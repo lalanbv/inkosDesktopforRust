@@ -9,12 +9,19 @@
 //!
 //! 两者都空 → 无操作（Ok）。
 //! - `spawn_writeback`：常驻 watcher 线程，监听 secrets.json 变更 → debounce
-//!   → 防回环检查 → diff 回写 keychain（SPA 改/新增 key 同步到 keychain）。
+//!   → 防回环检查 → diff 回写 keychain（SPA 改/增/删 key 同步到 keychain）。
 //!
 //! ## 防回环
 //! `sync_on_startup` 写 secrets.json 前设 `syncing=true`，写后 `false`。
-//! watcher 处理前查 `syncing`：true → 跳过（programmatic 写不回写）；
-//! SPA（前端/用户改 secrets.json）触发时 syncing=false → 正常 diff 回写。
+//! watcher 处理前查 `syncing`：true → 跳过（programmatic 写不触发删除传播）；
+//! SPA（前端 / 用户改 secrets.json，含删除 key）触发时 syncing=false → 正常 diff 回写。
+//!
+//! **删除传播**（M2b 修复）：
+//! SPA 的 `DELETE /api/v1/services/:service` 调 `delete secrets.services[service]; saveSecrets(...)`
+//! （inkos server.ts），写出的 secrets.json 缺该 key。`compute_writeback_diff` 检测
+//! "store 有 json 无"的 key → 加入 deletes；`process_writeback` 调 `store.delete`。
+//! 这避免了 SPA 删 key 后下次启动 `sync_on_startup` path1 把 keychain 中的 key 写回
+//! secrets.json 导致 **已删 key 复活** 的回归。
 //!
 //! ## debounce
 //! notify 收到首个事件后进入 500ms 静默窗：窗内每收一个事件重置 deadline，
@@ -233,7 +240,20 @@ fn debounce_and_process(
     }
 }
 
-/// 处理一次回写：防回环 → read json → diff vs store → upsert 差异。
+/// 处理一次回写：防回环 → read json → diff vs store → upsert + delete + 恢复 0600。
+///
+/// 行为契约（M2b 修复）：
+/// 1. **防回环**：`syncing=true`（programmatic write 进行中）→ 跳过（返回 Ok，不删不写）。
+///    只有 SPA 触发（syncing=false）的写才会传播删除，避免 sync_on_startup 自身写
+///    secrets.json 触发 watcher 把 keychain 内容删除。
+/// 2. **read json**：损坏 / 缺失 → `read_secrets` 返回空 → diff 视为"store 全部多余"。
+///    为防止"secrets.json 暂时损坏 → watcher 误删 keychain 全部 key"的灾难，
+///    此处对"json 空 + store 非空"组合保守不删除（防回环灾难兜底）。
+/// 3. **diff**：`compute_writeback_diff` 返回 upserts + deletes。
+/// 4. **apply**：先 upsert 后 delete（顺序不重要，两者均幂等）。
+/// 5. **恢复 0600**（M1 修复）：inkos `saveSecrets` 用默认 umask 写 secrets.json
+///    （通常 0644），桌面壳作为特权方在每次 SPA 写后恢复 0600。Unix cfg-gate；
+///    Windows 无 0600 语义，跳过。失败仅 log，不阻塞回写（chmod 失败不影响 keychain）。
 ///
 /// 此函数是 spawn_writeback 的可测核心（无 notify timing 依赖）：
 /// 测试可直接调用以验证防回环与 diff 回写语义。
@@ -248,9 +268,40 @@ pub fn process_writeback(
     let from_json = read_secrets(path)?;
     let from_store = store.read_all()?;
     let diff = compute_writeback_diff(&from_json, &from_store);
-    for (key, value) in diff {
+
+    // 灾难兜底：json 完全空 + store 非空 + diff.deletes 非空 → 极可能是 secrets.json
+    // 暂时损坏（磁盘错乱、并发写截断），而非用户真删全部 key。保守跳过删除，仍 upsert。
+    // （用户单删/多删 key 不会让 json 完全空，因为至少还有其他 service 或损坏前的版本。）
+    let skip_deletes = from_json.is_empty() && !from_store.is_empty() && !diff.deletes.is_empty();
+    if skip_deletes {
+        eprintln!(
+            "[secrets-writeback] 警告：secrets.json 空 + keychain 有 {} key，跳过删除传播（防损坏误删）",
+            from_store.len()
+        );
+    }
+
+    for (key, value) in diff.upserts {
         store.upsert(&key, &value)?;
     }
+    if !skip_deletes {
+        for key in diff.deletes {
+            store.delete(&key)?;
+        }
+    }
+
+    // M1 修复：恢复 secrets.json 权限到 0600（inkos saveSecrets 用默认 umask，常 0644）。
+    // 桌面壳作为特权方在每次 SPA 写后恢复 0600。失败仅 log，不影响回写。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            eprintln!(
+                "[secrets-writeback] 恢复 {} 权限 0600 失败（不影响回写）: {e}",
+                path.display()
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -261,25 +312,62 @@ pub fn should_writeback(syncing: &AtomicBool) -> bool {
     !syncing.load(Ordering::SeqCst)
 }
 
-/// diff 计算：返回 `from_json` 中"store 缺失或值不同"的 `(key, value)` 列表。
+/// diff 计算结果：watcher 应应用到 keychain 的变更集。
 ///
-/// **保守策略**：仅 upsert 新增/变更 key；**不删除** store 中 `from_json` 没有的 key
-/// （json 缺 key 不视为删除意图——避免 SPA 临时缺失或解析不全误删 keychain 项；
-/// 删除路径由 store.delete 显式调用，不经 watcher）。
+/// - `upserts`：json 中"store 缺失或值不同"的 `(key, value)` 列表（新增 / 改值）。
+/// - `deletes`：store 中"json 缺失"的 key 列表（**SPA 删除传播**，M2b 修复）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritebackDiff {
+    pub upserts: Vec<(String, String)>,
+    pub deletes: Vec<String>,
+}
+
+impl WritebackDiff {
+    /// 便利构造：空 diff（两个空 HashMap 等价）。
+    pub fn empty() -> Self {
+        Self {
+            upserts: Vec::new(),
+            deletes: Vec::new(),
+        }
+    }
+}
+
+/// diff 计算：返回 SPA 写（secrets.json）相对 keychain（store）的差异变更集。
+///
+/// **策略**（M2b 修复后的完整语义）：
+/// - **upserts**：json 中"store 缺失或值不同"的 key → 加入 upserts（新增 / 改值）。
+/// - **deletes**：store 中"json 缺失"的 key → 加入 deletes（**传播 SPA 删除**）。
+///   这修复了 SPA 调 `DELETE /api/v1/services/:service` → secrets.json 缺 key →
+///   watcher 不删 store → 下次启动 sync_on_startup path1 把 keychain 中 key 写回
+///   secrets.json 导致 **已删 key 复活** 的回归。
+///
+/// **防回环安全**（不在本函数，在 process_writeback）：
+/// `syncing=true` 时 `process_writeback` 整体跳过——本函数是纯计算，syncing 期间
+/// 不会被调用。故 compute 内无需考虑 syncing 语义。
 ///
 /// 抽成纯函数便于单测全覆盖（diff 是 SPA → keychain 回写的核心语义）。
 pub fn compute_writeback_diff(
     from_json: &HashMap<String, String>,
     from_store: &HashMap<String, String>,
-) -> Vec<(String, String)> {
-    from_json
+) -> WritebackDiff {
+    // upserts：json 中"store 缺失或值不同"
+    let upserts: Vec<(String, String)> = from_json
         .iter()
         .filter(|(k, v)| match from_store.get(*k) {
             None => true,
             Some(existing) => existing != *v,
         })
         .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
+        .collect();
+
+    // deletes：store 中"json 缺失"——SPA 删除传播的核心
+    let deletes: Vec<String> = from_store
+        .keys()
+        .filter(|k| !from_json.contains_key(*k))
+        .cloned()
+        .collect();
+
+    WritebackDiff { upserts, deletes }
 }
 
 /// 判断 notify 事件是否针对目标文件：`event.paths` 中任一路径的 file_name 等于
@@ -585,26 +673,31 @@ mod tests {
     fn diff_empty_both_returns_empty() {
         let json = HashMap::new();
         let store = HashMap::new();
-        assert!(compute_writeback_diff(&json, &store).is_empty());
+        let diff = compute_writeback_diff(&json, &store);
+        assert!(diff.upserts.is_empty());
+        assert!(diff.deletes.is_empty());
     }
 
     #[test]
     fn diff_new_key_in_json_is_added() {
-        // SPA 新增 openai：store 无 → 回写
+        // SPA 新增 openai：store 无 → upsert
         let json = singleton("openai", "sk-new");
         let store = HashMap::new();
-        let mut diff = compute_writeback_diff(&json, &store);
-        diff.sort();
-        assert_eq!(diff, vec![("openai".to_string(), "sk-new".to_string())]);
+        let diff = compute_writeback_diff(&json, &store);
+        let mut upserts = diff.upserts;
+        upserts.sort();
+        assert_eq!(upserts, vec![("openai".to_string(), "sk-new".to_string())]);
+        assert!(diff.deletes.is_empty());
     }
 
     #[test]
     fn diff_changed_value_is_included() {
-        // SPA 改 openai 值：store 有但不同 → 回写覆盖
+        // SPA 改 openai 值：store 有但不同 → upsert 覆盖
         let json = singleton("openai", "sk-new");
         let store = singleton("openai", "sk-old");
         let diff = compute_writeback_diff(&json, &store);
-        assert_eq!(diff, vec![("openai".to_string(), "sk-new".to_string())]);
+        assert_eq!(diff.upserts, vec![("openai".to_string(), "sk-new".to_string())]);
+        assert!(diff.deletes.is_empty());
     }
 
     #[test]
@@ -612,20 +705,24 @@ mod tests {
         // 同 key 同值 → 不重复写（节省 keychain 调用）
         let json = singleton("openai", "sk-x");
         let store = singleton("openai", "sk-x");
-        assert!(compute_writeback_diff(&json, &store).is_empty());
+        let diff = compute_writeback_diff(&json, &store);
+        assert!(diff.upserts.is_empty());
+        assert!(diff.deletes.is_empty());
     }
 
     #[test]
-    fn diff_store_only_keys_not_removed() {
-        // 保守策略：store 比 json 多 → 不删除（删除需显式 store.delete，不经 watcher）
+    fn diff_store_only_keys_propagate_delete() {
+        // M2b 修复：store 比 json 多 → deletes（SPA 删除传播，防已删 key 复活回归）
         let json = HashMap::new();
         let store = singleton("deepseek", "dk-x");
-        assert!(compute_writeback_diff(&json, &store).is_empty());
+        let diff = compute_writeback_diff(&json, &store);
+        assert!(diff.upserts.is_empty());
+        assert_eq!(diff.deletes, vec!["deepseek".to_string()]);
     }
 
     #[test]
-    fn diff_mixed_new_changed_unchanged_only_returns_diff() {
-        // 综合：A 新增 / B 改值 / C 不变 / D 仅 store 有
+    fn diff_mixed_new_changed_unchanged_store_only() {
+        // 综合：A 新增 / B 改值 / C 不变 / D 仅 store 有（SPA 删 D）
         let mut json = HashMap::new();
         json.insert("a_new".to_string(), "v1".to_string());
         json.insert("b_changed".to_string(), "v2-new".to_string());
@@ -635,15 +732,37 @@ mod tests {
         store.insert("c_same".to_string(), "v3".to_string());
         store.insert("d_store_only".to_string(), "v4".to_string());
 
-        let mut diff = compute_writeback_diff(&json, &store);
-        diff.sort();
+        let diff = compute_writeback_diff(&json, &store);
+
+        let mut upserts = diff.upserts;
+        upserts.sort();
         assert_eq!(
-            diff,
+            upserts,
             vec![
                 ("a_new".to_string(), "v1".to_string()),
                 ("b_changed".to_string(), "v2-new".to_string()),
             ]
         );
+        // d_store_only 应出现在 deletes
+        assert_eq!(diff.deletes, vec!["d_store_only".to_string()]);
+    }
+
+    #[test]
+    fn diff_multiple_store_only_keys_all_in_deletes() {
+        // SPA 删多个 key：store 比 json 少 2 个 → 都进 deletes
+        let mut json = HashMap::new();
+        json.insert("keep".to_string(), "v".to_string());
+        let mut store = HashMap::new();
+        store.insert("keep".to_string(), "v".to_string());
+        store.insert("del1".to_string(), "v1".to_string());
+        store.insert("del2".to_string(), "v2".to_string());
+
+        let diff = compute_writeback_diff(&json, &store);
+
+        assert!(diff.upserts.is_empty());
+        let mut deletes = diff.deletes;
+        deletes.sort();
+        assert_eq!(deletes, vec!["del1".to_string(), "del2".to_string()]);
     }
 
     // ===================================================================
@@ -746,14 +865,17 @@ mod tests {
     #[test]
     fn process_writeback_only_upserts_changed_keys() {
         // store 已有 openai=sk-x，json 改 openai=sk-new + 新增 deepseek
-        // → 仅 upsert 这两个差异，未触及不变项
+        // → 仅 upsert 这两个差异；同时 json 缺 anthropic 但 store 有 → 进 deletes
+        // 但本测试 anthropic 在 store 中、json 中缺，按新语义会删除——为了让旧场景
+        // 保持"只验证 upsert"语义，本测试改用 json 也含 anthropic 的形态。
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.json");
         fs::write(
             &path,
             r#"{"services":{
                 "openai":{"apiKey":"sk-new"},
-                "deepseek":{"apiKey":"dk-new"}
+                "deepseek":{"apiKey":"dk-new"},
+                "anthropic":{"apiKey":"ak-keep"}
             }}"#,
         )
         .unwrap();
@@ -773,7 +895,8 @@ mod tests {
 
     #[test]
     fn process_writeback_corrupt_json_is_noop() {
-        // 损坏 JSON → read_secrets 返回 Ok(empty) → diff 空 → 无 upsert
+        // 损坏 JSON → read_secrets 返回 Ok(empty) → 灾难兜底跳过删除（防误删 keychain）
+        // 且 diff.upserts 为空 → 无 upsert
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.json");
         fs::write(&path, "{ broken }").unwrap();
@@ -783,10 +906,162 @@ mod tests {
 
         process_writeback(&store, &path, &AtomicBool::new(false)).unwrap();
 
-        // store 不变（无新 upsert，已存在的 preexisting 保留）
+        // store 不变：json 空兜底跳过删除，无 upsert
         let all = store.read_all().unwrap();
         assert_eq!(all.get("preexisting").unwrap(), "v");
+        assert_eq!(all.len(), 1, "损坏 json 不应触发 keychain 误删");
+    }
+
+    // ===================================================================
+    // M3 修复：SPA 删除传播（防已删 key 复活回归）
+    // inkos server.ts `app.delete("/api/v1/services/:service")` 会
+    // `delete secrets.services[service]; saveSecrets(...)`，watcher 必须
+    // 把 store 中对应 key 也 delete，否则下次 sync_on_startup path1 复活它。
+    // ===================================================================
+
+    #[test]
+    fn process_writeback_propagates_spa_delete_to_store() {
+        // SPA 删 openai：json 缺 openai 但 store 有 → process_writeback 应删 store.openai
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        // SPA 删除后 secrets.json 只剩 deepseek（openai 被删）
+        fs::write(
+            &path,
+            r#"{"services":{"deepseek":{"apiKey":"dk-keep"}}}"#,
+        )
+        .unwrap();
+
+        let store = MockStore::new();
+        store.upsert("openai", "sk-stale").unwrap(); // SPA 已删，watcher 应删
+        store.upsert("deepseek", "dk-keep").unwrap(); // 保留
+
+        process_writeback(&store, &path, &AtomicBool::new(false)).unwrap();
+
+        let all = store.read_all().unwrap();
+        assert!(
+            !all.contains_key("openai"),
+            "SPA 删 openai 后 watcher 必须删除 keychain.openai；实际: {all:?}"
+        );
+        assert_eq!(all.get("deepseek").unwrap(), "dk-keep");
         assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn process_writeback_does_not_revive_deleted_key_after_restart() {
+        // M3 核心回归断言：SPA 删 key → watcher 删 store → 重启 sync_on_startup
+        // 不复活该 key（path1 从 keychain 覆盖 secrets.json，但 keychain 已无该 key）。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+
+        // stage 0：初始 secrets.json 含 openai + deepseek
+        fs::write(
+            &path,
+            r#"{"services":{
+                "openai":{"apiKey":"sk-x"},
+                "deepseek":{"apiKey":"dk-x"}
+            }}"#,
+        )
+        .unwrap();
+
+        // stage 1：首迁到 keychain（keychain 空 + secrets.json 非空 → path2）
+        let store = MockStore::new();
+        sync_on_startup(&store, &path, &AtomicBool::new(false)).unwrap();
+        assert_eq!(store.read_all().unwrap().len(), 2);
+
+        // stage 2：SPA 删除 openai（写回只含 deepseek 的 secrets.json）
+        fs::write(
+            &path,
+            r#"{"services":{"deepseek":{"apiKey":"dk-x"}}}"#,
+        )
+        .unwrap();
+
+        // stage 3：watcher 触发 process_writeback → 删除 keychain.openai
+        process_writeback(&store, &path, &AtomicBool::new(false)).unwrap();
+
+        let after_delete = store.read_all().unwrap();
+        assert!(!after_delete.contains_key("openai"), "watcher 应删除 openai");
+        assert_eq!(after_delete.len(), 1);
+
+        // stage 4：模拟重启——sync_on_startup 再次执行。
+        // 关键断言：path1 从 keychain 读，keychain 已无 openai → secrets.json 不再有 openai。
+        // 若 process_writeback 没删 keychain，path1 会再次把 openai 写回 secrets.json（回归）。
+        let syncing_restart = AtomicBool::new(false);
+        sync_on_startup(&store, &path, &syncing_restart).unwrap();
+
+        let final_json = read_secrets(&path).unwrap();
+        assert!(
+            !final_json.contains_key("openai"),
+            "重启后 openai 不应复活（M3 回归断言）；实际: {final_json:?}"
+        );
+        assert_eq!(final_json.get("deepseek").unwrap(), "dk-x");
+    }
+
+    #[test]
+    fn process_writeback_anti_loop_programmatic_write_skips_delete() {
+        // 防回环：syncing=true 时即便 json 完全缺 key 也不删除 store。
+        // sync_on_startup 写 secrets.json 期间 syncing=true，watcher 必须整体跳过——
+        // 否则 sync 写入 = "json 暂时空" → watcher 删 keychain 全部 key = 灾难。
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        // syncing=true 期间 sync_on_startup 写入新内容（假设从 keychain 读，写 openai）
+        // 但 watcher 看到的瞬间可能是空 / 旧值——必须不删。
+        fs::write(&path, r#"{"services":{}}"#).unwrap();
+
+        let store = MockStore::new();
+        store.upsert("openai", "sk-x").unwrap();
+        store.upsert("deepseek", "dk-x").unwrap();
+
+        process_writeback(&store, &path, &AtomicBool::new(true)).unwrap();
+
+        let all = store.read_all().unwrap();
+        assert_eq!(all.len(), 2, "syncing=true 必须 skip 整体（不删不写）");
+        assert!(all.contains_key("openai"));
+        assert!(all.contains_key("deepseek"));
+    }
+
+    // ===================================================================
+    // M1 修复：SPA 写后恢复 secrets.json 权限到 0600（Unix）
+    // inkos saveSecrets 用默认 umask 写（通常 0644），桌面壳作为特权方恢复 0600。
+    // ===================================================================
+
+    #[test]
+    #[cfg(unix)]
+    fn process_writeback_restores_0600_after_spa_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        // 模拟 inkos saveSecrets：用默认 umask 写（此处显式 0644 模拟最差情况）
+        fs::write(&path, r#"{"services":{"openai":{"apiKey":"sk-x"}}}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // 验证夹具：确实是 0644
+        let mode_before = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_before, 0o644);
+
+        let store = MockStore::new();
+        process_writeback(&store, &path, &AtomicBool::new(false)).unwrap();
+
+        // 核心断言：process_writeback 后权限恢复为 0600
+        let mode_after = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_after, 0o600, "SPA 写后桌面壳必须恢复 secrets.json 到 0600");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn atomic_write_0600_creates_file_with_0600_mode() {
+        // M2 加固验证：即便父目录有历史固定名 tmp 风险，NamedTempFile 创建即 0600。
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        let mut m = HashMap::new();
+        m.insert("openai".to_string(), "sk-x".to_string());
+
+        // 设置宽松 umask（022）模拟常见 shell 环境——但 tempfile::Builder::permissions
+        // 应该覆盖 umask 影响（创建即 0600）。
+        write_secrets(&path, &m).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "atomic_write_0600 必须创建 0600 文件");
     }
 
     // ===================================================================

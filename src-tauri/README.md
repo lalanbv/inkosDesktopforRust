@@ -13,7 +13,7 @@ inkos 的 Tauri / Rust 桌面客户端骨架。当前里程碑 **M2b**（secrets
 | `src/lifecycle.rs` | `SidecarState`（Tauri managed state）+ `cleanup_sidecar`（退出清理）+ `BadgeCounter` + `TrayController` + `ExitingFlag` + `install_signal_hooks` |
 | `src/isolation/` | loopback 加固：`LoopbackGuard` trait + macOS pf / Linux iptables / Windows netsh 占位实现 |
 | `src/observer/` | SSE 旁路：`sse`（frame parser + 重连 client）→ `router`（默认路由表）→ `notifier`（原生通知）+ `tray_badge`（托盘角标） |
-| `src/secrets/` | keychain 同步：`store`（`SecretStore` trait + `MockStore` + `KeyringStore` keyring v3 封装）+ `jsonio`（`.inkos/secrets.json` 纯函数读写，atomic + 0600）+ `sync`（启动期 sync_on_startup + 首迁 + `spawn_writeback` watcher + 防回环 + debounce） |
+| `src/secrets/` | keychain 同步：`store`（`SecretStore` trait + `MockStore` + `KeyringStore` keyring v3 封装）+ `jsonio`（`.inkos/secrets.json` 纯函数读写，atomic NamedTempFile persist + 创建即 0600）+ `sync`（启动期 sync_on_startup + 首迁 + `spawn_writeback` watcher + 防回环 + debounce + **SPA 删除传播**） |
 | `src/main.rs` | Tauri 二进制入口：setup 拉起 sidecar、Exit 清理、loopback guard 接入、observer/lifecycle 接线、关窗隐藏保活、信号钩子、**secrets 同步与 writeback 接线** |
 | `src/lib.rs` | 库入口，导出公开模块（供集成测与 doctest 使用） |
 
@@ -66,12 +66,17 @@ set `ExitingFlag` + shutdown observer + take SidecarState + cleanup_sidecar（ki
 
 ### 2. 文件监听回写 + 防回环（spawn sidecar 之后）
 
-`spawn_writeback` 启动 `notify::RecommendedWatcher` 监听 `.inkos/secrets.json` 改动 → debounce 500ms → `process_writeback` 读 json → `compute_writeback_diff`（仅写变化的 key）→ keychain `upsert`。
+`spawn_writeback` 启动 `notify::RecommendedWatcher` 监听 `.inkos/secrets.json` 改动 → debounce 500ms → `process_writeback` 读 json → `compute_writeback_diff`（返回 `WritebackDiff{upserts, deletes}`）→ keychain `upsert` + `delete`（**M2b 修复：传播 SPA 删除**）→ 恢复 secrets.json 权限 0600（**M2b 修复**：inkos `saveSecrets` 用默认 umask 写常 0644，桌面壳作为特权方每次 SPA 写后恢复 0600）。
 
 **防回环三层**：
-- L1 `syncing` flag（SeqCst）：sync_on_startup 写 json 期间置 true，`process_writeback` 入口检查 true 直接 return
+- L1 `syncing` flag（SeqCst）：sync_on_startup 写 json 期间置 true，`process_writeback` 入口检查 true 直接整体跳过（不删不写——**关键**：sync 写期间不会因 json 暂时不完整而误删 keychain）
 - L2 debounce 500ms：合并连发写；分段检查 shutdown
-- L3 diff 只写变化的 key：防 race 与无谓 keychain 写
+- L3 diff 只返回真正变更（upserts = json 中"缺失或值不同"；deletes = store 中"json 缺失"，传播 SPA 删除）；**灾难兜底**：json 完全空 + store 非空 → 跳过删除（防 secrets.json 损坏误删全部 key）
+
+**原子写（M2b 加固）**：`atomic_write_0600` 改用 `tempfile::NamedTempFile::new_in(parent)` + `.persist(path)`：
+- 随机文件名：消除固定 `secrets.json.tmp` 的符号链接预创建攻击面
+- 创建即 0600（Unix）：消除 `fs::write` 默认权限（受 umask 影响常 0644）的短暂可读窗口
+- `.persist`：原子 rename（同 filesystem 保证）
 
 ### 3. 降级（keychain 不可用不阻塞）
 
@@ -125,7 +130,7 @@ cd src-tauri && cargo test                  # 单测 + 集成测（mock）+ doct
 cd src-tauri && cargo test -- --ignored     # 包含真实 inkos sidecar 集成测与 keychain 真实路径（需先跑构建脚本与可达 OS keychain）
 ```
 
-**稳定性**：单测/集成测/doctest 共 122 个（107 lib + 1 bin + 3 observer integration + 2 supervisor integration mock + 2 doctest + 7 ignored），连续 3 次全量跑全绿，无 flaky。7 个 `#[ignore]` 中：3 个 KeyringStore 真实 keychain + 1 watcher SPA IO timing + 1 real_inkos_sidecar_serves_spa + 2 secrets 内部 IO timing——均需真机或真实 keychain 才有意义。
+**稳定性**：单测/集成测/doctest 共 128 个（113 lib + 1 bin + 3 observer integration + 2 supervisor integration mock + 2 doctest + 7 ignored），连续 3 次全量跑全绿，无 flaky。M2b 修复后新增 6 个测试（删除传播 + 0600 恢复 + tempfile 创建模式）。7 个 `#[ignore]` 中：3 个 KeyringStore 真实 keychain + 1 watcher SPA IO timing + 1 real_inkos_sidecar_serves_spa + 2 secrets 内部 IO timing——均需真机或真实 keychain 才有意义。
 
 ## 覆盖率
 

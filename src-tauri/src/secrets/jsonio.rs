@@ -8,11 +8,14 @@
 //! - 顶层 `services` 字段；每个 service entry 至少含 `apiKey`（**camelCase**）。
 //! - 损坏 / 缺失文件 → 视为空（与 inkos `loadSecrets` catch-returns-default 语义一致），不 panic。
 //!
-//! ## write 策略：merge-保留 + 0600 + 原子 rename
+//! ## write 策略：merge-保留 + 0600 + 原子替换
 //! - 先读既有文件得到完整 `serde_json::Value`，只覆盖 `services[*].apiKey`，
 //!   保留 inkos 未来可能添加的其他字段（forward-compat）。
 //! - pretty 2-space 缩进（对齐 inkos `JSON.stringify(secrets, null, 2)`）。
-//! - tmp 文件 + `rename` 原子替换；Unix 设置 0600 权限（Windows cfg-gate 跳过）。
+//! - `tempfile::NamedTempFile::new_in(parent)` + `.persist(path)` 原子替换：
+//!   - 随机文件名（消除固定 `secrets.json.tmp` 的符号链接预创建攻击面）；
+//!   - 创建即 0600（Unix）：消除 `fs::write` 默认权限的短暂可读窗口；
+//!   - `.persist` 是原子 rename（同 filesystem 保证）。
 //!
 //! ## 错误处理
 //! - 文件缺失 / JSON 损坏（read）→ `Ok(empty)`，不报错（对齐 inkos）。
@@ -21,7 +24,7 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 从 `secrets.json` 读取全部 `serviceId -> apiKey` 映射。
 ///
@@ -127,30 +130,50 @@ fn ensure_services_object(root: &mut Value) {
     }
 }
 
-/// tmp + rename 原子写；Unix 设置 0600 权限。
+/// 原子写：`tempfile::NamedTempFile::new_in(parent)` + `.persist(path)`。
+///
+/// **安全设计**（M2b 加固）：
+/// - 随机文件名：消除固定 `secrets.json.tmp` 的符号链接预创建攻击面
+///   （攻击者在父目录预创建同名符号链接指向敏感文件，旧实现 fs::write 会跟随符号链接写）。
+/// - 创建即 0600（Unix）：`tempfile::Builder::permissions(0o600)` 在创建时即设置权限，
+///   消除 `fs::write` 默认权限（受 umask 影响，通常 0644）的"短暂可读窗口"——
+///   secret 内容从未以非 0600 状态落盘。Windows 无 0600 概念，跳过（NTFS ACL 另论）。
+/// - `.persist(path)`：原子 rename（同 filesystem 保证；跨 filesystem 会 fall back 到
+///   非原子拷贝，本场景 secrets.json 与其 tmp 同在 `.inkos/` 目录，不会跨 fs）。
+///
+/// **失败语义**：`NamedTempFile::new_in` / `write_all` / `persist` 任一失败 → 显式 `Err`，
+/// `NamedTempFile` 即便 drop 未 persist，也会自动清理 tmp 文件（无垃圾残留）。
 fn atomic_write_0600(path: &Path, data: &[u8]) -> Result<()> {
-    let tmp = tmp_path_for(path);
-    std::fs::write(&tmp, data)
-        .with_context(|| format!("write tmp: {}", tmp.display()))?;
+    let parent = path.parent().with_context(|| {
+        format!("atomic_write: path={} 无父目录", path.display())
+    })?;
+
+    let mut builder = tempfile::Builder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 0600: {}", tmp.display()))?;
+        builder.permissions(PermissionsExt::from_mode(0o600));
     }
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
-    Ok(())
-}
+    let mut tmp = builder
+        .tempfile_in(parent)
+        .with_context(|| format!("创建 NamedTempFile 失败: {}", parent.display()))?;
 
-/// 在与 `path` 同目录下构造 `.tmp` 后缀临时路径。
-fn tmp_path_for(path: &Path) -> PathBuf {
-    let mut name = path
-        .file_name()
-        .map(|s| s.to_os_string())
-        .unwrap_or_else(|| std::ffi::OsString::from("secrets.json"));
-    name.push(".tmp");
-    path.with_file_name(name)
+    use std::io::Write;
+    tmp.write_all(data)
+        .with_context(|| format!("write tmp 失败: {}", tmp.path().display()))?;
+    tmp.flush()
+        .with_context(|| format!("flush tmp 失败: {}", tmp.path().display()))?;
+
+    // persist 是 tempfile 3.x NamedTempFile 的 inherent 方法（同 fs 原子 rename）。
+    // 跨 fs 会 fallback 到非原子拷贝，但本场景同目录不会跨。
+    if let Err(e) = tmp.persist(path) {
+        return Err(anyhow::anyhow!(
+            "persist tmp -> {} 失败: {}",
+            path.display(),
+            e.error
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

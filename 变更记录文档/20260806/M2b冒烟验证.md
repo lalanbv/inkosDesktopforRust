@@ -17,7 +17,7 @@
 | # | 任务 | 关键 commit | 状态 |
 |---|------|------------|------|
 | T1 | `SecretStore` trait + `MockStore` + `KeyringStore` 占位（Err 非 panic） | `a9eb0192 feat(secrets): SecretStore trait + MockStore + KeyringStore scaffold` | ✅ review clean |
-| T2 | `.inkos/secrets.json` 纯函数读写（merge 保留 + 0600 + 原子 rename） | `dc28a167 feat(secrets): secrets.json read/write (atomic, 0600)` | ✅ review clean |
+| T2 | `.inkos/secrets.json` 纯函数读写（merge 保留 + 0600 + 原子 persist） | `dc28a167 feat(secrets): secrets.json read/write (atomic, 0600)` | ✅ review clean；M2b fix：`atomic_write_0600` 改用 `tempfile::NamedTempFile` + `.persist`（消除固定名 tmp 符号链接攻击 + 创建即 0600） |
 | T3 | 启动期同步 + 首迁（keychain→json / json→keychain / 双空→noop） | `90ed2199 feat(secrets): startup sync + first-run migration` | ✅ review clean |
 | T4 | 文件监听回写 + 防回环（`syncing` flag + debounce 500ms） | `4fcf5285 feat(secrets): writeback watcher with anti-loop + debounce` | ✅ review clean |
 | T5 | `KeyringStore` 实装（keyring v3 + `__index__`）+ main.rs 接线 + 降级 | `576d0d72 feat(app): wire secrets keychain sync + writeback` | ✅ review LOW 文案已在 T6 修 |
@@ -88,19 +88,39 @@ process_writeback  ← 读 secrets.json，compute_writeback_diff，逐个 upsert
 
 | 层 | 实现 | 测试 |
 |---|---|---|
-| **L1：`syncing` flag** | `sync_on_startup` 写 json 前 `syncing.store(true, SeqCst)`；`process_writeback` 入口检查 `should_writeback`（`syncing.load(SeqCst)` 为 true 直接 return） | `process_writeback_skips_when_syncing_true_anti_loop` |
+| **L1：`syncing` flag** | `sync_on_startup` 写 json 前 `syncing.store(true, SeqCst)`；`process_writeback` 入口检查 `should_writeback`（`syncing.load(SeqCst)` 为 true 直接 return，整体跳过——不删不写，防 sync 写触发 watcher 误删 keychain） | `process_writeback_skips_when_syncing_true_anti_loop`、`process_writeback_anti_loop_programmatic_write_skips_delete`（M2b fix：syncing=true 时即使 json 缺 key 也不删 store） |
 | **L2：debounce 500ms** | notify 触发后 sleep 500ms 分段检查 shutdown，合并连发事件 | `watcher_spa_write_writebacks_to_keychain`（#[ignore]，依赖 notify timing） |
-| **L3：compute_writeback_diff 只写变化的 key** | 仅当 json 中的 key 不等于 keychain 中对应值才 upsert；防 race | `process_writeback_only_upserts_changed_keys`、`process_writeback_diffs_upserts_when_syncing_false` |
+| **L3：compute_writeback_diff 仅返回真正变更** | upserts 仅含"json 中 key 缺失或值不同"；deletes 仅含"store 中有 json 中无"——M2b fix 后传播 SPA 删除（防已删 key 复活回归） | `process_writeback_only_upserts_changed_keys`、`process_writeback_diffs_upserts_when_syncing_false`、`process_writeback_propagates_spa_delete_to_store`、`process_writeback_does_not_revive_deleted_key_after_restart` |
 
 ### 4.2 容错
 
 | 场景 | 行为 | 测试 |
 |---|---|---|
 | 写失败（keychain 不可达 mid-run） | `process_writeback` 返回 `Err`；外层 `syncing.store(false, SeqCst)` **始终 reset**（用 `let result = ...; syncing.store(false, ...); result`），避免下次 writeback 因 flag 卡死 | `write_failure_propagates_error_and_resets_syncing` |
-| json 损坏 mid-run | `process_writeback` 视为 noop（不 panic、不报错） | `process_writeback_corrupt_json_is_noop` |
+| json 损坏 mid-run | `process_writeback` 灾难兜底：json 完全空 + store 非空 → 跳过删除传播（防损坏误删全部 key）；upserts 为空 → 无写入 | `process_writeback_corrupt_json_is_noop` |
 | shutdown 触发 | watcher 循环在 recv 间隙检查 shutdown=true → break；debounce 期间也分段检查 | `watcher_spa_write_writebacks_to_keychain`（#[ignore]） |
+| **SPA 写后 secrets.json 权限漂移**（M2b fix） | inkos `saveSecrets` 用默认 umask 写（常 0644），桌面壳 `process_writeback` 处理 SPA 写后对 secrets.json `set_permissions(0600)`（Unix cfg-gate），失败仅 log 不阻塞回写 | `process_writeback_restores_0600_after_spa_write`、`atomic_write_0600_creates_file_with_0600_mode` |
 
-### 4.3 event 过滤
+### 4.3 删除传播（M2b 修复，关键正确性）
+
+**回归场景**：SPA 调 `DELETE /api/v1/services/:service`（inkos `packages/studio/src/api/server.ts:3955-3973`）
+→ `delete secrets.services[service]; saveSecrets(...)` → secrets.json 缺该 key
+→ 桌面壳 watcher 检测到 SPA 写
+→ **若** `compute_writeback_diff` 保守不删 → keychain 中 key 残留
+→ 下次启动 `sync_on_startup` path1（keychain 非空）→ keychain 中 key 写回 secrets.json
+→ **已删 key 复活**（用户视角：删了又回来，安全 + UX 双输）。
+
+**修复**：`compute_writeback_diff` 改为返回 `WritebackDiff { upserts, deletes }`：
+- `deletes`：store 中"json 缺失"的 key 列表
+- `process_writeback` 对 deletes 调 `store.delete`
+
+**防回环安全**：
+1. syncing=true 时 `process_writeback` 整体跳过（L1）——sync_on_startup 自身写 secrets.json 期间不会误删 keychain。
+2. json 完全空 + store 非空 → 灾难兜底跳过删除（防 secrets.json 损坏误删全部 key）。
+
+**前端 UI 证据**：`packages/studio/src/pages/ServiceDetailPage.tsx:183-194 handleDelete` + line 302-308 "删除配置"按钮（Trash2 图标）。
+
+### 4.4 event 过滤
 
 `event_targets_file(event, target_file)` + `paths_contain_target(paths, target)`：只处理路径以 `secrets.json` 结尾的事件，忽略同目录其他文件改动。空 target → 默认处理（保守不丢事件）。
 
@@ -140,17 +160,26 @@ let writeback_handle = secrets::spawn_writeback(store, secrets_path, syncing, sh
 ### 6.1 全量测试稳定性（连跑 3 次，2026-08-06）
 
 ```
-Run 1/2/3 一致：
-  lib unittests:           107 passed; 0 failed; 6 ignored   ← 6 ignored: 3 KeyringStore 真实 keychain + 1 watcher SPA IO + 其他 IO timing
+Run 1/2/3 一致（baseline T6 收尾时）：
+  lib unittests:           107 passed; 0 failed; 6 ignored
   bin unittests (main.rs):   1 passed; 0 failed; 0 ignored
   observer_integration:     3 passed; 0 failed; 0 ignored
   supervisor_integration:   2 passed; 0 failed; 1 ignored   ← real_inkos_sidecar_serves_spa（沿用 M1 ignore）
   doctest:                  2 passed; 0 failed; 0 ignored
   -----------------------------------------------
   合计：                   115 passed; 0 failed; 7 ignored
+
+M2b 修复后（fix 段见 task-6-report.md §10）：
+  lib unittests:           113 passed; 0 failed; 6 ignored   ← +6 新增（删除传播 + 0600 恢复 + tempfile 验证）
+  bin unittests (main.rs):   1 passed; 0 failed; 0 ignored
+  observer_integration:     3 passed; 0 failed; 0 ignored
+  supervisor_integration:   2 passed; 0 failed; 1 ignored
+  doctest:                  2 passed; 0 failed; 0 ignored
+  -----------------------------------------------
+  合计：                   121 passed; 0 failed; 7 ignored
 ```
 
-3 次结果完全一致，无 flaky。secrets 模块新增 50+ 单测（jsonio 8 + store 8 + sync 35+），其中 6 个标 `#[ignore]`（依赖真实 keychain / notify timing，跑法：`cargo test -- --ignored`）。
+3 次 baseline 结果完全一致，无 flaky。M2b 修复后新增 6 个测试（5 sync + 1 jsonio）覆盖删除传播 + 0600 恢复 + tempfile 创建模式。secrets 模块测试总计 60+（jsonio 9 + store 8 + sync 41+），其中 6 个标 `#[ignore]`（依赖真实 keychain / notify timing，跑法：`cargo test -- --ignored`）。
 
 ### 6.2 覆盖率（`cargo llvm-cov --workspace --summary-only`，2026-08-06）
 

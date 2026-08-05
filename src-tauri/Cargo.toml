@@ -25,9 +25,15 @@ keyring = "3"
 # M2b Task 4：secrets.json 文件监听回写（spawn_writeback）。
 # 选 v6（API 自 v6 起跨 v8 保持稳定，v6 最广泛验证；序列化兼容性最稳）。
 notify = "6"
+# M2b：atomic_write_0600 用 NamedTempFile（随机名 + persist 原子替换）。
+#   - 随机名：消除固定 `secrets.json.tmp` 的符号链接攻击面
+#   - 创建即 0600（Unix）：消除 fs::write 默认权限的短暂可读窗口
+#   - .persist(path)：原子 rename（同 filesystem 保证）
+# 同时仍是 dev-dep（测试 tempdir 依赖），下面 [dev-dependencies] 不再列。
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
+# tempfile 已提升为常规 dep（M2b 加固：atomic_write 使用 NamedTempFile）。
 
 # Unix 进程组信号：kill_tree 用 libc::kill(-pgid, SIGTERM) 杀整个进程组，
 # 避免 inkos CLI 派生的 tsx 孙子进程被 PID 1 收养后变孤儿继续占端口。
