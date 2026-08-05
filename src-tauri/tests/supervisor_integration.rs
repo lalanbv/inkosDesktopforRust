@@ -59,8 +59,7 @@ async fn real_inkos_sidecar_serves_spa() {
     use std::net::TcpListener;
 
     // 集成测从 src-tauri/ 跑；仓库根 = src-tauri 的上一级。
-    // inkos CLI 在 cwd 寻找 inkos.json，所以 project_root 必须是含 inkos.json 的目录
-    // （仓库根本身就有 inkos.json）。 submodule_root 也指向仓库根（packages/cli/dist 在此）。
+    // submodule_root 指向仓库根：packages/cli/dist/index.js 在此查找。
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().expect("cwd"));
@@ -74,7 +73,18 @@ async fn real_inkos_sidecar_serves_spa() {
         inkos_root.join("packages/cli/dist/index.js").display()
     );
 
-    let paths = AppPaths::new(inkos_root.clone(), inkos_root).expect("AppPaths 解析失败");
+    // project_root 用 temp 目录，**对齐生产路径**（main.rs 用
+    // `std::env::temp_dir().join("inkos-m1-demo")`）。inkos studio 启动时
+    // `findProjectRoot()` 返回 cwd（utils.ts:31 = process.cwd()），cwd 即本测试
+    // 设的 project_root；temp dir 无 inkos.json，studio action 会通过
+    // `ensureProjectDirectoryInitialized` 自动 init 一个 minimal project
+    // （project-bootstrap.ts:155）。本测试正是为了验证生产路径下「temp dir +
+    // auto-init」真能拉起 SPA。用独立名字避免与 demo 目录冲突（demo 目录可能
+    // 已被 `cargo run` 创建）。
+    let project_root = std::env::temp_dir().join("inkos-m1-demo-realtest");
+    std::fs::create_dir_all(&project_root)
+        .expect("创建 temp project_root 失败");
+    let paths = AppPaths::new(project_root, inkos_root).expect("AppPaths 解析失败");
     let port = config::DEFAULT_STUDIO_PORT;
 
     // 预检：端口未占用。如被占，说明上一次测试的孤儿进程残留。
