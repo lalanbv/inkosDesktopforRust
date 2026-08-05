@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "inkosDesktop",
+  "version": "0.1.0",
+  "identifier": "com.inkos.desktop",
+  "build": {
+    "frontendDist": "stub"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "inkosDesktop",
+        "width": 1280,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": []
+  }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "inkos-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["blocking"] }
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Unix 进程组信号：kill_tree 用 libc::kill(-pgid, SIGTERM) 杀整个进程组，
+# 避免 inkos CLI 派生的 tsx 孙子进程被 PID 1 收养后变孤儿继续占端口。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
