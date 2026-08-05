@@ -4,6 +4,10 @@
 //! - 不用 `#[tokio::main]`：Tauri 2 自带事件循环，异步用 `tauri::async_runtime::spawn`。
 //! - sidecar `Child` 存进 `SidecarState`（Tauri managed state），在 `RunEvent::Exit`
 //!   触发 `cleanup_sidecar`，保证关窗即清进程组（不留孤儿占端口）。
+//! - loopback 加固：setup 中 spawn **之前** `LoopbackGuard::lock(port)`，失败仅 log
+//!   警告、不阻塞启动（M1 不假设 app 有 root 权限；运行时强制待 M2/M3 特权 helper）；
+//!   `RunEvent::Exit` 时 `release(port)` best-effort。guard 句柄与 port 一并存入
+//!   `LoopbackGuardState`，避免 Exit 处无法取 port。
 //! - WebView 加载方案：setup 异步块内 `health_probe` 通过后，用
 //!   `WebviewWindow::eval("window.location.replace('http://127.0.0.1:<port>/')")`
 //!   在 webview 内做客户端导航。CSP 已在 `tauri.conf.json` 设 null；Tauri 2 默认不拦
@@ -17,13 +21,55 @@ use anyhow::Context;
 use tauri::{Manager, RunEvent};
 
 use inkos_desktop::config;
+use inkos_desktop::isolation::{platform_guard, LoopbackGuard};
 use inkos_desktop::lifecycle::{cleanup_sidecar, SidecarState};
 use inkos_desktop::paths::AppPaths;
 use inkos_desktop::supervisor;
 
+/// loopback guard 句柄 + 锁定的端口，存入 Tauri managed state。
+/// `RunEvent::Exit` 时取出，对端口 release（best-effort）。
+///
+/// `Mutex` 而非 `OnceCell`：与 `SidecarState` 一致，简化 Send + Sync 契约。
+/// `port: u16`：guard 仅锁一个端口；端口 0 表示「未 lock」（release 时跳过）。
+#[derive(Default)]
+struct LoopbackGuardState {
+    guard: std::sync::Mutex<Option<Box<dyn LoopbackGuard>>>,
+    port: std::sync::Mutex<u16>,
+}
+
+impl LoopbackGuardState {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// 存入 guard 句柄；port 在 `record_port` 单独记录。
+    fn set_guard(&self, guard: Box<dyn LoopbackGuard>) {
+        let mut g = self.guard.lock().expect("LoopbackGuardState guard mutex 中毒");
+        *g = Some(guard);
+    }
+
+    /// 记录 lock 成功的端口；Exit 时按此端口 release。
+    fn record_port(&self, port: u16) {
+        let mut p = self.port.lock().expect("LoopbackGuardState port mutex 中毒");
+        *p = port;
+    }
+
+    /// 取出 guard 句柄消费（Exit 路径）。
+    fn take_guard(&self) -> Option<Box<dyn LoopbackGuard>> {
+        let mut g = self.guard.lock().expect("LoopbackGuardState guard mutex 中毒");
+        g.take()
+    }
+
+    /// 读取已 lock 的端口（未 lock 时返回 0）。
+    fn current_port(&self) -> u16 {
+        *self.port.lock().expect("LoopbackGuardState port mutex 中毒")
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(SidecarState::new())
+        .manage(LoopbackGuardState::new())
         .setup(|app| {
             // 复制一份句柄进异步块，用于把 spawn 后的 Child 写入 managed state。
             let app_handle = app.handle().clone();
@@ -58,6 +104,33 @@ fn main() {
 
                     let port = supervisor::pick_free_port(config::DEFAULT_STUDIO_PORT)
                         .context("pick_free_port 在 [4567, 5567) 区间无空闲端口")?;
+
+                    // loopback 加固：spawn **之前** lock，把外部入站挡在 port 之外。
+                    // 失败（权限不足等）只 log 警告、继续启动——M1 不假设 app 有 root；
+                    // 完整运行时强制待 M2/M3 特权 helper（SMJOP/launchd/setuid）。
+                    let guard = platform_guard();
+                    match guard.lock(port) {
+                        Ok(()) => {
+                            eprintln!(
+                                "[main] loopback guard: 已 lock port={port}（外部入站被挡）"
+                            );
+                            if let Some(state) = app_handle.try_state::<LoopbackGuardState>() {
+                                state.record_port(port);
+                            }
+                        }
+                        Err(e) => {
+                            // ⚠️ 降级：警告但绝不 panic；sidecar 仍会 spawn 但监听 0.0.0.0，
+                            // 同网段可访问（架构 §8 已证）。M1 范围声明此风险。
+                            eprintln!(
+                                "[main] loopback guard: lock port={port} 失败（多半缺权限），降级继续: {e:#}"
+                            );
+                        }
+                    }
+                    // guard 句柄无论 lock 是否成功都存入 state——release() 对未 lock
+                    // 的 anchor/rules 是幂等的，便于 Exit 统一调用。
+                    if let Some(state) = app_handle.try_state::<LoopbackGuardState>() {
+                        state.set_guard(guard);
+                    }
 
                     let spec = supervisor::build_launch(&paths, port, "node");
                     let child = supervisor::spawn(&spec).context("spawn sidecar 失败")?;
@@ -122,7 +195,7 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败")
         .run(|app_handle, event| {
-            // Exit：进程即将退出，确保 sidecar 进程组被清理。
+            // Exit：进程即将退出，确保 sidecar 进程组被清理 + loopback guard release。
             // 用 Exit 而非 ExitRequested：后者可被拒绝/deref，前者必然触发。
             if let RunEvent::Exit = event {
                 if let Some(state) = app_handle.try_state::<SidecarState>() {
@@ -131,6 +204,18 @@ fn main() {
                 }
                 // 兜底：如果 managed state 因任何原因没拿到 child（例如 setup
                 // 异步块还没跑完用户就关窗），无副作用——此时无 sidecar 可清。
+
+                // loopback release：best-effort。失败仅 log，不让退出路径抛错。
+                if let Some(guard_state) = app_handle.try_state::<LoopbackGuardState>() {
+                    let port = guard_state.current_port();
+                    if let Some(guard) = guard_state.take_guard() {
+                        if let Err(e) = guard.release(port) {
+                            eprintln!(
+                                "[main] loopback guard: release port={port} 失败: {e:#}"
+                            );
+                        }
+                    }
+                }
             }
         });
 }
@@ -140,4 +225,5 @@ fn main() {
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<SidecarState>();
+    assert_send_sync::<LoopbackGuardState>();
 };
