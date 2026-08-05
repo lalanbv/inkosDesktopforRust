@@ -434,3 +434,51 @@ const _: fn() = || {
     assert_send_sync::<ObserverShutdown>();
     assert_send_sync::<TrayController>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::to_js_string_literal;
+
+    // to_js_string_literal 用 serde_json::to_string 做规范 JS 字符串字面量转义，
+    // 替代手写 .replace 链——后者对反斜杠/控制字符的遗漏是 Task 6 LOW 修复点。
+    // 仅断言 happy path（serde_json 失败兜底分支触发条件极端，不可达，不测）。
+    #[test]
+    fn to_js_string_literal_escapes_quotes_backslash_and_control() {
+        // 普通 ASCII：原样包裹双引号。
+        assert_eq!(to_js_string_literal("hello"), r#""hello""#);
+
+        // 单引号（旧手写转义的关注点）：serde_json 不转义单引号，保留即可。
+        assert_eq!(
+            to_js_string_literal("inkos 启动失败: can't open"),
+            r#""inkos 启动失败: can't open""#
+        );
+
+        // 双引号：必须转义为 \"。
+        assert_eq!(to_js_string_literal(r#"a"b"#), r#""a\"b""#);
+
+        // 反斜杠：必须转义为 \\（旧手写 .replace 链漏掉，是引入 serde_json 的关键原因）。
+        assert_eq!(to_js_string_literal(r"a\b"), r#""a\\b""#);
+
+        // 换行（调用方已 .replace 掉，但即便漏掉 serde_json 也会转义为 \n）。
+        assert_eq!(to_js_string_literal("a\nb"), "\"a\\nb\"");
+
+        // 空串与中文（serde_json 对非 ASCII 不转义，保留可读性）。
+        assert_eq!(to_js_string_literal(""), "\"\"");
+        assert_eq!(to_js_string_literal("中文测试"), "\"中文测试\"");
+
+        // 组合：中文 + 双引号 + 反斜杠 + 单引号（启动失败消息的真实形态）。
+        // 验证产生的字面量是合法 JS：以 " 包裹、内部 " 与 \ 均被转义。
+        let raw = "inkos 启动失败: path 'C:\\foo\\bar' 不存在";
+        let literal = to_js_string_literal(raw);
+        assert!(literal.starts_with('"') && literal.ends_with('"'));
+        // 原串含两个单 `\`（C:\foo 与 \bar），转义后每个变 `\\`——literal 应有 4 个反斜杠。
+        assert_eq!(
+            literal.chars().filter(|&c| c == '\\').count(),
+            4,
+            "反斜杠应每个转义为两个: {}",
+            literal
+        );
+        // 双引号序列化后变 \"，但本例 raw 无双引号；改单独构造断言。
+        assert!(to_js_string_literal(r#"a"b"#).contains(r#"\""#));
+    }
+}

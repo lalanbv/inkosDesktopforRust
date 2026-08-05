@@ -51,9 +51,13 @@ pub fn pick_free_port(start: u16) -> Option<u16> {
 ///
 /// - `program` = `node_bin`
 /// - `args` = `[<submodule>/packages/cli/dist/index.js, "studio", "--port", <port>]`
-/// - `env` 注入 `INKOS_STUDIO_PORT`（inkos studio 用 cwd 解析 project_root，
-///   见架构 §6.1/§14 Q4；不再注入 `INKOS_PROJECT_ROOT` env——已确认为死代码）
-/// - `cwd` = `project_root`（CLI 的 `findProjectRoot()` 即 `process.cwd()`）
+/// - `env` 注入 `INKOS_STUDIO_PORT`；**不**注入 `INKOS_PROJECT_ROOT`——
+///   该 env 与 cwd 在本路径下**等价**（见架构 §6.1/§14 Q4：studio 服务
+///   `api/index.ts` 解析链 `argv[2] ?? process.env.INKOS_PROJECT_ROOT ?? process.cwd()`，
+///   三者均可指定 root，env 端确有读取，**非死代码**）。supervisor 已通过
+///   `cwd=project_root`（下行）注入相同值，再叠加 env 冗余、徒增状态面，故移除。
+/// - `cwd` = `project_root`（CLI `findProjectRoot()`=`process.cwd()` 作 argv[2]
+///   传 studio 服务，是当前解析链的实际承重路径）。
 ///
 /// 本函数为纯逻辑：不执行 spawn、不做 I/O，所有副作用由调用方承担。
 pub fn build_launch<R: PathResolver>(paths: &R, port: u16, node_bin: &str) -> LaunchSpec {
@@ -220,7 +224,8 @@ mod tests {
 
     #[test]
     fn build_launch_sets_studio_port_env_only() {
-        // M1 清理：INKOS_PROJECT_ROOT env 已移除（架构 §6.1/§14 Q4 确认 inkos studio 用 cwd）。
+        // M1 清理：INKOS_PROJECT_ROOT env 已移除——它与 cwd 在 supervisor 路径下
+        // 等价（见 build_launch 文档与架构 §6.1/§14 Q4），保留 cwd=project_root 即足够。
         // 验证 env 仅含 INKOS_STUDIO_PORT；cwd 仍 = project_root 由独立测试覆盖。
         let paths = DummyPaths {
             proj: PathBuf::from("/tmp/proj"),
