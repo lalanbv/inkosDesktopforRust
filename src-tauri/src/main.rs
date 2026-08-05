@@ -21,9 +21,18 @@
 //!   release loopback + set ExitingFlag）。
 //! - **关窗→隐藏保活**：`on_window_event` 拦截 `CloseRequested`，除非 `ExitingFlag`
 //!   已置位（来自托盘退出菜单 / 信号钩子），否则 `prevent_close` + `window.hide()`。
+//! - **M2b Task 5 secrets 接线**：setup 内 spawn sidecar **之前**构建
+//!   `KeyringStore("inkosDesktop")` + `secrets_path`（`.inkos/secrets.json`）+ `syncing`
+//!   标记，调用 `sync_on_startup`（keychain ↔ secrets.json 对齐）。sync 失败（Linux
+//!   无 Secret Service / Keychain 锁死）→ **仅 log，不阻塞**（降级明文，inkos 仍可读
+//!   secrets.json）。spawn sidecar **后**启动 `spawn_writeback` watcher 线程，监听
+//!   secrets.json 变更 → diff → 回写 keychain。watcher 生命周期由
+//!   `SecretsWritebackState` 管理，`RunEvent::Exit` 与信号钩子都调用
+//!   `shutdown_and_join`（发 shutdown 信号 + join 线程，idempotent）。
 //!
 //! Tauri 版本：2.11.5（见 `Cargo.lock`）。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -41,7 +50,11 @@ use inkos_desktop::observer::notifier::NativeNotifier;
 use inkos_desktop::observer::router::Router;
 use inkos_desktop::observer::sse::SseClient;
 use inkos_desktop::observer::tray_badge::TrayBadge;
-use inkos_desktop::paths::AppPaths;
+use inkos_desktop::paths::{AppPaths, PathResolver};
+// M2b Task 5：secrets keychain 同步 + 文件监听回写。
+// KeyringStore 是具体实现；SecretStore trait 必须在作用域里才能 `as Arc<dyn SecretStore>`。
+use inkos_desktop::secrets;
+use inkos_desktop::secrets::store::{KeyringStore, SecretStore};
 use inkos_desktop::supervisor;
 
 /// loopback guard 句柄 + 锁定的端口，存入 Tauri managed state。
@@ -81,6 +94,40 @@ impl LoopbackGuardState {
     /// 读取已 lock 的端口（未 lock 时返回 0）。
     fn current_port(&self) -> u16 {
         *self.port.lock().expect("LoopbackGuardState port mutex 中毒")
+    }
+}
+
+/// secrets.json → keychain 回写 watcher 的关闭句柄。
+///
+/// `RunEvent::Exit` 与信号钩子 cleanup 闭包都调用：
+/// 1. `shutdown.store(true)` — watcher 主循环下次轮询（≤100ms）跳出；
+/// 2. `handle.take().join()` — 阻塞至 watcher 线程退出（最坏 ~500ms，等
+///    `debounce_and_process` 内 `recv_timeout` 醒来检查 shutdown）。
+///
+/// `Mutex<Option<JoinHandle>>`：JoinHandle 是 `Send` 但非 `Sync`，Mutex 包装满足
+/// Tauri managed state 的 `Send + Sync` 契约；Option 支持 take-once 消费语义
+/// （Exit + 信号钩子 idempotent，第二次 take 拿到 None）。
+struct SecretsWritebackState {
+    shutdown: Arc<AtomicBool>,
+    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl SecretsWritebackState {
+    /// 优雅关闭 watcher：发 shutdown 信号 + join 线程。
+    /// 两次调用（Exit + 信号钩子）idempotent：第二次 take 拿到 None 直接返回。
+    fn shutdown_and_join(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        let mut guard = self
+            .handle
+            .lock()
+            .expect("SecretsWritebackState handle mutex 中毒");
+        if let Some(handle) = guard.take() {
+            // watcher 主循环：recv_timeout 上限 100ms；debounce 内上限 500ms。
+            // join 在 ≤500ms 内必返回（无外设 IO 阻塞）——不设超时，避免漏 join 泄漏线程。
+            if let Err(e) = handle.join() {
+                eprintln!("[main] secrets-writeback watcher join 失败: panic={e:?}");
+            }
+        }
     }
 }
 
@@ -156,6 +203,44 @@ fn main() {
                     )
                     .context("解析 AppPaths 失败")?;
 
+                    // =========================================================
+                    // M2b Task 5：secrets keychain 同步（spawn sidecar **之前**）
+                    // =========================================================
+                    // secrets_path = project_root/.inkos/secrets.json（与 inkos
+                    // `loadSecrets` 默认路径一致）。先确保 .inkos/ 在：
+                    let secrets_path = paths
+                        .project_root()
+                        .join(".inkos")
+                        .join("secrets.json");
+                    std::fs::create_dir_all(
+                        secrets_path
+                            .parent()
+                            .context("secrets_path 应有 .inkos/ 父目录")?,
+                    )
+                    .with_context(|| {
+                        format!("创建 .inkos/ 失败: {}", secrets_path.display())
+                    })?;
+
+                    // KeyringStore（macOS Keychain / Win Cred Manager / Linux Secret Service）。
+                    // Arc<dyn SecretStore> 让 sync_on_startup 与 spawn_writeback 共享同一实例。
+                    let store: Arc<dyn SecretStore> =
+                        Arc::new(KeyringStore::new("inkosDesktop"));
+
+                    // syncing 标记：sync_on_startup 写 secrets.json 期间置 true，
+                    // 防 watcher 回写（程序写不触发回写，仅 SPA 改触发）。
+                    let syncing = Arc::new(AtomicBool::new(false));
+
+                    // 同步 keychain ↔ secrets.json（首启或 keychain 主覆盖）。
+                    // **降级语义**：keychain 不可用（Linux 无 Secret Service、
+                    // macOS Keychain 锁死等）→ sync_on_startup 返回 Err。
+                    // 此处仅 eprintln log，不 panic、不阻塞启动——
+                    // secrets.json 若已存在，inkos 仍可读（明文降级，安全损失记入日志）。
+                    if let Err(e) = secrets::sync_on_startup(&*store, &secrets_path, &syncing) {
+                        eprintln!(
+                            "[secrets] keychain 同步失败，降级明文存储（keychain 不可用）: {e:#}"
+                        );
+                    }
+
                     let port = supervisor::pick_free_port(config::DEFAULT_STUDIO_PORT)
                         .context("pick_free_port 在 [4567, 5567) 区间无空闲端口")?;
 
@@ -189,12 +274,18 @@ fn main() {
                     let spec = supervisor::build_launch(&paths, port, "node");
                     let child = supervisor::spawn(&spec).context("spawn sidecar 失败")?;
 
-                    Ok::<(u16, std::process::Child), anyhow::Error>((port, child))
+                    Ok::<(u16, std::process::Child, Arc<dyn SecretStore>, Arc<AtomicBool>, PathBuf), anyhow::Error>((
+                        port,
+                        child,
+                        store,
+                        syncing,
+                        secrets_path,
+                    ))
                 }
                 .await;
 
                 match outcome {
-                    Ok((port, child)) => {
+                    Ok((port, child, store, syncing, secrets_path)) => {
                         // 把 Child 存入 managed state，供 RunEvent::Exit 时清理。
                         if let Some(state) = app_handle.try_state::<SidecarState>() {
                             state.insert(child);
@@ -202,6 +293,25 @@ fn main() {
                             // 理论上 .manage 注册了必然能取出；走不到这条分支。
                             eprintln!("[main] 警告: SidecarState 未注册，无法清理 child");
                         }
+
+                        // =====================================================
+                        // M2b Task 5：spawn sidecar **后**，启动 secrets writeback watcher
+                        // =====================================================
+                        // 即便 sync_on_startup 降级（keychain 不可用），仍启动 watcher——
+                        // 它内部 eprintln 容错每次回写错误，keychain 恢复后自动 work。
+                        // watcher 生命周期由 wb_shutdown + SecretsWritebackState 管理，
+                        // Exit / 信号钩子调用 shutdown_and_join 优雅关闭。
+                        let wb_shutdown = Arc::new(AtomicBool::new(false));
+                        let wb_handle = secrets::spawn_writeback(
+                            store.clone(),
+                            Arc::new(secrets_path),
+                            syncing.clone(),
+                            wb_shutdown.clone(),
+                        );
+                        app_handle.manage(SecretsWritebackState {
+                            shutdown: wb_shutdown,
+                            handle: std::sync::Mutex::new(Some(wb_handle)),
+                        });
 
                         let healthy = supervisor::health_probe(
                             port,
@@ -267,6 +377,13 @@ fn main() {
                 }
                 // 兜底：如果 managed state 因任何原因没拿到 child（例如 setup
                 // 异步块还没跑完用户就关窗），无副作用——此时无 sidecar 可清。
+
+                // secrets writeback watcher：发 shutdown 信号 + join 线程（≤500ms）。
+                // best-effort：watcher 在 debounce 中可能延迟 500ms 才检查 shutdown，
+                // 但必然返回——不阻塞 Exit 流程到不可接受的程度。
+                if let Some(wb_state) = app_handle.try_state::<SecretsWritebackState>() {
+                    wb_state.shutdown_and_join();
+                }
 
                 // loopback release：best-effort。失败仅 log，不让退出路径抛错。
                 if let Some(guard_state) = app_handle.try_state::<LoopbackGuardState>() {
@@ -387,8 +504,8 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     // ---- 5. install_signal_hooks（cleanup 闭包）----
     // cleanup 在 SIGINT/SIGTERM 收到时调用，之后 process::exit(0)（绕过 RunEvent::Exit），
     // 故必须自包含：set ExitingFlag + shutdown observer + take SidecarState +
-    // cleanup_sidecar + release loopback。与 RunEvent::Exit 路径 idempotent 冗余——
-    // 两边都做、take/AtomicBool/store 都是幂等。
+    // cleanup_sidecar + shutdown secrets writeback + release loopback。
+    // 与 RunEvent::Exit 路径 idempotent 冗余——两边都做、take/AtomicBool/store 都是幂等。
     let sig_app = app_handle.clone();
     let cleanup: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         // 1. 退出意图 + observer shutdown：两个状态独立，但 cleanup 同时置。
@@ -405,7 +522,12 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
             cleanup_sidecar(child);
         }
 
-        // 3. loopback release：best-effort。
+        // 3. secrets writeback watcher：shutdown + join（idempotent，二次调用拿 None）。
+        if let Some(wb_state) = sig_app.try_state::<SecretsWritebackState>() {
+            wb_state.shutdown_and_join();
+        }
+
+        // 4. loopback release：best-effort。
         if let Some(guard_state) = sig_app.try_state::<LoopbackGuardState>() {
             let port = guard_state.current_port();
             if let Some(guard) = guard_state.take_guard() {
@@ -433,6 +555,7 @@ const _: fn() = || {
     assert_send_sync::<ExitingFlag>();
     assert_send_sync::<ObserverShutdown>();
     assert_send_sync::<TrayController>();
+    assert_send_sync::<SecretsWritebackState>();
 };
 
 #[cfg(test)]
