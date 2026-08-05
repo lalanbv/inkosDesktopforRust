@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 # （替代手写 .replace('\n',..).replace('\'',...)，规避引号/反斜杠/控制字符注入）
 serde_json = "1"
 dirs = "5"
+# M2b：OS keychain 抽象（macOS Keychain / Win Cred Manager / Linux Secret Service）。
+# Task 1 仅引入依赖占位，真实调用在 Task 5（wiring）实装。
+keyring = "3"
 
 [dev-dependencies]
 tempfile = "3"
