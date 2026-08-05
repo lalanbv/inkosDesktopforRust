@@ -22,6 +22,9 @@ dirs = "5"
 # M2b：OS keychain 抽象（macOS Keychain / Win Cred Manager / Linux Secret Service）。
 # Task 1 仅引入依赖占位，真实调用在 Task 5（wiring）实装。
 keyring = "3"
+# M2b Task 4：secrets.json 文件监听回写（spawn_writeback）。
+# 选 v6（API 自 v6 起跨 v8 保持稳定，v6 最广泛验证；序列化兼容性最稳）。
+notify = "6"
 
 [dev-dependencies]
 tempfile = "3"
