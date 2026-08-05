@@ -7,12 +7,17 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+tokio-stream = "0.1"
 anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
+# main.rs eval 错误消息用 serde_json::to_string 做规范 JS 字符串转义
+# （替代手写 .replace('\n',..).replace('\'',...)，规避引号/反斜杠/控制字符注入）
+serde_json = "1"
 dirs = "5"
 
 [dev-dependencies]

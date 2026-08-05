@@ -204,7 +204,7 @@ updater 定时（默认每 24h）查询：
 
 | 适配需求 | 外部手段（不改 inkos） |
 |---|---|
-| 数据写入规范目录 | **cwd**（=用户项目目录）。实测：`inkos studio` 路径下 CLI `findProjectRoot()`=`process.cwd()` 并作 argv[2] 传给 studio 服务，**`INKOS_PROJECT_ROOT` env 对此路径是死代码**（studio 服务虽认 env，但被 argv[2] 抢先）。壳层设 `cwd=用户项目目录` 即生效（已实现）。`~/.inkos` 全局配置是否随 `HOME` 重定向另行评估（建议不动 HOME） |
+| 数据写入规范目录 | **cwd**（=用户项目目录）。实测：`inkos studio` 路径下 CLI `findProjectRoot()`=`process.cwd()` 并作 argv[2] 传给 studio 服务，**`INKOS_PROJECT_ROOT` env 对此路径冗余**（studio 服务认 env=argv>env>cwd，但被 argv[2] 抢先；且 cwd 为等价回退）。壳层设 `cwd=用户项目目录` 即生效（已实现，M2 已删冗余 env 注入）。`~/.inkos` 全局配置是否随 `HOME` 重定向另行评估（建议不动 HOME） |
 | API key 安全 | keychain 管理；注入策略见 §6.4（⚠️ Studio 模式 `.inkos/secrets.json` 优先于 env） |
 | 系统通知 | observer 旁路 SSE → 原生通知（不改 inkos --notify） |
 | 全局快捷键 | Tauri 注册 → WebView focus 命令 |
@@ -390,7 +390,7 @@ inkos 跑在 V8（带 GC），**系统级 0GC 物理不可能**。但性能瓶�
 | 1 | 生产启动方式 | **单端口统一服务**。`inkos studio` 默认 :4567（`INKOS_STUDIO_PORT`/`--port`），Hono 同端口 serve SPA 静态 + REST + SSE（`api/index.ts`、`server.ts:6192-6220`）。:4569 仅 dev |
 | 2 | 能否仅起 Hono 不起 SPA | server 始终 serve `staticDir`；理论上可指向空目录，γ 非必需，不深入 |
 | 3 | API key env 变量名 | `INKOS_LLM_PROVIDER/BASE_URL/API_KEY/MODEL` + per-service `*_API_KEY`；但 **`.inkos/secrets.json` 优先于 env**（见 §6.4） |
-| 4 | 数据目录重定向 | **实测修正**：`inkos studio` 路径下 CLI `findProjectRoot()`=`process.cwd()`，作 argv[2] 传 studio 服务（preempt `INKOS_PROJECT_ROOT` env）。**有效机制=cwd**，env 对此路径是死代码（M2 清理）。壳层设 cwd=用户项目目录即可（已实现）。`HOME` 仅影响 `~/.inkos/.env` |
+| 4 | 数据目录重定向 | **实测修正**：`inkos studio` 路径下 CLI `findProjectRoot()`=`process.cwd()`，作 argv[2] 传 studio 服务（preempt `INKOS_PROJECT_ROOT` env）。**有效机制=cwd**，env 对此路径冗余（被 argv[2] 抢先 + cwd 等价回退，M2 已删注入）。壳层设 cwd=用户项目目录即可（已实现）。`HOME` 仅影响 `~/.inkos/.env` |
 | 5 | SPA 是否硬编码 baseURL | **否**——`use-api.ts` 用同源相对 `/api/v1`，换端口自动跟随，无需重写 |
 | 6 | daemon 托盘保活生命周期 | daemon 是 **studio 进程内 Scheduler**，托盘保活 sidecar 即保活 daemon（`server.ts:3849-3878`） |
 | 7 | bundle 运行时资源保留 | sidecar **预构建并随包分发 dist/**（含 SPA 静态 + genres/skills/提示词）；禁止依赖运行时 `npx vite build`（`api/index.ts` 的自动构建仅兜底） |
