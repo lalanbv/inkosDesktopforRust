@@ -6,10 +6,16 @@ use std::collections::HashMap;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
-// process_group 来自 CommandExt：Unix 在 std::os::unix::process，Windows 在 std::os::windows::process。
-// 我们只在 Unix 用它（Windows 走 taskkill /T，不需要新进程组）；但 cfg(unix) 引入即可覆盖。
+// spawn 让子进程成新进程组 leader，跨平台分别通过 CommandExt 的不同方法实现：
+// - Unix：`process_group(0)` → fork 后 setpgid(0,0)，pgid=child.pid
+// - Windows：`creation_flags(CREATE_NEW_PROCESS_GROUP=0x00000200)` → 新进程组
+// 两者的 trait 都叫 `CommandExt`，但分别在 `std::os::unix::process` 与
+// `std::os::windows::process`，需要按平台 cfg-gate 导入；其上的方法调用也必须
+// 在对应 cfg 块内（方法本身仅在 trait 导入时才存在）。
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 /// 启动规格：描述如何拉起 inkos studio sidecar 进程。
 ///
 /// 构造后不可变；调用方应视为只读快照。
@@ -64,28 +70,46 @@ pub fn build_launch<R: PathResolver>(paths: &R, port: u16, node_bin: &str) -> La
 
 /// 拉起 sidecar 子进程。
 ///
-/// 关键设计：`process_group(0)` 让子进程成为新进程组 leader（pgid=child pid）。
+/// 关键设计：让子进程成为新进程组 leader，跨平台一致：
+/// - Unix：`process_group(0)` → fork 后 `setpgid(0, 0)`，pgid=child.pid。
+/// - Windows：`creation_flags(CREATE_NEW_PROCESS_GROUP = 0x00000200)` → 子进程
+///   进入新进程组（[`kill_tree`] 的 Windows 分支用 `taskkill /T /F` 按进程树杀，
+///   不读 pgid；这里设进程组是为了与 Unix 语义对齐，并允许将来用 Ctrl-Break
+///   信号整组发送）。
+///
 /// 这是为了解决 Task 3 实测发现：inkos CLI（`node packages/cli/dist/index.js studio`）
 /// 会 spawn 一个 tsx 孙子进程作为真正的 HTTP 服务；CLI 父进程退出后 tsx 被 init
 /// （PID 1）收养，`child.kill()` 只杀 CLI 父进程、留下孤儿 tsx 继续占端口。
 /// 新进程组让我们后续能用 [`kill_tree`] 一次性杀掉整组（CLI + tsx）。
 ///
-/// `process_group` 在 Rust 1.64+ 于 Unix/Windows 均稳定可用。
+/// 注意：`process_group` 仅在 `std::os::unix::process::CommandExt` 提供；Windows
+/// 的同名 trait 没有该方法，故不能用单个链式 `.process_group(0)` 跨平台，必须
+/// 按平台分别调用对应方法。
 pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
-    std::process::Command::new(&spec.program)
-        .args(&spec.args)
+    let mut cmd = std::process::Command::new(&spec.program);
+    cmd.args(&spec.args)
         .envs(spec.env.iter())
-        .current_dir(&spec.cwd)
-        .process_group(0)
-        .spawn()
-        .map_err(Into::into)
+        .current_dir(&spec.cwd);
+
+    // 子进程成新进程组 leader（跨平台分置，避免方法不存在导致 Windows 编译失败）。
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        // CREATE_NEW_PROCESS_GROUP = 0x00000200；winapi 常量，避免引入 winapi crate。
+        cmd.creation_flags(0x0000_0200);
+    }
+
+    cmd.spawn().map_err(Into::into)
 }
 
 /// 杀掉 [`spawn`] 拉起的整棵进程树。
 ///
 /// 必须配合 `spawn`（用了 `process_group(0)`）使用——`child.id()` 同时也是进程组 ID。
 ///
-/// - Unix：`libc::kill(-pgid, SIGTERM)` 向整个进程组发 SIGTERM；ESESCH（进程已退出）
+/// - Unix：`libc::kill(-pgid, SIGTERM)` 向整个进程组发 SIGTERM；ESRCH（进程已退出）
 ///   视为成功（幂等）。SIGTERM 而非 SIGKILL，给 tsx 一个清理端口的机会。
 /// - Windows：`taskkill /PID <pid> /T /F`，`/T` 杀整树。
 ///
