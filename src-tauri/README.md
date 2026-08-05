@@ -22,13 +22,15 @@ inkos 的 Tauri / Rust 桌面客户端骨架。当前里程碑 **M2a**（observe
 
 ### 1. 系统通知（背景写作不打扰）
 
-observer 旁路订阅 `http://127.0.0.1:<port>/api/v1/events`（与 SPA 同端口），按事件前缀路由：
+observer 旁路订阅 `http://127.0.0.1:<port>/api/v1/events`（与 SPA 同端口），按事件名**精确匹配**路由（非前缀匹配，与 spec §2.1 一致）：
 
-| SSE 事件 | 行为 |
-|---|---|
-| `book:` / `write:` / `draft:` / `agent:` / `tool:` / `import:` / `audit:` / `revise:` | 系统通知 + 托盘角标 +1 |
-| `daemon:chapter:*` | 仅托盘角标 +1（后台章节生成静默） |
-| 其他（`log:` / `llm:` / 未知） | 静默忽略 |
+| SSE 事件 | 原生通知 | 托盘角标 |
+|---|---|---|
+| `write:complete` / `draft:complete` | ✅（仅窗口失焦时） | +1 |
+| `book:created` | ✅（失焦时） | +1 |
+| `agent:complete` | ✅（失焦时） | +1 |
+| `daemon:chapter` | ❌ | +1 |
+| `log` / `tool:*` / `llm:progress` / `context:*` / `ping` / 其他未知 | ❌ | ❌（静默忽略，容错） |
 
 通知仅在主窗口**未聚焦**时发送（隐藏/失焦/取不到 → 视为未在前台，保守多发不漏发）。
 

@@ -29,15 +29,17 @@
 
 ## 2. observer 路由表（默认，源自 T3）
 
-`Router::default_table(notifier, badge)` 组装：
+`Router::default_table(notifier, badge)` 按事件名**精确匹配**组装（非前缀匹配，与 spec §2.1 一致）：
 
-| SSE event 前缀 | 路由目标 | 用户感知 |
-|---|---|---|
-| `book:` / `write:` / `draft:` / `agent:` / `tool:` / `import:` / `audit:` / `revise:` | `NativeNotifier` + `TrayBadge` | 系统通知 + 托盘角标 +1 |
-| `daemon:chapter:*` | **仅** `TrayBadge` | 仅角标 +1（后台章节生成不打扰） |
-| `log:` / `llm:` / 其他 | （未注册） | 静默忽略 |
+| SSE 事件 | NativeNotifier | TrayBadge | 备注 |
+|---|---|---|---|
+| `write:complete` / `draft:complete` | ✅（仅窗口失焦时） | +1 | 章节写完 |
+| `book:created` | ✅（失焦时） | +1 | 新建书 |
+| `agent:complete` | ✅（失焦时） | +1 | agent 完成 |
+| `daemon:chapter` | ❌ | +1 | daemon 写完一章（静默，仅角标） |
+| `log` / `tool:*` / `llm:progress` / `context:*` / `ping` / 其他未知 | ❌ | ❌ | 静默忽略（架构 §6.2 容错，防上游新增） |
 
-设计点：router 内部用 `Arc<dyn EventHandler>`，handler 失败仅 log 不阻断链路（`failing_handler_does_not_break_chain` 单测验证）。
+设计点：router 内部用 `Arc<dyn EventHandler>`，handler 失败仅 log 不阻断链路（`failing_handler_does_not_break_chain` 单测验证）；未知事件不崩溃（`unknown_event_is_ignored` 单测验证）。
 
 ---
 
