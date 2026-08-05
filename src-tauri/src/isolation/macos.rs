@@ -40,7 +40,7 @@ pub const ANCHOR_NAME: &str = "inkosdesktop";
 /// # use inkos_desktop::isolation::macos::pf_anchor_rules;
 /// let s = pf_anchor_rules(4567);
 /// assert!(s.contains("pass in quick on lo0"));
-/// assert!(s.contains("block in proto tcp from !lo0 to any port = 4567"));
+/// assert!(s.contains("block in quick proto tcp from !lo0 to any port = 4567"));
 /// ```
 pub fn pf_anchor_rules(port: u16) -> String {
     format!(

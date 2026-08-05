@@ -31,8 +31,17 @@ pub struct LaunchSpec {
 /// 从 `start` 起递增找首个可绑定的端口（含 `start`）。
 ///
 /// 探测区间为 `[start, start+1000)`；探测方式为 `TcpListener::bind`，
-/// 成功即说明端口当前空闲。返回 `Some(port)` 表示该端口在探测瞬间可用，
-/// 不保证后续仍可用（TOCTOU 由 spawn 侧的失败处理兜底，见 Task 5）。
+/// 成功即说明端口当前空闲。返回 `Some(port)` 表示该端口在**探测瞬间**可用，
+/// **不保证后续仍可用**——这是经典的 TOCTOU（time-of-check/time-of-use）
+/// 缝隙：`bind` 探测成功后 `TcpListener` 立即 drop 释放端口，到调用方
+/// 真正用它（如 sidecar spawn）之间，另一并发进程可能抢先把同一端口 bind 走。
+///
+/// 调用方必须容忍这种竞争：
+/// - 直接消费方（`main.rs` setup）在 spawn 后用 [`health_probe`] 兜底，
+///   端口被抢则 sidecar 起不来、健康探测失败、UI 显式报错。
+/// - 单元测试**不得**再 `TcpListener::bind` 同一端口做"复核"——并发测试
+///   下两个 `pick_free_port` 几乎必然抢同一端口，使测试 flaky。
+///   正确断言是「返回 `Some` 且端口落在探测区间内」。
 pub fn pick_free_port(start: u16) -> Option<u16> {
     (start..start.saturating_add(1000))
         .find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
@@ -195,9 +204,21 @@ mod tests {
 
     #[test]
     fn pick_free_port_returns_bindable_port() {
-        let p = pick_free_port(DEFAULT_STUDIO_PORT).expect("应找到空闲端口");
-        // 返回的端口确实可绑定（再次 bind 成功说明未被占）
-        assert!(TcpListener::bind(("127.0.0.1", p)).is_ok());
+        // 注意：本测试**不**再对返回端口做 `TcpListener::bind` 复核。
+        // 原因：`pick_free_port` 内部 bind→drop 留下 TOCTOU 缝隙，并发 `cargo test`
+        // 下另一测试的 `pick_free_port` 完全可能抢同一端口；任何"再 bind 复核"
+        // 都会偶发失败（实测约 1/3）。这里只断言函数契约：
+        //   1. 返回 `Some(p)` —— 区间内确有空闲端口；
+        //   2. p ∈ [start, start+1000) —— 在探测区间内。
+        // 函数自身的"探测瞬间可用"语义已被 doc 充分说明，调用方容忍策略
+        // 见 `pick_free_port` 文档与 `main.rs` setup 的 health_probe 兜底。
+        let start = DEFAULT_STUDIO_PORT;
+        let p = pick_free_port(start).expect("应找到空闲端口");
+        assert!(
+            (start..start.saturating_add(1000)).contains(&p),
+            "返回端口 {p} 应落在探测区间 [{start}, {})",
+            start.saturating_add(1000)
+        );
     }
 
     #[test]
