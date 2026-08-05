@@ -51,17 +51,14 @@ pub fn pick_free_port(start: u16) -> Option<u16> {
 ///
 /// - `program` = `node_bin`
 /// - `args` = `[<submodule>/packages/cli/dist/index.js, "studio", "--port", <port>]`
-/// - `env` 注入 `INKOS_PROJECT_ROOT` 与 `INKOS_STUDIO_PORT`
-/// - `cwd` = `project_root`
+/// - `env` 注入 `INKOS_STUDIO_PORT`（inkos studio 用 cwd 解析 project_root，
+///   见架构 §6.1/§14 Q4；不再注入 `INKOS_PROJECT_ROOT` env——已确认为死代码）
+/// - `cwd` = `project_root`（CLI 的 `findProjectRoot()` 即 `process.cwd()`）
 ///
 /// 本函数为纯逻辑：不执行 spawn、不做 I/O，所有副作用由调用方承担。
 pub fn build_launch<R: PathResolver>(paths: &R, port: u16, node_bin: &str) -> LaunchSpec {
     let cli_entry = paths.submodule_root().join(CLI_ENTRY_REL);
     let mut env = HashMap::new();
-    env.insert(
-        "INKOS_PROJECT_ROOT".to_string(),
-        paths.project_root().to_string_lossy().into_owned(),
-    );
     env.insert("INKOS_STUDIO_PORT".to_string(), port.to_string());
     LaunchSpec {
         program: node_bin.to_string(),
@@ -222,13 +219,18 @@ mod tests {
     }
 
     #[test]
-    fn build_launch_sets_project_root_and_port_env() {
+    fn build_launch_sets_studio_port_env_only() {
+        // M1 清理：INKOS_PROJECT_ROOT env 已移除（架构 §6.1/§14 Q4 确认 inkos studio 用 cwd）。
+        // 验证 env 仅含 INKOS_STUDIO_PORT；cwd 仍 = project_root 由独立测试覆盖。
         let paths = DummyPaths {
             proj: PathBuf::from("/tmp/proj"),
             sub: PathBuf::from("/tmp/inkos"),
         };
         let spec = build_launch(&paths, 4567, "/usr/bin/node");
-        assert_eq!(spec.env.get("INKOS_PROJECT_ROOT").unwrap(), "/tmp/proj");
+        assert!(
+            spec.env.get("INKOS_PROJECT_ROOT").is_none(),
+            "INKOS_PROJECT_ROOT env 应已移除"
+        );
         assert_eq!(spec.env.get("INKOS_STUDIO_PORT").unwrap(), "4567");
     }
 

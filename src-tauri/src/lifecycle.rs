@@ -175,6 +175,10 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
 
 /// 菜单事件：show → window.show + set_focus；quit → app.exit(0)。
 /// quit 复用 main.rs RunEvent::Exit 钩子做 cleanup_sidecar + loopback release。
+///
+/// quit 路径会先 set `ExitingFlag`（managed state），让 `on_window_event` 的
+/// CloseRequested 知道这是退出意图、不要 prevent_close 拦截（参见 main.rs）。
+/// 若未注册 `ExitingFlag`（例如单测路径），按 `app.exit(0)` 直走，行为同前。
 fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {
     match ev.id().as_ref() {
         "show" => {
@@ -183,7 +187,13 @@ fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {
                 let _ = w.set_focus();
             }
         }
-        "quit" => app.exit(0),
+        "quit" => {
+            // 标记"正在退出"，让 CloseRequested 处理器放行；然后触发退出。
+            if let Some(flag) = app.try_state::<ExitingFlag>() {
+                flag.set();
+            }
+            app.exit(0);
+        }
         _ => {}
     }
 }
@@ -192,6 +202,43 @@ fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<TrayController>();
+};
+
+// =====================================================================
+// ExitingFlag（M2a Task 6）—— 区分"用户点 X 关窗"与"主动退出"
+// =====================================================================
+//
+// Tauri 2 关闭语义：用户点窗口 X 触发 `WindowEvent::CloseRequested`，
+// `api.prevent_close()` 可拦截。但托盘"退出"菜单 / 信号钩子调用 `app.exit(0)`
+// 时希望直接退出，不被 `prevent_close` 拦在窗口层。
+// 解决：quit 菜单与信号 cleanup 先 set 此 flag，CloseRequested 处理器读到 true
+// 则放行（不 prevent_close）；否则视为"用户想最小化到托盘"，prevent_close + hide。
+
+/// 退出意图标志：`Arc<AtomicBool>` 包装，作为 Tauri managed state 注册。
+/// `Send + Sync`，多线程（菜单事件 / 信号钩子 / 窗口事件）共享读。
+#[derive(Debug, Default, Clone)]
+pub struct ExitingFlag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl ExitingFlag {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 标记退出意图（SeqCst 保证跨线程可见）。
+    pub fn set(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 是否有退出意图。
+    pub fn is_set(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// 编译期断言：ExitingFlag 满足 Send + Sync。
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ExitingFlag>();
 };
 
 // =====================================================================
@@ -399,5 +446,31 @@ mod tests {
         cleanup();
 
         assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    // --- ExitingFlag 单测（纯逻辑，无 Tauri 依赖）---
+
+    #[test]
+    fn exiting_flag_new_is_false() {
+        assert!(!ExitingFlag::new().is_set());
+    }
+
+    #[test]
+    fn exiting_flag_set_marks_intent() {
+        let flag = ExitingFlag::new();
+        assert!(!flag.is_set());
+        flag.set();
+        assert!(flag.is_set());
+    }
+
+    #[test]
+    fn exiting_flag_clone_shares_state() {
+        let flag = ExitingFlag::new();
+        let clone = flag.clone();
+        flag.set();
+        assert!(
+            clone.is_set(),
+            "clone 应共享底层 Arc，set 在原实例上对 clone 可见"
+        );
     }
 }
