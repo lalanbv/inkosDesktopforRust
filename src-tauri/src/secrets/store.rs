@@ -232,7 +232,7 @@ impl SecretStore for KeyringStore {
             }
             Err(e) => {
                 return Err(anyhow::anyhow!(
-                    "keyring delete_password(service={}, key={key}) 失败: {e}",
+                    "keyring delete_credential(service={}, key={key}) 失败: {e}",
                     self.service
                 ));
             }
