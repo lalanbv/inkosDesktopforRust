@@ -2,11 +2,13 @@
 
 pub mod detector;
 pub mod index;
+pub mod manager;
 pub mod scanner;
 pub mod types;
 
 pub use detector::ProjectDetector;
 pub use index::ProjectIndex;
+pub use manager::ProjectManager;
 pub use scanner::ProjectScanner;
 pub use types::{
     HealthIssue, HealthStatus, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta,
