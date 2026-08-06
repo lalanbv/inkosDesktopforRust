@@ -1,6 +1,8 @@
 //! 项目生命周期管理器
 
-use crate::project::{ProjectDetector, ProjectIndex, ProjectMeta, ProjectScanner};
+use crate::project::{
+    ProjectDetector, ProjectHealth, ProjectIndex, ProjectMeta, ProjectScanner,
+};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,6 +18,13 @@ pub struct ProjectManager {
     index: ProjectIndex,
     scanner: ProjectScanner,
     cache: Arc<Mutex<HashMap<String, ProjectMeta>>>,
+
+    /// 遥测：健康检查次数（Relaxed 原子，无锁热路径）
+    health_count: std::sync::atomic::AtomicU64,
+    /// 遥测：健康检查累计耗时（微秒）
+    health_total_us: std::sync::atomic::AtomicU64,
+    /// 遥测：健康检查失败次数
+    health_failures: std::sync::atomic::AtomicU64,
 }
 
 impl ProjectManager {
@@ -28,6 +37,9 @@ impl ProjectManager {
             index,
             scanner: ProjectScanner::new(),
             cache: Arc::new(Mutex::new(HashMap::new())),
+            health_count: std::sync::atomic::AtomicU64::new(0),
+            health_total_us: std::sync::atomic::AtomicU64::new(0),
+            health_failures: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -227,11 +239,61 @@ impl ProjectManager {
         self.index.search(query)
     }
 
+    /// 对项目执行健康检查（封装 ProjectHealthChecker + 遥测埋点）。
+    ///
+    /// 命令层 `check_project_health` 应调本方法而非直接调 ProjectHealthChecker，
+    /// 以便统一计入 metrics。失败（项目不存在 / 检查异常）也计入 count + failures。
+    pub async fn check_health(&self, id: &str) -> Result<ProjectHealth> {
+        use crate::project::ProjectHealthChecker;
+
+        let start = std::time::Instant::now();
+        let result = async {
+            let meta = self
+                .index
+                .get_by_id(id)?
+                .ok_or_else(|| anyhow::anyhow!("Project not found: {}", id))?;
+            ProjectHealthChecker::check(&meta).await
+        }
+        .await;
+
+        use std::sync::atomic::Ordering::Relaxed;
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        self.health_count.fetch_add(1, Relaxed);
+        self.health_total_us.fetch_add(elapsed_us, Relaxed);
+        if result.is_err() {
+            self.health_failures.fetch_add(1, Relaxed);
+        }
+        result
+    }
+
+    /// 健康检查遥测快照（与 plugin::PluginMetrics 对称）
+    pub fn metrics(&self) -> ProjectMetrics {
+        use std::sync::atomic::Ordering::Relaxed;
+        let count = self.health_count.load(Relaxed);
+        let total_us = self.health_total_us.load(Relaxed);
+        let failures = self.health_failures.load(Relaxed);
+        ProjectMetrics {
+            health_count: count,
+            health_total_us: total_us,
+            health_failures: failures,
+            avg_us: if count > 0 { total_us / count } else { 0 },
+        }
+    }
+
     /// 清空缓存（仅测试用）
     #[cfg(test)]
     pub fn clear_cache(&self) {
         self.cache.lock().expect("cache mutex 中毒").clear();
     }
+}
+
+/// 健康检查聚合指标（遥测快照）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectMetrics {
+    pub health_count: u64,
+    pub health_total_us: u64,
+    pub health_failures: u64,
+    pub avg_us: u64,
 }
 
 #[cfg(test)]
@@ -487,6 +549,40 @@ mod tests {
         let results = manager.search_projects("app").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "my-app");
+    }
+
+    #[tokio::test]
+    async fn test_health_metrics_counts_checks() {
+        let (_temp_db, manager) = create_test_manager();
+
+        // 不存在的项目 → check_health 报错，但计入 count + failures
+        let r = manager.check_health("nonexistent").await;
+        assert!(r.is_err());
+
+        let m = manager.metrics();
+        assert_eq!(m.health_count, 1);
+        assert_eq!(m.health_failures, 1);
+        assert!(m.health_total_us > 0, "应记录耗时");
+        assert!(m.avg_us > 0);
+    }
+
+    #[tokio::test]
+    async fn test_health_metrics_successful_check() {
+        let (_temp_db, manager) = create_test_manager();
+        let project_temp = create_test_project_dir(
+            Path::new("/tmp"),
+            "healthy-app",
+            r#"{"name": "healthy-app"}"#,
+        );
+        let meta = manager.add_project(&project_temp.path().join("healthy-app")).unwrap();
+
+        // 真实项目健康检查（Node.js 项目，可能报 node_modules 缺失但不算失败）
+        let r = manager.check_health(&meta.id).await;
+        assert!(r.is_ok(), "健康检查应成功: {:?}", r);
+
+        let m = manager.metrics();
+        assert_eq!(m.health_count, 1);
+        assert_eq!(m.health_failures, 0, "成功检查不计入失败");
     }
 
     #[tokio::test]

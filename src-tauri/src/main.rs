@@ -215,6 +215,7 @@ fn main() {
             inkos_desktop::project::commands::search_projects,
             inkos_desktop::project::commands::open_project,
             inkos_desktop::project::commands::check_project_health,
+            inkos_desktop::project::commands::get_project_metrics,
             inkos_desktop::plugin::commands::list_plugins,
             inkos_desktop::plugin::commands::install_plugin,
             inkos_desktop::plugin::commands::uninstall_plugin,

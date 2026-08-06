@@ -1,6 +1,6 @@
 //! Tauri 命令层 - 项目管理 API
 
-use crate::project::{ProjectHealthChecker, ProjectManager, ProjectMeta};
+use crate::project::{ProjectManager, ProjectMeta};
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -145,25 +145,27 @@ pub async fn open_project(id: String, state: State<'_, AppState>) -> Result<Proj
 }
 
 /// 检查项目健康状态
+///
+/// 走 `ProjectManager::check_health`（封装 ProjectHealthChecker + 遥测埋点），
+/// 而非直接调 ProjectHealthChecker，确保每次检查计入 metrics。
 #[tauri::command]
 pub async fn check_project_health(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<crate::project::ProjectHealth, String> {
-    let manager = &state.project_manager;
-
-    // 获取项目元数据
-    let meta = manager
-        .get_project(&id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "项目不存在".to_string())?;
-
-    // 执行健康检查
-    let health = ProjectHealthChecker::check(&meta)
+    state
+        .project_manager
+        .check_health(&id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
 
-    Ok(health)
+/// 项目健康检查遥测：返回聚合指标（次数/总耗时/失败/平均）。
+#[tauri::command]
+pub async fn get_project_metrics(
+    state: State<'_, AppState>,
+) -> Result<crate::project::manager::ProjectMetrics, String> {
+    Ok(state.project_manager.metrics())
 }
 
 // 说明：`tauri::State` 没有公开构造函数，无法在单元测试里直接合成，
