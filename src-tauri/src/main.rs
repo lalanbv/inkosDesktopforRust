@@ -528,8 +528,11 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     let watcher_url = events_url.clone();
     tauri::async_runtime::spawn(async move {
         eprintln!("[main] observer watcher 启动: {}", watcher_url);
+        // C8：SseClient（含共享 reqwest::Client）提到 watcher 循环外——task 级单例。
+        // Client 的连接池/TLS 会话跨 run() 重启与 connect_once() 重连复用，
+        // 避免每次重连重建 Client 触发重复 TLS 握手。shutdown 时随 task drop。
+        let client = SseClient::new(watcher_url.clone());
         while !watcher_shutdown.load(Ordering::Relaxed) {
-            let client = SseClient::new(watcher_url.clone());
             let result = client
                 .run(Arc::clone(&watcher_router), Arc::clone(&watcher_shutdown))
                 .await;
@@ -538,7 +541,7 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
             }
             match result {
                 Ok(()) => {
-                    // run 在非 shutdown 路径下返回 Ok——重新建 client 重连。
+                    // run 在非 shutdown 路径下返回 Ok——client 单例复用，仅重启 run。
                     eprintln!("[main] observer watcher: run 退出（Ok），500ms 后重启");
                 }
                 Err(e) => {
