@@ -179,6 +179,59 @@ fn main() {
                 .get_webview_window("main")
                 .context("tauri.conf.json 声明的 main 窗口未找到")?;
 
+            // =========================================================
+            // C10 修复：install_signal_hooks 提前到 spawn sidecar **之前**
+            // =========================================================
+            // 原代码：cleanup 闭包 + install_signal_hooks 在 wire_observer_and_lifecycle
+            // 内调用（health_probe 通过后）。慢启动期（health_probe 30s）Ctrl+C 无监听 →
+            // sidecar 孤儿进程残留。
+            // 修法：cleanup 闭包对**未注册**的 managed state 走 try_state→None→跳过
+            // （已幂等——cleanup_sidecar(None) no-op，loopback release 对未 lock 的
+            // anchor 视为幂等成功）。同一 Arc<dyn Fn> 闭包在 setup 末段调用一次，
+            // 信号触发时按当下已注册的 state 尽力清理。
+            //
+            // 注意：ObserverShutdown / SecretsWritebackState 在 spawn sidecar 后才
+            // manage；若信号在 manage 前到达，cleanup 跳过它们——此时 observer/watcher
+            // 还未起，无资源可清。sidecar 本身：若信号在 `state.insert(child)` 前到达，
+            // take→None→cleanup_sidecar(None)→no-op；sidecar 仍在跑，但**它至少是
+            // 新进程组 leader**（spawn 已让 setpgid），后续可由用户/系统回收。
+            // 这是 C10 修法的最小残留风险，远好于"无任何监听"。
+            let sig_app = app.handle().clone();
+            let cleanup: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                // 1. 退出意图 + observer shutdown：两个状态独立，但 cleanup 同时置。
+                if let Some(flag) = sig_app.try_state::<ExitingFlag>() {
+                    flag.set();
+                }
+                if let Some(obs_shutdown) = sig_app.try_state::<ObserverShutdown>() {
+                    obs_shutdown.0.store(true, Ordering::SeqCst);
+                }
+
+                // 2. sidecar 清理：take Child + kill_tree + wait_with_timeout
+                //    （idempotent；None 时 cleanup_sidecar no-op）。
+                if let Some(state) = sig_app.try_state::<SidecarState>() {
+                    let child = state.take();
+                    cleanup_sidecar(child);
+                }
+
+                // 3. secrets writeback watcher：shutdown + join（idempotent，二次调用拿 None）。
+                if let Some(wb_state) = sig_app.try_state::<SecretsWritebackState>() {
+                    wb_state.shutdown_and_join();
+                }
+
+                // 4. loopback release：best-effort。
+                if let Some(guard_state) = sig_app.try_state::<LoopbackGuardState>() {
+                    let port = guard_state.current_port();
+                    if let Some(guard) = guard_state.take_guard() {
+                        if let Err(e) = guard.release(port) {
+                            eprintln!(
+                                "[main] signal cleanup: loopback release port={port} 失败: {e:#}"
+                            );
+                        }
+                    }
+                }
+            });
+            install_signal_hooks(cleanup);
+
             tauri::async_runtime::spawn(async move {
                 let outcome = async {
                     // mono-repo：submodule_root = 仓库根（packages/cli/dist 在此）。
@@ -186,12 +239,16 @@ fn main() {
                     // 与 Task 5 集成测运行时 `std::env::var("CARGO_MANIFEST_DIR")` 等价。
                     // 不能用 `std::env::current_dir()`——`cargo run` 会把 cwd 设为 src-tauri/
                     // 而非仓库根，导致 packages/cli/dist/index.js 路径错位（实测踩过）。
+                    // TODO(M3): 用 Tauri resource_dir + 打包 engine/（便携 node + 预构建 dist）
+                    // 替代编译期 CARGO_MANIFEST_DIR，否则分发二进制找不到 sidecar。
                     let manifest_dir = env!("CARGO_MANIFEST_DIR");
                     let submodule_root = std::path::Path::new(manifest_dir)
                         .parent()
                         .context("CARGO_MANIFEST_DIR 应有父目录（仓库根）")?;
 
                     // project_root 用 temp 目录，inkos studio 会自动初始化 minimal project。
+                    // TODO(M3): 项目选择 UI（最近项目列表 + 首启目录选择），持久化到
+                    // app_data/projects.json；当前 temp 占位仅 dev。
                     let project_root = std::env::temp_dir().join("inkos-m1-demo");
                     // inkos studio 启动时 cwd 必须存在（Command::current_dir 在 dir 缺失时
                     // 直接返回 NotFound，不会进入子进程）。先确保目录在。
@@ -501,43 +558,10 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
         eprintln!("[main] observer watcher 退出（shutdown=true）");
     });
 
-    // ---- 5. install_signal_hooks（cleanup 闭包）----
-    // cleanup 在 SIGINT/SIGTERM 收到时调用，之后 process::exit(0)（绕过 RunEvent::Exit），
-    // 故必须自包含：set ExitingFlag + shutdown observer + take SidecarState +
-    // cleanup_sidecar + shutdown secrets writeback + release loopback。
-    // 与 RunEvent::Exit 路径 idempotent 冗余——两边都做、take/AtomicBool/store 都是幂等。
-    let sig_app = app_handle.clone();
-    let cleanup: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        // 1. 退出意图 + observer shutdown：两个状态独立，但 cleanup 同时置。
-        if let Some(flag) = sig_app.try_state::<ExitingFlag>() {
-            flag.set();
-        }
-        if let Some(obs_shutdown) = sig_app.try_state::<ObserverShutdown>() {
-            obs_shutdown.0.store(true, Ordering::SeqCst);
-        }
-
-        // 2. sidecar 清理：take Child + kill_tree + wait（idempotent）。
-        if let Some(state) = sig_app.try_state::<SidecarState>() {
-            let child = state.take();
-            cleanup_sidecar(child);
-        }
-
-        // 3. secrets writeback watcher：shutdown + join（idempotent，二次调用拿 None）。
-        if let Some(wb_state) = sig_app.try_state::<SecretsWritebackState>() {
-            wb_state.shutdown_and_join();
-        }
-
-        // 4. loopback release：best-effort。
-        if let Some(guard_state) = sig_app.try_state::<LoopbackGuardState>() {
-            let port = guard_state.current_port();
-            if let Some(guard) = guard_state.take_guard() {
-                if let Err(e) = guard.release(port) {
-                    eprintln!("[main] signal cleanup: loopback release port={port} 失败: {e:#}");
-                }
-            }
-        }
-    });
-    install_signal_hooks(cleanup);
+    // ---- 5. install_signal_hooks 已在 setup 早期完成（C10 修复）----
+    // 原代码在此处构建 cleanup 闭包 + 调 install_signal_hooks；C10 改为
+    // setup 同步阶段（spawn sidecar 之前）注册，避免慢启动期 Ctrl+C 无监听。
+    // 信号 → cleanup → exit 链路依赖 try_state，对未注册 state 幂等跳过。
 }
 
 /// observer 任务的 shutdown 标志，独立于 `ExitingFlag`（语义不同：
