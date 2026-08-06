@@ -3,6 +3,8 @@
 //! 工作区隔离：独立项目列表、Engine 版本、配置。
 //! 数据持久化：workspaces.json（app_data_dir）。
 
+pub mod migration;
+
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
