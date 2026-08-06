@@ -63,6 +63,16 @@ pub async fn update_config(
         ConfigLayer::System => {
             return Err("不允许修改系统配置".to_string());
         }
+        ConfigLayer::User => {
+            // 用户全局层常驻可写，无需工作区/项目上下文——settings 面板的核心编辑入口。
+            state
+                .config_loader
+                .save_user_config(&config)
+                .map_err(|e| e.to_string())?;
+
+            // 更新内存
+            mgr.set_user(config);
+        }
         ConfigLayer::Workspace => {
             let ws_id = state.current_workspace_id.lock().await;
             let workspace_id = ws_id.as_ref().ok_or("未选择工作区")?;
@@ -105,6 +115,9 @@ pub async fn reset_config(
     match layer {
         ConfigLayer::System => {
             return Err("不允许重置系统配置".to_string());
+        }
+        ConfigLayer::User => {
+            mgr.clear_user();
         }
         ConfigLayer::Workspace => {
             mgr.clear_workspace();
@@ -168,6 +181,9 @@ pub async fn start_config_watch(
 
     let mut watcher = ConfigWatcher::new().map_err(|e| e.to_string())?;
     let paths = state.config_loader.paths();
+
+    // 监听用户全局配置（无上下文门槛，常驻监听——用户偏好随时可被外部编辑）
+    watcher.watch_user_config(paths).map_err(|e| e.to_string())?;
 
     // 监听当前工作区配置
     if let Some(workspace_id) = state.current_workspace_id.lock().await.as_ref() {
@@ -254,6 +270,22 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
                                 .ok();
                         }
                     }
+                    ConfigChangeEvent::UserChanged => {
+                        tracing::info!("检测到用户全局配置变更");
+
+                        let mut mgr = state.config.lock().await;
+                        if let Ok(new_config) =
+                            state.config_reloader.reload_user_config(&mut mgr)
+                        {
+                            // 通知前端
+                            app_handle
+                                .emit("config-changed", serde_json::json!({
+                                    "layer": "User",
+                                    "config": new_config,
+                                }))
+                                .ok();
+                        }
+                    }
                 }
             }
         } else {
@@ -326,5 +358,37 @@ mod tests {
         let (_temp, state) = create_test_state();
         assert!(state.current_workspace_id.lock().await.is_none());
         assert!(state.current_project_root.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_layer_update_and_reset_flow() {
+        // 模拟 update_config(User, cfg) 的等价路径：save_user_config + set_user。
+        // （tauri::State 不可在单测合成，端到端命令注册由集成测试覆盖。）
+        let (_temp, state) = create_test_state();
+
+        // update：写入用户全局配置并应用
+        let mut user_cfg = AppConfig::default();
+        user_cfg.logging.level = "debug".to_string();
+        user_cfg.updates.channel = "beta".to_string();
+        state.config_loader.save_user_config(&user_cfg).unwrap();
+        {
+            let mut mgr = state.config.lock().await;
+            mgr.set_user(user_cfg);
+        }
+
+        // merged 反映用户覆盖
+        {
+            let mut mgr = state.config.lock().await;
+            assert_eq!(mgr.merged().logging.level, "debug");
+            assert_eq!(mgr.merged().updates.channel, "beta");
+        }
+
+        // reset：清除用户层 → 回退系统默认
+        {
+            let mut mgr = state.config.lock().await;
+            mgr.clear_user();
+            assert_eq!(mgr.merged().logging.level, "info");
+            assert_eq!(mgr.merged().updates.channel, "stable");
+        }
     }
 }

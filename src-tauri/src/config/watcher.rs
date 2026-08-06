@@ -16,6 +16,8 @@ pub enum ConfigChangeEvent {
     WorkspaceChanged(String),
     /// 项目配置变更
     ProjectChanged(PathBuf),
+    /// 用户全局配置变更（单例文件 user.toml，无额外参数）
+    UserChanged,
 }
 
 /// 配置文件监听器
@@ -157,6 +159,47 @@ impl ConfigWatcher {
         Ok(())
     }
 
+    /// 监听用户全局配置文件
+    pub fn watch_user_config(&mut self, paths: &ConfigPaths) -> Result<()> {
+        let config_path = paths.user_config();
+        if let Some(parent) = config_path.parent() {
+            self.watcher
+                .watch(parent, RecursiveMode::NonRecursive)
+                .with_context(|| format!("监听用户全局配置目录失败: {}", parent.display()))?;
+
+            let mut watched = self
+                .watched_paths
+                .lock()
+                .expect("watched_paths mutex 中毒");
+            watched.insert(
+                normalize_config_path(&config_path),
+                ConfigChangeEvent::UserChanged,
+            );
+
+            tracing::info!("开始监听用户全局配置: {}", config_path.display());
+        }
+        Ok(())
+    }
+
+    /// 停止监听用户全局配置文件
+    pub fn unwatch_user_config(&mut self, paths: &ConfigPaths) -> Result<()> {
+        let config_path = paths.user_config();
+        if let Some(parent) = config_path.parent() {
+            self.watcher
+                .unwatch(parent)
+                .with_context(|| format!("停止监听用户全局配置失败: {}", parent.display()))?;
+
+            let mut watched = self
+                .watched_paths
+                .lock()
+                .expect("watched_paths mutex 中毒");
+            watched.remove(&normalize_config_path(&config_path));
+
+            tracing::info!("停止监听用户全局配置: {}", config_path.display());
+        }
+        Ok(())
+    }
+
     /// 轮询配置变更事件（带防抖）
     pub fn poll_events(&self) -> Vec<ConfigChangeEvent> {
         let mut events = Vec::new();
@@ -243,6 +286,17 @@ mod tests {
 
         let mut watcher = ConfigWatcher::new().unwrap();
         let result = watcher.watch_project_config(&project_root);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_watch_user_config() {
+        let temp = TempDir::new().unwrap();
+        let paths = ConfigPaths::new(temp.path().to_path_buf());
+        paths.ensure_config_dirs().unwrap();
+
+        let mut watcher = ConfigWatcher::new().unwrap();
+        let result = watcher.watch_user_config(&paths);
         assert!(result.is_ok());
     }
 

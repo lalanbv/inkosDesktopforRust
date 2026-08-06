@@ -90,6 +90,33 @@ impl ConfigReloader {
         }
     }
 
+    /// 重新加载用户全局配置
+    pub fn reload_user_config(&self, manager: &mut ConfigManager) -> Result<AppConfig> {
+        tracing::info!("重新加载用户全局配置");
+
+        match self.loader.load_user_config() {
+            Ok(new_config) => {
+                if let Err(e) = new_config.validate() {
+                    tracing::error!("用户全局配置验证失败: {:#}", e);
+                    return Err(e).context("用户全局配置验证失败，保持旧配置");
+                }
+
+                manager.set_user(new_config.clone());
+                let merged = manager.merged().clone();
+
+                *self.last_valid_config.lock().expect("last_valid_config mutex 中毒") =
+                    merged.clone();
+
+                tracing::info!("用户全局配置重新加载成功");
+                Ok(merged)
+            }
+            Err(e) => {
+                tracing::error!("加载用户全局配置失败: {:#}", e);
+                Err(e).context("加载用户全局配置失败，保持旧配置")
+            }
+        }
+    }
+
     /// 获取最后有效配置（回退用）
     pub fn get_last_valid_config(&self) -> AppConfig {
         self.last_valid_config
@@ -167,6 +194,33 @@ mod tests {
 
         let merged = result.unwrap();
         assert!(!merged.engine.auto_download);
+    }
+
+    #[test]
+    fn test_reload_user_config_success() {
+        let temp = TempDir::new().unwrap();
+        let paths = ConfigPaths::new(temp.path().to_path_buf());
+        let loader = ConfigLoader::new(paths.clone());
+        let mut manager = ConfigManager::new();
+
+        // 保存用户全局配置
+        let user_config = AppConfig {
+            logging: crate::config::LoggingConfig {
+                level: "warn".to_string(),
+                retention_days: 30,
+            },
+            ..Default::default()
+        };
+        loader.save_user_config(&user_config).unwrap();
+
+        let reloader = ConfigReloader::new(loader.clone(), AppConfig::default());
+
+        let result = reloader.reload_user_config(&mut manager);
+        assert!(result.is_ok());
+
+        let merged = result.unwrap();
+        assert_eq!(merged.logging.level, "warn");
+        assert_eq!(merged.logging.retention_days, 30);
     }
 
     #[test]

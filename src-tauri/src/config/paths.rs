@@ -20,6 +20,11 @@ impl ConfigPaths {
         self.app_data.join("config").join("default.toml")
     }
 
+    /// 用户全局配置文件路径（settings 面板常驻可写层）
+    pub fn user_config(&self) -> PathBuf {
+        self.app_data.join("config").join("user.toml")
+    }
+
     /// 工作区配置文件路径
     pub fn workspace_config(&self, workspace_id: &str) -> PathBuf {
         self.app_data
@@ -75,6 +80,9 @@ mod tests {
 
         let system = paths.system_config();
         assert!(system.ends_with("config/default.toml"));
+
+        let user = paths.user_config();
+        assert!(user.ends_with("config/user.toml"));
 
         let workspace = paths.workspace_config("ws-123");
         assert!(workspace.ends_with("config/workspace-ws-123/config.toml"));

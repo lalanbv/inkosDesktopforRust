@@ -2,10 +2,11 @@
 
 use crate::config::types::*;
 
-/// 配置管理器（三层架构）
+/// 配置管理器（四层架构：System < User < Workspace < Project）
 #[derive(Debug, Clone)]
 pub struct ConfigManager {
     system: AppConfig,
+    user: Option<AppConfig>,
     workspace: Option<AppConfig>,
     project: Option<AppConfig>,
     merged: AppConfig,
@@ -19,10 +20,23 @@ impl ConfigManager {
         Self {
             merged: system.clone(),
             system,
+            user: None,
             workspace: None,
             project: None,
             dirty: false,
         }
+    }
+
+    /// 设置用户全局配置
+    pub fn set_user(&mut self, user_cfg: AppConfig) {
+        self.user = Some(user_cfg);
+        self.dirty = true;
+    }
+
+    /// 清除用户全局配置
+    pub fn clear_user(&mut self) {
+        self.user = None;
+        self.dirty = true;
     }
 
     /// 设置工作区配置
@@ -62,12 +76,17 @@ impl ConfigManager {
     fn recompute_merged(&mut self) {
         let mut merged = self.system.clone();
 
-        // 工作区覆盖系统
+        // 优先级：System < User < Workspace < Project（后者覆盖前者）
+        if let Some(ref user) = self.user {
+            Self::merge_into(&mut merged, user);
+        }
+
+        // 工作区覆盖 系统+用户
         if let Some(ref ws) = self.workspace {
             Self::merge_into(&mut merged, ws);
         }
 
-        // 项目覆盖工作区+系统
+        // 项目覆盖 工作区+用户+系统
         if let Some(ref proj) = self.project {
             Self::merge_into(&mut merged, proj);
         }
@@ -161,6 +180,65 @@ mod tests {
         assert_eq!(merged.logging.level, "debug");
         assert_eq!(merged.updates.channel, "beta");
         assert_eq!(merged.network.timeout_seconds, 30); // 未覆盖字段保持系统默认
+    }
+
+    #[test]
+    fn test_user_overrides_system() {
+        let mut mgr = ConfigManager::new();
+
+        let mut user_cfg = AppConfig::default();
+        user_cfg.logging.level = "debug".to_string();
+        user_cfg.updates.channel = "beta".to_string();
+        mgr.set_user(user_cfg);
+
+        let merged = mgr.merged();
+        assert_eq!(merged.logging.level, "debug");
+        assert_eq!(merged.updates.channel, "beta");
+        assert_eq!(merged.network.timeout_seconds, 30); // 未覆盖字段保持系统默认
+    }
+
+    #[test]
+    fn test_workspace_and_project_override_user() {
+        // 优先级 System < User < Workspace < Project
+        let mut mgr = ConfigManager::new();
+
+        let mut user_cfg = AppConfig::default();
+        user_cfg.logging.level = "debug".to_string();
+        user_cfg.updates.channel = "beta".to_string();
+        user_cfg.network.proxy = Some("http://user-proxy:8080".to_string());
+        mgr.set_user(user_cfg);
+
+        // 工作区覆盖用户的 logging.level，保留用户的 channel/proxy
+        let mut workspace_cfg = AppConfig::default();
+        workspace_cfg.logging.level = "trace".to_string();
+        mgr.set_workspace(workspace_cfg);
+
+        // 项目覆盖用户的 proxy
+        let mut project_cfg = AppConfig::default();
+        project_cfg.network.proxy = Some("http://proj-proxy:9090".to_string());
+        mgr.set_project(project_cfg);
+
+        let merged = mgr.merged();
+        assert_eq!(merged.logging.level, "trace");      // 工作区覆盖用户
+        assert_eq!(merged.updates.channel, "beta");     // 用户保留（未被更高层覆盖）
+        assert_eq!(
+            merged.network.proxy,
+            Some("http://proj-proxy:9090".to_string())
+        ); // 项目覆盖用户
+        assert_eq!(merged.network.timeout_seconds, 30); // 系统默认
+    }
+
+    #[test]
+    fn test_clear_user_falls_back_to_system() {
+        let mut mgr = ConfigManager::new();
+
+        let mut user_cfg = AppConfig::default();
+        user_cfg.logging.level = "debug".to_string();
+        mgr.set_user(user_cfg);
+        assert_eq!(mgr.merged().logging.level, "debug");
+
+        mgr.clear_user();
+        assert_eq!(mgr.merged().logging.level, "info"); // 回退系统默认
     }
 
     #[test]

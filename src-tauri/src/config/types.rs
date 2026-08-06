@@ -140,11 +140,18 @@ pub enum VersionPolicy {
 }
 
 
-/// 配置层级
+/// 配置层级（合并优先级：System < User < Workspace < Project，后者覆盖前者）
+///
+/// 设计说明：本枚举是 serde 数据判别器（经 Tauri IPC / watcher 事件序列化为
+/// `system`/`user`/`workspace`/`project`），变体本身是**有意义的外部值**，
+/// 非位标志/可迭代的能力枚举。故不套用 `None=0`/`Max` 占位约定——那会引入
+/// `none`/`max` 两个非法层级值，污染 IPC/TOML 契约并在 `update_config` 的 match
+/// 里产生不可达分支。能力类枚举（如 `Capability`）才适用占位约定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigLayer {
-    System,     // 系统默认（app_data/config/default.toml）
+    System,     // 系统默认（硬编码 AppConfig::default()，只读，不从文件加载）
+    User,       // 用户全局（app_data/config/user.toml，settings 面板常驻可写层）
     Workspace,  // 工作区级（app_data/config/workspace-{id}/config.toml）
     Project,    // 项目级（project/.inkos/config.toml）
 }
