@@ -60,13 +60,13 @@
       <p class="metrics" id="metrics">加载指标中…</p>
       <p class="err" id="err"></p>
 
-      <ul id="plugins"><!-- 插件列表由 JS 注入 --></ul>
+      <ul id="plugins" aria-label="已安装插件列表"><!-- 插件列表由 JS 注入 --></ul>
       <div id="empty" class="empty hidden">尚无已安装插件。点击「从目录安装」添加。</div>
 
       <section id="diagnostics" style="margin-top:2rem; text-align:left;">
         <h2 style="font-size:1rem; margin:0 0 0.5rem;">系统诊断</h2>
         <p class="muted" style="margin:0 0 0.5rem;">聚合应用版本、引擎、插件/项目遥测、崩溃记录，便于排障。可复制报告附到 issue。</p>
-        <pre id="diag-output" style="background:#f3f4f6; padding:0.8rem; border-radius:8px; font-size:0.78rem; line-height:1.4; overflow-x:auto; max-height:20rem;">加载中…</pre>
+        <pre id="diag-output" role="status" aria-live="polite" aria-atomic="true" style="background:#f3f4f6; padding:0.8rem; border-radius:8px; font-size:0.78rem; line-height:1.4; overflow-x:auto; max-height:20rem;">加载中…</pre>
         <div class="toolbar" style="margin-top:0.5rem;">
           <button id="diag-refresh" class="small">刷新诊断</button>
           <button id="diag-copy" class="small">复制报告</button>
