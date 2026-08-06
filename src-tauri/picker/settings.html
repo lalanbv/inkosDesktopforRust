@@ -213,7 +213,24 @@
           if (!picked) return;
           const meta = await invoke("install_plugin", { path: picked });
           await loadPlugins();
-          alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}`);
+
+          // 安装时安全知情：若声明网络/系统命令权限，提示用户做信任决策。
+          // 进程隔离插件是独立进程，OS 级网络沙箱无 root 跨平台不可行（unshare 需
+          // CAP_SYS_ADMIN），故在 UX 层告知敏感权限，由用户判断来源可信度。
+          // （WASM 插件则由 host_api 强制白名单，这是强隔离的安全替代。）
+          const caps = meta.capabilities || [];
+          const hasNetwork = caps.some(
+            (c) => c && typeof c === "object" && "network" in c
+          );
+          const hasSystemCmd = caps.some((c) => c === "system_command");
+          const warnings = [];
+          if (hasNetwork) warnings.push("网络访问");
+          if (hasSystemCmd) warnings.push("系统命令执行");
+          const warnText =
+            warnings.length > 0
+              ? `\n⚠ 此插件声明：${warnings.join("、")}。请确认来源可信（进程隔离插件不受宿主沙箱限制）。`
+              : "";
+          alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}${warnText}`);
         } catch (e) {
           showErr("安装失败：" + String(e));
         }
