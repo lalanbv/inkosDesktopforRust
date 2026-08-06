@@ -20,7 +20,7 @@ pub mod types;
 
 pub use commands::{open_manager_window, PluginState};
 pub use host_api::HostContext;
-pub use manager::PluginManager;
+pub use manager::{PluginManager, PluginMetrics};
 pub use manifest::{parse_manifest, PluginManifest};
 pub use process::PluginProcess;
 pub use protocol::{RpcError, RpcRequest, RpcResponse};

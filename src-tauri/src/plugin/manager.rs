@@ -9,6 +9,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// 插件执行聚合指标（遥测快照）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PluginMetrics {
+    /// execute_plugin 累计调用次数（含失败）
+    pub exec_count: u64,
+    /// 累计耗时（微秒）
+    pub exec_total_us: u64,
+    /// 失败次数
+    pub exec_failures: u64,
+    /// 平均每次耗时（微秒）= total_us / count，count=0 时为 0
+    pub avg_us: u64,
+}
+
 /// 插件管理器
 pub struct PluginManager {
     /// 插件安装目录
@@ -19,6 +32,16 @@ pub struct PluginManager {
 
     /// 运行中的插件进程 (id -> process)
     running: HashMap<String, PluginProcess>,
+
+    /// 遥测：execute_plugin 累计调用次数（含失败）—— AtomicU64 无锁统计
+    exec_count: std::sync::atomic::AtomicU64,
+
+    /// 遥测：execute_plugin 累计耗时（微秒）。用整数避免浮点跨原子问题；
+    /// 调用方可按需换算 ms。Atomic 累加，读取时为近似值（并发下可能轻微偏移）。
+    exec_total_us: std::sync::atomic::AtomicU64,
+
+    /// 遥测：execute_plugin 失败次数
+    exec_failures: std::sync::atomic::AtomicU64,
 }
 
 impl PluginManager {
@@ -33,6 +56,9 @@ impl PluginManager {
             plugins_dir: plugins_dir.to_path_buf(),
             installed: HashMap::new(),
             running: HashMap::new(),
+            exec_count: std::sync::atomic::AtomicU64::new(0),
+            exec_total_us: std::sync::atomic::AtomicU64::new(0),
+            exec_failures: std::sync::atomic::AtomicU64::new(0),
         };
 
         // 加载已安装的插件
@@ -213,6 +239,47 @@ impl PluginManager {
     /// - 其他（脚本/可执行） → 进程隔离（[`PluginProcess`]），通过 JSON-RPC
     ///   与插件通信。长驻进程在 `running` 中缓存复用，避免每次调用重启。
     pub async fn execute_plugin(
+        &mut self,
+        id: &str,
+        command: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, PluginError> {
+        // 遥测：计时。std::time::Instant 在 lib 受限吗？不受限——它是标准库。
+        // 用 elapsed 仅在结束时读一次，热路径零额外分配。
+        let start = std::time::Instant::now();
+        let result = self.execute_plugin_inner(id, command, args).await;
+
+        // 无锁累加统计：count 每次都加；total_us 加本次耗时；失败时 failures+1
+        let elapsed_us = start.elapsed().as_micros() as u64;
+        use std::sync::atomic::Ordering::Relaxed;
+        self.exec_count.fetch_add(1, Relaxed);
+        self.exec_total_us.fetch_add(elapsed_us, Relaxed);
+        if result.is_err() {
+            self.exec_failures.fetch_add(1, Relaxed);
+        }
+
+        result
+    }
+
+    /// 遥测：返回插件执行的聚合指标（次数 / 总耗时μs / 失败次数 / 平均μs）。
+    ///
+    /// 供诊断命令 `cmd_get_plugin_metrics` 暴露，前端可展示插件调用性能。
+    /// 读取是近似的（Relaxed 原子，并发下 count/total 可能轻微不一致），
+    /// 但对监控足够——精确快照需要锁，不值得。
+    pub fn metrics(&self) -> PluginMetrics {
+        use std::sync::atomic::Ordering::Relaxed;
+        let count = self.exec_count.load(Relaxed);
+        let total_us = self.exec_total_us.load(Relaxed);
+        let failures = self.exec_failures.load(Relaxed);
+        PluginMetrics {
+            exec_count: count,
+            exec_total_us: total_us,
+            exec_failures: failures,
+            avg_us: if count > 0 { total_us / count } else { 0 },
+        }
+    }
+
+    async fn execute_plugin_inner(
         &mut self,
         id: &str,
         command: &str,
@@ -399,5 +466,40 @@ entrypoint = "plugin.wasm"
         manager.enable_plugin("test-plugin").unwrap();
         let plugin = manager.get_plugin("test-plugin").unwrap();
         assert!(plugin.enabled);
+    }
+
+    #[test]
+    fn test_metrics_initial_zero() {
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let manager = PluginManager::new(&plugins_dir).unwrap();
+
+        let m = manager.metrics();
+        assert_eq!(m.exec_count, 0);
+        assert_eq!(m.exec_total_us, 0);
+        assert_eq!(m.exec_failures, 0);
+        assert_eq!(m.avg_us, 0);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_counts_failures() {
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+
+        let mut manager = PluginManager::new(&plugins_dir).unwrap();
+
+        // 未安装的插件 → NotFound（计入 count + failures）
+        let r = manager
+            .execute_plugin("nonexistent", "plugin.echo", serde_json::Value::Null)
+            .await;
+        assert!(r.is_err());
+
+        let m = manager.metrics();
+        assert_eq!(m.exec_count, 1);
+        assert_eq!(m.exec_failures, 1);
+        assert!(m.exec_total_us > 0, "应记录耗时");
+        assert!(m.avg_us > 0);
     }
 }

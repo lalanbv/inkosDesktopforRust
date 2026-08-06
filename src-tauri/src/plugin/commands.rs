@@ -104,6 +104,15 @@ pub async fn execute_plugin(
         .map_err(|e| format!("执行插件命令失败: {}", e))
 }
 
+/// 插件执行遥测：返回 execute_plugin 的聚合指标（次数/总耗时/失败/平均）。
+#[tauri::command]
+pub async fn get_plugin_metrics(
+    state: State<'_, PluginState>,
+) -> Result<crate::plugin::PluginMetrics, String> {
+    let manager = state.manager.lock().await;
+    Ok(manager.metrics())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
