@@ -45,6 +45,7 @@
       .empty { text-align: center; color: #999; padding: 3rem 1rem; }
       .err { color: #b91c1c; margin: 0.75rem 0; min-height: 1.2em; font-size: 0.85rem; }
       .muted { color: #999; font-size: 0.85rem; }
+      .metrics { color: #6b7280; font-size: 0.8rem; margin: 0.3rem 0 0; font-family: ui-monospace, monospace; }
     </style>
   </head>
   <body>
@@ -56,6 +57,7 @@
         <button id="install" class="primary">从目录安装…</button>
         <button id="refresh">刷新</button>
       </div>
+      <p class="metrics" id="metrics">加载指标中…</p>
       <p class="err" id="err"></p>
 
       <ul id="plugins"><!-- 插件列表由 JS 注入 --></ul>
@@ -100,6 +102,21 @@
           renderPlugins(plugins || []);
         } catch (e) {
           showErr("加载插件失败：" + String(e));
+        }
+      }
+
+      // 遥测：插件执行聚合指标（次数/均耗时/失败）。失败静默——指标非关键功能，
+      // 不应因后端未启用 PluginState 而阻塞面板渲染。
+      async function loadMetrics() {
+        try {
+          const m = await invoke("get_plugin_metrics");
+          const el = document.getElementById("metrics");
+          if (m && typeof m.exec_count === "number") {
+            el.textContent =
+              `调用 ${m.exec_count} 次 · 均耗时 ${m.avg_us}μs · 失败 ${m.exec_failures} 次`;
+          }
+        } catch (_) {
+          /* 指标不可用（如插件子系统未初始化），忽略 */
         }
       }
 
@@ -192,7 +209,10 @@
       }
 
       document.getElementById("install").addEventListener("click", installFromDir);
-      document.getElementById("refresh").addEventListener("click", loadPlugins);
+      document.getElementById("refresh").addEventListener("click", async () => {
+        await loadPlugins();
+        await loadMetrics();
+      });
 
       // 全局错误兜底
       window.addEventListener("unhandledrejection", (event) => {
@@ -200,8 +220,9 @@
         event.preventDefault();
       });
 
-      // 初始加载
+      // 初始加载：列表 + 指标
       loadPlugins();
+      loadMetrics();
     </script>
   </body>
 </html>
