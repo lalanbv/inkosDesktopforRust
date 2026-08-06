@@ -9,6 +9,7 @@
 //! bump 版本 → tag → `desktop-build.yml` 构建 + 发布 engine bundle 到**本仓** Releases →
 //! 本机 updater 拉本仓 release（单一可信源）。不直接拉 Narcooo/inkos。
 
+pub mod delta;
 pub mod engine;
 
 use serde::Serialize;
