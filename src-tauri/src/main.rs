@@ -297,6 +297,31 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
             let port = supervisor::pick_free_port(config::DEFAULT_STUDIO_PORT)
                 .context("pick_free_port 在 [4567, 5567) 区间无空闲端口")?;
 
+            // =====================================================
+            // M3c：运行时 Node 自适应 bootstrap
+            // =====================================================
+            // 缓存命中即用（后续启动零网络）；否则 region-aware 下载（CN 优先 npmmirror），
+            // 官方 SHASUMS256 校验，解压到 app_data/runtime/node/{ver}-{os}-{arch}/。
+            // 失败（无网/校验不过/解压失败）→ 回退系统 node（依赖 PATH），log 不阻塞。
+            let cache_dir = paths.runtime_dir().join(config::NODE_DIR_NAME);
+            let resolver = inkos_desktop::engine::node::BootstrappingResolver::new(
+                cache_dir,
+                Box::new(inkos_desktop::engine::node::LocaleMirrorSelector),
+            )
+            .with_progress(Arc::new(|stage: &str| {
+                eprintln!("[node] bootstrap: {stage}");
+            }));
+            let node_bin: String = match resolver.resolve().await {
+                Ok(p) => {
+                    eprintln!("[main] node bootstrap 完成: {}", p.display());
+                    p.to_string_lossy().into_owned()
+                }
+                Err(e) => {
+                    eprintln!("[main] node bootstrap 失败，回退系统 node（依赖 PATH）: {e:#}");
+                    "node".to_string()
+                }
+            };
+
             // loopback 加固：spawn 之前 lock。失败仅 log 警告、继续启动。
             let guard = platform_guard();
             match guard.lock(port) {
@@ -316,7 +341,7 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 state.set_guard(guard);
             }
 
-            let spec = supervisor::build_launch(&paths, port, "node");
+            let spec = supervisor::build_launch(&paths, port, &node_bin);
             let child = supervisor::spawn(&spec).context("spawn sidecar 失败")?;
 
             Ok::<(u16, std::process::Child, Arc<dyn SecretStore>, Arc<AtomicBool>, PathBuf), anyhow::Error>((

@@ -35,6 +35,11 @@ notify = "6"
 tempfile = "3"
 # M3a：EngineManifest SHA256 校验（engine bundle 完整性，M3d updater 下载校验）。
 sha2 = "0.10"
+# M3c：Node bootstrap——下载 .tar.gz 解压（unix；windows 用 zip crate）。
+flate2 = "1"
+tar = "0.4"
+[target.'cfg(windows)'.dependencies]
+zip = "2"
 
 [dev-dependencies]
 # tempfile 已提升为常规 dep（M2b 加固：atomic_write 使用 NamedTempFile）。

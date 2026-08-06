@@ -4,6 +4,7 @@
 //! M3c 增 node bootstrap（`node.rs`）；M3d 增 updater（独立 `updater` 模块）。
 
 pub mod manifest;
+pub mod node;
 
 use std::path::{Path, PathBuf};
 
@@ -11,21 +12,31 @@ use crate::config::ENGINE_DIR_NAME;
 
 /// 解析**启动用** engine 源目录。
 ///
-/// 优先 prod：`resource_dir/engine`（Tauri 打包后随包分发的 resource，存在即用）。
-/// 回退 dev：`dev_engine_root/engine`（`desktop-package-engine.sh` 在 `src-tauri/engine`
-/// 组装；`dev_engine_root` = `CARGO_MANIFEST_DIR` = src-tauri 目录）。
+/// 优先级：
+/// 1. **debug 构建（dev）**：`dev_engine_root/engine`（= `CARGO_MANIFEST_DIR`/engine =
+///    `src-tauri/engine`，原始组装，node_modules 符号链接完好）。
+///    —— 必须优先：Tauri 在 dev 会把 resource（含 engine/）**复制**到 `target/debug/`，
+///    符号链接在复制中断裂（node_modules → packages/cli/node_modules 失效）→
+///    `Cannot find package 'commander'`。用原始 src-tauri/engine 避开。
+/// 2. **release 构建（prod）**：`resource_dir/engine`（打包 .app 内，M3e 用真实自包含
+///    node_modules，无符号链接问题）。
+/// 3. 兜底：`dev_engine_root/engine`。
 ///
-/// 为何 dev 回退用 `CARGO_MANIFEST_DIR`（src-tauri）而非仓库根：零交叉纪律要求
-/// engine/ 只进 `src-tauri/`（被 `src-tauri/.gitignore` 忽略），故 engine 与 Cargo.toml
-/// 同级。prod 下 `CARGO_MANIFEST_DIR` 是烘焙的构建机路径（用户机不存在，即 C1 bug），
-/// 故 prod 必须走 `resource_dir`——这正是本函数优先 resource_dir 的原因。
+/// `dev_engine_root` = `CARGO_MANIFEST_DIR`（= src-tauri）。prod 下它是烘焙的构建机路径
+/// （用户机不存在，即 C1 bug），故 prod 必走 resource_dir。
 ///
 /// 纯函数（无 Tauri 依赖）：main 把 `app.path().resource_dir()` 的 Option 与
-/// `CARGO_MANIFEST_DIR` 传入，便于单测覆盖两条分支。
-///
-/// 注意：此为**启动源**（只读）；M3d updater 维护的**运行态副本**在
-/// `app_data/engine`（[`crate::paths::PathResolver::engine_dir`]），两者解耦。
+/// `CARGO_MANIFEST_DIR` 传入。
 pub fn resolve_engine_dir(resource_dir: Option<&Path>, dev_engine_root: &Path) -> PathBuf {
+    // dev（debug 构建）：优先原始 src-tauri/engine（符号链接完好，避开 target/debug 复制副本）。
+    #[cfg(debug_assertions)]
+    {
+        let dev = dev_engine_root.join(ENGINE_DIR_NAME);
+        if dev.is_dir() {
+            return dev;
+        }
+    }
+    // prod（release 构建）或 dev 原始缺失：resource_dir/engine。
     if let Some(rd) = resource_dir {
         let candidate = rd.join(ENGINE_DIR_NAME);
         if candidate.is_dir() {
@@ -39,28 +50,42 @@ pub fn resolve_engine_dir(resource_dir: Option<&Path>, dev_engine_root: &Path) -
 mod tests {
     use super::*;
 
+    // 测试用 tempdir 作 dev_engine_root（其下无 engine）→ debug_assertions 分支确定性跳过，
+    // 覆盖 prod（resource_dir）与兜底（dev_engine_root）路径。
+
     #[test]
-    fn prefers_resource_dir_engine_when_present() {
-        let tmp = tempfile::tempdir().unwrap();
-        let resource = tmp.path();
-        // 模拟 prod：resource/engine 存在。
-        std::fs::create_dir_all(resource.join(ENGINE_DIR_NAME)).unwrap();
-        let resolved = resolve_engine_dir(Some(resource), Path::new("/Users/me/src-tauri"));
-        assert_eq!(resolved, resource.join(ENGINE_DIR_NAME));
+    fn prefers_resource_dir_engine_when_dev_missing() {
+        let resource = tempfile::tempdir().unwrap();
+        let dev_root = tempfile::tempdir().unwrap(); // 空，无 engine
+        std::fs::create_dir_all(resource.path().join(ENGINE_DIR_NAME)).unwrap();
+        let resolved = resolve_engine_dir(Some(resource.path()), dev_root.path());
+        assert_eq!(resolved, resource.path().join(ENGINE_DIR_NAME));
     }
 
     #[test]
     fn falls_back_to_dev_engine_root_when_resource_missing() {
-        // resource_dir 给定但其下无 engine → 回退 dev_engine_root/engine。
-        let tmp = tempfile::tempdir().unwrap();
-        let resolved = resolve_engine_dir(Some(tmp.path()), Path::new("/Users/me/src-tauri"));
-        assert_eq!(resolved, PathBuf::from("/Users/me/src-tauri/engine"));
+        let resource = tempfile::tempdir().unwrap(); // 无 engine
+        let dev_root = tempfile::tempdir().unwrap(); // 无 engine
+        let resolved = resolve_engine_dir(Some(resource.path()), dev_root.path());
+        assert_eq!(resolved, dev_root.path().join(ENGINE_DIR_NAME));
     }
 
     #[test]
     fn falls_back_to_dev_engine_root_when_resource_none() {
-        // dev 无 resource_dir → 直接 dev_engine_root/engine（= src-tauri/engine）。
-        let resolved = resolve_engine_dir(None, Path::new("/Users/me/src-tauri"));
-        assert_eq!(resolved, PathBuf::from("/Users/me/src-tauri/engine"));
+        let dev_root = tempfile::tempdir().unwrap();
+        let resolved = resolve_engine_dir(None, dev_root.path());
+        assert_eq!(resolved, dev_root.path().join(ENGINE_DIR_NAME));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn debug_prefers_dev_engine_root_when_present() {
+        // dev（debug）：dev_engine_root/engine 存在 → 优先于 resource_dir（避开 target/debug 复制副本）。
+        let resource = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(resource.path().join(ENGINE_DIR_NAME)).unwrap();
+        let dev_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dev_root.path().join(ENGINE_DIR_NAME)).unwrap();
+        let resolved = resolve_engine_dir(Some(resource.path()), dev_root.path());
+        assert_eq!(resolved, dev_root.path().join(ENGINE_DIR_NAME));
     }
 }
