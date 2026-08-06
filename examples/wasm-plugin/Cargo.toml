@@ -1,0 +1,12 @@
+[package]
+name = "inkos-example-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "inkos WASM 插件 SDK 脚手架——实现 wit/inkos.wit 的 plugin interface"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# wit-bindgen：从 wit/ 生成 guest 侧绑定（与宿主的 wasmtime bindgen 对称）
+wit-bindgen = "0.30"

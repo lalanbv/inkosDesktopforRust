@@ -1,0 +1,56 @@
+// inkos 插件 Component Model 接口契约（Phase 6.3）
+//
+// 定义宿主与 WASM 插件之间的类型化接口。配合 `wasmtime::component::bindgen!`
+// 生成宿主侧绑定 + 链接器，实现 WASM 插件的强类型、沙箱化调用（强于进程隔离）。
+//
+// ## 关系
+// - 进程隔离插件（plugin.sh 等）走 JSON-RPC over stdio，不受本契约约束
+// - WASM 插件（plugin.wasm component）实现本契约的 `plugin` interface，
+//   可调用 `host` interface 暴露的能力（受 capability 运行时校验）
+//
+// ## 完整执行路径（Phase 6.3 后续）
+// 1. 本文件定义契约（✅ 本次）
+// 2. runtime.rs 用 `wasmtime::component::bindgen!({ path: "wit", world: "inkos-plugin" })`
+//    生成 InkosPlugin 实例类型 + Host trait
+// 3. 实现 Host trait（委托给 host_api::HostContext，复用权限校验）
+// 4. Component::from_file + Linker + 实例化 → 类型化调用 plugin.invoke
+// 5. 真实 component 测试（用 wit-bindgen 生成 + wasm target 编译的测试插件）
+//
+// 当前进程隔离已端到端验证可执行；本契约是 WASM 强隔离路径的基础。
+
+package inkos:plugin;
+
+/// 宿主暴露给插件的功能。每个调用在 host_api::HostContext 内经 capability
+/// 校验 + 路径沙箱（见 src/plugin/host_api.rs），插件无法绕过。
+interface host {
+    /// 读取项目文件（需 read_project / filesystem 权限）
+    read-file: func(path: string) -> result<string, string>;
+
+    /// 写入项目文件（需 write_project / filesystem 权限）
+    write-file: func(path: string, content: string) -> result<_, string>;
+
+    /// 列出目录（需 read_project 权限）
+    list-dir: func(path: string) -> result<list<string>, string>;
+
+    /// 结构化日志（level: error/warn/info/debug/trace）
+    log: func(level: string, message: string);
+}
+
+/// 插件必须实现的功能。宿主通过 bindgen 生成的类型化接口调用。
+interface plugin {
+    /// 初始化插件（传入配置 JSON）。失败则插件不可用。
+    init: func(config: string) -> result<_, string>;
+
+    /// 核心调用：command + args(JSON)，返回 result(JSON) 或错误。
+    /// 与进程隔离插件的 JSON-RPC 方法名语义一致，便于双引擎统一上层 API。
+    invoke: func(command: string, args: string) -> result<string, string>;
+
+    /// 可选事件钩子（项目打开、文件保存等）。无返回值，插件可忽略。
+    on-event: func(event: string, payload: string);
+}
+
+/// 一个 inkos 插件 world：导入 host 能力，导出 plugin 实现。
+world inkos-plugin {
+    import host;
+    export plugin;
+}
