@@ -46,6 +46,27 @@
       .err { color: #b91c1c; margin: 0.75rem 0; min-height: 1.2em; font-size: 0.85rem; }
       .muted { color: #595959; font-size: 0.85rem; }
       .metrics { color: #4b5563; font-size: 0.8rem; margin: 0.3rem 0 0; font-family: ui-monospace, monospace; }
+
+      /* 配置编辑表单 */
+      fieldset {
+        border: 1px solid #e0e0e0; border-radius: 8px; margin: 0 0 1rem; padding: 0.8rem 1rem;
+      }
+      legend { font-weight: 600; font-size: 0.9rem; padding: 0 0.4rem; color: #1a1a1a; }
+      .cfg-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; }
+      .cfg-row > label { flex: 0 0 11rem; font-size: 0.85rem; color: #1a1a1a; }
+      .cfg-row > input[type="text"],
+      .cfg-row > input[type="number"],
+      .cfg-row > select {
+        flex: 1; max-width: 18rem; font: inherit; font-size: 0.85rem; padding: 0.35rem 0.5rem;
+        border: 1px solid #d0d0d0; border-radius: 6px; background: #fff; color: #1a1a1a;
+      }
+      .cfg-row > input[type="checkbox"] { width: 1rem; height: 1rem; }
+      .cfg-hint { color: #595959; font-size: 0.78rem; margin: 0.2rem 0 0 11.6rem; }
+      .cfg-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+      .form-msg { font-size: 0.82rem; min-height: 1.2em; }
+      .form-msg.ok { color: #166534; }
+      .form-msg.err { color: #b91c1c; }
+      .hidden { display: none !important; }
     </style>
   </head>
   <body>
@@ -73,6 +94,93 @@
           <span class="err" id="diag-err" style="margin-left:0.5rem;"></span>
         </div>
       </section>
+
+      <section id="config" style="margin-top:2rem; text-align:left;">
+        <h2 style="font-size:1rem; margin:0 0 0.5rem;" data-i18n="config.title">用户配置</h2>
+        <p class="muted" style="margin:0 0 0.5rem;" data-i18n="config.muted">全局偏好，应用于所有项目（除非被工作区/项目配置覆盖）。</p>
+
+        <form id="config-form" aria-describedby="config-msg">
+          <fieldset>
+            <legend data-i18n="config.logging.legend">日志</legend>
+            <div class="cfg-row">
+              <label for="cfg-log-level" data-i18n="config.logging.level">日志级别</label>
+              <select id="cfg-log-level">
+                <option value="error" data-i18n="config.level.error">error</option>
+                <option value="warn" data-i18n="config.level.warn">warn</option>
+                <option value="info" data-i18n="config.level.info">info</option>
+                <option value="debug" data-i18n="config.level.debug">debug</option>
+                <option value="trace" data-i18n="config.level.trace">trace</option>
+              </select>
+            </div>
+            <div class="cfg-row">
+              <label for="cfg-log-retention" data-i18n="config.logging.retention">保留天数</label>
+              <input id="cfg-log-retention" type="number" min="1" step="1" />
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend data-i18n="config.updates.legend">更新</legend>
+            <div class="cfg-row">
+              <label for="cfg-upd-channel" data-i18n="config.updates.channel">更新通道</label>
+              <select id="cfg-upd-channel">
+                <option value="stable" data-i18n="config.channel.stable">stable</option>
+                <option value="beta" data-i18n="config.channel.beta">beta</option>
+                <option value="dev" data-i18n="config.channel.dev">dev</option>
+              </select>
+            </div>
+            <div class="cfg-row">
+              <label for="cfg-upd-interval" data-i18n="config.updates.interval">检查间隔（小时）</label>
+              <input id="cfg-upd-interval" type="number" min="0" step="1" />
+            </div>
+            <div class="cfg-row">
+              <label for="cfg-upd-auto" data-i18n="config.updates.auto_apply">自动应用更新</label>
+              <input id="cfg-upd-auto" type="checkbox" />
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend data-i18n="config.engine.legend">引擎</legend>
+            <div class="cfg-row">
+              <label for="cfg-eng-autodl" data-i18n="config.engine.auto_download">自动下载引擎</label>
+              <input id="cfg-eng-autodl" type="checkbox" />
+            </div>
+            <div class="cfg-row">
+              <label for="cfg-eng-policy" data-i18n="config.engine.version_policy">版本策略</label>
+              <select id="cfg-eng-policy">
+                <option value="latest" data-i18n="config.policy.latest">最新</option>
+                <option value="fixed" data-i18n="config.policy.fixed">锁定版本</option>
+                <option value="range" data-i18n="config.policy.range">版本范围</option>
+              </select>
+            </div>
+            <div class="cfg-row hidden" id="cfg-eng-version-row">
+              <label for="cfg-eng-version" data-i18n="config.engine.version">锁定版本</label>
+              <input id="cfg-eng-version" type="text" placeholder="0.4.0" />
+            </div>
+            <div class="cfg-row hidden" id="cfg-eng-range-row">
+              <label for="cfg-eng-range" data-i18n="config.engine.range">版本范围</label>
+              <input id="cfg-eng-range" type="text" placeholder="^0.4.0" />
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend data-i18n="config.network.legend">网络</legend>
+            <div class="cfg-row">
+              <label for="cfg-net-proxy" data-i18n="config.network.proxy">代理 URL</label>
+              <input id="cfg-net-proxy" type="text" placeholder="http://host:port" />
+            </div>
+            <div class="cfg-row">
+              <label for="cfg-net-timeout" data-i18n="config.network.timeout">超时（秒）</label>
+              <input id="cfg-net-timeout" type="number" min="1" step="1" />
+            </div>
+          </fieldset>
+
+          <div class="cfg-actions">
+            <button type="submit" id="cfg-save" class="primary" data-i18n="config.save">保存</button>
+            <button type="button" id="cfg-reset" class="danger" data-i18n="config.reset">重置为默认</button>
+            <span class="form-msg" id="config-msg" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
     </main>
 
     <script>
@@ -96,6 +204,41 @@
           "diag.muted": "聚合应用版本、引擎、插件/项目遥测、崩溃记录，便于排障。可复制报告附到 issue。",
           "diag.refresh": "刷新诊断",
           "diag.copy": "复制报告",
+          "config.title": "用户配置",
+          "config.muted": "全局偏好，应用于所有项目（除非被工作区/项目配置覆盖）。",
+          "config.save": "保存",
+          "config.reset": "重置为默认",
+          "config.logging.legend": "日志",
+          "config.logging.level": "日志级别",
+          "config.logging.retention": "保留天数",
+          "config.updates.legend": "更新",
+          "config.updates.channel": "更新通道",
+          "config.updates.interval": "检查间隔（小时）",
+          "config.updates.auto_apply": "自动应用更新",
+          "config.engine.legend": "引擎",
+          "config.engine.auto_download": "自动下载引擎",
+          "config.engine.version_policy": "版本策略",
+          "config.engine.version": "锁定版本",
+          "config.engine.range": "版本范围",
+          "config.network.legend": "网络",
+          "config.network.proxy": "代理 URL",
+          "config.network.timeout": "超时（秒）",
+          "config.level.error": "error（仅错误）",
+          "config.level.warn": "warn（警告）",
+          "config.level.info": "info（信息）",
+          "config.level.debug": "debug（调试）",
+          "config.level.trace": "trace（全量）",
+          "config.channel.stable": "stable（稳定）",
+          "config.channel.beta": "beta（公测）",
+          "config.channel.dev": "dev（开发）",
+          "config.policy.latest": "最新",
+          "config.policy.fixed": "锁定版本",
+          "config.policy.range": "版本范围",
+          "config.saved": "已保存",
+          "config.reset_done": "已重置为默认",
+          "config.load_fail": "加载配置失败：",
+          "config.save_fail": "保存失败：",
+          "config.reset_fail": "重置失败：",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -107,6 +250,41 @@
           "diag.muted": "Aggregates app version, engine, plugin/project telemetry, crash records for troubleshooting. Copy report to attach to issues.",
           "diag.refresh": "Refresh Diagnostics",
           "diag.copy": "Copy Report",
+          "config.title": "User Settings",
+          "config.muted": "Global preferences applied to all projects unless overridden by workspace/project config.",
+          "config.save": "Save",
+          "config.reset": "Reset to Defaults",
+          "config.logging.legend": "Logging",
+          "config.logging.level": "Log Level",
+          "config.logging.retention": "Retention (days)",
+          "config.updates.legend": "Updates",
+          "config.updates.channel": "Update Channel",
+          "config.updates.interval": "Check Interval (hours)",
+          "config.updates.auto_apply": "Auto-apply Updates",
+          "config.engine.legend": "Engine",
+          "config.engine.auto_download": "Auto-download Engine",
+          "config.engine.version_policy": "Version Policy",
+          "config.engine.version": "Pinned Version",
+          "config.engine.range": "Version Range",
+          "config.network.legend": "Network",
+          "config.network.proxy": "Proxy URL",
+          "config.network.timeout": "Timeout (seconds)",
+          "config.level.error": "error (errors only)",
+          "config.level.warn": "warn (warnings)",
+          "config.level.info": "info (informational)",
+          "config.level.debug": "debug (debug)",
+          "config.level.trace": "trace (verbose)",
+          "config.channel.stable": "stable",
+          "config.channel.beta": "beta",
+          "config.channel.dev": "dev",
+          "config.policy.latest": "Latest",
+          "config.policy.fixed": "Pinned Version",
+          "config.policy.range": "Version Range",
+          "config.saved": "Saved",
+          "config.reset_done": "Reset to defaults",
+          "config.load_fail": "Failed to load config: ",
+          "config.save_fail": "Save failed: ",
+          "config.reset_fail": "Reset failed: ",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -314,6 +492,132 @@
         }
       }
 
+      // === 用户配置（User 层）编辑：get_config 读 → 表单 → update_config("user") 写 ===
+      function syncPolicyRows() {
+        const p = document.getElementById("cfg-eng-policy").value;
+        document.getElementById("cfg-eng-version-row").classList.toggle("hidden", p !== "fixed");
+        document.getElementById("cfg-eng-range-row").classList.toggle("hidden", p !== "range");
+      }
+
+      function numVal(id, dflt) {
+        const n = Number(document.getElementById(id).value);
+        return Number.isFinite(n) && n >= 0 ? n : dflt;
+      }
+
+      function buildConfigFromForm() {
+        const policy = document.getElementById("cfg-eng-policy").value;
+        let version_policy;
+        if (policy === "fixed") {
+          version_policy = { fixed: document.getElementById("cfg-eng-version").value.trim() };
+        } else if (policy === "range") {
+          version_policy = { range: document.getElementById("cfg-eng-range").value.trim() };
+        } else {
+          version_policy = "latest";
+        }
+        const proxyRaw = document.getElementById("cfg-net-proxy").value.trim();
+        return {
+          engine: {
+            version_policy,
+            auto_download: document.getElementById("cfg-eng-autodl").checked,
+          },
+          updates: {
+            check_interval_hours: numVal("cfg-upd-interval", 24),
+            channel: document.getElementById("cfg-upd-channel").value,
+            auto_apply: document.getElementById("cfg-upd-auto").checked,
+          },
+          logging: {
+            level: document.getElementById("cfg-log-level").value,
+            retention_days: numVal("cfg-log-retention", 7),
+          },
+          network: {
+            proxy: proxyRaw === "" ? null : proxyRaw,
+            timeout_seconds: numVal("cfg-net-timeout", 30),
+          },
+        };
+      }
+
+      function populateConfigForm(config) {
+        const logging = config.logging || {};
+        document.getElementById("cfg-log-level").value = logging.level || "info";
+        document.getElementById("cfg-log-retention").value = logging.retention_days ?? 7;
+
+        const updates = config.updates || {};
+        document.getElementById("cfg-upd-channel").value = updates.channel || "stable";
+        document.getElementById("cfg-upd-interval").value = updates.check_interval_hours ?? 24;
+        document.getElementById("cfg-upd-auto").checked = !!updates.auto_apply;
+
+        const engine = config.engine || {};
+        document.getElementById("cfg-eng-autodl").checked = !!engine.auto_download;
+        // version_policy 反序列化形态：`"latest"` | `{fixed:"x"}` | `{range:"^x"}`
+        const vp = engine.version_policy;
+        let policy = "latest", version = "", range = "";
+        if (vp && typeof vp === "object") {
+          if ("fixed" in vp) { policy = "fixed"; version = vp.fixed || ""; }
+          else if ("range" in vp) { policy = "range"; range = vp.range || ""; }
+        }
+        document.getElementById("cfg-eng-policy").value = policy;
+        document.getElementById("cfg-eng-version").value = version;
+        document.getElementById("cfg-eng-range").value = range;
+        syncPolicyRows();
+
+        const network = config.network || {};
+        document.getElementById("cfg-net-proxy").value = network.proxy || "";
+        document.getElementById("cfg-net-timeout").value = network.timeout_seconds ?? 30;
+      }
+
+      async function loadConfig() {
+        const msgEl = document.getElementById("config-msg");
+        try {
+          const config = await invoke("get_config");
+          if (!config) return;
+          populateConfigForm(config);
+          msgEl.textContent = "";
+          msgEl.className = "form-msg";
+        } catch (e) {
+          msgEl.textContent = t("config.load_fail") + String(e);
+          msgEl.className = "form-msg err";
+        }
+      }
+
+      async function saveConfig(event) {
+        event.preventDefault();
+        const msgEl = document.getElementById("config-msg");
+        const saveBtn = document.getElementById("cfg-save");
+        msgEl.textContent = "";
+        msgEl.className = "form-msg";
+        saveBtn.disabled = true;
+        try {
+          const config = buildConfigFromForm();
+          await invoke("update_config", { layer: "user", config });
+          msgEl.textContent = t("config.saved");
+          msgEl.className = "form-msg ok";
+        } catch (e) {
+          msgEl.textContent = t("config.save_fail") + String(e);
+          msgEl.className = "form-msg err";
+        } finally {
+          saveBtn.disabled = false;
+        }
+      }
+
+      async function resetConfig() {
+        const msgEl = document.getElementById("config-msg");
+        msgEl.textContent = "";
+        msgEl.className = "form-msg";
+        try {
+          await invoke("reset_config", { layer: "user" });
+          await loadConfig(); // merged 回退系统默认，重新填充表单
+          msgEl.textContent = t("config.reset_done");
+          msgEl.className = "form-msg ok";
+        } catch (e) {
+          msgEl.textContent = t("config.reset_fail") + String(e);
+          msgEl.className = "form-msg err";
+        }
+      }
+
+      document.getElementById("config-form").addEventListener("submit", saveConfig);
+      document.getElementById("cfg-reset").addEventListener("click", resetConfig);
+      document.getElementById("cfg-eng-policy").addEventListener("change", syncPolicyRows);
+
       document.getElementById("install").addEventListener("click", installFromDir);
       document.getElementById("refresh").addEventListener("click", async () => {
         await loadPlugins();
@@ -337,10 +641,11 @@
         event.preventDefault();
       });
 
-      // 初始加载：列表 + 指标 + 诊断
+      // 初始加载：列表 + 指标 + 诊断 + 配置
       loadPlugins();
       loadMetrics();
       loadDiagnostics();
+      loadConfig();
     </script>
   </body>
 </html>
