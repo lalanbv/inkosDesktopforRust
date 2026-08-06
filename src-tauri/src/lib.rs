@@ -6,6 +6,7 @@ pub mod lifecycle;
 pub mod observability;
 pub mod observer;
 pub mod paths;
+pub mod project;
 pub mod projects;
 pub mod secrets;
 pub mod supervisor;

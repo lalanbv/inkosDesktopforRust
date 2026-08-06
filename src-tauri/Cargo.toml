@@ -50,6 +50,10 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
+# M6a：项目索引数据库（SQLite 嵌入式数据库）。
+rusqlite = { version = "0.32", features = ["bundled"] }
+# M6c：项目扫描器（文件系统遍历）。
+walkdir = "2.5"
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 

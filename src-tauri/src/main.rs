@@ -30,6 +30,8 @@ use tauri_plugin_notification::NotificationExt;
 // DialogExt（M3b）：项目目录选择对话框（Rust 侧，不经 webview ACL）。
 use tauri_plugin_dialog::DialogExt;
 
+mod commands;
+
 use inkos_desktop::config;
 use inkos_desktop::engine;
 use inkos_desktop::isolation::{platform_guard, LoopbackGuard};
@@ -139,6 +141,13 @@ fn main() {
 
     tracing::info!("inkosDesktop 启动");
 
+    // M5b：初始化配置管理器
+    let app_data = dirs::data_dir()
+        .map(|d| d.join(config::APP_DATA_DIR_NAME))
+        .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
+    std::fs::create_dir_all(&app_data).ok();
+    let config_state = commands::config::AppState::new(app_data.clone());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -156,10 +165,18 @@ fn main() {
             workspace::cmd_switch_workspace,
             workspace::cmd_delete_workspace,
             workspace::cmd_add_project_to_workspace,
+            commands::config::get_config,
+            commands::config::update_config,
+            commands::config::reset_config,
+            commands::config::load_workspace_config,
+            commands::config::load_project_config,
+            commands::config::start_config_watch,
+            commands::config::stop_config_watch,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
         .manage(ExitingFlag::new())
+        .manage(config_state)
         .on_window_event(|window, event| {
             // 关窗 → 隐藏保活（除非来自"退出"意图）。
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -217,6 +234,11 @@ fn main() {
                 .map(|d| d.join(config::APP_DATA_DIR_NAME))
                 .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
             std::fs::create_dir_all(&app_data).ok();
+
+            // =========================================================
+            // M5b：初始化配置管理器
+            // =========================================================
+            let config_state = commands::AppState::new(app_data.clone());
 
             // =========================================================
             // M5a（Phase 3）：工作区迁移（Phase 2 → Phase 3）
