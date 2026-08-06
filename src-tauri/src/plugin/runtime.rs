@@ -9,8 +9,9 @@
 //! 通过 Engine 校验。
 //!
 //! 未实现：基于 `wit` IDL + `wasmtime::component::bindgen!` 的宿主-插件接口绑定。
-//! Component Model 的类型化调用需要为每个插件接口生成绑定代码，这是一个独立的
-//! 大工程（需要 wit 文件 + 编译期宏 + 链接器）。在绑定就绪前，[`WasmPlugin::execute`]
+//! 接口契约已定义在 `wit/inkos.wit`（host + plugin interface + inkos-plugin world）。
+//! Component Model 的类型化调用需要为该契约生成绑定代码 + 实现链接器，这是一个独立的
+//! 大工程（见 wit/inkos.wit 顶部「完整执行路径」）。在绑定就绪前，[`WasmPlugin::execute`]
 //! 返回明确的 [`PluginError::ExecutionFailed`]，而不是假装执行——这样上层不会
 //! 拿到静默错误的"假结果"。
 //!
