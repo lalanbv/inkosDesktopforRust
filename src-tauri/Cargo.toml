@@ -66,10 +66,10 @@ tracing-appender = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # M6c：项目扫描器（文件系统遍历）。
 walkdir = "2.5"
-# M7a：WASM 插件运行时（Wasmtime 26+ 稳定 API + Component Model 支持）。
-wasmtime = { version = "26", features = ["component-model", "cranelift"] }
-# M7a：Component Model wit 绑定生成（宿主侧）。
-wasmtime-wasi = "26"
+# M7a：WASM 插件运行时（Wasmtime 27+ 稳定 API + Component Model 支持）。
+wasmtime = { version = "27", features = ["component-model", "cranelift"] }
+# M7a：WASI 环境支持（文件系统、环境变量等）。
+wasmtime-wasi = "27"
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 

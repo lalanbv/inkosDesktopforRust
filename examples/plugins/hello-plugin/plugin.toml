@@ -1,0 +1,11 @@
+capabilities = ["read_project"]
+
+[plugin]
+id = "hello-plugin"
+name = "Hello Plugin"
+version = "1.0.0"
+description = "进程隔离示例插件：实现 JSON-RPC over stdio 协议，演示 echo/upper/health 命令"
+author = "Inkos Team"
+license = "MIT"
+abi_version = "1"
+entrypoint = "plugin.sh"

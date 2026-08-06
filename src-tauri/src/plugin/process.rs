@@ -134,7 +134,7 @@ impl PluginProcess {
     }
 
     /// 终止插件进程
-    pub fn kill(&self) -> Result<(), PluginError> {
+    pub fn stop(&self) -> Result<(), PluginError> {
         let mut child = self.child.lock().map_err(|_| {
             PluginError::ExecutionFailed("Failed to lock child process".to_string())
         })?;
@@ -175,6 +175,7 @@ mod tests {
             capabilities: vec![],
             entrypoint: "plugin.js".to_string(),
             dependencies: HashMap::new(),
+            enabled: true,
         };
 
         // 测试无效可执行文件

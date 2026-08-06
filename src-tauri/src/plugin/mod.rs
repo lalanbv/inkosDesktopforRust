@@ -9,12 +9,20 @@
 //! - **高性能 0GC**：预编译缓存，共享内存，零拷贝序列化
 //! - **开发者友好**：wit 接口定义，自动生成绑定，清晰的错误信息
 
+pub mod commands;
+pub mod host_api;
+pub mod manager;
 pub mod manifest;
 pub mod process;
 pub mod protocol;
+pub mod runtime;
 pub mod types;
 
+pub use commands::PluginState;
+pub use host_api::HostContext;
+pub use manager::PluginManager;
 pub use manifest::{parse_manifest, PluginManifest};
 pub use process::PluginProcess;
 pub use protocol::{RpcError, RpcRequest, RpcResponse};
+pub use runtime::WasmPlugin;
 pub use types::{Capability, PluginError, PluginMetadata};

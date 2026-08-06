@@ -77,6 +77,7 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         capabilities,
         entrypoint: manifest.plugin.entrypoint,
         dependencies: manifest.dependencies,
+        enabled: true,
     })
 }
 

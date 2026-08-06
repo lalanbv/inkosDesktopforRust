@@ -14,6 +14,9 @@ pub enum PluginError {
     #[error("插件未找到: {0}")]
     NotFound(String),
 
+    #[error("插件安装失败: {0}")]
+    InstallFailed(String),
+
     #[error("插件版本不兼容: {0}")]
     IncompatibleVersion(String),
 
@@ -68,6 +71,14 @@ pub struct PluginMetadata {
 
     /// 依赖的其他插件
     pub dependencies: HashMap<String, String>,
+
+    /// 是否启用
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 /// 插件能力（权限声明）
@@ -177,6 +188,7 @@ mod tests {
             capabilities: vec![Capability::ReadProject],
             entrypoint: "plugin.wasm".to_string(),
             dependencies: HashMap::new(),
+            enabled: true,
         };
 
         assert_eq!(meta.id, "test-plugin");

@@ -153,7 +153,7 @@ fn main() {
     let config_state = commands::config::AppState::new(app_data.clone());
 
     // M6f：项目索引数据库（SQLite）+ 生命周期管理器。
-    // 打开失败不应阻断启动——项目管理是增量功能，其余功能（引擎/工作区/配置）仍可用，
+    // 打开失败不应阻断启动——项目管理是增量功能,其余功能（引擎/工作区/配置）仍可用，
     // 因此这里记录错误并以 None 降级，命令层遇到 None 返回明确的用户可读错误。
     let project_db = app_data.join("projects.db");
     let project_state = match inkos_desktop::project::ProjectManager::new(&project_db) {
@@ -162,6 +162,18 @@ fn main() {
         }),
         Err(e) => {
             tracing::error!("项目索引数据库打开失败（项目管理功能不可用）: {e:#}");
+            None
+        }
+    };
+
+    // M7：插件管理器初始化
+    let plugins_dir = app_data.join("plugins");
+    let plugin_state = match inkos_desktop::plugin::PluginManager::new(&plugins_dir) {
+        Ok(manager) => Some(inkos_desktop::plugin::commands::PluginState {
+            manager: std::sync::Arc::new(tokio::sync::Mutex::new(manager)),
+        }),
+        Err(e) => {
+            tracing::error!("插件管理器初始化失败（插件功能不可用）: {e:#}");
             None
         }
     };
@@ -202,6 +214,13 @@ fn main() {
             inkos_desktop::project::commands::search_projects,
             inkos_desktop::project::commands::open_project,
             inkos_desktop::project::commands::check_project_health,
+            inkos_desktop::plugin::commands::list_plugins,
+            inkos_desktop::plugin::commands::install_plugin,
+            inkos_desktop::plugin::commands::uninstall_plugin,
+            inkos_desktop::plugin::commands::enable_plugin,
+            inkos_desktop::plugin::commands::disable_plugin,
+            inkos_desktop::plugin::commands::get_plugin,
+            inkos_desktop::plugin::commands::execute_plugin,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
@@ -232,6 +251,11 @@ fn main() {
             // 注意：Tauri 的 setup 是单一回调（不是回调链），必须合并进这里——
             // 另起一个 .setup() 会静默覆盖本回调。
             if let Some(state) = project_state {
+                app.manage(state);
+            }
+
+            // M7：托管插件状态
+            if let Some(state) = plugin_state {
                 app.manage(state);
             }
 
