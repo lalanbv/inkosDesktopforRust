@@ -62,6 +62,17 @@
 
       <ul id="plugins"><!-- 插件列表由 JS 注入 --></ul>
       <div id="empty" class="empty hidden">尚无已安装插件。点击「从目录安装」添加。</div>
+
+      <section id="diagnostics" style="margin-top:2rem; text-align:left;">
+        <h2 style="font-size:1rem; margin:0 0 0.5rem;">系统诊断</h2>
+        <p class="muted" style="margin:0 0 0.5rem;">聚合应用版本、引擎、插件/项目遥测、崩溃记录，便于排障。可复制报告附到 issue。</p>
+        <pre id="diag-output" style="background:#f3f4f6; padding:0.8rem; border-radius:8px; font-size:0.78rem; line-height:1.4; overflow-x:auto; max-height:20rem;">加载中…</pre>
+        <div class="toolbar" style="margin-top:0.5rem;">
+          <button id="diag-refresh" class="small">刷新诊断</button>
+          <button id="diag-copy" class="small">复制报告</button>
+          <span class="err" id="diag-err" style="margin-left:0.5rem;"></span>
+        </div>
+      </section>
     </main>
 
     <script>
@@ -208,10 +219,61 @@
         }
       }
 
+      // 系统诊断：聚合 cmd_get_diagnostics + 双 metrics，展示 + 复制报告。
+      // 各后端独立容错——某子系统未启用（如插件 state 未 manage）不影响其余展示。
+      async function loadDiagnostics() {
+        const out = document.getElementById("diag-output");
+        const errEl = document.getElementById("diag-err");
+        errEl.textContent = "";
+        out.textContent = "加载中…";
+        try {
+          // 并行拉取，单项失败返回 null 不拖垮整体
+          const [diag, plugMetrics, projMetrics] = await Promise.all([
+            invoke("cmd_get_diagnostics").catch((e) => {
+              errEl.textContent = "诊断部分失败：" + String(e);
+              return null;
+            }),
+            invoke("get_plugin_metrics").catch(() => null),
+            invoke("get_project_metrics").catch(() => null),
+          ]);
+          const report = {
+            app: diag
+              ? { version: diag.version, platform: diag.platform, arch: diag.arch }
+              : null,
+            dirs: diag
+              ? {
+                  app_data: diag.app_data_dir,
+                  engine: diag.engine_dir,
+                  node_cache: diag.node_cache_dir,
+                  projects: diag.projects_file,
+                }
+              : null,
+            engine_manifest: diag ? diag.engine_manifest : null,
+            telemetry: { plugin: plugMetrics, project: projMetrics },
+            recent_crashes: diag ? diag.recent_crashes : [],
+          };
+          out.textContent = JSON.stringify(report, null, 2);
+        } catch (e) {
+          out.textContent = "";
+          errEl.textContent = "诊断加载失败：" + String(e);
+        }
+      }
+
       document.getElementById("install").addEventListener("click", installFromDir);
       document.getElementById("refresh").addEventListener("click", async () => {
         await loadPlugins();
         await loadMetrics();
+      });
+
+      document.getElementById("diag-refresh").addEventListener("click", loadDiagnostics);
+      document.getElementById("diag-copy").addEventListener("click", async () => {
+        const text = document.getElementById("diag-output").textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          document.getElementById("diag-err").textContent = "已复制到剪贴板";
+        } catch (e) {
+          document.getElementById("diag-err").textContent = "复制失败：" + String(e);
+        }
       });
 
       // 全局错误兜底
@@ -220,9 +282,10 @@
         event.preventDefault();
       });
 
-      // 初始加载：列表 + 指标
+      // 初始加载：列表 + 指标 + 诊断
       loadPlugins();
       loadMetrics();
+      loadDiagnostics();
     </script>
   </body>
 </html>
