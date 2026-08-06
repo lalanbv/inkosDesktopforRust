@@ -217,6 +217,16 @@ fn main() {
                 .map(|d| d.join(config::APP_DATA_DIR_NAME))
                 .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
             std::fs::create_dir_all(&app_data).ok();
+
+            // =========================================================
+            // M5a（Phase 3）：工作区迁移（Phase 2 → Phase 3）
+            // =========================================================
+            match inkos_desktop::workspace::migration::migrate_from_phase2(&app_data) {
+                Ok(true) => tracing::info!("✅ Phase 2 数据已迁移至默认工作区"),
+                Ok(false) => tracing::debug!("跳过迁移：workspaces.json 已存在或无旧数据"),
+                Err(e) => tracing::warn!("迁移失败（继续运行）: {:#}", e),
+            }
+
             let projects_path = app_data.join(config::PROJECTS_FILE_NAME);
             let recents = RecentProjects::read(&projects_path).unwrap_or_else(|e| {
                 eprintln!("[main] 读取 projects.json 失败，降级空列表: {e:#}");

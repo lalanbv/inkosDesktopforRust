@@ -12,6 +12,7 @@ use super::{WorkspaceList};
 struct Phase2ProjectList {
     projects: Vec<Phase2Project>,
     #[serde(default)]
+    #[allow(dead_code)]
     last_selected: usize,
 }
 
