@@ -66,17 +66,17 @@
     <main>
       <!-- 启动中（auto 复用 或 选择后） -->
       <section id="launching" class="hidden">
-        <h1>inkosDesktop 启动中…</h1>
-        <p>正在拉起 inkos Studio sidecar，请稍候。</p>
+        <h1 data-i18n="launching.title">inkosDesktop 启动中…</h1>
+        <p data-i18n="launching.desc">正在拉起 inkos Studio sidecar，请稍候。</p>
       </section>
 
       <!-- 项目选择（首启 / 无有效 last_opened） -->
       <section id="picker">
-        <h1>选择 inkos 项目目录</h1>
-        <p class="muted">inkos 将在此目录读写数据（inkos.json、章节、记忆库）。</p>
+        <h1 data-i18n="picker.title">选择 inkos 项目目录</h1>
+        <p class="muted" data-i18n="picker.muted">inkos 将在此目录读写数据（inkos.json、章节、记忆库）。</p>
         <ul id="recents"><!-- 最近项目由 JS 注入 --></ul>
-        <button id="pick" class="primary">选择文件夹…</button>
-        <div style="margin-top:0.5rem"><button id="open-plugins" class="link-btn">⚙ 插件管理</button></div>
+        <button id="pick" class="primary" data-i18n="picker.pick">选择文件夹…</button>
+        <div style="margin-top:0.5rem"><button id="open-plugins" class="link-btn" data-i18n="picker.plugins">⚙ 插件管理</button></div>
         <p class="err" id="err"></p>
       </section>
     </main>
@@ -97,6 +97,37 @@
       function showErr(msg) {
         errEl.textContent = msg || "";
       }
+
+      // i18n 渐进实施：中英字典 + locale 检测（navigator.language）。
+      // 扩展：加 key + 翻译即可，无需框架。data-i18n 标记的元素启动时自动填充。
+      const I18N = {
+        zh: {
+          "picker.title": "选择 inkos 项目目录",
+          "picker.muted": "inkos 将在此目录读写数据（inkos.json、章节、记忆库）。",
+          "picker.pick": "选择文件夹…",
+          "picker.plugins": "⚙ 插件管理",
+          "launching.title": "inkosDesktop 启动中…",
+          "launching.desc": "正在拉起 inkos Studio sidecar，请稍候。",
+        },
+        en: {
+          "picker.title": "Choose inkos Project Directory",
+          "picker.muted": "inkos reads/writes data here (inkos.json, chapters, memory).",
+          "picker.pick": "Choose Folder…",
+          "picker.plugins": "⚙ Plugins",
+          "launching.title": "inkosDesktop Starting…",
+          "launching.desc": "Launching inkos Studio sidecar, please wait.",
+        },
+      };
+      const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
+      function t(key) {
+        return (I18N[LANG] && I18N[LANG][key]) || key;
+      }
+      function applyI18n() {
+        document.querySelectorAll("[data-i18n]").forEach((el) => {
+          el.textContent = t(el.getAttribute("data-i18n"));
+        });
+      }
+      applyI18n();
 
       // 显示结构化错误（AppError）
       function showStructuredError(error) {
@@ -250,7 +281,17 @@
           }
 
           li.appendChild(meta);
+          // a11y：列表项可键盘聚焦 + Enter/Space 选中（不只鼠标）
+          li.tabIndex = 0;
+          li.setAttribute("role", "button");
+          li.setAttribute("aria-label", `选择项目 ${r.name}`);
           li.addEventListener("click", () => chooseProject(r.path));
+          li.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              chooseProject(r.path);
+            }
+          });
           recentsEl.appendChild(li);
         }
       }
