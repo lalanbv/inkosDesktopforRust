@@ -32,6 +32,19 @@
       }
       #recents li:hover { background: #f0f6ff; border-color: #93c5fd; }
       #recents .path { color: #888; font-size: 0.8rem; word-break: break-all; }
+      /* M6f：类型徽章 + 收藏。数据来自 M6 索引；索引未命中时不渲染这些元素。 */
+      #recents .meta { display: flex; align-items: center; gap: 0.4rem; }
+      #recents .badge {
+        font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px;
+        background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;
+        white-space: nowrap;
+      }
+      #recents .fav {
+        border: none; background: none; padding: 0.2rem; font-size: 0.95rem;
+        line-height: 1; cursor: pointer; color: #d4d4d4; border-radius: 4px;
+      }
+      #recents .fav:hover { background: #e5e7eb; }
+      #recents .fav.on { color: #f59e0b; }
       .hidden { display: none !important; }
       .err { color: #b91c1c; margin-top: 0.75rem; min-height: 1.2em; }
       .muted { color: #999; font-size: 0.85rem; }
@@ -163,6 +176,34 @@
         }
       }
 
+      // 项目类型 → 展示名。索引里没有的类型（或未来新增的）回退为原字符串，
+      // 不做 throw：徽章是展示增强，不该因未知取值破坏 picker。
+      const TYPE_LABELS = {
+        nodejs: "Node.js",
+        python: "Python",
+        rust: "Rust",
+        go: "Go",
+        java: "Java",
+        dotnet: ".NET",
+        generic: "通用",
+      };
+
+      // 收藏切换：仅当该项已被 M6 索引收录（有 project_id）时可用。
+      // 失败只回滚图标 + 提示，不影响选择项目这一主流程。
+      async function toggleFavorite(projectId, btn) {
+        const wasOn = btn.classList.contains("on");
+        btn.classList.toggle("on", !wasOn);
+        btn.setAttribute("aria-pressed", String(!wasOn));
+        try {
+          await invoke("toggle_favorite", { id: projectId });
+        } catch (e) {
+          console.error("切换收藏失败:", e);
+          btn.classList.toggle("on", wasOn);
+          btn.setAttribute("aria-pressed", String(wasOn));
+          showErr("收藏状态更新失败：" + String(e));
+        }
+      }
+
       async function renderRecents(recents) {
         recentsEl.innerHTML = "";
         for (const r of recents) {
@@ -177,6 +218,35 @@
           span.appendChild(document.createElement("br"));
           span.appendChild(path);
           li.appendChild(span);
+
+          // M6f：右侧元信息区（类型徽章 + 收藏）。索引未命中时整个区域为空，
+          // 展示与增强前一致。
+          const meta = document.createElement("span");
+          meta.className = "meta";
+
+          if (r.project_type) {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = TYPE_LABELS[r.project_type] || r.project_type;
+            meta.appendChild(badge);
+          }
+
+          if (r.project_id) {
+            const fav = document.createElement("button");
+            fav.className = r.is_favorite ? "fav on" : "fav";
+            fav.textContent = "★";
+            fav.title = "收藏/取消收藏";
+            fav.setAttribute("aria-label", "收藏 " + r.name);
+            fav.setAttribute("aria-pressed", String(!!r.is_favorite));
+            // 阻止冒泡：点星标不应触发 li 的「选择项目」。
+            fav.addEventListener("click", (event) => {
+              event.stopPropagation();
+              toggleFavorite(r.project_id, fav);
+            });
+            meta.appendChild(fav);
+          }
+
+          li.appendChild(meta);
           li.addEventListener("click", () => chooseProject(r.path));
           recentsEl.appendChild(li);
         }

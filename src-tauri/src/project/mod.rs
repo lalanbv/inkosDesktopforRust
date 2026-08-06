@@ -7,8 +7,10 @@
 //! - `scanner`  — 文件系统遍历（发现项目根）
 //! - `health`   — 健康检查（依赖 / 配置 / 环境 / 权限 / 磁盘）
 //! - `manager`  — 生命周期管理（整合以上各层 + 内存缓存）
+//! - `bridge`   — projects.json ↔ 索引 合并（picker 展示增强，纯函数）
 //! - `commands` — Tauri 命令层（前端 API）
 
+pub mod bridge;
 pub mod commands;
 pub mod detector;
 pub mod health;
@@ -17,6 +19,7 @@ pub mod manager;
 pub mod scanner;
 pub mod types;
 
+pub use bridge::{enrich_recents, EnrichedRecent};
 pub use detector::ProjectDetector;
 pub use health::ProjectHealthChecker;
 pub use index::ProjectIndex;

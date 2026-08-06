@@ -57,7 +57,13 @@ impl ProjectIndex {
                 last_scanned_at INTEGER,
                 is_favorite INTEGER NOT NULL DEFAULT 0,
                 tags TEXT,
-                description TEXT
+                description TEXT,
+                -- 「最近打开」的真正排序键。last_opened_at 是秒级
+                -- （SystemTime::as_secs），同一秒内连续打开两个项目会并列，
+                -- 单靠它 ORDER BY 得到的顺序不确定；而且系统时钟被 NTP 回拨时
+                -- 顺序会错乱。open_seq 是库内单调自增计数器，不依赖时钟：
+                -- last_opened_at 只用于展示，排序一律用 open_seq。
+                open_seq INTEGER NOT NULL DEFAULT 0
             )
             "#,
             [],
@@ -86,7 +92,8 @@ impl ProjectIndex {
         )?;
 
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_projects_last_opened ON projects(last_opened_at DESC)",
+            // 索引建在真实排序键 open_seq 上（见建表处注释）。
+            "CREATE INDEX IF NOT EXISTS idx_projects_open_seq ON projects(open_seq DESC)",
             [],
         )?;
 
@@ -325,15 +332,46 @@ impl ProjectIndex {
         Ok(projects)
     }
 
+    /// 记录一次「打开」：写入展示用时间戳，并分配下一个排序序号。
+    ///
+    /// `open_seq = MAX(open_seq) + 1` 与本次 UPDATE 在同一条语句里完成，
+    /// 由 SQLite 的写锁保证原子性——并发打开两个项目不会拿到相同序号。
+    /// 返回值为新序号，便于调用方刷新缓存。
+    pub fn mark_opened(&self, id: &str, opened_at: i64) -> Result<i64> {
+        let conn = self.conn()?;
+        let rows = conn.execute(
+            "UPDATE projects
+                SET last_opened_at = ?2,
+                    open_seq = (SELECT COALESCE(MAX(open_seq), 0) + 1 FROM projects)
+              WHERE id = ?1",
+            params![id, opened_at],
+        )?;
+
+        if rows == 0 {
+            anyhow::bail!("Project not found: {}", id);
+        }
+
+        let seq: i64 = conn.query_row(
+            "SELECT open_seq FROM projects WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+
+        Ok(seq)
+    }
+
     /// 列出最近打开的项目
+    ///
+    /// 按 `open_seq` 降序——不用 `last_opened_at`，原因见建表处注释
+    /// （秒级精度会让同一秒内的多次打开顺序不确定）。
     pub fn list_recent(&self, limit: usize) -> Result<Vec<ProjectMeta>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects
-             WHERE last_opened_at IS NOT NULL
-             ORDER BY last_opened_at DESC
+             WHERE open_seq > 0
+             ORDER BY open_seq DESC
              LIMIT ?1",
         )?;
 
@@ -657,34 +695,43 @@ mod tests {
     fn test_list_recent() {
         let (_temp, index) = create_test_db();
 
-        let mut meta1 = ProjectMeta::new(
+        let meta1 = ProjectMeta::new(
             "proj1".to_string(),
             PathBuf::from("/path1"),
             ProjectType::Generic,
         );
-        meta1.last_opened_at = Some(1000);
 
-        let mut meta2 = ProjectMeta::new(
+        let meta2 = ProjectMeta::new(
             "proj2".to_string(),
             PathBuf::from("/path2"),
             ProjectType::Generic,
         );
-        meta2.last_opened_at = Some(2000);
 
         let meta3 = ProjectMeta::new(
             "proj3".to_string(),
             PathBuf::from("/path3"),
             ProjectType::Generic,
         );
-        // meta3 没有 last_opened_at
 
         index.insert(&meta1).unwrap();
         index.insert(&meta2).unwrap();
         index.insert(&meta3).unwrap();
 
+        // 未打开过 → 不在最近列表
+        assert!(index.list_recent(10).unwrap().is_empty());
+
+        // 打开 proj1 → 进入最近列表
+        index.mark_opened(&meta1.id, 1000).unwrap();
+        let recent = index.list_recent(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].name, "proj1");
+
+        // 打开 proj2 → 排在 proj1 前面
+        index.mark_opened(&meta2.id, 2000).unwrap();
         let recent = index.list_recent(10).unwrap();
         assert_eq!(recent.len(), 2);
-        assert_eq!(recent[0].name, "proj2"); // 最近的在前
+        assert_eq!(recent[0].name, "proj2");
+        assert_eq!(recent[1].name, "proj1");
     }
 
     #[test]

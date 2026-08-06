@@ -43,7 +43,7 @@ use inkos_desktop::observer::router::Router;
 use inkos_desktop::observer::sse::SseClient;
 use inkos_desktop::observer::tray_badge::{IncBadgeFn, TrayBadge};
 use inkos_desktop::paths::{AppPaths, PathResolver};
-use inkos_desktop::projects::{RecentProject, RecentProjects};
+use inkos_desktop::projects::RecentProjects;
 // M2b Task 5：secrets keychain 同步 + 文件监听回写。
 use inkos_desktop::secrets;
 use inkos_desktop::secrets::store::{KeyringStore, SecretStore};
@@ -113,10 +113,14 @@ struct LaunchState {
 }
 
 /// `get_launch_state` 命令的返回 DTO（前端 picker 据此渲染）。
+///
+/// M6f：`recents` 由 [`inkos_desktop::project::enrich_recents`] 用 M6 索引增强
+/// （附类型 / 收藏 / 项目 ID）。索引缺失或查不到该路径时字段缺省，picker 退化为
+/// 增强前的展示——既有用户零迁移。
 #[derive(Serialize)]
 struct LaunchStateDto {
     needs_project: bool,
-    recents: Vec<RecentProject>,
+    recents: Vec<inkos_desktop::project::EnrichedRecent>,
 }
 
 fn to_js_string_literal(s: &str) -> String {
@@ -222,8 +226,9 @@ fn main() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // M6f：仅在数据库打开成功时托管项目状态；失败时命令层的 try_state
-            // 返回 None，前端得到「项目管理不可用」而非静默 panic。
+            // M6f：仅在数据库打开成功时托管项目状态。失败时前端调用 M6 命令
+            // 收到 Tauri 的 "state not managed" 错误，picker 的 toggleFavorite
+            // 回滚图标 + 提示用户；列表类命令（scan_projects 等）显示明确的错误。
             // 注意：Tauri 的 setup 是单一回调（不是回调链），必须合并进这里——
             // 另起一个 .setup() 会静默覆盖本回调。
             if let Some(state) = project_state {
@@ -561,12 +566,30 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
 // =========================================================
 
 /// 返回启动状态：needs_project=true 时前端显示 picker；false 显示"启动中"。
+///
+/// M6f：最近列表用 M6 索引增强（类型徽章 / 收藏标记）。索引未托管（数据库打开
+/// 失败）或某路径不在索引中时，该项退化为纯 projects.json 展示——增强是可选的，
+/// 不能成为 picker 渲染的前置条件。
 #[tauri::command]
-fn cmd_get_launch_state(state: tauri::State<LaunchState>) -> LaunchStateDto {
+fn cmd_get_launch_state(
+    state: tauri::State<LaunchState>,
+    app_handle: tauri::AppHandle,
+) -> LaunchStateDto {
     let recents = state.recents.lock().expect("LaunchState recents mutex 中毒");
+
+    let project_state = app_handle.try_state::<inkos_desktop::project::commands::AppState>();
+    let enriched = inkos_desktop::project::enrich_recents(&recents.recent, |path| {
+        // 索引未托管 → None（退化）；查询报错也当未命中处理，
+        // 展示增强不值得让启动流程失败。
+        project_state
+            .as_ref()
+            .and_then(|s| s.project_manager.get_by_path(std::path::Path::new(path)).ok())
+            .flatten()
+    });
+
     LaunchStateDto {
         needs_project: !state.auto_launched.load(Ordering::Relaxed),
-        recents: recents.recent.clone(),
+        recents: enriched,
     }
 }
 
@@ -615,6 +638,21 @@ fn cmd_choose_project(
             eprintln!("[main] 持久化 projects.json 失败: {e:#}");
         }
     }
+    // M6f：把选中的项目同步进 M6 索引（幂等）。索引是增强性存储——同步失败
+    // 只记日志，不阻断启动：projects.json 已写入，picker 与 sidecar 均不受影响。
+    if let Some(project_state) =
+        app_handle.try_state::<inkos_desktop::project::commands::AppState>()
+    {
+        match project_state.project_manager.ensure_indexed(&p) {
+            Ok(meta) => {
+                tracing::debug!("项目已同步进索引: {} ({})", meta.name, meta.project_type.as_str());
+            }
+            Err(e) => {
+                tracing::warn!("同步项目进索引失败（不影响启动）: {e:#}");
+            }
+        }
+    }
+
     eprintln!("[main] 用户选择项目 {}（picker → spawn sidecar）", p.display());
     spawn_sidecar_task(app_handle, p);
     Ok(())

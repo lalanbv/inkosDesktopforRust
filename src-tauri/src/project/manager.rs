@@ -138,16 +138,47 @@ impl ProjectManager {
         Ok(meta)
     }
 
-    /// 打开项目（更新 last_opened_at）
+    /// 按路径获取项目
+    ///
+    /// 缓存以 id 为键，无法按 path 命中，因此这里直接查数据库（path 上有 UNIQUE
+    /// 索引，单次查询即可）。命中后回填缓存，后续按 id 的读取可直接复用。
+    pub fn get_by_path(&self, path: &Path) -> Result<Option<ProjectMeta>> {
+        let meta = self.index.get_by_path(path)?;
+
+        if let Some(ref m) = meta {
+            self.cache
+                .lock()
+                .expect("cache mutex 中毒")
+                .insert(m.id.clone(), m.clone());
+        }
+
+        Ok(meta)
+    }
+
+    /// 确保路径已被索引收录：已存在则返回既有记录，否则检测类型并新增。
+    ///
+    /// 幂等——供 `cmd_choose_project` 在用户选定项目时调用，把「已发布的
+    /// projects.json 写入路径」与 M6 索引对齐，避免索引在真实使用中长期为空。
+    pub fn ensure_indexed(&self, path: &Path) -> Result<ProjectMeta> {
+        if let Some(existing) = self.get_by_path(path)? {
+            return Ok(existing);
+        }
+        self.add_project(path)
+    }
+
+    /// 打开项目（更新 last_opened_at + 分配「最近」排序序号）
+    ///
+    /// 走 `index.mark_opened` 而不是「读改写 + update」：后者的 `last_opened_at`
+    /// 是秒级精度，同一秒内连续打开两个项目会并列，`list_recent` 顺序不确定。
+    /// `mark_opened` 在库内单条语句里原子分配单调序号，不受时钟精度与 NTP 回拨影响。
     pub fn open_project(&self, id: &str) -> Result<ProjectMeta> {
         let mut meta = self.index.get_by_id(id)?
             .ok_or_else(|| anyhow::anyhow!("Project not found: {}", id))?;
 
-        // 更新 last_opened_at
+        // 更新 last_opened_at（展示用），序号由数据库分配
         meta.mark_opened();
-
-        // 写入数据库
-        self.index.update(&meta)
+        self.index
+            .mark_opened(id, meta.last_opened_at.unwrap_or_default())
             .context("Failed to update last_opened_at")?;
 
         // 刷新缓存
@@ -498,5 +529,76 @@ mod tests {
 
         let projects = manager.list_projects().unwrap();
         assert_eq!(projects.len(), 1);
+    }
+
+    #[test]
+    fn test_get_by_path_hit_and_miss() {
+        let (_temp_db, manager) = create_test_manager();
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "path-app", r#"{"name": "path-app"}"#);
+        let project_path = project_temp.path().join("path-app");
+
+        // 未收录 → None
+        assert!(manager.get_by_path(&project_path).unwrap().is_none());
+
+        let added = manager.add_project(&project_path).unwrap();
+
+        // 已收录 → 返回同一条记录
+        let found = manager.get_by_path(&project_path).unwrap().unwrap();
+        assert_eq!(found.id, added.id);
+        assert_eq!(found.name, "path-app");
+    }
+
+    #[test]
+    fn test_get_by_path_backfills_cache() {
+        let (_temp_db, manager) = create_test_manager();
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "cache-app", r#"{"name": "cache-app"}"#);
+        let project_path = project_temp.path().join("cache-app");
+        let added = manager.add_project(&project_path).unwrap();
+
+        // 清空缓存后按 path 查，应回填缓存，使后续按 id 读取命中
+        manager.clear_cache();
+        manager.get_by_path(&project_path).unwrap().unwrap();
+
+        let by_id = manager.get_project(&added.id).unwrap().unwrap();
+        assert_eq!(by_id.id, added.id);
+    }
+
+    #[test]
+    fn test_ensure_indexed_is_idempotent() {
+        let (_temp_db, manager) = create_test_manager();
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "idem-app", r#"{"name": "idem-app"}"#);
+        let project_path = project_temp.path().join("idem-app");
+
+        // 首次调用新增
+        let first = manager.ensure_indexed(&project_path).unwrap();
+        assert_eq!(first.name, "idem-app");
+        assert_eq!(manager.list_projects().unwrap().len(), 1);
+
+        // 重复调用返回既有记录，不产生重复行（ID 保持稳定）
+        let second = manager.ensure_indexed(&project_path).unwrap();
+        assert_eq!(second.id, first.id);
+        assert_eq!(manager.list_projects().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_ensure_indexed_detects_type() {
+        let (_temp_db, manager) = create_test_manager();
+
+        // Rust 项目（Cargo.toml）应被识别为 Rust，而非 Generic
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("rust-app");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            "[package]\nname = \"rust-app\"",
+        )
+        .unwrap();
+
+        let meta = manager.ensure_indexed(&project_dir).unwrap();
+        assert_eq!(meta.project_type, ProjectType::Rust);
+        assert_eq!(meta.name, "rust-app");
     }
 }
