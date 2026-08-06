@@ -32,6 +32,9 @@ interface host {
     /// 列出目录（需 read_project 权限）
     list-dir: func(path: string) -> result<list<string>, string>;
 
+    /// HTTP GET（需 network 权限 + 域名白名单；宿主 host_api 强制校验）
+    http-get: func(url: string) -> result<string, string>;
+
     /// 结构化日志（level: error/warn/info/debug/trace）
     log: func(level: string, message: string);
 }

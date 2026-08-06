@@ -107,6 +107,10 @@ impl inkos::plugin::host::Host for PluginState {
             .map_err(|e| e.to_string())
     }
 
+    fn http_get(&mut self, url: String) -> Result<String, String> {
+        self.host.http_get(&url).map_err(|e| e.to_string())
+    }
+
     fn log(&mut self, level: String, message: String) {
         match level.as_str() {
             "error" => tracing::error!(plugin_log = %message),

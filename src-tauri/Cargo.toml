@@ -76,6 +76,10 @@ bsdiff = "0.2"
 # Phase 6.5：Ed25519 签名验证——engine bundle 来源认证（防 MITM 替换）。
 # 与 shell 通道（tauri-plugin-updater 的 Ed25519）对称，纯 Rust。
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+# Phase 6 网络白名单：插件 host_api 的 HTTP 代理（域名白名单校验）。
+# 纯同步——reqwest::blocking 在 tokio 上下文（WASM execute 经 async manager 调用）
+# 会因嵌套 runtime panic；ureq 无 runtime，安全用于同步 Host trait。
+ureq = "2"
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 

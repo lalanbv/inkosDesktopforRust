@@ -91,8 +91,8 @@ pub enum Capability {
     /// 修改项目文件
     WriteProject,
 
-    /// 访问网络
-    Network,
+    /// 访问网络（域名白名单：插件只能请求白名单内域名；`["*"]` 表示任意）
+    Network { allowed_domains: Vec<String> },
 
     /// 访问文件系统
     Filesystem { path: String },

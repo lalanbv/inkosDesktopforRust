@@ -86,11 +86,26 @@ fn parse_capability(s: &str) -> Option<Capability> {
     match s {
         "read_project" => Some(Capability::ReadProject),
         "write_project" => Some(Capability::WriteProject),
-        "network" => Some(Capability::Network),
         "system_command" => Some(Capability::SystemCommand),
         "environment" => Some(Capability::Environment),
         "database" => Some(Capability::Database),
         "ui" => Some(Capability::Ui),
+        // 网络：`network` = 任意域名（向后兼容），`network:a.com,b.com` = 白名单
+        "network" => Some(Capability::Network {
+            allowed_domains: vec!["*".to_string()],
+        }),
+        _ if s.starts_with("network:") => {
+            let domains: Vec<String> = s
+                .strip_prefix("network:")
+                .unwrap()
+                .split(',')
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .collect();
+            Some(Capability::Network {
+                allowed_domains: domains,
+            })
+        }
         _ if s.starts_with("filesystem:") => {
             let path = s.strip_prefix("filesystem:").unwrap().to_string();
             Some(Capability::Filesystem { path })
@@ -107,7 +122,21 @@ mod tests {
     #[test]
     fn test_parse_capability() {
         assert_eq!(parse_capability("read_project"), Some(Capability::ReadProject));
-        assert_eq!(parse_capability("network"), Some(Capability::Network));
+        assert_eq!(
+            parse_capability("network"),
+            Some(Capability::Network {
+                allowed_domains: vec!["*".to_string()]
+            })
+        );
+        assert_eq!(
+            parse_capability("network:api.github.com,registry.npmjs.org"),
+            Some(Capability::Network {
+                allowed_domains: vec![
+                    "api.github.com".to_string(),
+                    "registry.npmjs.org".to_string()
+                ]
+            })
+        );
         assert_eq!(
             parse_capability("filesystem:/tmp"),
             Some(Capability::Filesystem {

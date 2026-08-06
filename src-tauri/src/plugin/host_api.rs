@@ -285,6 +285,76 @@ pub struct ExecCommandResponse {
     pub exit_code: i32,
 }
 
+// =====================================================================
+// 网络能力白名单（Phase 6 最安全可靠）
+// =====================================================================
+// 进程隔离插件是独立进程，无法限制网络（OS 级沙箱超出范围）；WASM 插件经
+// Host trait 调用本 http_get，域名白名单在此强制——插件无法绕过。
+
+/// 从 URL 提取 host（小写，owned）。纯函数，便于单测。
+/// `https://api.example.com/path?x=1` → `api.example.com`
+pub fn extract_host(url: &str) -> Option<String> {
+    let after_scheme = url.split("://").nth(1).unwrap_or(url);
+    let host = after_scheme.split('/').next()?.split(':').next()?.to_lowercase();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
+/// 校验 URL 的 host 是否在白名单。
+/// - `*` 通配任意
+/// - 精确匹配（大小写不敏感）
+/// - 后缀匹配：allowed `example.com` 匹配 `api.example.com`（子域）
+pub fn check_network_domain(url: &str, allowed: &[String]) -> bool {
+    let host = match extract_host(url) {
+        Some(h) => h,
+        None => return false,
+    };
+    allowed.iter().any(|a| {
+        let a = a.to_lowercase();
+        a == "*" || a == host || host.ends_with(&format!(".{a}"))
+    })
+}
+
+/// 网络 API
+impl HostContext {
+    /// 返回声明的网络白名单（无 Network capability → None）
+    fn network_allowed_domains(&self) -> Option<&[String]> {
+        self.metadata.capabilities.iter().find_map(|cap| {
+            if let Capability::Network { allowed_domains } = cap {
+                Some(allowed_domains.as_slice())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// HTTP GET（受域名白名单限制）。用 ureq 纯同步——避免 reqwest::blocking
+    /// 在 tokio 上下文（WASM execute 经 async manager 调用）的嵌套 runtime panic。
+    pub fn http_get(&self, url: &str) -> Result<String, PluginError> {
+        let allowed = self.network_allowed_domains().ok_or_else(|| {
+            warn!(plugin_id = %self.metadata.id, url = %url, "http_get: 缺少 network 权限");
+            PluginError::PermissionDenied("缺少 network 权限".to_string())
+        })?;
+
+        if !check_network_domain(url, allowed) {
+            warn!(plugin_id = %self.metadata.id, url = %url, "http_get: 域名不在白名单");
+            return Err(PluginError::PermissionDenied(format!(
+                "域名不在白名单: {url}"
+            )));
+        }
+
+        tracing::info!(plugin_id = %self.metadata.id, url = %url, "http_get: 允许");
+        ureq::get(url)
+            .call()
+            .map_err(|e| PluginError::ExecutionFailed(format!("HTTP 请求失败: {e}")))?
+            .into_string()
+            .map_err(|e| PluginError::ExecutionFailed(format!("读取响应失败: {e}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +488,62 @@ mod tests {
         assert_eq!(result.entries.len(), 2);
         assert!(result.entries.contains(&"file1.txt".to_string()));
         assert!(result.entries.contains(&"file2.txt".to_string()));
+    }
+
+    #[test]
+    fn test_extract_host() {
+        assert_eq!(
+            extract_host("https://api.example.com/path?x=1").as_deref(),
+            Some("api.example.com")
+        );
+        assert_eq!(extract_host("http://localhost:3000").as_deref(), Some("localhost"));
+        assert_eq!(extract_host("example.com").as_deref(), Some("example.com"));
+        assert_eq!(extract_host("https://API.COM").as_deref(), Some("api.com"));
+        assert!(extract_host("").is_none());
+    }
+
+    #[test]
+    fn test_check_network_domain_wildcard() {
+        let allowed = vec!["*".to_string()];
+        assert!(check_network_domain("https://anywhere.com", &allowed));
+        assert!(check_network_domain("https://evil.test", &allowed));
+    }
+
+    #[test]
+    fn test_check_network_domain_exact() {
+        let allowed = vec!["api.github.com".to_string(), "registry.npmjs.org".to_string()];
+        assert!(check_network_domain("https://api.github.com/repos", &allowed));
+        assert!(check_network_domain("https://registry.npmjs.org/pkg", &allowed));
+        // 不在白名单
+        assert!(!check_network_domain("https://evil.com", &allowed));
+        assert!(!check_network_domain("https://api.github.com.evil.com", &allowed));
+    }
+
+    #[test]
+    fn test_check_network_domain_subdomain_suffix() {
+        // allowed example.com 匹配子域 api.example.com（后缀匹配）
+        let allowed = vec!["example.com".to_string()];
+        assert!(check_network_domain("https://example.com", &allowed));
+        assert!(check_network_domain("https://api.example.com", &allowed));
+        assert!(!check_network_domain("https://notexample.com", &allowed));
+        assert!(!check_network_domain("https://evil.com", &allowed));
+    }
+
+    #[test]
+    fn test_http_get_without_network_capability() {
+        let (ctx, _temp) = create_test_context(vec![]);
+        let result = ctx.http_get("https://example.com");
+        assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_http_get_domain_not_in_whitelist() {
+        let (ctx, _temp) =
+            create_test_context(vec![Capability::Network {
+                allowed_domains: vec!["allowed.com".to_string()],
+            }]);
+        // 白名单外域名 → PermissionDenied（不发请求）
+        let result = ctx.http_get("https://evil.com");
+        assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
     }
 }
