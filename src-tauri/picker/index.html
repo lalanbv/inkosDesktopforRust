@@ -24,6 +24,8 @@
       button:hover { background: #f0f0f0; }
       button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
       button.primary:hover { background: #1d4ed8; }
+      button.link-btn { border: none; background: none; color: #2563eb; padding: 0.3rem 0.6rem; font-size: 0.85rem; }
+      button.link-btn:hover { background: #eff6ff; text-decoration: underline; }
       #recents { list-style: none; padding: 0; margin: 1rem 0; max-width: 28rem; width: 100%; }
       #recents li {
         padding: 0.7rem 0.9rem; border: 1px solid #e0e0e0; border-radius: 8px;
@@ -74,6 +76,7 @@
         <p class="muted">inkos 将在此目录读写数据（inkos.json、章节、记忆库）。</p>
         <ul id="recents"><!-- 最近项目由 JS 注入 --></ul>
         <button id="pick" class="primary">选择文件夹…</button>
+        <div style="margin-top:0.5rem"><button id="open-plugins" class="link-btn">⚙ 插件管理</button></div>
         <p class="err" id="err"></p>
       </section>
     </main>
@@ -270,6 +273,17 @@
               } catch (e) {
                 console.error("选择文件夹失败:", e);
                 showStructuredError(e);
+              }
+            });
+
+            // 插件管理入口：打开独立窗口（settings.html）
+            document.getElementById("open-plugins").addEventListener("click", async () => {
+              showErr("");
+              try {
+                await invoke("cmd_open_plugin_manager");
+              } catch (e) {
+                console.error("打开插件管理失败:", e);
+                showErr("打开插件管理失败：" + String(e));
               }
             });
           } else {

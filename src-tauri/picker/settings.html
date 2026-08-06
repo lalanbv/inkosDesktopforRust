@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>inkosDesktop · 插件管理</title>
+    <style>
+      html, body {
+        margin: 0; min-height: 100%;
+        background: #fafafa; color: #1a1a1a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      main { max-width: 42rem; margin: 0 auto; padding: 2rem 1.5rem; }
+      h1 { font-weight: 600; font-size: 1.25rem; margin: 0 0 0.5rem; }
+      p { color: #666; margin: 0.4rem 0; font-size: 0.9rem; }
+      .toolbar { display: flex; gap: 0.5rem; align-items: center; margin: 1.5rem 0 0.5rem; }
+      button {
+        font: inherit; padding: 0.5rem 1rem; border: 1px solid #d0d0d0;
+        background: #fff; color: #1a1a1a; border-radius: 8px; cursor: pointer;
+        transition: background 0.15s;
+      }
+      button:hover { background: #f0f0f0; }
+      button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+      button.primary:hover { background: #1d4ed8; }
+      button.danger { color: #b91c1c; border-color: #fecaca; }
+      button.danger:hover { background: #fef2f2; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.small { padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+
+      ul#plugins { list-style: none; padding: 0; margin: 0; }
+      ul#plugins li {
+        padding: 0.8rem 1rem; border: 1px solid #e0e0e0; border-radius: 8px;
+        margin-bottom: 0.6rem; display: flex; justify-content: space-between;
+        align-items: center; gap: 0.8rem; background: #fff;
+      }
+      .plugin-info { text-align: left; flex: 1; min-width: 0; }
+      .plugin-name { font-weight: 600; font-size: 0.95rem; }
+      .plugin-meta { color: #888; font-size: 0.8rem; margin-top: 0.2rem; }
+      .plugin-badge {
+        display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.45rem;
+        border-radius: 4px; margin-left: 0.4rem; vertical-align: middle;
+      }
+      .badge-on { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+      .badge-off { background: #f3f4f6; color: #6b7280; border: 1px solid #e5e7eb; }
+      .plugin-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+      .empty { text-align: center; color: #999; padding: 3rem 1rem; }
+      .err { color: #b91c1c; margin: 0.75rem 0; min-height: 1.2em; font-size: 0.85rem; }
+      .muted { color: #999; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>插件管理</h1>
+      <p class="muted">安装、启用、卸载 inkosDesktop 扩展插件。插件运行在进程隔离沙箱，按声明的权限访问资源。</p>
+
+      <div class="toolbar">
+        <button id="install" class="primary">从目录安装…</button>
+        <button id="refresh">刷新</button>
+      </div>
+      <p class="err" id="err"></p>
+
+      <ul id="plugins"><!-- 插件列表由 JS 注入 --></ul>
+      <div id="empty" class="empty hidden">尚无已安装插件。点击「从目录安装」添加。</div>
+    </main>
+
+    <script>
+      // Tauri 2 withGlobalTauri：window.__TAURI__.core.invoke 可调自定义命令。
+      const { invoke } = window.__TAURI__.core;
+      const pluginsEl = document.getElementById("plugins");
+      const emptyEl = document.getElementById("empty");
+      const errEl = document.getElementById("err");
+
+      function showErr(msg) { errEl.textContent = msg || ""; }
+
+      // 插件能力（capability）→ 中文标签。未知值原样回显，不抛错。
+      const CAP_LABELS = {
+        read_project: "读项目",
+        write_project: "写项目",
+        filesystem: "文件系统",
+        network: "网络",
+        system_command: "系统命令",
+        environment: "环境变量",
+        database: "数据库",
+        ui: "UI",
+      };
+
+      function capabilityLabel(cap) {
+        if (typeof cap === "string") return CAP_LABELS[cap] || cap;
+        if (cap && typeof cap === "object") {
+          // filesystem: { path } 形态
+          const key = Object.keys(cap)[0];
+          return CAP_LABELS[key] ? `${CAP_LABELS[key]}(${cap[key]})` : JSON.stringify(cap);
+        }
+        return String(cap);
+      }
+
+      async function loadPlugins() {
+        showErr("");
+        try {
+          const plugins = await invoke("list_plugins");
+          renderPlugins(plugins || []);
+        } catch (e) {
+          showErr("加载插件失败：" + String(e));
+        }
+      }
+
+      function renderPlugins(plugins) {
+        pluginsEl.innerHTML = "";
+        if (plugins.length === 0) {
+          emptyEl.classList.remove("hidden");
+          return;
+        }
+        emptyEl.classList.add("hidden");
+
+        for (const p of plugins) {
+          const li = document.createElement("li");
+
+          const info = document.createElement("div");
+          info.className = "plugin-info";
+
+          const name = document.createElement("div");
+          name.className = "plugin-name";
+          name.textContent = p.name || p.id;
+
+          const badge = document.createElement("span");
+          badge.className = p.enabled ? "plugin-badge badge-on" : "plugin-badge badge-off";
+          badge.textContent = p.enabled ? "已启用" : "已禁用";
+          name.appendChild(badge);
+          info.appendChild(name);
+
+          const meta = document.createElement("div");
+          meta.className = "plugin-meta";
+          const caps = (p.capabilities || []).map(capabilityLabel).join("、") || "无权限声明";
+          meta.textContent = `${p.id} · v${p.version || "?"} · ${p.author || "未知"} · ${caps}`;
+          info.appendChild(meta);
+
+          li.appendChild(info);
+
+          const actions = document.createElement("div");
+          actions.className = "plugin-actions";
+
+          const toggleBtn = document.createElement("button");
+          toggleBtn.className = "small";
+          toggleBtn.textContent = p.enabled ? "禁用" : "启用";
+          toggleBtn.addEventListener("click", () => togglePlugin(p.id, p.enabled));
+          actions.appendChild(toggleBtn);
+
+          const uninstallBtn = document.createElement("button");
+          uninstallBtn.className = "small danger";
+          uninstallBtn.textContent = "卸载";
+          uninstallBtn.addEventListener("click", () => uninstallPlugin(p.id, p.name || p.id));
+          actions.appendChild(uninstallBtn);
+
+          li.appendChild(actions);
+          pluginsEl.appendChild(li);
+        }
+      }
+
+      async function togglePlugin(id, currentlyEnabled) {
+        const cmd = currentlyEnabled ? "disable_plugin" : "enable_plugin";
+        showErr("");
+        try {
+          await invoke(cmd, { id });
+          await loadPlugins();
+        } catch (e) {
+          showErr(`${currentlyEnabled ? "禁用" : "启用"}失败：` + String(e));
+        }
+      }
+
+      async function uninstallPlugin(id, name) {
+        if (!confirm(`确定卸载插件「${name}」？此操作会删除插件文件。`)) return;
+        showErr("");
+        try {
+          await invoke("uninstall_plugin", { id });
+          await loadPlugins();
+        } catch (e) {
+          showErr("卸载失败：" + String(e));
+        }
+      }
+
+      async function installFromDir() {
+        showErr("");
+        try {
+          // 复用 picker 的原生目录选择对话框（Rust 侧 blocking_pick_folder）
+          const picked = await invoke("cmd_pick_project_dialog");
+          if (!picked) return;
+          const meta = await invoke("install_plugin", { path: picked });
+          await loadPlugins();
+          alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}`);
+        } catch (e) {
+          showErr("安装失败：" + String(e));
+        }
+      }
+
+      document.getElementById("install").addEventListener("click", installFromDir);
+      document.getElementById("refresh").addEventListener("click", loadPlugins);
+
+      // 全局错误兜底
+      window.addEventListener("unhandledrejection", (event) => {
+        showErr(String(event.reason || "操作失败"));
+        event.preventDefault();
+      });
+
+      // 初始加载
+      loadPlugins();
+    </script>
+  </body>
+</html>

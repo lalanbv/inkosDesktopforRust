@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use serde::Serialize;
 // Manager trait 在作用域里才能用 `app.get_webview_window` / `app_handle.try_state` / `app_handle.path()`。
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 // NotificationExt 才能用 `app.notification()`。
 use tauri_plugin_notification::NotificationExt;
 // DialogExt（M3b）：项目目录选择对话框（Rust 侧，不经 webview ACL）。
@@ -185,6 +185,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             cmd_get_launch_state,
             cmd_pick_project_dialog,
+            cmd_open_plugin_manager,
             cmd_choose_project,
             cmd_check_updates,
             cmd_apply_engine_update,
@@ -627,6 +628,29 @@ fn cmd_pick_project_dialog(app_handle: tauri::AppHandle) -> Option<String> {
         .blocking_pick_folder();
     // FilePath::as_path() 对本地 Path 变体返回 Some（远程 Url 变体返回 None）。
     picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// 打开插件管理窗口（独立窗口加载 settings.html）。
+///
+/// 已存在则聚焦，避免重复窗口；不存在则新建。picker 与 sidecar 主窗口分离，
+/// 插件管理作为独立窗口，生命周期不受项目选择 / sidecar 启动影响。
+#[tauri::command]
+fn cmd_open_plugin_manager(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let label = "plugin-manager";
+    if let Some(win) = app_handle.get_webview_window(label) {
+        // 已打开：展示并置顶，不重复创建
+        win.show().map_err(|e| format!("显示插件管理窗口失败: {e}"))?;
+        win.set_focus().map_err(|e| format!("聚焦插件管理窗口失败: {e}"))?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(&app_handle, label, WebviewUrl::App("settings.html".into()))
+        .title("inkosDesktop · 插件管理")
+        .inner_size(720.0, 560.0)
+        .min_inner_size(480.0, 360.0)
+        .build()
+        .map_err(|e| format!("创建插件管理窗口失败: {e}"))?;
+    Ok(())
 }
 
 /// 用户选定项目：持久化到 projects.json + spawn sidecar。双发防护（CAS）。
