@@ -8,6 +8,17 @@
 //! - 顶层 `services` 字段；每个 service entry 至少含 `apiKey`（**camelCase**）。
 //! - 损坏 / 缺失文件 → 视为空（与 inkos `loadSecrets` catch-returns-default 语义一致），不 panic。
 //!
+//! ## C7 tri-state 区分（M3 批次 3）
+//! 旧版 [`read_secrets`] 把"文件缺失"、"JSON 损坏"、"合法但 services 空"三者折叠为
+//! 同一个 `Ok(empty)`，让 watcher 的删除传播兜底无法区分"用户真删全部 key"与
+//! "磁盘瞬时损坏"——用户删唯一 service 写出合法 `{"services":{}}` 被误判为"损坏"
+//! 跳过删除，keychain 残留导致重启 `sync_on_startup` path1 复活已删 key。
+//!
+//! 新 API [`read_secrets_state`] 在保持 [`read_secrets`] 行为兼容的同时，额外返回
+//! [`SecretsFileState`]（Absent / Empty / Populated / Corrupt），让 watcher 兜底
+//! 仅对 `Corrupt` 跳过删除（保守不删），对 `Empty` / `Absent` 正常传播 deletes
+//! （视为用户合法意图：清空 / 删文件）。
+//!
 //! ## write 策略：merge-保留 + 0600 + 原子替换
 //! - 先读既有文件得到完整 `serde_json::Value`，只覆盖 `services[*].apiKey`，
 //!   保留 inkos 未来可能添加的其他字段（forward-compat）。
@@ -26,35 +37,95 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// 从 `secrets.json` 读取全部 `serviceId -> apiKey` 映射。
+/// 文件状态的 tri-state 分类，配合 [`read_secrets_state`] 使用。
 ///
-/// 行为契约（对齐 inkos `loadSecrets` 容错语义）：
-/// - 文件缺失 → `Ok(empty)`，不报错。
-/// - JSON 损坏 / 非 object / 缺 `services` → `Ok(empty)`，不 panic。
-/// - service entry 缺 `apiKey` 或值非 string → 该 entry 跳过（不影响其他 entry）。
+/// **C7 修复背景**：旧版 [`read_secrets`] 把"文件缺失"、"JSON 损坏"、"合法但
+/// services 空"折叠为同一个 `Ok(empty)`。这导致 [`process_writeback`]
+/// 的删除传播兜底（`from_json.is_empty() && !from_store.is_empty()`）无法区分
+/// "用户真删全部 key"与"磁盘瞬时损坏"——用户删唯一 service 后写出合法
+/// `{"services":{}}` 被误判为"损坏"跳过删除，keychain 残留，下次启动
+/// `sync_on_startup` path1 复活已删 key。
 ///
-/// 仅底层 IO 失败（权限、磁盘错误等）返回 `Err`。
+/// tri-state 让 watcher 兜底**仅**对 [`Corrupt`](Self::Corrupt) 跳过删除
+/// （保守不删），对 [`Empty`](Self::Empty) / [`Absent`](Self::Absent) 正常传播
+/// deletes（视为用户合法意图：清空 / 删文件）。
+///
+/// [`process_writeback`]: crate::secrets::sync::process_writeback
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretsFileState {
+    /// 文件不存在（用户从未创建 / 显式删除）。
+    ///
+    /// watcher 视为"用户意图清空"→ 正常传播 deletes。
+    Absent,
+    /// 文件存在且 JSON 合法，但没有任何 `services[*].apiKey` 对（如
+    /// `{"services": {}}`、`{"version": 42}`、或所有 entry 都缺 `apiKey`）。
+    ///
+    /// 视为**用户意图清空全部 secret** → 正常传播 deletes。
+    Empty,
+    /// 文件存在且至少有一个 `serviceId -> apiKey` 对。
+    Populated,
+    /// 文件存在但 JSON 不可解析（并发写截断、磁盘错乱）。
+    ///
+    /// watcher 兜底：保守跳过 deletes（防瞬时损坏导致 keychain 全部丢失）。
+    Corrupt,
+}
+
+/// tri-state 版本的 [`read_secrets`]：返回解析得到的 map **和**文件状态，
+/// 让调用方区分"合法清空"（[`Empty`](SecretsFileState::Empty)）与"瞬时损坏"
+/// （[`Corrupt`](SecretsFileState::Corrupt)）。
+///
+/// 行为契约：
+/// - 文件缺失 → `(empty, [`Absent`](SecretsFileState::Absent))`，不报错。
+/// - JSON 解析失败 → `(empty, [`Corrupt`](SecretsFileState::Corrupt))`，不报错。
+/// - 合法 JSON 但无 apiKey 对 → `(empty, [`Empty`](SecretsFileState::Empty))`。
+/// - 合法 JSON 且 ≥1 apiKey 对 → `(map, [`Populated`](SecretsFileState::Populated))`。
+/// - 底层 IO 失败（权限、磁盘错误） → `Err`（显式向上传播，不静默吞错）。
+///
+/// service entry 缺 `apiKey` 或值非 string → 该 entry 跳过（不影响其他 entry）。
 ///
 /// 注：本层不区分"空字符串 apiKey"与"缺失 apiKey"——空串会被读出。
 /// inkos `getServiceApiKey` 把空串视为未设置（`if (entry?.apiKey) return entry.apiKey`），
 /// 该语义由上层 store 负责；jsonio 仅做 schema 解析。
-pub fn read_secrets(path: &Path) -> Result<HashMap<String, String>> {
+pub fn read_secrets_state(path: &Path) -> Result<(HashMap<String, String>, SecretsFileState)> {
     let txt = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((HashMap::new(), SecretsFileState::Absent));
+        }
         Err(e) => {
             return Err(e).with_context(|| format!("read secrets: {}", path.display()))
         }
     };
-    Ok(parse_api_keys(&txt))
+    let root: Value = match serde_json::from_str(&txt) {
+        Ok(v) => v,
+        Err(_) => return Ok((HashMap::new(), SecretsFileState::Corrupt)),
+    };
+    let map = collect_api_keys(&root);
+    let state = if map.is_empty() {
+        SecretsFileState::Empty
+    } else {
+        SecretsFileState::Populated
+    };
+    Ok((map, state))
 }
 
-/// 把 `services.*.apiKey` 解析为 `HashMap`；损坏 / 缺字段 → 空。
-fn parse_api_keys(txt: &str) -> HashMap<String, String> {
-    let root: Value = match serde_json::from_str(txt) {
-        Ok(v) => v,
-        Err(_) => return HashMap::new(),
-    };
+/// 从 `secrets.json` 读取全部 `serviceId -> apiKey` 映射。
+///
+/// **向后兼容包装**：委托 [`read_secrets_state`] 并丢弃状态。等价于旧版语义
+/// （文件缺失 / JSON 损坏 / services 空都返回 `Ok(empty)`）。
+///
+/// 需要区分"合法清空"与"瞬时损坏"的调用方（如 [`process_writeback`]
+/// 的删除传播兜底）应改用 [`read_secrets_state`]。
+///
+/// [`process_writeback`]: crate::secrets::sync::process_writeback
+pub fn read_secrets(path: &Path) -> Result<HashMap<String, String>> {
+    let (map, _state) = read_secrets_state(path)?;
+    Ok(map)
+}
+
+/// 从已解析的 JSON root 收集 `services[*].apiKey`。
+/// 缺 `services` 字段 / 非 object services / entry 缺 apiKey → 空 map。
+fn collect_api_keys(root: &Value) -> HashMap<String, String> {
     let services = match root.get("services").and_then(Value::as_object) {
         Some(m) => m,
         None => return HashMap::new(),
@@ -193,7 +264,7 @@ mod tests {
         m.insert("deepseek".into(), "dk-1".into());
         write_secrets(&p, &m).unwrap();
 
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.get("openai").unwrap(), "sk-1");
         assert_eq!(got.get("deepseek").unwrap(), "dk-1");
         assert_eq!(got.len(), 2);
@@ -202,7 +273,7 @@ mod tests {
     #[test]
     fn read_missing_file_returns_empty_ok() {
         let p = Path::new("/nonexistent/path/secrets.json");
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p).unwrap();
         assert!(got.is_empty(), "missing file should yield Ok(empty), not Err");
     }
 
@@ -211,7 +282,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         write_raw(&p, "{ not valid json }}}}");
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert!(
             got.is_empty(),
             "corrupt JSON should yield Ok(empty), not panic"
@@ -223,7 +294,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         write_raw(&p, r#"{"version": 42}"#);
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert!(got.is_empty());
     }
 
@@ -235,7 +306,7 @@ mod tests {
             &p,
             r#"{"services": {"openai": {"apiKey": "sk-x"}, "broken": {}}}"#,
         );
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got.get("openai").unwrap(), "sk-x");
     }
@@ -347,7 +418,7 @@ mod tests {
         m2.insert("a".into(), "1-updated".into());
         write_secrets(&p, &m2).unwrap();
 
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.get("a").unwrap(), "1-updated");
         assert_eq!(got.get("b").unwrap(), "2");
         assert_eq!(got.len(), 2);
@@ -364,7 +435,7 @@ mod tests {
         m.insert("broken".into(), "sk-fixed".into());
         write_secrets(&p, &m).unwrap();
 
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.get("broken").unwrap(), "sk-fixed");
     }
 
@@ -375,10 +446,78 @@ mod tests {
         let m = HashMap::new();
         write_secrets(&p, &m).unwrap();
 
-        let got = read_secrets(&p).unwrap();
+        let got = read_secrets(p.as_path()).unwrap();
         assert!(got.is_empty());
 
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(raw.contains("\"services\""));
+    }
+
+    // ===================================================================
+    // C7 修复：read_secrets_state tri-state（Absent / Empty / Populated / Corrupt）
+    // 区分"用户合法清空"与"瞬时损坏"，让 watcher 兜底仅对 Corrupt 跳过删除。
+    // ===================================================================
+
+    #[test]
+    fn read_state_missing_file_is_absent() {
+        let p = Path::new("/nonexistent/path/secrets.json");
+        let (map, state) = read_secrets_state(p).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(state, SecretsFileState::Absent);
+    }
+
+    #[test]
+    fn read_state_corrupt_json_is_corrupt() {
+        // C7 核心：JSON 不可解析 → Corrupt（watcher 兜底将跳过删除）
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.json");
+        write_raw(&p, "{ broken not json }}}}");
+        let (map, state) = read_secrets_state(p.as_path()).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(state, SecretsFileState::Corrupt, "不可解析 JSON 必须分类为 Corrupt");
+    }
+
+    #[test]
+    fn read_state_legal_empty_services_is_empty_not_corrupt() {
+        // C7 回归核心：合法 {"services":{}} 必须分类为 Empty（用户意图清空），
+        // 而非 Corrupt——否则 watcher 兜底误跳过删除导致 keychain 残留。
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.json");
+        write_raw(&p, r#"{"services":{}}"#);
+        let (map, state) = read_secrets_state(p.as_path()).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(state, SecretsFileState::Empty, "合法空 services 必须是 Empty，不能误判为 Corrupt");
+    }
+
+    #[test]
+    fn read_state_missing_services_field_is_empty() {
+        // 合法 JSON 但无 services 字段 → Empty（无 apiKey 对）
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.json");
+        write_raw(&p, r#"{"version": 42}"#);
+        let (map, state) = read_secrets_state(p.as_path()).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(state, SecretsFileState::Empty);
+    }
+
+    #[test]
+    fn read_state_entries_all_missing_apikey_is_empty() {
+        // services 存在但所有 entry 都缺 apiKey → Empty（无 apiKey 对）
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.json");
+        write_raw(&p, r#"{"services": {"broken": {}, "alsobroken": {}}}"#);
+        let (map, state) = read_secrets_state(p.as_path()).unwrap();
+        assert!(map.is_empty());
+        assert_eq!(state, SecretsFileState::Empty);
+    }
+
+    #[test]
+    fn read_state_with_apikey_is_populated() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("secrets.json");
+        write_raw(&p, r#"{"services": {"openai": {"apiKey": "sk-x"}}}"#);
+        let (map, state) = read_secrets_state(p.as_path()).unwrap();
+        assert_eq!(map.get("openai").unwrap(), "sk-x");
+        assert_eq!(state, SecretsFileState::Populated);
     }
 }
