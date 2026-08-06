@@ -25,7 +25,10 @@ impl AppState {
     pub fn new(app_data: PathBuf) -> Self {
         let paths = ConfigPaths::new(app_data);
         let loader = ConfigLoader::new(paths);
-        let mut manager = loader.init_manager().unwrap_or_else(|_| ConfigManager::new());
+        let mut manager = loader.init_manager().unwrap_or_else(|e| {
+            tracing::error!("初始化配置管理器失败（如目录创建），回退系统默认: {:#}", e);
+            ConfigManager::new()
+        });
         let initial_config = manager.merged().clone();
         let reloader = ConfigReloader::new(loader.clone(), initial_config);
 
@@ -57,8 +60,10 @@ pub async fn update_config(
     // 验证配置
     config.validate().map_err(|e| e.to_string())?;
 
-    let mut mgr = state.config.lock().await;
-
+    // 先持久化（文件 I/O 含 fsync），再取锁更新内存——避免在持 config mutex 时
+    // 阻塞 tokio worker（fsync 抖动可达数十毫秒~秒级，会卡住所有 get_config 等
+    // 等待该锁的命令）。崩溃一致性：save 成功后取锁前崩溃 → 下次启动 init_manager
+    // 从文件加载，最终一致。
     match layer {
         ConfigLayer::System => {
             return Err("不允许修改系统配置".to_string());
@@ -69,36 +74,42 @@ pub async fn update_config(
                 .config_loader
                 .save_user_config(&config)
                 .map_err(|e| e.to_string())?;
-
-            // 更新内存
-            mgr.set_user(config);
         }
         ConfigLayer::Workspace => {
-            let ws_id = state.current_workspace_id.lock().await;
-            let workspace_id = ws_id.as_ref().ok_or("未选择工作区")?;
-
-            // 持久化到文件
+            let workspace_id = state
+                .current_workspace_id
+                .lock()
+                .await
+                .as_ref()
+                .ok_or("未选择工作区")?
+                .clone();
             state
                 .config_loader
-                .save_workspace_config(workspace_id, &config)
+                .save_workspace_config(&workspace_id, &config)
                 .map_err(|e| e.to_string())?;
-
-            // 更新内存
-            mgr.set_workspace(config);
         }
         ConfigLayer::Project => {
-            let proj_root = state.current_project_root.lock().await;
-            let project_root = proj_root.as_ref().ok_or("未选择项目")?;
-
-            // 持久化到文件
+            let project_root = state
+                .current_project_root
+                .lock()
+                .await
+                .as_ref()
+                .ok_or("未选择项目")?
+                .clone();
             state
                 .config_loader
-                .save_project_config(project_root, &config)
+                .save_project_config(&project_root, &config)
                 .map_err(|e| e.to_string())?;
-
-            // 更新内存
-            mgr.set_project(config);
         }
+    }
+
+    // 持久化成功后再取锁更新内存（set_* 是纯内存操作，持锁极短）
+    let mut mgr = state.config.lock().await;
+    match layer {
+        ConfigLayer::System => unreachable!("System 在上 match 已 return"),
+        ConfigLayer::User => mgr.set_user(config),
+        ConfigLayer::Workspace => mgr.set_workspace(config),
+        ConfigLayer::Project => mgr.set_project(config),
     }
 
     Ok(())
@@ -110,21 +121,27 @@ pub async fn reset_config(
     state: tauri::State<'_, AppState>,
     layer: ConfigLayer,
 ) -> Result<(), String> {
-    let mut mgr = state.config.lock().await;
-
+    // User 层：先删持久化文件（避免重启被 init_manager→apply_user_config 重新加载
+    // 而"复活"，违反最小惊讶）；删失败仅 warn 不阻断（仍清内存）。
+    // Workspace/Project 沿用既有语义（仅清内存，按需重载）。
     match layer {
         ConfigLayer::System => {
             return Err("不允许重置系统配置".to_string());
         }
         ConfigLayer::User => {
-            mgr.clear_user();
+            if let Err(e) = state.config_loader.delete_user_config() {
+                tracing::warn!("删除用户全局配置文件失败（仍清除内存）: {:#}", e);
+            }
         }
-        ConfigLayer::Workspace => {
-            mgr.clear_workspace();
-        }
-        ConfigLayer::Project => {
-            mgr.clear_project();
-        }
+        ConfigLayer::Workspace | ConfigLayer::Project => {}
+    }
+
+    let mut mgr = state.config.lock().await;
+    match layer {
+        ConfigLayer::System => unreachable!("System 在上 match 已 return"),
+        ConfigLayer::User => mgr.clear_user(),
+        ConfigLayer::Workspace => mgr.clear_workspace(),
+        ConfigLayer::Project => mgr.clear_project(),
     }
 
     Ok(())

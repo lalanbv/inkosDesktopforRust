@@ -78,13 +78,25 @@ impl ConfigLoader {
         config.write(&path).with_context(|| "保存用户全局配置失败")
     }
 
+    /// 删除用户全局配置文件（幂等：不存在视为成功——reset 场景文件可能已删）
+    pub fn delete_user_config(&self) -> Result<()> {
+        let path = self.paths.user_config();
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("删除用户全局配置失败: {}", path.display())),
+        }
+    }
+
     /// 初始化配置管理器（加载系统默认 + 用户全局配置）
     pub fn init_manager(&self) -> Result<ConfigManager> {
         self.paths.ensure_config_dirs()?;
         let mut manager = ConfigManager::new();
-        // 启动即加载用户全局配置——User 层核心价值：用户偏好无需打开 settings
-        // 面板即生效（日志级别/更新通道/网络代理等）。
-        self.apply_user_config(&mut manager)?;
+        // 加载用户全局配置；损坏（非法 TOML / 校验失败）时记日志并跳过——
+        // 不让单个损坏文件使整个 init 失败（用户失去全局偏好，但应用可启动）。
+        if let Err(e) = self.apply_user_config(&mut manager) {
+            tracing::error!("加载用户全局配置失败（已忽略，回退系统默认）: {:#}", e);
+        }
         Ok(manager)
     }
 
@@ -215,6 +227,36 @@ mod tests {
 
         let mut mgr = loader.init_manager().unwrap();
         assert_eq!(mgr.merged().logging.level, "info");
+    }
+
+    #[test]
+    fn test_init_manager_corrupt_user_config_falls_back() {
+        // 损坏的 user.toml 不应使 init_manager 失败——记日志 + 回退系统默认。
+        let temp = TempDir::new().unwrap();
+        let paths = ConfigPaths::new(temp.path().to_path_buf());
+        let loader = ConfigLoader::new(paths);
+
+        // 手工写入非法 TOML（save_user_config 路径会校验拒绝，须模拟磁盘损坏）
+        std::fs::create_dir_all(temp.path().join("config")).unwrap();
+        std::fs::write(temp.path().join("config").join("user.toml"), "invalid toml [[[").unwrap();
+
+        let mut mgr = loader.init_manager().unwrap();
+        assert_eq!(mgr.merged().logging.level, "info"); // 回退系统默认
+    }
+
+    #[test]
+    fn test_delete_user_config_idempotent() {
+        let temp = TempDir::new().unwrap();
+        let paths = ConfigPaths::new(temp.path().to_path_buf());
+        let loader = ConfigLoader::new(paths);
+
+        // 文件不存在时删除应成功（幂等）
+        assert!(loader.delete_user_config().is_ok());
+
+        // 保存后删除 → 再删（已不存在）仍 Ok
+        loader.save_user_config(&AppConfig::default()).unwrap();
+        assert!(loader.delete_user_config().is_ok());
+        assert!(loader.delete_user_config().is_ok());
     }
 
     #[test]
