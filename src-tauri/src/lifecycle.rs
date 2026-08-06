@@ -299,10 +299,13 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
         .context("badge MenuItem 构建失败")?;
     let show_item = tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)
         .context("show MenuItem 构建失败")?;
+    let plugins_item =
+        tauri::menu::MenuItem::with_id(app, "plugins", "插件管理…", true, None::<&str>)
+            .context("plugins MenuItem 构建失败")?;
     let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
         .context("quit MenuItem 构建失败")?;
     tauri::menu::MenuBuilder::new(app)
-        .items(&[&badge_item, &show_item, &quit_item])
+        .items(&[&badge_item, &show_item, &plugins_item, &quit_item])
         .build()
         .context("MenuBuilder build 失败")
 }
@@ -319,6 +322,14 @@ fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
+            }
+        }
+        // 插件管理：复用 plugin::commands::open_manager_window（与 picker 的
+        // cmd_open_plugin_manager 同一入口），让常驻状态（sidecar 运行）下也能
+        // 经托盘打开插件管理面板，不只 picker 阶段可达。
+        "plugins" => {
+            if let Err(e) = crate::plugin::commands::open_manager_window(app) {
+                eprintln!("[lifecycle] 打开插件管理窗口失败: {e}");
             }
         }
         "quit" => {

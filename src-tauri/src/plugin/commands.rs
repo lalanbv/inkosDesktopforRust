@@ -2,12 +2,33 @@
 
 use crate::plugin::{PluginManager, PluginMetadata};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
 /// 应用状态（插件管理器）
 pub struct PluginState {
     pub manager: Arc<Mutex<PluginManager>>,
+}
+
+/// 打开插件管理窗口（加载 settings.html）。
+///
+/// 公共入口：Tauri 命令（`cmd_open_plugin_manager`）与托盘菜单（"插件管理…"）
+/// 共用此函数，避免两处窗口创建逻辑漂移。已存在则聚焦，否则新建。
+pub fn open_manager_window(app: &tauri::AppHandle) -> Result<(), String> {
+    const LABEL: &str = "plugin-manager";
+    if let Some(win) = app.get_webview_window(LABEL) {
+        win.show().map_err(|e| format!("显示插件管理窗口失败: {e}"))?;
+        win.set_focus().map_err(|e| format!("聚焦插件管理窗口失败: {e}"))?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("settings.html".into()))
+        .title("inkosDesktop · 插件管理")
+        .inner_size(720.0, 560.0)
+        .min_inner_size(480.0, 360.0)
+        .build()
+        .map_err(|e| format!("创建插件管理窗口失败: {e}"))?;
+    Ok(())
 }
 
 /// 列出所有已安装的插件

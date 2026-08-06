@@ -18,7 +18,7 @@ pub mod protocol;
 pub mod runtime;
 pub mod types;
 
-pub use commands::PluginState;
+pub use commands::{open_manager_window, PluginState};
 pub use host_api::HostContext;
 pub use manager::PluginManager;
 pub use manifest::{parse_manifest, PluginManifest};
