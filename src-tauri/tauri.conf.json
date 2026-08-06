@@ -24,5 +24,13 @@
     "active": false,
     "icon": [],
     "resources": ["engine"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_ED25519_PUBKEY_FROM_M3E",
+      "endpoints": [
+        "https://github.com/lalanbv/inkosDesktopforRust/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

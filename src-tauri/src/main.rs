@@ -126,10 +126,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             cmd_get_launch_state,
             cmd_pick_project_dialog,
             cmd_choose_project,
+            cmd_check_updates,
+            cmd_apply_engine_update,
+            cmd_apply_shell_update,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
@@ -217,6 +221,31 @@ fn main() {
                 recents: Mutex::new(recents),
             });
 
+            // =========================================================
+            // M3d：updater 状态（engine + shell 通道）
+            // =========================================================
+            let repo = std::env::var("INKOS_REPO")
+                .unwrap_or_else(|_| "lalanbv/inkosDesktopforRust".to_string());
+            let current_engine_version = {
+                let manifest_path =
+                    resolve_launch_engine(&app_handle).join(config::ENGINE_MANIFEST_FILE);
+                inkos_desktop::engine::manifest::EngineManifest::read(&manifest_path)
+                    .map(|m| m.engine_version)
+                    .unwrap_or_else(|_| "0".to_string())
+            };
+            let engine_base = dirs::data_dir()
+                .map(|d| d.join(config::APP_DATA_DIR_NAME))
+                .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
+            app.manage(UpdaterState {
+                repo,
+                current_engine_version,
+                engine_dir: engine_base.join(config::ENGINE_DIR_NAME),
+                bak_dir: engine_base.join(config::ENGINE_BAK_DIR_NAME),
+                staging_dir: engine_base
+                    .join(config::UPDATES_DIR_NAME)
+                    .join(config::STAGING_DIR_NAME),
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -248,6 +277,41 @@ fn main() {
         });
 }
 
+/// M3d：解析启动 engine 路径（app_data 更新副本优先 → 否则 dev/prod 源）。
+/// setup（读 manifest 版本）与 spawn_sidecar_task（build_launch）共用。
+fn resolve_launch_engine(app_handle: &tauri::AppHandle) -> PathBuf {
+    let app_data_engine = dirs::data_dir()
+        .map(|d| d.join(config::APP_DATA_DIR_NAME).join(config::ENGINE_DIR_NAME))
+        .unwrap_or_else(|| std::env::temp_dir().join(config::ENGINE_DIR_NAME));
+    if app_data_engine.is_dir() {
+        return app_data_engine;
+    }
+    let dev_engine_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let resource_dir = app_handle.path().resource_dir().ok();
+    engine::resolve_engine_dir(resource_dir.as_deref(), dev_engine_root)
+}
+
+/// M3d：updater 状态（engine + shell 通道共享）。setup 写入，命令读取。
+struct UpdaterState {
+    /// 本仓 "owner/repo"（从 env 或默认 origin 解析；fallback 占位）。
+    repo: String,
+    /// 当前 engine 版本（manifest.engine_version；读失败 → "0" 视为总需更新）。
+    current_engine_version: String,
+    /// app_data/engine（updater 替换目标）。
+    engine_dir: PathBuf,
+    /// app_data/engine.bak（回滚备份）。
+    bak_dir: PathBuf,
+    /// app_data/updates/staging（下载暂存）。
+    staging_dir: PathBuf,
+}
+
+/// `check_updates` 返回 DTO（前端 + 日志用）。
+#[derive(Serialize)]
+struct UpdatesDto {
+    engine: inkos_desktop::updater::ReleaseInfo,
+    shell: inkos_desktop::updater::ReleaseInfo,
+}
+
 /// M3b：提取的 sidecar 启动任务。auto 复用（last_opened）与 picker 选择（choose_project）
 /// 共用此入口。所有失败仅 log + 窗口 title 回显，不 panic（与 M1/M2 一致的降级纪律）。
 fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
@@ -260,13 +324,8 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
             }
         };
         let outcome = async {
-            // M3a（解 C1）：engine 经 resource_dir（prod）→ CARGO_MANIFEST_DIR（dev）解析。
-            let dev_engine_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            let resource_dir = app_handle.path().resource_dir().ok();
-            let launch_engine = engine::resolve_engine_dir(
-                resource_dir.as_deref(),
-                dev_engine_root,
-            );
+            // M3d：engine 解析（app_data 更新副本优先 → 否则 dev/prod 源）。
+            let launch_engine = resolve_launch_engine(&app_handle);
 
             // project_root 由参数传入（auto=last_opened / picker=用户选择）。确保 cwd 存在：
             std::fs::create_dir_all(&project_root)
@@ -466,6 +525,108 @@ fn cmd_choose_project(
     Ok(())
 }
 
+// =========================================================
+// M3d：updater 命令（engine 通道 + shell 通道）
+// =========================================================
+
+/// 查 engine + shell 两个通道的最新版本。失败（无网/无 release/未签名）保守视为无更新。
+#[tauri::command]
+async fn cmd_check_updates(
+    state: tauri::State<'_, UpdaterState>,
+    app_handle: tauri::AppHandle,
+) -> Result<UpdatesDto, String> {
+    use inkos_desktop::updater::{engine::EngineChannel, ReleaseInfo};
+
+    let engine_ch =
+        EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
+    let engine = match engine_ch.check().await {
+        Ok(Some(tag)) => ReleaseInfo {
+            channel: "engine",
+            version: tag.trim_start_matches('v').to_string(),
+            needs_update: true,
+        },
+        _ => ReleaseInfo {
+            channel: "engine",
+            version: state.current_engine_version.clone(),
+            needs_update: false,
+        },
+    };
+
+    let shell_version = app_handle.package_info().version.to_string();
+    let shell = match check_shell_update(&app_handle).await {
+        Ok(Some(v)) => ReleaseInfo {
+            channel: "shell",
+            version: v,
+            needs_update: true,
+        },
+        _ => ReleaseInfo {
+            channel: "shell",
+            version: shell_version,
+            needs_update: false,
+        },
+    };
+    Ok(UpdatesDto { engine, shell })
+}
+
+/// shell 通道探测（Tauri updater）。失败（无 release/未配置 pubkey）→ None，不报错。
+async fn check_shell_update(app_handle: &tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app_handle.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(Some(update.version)),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            eprintln!("[updater] shell 通道 check 失败（可能无签名 release）: {e}");
+            Ok(None)
+        }
+    }
+}
+
+/// 应用 engine 更新（下载 → SHA256 → 原子替换 + 回滚）。下次启动生效（app_data/engine）。
+#[tauri::command]
+async fn cmd_apply_engine_update(
+    state: tauri::State<'_, UpdaterState>,
+) -> Result<String, String> {
+    use inkos_desktop::updater::engine::EngineChannel;
+    let engine_ch =
+        EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
+    // 先 check 确认有更新（友好错误）；apply 内部再 fetch release + 下载 + 校验 + 替换。
+    let latest_tag = engine_ch
+        .check()
+        .await
+        .map_err(|e| format!("{e:#}"))?
+        .ok_or_else(|| "engine 已是最新版本".to_string())?;
+    let ver = latest_tag.trim_start_matches('v');
+    engine_ch
+        .apply(
+            &state.engine_dir,
+            &state.bak_dir,
+            &state.staging_dir,
+            &|bundle, dest| inkos_desktop::engine::node::extract_archive(bundle, dest),
+        )
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(format!("engine 已更新至 {ver}（重启 app 生效）"))
+}
+
+/// 应用 shell 更新（Tauri updater：下载 + Ed25519 验签 + 安装）。完成后提示重启。
+#[tauri::command]
+async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app_handle.updater().map_err(|e| e.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "shell 已是最新版本".to_string())?;
+    let ver = update.version.clone();
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("shell 已更新至 {ver}，请重启 app"))
+}
+
 /// M2a Task 6 接线：health_probe 通过后构建 tray + observer + 信号钩子（未改）。
 fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     let tray = TrayController::build(app_handle);
@@ -552,6 +713,7 @@ const _: fn() = || {
     assert_send_sync::<TrayController>();
     assert_send_sync::<SecretsWritebackState>();
     assert_send_sync::<LaunchState>();
+    assert_send_sync::<UpdaterState>();
 };
 
 #[cfg(test)]

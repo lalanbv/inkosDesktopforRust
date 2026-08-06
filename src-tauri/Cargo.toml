@@ -12,7 +12,7 @@ tauri-plugin-notification = "2"
 # M3b：项目目录选择对话框（Rust 侧 DialogExt，不经 webview ACL）。
 tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["blocking", "stream"] }
+reqwest = { version = "0.12", features = ["blocking", "stream", "json"] }
 tokio-stream = "0.1"
 anyhow = "1"
 thiserror = "1"
@@ -38,6 +38,10 @@ sha2 = "0.10"
 # M3c：Node bootstrap——下载 .tar.gz 解压（unix；windows 用 zip crate）。
 flate2 = "1"
 tar = "0.4"
+# M3d：版本比较（engine/node 版本探测）+ engine 通道 updater 逻辑。
+semver = "1"
+# M3d：shell 通道自更新（Tauri updater + Ed25519）。
+tauri-plugin-updater = "2"
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 

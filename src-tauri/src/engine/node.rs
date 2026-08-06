@@ -319,8 +319,8 @@ impl BootstrappingResolver {
     }
 }
 
-/// 解压 tarball 到 dest_dir（保留顶层 node-v{ver}-.../ 目录）。
-fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
+/// 解压 tarball 到 dest_dir（保留顶层 node-v{ver}-.../ 目录）。pub 供 updater engine 通道复用。
+pub fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
     let is_gz = tarball
         .file_name()
         .map(|n| n.to_string_lossy().ends_with(".tar.gz"))

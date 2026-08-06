@@ -7,4 +7,5 @@ pub mod paths;
 pub mod projects;
 pub mod secrets;
 pub mod supervisor;
+pub mod updater;
 pub mod util;
