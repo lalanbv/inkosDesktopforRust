@@ -42,6 +42,10 @@ tar = "0.4"
 semver = "1"
 # M3d：shell 通道自更新（Tauri updater + Ed25519）。
 tauri-plugin-updater = "2"
+# M4a：可观测性——结构化日志（tracing + subscriber + 滚动文件）。
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 

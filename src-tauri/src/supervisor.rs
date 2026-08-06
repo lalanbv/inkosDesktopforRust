@@ -98,6 +98,13 @@ pub fn build_launch<R: PathResolver>(paths: &R, port: u16, node_bin: &str) -> La
 /// 的同名 trait 没有该方法，故不能用单个链式 `.process_group(0)` 跨平台，必须
 /// 按平台分别调用对应方法。
 pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
+    tracing::info!(
+        program = %spec.program,
+        port = spec.port,
+        cwd = %spec.cwd.display(),
+        "spawning sidecar"
+    );
+
     let mut cmd = std::process::Command::new(&spec.program);
     cmd.args(&spec.args)
         .envs(spec.env.iter())
@@ -114,7 +121,9 @@ pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
         cmd.creation_flags(0x0000_0200);
     }
 
-    cmd.spawn().map_err(Into::into)
+    let child = cmd.spawn().map_err(Into::into)?;
+    tracing::info!(pid = child.id(), "sidecar spawned");
+    Ok(child)
 }
 
 /// 杀掉 [`spawn`] 拉起的整棵进程树。
@@ -128,6 +137,8 @@ pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
 /// 返回 `Ok(())` 表示已尽力发送信号；不保证子进程已退出（调用方如需确认应额外等 wait）。
 pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
     let pid = child.id();
+    tracing::info!(pid, "killing sidecar tree");
+
     #[cfg(unix)]
     {
         // 负号 = 向整个进程组发送；pgid = pid（child 是 leader）。
@@ -136,9 +147,11 @@ pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
         if rc != 0 {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() != Some(libc::ESRCH) {
+                tracing::error!(pid, error = %err, "kill_tree failed");
                 anyhow::bail!("kill(-pgid={pid}) 失败: {err}");
             }
         }
+        tracing::info!(pid, "sidecar tree killed (SIGTERM)");
         Ok(())
     }
     #[cfg(windows)]
@@ -146,10 +159,15 @@ pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
         let status = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .status()
-            .map_err(|e| anyhow::anyhow!("taskkill 启动失败: {e}"))?;
+            .map_err(|e| {
+                tracing::error!(pid, error = %e, "taskkill spawn failed");
+                anyhow::anyhow!("taskkill 启动失败: {e}")
+            })?;
         if !status.success() {
+            tracing::error!(pid, exit_code = ?status.code(), "taskkill failed");
             anyhow::bail!("taskkill /PID {pid} /T /F 失败 (exit={status})");
         }
+        tracing::info!(pid, "sidecar tree killed (taskkill)");
         Ok(())
     }
 }
@@ -168,20 +186,42 @@ pub async fn health_probe(port: u16, timeout: std::time::Duration) -> bool {
     {
         Ok(c) => c,
         // ClientBuilder 失败几乎只在 TLS 后端不可用时发生；按"探测不可用"处理。
-        Err(_) => return false,
+        Err(e) => {
+            tracing::warn!("health_probe: reqwest Client 构建失败: {:#}", e);
+            return false;
+        }
     };
+
+    let start = std::time::Instant::now();
     while std::time::Instant::now() < deadline {
-        let ok = client
-            .get(&url)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        if ok {
-            return true;
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(
+                    "health_probe: 端口 {} 健康探测成功，耗时 {:?}",
+                    port,
+                    start.elapsed()
+                );
+                return true;
+            }
+            Ok(resp) => {
+                tracing::debug!(
+                    "health_probe: 端口 {} 返回非 2xx 状态码 {}，继续轮询",
+                    port,
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                tracing::debug!("health_probe: 端口 {} 请求失败: {:#}，继续轮询", port, e);
+            }
         }
         tokio::time::sleep(crate::config::HEALTH_PROBE_INTERVAL).await;
     }
+
+    tracing::warn!(
+        "health_probe: 端口 {} 超时（{:?}），探测失败",
+        port,
+        timeout
+    );
     false
 }
 

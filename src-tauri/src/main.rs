@@ -123,6 +123,21 @@ fn to_js_string_literal(s: &str) -> String {
 }
 
 fn main() {
+    // M4a：可观测性初始化（tracing 日志 + panic hook）
+    let log_dir = dirs::data_dir()
+        .map(|d| d.join(config::APP_DATA_DIR_NAME).join("logs"))
+        .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME).join("logs"));
+    let _log_guard = inkos_desktop::observability::init_logging(log_dir)
+        .expect("init_logging 失败");
+
+    let crash_dir = dirs::data_dir()
+        .map(|d| d.join(config::APP_DATA_DIR_NAME).join("crashes"))
+        .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME).join("crashes"));
+    inkos_desktop::observability::init_panic_hook(crash_dir)
+        .expect("init_panic_hook 失败");
+
+    tracing::info!("inkosDesktop 启动");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -134,6 +149,7 @@ fn main() {
             cmd_check_updates,
             cmd_apply_engine_update,
             cmd_apply_shell_update,
+            inkos_desktop::observability::cmd_get_diagnostics,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
