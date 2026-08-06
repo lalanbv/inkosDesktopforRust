@@ -81,6 +81,45 @@ impl WasiView for PluginState {
     }
 }
 
+// Phase 6.3：实现 bindgen 生成的 Host trait（对应 wit 的 host import interface）。
+// 把插件对 host 能力的调用委托给 HostContext（复用 capability 校验 + 路径沙箱），
+// 这样 WASM 插件与进程隔离插件走同一套权限模型，而非另造。
+//
+// 路径 inkos::plugin::host 由 wit 的 `package inkos:plugin; interface host` 决定：
+// wasmtime bindgen 按 namespace::package::interface 组织 mod。
+impl inkos::plugin::host::Host for PluginState {
+    fn read_file(&mut self, path: String) -> Result<String, String> {
+        self.host
+            .read_file(&path)
+            .map(|r| r.content)
+            .map_err(|e| e.to_string())
+    }
+
+    fn write_file(&mut self, path: String, content: String) -> Result<(), String> {
+        self.host
+            .write_file(&path, &content)
+            .map_err(|e| e.to_string())
+            .map(|_| ())
+    }
+
+    fn list_dir(&mut self, path: String) -> Result<Vec<String>, String> {
+        self.host
+            .list_dir(&path)
+            .map(|r| r.entries)
+            .map_err(|e| e.to_string())
+    }
+
+    fn log(&mut self, level: String, message: String) {
+        match level.as_str() {
+            "error" => tracing::error!(plugin_log = %message),
+            "warn" => tracing::warn!(plugin_log = %message),
+            "info" => tracing::info!(plugin_log = %message),
+            "debug" => tracing::debug!(plugin_log = %message),
+            _ => tracing::trace!(plugin_log = %message),
+        }
+    }
+}
+
 impl WasmPlugin {
     /// 加载并编译插件
     ///
