@@ -15,7 +15,7 @@
 //! 下载-校验流程是后续步骤（需 release 附 .sig 资产 + 公钥内嵌约定）。
 
 use anyhow::{bail, Context, Result};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 
 /// Ed25519 签名长度（字节）
 pub const SIG_LEN: usize = 64;
@@ -47,6 +47,43 @@ pub fn verify(data: &[u8], sig: &[u8], pubkey: &[u8]) -> Result<()> {
     let signature = Signature::from_bytes(&sig_arr);
     vk.verify(data, &signature).context("Ed25519 签名验证失败")?;
     Ok(())
+}
+
+/// 用私钥对 data 签名，返回 64 字节签名（发布方 / CI 用）。
+pub fn sign(data: &[u8], signing_key: &ed25519_dalek::SigningKey) -> [u8; SIG_LEN] {
+    signing_key.sign(data).to_bytes()
+}
+
+/// hex 编码（与 .sha256 / .sig 资产的文本格式一致）
+pub fn encode_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    use std::fmt::Write;
+    for b in bytes {
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
+/// hex 解码（读 .sig / 私钥文件用）。长度必须偶数，字符须合法。
+pub fn decode_hex(s: &str) -> Result<Vec<u8>> {
+    let bytes = s.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
+        bail!("hex 长度必须为偶数，实际 {}", bytes.len());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks(2) {
+        out.push((hex_val(chunk[0])? << 4) | hex_val(chunk[1])?);
+    }
+    Ok(out)
+}
+
+fn hex_val(c: u8) -> Result<u8> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => bail!("无效 hex 字符: {}", c as char),
+    }
 }
 
 #[cfg(test)]
@@ -104,5 +141,31 @@ mod tests {
         let sig = signing.sign(b"");
         let pubkey = signing.verifying_key().to_bytes();
         verify(b"", &sig.to_bytes(), &pubkey).unwrap();
+    }
+
+    #[test]
+    fn test_sign_then_verify_roundtrip() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let data = b"engine bundle v1.7.3";
+        let sig_bytes = sign(data, &signing);
+        let pubkey = signing.verifying_key().to_bytes();
+        // 签名产物能被 verify 接受
+        verify(data, &sig_bytes, &pubkey).unwrap();
+    }
+
+    #[test]
+    fn test_hex_encode_decode_roundtrip() {
+        let original = [0u8, 15, 16, 255, 0xab, 0xcd];
+        let encoded = encode_hex(&original);
+        assert_eq!(encoded, "000f10ffabcd");
+        let decoded = decode_hex(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_decode_hex_rejects_invalid() {
+        assert!(decode_hex("abc").is_err()); // 奇数长度
+        assert!(decode_hex("xy").is_err()); // 非 hex 字符
+        assert!(decode_hex("ZZZZ").is_err());
     }
 }

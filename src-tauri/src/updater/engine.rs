@@ -145,8 +145,11 @@ impl EngineChannel {
         let tarball_name = bundle_name(ver);
         let bundle_asset = asset(&rel, &tarball_name)?;
         let sha_asset = asset(&rel, &format!("{tarball_name}.sha256"))?;
+        // M4c：签名 asset 可选（过渡期旧 release 可能无 .sig；有则强制验证）
+        let sig_asset = asset(&rel, &format!("{tarball_name}.sig")).ok();
         let bundle_path = staging_dir.join(&tarball_name);
         let sha_path = staging_dir.join(format!("{tarball_name}.sha256"));
+        let sig_path = staging_dir.join(format!("{tarball_name}.sig"));
         let new_dir = staging_dir.join("new_engine");
 
         // 任意提前返回都清理本次 staging 产物（M2）。
@@ -155,17 +158,20 @@ impl EngineChannel {
                 &bundle_asset.browser_download_url,
                 bundle_asset.size,
                 &sha_asset.browser_download_url,
+                sig_asset.as_ref().map(|a| a.browser_download_url.as_str()),
                 &bundle_path,
                 &sha_path,
+                &sig_path,
                 &new_dir,
                 engine_dir,
                 bak_dir,
                 extract,
             )
             .await;
-        // 清理（无论成功/失败）：bundle/sha 临时文件 + new_dir（成功后 new_dir 已 rename 走）。
+        // 清理（无论成功/失败）：bundle/sha/sig 临时文件 + new_dir（成功后 new_dir 已 rename 走）。
         let _ = std::fs::remove_file(&bundle_path);
         let _ = std::fs::remove_file(&sha_path);
+        let _ = std::fs::remove_file(&sig_path);
         let _ = std::fs::remove_dir_all(&new_dir);
         result
     }
@@ -177,8 +183,10 @@ impl EngineChannel {
         bundle_url: &str,
         bundle_size: u64,
         sha_url: &str,
+        sig_url: Option<&str>,
         bundle_path: &Path,
         sha_path: &Path,
+        sig_path: &Path,
         new_dir: &Path,
         engine_dir: &Path,
         bak_dir: &Path,
@@ -198,6 +206,37 @@ impl EngineChannel {
         let actual = crate::engine::manifest::sha256_file(bundle_path)?;
         if actual != expected {
             anyhow::bail!("engine bundle SHA256 不匹配：期望 {expected}，实际 {actual}");
+        }
+
+        // M4c 签名验证（来源认证）：公钥编译期注入（INKOS_ENGINE_PUBKEY env）。
+        // - 公钥已配置 + release 提供 .sig → 强制验证，失败拒绝更新
+        // - 公钥未配置 或 release 无 .sig → 过渡期跳过 + warn（不阻断既有更新流程）
+        //   部署侧设置 INKOS_ENGINE_PUBKEY 后即转为强制模式（见密钥采购指引文档）。
+        let pubkey_hex = option_env!("INKOS_ENGINE_PUBKEY");
+        match (sig_url, pubkey_hex) {
+            (Some(url), Some(pubkey)) => {
+                download_to(&self.client, url, sig_path, 0).await?;
+                let sig_hex = std::fs::read_to_string(sig_path)
+                    .context("读 .sig 失败")?
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let sig_bytes = crate::updater::sig::decode_hex(&sig_hex)
+                    .context(".sig hex 解析失败")?;
+                let bundle_bytes = std::fs::read(bundle_path).context("读 bundle 失败")?;
+                let pubkey_bytes = crate::updater::sig::decode_hex(pubkey)
+                    .context("INKOS_ENGINE_PUBKEY hex 解析失败")?;
+                crate::updater::sig::verify(&bundle_bytes, &sig_bytes, &pubkey_bytes)
+                    .context("engine bundle 签名验证失败——拒绝该 bundle（可能被篡改）")?;
+                tracing::info!("engine bundle 签名验证通过");
+            }
+            _ => {
+                tracing::warn!(
+                    "engine bundle 签名验证跳过（INKOS_ENGINE_PUBKEY 未配置或 release 无 .sig）——\
+                     过渡期放行，部署侧配置公钥后转为强制模式"
+                );
+            }
         }
 
         // 解压到临时 new_dir（与 engine_dir 同 fs：放 staging 下）。

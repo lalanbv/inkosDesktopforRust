@@ -80,6 +80,23 @@ jobs:
           shasum -a 256 "../../engine-${VER}.tar.gz" | awk '{print $1}' > "../../engine-${VER}.tar.gz.sha256"
           echo "engine bundle: engine-${VER}.tar.gz (+ .sha256)"
 
+      # M4c：engine bundle Ed25519 签名（gated：INKOS_ENGINE_SIGNING_KEY 齐备才签）。
+      # 未配置则告警跳过——客户端降级为仅 SHA256 校验（过渡期，见密钥采购指引文档）。
+      # 配置后产出 engine-*.tar.gz.sig，上传到 release；客户端用编译期 INKOS_ENGINE_PUBKEY 强制验证。
+      - name: Sign engine bundle (gated by INKOS_ENGINE_SIGNING_KEY)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          INKOS_ENGINE_SIGNING_KEY: ${{ secrets.INKOS_ENGINE_SIGNING_KEY }}
+        run: |
+          VER=$(node -p "require('./packages/cli/package.json').version")
+          if [ -z "$INKOS_ENGINE_SIGNING_KEY" ]; then
+            echo "::warning::secret INKOS_ENGINE_SIGNING_KEY 未配置——engine bundle 未签名（客户端降级为仅 SHA256 校验，见 M4c 文档）"
+            exit 0
+          fi
+          (cd src-tauri && cargo build --bin sign-bundle --release)
+          src-tauri/target/release/sign-bundle "engine-${VER}.tar.gz" "$INKOS_ENGINE_SIGNING_KEY"
+
       # Tauri 构建 + 签名（gated：secrets 齐备才签）+ 发版 + updater manifest（Ed25519）。
       # tauri-action 在 TAURI_SIGNING_PRIVATE_KEY 存在时自动签 latest.json。
       - uses: tauri-apps/tauri-action@v0
@@ -109,6 +126,7 @@ jobs:
           files: |
             engine-*.tar.gz
             engine-*.tar.gz.sha256
+            engine-*.tar.gz.sig
 
       - uses: actions/upload-artifact@v4
         with:
