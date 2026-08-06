@@ -26,6 +26,14 @@ use wasmtime::component::ResourceTable;
 use wasmtime::*;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
+// Phase 6.3：用 wit 契约生成宿主绑定（InkosPlugin 实例类型 + Host trait）。
+// 编译期解析 wit/inkos.wit，生成类型化接口——这是 Component Model 完整执行的基础。
+// path 相对 crate root（src-tauri/）。
+wasmtime::component::bindgen!({
+    path: "wit",
+    world: "inkos-plugin",
+});
+
 /// 默认 fuel 上限：10M 条指令。
 /// 足够典型插件处理一次格式化/转换；死循环会在 ~毫秒级被中断。
 const DEFAULT_FUEL: u64 = 10_000_000;
