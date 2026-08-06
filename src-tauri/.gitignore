@@ -4,5 +4,8 @@
 # Tauri 构建过程生成的代码（tauri-build 注入）
 /gen
 
+# M3a：engine/ 是 desktop-package-engine.sh 组装的构建产物（inkos dist + node_modules 链接）
+/engine
+
 # macOS 目录元数据
 .DS_Store

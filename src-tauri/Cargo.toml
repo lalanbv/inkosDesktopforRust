@@ -31,6 +31,8 @@ notify = "6"
 #   - .persist(path)：原子 rename（同 filesystem 保证）
 # 同时仍是 dev-dep（测试 tempdir 依赖），下面 [dev-dependencies] 不再列。
 tempfile = "3"
+# M3a：EngineManifest SHA256 校验（engine bundle 完整性，M3d updater 下载校验）。
+sha2 = "0.10"
 
 [dev-dependencies]
 # tempfile 已提升为常规 dep（M2b 加固：atomic_write 使用 NamedTempFile）。

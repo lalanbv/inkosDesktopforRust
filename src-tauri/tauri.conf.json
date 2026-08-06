@@ -21,6 +21,7 @@
   },
   "bundle": {
     "active": false,
-    "icon": []
+    "icon": [],
+    "resources": ["engine"]
   }
 }

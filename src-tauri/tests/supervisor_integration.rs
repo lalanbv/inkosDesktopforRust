@@ -54,23 +54,22 @@ async fn health_probe_times_out_when_no_server() {
 #[ignore]
 async fn real_inkos_sidecar_serves_spa() {
     use inkos_desktop::{
-        config, paths::AppPaths, supervisor::{build_launch, spawn, health_probe, kill_tree},
+        config, engine::resolve_engine_dir, paths::AppPaths,
+        supervisor::{build_launch, spawn, health_probe, kill_tree},
     };
     use std::net::TcpListener;
 
-    // 集成测从 src-tauri/ 跑；仓库根 = src-tauri 的上一级。
-    // submodule_root 指向仓库根：packages/cli/dist/index.js 在此查找。
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+    // 集成测从 src-tauri/ 跑；CARGO_MANIFEST_DIR = src-tauri（engine 与 Cargo.toml 同级）。
+    // dev 模式：resolve_engine_dir(None, src-tauri) = src-tauri/engine（desktop-package-engine.sh 组装）。
+    let dev_engine_root = std::env::var("CARGO_MANIFEST_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().expect("cwd"));
-    let inkos_root = manifest_dir
-        .parent()
-        .expect("src-tauri 应有父目录（仓库根）")
-        .to_path_buf();
+    let launch_engine = resolve_engine_dir(None, &dev_engine_root);
+    let cli_entry = launch_engine.join(config::CLI_ENTRY_REL);
     assert!(
-        inkos_root.join("packages/cli/dist/index.js").exists(),
-        "inkos 未构建：缺 {}。请先运行 ./scripts/desktop-build-inkos.sh",
-        inkos_root.join("packages/cli/dist/index.js").display()
+        cli_entry.exists(),
+        "engine 未组装：缺 {}。请先运行 ./scripts/desktop-package-engine.sh",
+        cli_entry.display()
     );
 
     // project_root 用 temp 目录，**对齐生产路径**（main.rs 用
@@ -84,7 +83,7 @@ async fn real_inkos_sidecar_serves_spa() {
     let project_root = std::env::temp_dir().join("inkos-m1-demo-realtest");
     std::fs::create_dir_all(&project_root)
         .expect("创建 temp project_root 失败");
-    let paths = AppPaths::new(project_root, inkos_root).expect("AppPaths 解析失败");
+    let paths = AppPaths::new(project_root, launch_engine).expect("AppPaths 解析失败");
     let port = config::DEFAULT_STUDIO_PORT;
 
     // 预检：端口未占用。如被占，说明上一次测试的孤儿进程残留。

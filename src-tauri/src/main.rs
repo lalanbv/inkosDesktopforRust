@@ -234,31 +234,34 @@ fn main() {
 
             tauri::async_runtime::spawn(async move {
                 let outcome = async {
-                    // mono-repo：submodule_root = 仓库根（packages/cli/dist 在此）。
-                    // 用 `CARGO_MANIFEST_DIR`（编译期烘焙的 src-tauri/ 绝对路径）的 parent 解析，
-                    // 与 Task 5 集成测运行时 `std::env::var("CARGO_MANIFEST_DIR")` 等价。
-                    // 不能用 `std::env::current_dir()`——`cargo run` 会把 cwd 设为 src-tauri/
-                    // 而非仓库根，导致 packages/cli/dist/index.js 路径错位（实测踩过）。
-                    // TODO(M3): 用 Tauri resource_dir + 打包 engine/（便携 node + 预构建 dist）
-                    // 替代编译期 CARGO_MANIFEST_DIR，否则分发二进制找不到 sidecar。
-                    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-                    let submodule_root = std::path::Path::new(manifest_dir)
-                        .parent()
-                        .context("CARGO_MANIFEST_DIR 应有父目录（仓库根）")?;
+                    // =====================================================
+                    // M3a（解 C1）：engine 定位改用 Tauri resource_dir
+                    // =====================================================
+                    // 旧：CARGO_MANIFEST_DIR.parent()（编译期烘焙的仓库根路径）→ prod 用户机
+                    //     不存在该路径 → 分发二进制找不到 sidecar（C1 bug）。
+                    // 新：resolve_engine_dir(resource_dir, dev_engine_root)
+                    //   - prod：resource_dir/engine（tauri.conf.json bundle.resources 含 engine，
+                    //     随包分发；resource_dir 在打包 app 内有效）
+                    //   - dev ：dev_engine_root/engine = src-tauri/engine
+                    //     （desktop-package-engine.sh 组装；CARGO_MANIFEST_DIR=src-tauri）
+                    // prod 下 resource_dir/engine 存在即用，永不触碰烘焙的 CARGO_MANIFEST_DIR。
+                    let dev_engine_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+                    let resource_dir = app_handle.path().resource_dir().ok();
+                    let launch_engine = inkos_desktop::engine::resolve_engine_dir(
+                        resource_dir.as_deref(),
+                        dev_engine_root,
+                    );
 
                     // project_root 用 temp 目录，inkos studio 会自动初始化 minimal project。
-                    // TODO(M3): 项目选择 UI（最近项目列表 + 首启目录选择），持久化到
+                    // TODO(M3b): 项目选择 UI（最近项目列表 + 首启目录选择），持久化到
                     // app_data/projects.json；当前 temp 占位仅 dev。
                     let project_root = std::env::temp_dir().join("inkos-m1-demo");
                     // inkos studio 启动时 cwd 必须存在（Command::current_dir 在 dir 缺失时
                     // 直接返回 NotFound，不会进入子进程）。先确保目录在。
                     std::fs::create_dir_all(&project_root)
                         .with_context(|| format!("创建 project_root 失败: {}", project_root.display()))?;
-                    let paths = AppPaths::new(
-                        project_root.to_path_buf(),
-                        submodule_root.to_path_buf(),
-                    )
-                    .context("解析 AppPaths 失败")?;
+                    let paths = AppPaths::new(project_root.to_path_buf(), launch_engine)
+                        .context("解析 AppPaths 失败")?;
 
                     // =========================================================
                     // M2b Task 5：secrets keychain 同步（spawn sidecar **之前**）
@@ -267,8 +270,8 @@ fn main() {
                     // `loadSecrets` 默认路径一致）。先确保 .inkos/ 在：
                     let secrets_path = paths
                         .project_root()
-                        .join(".inkos")
-                        .join("secrets.json");
+                        .join(config::SECRETS_DIR_NAME)
+                        .join(config::SECRETS_FILE_NAME);
                     std::fs::create_dir_all(
                         secrets_path
                             .parent()

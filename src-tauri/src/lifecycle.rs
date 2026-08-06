@@ -457,7 +457,7 @@ mod tests {
         // 覆盖 program 与 args 为 "sleep 30"，但保留 supervisor::spawn 的 process_group(0) 行为。
         let paths = DummyPaths {
             proj: PathBuf::from("/tmp"),
-            sub: PathBuf::from("/tmp"),
+            engine: PathBuf::from("/tmp"),
         };
         let mut spec = build_launch(&paths, 0, "sleep");
         spec.args = vec!["30".to_string()];
@@ -481,17 +481,29 @@ mod tests {
 
     struct DummyPaths {
         proj: PathBuf,
-        sub: PathBuf,
+        engine: PathBuf,
     }
     impl PathResolver for DummyPaths {
         fn project_root(&self) -> &std::path::Path {
             &self.proj
         }
-        fn submodule_root(&self) -> &std::path::Path {
-            &self.sub
+        fn launch_engine_dir(&self) -> &std::path::Path {
+            &self.engine
+        }
+        fn runtime_dir(&self) -> PathBuf {
+            self.proj.join("runtime")
         }
         fn log_dir(&self) -> PathBuf {
             self.proj.join("log")
+        }
+        fn projects_path(&self) -> PathBuf {
+            self.proj.join("projects.json")
+        }
+        fn updates_staging_dir(&self) -> PathBuf {
+            self.proj.join("updates/staging")
+        }
+        fn engine_dir(&self) -> PathBuf {
+            self.proj.join("engine")
         }
     }
 
@@ -593,7 +605,7 @@ mod tests {
     fn wait_with_timeout_returns_true_when_child_exits_in_grace() {
         let paths = DummyPaths {
             proj: PathBuf::from("/tmp"),
-            sub: PathBuf::from("/tmp"),
+            engine: PathBuf::from("/tmp"),
         };
         // sleep 0.3s：远小于 grace（3s），wait_with_timeout 应在 grace 内观察到退出。
         let mut spec = build_launch(&paths, 0, "sleep");
@@ -612,7 +624,7 @@ mod tests {
     fn wait_with_timeout_escalates_to_sigkill_on_timeout() {
         let paths = DummyPaths {
             proj: PathBuf::from("/tmp"),
-            sub: PathBuf::from("/tmp"),
+            engine: PathBuf::from("/tmp"),
         };
         // bash -c "trap '' TERM; sleep 30"：忽略 SIGTERM，模拟 tsx 卡死。
         // 必须用 supervisor::spawn 让它成新进程组 leader，否则 SIGKILL 整组
