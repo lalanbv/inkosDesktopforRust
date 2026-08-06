@@ -178,8 +178,10 @@ pub struct BootstrappingResolver {
 
 impl BootstrappingResolver {
     pub fn new(cache_dir: PathBuf, selector: Box<dyn MirrorSelector>) -> Self {
+        // H3 审计修复：总超时 300s（tarball ~30MB + 解压预算）；防 mirror 慢流永久挂起 / 巨包 DoS。
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self { cache_dir, selector, progress: None, client }
@@ -245,6 +247,9 @@ impl BootstrappingResolver {
         let mirrors = self.selector.binary_mirrors();
         let mut last_err: Option<anyhow::Error> = None;
         for base in mirrors {
+            // M5 审计修复：清理上一 mirror 可能留下的部分解压（key_dir/top），保证每 mirror 干净起跑。
+            let top = format!("node-v{ver}-{}-{}", pa.os, pa.arch);
+            let _ = std::fs::remove_dir_all(key_dir.join(&top));
             let url = binary_url(base, ver, &tarball);
             self.emit(&format!("下载 node {ver}（{}）", short_host(base)));
             let tarball_path = key_dir.join(&tarball);
@@ -347,9 +352,11 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<()> {
         let Some(enclosed) = entry.enclosed_name() else { continue }; // 防 zip slip
         let outpath = dest_dir.join(enclosed);
         if entry.is_dir() {
-            std::fs::create_dir_all(&outpath).ok();
+            std::fs::create_dir_all(&outpath)
+                .with_context(|| format!("解压 zip 创建目录失败: {}", outpath.display()))?;
         } else {
-            std::fs::create_dir_all(outpath.parent().unwrap_or(dest_dir)).ok();
+            std::fs::create_dir_all(outpath.parent().unwrap_or(dest_dir))
+                .with_context(|| format!("解压 zip 创建父目录失败: {}", outpath.display()))?;
             let mut outfile = std::fs::File::create(&outpath)
                 .with_context(|| format!("创建 {} 失败", outpath.display()))?;
             std::io::copy(&mut entry, &mut outfile).context("写 zip entry 失败")?;

@@ -74,4 +74,14 @@ mod tests {
             Some("1.8.0".to_string())
         );
     }
+
+    #[test]
+    fn is_newer_sentinel_zero_means_always_older() {
+        // H2 审计修复：manifest 读失败 sentinel = "0.0.0"（合法 semver，低于任何 release）
+        // → 视为总需更新（不误报"已是最新"）。
+        assert_eq!(
+            is_newer("0.0.0", "v1.7.3").map(|v| v.to_string()),
+            Some("1.7.3".to_string())
+        );
+    }
 }

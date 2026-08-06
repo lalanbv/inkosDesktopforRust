@@ -231,7 +231,7 @@ fn main() {
                     resolve_launch_engine(&app_handle).join(config::ENGINE_MANIFEST_FILE);
                 inkos_desktop::engine::manifest::EngineManifest::read(&manifest_path)
                     .map(|m| m.engine_version)
-                    .unwrap_or_else(|_| "0".to_string())
+                    .unwrap_or_else(|_| "0.0.0".to_string())
             };
             let engine_base = dirs::data_dir()
                 .map(|d| d.join(config::APP_DATA_DIR_NAME))
@@ -244,6 +244,7 @@ fn main() {
                 staging_dir: engine_base
                     .join(config::UPDATES_DIR_NAME)
                     .join(config::STAGING_DIR_NAME),
+                apply_lock: Arc::new(tokio::sync::Mutex::new(())),
             });
 
             Ok(())
@@ -295,7 +296,7 @@ fn resolve_launch_engine(app_handle: &tauri::AppHandle) -> PathBuf {
 struct UpdaterState {
     /// 本仓 "owner/repo"（从 env 或默认 origin 解析；fallback 占位）。
     repo: String,
-    /// 当前 engine 版本（manifest.engine_version；读失败 → "0" 视为总需更新）。
+    /// 当前 engine 版本（manifest.engine_version；读失败 → "0.0.0" 视为总需更新）。
     current_engine_version: String,
     /// app_data/engine（updater 替换目标）。
     engine_dir: PathBuf,
@@ -303,6 +304,8 @@ struct UpdaterState {
     bak_dir: PathBuf,
     /// app_data/updates/staging（下载暂存）。
     staging_dir: PathBuf,
+    /// C2 审计修复：apply 串行锁（防双击/并发调用破坏 engine 状态）。
+    apply_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// `check_updates` 返回 DTO（前端 + 日志用）。
@@ -588,6 +591,9 @@ async fn cmd_apply_engine_update(
     state: tauri::State<'_, UpdaterState>,
 ) -> Result<String, String> {
     use inkos_desktop::updater::engine::EngineChannel;
+    // C2 审计修复：串行化 apply（防双击/并发调用并发下载/替换破坏 engine 状态）。
+    // tokio::sync::Mutex::lock().await 返回 MutexGuard（非 Result，无中毒概念）。
+    let _lock = state.apply_lock.lock().await;
     let engine_ch =
         EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
     // 先 check 确认有更新（友好错误）；apply 内部再 fetch release + 下载 + 校验 + 替换。

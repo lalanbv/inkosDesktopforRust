@@ -35,6 +35,11 @@ pub fn atomic_write_0600(path: &Path, data: &[u8]) -> anyhow::Result<()> {
         .with_context(|| format!("write tmp 失败: {}", tmp.path().display()))?;
     tmp.flush()
         .with_context(|| format!("flush tmp 失败: {}", tmp.path().display()))?;
+    // M4 审计修复：fsync 到磁盘再 persist（flush 只到 OS page cache；断电可致半写/空文件）。
+    // 对 secrets/projects（敏感/用户数据）值得 ms 级延迟换持久性。
+    tmp.as_file()
+        .sync_all()
+        .with_context(|| format!("fsync tmp 失败: {}", tmp.path().display()))?;
 
     if let Err(e) = tmp.persist(path) {
         return Err(anyhow::anyhow!(

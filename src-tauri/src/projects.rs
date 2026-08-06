@@ -67,7 +67,8 @@ impl RecentProjects {
             std::path::Path::new(path)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "unknown".to_string())
         } else {
             name.to_string()
         };
