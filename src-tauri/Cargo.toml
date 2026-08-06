@@ -73,6 +73,9 @@ wasmtime-wasi = "27"
 # Phase 6.1：增量更新——bsdiff 二进制 delta（纯 Rust，safe Rust，无 C 依赖）。
 # 客户端用 patch 应用 delta，配合 sha256 校验，显著减小 engine bundle 更新体积。
 bsdiff = "0.2"
+# Phase 6.5：Ed25519 签名验证——engine bundle 来源认证（防 MITM 替换）。
+# 与 shell 通道（tauri-plugin-updater 的 Ed25519）对称，纯 Rust。
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 
@@ -81,6 +84,8 @@ zip = "2"
 # M4b：E2E 回归测试框架（binary 测试 + 断言）。
 assert_cmd = "2.0"
 predicates = "3.0"
+# Phase 6.5：sig 模块测试需要生成 Ed25519 密钥对（OsRng）。
+rand = "0.8"
 
 # Unix 进程组信号：kill_tree 用 libc::kill(-pgid, SIGTERM) 杀整个进程组，
 # 避免 inkos CLI 派生的 tsx 孙子进程被 PID 1 收养后变孤儿继续占端口。
