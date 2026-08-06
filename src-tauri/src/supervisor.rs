@@ -233,7 +233,7 @@ mod tests {
         };
         let spec = build_launch(&paths, 4567, "/usr/bin/node");
         assert!(
-            spec.env.get("INKOS_PROJECT_ROOT").is_none(),
+            !spec.env.contains_key("INKOS_PROJECT_ROOT"),
             "INKOS_PROJECT_ROOT env 应已移除"
         );
         assert_eq!(spec.env.get("INKOS_STUDIO_PORT").unwrap(), "4567");

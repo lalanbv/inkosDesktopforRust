@@ -9,12 +9,18 @@ use super::sse::SseEvent;
 use anyhow::Result;
 use std::sync::Arc;
 
+/// 调用方注入的“窗口是否失焦”判定闭包类型（生产 = 查主窗口聚焦态；测试 = spy）。
+pub type IsUnfocusedFn = Arc<dyn Fn() -> bool + Send + Sync>;
+/// 调用方注入的通知发送闭包类型（生产 = tauri-plugin-notification；测试 = spy）。
+/// 签名为 `Fn(title, body)`——title 来自事件名映射，body 直接透传 `ev.data`。
+pub type NotifyFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 /// is_unfocused: 调用方注入的“窗口是否失焦”判定（便于测试）。
 /// notify: 调用方注入的通知发送闭包（便于测试；生产用 tauri-plugin-notification）。
 /// notify 签名为 `Fn(title, body)`——title 来自事件名映射，body 直接透传 `ev.data`。
 pub struct NativeNotifier {
-    pub is_unfocused: Arc<dyn Fn() -> bool + Send + Sync>,
-    pub notify: Arc<dyn Fn(&str, &str) + Send + Sync>,
+    pub is_unfocused: IsUnfocusedFn,
+    pub notify: NotifyFn,
 }
 
 impl EventHandler for NativeNotifier {

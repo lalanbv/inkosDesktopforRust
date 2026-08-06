@@ -8,9 +8,12 @@ use super::sse::SseEvent;
 use anyhow::Result;
 use std::sync::Arc;
 
+/// 调用方注入的角标自增闭包类型（生产 = TrayController::inc_badge；测试 = spy 计数）。
+pub type IncBadgeFn = Arc<dyn Fn() + Send + Sync>;
+
 /// inc_badge: 调用方注入（生产 = TrayController::inc_badge；测试 = spy 计数）。
 pub struct TrayBadge {
-    pub inc_badge: Arc<dyn Fn() + Send + Sync>,
+    pub inc_badge: IncBadgeFn,
 }
 
 impl EventHandler for TrayBadge {

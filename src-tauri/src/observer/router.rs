@@ -46,6 +46,15 @@ impl Router {
         }
     }
 
+    /// 已注册的事件名集合（C9：契约测断言 default_table 的键 ⊆ inkos broadcast 事件）。
+    /// 返回排序后的副本（非 `&str` 因 `HashMap` key 生命周期与 `self` 绑定，借引用即可）。
+    /// 公开仅为 `dispatch`/`register` 的只读视图——不暴露 handler 列表。
+    pub fn events(&self) -> Vec<&str> {
+        let mut keys: Vec<&str> = self.table.keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        keys
+    }
+
     /// 默认路由表（M2a spec §2.1）。notifier / badge 由调用方注入便于测试以 spy 替换。
     pub fn default_table(notifier: Arc<dyn EventHandler>, badge: Arc<dyn EventHandler>) -> Self {
         let mut r = Self::new();

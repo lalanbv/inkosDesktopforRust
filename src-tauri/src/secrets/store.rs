@@ -261,7 +261,7 @@ mod tests {
 
         store.delete("openai").unwrap();
         let after = store.read_all().unwrap();
-        assert!(after.get("openai").is_none());
+        assert!(!after.contains_key("openai"));
         assert_eq!(after.len(), 1);
     }
 
@@ -350,7 +350,7 @@ mod tests {
         // delete 一个
         store.delete("openai").unwrap();
         let all = store.read_all().unwrap();
-        assert!(all.get("openai").is_none());
+        assert!(!all.contains_key("openai"));
         assert_eq!(all.len(), 1);
 
         cleanup(&store);
@@ -389,7 +389,7 @@ mod tests {
         // ghost_key 被跳过（log），real_key 正常返回
         assert_eq!(all.len(), 1);
         assert_eq!(all.get("real_key").unwrap(), "real_val");
-        assert!(all.get("ghost_key").is_none());
+        assert!(!all.contains_key("ghost_key"));
 
         cleanup(&store);
     }

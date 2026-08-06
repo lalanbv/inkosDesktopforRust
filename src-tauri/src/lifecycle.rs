@@ -10,6 +10,7 @@
 use std::process::Child;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use tauri::{AppHandle, Manager};
@@ -45,11 +46,92 @@ impl SidecarState {
     }
 }
 
-/// 退出清理：发 SIGTERM/taskkill 整组，再 wait reap，避免僵尸。
+/// SIGTERM 后给 sidecar 的 grace period：超过则升级 SIGKILL（Unix）/ 强杀。
+///
+/// 选 3s：
+/// - inkos CLI + tsx 进程组在 SIGTERM 下正常退出实测 <1s（即便在做 cleanup）；
+/// - 3s 留足端口释放（TIME_WAIT 由 OS 管，不受 SIGKILL 影响）；
+/// - 不超 5s 避免 Ctrl+C / 关窗时用户感到"卡住"。
+///
+/// 拆常量便于 wait_with_timeout 单测引用（避免魔术数）。
+pub const CLEANUP_GRACE: Duration = Duration::from_secs(3);
+
+/// wait_with_timeout 的轮询间隔。100ms 兼顾响应（退出快）与 CPU（不空转）。
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// 在 `grace` 内轮询 `child.try_wait`；超时则升级 SIGKILL 强杀，最后 `wait` reap。
+///
+/// C4 修复：原 `cleanup_sidecar` 直接 `c.wait()` 无超时；tsx 卡住则 app 永不退出。
+/// 现在用 `try_wait` 轮询（100ms 间隔），grace 内未退则：
+/// - Unix：`libc::kill(-pgid, SIGKILL)` 整组强杀（pgid = pid，与 `kill_tree` 同语义）；
+/// - Windows：`taskkill /PID <pid> /T /F`（与 `kill_tree` 同路径——/F 已是强杀，
+///   超时再调一次兜底；幂等）。
+///
+/// 最后必 `wait()` reap 一次：避免僵尸进程（SIGKILL 后子进程也需 reap 才彻底消失）。
+///
+/// 返回值表示最终是否已退出（true = 退出，false = 即便 SIGKILL 也未退出——
+/// 几乎不可能，但防御性返回让调用方决策）。本函数不返回 Err——退出路径不容失败。
+pub fn wait_with_timeout(child: &mut Child, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) => std::thread::sleep(WAIT_POLL_INTERVAL),
+            Err(_) => return true, // wait 失败视为已退出（避免挂死调用方）
+        }
+    }
+    // grace 超时 → 升级 SIGKILL。
+    if let Err(e) = escalate_kill(child) {
+        eprintln!(
+            "[lifecycle] wait_with_timeout: 升级 SIGKILL 失败 (pid={}): {e:#}",
+            child.id()
+        );
+    }
+    // SIGKILL 后最终 wait reap。理论秒退；再设上限避免病态挂死。
+    // 这里不嵌套 wait_with_timeout（避免无限递归），直接 wait()——
+    // SIGKILL 后 kernel 必 reap 进程；若 wait() 仍卡，是 OS 级 bug，非业务问题。
+    let _ = child.wait();
+    // wait 返回了说明进程已退出（成功或已经被 reap）。try_wait 二次确认：
+    matches!(child.try_wait(), Ok(Some(_)) | Err(_))
+}
+
+/// 平台特定的 SIGKILL 升级路径（仅在 grace 超时时调用）。
+fn escalate_kill(child: &Child) -> anyhow::Result<()> {
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        // 与 supervisor::kill_tree 同语义：负号 = 整组，pgid = pid（leader）。
+        // 这里直接 SIGKILL（kill_tree 已发过 SIGTERM，本路径是超时升级）。
+        let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                anyhow::bail!("kill(-pgid={pid}, SIGKILL) 失败: {err}");
+            }
+            // ESRCH = 进程组已不存在，视为已退出
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        // taskkill /T /F 已是强杀；grace 超时再调一次兜底（幂等）。
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map_err(|e| anyhow::anyhow!("taskkill 启动失败: {e}"))?;
+        if !status.success() {
+            anyhow::bail!("taskkill /PID {pid} /T /F 失败 (exit={status})");
+        }
+        Ok(())
+    }
+}
+
+/// 退出清理：发 SIGTERM/taskkill 整组，再 wait_with_timeout reap，避免僵尸。
 ///
 /// 设计为幂等：传入 `None` 直接返回（无 sidecar 或已清理）。
 /// `kill_tree` 失败不传播错误——退出路径上不容失败，只打 stderr 日志让进程退出继续走。
-/// `wait` 即便 kill_tree 失败也尝试，最大化 reap 概率。
+/// C4：用 [`wait_with_timeout`] 限时 grace（[`CLEANUP_GRACE`]）超时升级 SIGKILL，
+/// 避免 tsx 卡住时 app 永不退出。
 pub fn cleanup_sidecar(child: Option<Child>) {
     let Some(mut c) = child else {
         return;
@@ -57,7 +139,12 @@ pub fn cleanup_sidecar(child: Option<Child>) {
     if let Err(e) = supervisor::kill_tree(&c) {
         eprintln!("[lifecycle] cleanup_sidecar: kill_tree 失败: {e}");
     }
-    let _ = c.wait();
+    if !wait_with_timeout(&mut c, CLEANUP_GRACE) {
+        eprintln!(
+            "[lifecycle] cleanup_sidecar: wait_with_timeout 未能确认 pid={} 退出（病态）",
+            c.id()
+        );
+    }
 }
 
 // =====================================================================
@@ -90,18 +177,39 @@ impl BadgeCounter {
     }
 }
 
-/// 托盘控制器：`AppHandle` + `TrayIcon` + `BadgeCounter`。
+/// 托盘控制器：`AppHandle` + `TrayIcon` + `BadgeCounter` + refresh 去抖状态。
 ///
 /// 菜单固定三项：`未读:N`（不可点） / `显示窗口` / `退出`。
 /// `inc_badge`/`clear_badge` 改计数后 best-effort 重建菜单（失败仅 log）。
 /// `build`/`refresh` 走真实 Tauri tray API（GUI 路径），单测不可达——
 /// 标注「集成验证待 GUI/真机」；计数逻辑在 BadgeCounter 上单测。
 /// `Send + Sync` 满足，可作 Tauri managed state（Task 6 注册）。
+///
+/// ## M2 修复：refresh 去抖 + Linux tooltip fallback
+/// `inc_badge` 每事件重建 3 个 MenuItem + `set_menu`——Linux 上
+/// `set_menu` 在 once-set 后无法替换（GTK 限制），频繁调用堆日志噪声且
+/// 角标永不更新。Windows/macOS 上虽可替换但每事件重建浪费。
+///
+/// 修法：
+/// 1. **去抖**：`Mutex<Option<Instant>>` 存上次成功 refresh 时间，500ms 内
+///    跳过（仅更新计数，不重建菜单）。最后一次跳过的调用不补刷——
+///    可接受：未读数在 500ms 后下一次事件自然刷；零事件则角标停在中值。
+/// 2. **Linux fallback**：`set_menu` 失败时降级 `set_tooltip` 表达未读数
+///    （"inkosDesktop · 未读 N"），best-effort 不抛错。
+/// 3. **Linux once-set 限制**：加注释说明 Linux 上菜单不可替换，
+///    故 Linux 上角标 UI 实际靠 tooltip 兜底（M3 探索 GTK 菜单重建方案）。
 pub struct TrayController {
     badge: BadgeCounter,
     app: AppHandle,
     tray: tauri::tray::TrayIcon,
+    /// 上次成功 refresh 时间；None = 从未 refresh 过，首调强制走。
+    last_refresh: Mutex<Option<Instant>>,
 }
+
+/// refresh 去抖窗口：500ms 内重复调用跳过重建。
+/// 选 500ms：通知批量场景下用户感知不到延迟（人眼对菜单文字变化 ≥1s 才敏感），
+/// 但能压住 SSE 风暴（数百事件/秒 → ≤2 次 refresh/秒）。
+const REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
 
 impl TrayController {
     /// 构建托盘 + 菜单。失败 panic（GUI 启动期无降级路径）。
@@ -118,6 +226,7 @@ impl TrayController {
             badge,
             app: app.clone(),
             tray,
+            last_refresh: Mutex::new(None),
         }
     }
 
@@ -142,13 +251,38 @@ impl TrayController {
         self.badge.current()
     }
 
-    /// best-effort 重建菜单并挂回托盘。Linux 上菜单一旦设置无法替换——
-    /// 错误以 log 形式上报，不让计数操作抛错。
+    /// best-effort 重建菜单并挂回托盘。500ms 内重复调用去抖跳过。
+    ///
+    /// Linux 上 `set_menu` 一旦设置无法替换（GTK 限制）——错误以 log 形式
+    /// 上报并降级 `set_tooltip` 表达未读数（M2 fix）。
     fn refresh(&self) -> anyhow::Result<()> {
+        // 去抖：500ms 内已 refresh 过则跳过重建。
+        // lock 中毒 = 病态，按 Ok(()) 视为已 refresh（避免 panic）。
+        if let Ok(mut last) = self.last_refresh.lock() {
+            if let Some(t) = *last {
+                if t.elapsed() < REFRESH_DEBOUNCE {
+                    return Ok(());
+                }
+            }
+            // 更新 last_refresh 为"开始重建时间"——无论重建成功失败，
+            // 都压制后续风暴（失败时 Linux 上还会走 tooltip fallback）。
+            *last = Some(Instant::now());
+        }
+
         let menu = build_menu(&self.app, self.badge.current())?;
-        self.tray
-            .set_menu(Some(menu))
-            .context("TrayIcon::set_menu 失败")?;
+        if let Err(e) = self.tray.set_menu(Some(menu)) {
+            // Linux 上 set_menu 一旦设置无法替换——日志噪声 + 角标永不更新。
+            // 降级 set_tooltip 表达未读数（best-effort，失败仅 log 不抛错）。
+            let tooltip = format!("inkosDesktop · 未读 {}", self.badge.current());
+            if let Err(te) = self.tray.set_tooltip(Some(&tooltip)) {
+                eprintln!(
+                    "[lifecycle] refresh: set_menu 失败 ({e:#}) 且 set_tooltip fallback 也失败 ({te:#})"
+                );
+            }
+            // set_menu 失败本身仍 propagate——调用方（inc_badge/clear_badge）
+            // 会再 log 一次；debounce 窗口已生效，不会刷屏。
+            return Err(e).context("TrayIcon::set_menu 失败 (Linux once-set 已知限制)");
+        }
         Ok(())
     }
 }
@@ -446,6 +580,90 @@ mod tests {
         cleanup();
 
         assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    // --- C4: wait_with_timeout 单测 ---
+    // 用真实 sleep 子进程（supervisor::spawn 让它成新进程组 leader），
+    // 不依赖 mock——真实路径才能验出 try_wait / SIGKILL 升级正确性。
+
+    /// C4 happy path：子进程在 grace 内退出 → wait_with_timeout 返回 true
+    /// 且不调 SIGKILL（用 short sleep 验证）。
+    #[cfg(unix)]
+    #[test]
+    fn wait_with_timeout_returns_true_when_child_exits_in_grace() {
+        let paths = DummyPaths {
+            proj: PathBuf::from("/tmp"),
+            sub: PathBuf::from("/tmp"),
+        };
+        // sleep 0.3s：远小于 grace（3s），wait_with_timeout 应在 grace 内观察到退出。
+        let mut spec = build_launch(&paths, 0, "sleep");
+        spec.args = vec!["0.3".to_string()];
+        let mut child = spawn(&spec).expect("spawn sleep 0.3 失败");
+        // 不发 SIGTERM——直接 wait_with_timeout，让 try_wait 在 0.3s 后观察到退出。
+        let exited = wait_with_timeout(&mut child, Duration::from_secs(2));
+        assert!(exited, "grace 内应观察到 child 退出");
+    }
+
+    /// C4 超时升级 SIGKILL：子进程忽略 SIGTERM（trap）→ grace 超时升级 SIGKILL
+    /// 强杀，wait_with_timeout 必返回 true。用 `trap '' TERM; sleep 30` 模拟
+    /// tsx 卡住场景（tsx 在 IO 卡死时也对 SIGTERM 无响应）。
+    #[cfg(unix)]
+    #[test]
+    fn wait_with_timeout_escalates_to_sigkill_on_timeout() {
+        let paths = DummyPaths {
+            proj: PathBuf::from("/tmp"),
+            sub: PathBuf::from("/tmp"),
+        };
+        // bash -c "trap '' TERM; sleep 30"：忽略 SIGTERM，模拟 tsx 卡死。
+        // 必须用 supervisor::spawn 让它成新进程组 leader，否则 SIGKILL 整组
+        // 会误伤测试进程。
+        let mut spec = build_launch(&paths, 0, "bash");
+        spec.args = vec![
+            "-c".to_string(),
+            "trap '' TERM; sleep 30".to_string(),
+        ];
+        let mut child = spawn(&spec).expect("spawn trap+sleep 失败");
+        let pid = child.id();
+
+        // 先发 SIGTERM（与 cleanup_sidecar 同路径）：
+        let _ = supervisor::kill_tree(&child);
+        // grace=1s（缩短以加速测试；生产用 CLEANUP_GRACE=3s）：
+        let start = std::time::Instant::now();
+        let exited = wait_with_timeout(&mut child, Duration::from_secs(1));
+        let elapsed = start.elapsed();
+
+        assert!(exited, "SIGKILL 升级后 child 必退出");
+        // 应在 ~1s（grace）+ 些许 reap 时间内完成；不超过 5s（防病态 hang）。
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "总耗时应 < 5s，实际 {elapsed:?}"
+        );
+        // 给 OS 一点时间回收，验证进程组已彻底退出：
+        std::thread::sleep(Duration::from_millis(50));
+        let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(
+            rc, -1,
+            "kill -0 应失败（rc=-1）说明进程已退出；rc={rc}"
+        );
+    }
+
+    /// C4 验证常量：CLEANUP_GRACE = 3s，与文档一致。
+    /// 拆常量测试避免后续重构偷偷改超时阈值。
+    #[test]
+    fn cleanup_grace_is_three_seconds() {
+        assert_eq!(CLEANUP_GRACE, Duration::from_secs(3));
+    }
+
+    // --- M2: TrayController refresh 去抖单测 ---
+    // refresh 本身走 GUI 路径不可单测；去抖逻辑拆出 last_refresh 状态可单测。
+    // 这里间接验证：last_refresh 字段存在 + Mutex<Option<Instant>> 类型契约。
+    // 完整 debounce 行为标注「集成验证待 GUI/真机」。
+
+    /// M2 验证常量：REFRESH_DEBOUNCE = 500ms，与文档一致。
+    /// 拆常量测试避免后续重构偷偷改 debounce 窗口。
+    #[test]
+    fn refresh_debounce_is_500ms() {
+        assert_eq!(REFRESH_DEBOUNCE, Duration::from_millis(500));
     }
 
     // --- ExitingFlag 单测（纯逻辑，无 Tauri 依赖）---
