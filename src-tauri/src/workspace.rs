@@ -37,6 +37,59 @@ impl Default for WorkspaceList {
     }
 }
 
+impl WorkspaceList {
+    /// 创建新工作区（UUID v4 ID，Unix 时间戳）
+    pub fn create(&mut self, name: &str) -> WorkspaceId {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let workspace = Workspace {
+            id: id.clone(),
+            name: name.to_string(),
+            created_at: now,
+            last_used: now,
+            projects: Vec::new(),
+            engine_version: None,
+        };
+
+        self.workspaces.push(workspace);
+        id
+    }
+
+    /// 删除工作区（必须存在）
+    pub fn delete(&mut self, id: &WorkspaceId) -> Result<(), String> {
+        let pos = self
+            .workspaces
+            .iter()
+            .position(|w| &w.id == id)
+            .ok_or_else(|| format!("Workspace not found: {}", id))?;
+
+        self.workspaces.remove(pos);
+
+        // 如果删除的是当前激活工作区，清空 active_id
+        if self.active_id.as_ref() == Some(id) {
+            self.active_id = None;
+        }
+
+        Ok(())
+    }
+
+    /// 查找工作区（不可变引用，0GC）
+    pub fn find(&self, id: &WorkspaceId) -> Option<&Workspace> {
+        self.workspaces.iter().find(|w| &w.id == id)
+    }
+
+    /// 查找工作区（可变引用）
+    pub fn find_mut(&mut self, id: &WorkspaceId) -> Option<&mut Workspace> {
+        self.workspaces.iter_mut().find(|w| &w.id == id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +118,47 @@ mod tests {
         let list = WorkspaceList::default();
         assert!(list.workspaces.is_empty());
         assert!(list.active_id.is_none());
+    }
+
+    #[test]
+    fn test_create_workspace() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("My Workspace");
+
+        assert_eq!(list.workspaces.len(), 1);
+        assert_eq!(list.workspaces[0].name, "My Workspace");
+        assert_eq!(list.workspaces[0].id, id);
+        assert!(list.workspaces[0].projects.is_empty());
+    }
+
+    #[test]
+    fn test_delete_workspace() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+
+        assert!(list.delete(&id).is_ok());
+        assert_eq!(list.workspaces.len(), 0);
+    }
+
+    #[test]
+    fn test_delete_nonexistent_workspace() {
+        let mut list = WorkspaceList::default();
+        let result = list.delete(&"nonexistent".to_string());
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn test_find_workspace() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+
+        let found = list.find(&id);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Test");
+
+        let not_found = list.find(&"invalid".to_string());
+        assert!(not_found.is_none());
     }
 }
