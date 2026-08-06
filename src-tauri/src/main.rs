@@ -46,6 +46,7 @@ use inkos_desktop::projects::{RecentProject, RecentProjects};
 use inkos_desktop::secrets;
 use inkos_desktop::secrets::store::{KeyringStore, SecretStore};
 use inkos_desktop::supervisor;
+use inkos_desktop::workspace;
 
 /// loopback guard 句柄 + 锁定的端口，存入 Tauri managed state（同 M1，未改）。
 #[derive(Default)]
@@ -150,6 +151,11 @@ fn main() {
             cmd_apply_engine_update,
             cmd_apply_shell_update,
             cmd_get_diagnostics,
+            workspace::cmd_list_workspaces,
+            workspace::cmd_create_workspace,
+            workspace::cmd_switch_workspace,
+            workspace::cmd_delete_workspace,
+            workspace::cmd_add_project_to_workspace,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())

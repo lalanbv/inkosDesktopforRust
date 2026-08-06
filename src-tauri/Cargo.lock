@@ -2001,6 +2001,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uuid",
  "zip 2.4.2",
 ]
 

@@ -171,6 +171,97 @@ impl WorkspaceList {
     }
 }
 
+// ===== Tauri 命令 =====
+
+use crate::error::AppError;
+use tauri::{AppHandle, Manager};
+
+/// 工作区存储路径（app_data_dir/workspaces.json）
+fn workspaces_path(app: &AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .expect("无法获取 app_data_dir")
+        .join("workspaces.json")
+}
+
+#[tauri::command]
+pub async fn cmd_list_workspaces(app: AppHandle) -> Result<WorkspaceList, AppError> {
+    let path = workspaces_path(&app);
+    WorkspaceList::read(&path).map_err(|e| {
+        AppError::filesystem(format!("读取工作区列表失败: {}", e))
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_create_workspace(
+    app: AppHandle,
+    name: String,
+) -> Result<WorkspaceId, AppError> {
+    let path = workspaces_path(&app);
+    let mut list = WorkspaceList::read(&path).map_err(|e| {
+        AppError::filesystem(format!("读取工作区列表失败: {}", e))
+    })?;
+
+    let id = list.create(&name);
+    list.write(&path).map_err(|e| {
+        AppError::filesystem(format!("保存工作区失败: {}", e))
+    })?;
+
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn cmd_switch_workspace(app: AppHandle, id: WorkspaceId) -> Result<(), AppError> {
+    let path = workspaces_path(&app);
+    let mut list = WorkspaceList::read(&path).map_err(|e| {
+        AppError::filesystem(format!("读取工作区列表失败: {}", e))
+    })?;
+
+    list.switch(&id).map_err(|e| {
+        AppError::new(crate::error::ErrorKind::Project, e)
+    })?;
+
+    list.write(&path).map_err(|e| {
+        AppError::filesystem(format!("保存工作区失败: {}", e))
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_delete_workspace(app: AppHandle, id: WorkspaceId) -> Result<(), AppError> {
+    let path = workspaces_path(&app);
+    let mut list = WorkspaceList::read(&path).map_err(|e| {
+        AppError::filesystem(format!("读取工作区列表失败: {}", e))
+    })?;
+
+    list.delete(&id).map_err(|e| {
+        AppError::new(crate::error::ErrorKind::Project, e)
+    })?;
+
+    list.write(&path).map_err(|e| {
+        AppError::filesystem(format!("保存工作区失败: {}", e))
+    })
+}
+
+#[tauri::command]
+pub async fn cmd_add_project_to_workspace(
+    app: AppHandle,
+    id: WorkspaceId,
+    path: String,
+) -> Result<(), AppError> {
+    let ws_path = workspaces_path(&app);
+    let mut list = WorkspaceList::read(&ws_path).map_err(|e| {
+        AppError::filesystem(format!("读取工作区列表失败: {}", e))
+    })?;
+
+    list.add_project(&id, &path).map_err(|e| {
+        AppError::new(crate::error::ErrorKind::Project, e)
+    })?;
+
+    list.write(&ws_path).map_err(|e| {
+        AppError::filesystem(format!("保存工作区失败: {}", e))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
