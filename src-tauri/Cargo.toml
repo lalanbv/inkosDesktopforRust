@@ -90,6 +90,13 @@ assert_cmd = "2.0"
 predicates = "3.0"
 # Phase 6.5：sig 模块测试需要生成 Ed25519 密钥对（OsRng）。
 rand = "0.8"
+# 性能精细 bench（async_tokio：scanner.scan 是 async）。
+# perf_scanner/perf_plugin_wasm 提供回归断言；criterion 提供统计分析（最优解）。
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "scanner"
+harness = false
 
 # Unix 进程组信号：kill_tree 用 libc::kill(-pgid, SIGTERM) 杀整个进程组，
 # 避免 inkos CLI 派生的 tsx 孙子进程被 PID 1 收养后变孤儿继续占端口。

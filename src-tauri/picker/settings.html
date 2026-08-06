@@ -228,13 +228,14 @@
         out.textContent = "加载中…";
         try {
           // 并行拉取，单项失败返回 null 不拖垮整体
-          const [diag, plugMetrics, projMetrics] = await Promise.all([
+          const [diag, plugMetrics, projMetrics, config] = await Promise.all([
             invoke("cmd_get_diagnostics").catch((e) => {
               errEl.textContent = "诊断部分失败：" + String(e);
               return null;
             }),
             invoke("get_plugin_metrics").catch(() => null),
             invoke("get_project_metrics").catch(() => null),
+            invoke("get_config").catch(() => null),
           ]);
           const report = {
             app: diag
@@ -249,6 +250,8 @@
                 }
               : null,
             engine_manifest: diag ? diag.engine_manifest : null,
+            // 合并配置（只读展示；编辑需工作区上下文，在 sidecar 内进行）
+            config: config,
             telemetry: { plugin: plugMetrics, project: projMetrics },
             recent_crashes: diag ? diag.recent_crashes : [],
           };
