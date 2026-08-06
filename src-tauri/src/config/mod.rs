@@ -3,6 +3,7 @@
 pub mod constants;
 pub mod types;
 pub mod validation;
+pub mod persistence;
 
 // 重新导出常量（保持向后兼容）
 pub use constants::*;
