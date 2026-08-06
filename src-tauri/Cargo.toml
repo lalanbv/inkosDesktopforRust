@@ -44,6 +44,8 @@ semver = "1"
 tauri-plugin-updater = "2"
 # M5a：工作区 ID 生成（UUID v4）。
 uuid = { version = "1", features = ["v4", "serde"] }
+# M5b：配置分层系统（TOML 格式）。
+toml = "0.8"
 # M4a：可观测性——结构化日志（tracing + subscriber + 滚动文件）。
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
