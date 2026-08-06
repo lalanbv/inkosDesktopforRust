@@ -22,7 +22,7 @@
 use super::host_api::HostContext;
 use super::types::{PluginError, PluginMetadata};
 use std::path::Path;
-use wasmtime::component::ResourceTable;
+use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::*;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
@@ -43,7 +43,7 @@ const DEFAULT_EPOCH_DEADLINE: u64 = 10;
 
 /// WASM 插件实例（已编译，可复用）
 ///
-/// `Engine` 与 `Module` 在多次 `execute` 间复用，避免重复编译；`Store` 每次调用
+/// `Engine` 与 `Component` 在多次 `execute` 间复用，避免重复编译；`Store` 每次调用
 /// 新建，保证插件状态隔离（一次执行 = 一个干净的实例）。
 pub struct WasmPlugin {
     /// 插件元数据
@@ -52,10 +52,8 @@ pub struct WasmPlugin {
     /// Wasmtime Engine（线程安全，跨调用共享）
     engine: Engine,
 
-    /// 已编译的模块。持有它是为了在 Component Model 绑定就绪后（M7g-phase2）
-    /// 于 `execute` 中复用编译产物创建 instance，避免每次调用重编译。
-    #[allow(dead_code)]
-    module: Module,
+    /// 已编译的 Component（复用编译产物，execute 时实例化）
+    component: Component,
 
     /// Host 上下文（权限检查；每次 execute clone 一份给独立 Store）
     host_context: HostContext,
@@ -139,15 +137,15 @@ impl WasmPlugin {
         let engine = Engine::new(&config)
             .map_err(|e| PluginError::ExecutionFailed(format!("创建 Wasmtime Engine 失败: {e}")))?;
 
-        let module = Module::from_file(&engine, wasm_path).map_err(|e| {
-            tracing::error!(path = %wasm_path.display(), error = %e, "编译 WASM 模块失败");
-            PluginError::ExecutionFailed(format!("编译 WASM 模块失败: {e}"))
+        let component = Component::from_file(&engine, wasm_path).map_err(|e| {
+            tracing::error!(path = %wasm_path.display(), error = %e, "编译 WASM Component 失败");
+            PluginError::ExecutionFailed(format!("编译 WASM Component 失败: {e}"))
         })?;
 
         tracing::info!(
             plugin_id = %metadata.id,
             path = %wasm_path.display(),
-            "WASM 模块加载成功"
+            "WASM Component 加载成功"
         );
 
         let host_context = HostContext::new(metadata.clone(), work_dir.to_path_buf());
@@ -155,30 +153,46 @@ impl WasmPlugin {
         Ok(Self {
             metadata,
             engine,
-            module,
+            component,
             host_context,
         })
     }
 
-    /// 执行插件命令
+    /// 执行插件命令（Component Model 类型化调用）
     ///
-    /// 返回 [`PluginError::ExecutionFailed`]：Component Model 的类型化调用需要
-    /// `wit` 接口 + `wasmtime::component::bindgen!` 生成的链接器，尚未集成。
-    /// 在集成前请使用进程隔离执行（[`crate::plugin::process::PluginProcess`]）。
+    /// 链路：Linker 注册 host imports（Host trait 委托 HostContext）→
+    /// 预实例化 Component → 调用 export 的 `plugin.invoke(command, args_json)` →
+    /// 反序列化 JSON 结果。
     pub fn execute(
         &self,
         command: &str,
-        _args: serde_json::Value,
+        args: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
-        // 即便不执行，也先把 Store 建起来——这样 Engine/WASI 配置错误能在加载期
-        // 暴露，而不是拖到 component 绑定完成后才发现。
-        let _store = self.create_store()?;
+        tracing::debug!(plugin_id = %self.metadata.id, %command, "执行 WASM Component invoke");
+        let args_str = serde_json::to_string(&args)
+            .map_err(|e| PluginError::ExecutionFailed(format!("序列化参数失败: {e}")))?;
 
-        Err(PluginError::ExecutionFailed(format!(
-            "WASM 插件 {:?} 的 component model 调用尚未实现（需要 wit 接口绑定）；\
-             command={command}。请改用进程隔离 entrypoint",
-            self.metadata.id
-        )))
+        let mut linker = Linker::<PluginState>::new(&self.engine);
+        InkosPlugin::add_to_linker(&mut linker, |state: &mut PluginState| state)
+            .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
+
+        let mut store = self.create_store()?;
+
+        let bindings = InkosPlugin::instantiate(&mut store, &self.component, &linker)
+            .map_err(|e| PluginError::ExecutionFailed(format!("实例化 Component 失败: {e}")))?;
+
+        // call_invoke 返回 Result<Result<String, String>, wasmtime error>：
+        // 外层是 wasmtime trap / 资源耗尽，内层是插件语义的 result<string,string>
+        let inner = bindings
+            .inkos_plugin_plugin()
+            .call_invoke(&mut store, command, &args_str)
+            .map_err(|e| PluginError::ExecutionFailed(format!("调用 invoke 失败: {e}")))?;
+        let result_str = inner
+            .map_err(|e| PluginError::ExecutionFailed(format!("插件 invoke 返回错误: {e}")))?;
+
+        let result: serde_json::Value = serde_json::from_str(&result_str)
+            .map_err(|e| PluginError::ExecutionFailed(format!("结果反序列化失败: {e}")))?;
+        Ok(result)
     }
 
     /// 创建带资源限制的 Store
