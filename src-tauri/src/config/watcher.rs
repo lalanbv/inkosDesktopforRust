@@ -1,11 +1,11 @@
 //! 配置文件监听器（热重载支持）
 
-use crate::config::{AppConfig, ConfigLoader, ConfigPaths};
+use crate::config::ConfigPaths;
 use anyhow::{Context, Result};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,25 @@ pub struct ConfigWatcher {
     watched_paths: Arc<Mutex<HashMap<PathBuf, ConfigChangeEvent>>>,
     debounce_map: Arc<Mutex<HashMap<PathBuf, Instant>>>,
     debounce_duration: Duration,
+}
+
+/// 归一化配置文件路径，用于监听表的键与事件路径比对。
+///
+/// 必要性：文件系统后端（macOS FSEvents、Linux inotify）上报的是**解析过符号链接**
+/// 的真实路径。而调用方传入的路径常常带符号链接——macOS 上 `/var` 就是
+/// `/private/var` 的符号链接（`TempDir` 正落在这里），`$TMPDIR` 同理。若直接用原始
+/// 路径做 HashMap 键，事件路径永远匹配不上，热重载静默失效。
+///
+/// 配置文件本身可能尚未创建（首次写入前就开始监听），因此只对父目录做
+/// `canonicalize`，再拼回文件名。父目录也无法解析时退回原路径。
+fn normalize_config_path(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(file_name)) => match parent.canonicalize() {
+            Ok(real_parent) => real_parent.join(file_name),
+            Err(_) => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
 }
 
 impl ConfigWatcher {
@@ -63,7 +82,7 @@ impl ConfigWatcher {
                 .lock()
                 .expect("watched_paths mutex 中毒");
             watched.insert(
-                config_path.clone(),
+                normalize_config_path(&config_path),
                 ConfigChangeEvent::WorkspaceChanged(workspace_id.to_string()),
             );
 
@@ -85,7 +104,7 @@ impl ConfigWatcher {
                 .lock()
                 .expect("watched_paths mutex 中毒");
             watched.insert(
-                config_path.clone(),
+                normalize_config_path(&config_path),
                 ConfigChangeEvent::ProjectChanged(project_root.to_path_buf()),
             );
 
@@ -110,7 +129,8 @@ impl ConfigWatcher {
                 .watched_paths
                 .lock()
                 .expect("watched_paths mutex 中毒");
-            watched.remove(&config_path);
+            // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
+            watched.remove(&normalize_config_path(&config_path));
 
             tracing::info!("停止监听工作区配置: {}", config_path.display());
         }
@@ -129,7 +149,8 @@ impl ConfigWatcher {
                 .watched_paths
                 .lock()
                 .expect("watched_paths mutex 中毒");
-            watched.remove(&config_path);
+            // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
+            watched.remove(&normalize_config_path(&config_path));
 
             tracing::info!("停止监听项目配置: {}", config_path.display());
         }
@@ -147,28 +168,35 @@ impl ConfigWatcher {
                 Ok(event) => {
                     if let EventKind::Modify(_) | EventKind::Create(_) = event.kind {
                         for path in event.paths {
-                            // 检查是否是监听的配置文件
-                            let watched = self
-                                .watched_paths
-                                .lock()
-                                .expect("watched_paths mutex 中毒");
-                            if let Some(change_event) = watched.get(&path) {
-                                // 防抖检查
-                                let mut debounce = self
-                                    .debounce_map
+                            // 事件路径已由后端解析过符号链接；监听表的键在插入时做过
+                            // 同样的归一化，因此可以直接比对。
+                            let change_event = {
+                                let watched = self
+                                    .watched_paths
                                     .lock()
-                                    .expect("debounce_map mutex 中毒");
-
-                                let should_notify = debounce
-                                    .get(&path)
-                                    .map(|last_time| now.duration_since(*last_time) > self.debounce_duration)
-                                    .unwrap_or(true);
-
-                                if should_notify {
-                                    debounce.insert(path.clone(), now);
-                                    events.push(change_event.clone());
-                                    tracing::info!("检测到配置文件变更: {}", path.display());
+                                    .expect("watched_paths mutex 中毒");
+                                match watched.get(&path) {
+                                    Some(e) => e.clone(),
+                                    None => continue,
                                 }
+                            }; // 先放掉 watched_paths，避免与 debounce_map 嵌套持锁
+
+                            // 防抖：同一文件在窗口内的多次写入只上报一次
+                            // （编辑器保存常触发 truncate + write 两个事件）
+                            let mut debounce = self
+                                .debounce_map
+                                .lock()
+                                .expect("debounce_map mutex 中毒");
+
+                            let should_notify = debounce
+                                .get(&path)
+                                .map(|last| now.duration_since(*last) > self.debounce_duration)
+                                .unwrap_or(true);
+
+                            if should_notify {
+                                debounce.insert(path.clone(), now);
+                                events.push(change_event);
+                                tracing::info!("检测到配置文件变更: {}", path.display());
                             }
                         }
                     }

@@ -76,25 +76,53 @@ impl ConfigManager {
     }
 
     /// 字段级合并（source 覆盖 target）
+    ///
+    /// 覆盖层只覆盖「自己显式设置过」的字段。上层配置文件里省略的字段经
+    /// `#[serde(default)]` 反序列化后等于默认值，因此「字段 != 默认值」正好等价于
+    /// 「该字段在这一层被显式设置」——据此逐字段判断，避免上层用默认值把下层
+    /// 已设置的值冲掉（例如项目层只设 updates.channel，不应把工作区的
+    /// logging.level 打回 "info"）。
+    ///
+    /// 已知取舍：显式写入与默认值相同的值，等同于不写——此时合并结果一致，
+    /// 唯一无法表达的是「上层把下层的非默认值显式重置回默认值」。若将来需要
+    /// 该语义，需把覆盖层类型改为逐字段 `Option<T>` 的稀疏结构。
     fn merge_into(target: &mut AppConfig, source: &AppConfig) {
+        let defaults = AppConfig::default();
+
         // Engine 配置
-        target.engine.version_policy = source.engine.version_policy.clone();
-        target.engine.auto_download = source.engine.auto_download;
+        if source.engine.version_policy != defaults.engine.version_policy {
+            target.engine.version_policy = source.engine.version_policy.clone();
+        }
+        if source.engine.auto_download != defaults.engine.auto_download {
+            target.engine.auto_download = source.engine.auto_download;
+        }
 
         // Updates 配置
-        target.updates.check_interval_hours = source.updates.check_interval_hours;
-        target.updates.channel = source.updates.channel.clone();
-        target.updates.auto_apply = source.updates.auto_apply;
+        if source.updates.check_interval_hours != defaults.updates.check_interval_hours {
+            target.updates.check_interval_hours = source.updates.check_interval_hours;
+        }
+        if source.updates.channel != defaults.updates.channel {
+            target.updates.channel = source.updates.channel.clone();
+        }
+        if source.updates.auto_apply != defaults.updates.auto_apply {
+            target.updates.auto_apply = source.updates.auto_apply;
+        }
 
         // Logging 配置
-        target.logging.level = source.logging.level.clone();
-        target.logging.retention_days = source.logging.retention_days;
+        if source.logging.level != defaults.logging.level {
+            target.logging.level = source.logging.level.clone();
+        }
+        if source.logging.retention_days != defaults.logging.retention_days {
+            target.logging.retention_days = source.logging.retention_days;
+        }
 
-        // Network 配置
+        // Network 配置（proxy 是 Option，None 即未设置）
         if source.network.proxy.is_some() {
             target.network.proxy = source.network.proxy.clone();
         }
-        target.network.timeout_seconds = source.network.timeout_seconds;
+        if source.network.timeout_seconds != defaults.network.timeout_seconds {
+            target.network.timeout_seconds = source.network.timeout_seconds;
+        }
     }
 }
 
@@ -107,7 +135,7 @@ impl Default for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::*;
+    
 
     #[test]
     fn test_config_manager_default() {

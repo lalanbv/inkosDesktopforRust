@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex};
 ///
 /// 统一项目 CRUD + 内存缓存，整合 Index/Detector/Scanner
 pub struct ProjectManager {
-    index: Arc<ProjectIndex>,
+    // 直接持有（不套 Arc）：rusqlite::Connection 是 Send 但不是 Sync，
+    // Arc<T>: Send 要求 T: Send + Sync，因此 Arc<ProjectIndex> 反而破坏 Send。
+    // 调用方（AppState）已用 Mutex<ProjectManager> 提供同步，无需 unsafe。
+    index: ProjectIndex,
     scanner: ProjectScanner,
     cache: Arc<Mutex<HashMap<String, ProjectMeta>>>,
 }
@@ -22,7 +25,7 @@ impl ProjectManager {
             .context("Failed to open project database")?;
 
         Ok(Self {
-            index: Arc::new(index),
+            index,
             scanner: ProjectScanner::new(),
             cache: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -66,7 +69,7 @@ impl ProjectManager {
     /// 添加单个项目
     pub fn add_project(&self, path: &Path) -> Result<ProjectMeta> {
         // 检查是否已存在
-        if let Some(existing) = self.index.get_by_path(path)? {
+        if self.index.get_by_path(path)?.is_some() {
             anyhow::bail!("项目已存在: {:?}", path);
         }
 
@@ -214,7 +217,7 @@ mod tests {
         (temp_dir, manager)
     }
 
-    fn create_test_project_dir(base: &Path, name: &str, content: &str) -> TempDir {
+    fn create_test_project_dir(_base: &Path, name: &str, content: &str) -> TempDir {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join(name);
         fs::create_dir_all(&project_dir).unwrap();

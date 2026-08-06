@@ -25,6 +25,7 @@ pub struct Workspace {
 
 /// 工作区列表（workspaces.json schema）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct WorkspaceList {
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
@@ -32,14 +33,6 @@ pub struct WorkspaceList {
     pub active_id: Option<WorkspaceId>,
 }
 
-impl Default for WorkspaceList {
-    fn default() -> Self {
-        Self {
-            workspaces: Vec::new(),
-            active_id: None,
-        }
-    }
-}
 
 impl WorkspaceList {
     /// 创建新工作区（UUID v4 ID，Unix 时间戳）

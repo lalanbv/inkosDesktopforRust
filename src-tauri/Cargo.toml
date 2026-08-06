@@ -22,8 +22,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 # M2b：OS keychain 抽象（macOS Keychain / Win Cred Manager / Linux Secret Service）。
-# Task 1 仅引入依赖占位，真实调用在 Task 5（wiring）实装。
-keyring = "3"
+#
+# 平台后端必须显式开 feature：keyring v3 起所有后端都是可选的，
+# 不开任何 feature 时它회 fallback 到**进程内存 mock**——写入看似成功，
+# 进程退出即丢，重启后 read_all 返回空。这会让用户保存的凭据静默消失。
+#   - apple-native      : macOS/iOS Security Framework（Keychain）
+#   - windows-native    : Windows Credential Manager
+#   - sync-secret-service: Linux Secret Service（同步 D-Bus，避免引入 async runtime）
+#     crypto-rust: secret-service 的会话加密用纯 Rust 实现，免去 openssl 系统依赖。
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
 # M2b Task 4：secrets.json 文件监听回写（spawn_writeback）。
 # 选 v6（API 自 v6 起跨 v8 保持稳定，v6 最广泛验证；序列化兼容性最稳）。
 notify = "6"

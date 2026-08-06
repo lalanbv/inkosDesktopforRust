@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// 配置加载器
+#[derive(Clone)]
 pub struct ConfigLoader {
     paths: ConfigPaths,
 }
@@ -13,6 +14,11 @@ impl ConfigLoader {
     /// 创建配置加载器
     pub fn new(paths: ConfigPaths) -> Self {
         Self { paths }
+    }
+
+    /// 借用路径解析器（供 watcher 注册监听目录）
+    pub fn paths(&self) -> &ConfigPaths {
+        &self.paths
     }
 
     /// 加载系统配置（硬编码默认值）

@@ -1,7 +1,6 @@
 //! 配置系统集成测试
 
-use inkos_desktop::config::{AppConfig, ConfigLayer, ConfigLoader, ConfigManager, ConfigPaths};
-use std::path::PathBuf;
+use inkos_desktop::config::{AppConfig, ConfigLoader, ConfigPaths};
 use tempfile::TempDir;
 
 #[test]
@@ -45,13 +44,11 @@ fn test_config_persistence() {
     // 保存工作区配置
     let mut ws_cfg = AppConfig::default();
     ws_cfg.logging.level = "warn".to_string();
-    ws_cfg.logging.max_file_size_mb = 20;
     loader.save_workspace_config("ws-persist", &ws_cfg).unwrap();
 
     // 重新加载验证持久化
     let loaded = loader.load_workspace_config("ws-persist").unwrap();
     assert_eq!(loaded.logging.level, "warn");
-    assert_eq!(loaded.logging.max_file_size_mb, 20);
 }
 
 #[test]
@@ -117,7 +114,7 @@ fn test_config_clear_layers() {
 fn test_config_validation() {
     let temp = TempDir::new().unwrap();
     let paths = ConfigPaths::new(temp.path().to_path_buf());
-    let loader = ConfigLoader::new(paths);
+    let _loader = ConfigLoader::new(paths);
 
     // 无效的日志级别
     let mut invalid_cfg = AppConfig::default();

@@ -40,7 +40,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
     use crate::config::types::*;
     use tempfile::TempDir;
 

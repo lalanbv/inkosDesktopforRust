@@ -37,7 +37,7 @@ impl ProjectType {
     }
 
     /// 从字符串解析（用于数据库读取）
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_str(s: &str) -> Option<Self> {
         match s {
             "nodejs" => Some(Self::NodeJs),
             "python" => Some(Self::Python),
@@ -141,7 +141,7 @@ impl HealthStatus {
     }
 
     /// 从字符串解析
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_str(s: &str) -> Option<Self> {
         match s {
             "healthy" => Some(Self::Healthy),
             "warning" => Some(Self::Warning),
@@ -262,9 +262,9 @@ mod tests {
         assert_eq!(ProjectType::Python.as_str(), "python");
         assert_eq!(ProjectType::Rust.as_str(), "rust");
 
-        assert_eq!(ProjectType::from_str("nodejs"), Some(ProjectType::NodeJs));
-        assert_eq!(ProjectType::from_str("python"), Some(ProjectType::Python));
-        assert_eq!(ProjectType::from_str("invalid"), None);
+        assert_eq!(ProjectType::parse_str("nodejs"), Some(ProjectType::NodeJs));
+        assert_eq!(ProjectType::parse_str("python"), Some(ProjectType::Python));
+        assert_eq!(ProjectType::parse_str("invalid"), None);
     }
 
     #[test]
@@ -321,14 +321,14 @@ mod tests {
         assert_eq!(HealthStatus::Critical.as_str(), "critical");
 
         assert_eq!(
-            HealthStatus::from_str("healthy"),
+            HealthStatus::parse_str("healthy"),
             Some(HealthStatus::Healthy)
         );
         assert_eq!(
-            HealthStatus::from_str("warning"),
+            HealthStatus::parse_str("warning"),
             Some(HealthStatus::Warning)
         );
-        assert_eq!(HealthStatus::from_str("invalid"), None);
+        assert_eq!(HealthStatus::parse_str("invalid"), None);
     }
 
     #[test]

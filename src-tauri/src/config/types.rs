@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// 应用配置（TOML schema）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub engine: EngineConfig,
@@ -18,16 +19,6 @@ pub struct AppConfig {
     pub network: NetworkConfig,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            engine: EngineConfig::default(),
-            updates: UpdatesConfig::default(),
-            logging: LoggingConfig::default(),
-            network: NetworkConfig::default(),
-        }
-    }
-}
 
 /// Engine 配置
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,17 +131,14 @@ fn default_timeout() -> u32 {
 /// 版本策略
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum VersionPolicy {
     Fixed(String),      // 锁定版本（企业部署）
+    #[default]
     Latest,             // 总是最新（默认）
     Range(String),      // 语义化版本范围（^0.4.0）
 }
 
-impl Default for VersionPolicy {
-    fn default() -> Self {
-        Self::Latest
-    }
-}
 
 /// 配置层级
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

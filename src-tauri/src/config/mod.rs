@@ -5,7 +5,7 @@ pub mod loader;
 pub mod merge;
 pub mod paths;
 pub mod persistence;
-// pub mod reload;  // 临时禁用，待修复 API 不匹配
+pub mod reload;
 pub mod types;
 pub mod validation;
 pub mod watcher;
@@ -17,7 +17,7 @@ pub use constants::*;
 pub use loader::ConfigLoader;
 pub use merge::ConfigManager;
 pub use paths::ConfigPaths;
-// pub use reload::ConfigReloader;  // 临时禁用
+pub use reload::ConfigReloader;
 pub use types::{
     AppConfig, ConfigLayer, EngineConfig, LoggingConfig, NetworkConfig,
     UpdatesConfig, VersionPolicy,

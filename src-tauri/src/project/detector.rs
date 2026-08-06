@@ -156,7 +156,7 @@ impl ProjectDetector {
             .and_then(|line| line.strip_prefix("module "))
             .map(|module_path| {
                 // 提取最后一段作为项目名（例如 github.com/user/repo → repo）
-                module_path.split('/').last().unwrap_or(module_path).to_string()
+                module_path.split('/').next_back().unwrap_or(module_path).to_string()
             })
             .unwrap_or_else(|| Self::extract_dir_name(path));
 

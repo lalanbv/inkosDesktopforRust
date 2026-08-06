@@ -1,7 +1,7 @@
 //! 项目健康检查器
 
 use crate::project::{
-    HealthIssue, HealthStatus, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta,
+    HealthIssue, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta,
     ProjectType,
 };
 use anyhow::{Context, Result};
@@ -240,31 +240,24 @@ impl ProjectHealthChecker {
     fn check_disk_space(path: &Path) -> Result<Vec<HealthIssue>> {
         let mut issues = Vec::new();
 
-        // 获取目录所在磁盘的可用空间
-        // 注：这是简化实现，生产环境应使用 sysinfo crate
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if let Ok(metadata) = fs::metadata(path) {
-                // Unix 系统上，可以用 statfs 获取更准确的磁盘信息
-                // 这里简化处理：如果目录太大（>10GB），发出警告
-                let dir_size = Self::estimate_dir_size(path).unwrap_or(0);
-                if dir_size > 10 * 1024 * 1024 * 1024 {
-                    issues.push(HealthIssue {
-                        severity: IssueSeverity::Info,
-                        category: IssueCategory::DiskSpace,
-                        message: "项目目录占用空间较大（>10GB）".to_string(),
-                        suggestion: Some("清理构建产物或缓存".to_string()),
-                    });
-                }
-            }
+        // 注：这里只统计项目根目录的直属文件大小（不递归），作为「占用偏大」的
+        // 低成本信号。要获取真正的磁盘剩余空间需 statfs/GetDiskFreeSpaceEx，
+        // 后续可引入 sysinfo crate 替换。
+        const LARGE_DIR_THRESHOLD: u64 = 10 * 1024 * 1024 * 1024; // 10GB
+
+        if Self::estimate_dir_size(path).unwrap_or(0) > LARGE_DIR_THRESHOLD {
+            issues.push(HealthIssue {
+                severity: IssueSeverity::Info,
+                category: IssueCategory::DiskSpace,
+                message: "项目目录占用空间较大（>10GB）".to_string(),
+                suggestion: Some("清理构建产物或缓存".to_string()),
+            });
         }
 
         Ok(issues)
     }
 
-    /// 估算目录大小（简化实现）
-    #[cfg(unix)]
+    /// 估算目录大小（仅直属文件，不递归；跨平台）
     fn estimate_dir_size(path: &Path) -> Result<u64> {
         let mut total = 0u64;
         if let Ok(entries) = fs::read_dir(path) {
@@ -314,7 +307,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_project(project_type: ProjectType, files: Vec<(&str, &str)>) -> TempDir {
+    fn create_test_project(_project_type: ProjectType, files: Vec<(&str, &str)>) -> TempDir {
         let temp = TempDir::new().unwrap();
         for (file, content) in files {
             let file_path = temp.path().join(file);

@@ -7,8 +7,11 @@
 use inkos_desktop::secrets::store::{KeyringStore, SecretStore};
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_keychain_upsert() {
-    let store = KeyringStore::new("inkos-e2e-test");
+    // 每个测试用独立 service：同名 service 共享一个 `__index__` entry，
+    // 并行跑时彼此覆盖索引，导致 read_all 漏读。
+    let store = KeyringStore::new("inkos-e2e-upsert");
     let result = store.upsert("test-key", "test-value");
     assert!(result.is_ok(), "keychain upsert 应该成功");
 
@@ -17,8 +20,9 @@ fn test_keychain_upsert() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_keychain_read_all() {
-    let store = KeyringStore::new("inkos-e2e-test");
+    let store = KeyringStore::new("inkos-e2e-readall");
     store.upsert("test-key", "test-value").unwrap();
 
     let all = store.read_all().unwrap();
@@ -29,8 +33,9 @@ fn test_keychain_read_all() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_keychain_delete() {
-    let store = KeyringStore::new("inkos-e2e-test");
+    let store = KeyringStore::new("inkos-e2e-delete");
     store.upsert("test-key", "test-value").unwrap();
 
     let result = store.delete("test-key");
@@ -42,6 +47,7 @@ fn test_keychain_delete() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_keychain_read_empty() {
     let store = KeyringStore::new("inkos-e2e-empty-test");
 
@@ -50,8 +56,9 @@ fn test_keychain_read_empty() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_keychain_overwrite() {
-    let store = KeyringStore::new("inkos-e2e-test");
+    let store = KeyringStore::new("inkos-e2e-overwrite");
 
     // 第一次写入
     store.upsert("test-key", "value1").unwrap();
@@ -68,6 +75,7 @@ fn test_keychain_overwrite() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_secrets_full_cycle() {
     let store = KeyringStore::new("inkos-e2e-full");
 
@@ -92,6 +100,7 @@ fn test_secrets_full_cycle() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_multiple_keys() {
     let store = KeyringStore::new("inkos-e2e-multi");
 
@@ -121,6 +130,7 @@ fn test_multiple_keys() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_empty_value() {
     let store = KeyringStore::new("inkos-e2e-empty");
 
@@ -134,6 +144,7 @@ fn test_empty_value() {
 }
 
 #[test]
+#[ignore = "需真实 OS keychain：机器休眠/锁屏时报 dark wake，首次访问会弹授权框而阻塞"]
 fn test_unicode_value() {
     let store = KeyringStore::new("inkos-e2e-unicode");
 

@@ -2,7 +2,7 @@
 
 use crate::project::{ProjectDetector, ProjectMeta, ProjectType};
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use walkdir::WalkDir;
 
 /// 项目扫描器

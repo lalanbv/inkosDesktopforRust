@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 /// 配置路径解析器
+#[derive(Clone)]
 pub struct ConfigPaths {
     app_data: PathBuf,
 }

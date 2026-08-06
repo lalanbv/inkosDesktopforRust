@@ -4,10 +4,15 @@ use crate::project::types::{HealthStatus, ProjectHealth, ProjectMeta, ProjectTyp
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 /// 项目索引数据库
+///
+/// `rusqlite::Connection` 是 `Send` 但不是 `Sync`，因此连接由内部 `Mutex` 保护。
+/// 锁粒度收在单条语句上——调用方（ProjectManager / Tauri 命令层）因此无需再套一层
+/// 外部锁，也就不会出现「MutexGuard 跨 await 持有」导致的运行时阻塞与死锁风险。
 pub struct ProjectIndex {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl ProjectIndex {
@@ -16,15 +21,30 @@ impl ProjectIndex {
         let conn = Connection::open(db_path)
             .context(format!("Failed to open database at {:?}", db_path))?;
 
-        let index = Self { conn };
+        // 外键约束默认关闭，需显式开启，否则 project_health 的 ON DELETE CASCADE 不生效。
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .context("Failed to enable foreign key enforcement")?;
+
+        let index = Self {
+            conn: Mutex::new(conn),
+        };
         index.init_schema()?;
         Ok(index)
     }
 
+    /// 获取连接（锁定）
+    fn conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("数据库连接锁已中毒（此前有线程在持锁时 panic）"))
+    }
+
     /// 初始化数据库 Schema
     fn init_schema(&self) -> Result<()> {
+        let conn = self.conn()?;
+
         // 创建项目表
-        self.conn.execute(
+        conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -44,7 +64,7 @@ impl ProjectIndex {
         )?;
 
         // 创建健康检查表
-        self.conn.execute(
+        conn.execute(
             r#"
             CREATE TABLE IF NOT EXISTS project_health (
                 project_id TEXT PRIMARY KEY,
@@ -60,22 +80,22 @@ impl ProjectIndex {
         )?;
 
         // 创建索引
-        self.conn.execute(
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)",
             [],
         )?;
 
-        self.conn.execute(
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_projects_last_opened ON projects(last_opened_at DESC)",
             [],
         )?;
 
-        self.conn.execute(
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_projects_favorite ON projects(is_favorite)",
             [],
         )?;
 
-        self.conn.execute(
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_projects_type ON projects(project_type)",
             [],
         )?;
@@ -88,7 +108,7 @@ impl ProjectIndex {
         let tags_json = serde_json::to_string(&meta.tags)?;
         let path_str = meta.path.to_string_lossy();
 
-        self.conn.execute(
+        self.conn()?.execute(
             r#"
             INSERT INTO projects (
                 id, name, path, project_type, workspace_id,
@@ -119,7 +139,7 @@ impl ProjectIndex {
         let tags_json = serde_json::to_string(&meta.tags)?;
         let path_str = meta.path.to_string_lossy();
 
-        let rows_affected = self.conn.execute(
+        let rows_affected = self.conn()?.execute(
             r#"
             UPDATE projects SET
                 name = ?2,
@@ -157,7 +177,7 @@ impl ProjectIndex {
     /// 删除项目
     pub fn delete(&self, id: &str) -> Result<()> {
         let rows_affected = self
-            .conn
+            .conn()?
             .execute("DELETE FROM projects WHERE id = ?1", params![id])?;
 
         if rows_affected == 0 {
@@ -169,8 +189,8 @@ impl ProjectIndex {
 
     /// 根据 ID 查询项目
     pub fn get_by_id(&self, id: &str) -> Result<Option<ProjectMeta>> {
-        let result = self
-            .conn
+        let conn = self.conn()?;
+        let result = conn
             .query_row(
                 "SELECT id, name, path, project_type, workspace_id, created_at,
                         last_opened_at, last_scanned_at, is_favorite, tags, description
@@ -184,7 +204,7 @@ impl ProjectIndex {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         path: PathBuf::from(row.get::<_, String>(2)?),
-                        project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                        project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                             .unwrap_or(ProjectType::Generic),
                         workspace_id: row.get(4)?,
                         created_at: row.get(5)?,
@@ -205,8 +225,8 @@ impl ProjectIndex {
     pub fn get_by_path(&self, path: &Path) -> Result<Option<ProjectMeta>> {
         let path_str = path.to_string_lossy();
 
-        let result = self
-            .conn
+        let conn = self.conn()?;
+        let result = conn
             .query_row(
                 "SELECT id, name, path, project_type, workspace_id, created_at,
                         last_opened_at, last_scanned_at, is_favorite, tags, description
@@ -220,7 +240,7 @@ impl ProjectIndex {
                         id: row.get(0)?,
                         name: row.get(1)?,
                         path: PathBuf::from(row.get::<_, String>(2)?),
-                        project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                        project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                             .unwrap_or(ProjectType::Generic),
                         workspace_id: row.get(4)?,
                         created_at: row.get(5)?,
@@ -239,7 +259,8 @@ impl ProjectIndex {
 
     /// 列出所有项目
     pub fn list_all(&self) -> Result<Vec<ProjectMeta>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects ORDER BY created_at DESC",
@@ -254,7 +275,7 @@ impl ProjectIndex {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: PathBuf::from(row.get::<_, String>(2)?),
-                    project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                    project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                         .unwrap_or(ProjectType::Generic),
                     workspace_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -272,7 +293,8 @@ impl ProjectIndex {
 
     /// 列出工作区项目
     pub fn list_by_workspace(&self, workspace_id: &str) -> Result<Vec<ProjectMeta>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects WHERE workspace_id = ?1 ORDER BY created_at DESC",
@@ -287,7 +309,7 @@ impl ProjectIndex {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: PathBuf::from(row.get::<_, String>(2)?),
-                    project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                    project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                         .unwrap_or(ProjectType::Generic),
                     workspace_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -305,7 +327,8 @@ impl ProjectIndex {
 
     /// 列出最近打开的项目
     pub fn list_recent(&self, limit: usize) -> Result<Vec<ProjectMeta>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects
@@ -323,7 +346,7 @@ impl ProjectIndex {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: PathBuf::from(row.get::<_, String>(2)?),
-                    project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                    project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                         .unwrap_or(ProjectType::Generic),
                     workspace_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -341,7 +364,8 @@ impl ProjectIndex {
 
     /// 列出收藏项目
     pub fn list_favorites(&self) -> Result<Vec<ProjectMeta>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects WHERE is_favorite = 1 ORDER BY name ASC",
@@ -356,7 +380,7 @@ impl ProjectIndex {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: PathBuf::from(row.get::<_, String>(2)?),
-                    project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                    project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                         .unwrap_or(ProjectType::Generic),
                     workspace_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -376,7 +400,8 @@ impl ProjectIndex {
     pub fn search(&self, query: &str) -> Result<Vec<ProjectMeta>> {
         let search_pattern = format!("%{}%", query);
 
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
             "SELECT id, name, path, project_type, workspace_id, created_at,
                     last_opened_at, last_scanned_at, is_favorite, tags, description
              FROM projects WHERE name LIKE ?1 ORDER BY name ASC",
@@ -391,7 +416,7 @@ impl ProjectIndex {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: PathBuf::from(row.get::<_, String>(2)?),
-                    project_type: ProjectType::from_str(&row.get::<_, String>(3)?)
+                    project_type: ProjectType::parse_str(&row.get::<_, String>(3)?)
                         .unwrap_or(ProjectType::Generic),
                     workspace_id: row.get(4)?,
                     created_at: row.get(5)?,
@@ -412,7 +437,7 @@ impl ProjectIndex {
         let issues_json = serde_json::to_string(&health.issues)?;
         let missing_deps_json = serde_json::to_string(&health.missing_dependencies)?;
 
-        self.conn.execute(
+        self.conn()?.execute(
             r#"
             INSERT OR REPLACE INTO project_health (
                 project_id, checked_at, status, issues,
@@ -434,8 +459,8 @@ impl ProjectIndex {
 
     /// 获取健康检查结果
     pub fn get_health(&self, project_id: &str) -> Result<Option<ProjectHealth>> {
-        let result = self
-            .conn
+        let conn = self.conn()?;
+        let result = conn
             .query_row(
                 "SELECT project_id, checked_at, status, issues,
                         dependency_count, missing_dependencies
@@ -452,7 +477,7 @@ impl ProjectIndex {
                     Ok(ProjectHealth {
                         project_id: row.get(0)?,
                         checked_at: row.get(1)?,
-                        status: HealthStatus::from_str(&row.get::<_, String>(2)?)
+                        status: HealthStatus::parse_str(&row.get::<_, String>(2)?)
                             .unwrap_or(HealthStatus::Unknown),
                         issues,
                         dependency_count: row.get(4)?,

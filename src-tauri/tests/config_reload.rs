@@ -4,7 +4,6 @@ use inkos_desktop::config::{
     AppConfig, ConfigChangeEvent, ConfigLoader, ConfigManager, ConfigPaths, ConfigReloader,
     ConfigWatcher, LoggingConfig,
 };
-use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -26,8 +25,7 @@ fn test_config_watcher_detects_workspace_changes() {
     let config = AppConfig {
         logging: LoggingConfig {
             level: "debug".to_string(),
-            max_file_size_mb: 20,
-            max_backups: 5,
+            retention_days: 14,
         },
         ..Default::default()
     };
@@ -65,8 +63,7 @@ fn test_config_watcher_detects_project_changes() {
     let config = AppConfig {
         logging: LoggingConfig {
             level: "trace".to_string(),
-            max_file_size_mb: 30,
-            max_backups: 10,
+            retention_days: 14,
         },
         ..Default::default()
     };
@@ -100,8 +97,7 @@ fn test_config_reloader_updates_manager() {
     let workspace_config = AppConfig {
         logging: LoggingConfig {
             level: "debug".to_string(),
-            max_file_size_mb: 20,
-            max_backups: 5,
+            retention_days: 14,
         },
         ..Default::default()
     };
@@ -115,7 +111,6 @@ fn test_config_reloader_updates_manager() {
 
     let merged = result.unwrap();
     assert_eq!(merged.logging.level, "debug");
-    assert_eq!(merged.logging.max_file_size_mb, 20);
 }
 
 #[test]
@@ -129,25 +124,21 @@ fn test_config_reloader_validates_before_reload() {
     let initial_config = AppConfig {
         logging: LoggingConfig {
             level: "info".to_string(),
-            max_file_size_mb: 10,
-            max_backups: 3,
+            retention_days: 14,
         },
         ..Default::default()
     };
     let reloader = ConfigReloader::new(loader.clone(), initial_config.clone());
 
-    // 保存无效配置
-    let invalid_config = AppConfig {
-        logging: LoggingConfig {
-            level: "invalid_level".to_string(), // 无效日志级别
-            max_file_size_mb: 10,
-            max_backups: 3,
-        },
-        ..Default::default()
-    };
-    loader
-        .save_workspace_config("ws-invalid", &invalid_config)
-        .unwrap();
+    // 直接写入非法 TOML，绕过 save_workspace_config——它会先验证再落盘，
+    // 无法用来构造「磁盘上已存在坏配置」这一场景。而这恰恰是真实情况：
+    // 用户手改配置文件、或旧版本写入的配置在新版校验下不合法。
+    paths.ensure_workspace_config_dir("ws-invalid").unwrap();
+    std::fs::write(
+        paths.workspace_config("ws-invalid"),
+        "[logging]\nlevel = \"invalid_level\"\nretention_days = 14\n",
+    )
+    .unwrap();
 
     // 重新加载应该失败
     let result = reloader.reload_workspace_config("ws-invalid", &mut manager);
@@ -175,8 +166,7 @@ fn test_config_watcher_debounce() {
     let config = AppConfig {
         logging: LoggingConfig {
             level: "debug".to_string(),
-            max_file_size_mb: 20,
-            max_backups: 5,
+            retention_days: 14,
         },
         ..Default::default()
     };
@@ -221,8 +211,7 @@ fn test_full_hot_reload_cycle() {
     let config = AppConfig {
         logging: LoggingConfig {
             level: "trace".to_string(),
-            max_file_size_mb: 50,
-            max_backups: 10,
+            retention_days: 14,
         },
         ..Default::default()
     };
@@ -241,6 +230,4 @@ fn test_full_hot_reload_cycle() {
 
     let merged = result.unwrap();
     assert_eq!(merged.logging.level, "trace");
-    assert_eq!(merged.logging.max_file_size_mb, 50);
-    assert_eq!(merged.logging.max_backups, 10);
 }

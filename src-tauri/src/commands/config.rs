@@ -5,6 +5,7 @@ use crate::config::{
     ConfigReloader, ConfigWatcher,
 };
 use std::path::PathBuf;
+use tauri::Emitter;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -24,7 +25,7 @@ impl AppState {
     pub fn new(app_data: PathBuf) -> Self {
         let paths = ConfigPaths::new(app_data);
         let loader = ConfigLoader::new(paths);
-        let manager = loader.init_manager().unwrap_or_else(|_| ConfigManager::new());
+        let mut manager = loader.init_manager().unwrap_or_else(|_| ConfigManager::new());
         let initial_config = manager.merged().clone();
         let reloader = ConfigReloader::new(loader.clone(), initial_config);
 
@@ -264,64 +265,66 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::*;
+    
     use tempfile::TempDir;
 
-    fn create_test_state() -> AppState {
+    fn create_test_state() -> (TempDir, AppState) {
         let temp = TempDir::new().unwrap();
-        AppState::new(temp.path().to_path_buf())
+        let state = AppState::new(temp.path().to_path_buf());
+        (temp, state)
+    }
+
+    // 说明：`tauri::State` 没有公开构造函数，无法在单元测试里合成，
+    // 因此这里直接驱动命令的唯一依赖 `AppState`（与命令体等价的调用路径），
+    // 端到端的命令注册由 tests/config_integration.rs 覆盖。
+    #[tokio::test]
+    async fn test_default_config_is_info_level() {
+        let (_temp, state) = create_test_state();
+        let mut mgr = state.config.lock().await;
+        assert_eq!(mgr.merged().logging.level, "info");
     }
 
     #[tokio::test]
-    async fn test_get_config_default() {
-        let state = create_test_state();
-        let result = get_config(tauri::State::from(&state)).await;
-        assert!(result.is_ok());
+    async fn test_workspace_layer_overrides_default() {
+        let (_temp, state) = create_test_state();
 
-        let cfg = result.unwrap();
-        assert_eq!(cfg.logging.level, "info");
-    }
+        // 模拟 load_workspace_config + update_config(Workspace) 的效果
+        *state.current_workspace_id.lock().await = Some("ws-123".to_string());
 
-    #[tokio::test]
-    async fn test_update_workspace_config_without_workspace() {
-        let state = create_test_state();
-        let mut new_cfg = AppConfig::default();
-        new_cfg.logging.level = "debug".to_string();
-
-        let result = update_config(
-            tauri::State::from(&state),
-            ConfigLayer::Workspace,
-            new_cfg,
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("未选择工作区"));
-    }
-
-    #[tokio::test]
-    async fn test_load_and_update_workspace_config() {
-        let state = create_test_state();
-
-        // 加载工作区
-        load_workspace_config(tauri::State::from(&state), "ws-123".to_string())
-            .await
+        let mut ws_cfg = AppConfig::default();
+        ws_cfg.logging.level = "debug".to_string();
+        state
+            .config_loader
+            .save_workspace_config("ws-123", &ws_cfg)
             .unwrap();
 
-        // 更新配置
-        let mut new_cfg = AppConfig::default();
-        new_cfg.logging.level = "debug".to_string();
+        let mut mgr = state.config.lock().await;
+        mgr.set_workspace(ws_cfg);
+        assert_eq!(mgr.merged().logging.level, "debug");
+    }
 
-        update_config(
-            tauri::State::from(&state),
-            ConfigLayer::Workspace,
-            new_cfg,
-        )
-        .await
-        .unwrap();
+    #[tokio::test]
+    async fn test_saved_workspace_config_round_trips() {
+        let (_temp, state) = create_test_state();
 
-        // 验证
-        let merged = get_config(tauri::State::from(&state)).await.unwrap();
-        assert_eq!(merged.logging.level, "debug");
+        let mut ws_cfg = AppConfig::default();
+        ws_cfg.logging.level = "warn".to_string();
+        state
+            .config_loader
+            .save_workspace_config("ws-rt", &ws_cfg)
+            .unwrap();
+
+        let loaded = state
+            .config_loader
+            .load_workspace_config("ws-rt")
+            .unwrap();
+        assert_eq!(loaded.logging.level, "warn");
+    }
+
+    #[tokio::test]
+    async fn test_no_workspace_selected_by_default() {
+        let (_temp, state) = create_test_state();
+        assert!(state.current_workspace_id.lock().await.is_none());
+        assert!(state.current_project_root.lock().await.is_none());
     }
 }

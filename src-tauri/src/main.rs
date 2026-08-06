@@ -148,6 +148,20 @@ fn main() {
     std::fs::create_dir_all(&app_data).ok();
     let config_state = commands::config::AppState::new(app_data.clone());
 
+    // M6f：项目索引数据库（SQLite）+ 生命周期管理器。
+    // 打开失败不应阻断启动——项目管理是增量功能，其余功能（引擎/工作区/配置）仍可用，
+    // 因此这里记录错误并以 None 降级，命令层遇到 None 返回明确的用户可读错误。
+    let project_db = app_data.join("projects.db");
+    let project_state = match inkos_desktop::project::ProjectManager::new(&project_db) {
+        Ok(manager) => Some(inkos_desktop::project::commands::AppState {
+            project_manager: std::sync::Arc::new(manager),
+        }),
+        Err(e) => {
+            tracing::error!("项目索引数据库打开失败（项目管理功能不可用）: {e:#}");
+            None
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -172,6 +186,18 @@ fn main() {
             commands::config::load_project_config,
             commands::config::start_config_watch,
             commands::config::stop_config_watch,
+            inkos_desktop::project::commands::scan_projects,
+            inkos_desktop::project::commands::add_project,
+            inkos_desktop::project::commands::remove_project,
+            inkos_desktop::project::commands::update_project,
+            inkos_desktop::project::commands::get_project,
+            inkos_desktop::project::commands::list_projects,
+            inkos_desktop::project::commands::list_recent,
+            inkos_desktop::project::commands::list_favorites,
+            inkos_desktop::project::commands::toggle_favorite,
+            inkos_desktop::project::commands::search_projects,
+            inkos_desktop::project::commands::open_project,
+            inkos_desktop::project::commands::check_project_health,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
@@ -193,8 +219,16 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // M6f：仅在数据库打开成功时托管项目状态；失败时命令层的 try_state
+            // 返回 None，前端得到「项目管理不可用」而非静默 panic。
+            // 注意：Tauri 的 setup 是单一回调（不是回调链），必须合并进这里——
+            // 另起一个 .setup() 会静默覆盖本回调。
+            if let Some(state) = project_state {
+                app.manage(state);
+            }
 
             // =========================================================
             // C10 修复（同 M1+M2）：install_signal_hooks 提前到 spawn sidecar 之前
@@ -238,7 +272,7 @@ fn main() {
             // =========================================================
             // M5b：初始化配置管理器
             // =========================================================
-            let config_state = commands::AppState::new(app_data.clone());
+            let _config_state = commands::AppState::new(app_data.clone());
 
             // =========================================================
             // M5a（Phase 3）：工作区迁移（Phase 2 → Phase 3）
