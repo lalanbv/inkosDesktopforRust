@@ -149,7 +149,7 @@ fn main() {
             cmd_check_updates,
             cmd_apply_engine_update,
             cmd_apply_shell_update,
-            inkos_desktop::observability::cmd_get_diagnostics,
+            cmd_get_diagnostics,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
@@ -647,6 +647,12 @@ async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> Result<String, 
         .await
         .map_err(|e| e.to_string())?;
     Ok(format!("shell 已更新至 {ver}，请重启 app"))
+}
+
+/// M4a：获取诊断信息（版本/平台/路径/manifest/最近崩溃）。
+#[tauri::command]
+async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<inkos_desktop::observability::diagnostics::DiagnosticInfo, String> {
+    inkos_desktop::observability::diagnostics::cmd_get_diagnostics(app).await
 }
 
 /// M2a Task 6 接线：health_probe 通过后构建 tray + observer + 信号钩子（未改）。

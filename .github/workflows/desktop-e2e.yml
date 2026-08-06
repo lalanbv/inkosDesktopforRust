@@ -1,0 +1,96 @@
+name: Desktop E2E Tests
+
+on:
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'engine/**'
+      - '.github/workflows/desktop-e2e.yml'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    name: E2E (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { name: 'macOS ARM64', os: macos-14, target: aarch64-apple-darwin }
+          - { name: 'Linux x64', os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: 'Windows x64', os: windows-2022, target: x86_64-pc-windows-msvc }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform.target }}-e2e
+
+      # macOS 特定设置
+      - name: macOS setup
+        if: matrix.platform.os == 'macos-14'
+        run: |
+          # 授予 keychain 访问权限（CI 环境）
+          security unlock-keychain -p "" ~/Library/Keychains/login.keychain-db || true
+
+      # Linux 特定设置
+      - name: Linux setup
+        if: matrix.platform.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # Windows 特定设置
+      - name: Windows setup
+        if: matrix.platform.os == 'windows-2022'
+        run: |
+          # 确保 MSVC 工具链可用
+          echo "Windows setup complete"
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path src-tauri/Cargo.toml
+
+      - name: Run E2E tests
+        run: |
+          cargo test --release \
+            --manifest-path src-tauri/Cargo.toml \
+            --test 'e2e_*' \
+            -- --ignored --test-threads=1 --nocapture
+        env:
+          RUST_BACKTRACE: 1
+          RUST_LOG: info
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ matrix.platform.name }}
+          path: |
+            /tmp/inkos-e2e-*/logs/
+            target/release/*.log
+          retention-days: 7
+
+      - name: Upload crash dumps on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-crashes-${{ matrix.platform.name }}
+          path: |
+            /tmp/inkos-e2e-*/crashes/
+          retention-days: 7

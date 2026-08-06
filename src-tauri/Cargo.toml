@@ -51,6 +51,9 @@ zip = "2"
 
 [dev-dependencies]
 # tempfile 已提升为常规 dep（M2b 加固：atomic_write 使用 NamedTempFile）。
+# M4b：E2E 回归测试框架（binary 测试 + 断言）。
+assert_cmd = "2.0"
+predicates = "3.0"
 
 # Unix 进程组信号：kill_tree 用 libc::kill(-pgid, SIGTERM) 杀整个进程组，
 # 避免 inkos CLI 派生的 tsx 孙子进程被 PID 1 收养后变孤儿继续占端口。

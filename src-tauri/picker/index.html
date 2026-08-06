@@ -35,6 +35,16 @@
       .hidden { display: none !important; }
       .err { color: #b91c1c; margin-top: 0.75rem; min-height: 1.2em; }
       .muted { color: #999; font-size: 0.85rem; }
+      .err-banner {
+        background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
+        padding: 1rem; margin: 1rem 0; text-align: left; max-width: 28rem;
+      }
+      .err-banner h3 { color: #b91c1c; margin: 0 0 0.5rem; font-size: 0.95rem; }
+      .err-banner p { color: #666; margin: 0.25rem 0; font-size: 0.85rem; }
+      .err-banner .details { color: #888; font-size: 0.75rem; margin-top: 0.5rem; font-family: monospace; }
+      .err-banner button {
+        margin-top: 0.5rem; padding: 0.4rem 0.8rem; font-size: 0.85rem;
+      }
     </style>
   </head>
   <body>
@@ -72,14 +82,84 @@
         errEl.textContent = msg || "";
       }
 
+      // 显示结构化错误（AppError）
+      function showStructuredError(error) {
+        // 如果是字符串，直接显示
+        if (typeof error === "string") {
+          showErr(error);
+          return;
+        }
+
+        // 如果是结构化错误对象
+        if (error && typeof error === "object") {
+          const banner = document.createElement("div");
+          banner.className = "err-banner";
+
+          const title = document.createElement("h3");
+          title.textContent = error.message || "操作失败";
+          banner.appendChild(title);
+
+          if (error.suggestion) {
+            const suggestion = document.createElement("p");
+            suggestion.textContent = "💡 " + error.suggestion;
+            banner.appendChild(suggestion);
+          }
+
+          if (error.details) {
+            const details = document.createElement("p");
+            details.className = "details";
+            details.textContent = "技术细节: " + error.details;
+            banner.appendChild(details);
+          }
+
+          const retryBtn = document.createElement("button");
+          retryBtn.textContent = "重试";
+          retryBtn.addEventListener("click", () => {
+            banner.remove();
+            showErr("");
+          });
+          banner.appendChild(retryBtn);
+
+          // 插入到错误区域前
+          errEl.parentNode.insertBefore(banner, errEl);
+        } else {
+          showErr("操作失败：" + String(error));
+        }
+      }
+
+      // 全局错误捕获（ErrorBoundary）
+      window.addEventListener("error", (event) => {
+        console.error("全局错误:", event.error);
+        showStructuredError({
+          message: "应用发生了意外错误",
+          details: event.error?.message || String(event.error),
+          suggestion: "请刷新页面重试，或报告此问题",
+        });
+        event.preventDefault();
+      });
+
+      window.addEventListener("unhandledrejection", (event) => {
+        console.error("未处理的 Promise 拒绝:", event.reason);
+        showStructuredError({
+          message: "操作失败",
+          details: event.reason?.message || String(event.reason),
+          suggestion: "请重试此操作",
+        });
+        event.preventDefault();
+      });
+
       // 选定项目：持久化 + spawn sidecar（Rust 侧 cmd_choose_project）。
       async function chooseProject(path) {
         showErr("");
+        // 清除之前的错误横幅
+        document.querySelectorAll(".err-banner").forEach((el) => el.remove());
+
         try {
           await invoke("cmd_choose_project", { path });
           showLaunching(); // Rust 健康后导航窗口到 sidecar
         } catch (e) {
-          showErr("打开失败：" + e);
+          console.error("选择项目失败:", e);
+          showStructuredError(e);
         }
       }
 
@@ -104,22 +184,36 @@
 
       // 启动：查启动状态 → 渲染 picker 或"启动中"。
       (async () => {
-        const state = await invoke("cmd_get_launch_state");
-        if (state.needs_project) {
-          await renderRecents(state.recents || []);
-          document.getElementById("pick").addEventListener("click", async () => {
-            showErr("");
-            const picked = await invoke("cmd_pick_project_dialog");
-            if (picked) {
-              await chooseProject(picked);
-            }
+        try {
+          const state = await invoke("cmd_get_launch_state");
+          if (state.needs_project) {
+            await renderRecents(state.recents || []);
+            document.getElementById("pick").addEventListener("click", async () => {
+              showErr("");
+              document.querySelectorAll(".err-banner").forEach((el) => el.remove());
+
+              try {
+                const picked = await invoke("cmd_pick_project_dialog");
+                if (picked) {
+                  await chooseProject(picked);
+                }
+              } catch (e) {
+                console.error("选择文件夹失败:", e);
+                showStructuredError(e);
+              }
+            });
+          } else {
+            showLaunching();
+          }
+        } catch (e) {
+          console.error("初始化失败:", e);
+          showStructuredError({
+            message: "应用初始化失败",
+            details: String(e),
+            suggestion: "请重启应用，或检查应用日志",
           });
-        } else {
-          showLaunching();
         }
-      })().catch((e) => {
-        showErr("初始化失败：" + e);
-      });
+      })();
     </script>
   </body>
 </html>

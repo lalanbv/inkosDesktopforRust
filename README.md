@@ -296,6 +296,39 @@ inkos doctor
 - **外部 Agent 入口**：`inkos interact --json --message "..."` 仍是 OpenClaw / 其他 agent 的结构化入口。
 - **原子命令保留**：`plan` / `compose` / `draft` / `audit` / `revise` / `write next` 仍适合脚本和高级用户。
 
+## 桌面应用（InkOS Desktop）
+
+InkOS Desktop 是基于 Tauri 2 构建的跨平台桌面客户端，提供原生性能和系统集成。
+
+### 特性
+
+- 🚀 **原生性能**: Rust + Tauri 2，启动快速，内存占用低
+- 🔐 **安全存储**: 系统 Keychain 集成（macOS Keychain / Windows Credential Manager / Linux Secret Service）
+- 🔄 **自动更新**: Engine 和应用自动检测、下载、安装更新
+- 📊 **可观测性**: tracing 日志、panic hook 崩溃上报、诊断命令
+- 🧪 **E2E 测试**: 三平台 CI 门禁，关键路径自动化验证
+
+### 文档
+
+- 📖 [用户指南](./docs/USER_GUIDE.md) - 完整功能介绍和使用说明
+- 🚀 [快速开始](./docs/QUICK_START.md) - 5 分钟上手指南
+- 🔧 [故障排查](./docs/TROUBLESHOOTING.md) - 常见问题诊断与解决
+- 🧪 [E2E 测试指引](./src-tauri/tests/README.md) - 测试运行和维护
+
+### 下载
+
+从 [GitHub Releases](https://github.com/Narcooo/inkosDesktopforRust/releases) 下载最新版本：
+
+- macOS: `.dmg` (Apple Silicon / Intel)
+- Windows: `.msi` / `.exe`
+- Linux: `.deb` / `.AppImage`
+
+### 系统要求
+
+- macOS 11.0+ (Big Sur)
+- Windows 10 (1809+) / Windows 11
+- Linux: Ubuntu 20.04+ / Debian 11+ / Fedora 35+
+
 ### 写第一本书
 
 ```bash

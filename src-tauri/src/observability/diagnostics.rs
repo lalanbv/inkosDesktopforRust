@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tauri::Manager;
 
 /// 诊断信息结构（cmd_get_diagnostics 返回值）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,20 +65,21 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
     let manifest_path = app
         .path()
         .app_data_dir()
-        .map(|p| p.join("engine").join("manifest.json"))
-        .map_err(|e| format!("获取 manifest 路径失败: {}", e))?;
+        .ok()
+        .map(|p| p.join("engine").join("manifest.json"));
 
-    let engine_manifest = fs::read_to_string(&manifest_path).ok();
+    let engine_manifest = manifest_path.and_then(|p| fs::read_to_string(&p).ok());
 
     // 4. 最近崩溃文件（最多 5 个）
-    let crash_dir = app
+    let crash_dir: Option<PathBuf> = app
         .path()
         .app_data_dir()
-        .map(|p| p.join("crashes"))
-        .map_err(|e| format!("获取 crashes 路径失败: {}", e))?;
+        .ok()
+        .map(|p| p.join("crashes"));
 
     let mut recent_crashes = Vec::new();
-    if let Ok(entries) = fs::read_dir(&crash_dir) {
+    if let Some(crash_dir) = crash_dir {
+        if let Ok(entries) = fs::read_dir(&crash_dir) {
         let mut files: Vec<_> = entries
             .filter_map(Result::ok)
             .filter(|e| {
@@ -102,6 +104,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
             .take(5)
             .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
             .collect();
+        }
     }
 
     Ok(DiagnosticInfo {

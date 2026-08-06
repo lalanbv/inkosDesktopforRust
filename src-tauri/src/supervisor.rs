@@ -121,7 +121,7 @@ pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
         cmd.creation_flags(0x0000_0200);
     }
 
-    let child = cmd.spawn().map_err(Into::into)?;
+    let child = cmd.spawn()?;
     tracing::info!(pid = child.id(), "sidecar spawned");
     Ok(child)
 }
