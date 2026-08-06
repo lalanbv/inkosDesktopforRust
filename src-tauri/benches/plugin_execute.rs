@@ -37,10 +37,22 @@ fn metadata() -> PluginMetadata {
 fn bench_execute(c: &mut Criterion) {
     let wasm = example_wasm();
     if !wasm.exists() {
-        eprintln!(
-            "[skip] 示例 WASM component 未编译：cd examples/wasm-plugin && cargo build --target wasm32-wasip2 --release"
-        );
-        return; // criterion 空跑（不报失败），需手动编译 component 后再 bench
+        // 自举编译示例 component（而非静默空跑），让 bench 在干净环境也能跑。
+        // 需 wasm32-wasip2 target；编译失败才 skip（不静默隐藏问题）。
+        eprintln!("[bench] 示例 component 未编译，自举编译...");
+        let plugin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/wasm-plugin");
+        let status = std::process::Command::new("cargo")
+            .args(["build", "--target", "wasm32-wasip2", "--release"])
+            .current_dir(&plugin_dir)
+            .status();
+        let ok = matches!(status, Ok(s) if s.success()) && wasm.exists();
+        if !ok {
+            eprintln!(
+                "[skip] 自举编译失败（需 wasm32-wasip2 target：rustup target add wasm32-wasip2）"
+            );
+            return;
+        }
     }
     let tmp = tempfile::TempDir::new().unwrap();
     let plugin = WasmPlugin::new(metadata(), &wasm, tmp.path()).expect("加载 component");
