@@ -10,7 +10,11 @@
 //! - **开发者友好**：wit 接口定义，自动生成绑定，清晰的错误信息
 
 pub mod manifest;
+pub mod process;
+pub mod protocol;
 pub mod types;
 
 pub use manifest::{parse_manifest, PluginManifest};
+pub use process::PluginProcess;
+pub use protocol::{RpcError, RpcRequest, RpcResponse};
 pub use types::{Capability, PluginError, PluginMetadata};
