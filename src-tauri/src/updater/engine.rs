@@ -16,6 +16,34 @@ use serde::Deserialize;
 
 use super::is_newer;
 
+// === engine bundle 签名验证策略（纯函数 + 单一来源，便于单测）===
+//
+// fail-closed 原则：部署方一旦配置 INKOS_ENGINE_PUBKEY，即表达「只接受签名 bundle」
+// 的意图。此时缺签名的 bundle 必须拒绝——否则攻击者只需从发布 feed 剥离 .sig 即可
+// 让「已配置验证」的客户端接受未签名（被篡改）bundle（降级攻击）。
+//
+// | release 含 .sig | INKOS_ENGINE_PUBKEY | 动作           |
+// |-----------------|---------------------|----------------|
+// | 有              | 有                  | 强制验证，失败拒绝 |
+// | 有              | 无                  | 放行 + warn（无法验证；过渡期）|
+// | 无              | 有                  | **拒绝**（缺签名=可疑）       |
+// | 无              | 无                  | 放行 + warn（无签名基础设施；过渡期）|
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SigAction {
+    Verify,
+    WarnPass,
+    Reject,
+}
+
+/// 依据「release 是否含 .sig」与「是否配置公钥」决定签名验证动作（纯函数）。
+pub(super) fn decide_sig_action(sig_present: bool, pubkey_configured: bool) -> SigAction {
+    match (sig_present, pubkey_configured) {
+        (true, true) => SigAction::Verify,
+        (true, false) | (false, false) => SigAction::WarnPass,
+        (false, true) => SigAction::Reject,
+    }
+}
+
 /// 原子替换 engine 目录 + 健康预检失败自动回滚。
 ///
 /// 流程（同 filesystem，起手校验）：
@@ -213,8 +241,12 @@ impl EngineChannel {
         // - 公钥未配置 或 release 无 .sig → 过渡期跳过 + warn（不阻断既有更新流程）
         //   部署侧设置 INKOS_ENGINE_PUBKEY 后即转为强制模式（见密钥采购指引文档）。
         let pubkey_hex = option_env!("INKOS_ENGINE_PUBKEY");
-        match (sig_url, pubkey_hex) {
-            (Some(url), Some(pubkey)) => {
+        match decide_sig_action(sig_url.is_some(), pubkey_hex.is_some()) {
+            SigAction::Verify => {
+                // decide_sig_action 仅在 sig_url 与 pubkey_hex 均为 Some 时返回 Verify，
+                // 故这两处 unwrap 由契约保证安全。
+                let url = sig_url.unwrap();
+                let pubkey = pubkey_hex.unwrap();
                 download_to(&self.client, url, sig_path, 0).await?;
                 let sig_hex = std::fs::read_to_string(sig_path)
                     .context("读 .sig 失败")?
@@ -231,10 +263,18 @@ impl EngineChannel {
                     .context("engine bundle 签名验证失败——拒绝该 bundle（可能被篡改）")?;
                 tracing::info!("engine bundle 签名验证通过");
             }
-            _ => {
+            SigAction::WarnPass => {
                 tracing::warn!(
                     "engine bundle 签名验证跳过（INKOS_ENGINE_PUBKEY 未配置或 release 无 .sig）——\
-                     过渡期放行，部署侧配置公钥后转为强制模式"
+                     过渡期放行，部署侧配置公钥且发布带签 release 后即转为强制模式"
+                );
+            }
+            SigAction::Reject => {
+                // fail-closed：已配置公钥（验证意图）但 release 未签名 → 拒绝。
+                anyhow::bail!(
+                    "已配置签名公钥（INKOS_ENGINE_PUBKEY）但该 release 未提供 .sig ——\
+                     拒绝未签名 bundle（防降级攻击：剥离 .sig 不应绕过已配置的验证）。\
+                     若为合法旧版 release，请为其补签，或回退客户端公钥配置以恢复过渡放行"
                 );
             }
         }
@@ -327,6 +367,25 @@ mod tests {
 
     fn write(dir: &Path, name: &str, content: &str) {
         fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn sig_action_verify_when_both_present() {
+        assert_eq!(decide_sig_action(true, true), SigAction::Verify);
+    }
+
+    #[test]
+    fn sig_action_warnpass_when_cannot_or_not_armed() {
+        // release 有签名但客户端未配公钥（无法验证）；双方均无（无基础设施）→ 过渡放行。
+        assert_eq!(decide_sig_action(true, false), SigAction::WarnPass);
+        assert_eq!(decide_sig_action(false, false), SigAction::WarnPass);
+    }
+
+    #[test]
+    fn sig_action_reject_when_armed_but_unsigned() {
+        // fail-closed 回归：已配置公钥（验证意图）+ release 无 .sig → 必须拒绝，
+        // 防「剥离 .sig 降级攻击」。这是本次安全审计修复的核心断言。
+        assert_eq!(decide_sig_action(false, true), SigAction::Reject);
     }
 
     #[test]
