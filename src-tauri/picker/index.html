@@ -106,6 +106,7 @@
           "picker.muted": "inkos 将在此目录读写数据（inkos.json、章节、记忆库）。",
           "picker.pick": "选择文件夹…",
           "picker.plugins": "⚙ 插件管理",
+          "picker.select": "选择项目",
           "launching.title": "inkosDesktop 启动中…",
           "launching.desc": "正在拉起 inkos Studio sidecar，请稍候。",
         },
@@ -114,6 +115,7 @@
           "picker.muted": "inkos reads/writes data here (inkos.json, chapters, memory).",
           "picker.pick": "Choose Folder…",
           "picker.plugins": "⚙ Plugins",
+          "picker.select": "Select project",
           "launching.title": "inkosDesktop Starting…",
           "launching.desc": "Launching inkos Studio sidecar, please wait.",
         },
@@ -284,12 +286,19 @@
           // a11y：列表项可键盘聚焦 + Enter/Space 选中（不只鼠标）
           li.tabIndex = 0;
           li.setAttribute("role", "button");
-          li.setAttribute("aria-label", `选择项目 ${r.name}`);
+          li.setAttribute("aria-label", `${t("picker.select")} ${r.name}`);
           li.addEventListener("click", () => chooseProject(r.path));
           li.addEventListener("keydown", (e) => {
+            // Enter/Space 激活；方向键在项目间移动焦点（listbox 式导航增强）
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               chooseProject(r.path);
+            } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const items = Array.from(recentsEl.querySelectorAll("li"));
+              const idx = items.indexOf(li);
+              const next = e.key === "ArrowDown" ? idx + 1 : idx - 1;
+              if (next >= 0 && next < items.length) items[next].focus();
             }
           });
           recentsEl.appendChild(li);
