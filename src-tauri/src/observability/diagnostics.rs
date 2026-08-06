@@ -21,7 +21,8 @@ pub struct DiagnosticInfo {
 /// # 返回
 /// - `DiagnosticInfo`：JSON 序列化的诊断快照
 #[tauri::command]
-pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo, String> {
+pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<DiagnosticInfo> {
+    use crate::error::AppError;
     use std::fs;
 
     // 1. 版本/平台信息
@@ -33,7 +34,8 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("获取 app_data_dir 失败: {}", e))?
+        .map_err(|e| AppError::internal("获取 app_data_dir 失败")
+            .with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -41,7 +43,8 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
         .path()
         .app_data_dir()
         .map(|p| p.join("engine"))
-        .map_err(|e| format!("获取 engine_dir 失败: {}", e))?
+        .map_err(|e| AppError::internal("获取 engine_dir 失败")
+            .with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -49,7 +52,8 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
         .path()
         .app_cache_dir()
         .map(|p| p.join("node"))
-        .map_err(|e| format!("获取 node_cache_dir 失败: {}", e))?
+        .map_err(|e| AppError::internal("获取 node_cache_dir 失败")
+            .with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -57,7 +61,8 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<DiagnosticInfo
         .path()
         .app_data_dir()
         .map(|p| p.join("projects.json"))
-        .map_err(|e| format!("获取 projects_file 失败: {}", e))?
+        .map_err(|e| AppError::internal("获取 projects_file 失败")
+            .with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 

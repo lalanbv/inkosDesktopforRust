@@ -516,7 +516,9 @@ fn cmd_choose_project(
     path: String,
     state: tauri::State<LaunchState>,
     app_handle: tauri::AppHandle,
-) -> Result<(), String> {
+) -> inkos_desktop::error::Result<()> {
+    use inkos_desktop::error::AppError;
+
     // 双发防护：双击/回车只 spawn 一次。
     if state.chosen.swap(true, Ordering::SeqCst) {
         return Ok(());
@@ -525,7 +527,9 @@ fn cmd_choose_project(
     if !p.is_dir() {
         // 重置 chosen 允许重试（此次未真正启动）。
         state.chosen.store(false, Ordering::SeqCst);
-        return Err(format!("目录不存在: {path}"));
+        return Err(AppError::project("项目目录不存在")
+            .with_details(format!("路径: {}", path))
+            .with_suggestion("请选择一个有效的 InkOS 项目目录（包含 inkos.json）"));
     }
     let name = p
         .file_name()
@@ -553,7 +557,7 @@ fn cmd_choose_project(
 async fn cmd_check_updates(
     state: tauri::State<'_, UpdaterState>,
     app_handle: tauri::AppHandle,
-) -> Result<UpdatesDto, String> {
+) -> inkos_desktop::error::Result<UpdatesDto> {
     use inkos_desktop::updater::{engine::EngineChannel, ReleaseInfo};
 
     let engine_ch =
@@ -605,19 +609,25 @@ async fn check_shell_update(app_handle: &tauri::AppHandle) -> Result<Option<Stri
 #[tauri::command]
 async fn cmd_apply_engine_update(
     state: tauri::State<'_, UpdaterState>,
-) -> Result<String, String> {
+) -> inkos_desktop::error::Result<String> {
+    use inkos_desktop::error::AppError;
     use inkos_desktop::updater::engine::EngineChannel;
+
     // C2 审计修复：串行化 apply（防双击/并发调用并发下载/替换破坏 engine 状态）。
     // tokio::sync::Mutex::lock().await 返回 MutexGuard（非 Result，无中毒概念）。
     let _lock = state.apply_lock.lock().await;
     let engine_ch =
         EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
+
     // 先 check 确认有更新（友好错误）；apply 内部再 fetch release + 下载 + 校验 + 替换。
     let latest_tag = engine_ch
         .check()
         .await
-        .map_err(|e| format!("{e:#}"))?
-        .ok_or_else(|| "engine 已是最新版本".to_string())?;
+        .map_err(|e| AppError::update("检查 Engine 更新失败")
+            .with_details(format!("{e:#}"))
+            .with_suggestion("请检查网络连接，或稍后重试"))?
+        .ok_or_else(|| AppError::update("Engine 已是最新版本"))?;
+
     let ver = latest_tag.trim_start_matches('v');
     engine_ch
         .apply(
@@ -627,31 +637,45 @@ async fn cmd_apply_engine_update(
             &|bundle, dest| inkos_desktop::engine::node::extract_archive(bundle, dest),
         )
         .await
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| AppError::update("Engine 更新失败")
+            .with_details(format!("{e:#}"))
+            .with_suggestion("请稍后重试，或手动下载最新 Engine"))?;
+
     Ok(format!("engine 已更新至 {ver}（重启 app 生效）"))
 }
 
 /// 应用 shell 更新（Tauri updater：下载 + Ed25519 验签 + 安装）。完成后提示重启。
 #[tauri::command]
-async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> Result<String, String> {
+async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> inkos_desktop::error::Result<String> {
+    use inkos_desktop::error::AppError;
     use tauri_plugin_updater::UpdaterExt;
-    let updater = app_handle.updater().map_err(|e| e.to_string())?;
+
+    let updater = app_handle.updater()
+        .map_err(|e| AppError::update("初始化 updater 失败")
+            .with_details(e.to_string()))?;
+
     let update = updater
         .check()
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "shell 已是最新版本".to_string())?;
+        .map_err(|e| AppError::update("检查应用更新失败")
+            .with_details(e.to_string())
+            .with_suggestion("请检查网络连接，或稍后重试"))?
+        .ok_or_else(|| AppError::update("应用已是最新版本"))?;
+
     let ver = update.version.clone();
     update
         .download_and_install(|_chunk, _total| {}, || {})
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::update("应用更新失败")
+            .with_details(e.to_string())
+            .with_suggestion("请稍后重试，或手动下载最新安装包"))?;
+
     Ok(format!("shell 已更新至 {ver}，请重启 app"))
 }
 
 /// M4a：获取诊断信息（版本/平台/路径/manifest/最近崩溃）。
 #[tauri::command]
-async fn cmd_get_diagnostics(app: tauri::AppHandle) -> Result<inkos_desktop::observability::diagnostics::DiagnosticInfo, String> {
+async fn cmd_get_diagnostics(app: tauri::AppHandle) -> inkos_desktop::error::Result<inkos_desktop::observability::diagnostics::DiagnosticInfo> {
     inkos_desktop::observability::diagnostics::cmd_get_diagnostics(app).await
 }
 

@@ -173,7 +173,6 @@ impl From<tauri::Error> for AppError {
     }
 }
 
-#[cfg(feature = "updater")]
 impl From<tauri_plugin_updater::Error> for AppError {
     fn from(err: tauri_plugin_updater::Error) -> Self {
         Self::update("更新失败")
@@ -192,10 +191,16 @@ impl From<keyring::Error> for AppError {
                 Self::keychain("密钥不存在")
                     .with_details("Keychain 中未找到该密钥")
             }
-            KErr::PlatformFailure(ref msg) if msg.contains("denied") => {
-                Self::keychain("Keychain 访问被拒绝")
-                    .with_details(err.to_string())
-                    .with_suggestion("请在系统设置中授予应用 Keychain 访问权限")
+            KErr::PlatformFailure(ref e) => {
+                let msg = e.to_string();
+                if msg.contains("denied") || msg.contains("access") {
+                    Self::keychain("Keychain 访问被拒绝")
+                        .with_details(err.to_string())
+                        .with_suggestion("请在系统设置中授予应用 Keychain 访问权限")
+                } else {
+                    Self::keychain("Keychain 操作失败")
+                        .with_details(err.to_string())
+                }
             }
             _ => {
                 Self::keychain("Keychain 操作失败")
