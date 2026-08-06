@@ -3,7 +3,9 @@
 //! 工作区隔离：独立项目列表、Engine 版本、配置。
 //! 数据持久化：workspaces.json（app_data_dir）。
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// 工作区 ID（UUID v4 格式字符串）
 pub type WorkspaceId = String;
@@ -141,6 +143,32 @@ impl WorkspaceList {
         ws.projects.remove(pos);
         Ok(())
     }
+
+    /// 读取工作区列表（文件缺失 → 空列表，损坏 → Err）
+    pub fn read(path: &Path) -> anyhow::Result<Self> {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let list: Self = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("解析 workspaces.json 失败: {}", path.display()))?;
+                Ok(list)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // 文件不存在 → 返回空列表（首次运行）
+                Ok(Self::default())
+            }
+            Err(e) => Err(e)
+                .with_context(|| format!("读取 workspaces.json 失败: {}", path.display())),
+        }
+    }
+
+    /// 写入工作区列表（原子写入 + 0600 权限）
+    pub fn write(&self, path: &Path) -> anyhow::Result<()> {
+        let json =
+            serde_json::to_string_pretty(self).context("序列化 workspaces.json 失败")?;
+
+        crate::util::atomic_write_0600(path, json.as_bytes())
+            .with_context(|| format!("写入 workspaces.json 失败: {}", path.display()))
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +294,47 @@ mod tests {
 
         let ws = list.find(&id).unwrap();
         assert!(ws.projects.is_empty());
+    }
+
+    #[test]
+    fn test_read_nonexistent_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("workspaces.json");
+
+        let list = WorkspaceList::read(&path).unwrap();
+        assert!(list.workspaces.is_empty());
+        assert!(list.active_id.is_none());
+    }
+
+    #[test]
+    fn test_write_and_read() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("workspaces.json");
+
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test Workspace");
+        list.add_project(&id, "/path/to/project").unwrap();
+        list.switch(&id).unwrap();
+
+        // 写入
+        list.write(&path).unwrap();
+
+        // 读取
+        let loaded = WorkspaceList::read(&path).unwrap();
+        assert_eq!(loaded.workspaces.len(), 1);
+        assert_eq!(loaded.workspaces[0].name, "Test Workspace");
+        assert_eq!(loaded.workspaces[0].projects[0], "/path/to/project");
+        assert_eq!(loaded.active_id, Some(id));
+    }
+
+    #[test]
+    fn test_read_corrupted_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("workspaces.json");
+        std::fs::write(&path, b"invalid json").unwrap();
+
+        let result = WorkspaceList::read(&path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("解析"));
     }
 }
