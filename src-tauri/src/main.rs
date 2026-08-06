@@ -46,10 +46,10 @@ use tauri_plugin_notification::NotificationExt;
 use inkos_desktop::config;
 use inkos_desktop::isolation::{platform_guard, LoopbackGuard};
 use inkos_desktop::lifecycle::{cleanup_sidecar, install_signal_hooks, ExitingFlag, SidecarState, TrayController};
-use inkos_desktop::observer::notifier::NativeNotifier;
+use inkos_desktop::observer::notifier::{IsUnfocusedFn, NativeNotifier, NotifyFn};
 use inkos_desktop::observer::router::Router;
 use inkos_desktop::observer::sse::SseClient;
-use inkos_desktop::observer::tray_badge::TrayBadge;
+use inkos_desktop::observer::tray_badge::{IncBadgeFn, TrayBadge};
 use inkos_desktop::paths::{AppPaths, PathResolver};
 // M2b Task 5：secrets keychain 同步 + 文件监听回写。
 // KeyringStore 是具体实现；SecretStore trait 必须在作用域里才能 `as Arc<dyn SecretStore>`。
@@ -468,7 +468,7 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
 
     // ---- 2. NativeNotifier（is_unfocused 查主窗口聚焦态；notify 调 notification 插件）----
     let is_unfocused_app = app_handle.clone();
-    let is_unfocused: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+    let is_unfocused: IsUnfocusedFn = Arc::new(move || {
         // 窗口隐藏 / 失焦 / 取不到 → 视为"未在前台"，发通知。
         // unwrap_or(true)：保守默认为"失焦"——拿不到窗口时宁可多发通知也不漏发。
         is_unfocused_app
@@ -478,7 +478,7 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     });
 
     let notify_app = app_handle.clone();
-    let notify: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(move |title, body| {
+    let notify: NotifyFn = Arc::new(move |title, body| {
         // 通知发送失败仅 log：通知是 UX 增强，失败不应让 handler 抛错（router 会重试下一次事件）。
         if let Err(e) = notify_app
             .notification()
@@ -495,7 +495,7 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
 
     // ---- 3. TrayBadge（inc_badge 透传到 TrayController::inc_badge，通过 managed state）----
     let badge_app = app_handle.clone();
-    let inc_badge: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+    let inc_badge: IncBadgeFn = Arc::new(move || {
         // 找不到 TrayController 时仅 log：托盘可能在 GUI 不可达环境未注册。
         if let Some(tc) = badge_app.try_state::<TrayController>() {
             tc.inc_badge();
