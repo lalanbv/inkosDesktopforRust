@@ -88,6 +88,59 @@ impl WorkspaceList {
     pub fn find_mut(&mut self, id: &WorkspaceId) -> Option<&mut Workspace> {
         self.workspaces.iter_mut().find(|w| &w.id == id)
     }
+
+    /// 切换当前激活工作区（<50ms 性能目标）
+    pub fn switch(&mut self, id: &WorkspaceId) -> Result<(), String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // 验证工作区存在
+        let ws = self
+            .find_mut(id)
+            .ok_or_else(|| format!("Workspace not found: {}", id))?;
+
+        // 更新 last_used 时间戳
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        ws.last_used = now;
+
+        // 设置为当前激活
+        self.active_id = Some(id.clone());
+
+        Ok(())
+    }
+
+    /// 添加项目到工作区（去重）
+    pub fn add_project(&mut self, id: &WorkspaceId, path: &str) -> Result<(), String> {
+        let ws = self
+            .find_mut(id)
+            .ok_or_else(|| format!("Workspace not found: {}", id))?;
+
+        // 检查重复
+        if ws.projects.iter().any(|p| p == path) {
+            return Err(format!("Project already exists: {}", path));
+        }
+
+        ws.projects.push(path.to_string());
+        Ok(())
+    }
+
+    /// 从工作区移除项目
+    pub fn remove_project(&mut self, id: &WorkspaceId, path: &str) -> Result<(), String> {
+        let ws = self
+            .find_mut(id)
+            .ok_or_else(|| format!("Workspace not found: {}", id))?;
+
+        let pos = ws
+            .projects
+            .iter()
+            .position(|p| p == path)
+            .ok_or_else(|| format!("Project not found: {}", path))?;
+
+        ws.projects.remove(pos);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +213,58 @@ mod tests {
 
         let not_found = list.find(&"invalid".to_string());
         assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_switch_workspace() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+
+        assert!(list.switch(&id).is_ok());
+        assert_eq!(list.active_id, Some(id.clone()));
+    }
+
+    #[test]
+    fn test_switch_nonexistent_workspace() {
+        let mut list = WorkspaceList::default();
+        let result = list.switch(&"invalid".to_string());
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_project() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+
+        assert!(list.add_project(&id, "/path/to/project").is_ok());
+
+        let ws = list.find(&id).unwrap();
+        assert_eq!(ws.projects.len(), 1);
+        assert_eq!(ws.projects[0], "/path/to/project");
+    }
+
+    #[test]
+    fn test_add_duplicate_project() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+
+        list.add_project(&id, "/path/to/project").unwrap();
+        let result = list.add_project(&id, "/path/to/project");
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn test_remove_project() {
+        let mut list = WorkspaceList::default();
+        let id = list.create("Test");
+        list.add_project(&id, "/path/to/project").unwrap();
+
+        assert!(list.remove_project(&id, "/path/to/project").is_ok());
+
+        let ws = list.find(&id).unwrap();
+        assert!(ws.projects.is_empty());
     }
 }
