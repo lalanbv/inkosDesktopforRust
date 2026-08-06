@@ -82,7 +82,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::WorkspaceChanged(workspace_id.to_string()),
@@ -104,7 +104,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::ProjectChanged(project_root.to_path_buf()),
@@ -130,7 +130,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
             watched.remove(&normalize_config_path(&config_path));
 
@@ -150,7 +150,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
             watched.remove(&normalize_config_path(&config_path));
 
@@ -170,7 +170,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::UserChanged,
@@ -192,7 +192,7 @@ impl ConfigWatcher {
             let mut watched = self
                 .watched_paths
                 .lock()
-                .expect("watched_paths mutex 中毒");
+                .unwrap_or_else(|e| e.into_inner());
             watched.remove(&normalize_config_path(&config_path));
 
             tracing::info!("停止监听用户全局配置: {}", config_path.display());
@@ -217,7 +217,7 @@ impl ConfigWatcher {
                                 let watched = self
                                     .watched_paths
                                     .lock()
-                                    .expect("watched_paths mutex 中毒");
+                                    .unwrap_or_else(|e| e.into_inner());
                                 match watched.get(&path) {
                                     Some(e) => e.clone(),
                                     None => continue,
@@ -229,7 +229,7 @@ impl ConfigWatcher {
                             let mut debounce = self
                                 .debounce_map
                                 .lock()
-                                .expect("debounce_map mutex 中毒");
+                                .unwrap_or_else(|e| e.into_inner());
 
                             let should_notify = debounce
                                 .get(&path)

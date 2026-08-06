@@ -42,7 +42,7 @@ impl ConfigReloader {
                 let merged = manager.merged().clone();
 
                 // 保存为最后有效配置
-                *self.last_valid_config.lock().expect("last_valid_config mutex 中毒") =
+                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
                     merged.clone();
 
                 tracing::info!("工作区配置重新加载成功");
@@ -77,7 +77,7 @@ impl ConfigReloader {
                 let merged = manager.merged().clone();
 
                 // 保存为最后有效配置
-                *self.last_valid_config.lock().expect("last_valid_config mutex 中毒") =
+                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
                     merged.clone();
 
                 tracing::info!("项目配置重新加载成功");
@@ -104,7 +104,7 @@ impl ConfigReloader {
                 manager.set_user(new_config.clone());
                 let merged = manager.merged().clone();
 
-                *self.last_valid_config.lock().expect("last_valid_config mutex 中毒") =
+                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
                     merged.clone();
 
                 tracing::info!("用户全局配置重新加载成功");
@@ -121,7 +121,7 @@ impl ConfigReloader {
     pub fn get_last_valid_config(&self) -> AppConfig {
         self.last_valid_config
             .lock()
-            .expect("last_valid_config mutex 中毒")
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 }
