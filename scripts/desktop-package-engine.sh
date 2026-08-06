@@ -48,16 +48,22 @@ mkdir -p "$ENGINE"
 cp -R packages/cli/dist "$ENGINE/dist"
 cp packages/cli/package.json "$ENGINE/package.json"
 
-# node_modules 符号链接 → packages/cli/node_modules（**非 repo 根 node_modules**）。
-# 原因：pnpm 按包隔离依赖——commander / @actalk/inkos-core / @actalk/inkos-studio 在
-# packages/cli/node_modules，repo 根 node_modules 没有。链接到 cli 的 node_modules
-# 让 ESM import 与 studio.ts 的 cliPackageRoot/node_modules/@actalk/inkos-studio 候选
-# 同时命中。prod 由 M3e CI 替换为真实自包含 node_modules。
+# node_modules 链接/拷贝：
+# - dev（默认）：符号链接 → packages/cli/node_modules（pnpm 按包隔离依赖在此）。
+# - prod（INKOS_ENGINE_PROD=1，CI 用）：cp -L 解引用拷贝真实内容（自包含，无符号链接，
+#   打包进 .app 后在用户机可用；体积大但正确，Phase 2 SEA 优化）。
 LN_TARGET="$ROOT/packages/cli/node_modules"
 if [ -d "$LN_TARGET" ]; then
-  ln -sfn "$LN_TARGET" "$ENGINE/node_modules"
+  if [ "${INKOS_ENGINE_PROD:-0}" = "1" ]; then
+    echo "[engine] PROD 模式：cp -L 拷贝自包含 node_modules（可能数分钟）..."
+    mkdir -p "$ENGINE/node_modules"
+    # cp -L 解引用 pnpm 的符号链接/硬链接，产出真实自包含 node_modules。
+    cp -RL "$LN_TARGET/." "$ENGINE/node_modules/"
+  else
+    ln -sfn "$LN_TARGET" "$ENGINE/node_modules"
+  fi
 else
-  echo "WARN: $LN_TARGET 不存在，跳过 node_modules 链接（CLI 依赖无法解析）"
+  echo "WARN: $LN_TARGET 不存在，跳过 node_modules（CLI 依赖无法解析）"
   echo "      先运行 ./scripts/desktop-build-inkos.sh 安装依赖"
 fi
 

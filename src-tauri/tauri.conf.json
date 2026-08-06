@@ -27,7 +27,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_ED25519_PUBKEY_FROM_M3E",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3ODgzMkI4N0RCODVDMEEKUldRS1hMaDl1REtJNTFsd3Q3enZuMW8rK0dUY1padlFIY0JWcUNIbjUzVWdVeTVMTEF6eGYrdWcK",
       "endpoints": [
         "https://github.com/lalanbv/inkosDesktopforRust/releases/latest/download/latest.json"
       ]
