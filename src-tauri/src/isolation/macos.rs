@@ -2,12 +2,19 @@
 //!
 //! ## 方案
 //! 用 anchor（`pfctl -a "inkosdesktop" -f`）而非全局 pf 规则，避免污染用户
-//! 现有 pf 配置。anchor 内只放两条规则：block 入站非 lo + pass lo。
+//! 现场 pf 配置。anchor 内只放两条规则：block 入站非 lo + pass lo。
 //!
-//! ## 权限
+//! ## 权限 + pf 默认禁用
 //! `pfctl` 需要 root。M1 不假设 app 以 root 跑——失败时 [`PfGuard::lock`]
 //! 返回 `Err`，`main.rs` 仅 log 警告、不阻塞启动。完整运行时强制待 M2/M3
 //! 的 SMJOP / launchd 特权 helper。
+//!
+//! **C5 修复**：即便 `pfctl -a <anchor> -f -` 在非 root 下退出码 0（macOS
+//! 某些版本对非 root 仅 warn 不 fail），pf 默认禁用则 anchor 装了也不生效
+//! （`pfctl -s info` 显示 `Status: Disabled`）。这种「装上但没启用」状态
+//! 是假安全——anchor 命令没报错但 packet 层无过滤。故 [`PfGuard::lock`]
+//! 在装完 anchor 后**额外调** `pfctl -s info` 解析 `Status: Enabled`，
+//! 未启用则 bail，让 main.rs 走真实降级 log。
 //!
 //! ## 为什么不用 `block in on en0 ...`
 //! 接口名跨机器不固定（笔记本可能在 en0/wlan0/...）。anchor 内
@@ -49,6 +56,27 @@ pub fn pf_anchor_rules(port: u16) -> String {
     )
 }
 
+/// 解析 `pfctl -s info` 输出，判断 pf 是否处于 Enabled 状态。
+///
+/// C5：anchor 装上但 pf 默认禁用 → anchor 不生效（假安全）。
+/// 本函数查找输出中是否含 `Status: Enabled`（pfctl 输出固定文案）；
+/// 含则 `Ok(true)`，含 `Status: Disabled` 则 `Ok(false)`，两者都没有
+/// （输出格式异常或被裁剪）则 `Ok(false)` 走保守降级。
+///
+/// 抽成纯函数便于单测断言真实 pfctl 输出样本。
+pub fn pf_status_is_enabled(pfctl_info_output: &str) -> bool {
+    // pfctl -s info 第一行通常是 "Status: Enabled on xl0 pflog0" 或
+    // "Status: Disabled"；用行级 contains 行扫避免误判子串嵌入。
+    // 也接受输出仅含 "Status: Enabled"（无接口列表的旧版 macOS）。
+    for line in pfctl_info_output.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Status:") {
+            return trimmed.contains("Enabled") && !trimmed.contains("Disabled");
+        }
+    }
+    false
+}
+
 /// macOS pf anchor guard。
 pub struct PfGuard;
 
@@ -80,6 +108,23 @@ impl LoopbackGuard for PfGuard {
                 "pfctl 加载 anchor 失败 (exit={}): {}",
                 output.status,
                 stderr.trim()
+            );
+        }
+
+        // C5 修复：anchor 装上 ≠ pf 启用。macOS 某些版本对非 root `pfctl -a -f`
+        // 退出码 0 但 anchor 不生效（pf 默认禁用）。装完再调 `pfctl -s info`
+        // 解析 `Status: Enabled`——未启用则 bail，让 main.rs 走真实降级 log。
+        let info = Command::new("/sbin/pfctl")
+            .arg("-s")
+            .arg("info")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|e| anyhow::anyhow!("pfctl -s info spawn 失败: {e}"))?;
+        let info_str = String::from_utf8_lossy(&info.stdout);
+        if !pf_status_is_enabled(&info_str) {
+            anyhow::bail!(
+                "pf disabled: anchor loaded but not enforced (needs M3 privileged helper)"
             );
         }
         Ok(())
@@ -152,5 +197,53 @@ mod tests {
     #[test]
     fn pf_guard_satisfies_trait() {
         let _g: Box<dyn LoopbackGuard> = Box::new(PfGuard);
+    }
+
+    // --- C5: pf_status_is_enabled 纯函数单测（不调真实 pfctl，CI 稳定）---
+
+    #[test]
+    fn pf_status_is_enabled_detects_enabled() {
+        // 真实 pfctl -s info 输出（macOS Sonoma 样本，含接口列表）
+        let sample = "Status: Enabled on utun8 utun9 pflog0\nEncryption: AES-256\n";
+        assert!(pf_status_is_enabled(sample));
+    }
+
+    #[test]
+    fn pf_status_is_enabled_detects_disabled() {
+        let sample = "Status: Disabled\n";
+        assert!(!pf_status_is_enabled(sample));
+    }
+
+    #[test]
+    fn pf_status_is_enabled_treats_missing_status_as_disabled() {
+        // 输出格式异常 / 被 sandbox 截断 → 保守降级为 disabled（false）
+        assert!(!pf_status_is_enabled(""));
+        assert!(!pf_status_is_enabled("no status line here\n"));
+    }
+
+    #[test]
+    fn pf_status_is_enabled_handles_status_line_anywhere() {
+        // Status 行不在第一行也应识别（某些版本会先 dump 杂信息）
+        let sample = "Type: Filtering\nStatus: Enabled on en0\n";
+        assert!(pf_status_is_enabled(sample));
+    }
+
+    /// C5 回归：PfGuard::lock 在无 root 的 CI 环境下应 bail
+    /// （anchor 装不上或装上 pf 未启用任一都 bail）。
+    /// 此处 #[ignore]：CI 环境可能没装 pfctl（Linux Docker 等），
+    /// 跑法：`cargo test -- --ignored pf_guard_lock_bails_without_root`。
+    /// 手动验证：macOS 非管理员用户跑此测试应得到 bail。
+    #[test]
+    #[ignore]
+    fn pf_guard_lock_bails_without_root() {
+        let g = PfGuard;
+        let err = g.lock(4567).expect_err("非 root 应 bail");
+        let msg = format!("{err:#}");
+        // 错误消息可能是 "Operation not permitted" 或
+        // "pf disabled: anchor loaded but not enforced"——任一都算 C5 修对
+        assert!(
+            msg.contains("pfctl") || msg.contains("pf disabled"),
+            "bail 消息应提及根因，实际: {msg}"
+        );
     }
 }
