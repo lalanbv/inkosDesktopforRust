@@ -173,6 +173,10 @@ impl WasmPlugin {
             .map_err(|e| PluginError::ExecutionFailed(format!("序列化参数失败: {e}")))?;
 
         let mut linker = Linker::<PluginState>::new(&self.engine);
+        // 注册 WASI：component（wasm32-wasip2 target）默认依赖 wasi:io/poll 等，
+        // 不注册会在实例化时报 "imports not found in linker"。
+        wasmtime_wasi::add_to_linker_sync(&mut linker)
+            .map_err(|e| PluginError::ExecutionFailed(format!("注册 WASI 失败: {e}")))?;
         InkosPlugin::add_to_linker(&mut linker, |state: &mut PluginState| state)
             .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
 
