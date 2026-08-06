@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.inkos.desktop",
   "build": {
-    "frontendDist": "stub"
+    "frontendDist": "picker"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",

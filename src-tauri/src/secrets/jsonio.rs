@@ -37,6 +37,9 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+// M3b：atomic_write_0600 提取到共享 `util`（projects.json 复用同语义）。
+use crate::util::atomic_write_0600;
+
 /// 文件状态的 tri-state 分类，配合 [`read_secrets_state`] 使用。
 ///
 /// **C7 修复背景**：旧版 [`read_secrets`] 把"文件缺失"、"JSON 损坏"、"合法但
@@ -201,51 +204,8 @@ fn ensure_services_object(root: &mut Value) {
     }
 }
 
-/// 原子写：`tempfile::NamedTempFile::new_in(parent)` + `.persist(path)`。
-///
-/// **安全设计**（M2b 加固）：
-/// - 随机文件名：消除固定 `secrets.json.tmp` 的符号链接预创建攻击面
-///   （攻击者在父目录预创建同名符号链接指向敏感文件，旧实现 fs::write 会跟随符号链接写）。
-/// - 创建即 0600（Unix）：`tempfile::Builder::permissions(0o600)` 在创建时即设置权限，
-///   消除 `fs::write` 默认权限（受 umask 影响，通常 0644）的"短暂可读窗口"——
-///   secret 内容从未以非 0600 状态落盘。Windows 无 0600 概念，跳过（NTFS ACL 另论）。
-/// - `.persist(path)`：原子 rename（同 filesystem 保证；跨 filesystem 会 fall back 到
-///   非原子拷贝，本场景 secrets.json 与其 tmp 同在 `.inkos/` 目录，不会跨 fs）。
-///
-/// **失败语义**：`NamedTempFile::new_in` / `write_all` / `persist` 任一失败 → 显式 `Err`，
-/// `NamedTempFile` 即便 drop 未 persist，也会自动清理 tmp 文件（无垃圾残留）。
-fn atomic_write_0600(path: &Path, data: &[u8]) -> Result<()> {
-    let parent = path.parent().with_context(|| {
-        format!("atomic_write: path={} 无父目录", path.display())
-    })?;
-
-    let mut builder = tempfile::Builder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(PermissionsExt::from_mode(0o600));
-    }
-    let mut tmp = builder
-        .tempfile_in(parent)
-        .with_context(|| format!("创建 NamedTempFile 失败: {}", parent.display()))?;
-
-    use std::io::Write;
-    tmp.write_all(data)
-        .with_context(|| format!("write tmp 失败: {}", tmp.path().display()))?;
-    tmp.flush()
-        .with_context(|| format!("flush tmp 失败: {}", tmp.path().display()))?;
-
-    // persist 是 tempfile 3.x NamedTempFile 的 inherent 方法（同 fs 原子 rename）。
-    // 跨 fs 会 fallback 到非原子拷贝，但本场景同目录不会跨。
-    if let Err(e) = tmp.persist(path) {
-        return Err(anyhow::anyhow!(
-            "persist tmp -> {} 失败: {}",
-            path.display(),
-            e.error
-        ));
-    }
-    Ok(())
-}
+// M3b：`atomic_write_0600` 已提取到 `crate::util`（见上方 use），此处不再重复定义。
+// 语义文档见 `src/util.rs`。
 
 #[cfg(test)]
 mod tests {

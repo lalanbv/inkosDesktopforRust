@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>inkosDesktop</title>
+    <style>
+      html, body {
+        margin: 0; height: 100%;
+        background: #fafafa; color: #1a1a1a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      main {
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        height: 100%; padding: 2rem; text-align: center; box-sizing: border-box;
+      }
+      h1 { font-weight: 600; margin: 0 0 1.5rem; font-size: 1.25rem; }
+      p { color: #666; margin: 0.5rem 0; }
+      button {
+        font: inherit; padding: 0.6rem 1.2rem; border: 1px solid #d0d0d0;
+        background: #fff; color: #1a1a1a; border-radius: 8px; cursor: pointer;
+        transition: background 0.15s;
+      }
+      button:hover { background: #f0f0f0; }
+      button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+      button.primary:hover { background: #1d4ed8; }
+      #recents { list-style: none; padding: 0; margin: 1rem 0; max-width: 28rem; width: 100%; }
+      #recents li {
+        padding: 0.7rem 0.9rem; border: 1px solid #e0e0e0; border-radius: 8px;
+        margin-bottom: 0.5rem; cursor: pointer; text-align: left;
+        display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+      }
+      #recents li:hover { background: #f0f6ff; border-color: #93c5fd; }
+      #recents .path { color: #888; font-size: 0.8rem; word-break: break-all; }
+      .hidden { display: none !important; }
+      .err { color: #b91c1c; margin-top: 0.75rem; min-height: 1.2em; }
+      .muted { color: #999; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <!-- 启动中（auto 复用 或 选择后） -->
+      <section id="launching" class="hidden">
+        <h1>inkosDesktop 启动中…</h1>
+        <p>正在拉起 inkos Studio sidecar，请稍候。</p>
+      </section>
+
+      <!-- 项目选择（首启 / 无有效 last_opened） -->
+      <section id="picker">
+        <h1>选择 inkos 项目目录</h1>
+        <p class="muted">inkos 将在此目录读写数据（inkos.json、章节、记忆库）。</p>
+        <ul id="recents"><!-- 最近项目由 JS 注入 --></ul>
+        <button id="pick" class="primary">选择文件夹…</button>
+        <p class="err" id="err"></p>
+      </section>
+    </main>
+
+    <script>
+      // Tauri 2 withGlobalTauri：暴露 window.__TAURI__.core.invoke（自定义 app 命令默认可调）。
+      const { invoke } = window.__TAURI__.core;
+      const launching = document.getElementById("launching");
+      const picker = document.getElementById("picker");
+      const recentsEl = document.getElementById("recents");
+      const errEl = document.getElementById("err");
+
+      function showLaunching() {
+        picker.classList.add("hidden");
+        launching.classList.remove("hidden");
+      }
+
+      function showErr(msg) {
+        errEl.textContent = msg || "";
+      }
+
+      // 选定项目：持久化 + spawn sidecar（Rust 侧 cmd_choose_project）。
+      async function chooseProject(path) {
+        showErr("");
+        try {
+          await invoke("cmd_choose_project", { path });
+          showLaunching(); // Rust 健康后导航窗口到 sidecar
+        } catch (e) {
+          showErr("打开失败：" + e);
+        }
+      }
+
+      async function renderRecents(recents) {
+        recentsEl.innerHTML = "";
+        for (const r of recents) {
+          const li = document.createElement("li");
+          const span = document.createElement("span");
+          const name = document.createElement("strong");
+          name.textContent = r.name;
+          const path = document.createElement("span");
+          path.className = "path";
+          path.textContent = r.path;
+          span.appendChild(name);
+          span.appendChild(document.createElement("br"));
+          span.appendChild(path);
+          li.appendChild(span);
+          li.addEventListener("click", () => chooseProject(r.path));
+          recentsEl.appendChild(li);
+        }
+      }
+
+      // 启动：查启动状态 → 渲染 picker 或"启动中"。
+      (async () => {
+        const state = await invoke("cmd_get_launch_state");
+        if (state.needs_project) {
+          await renderRecents(state.recents || []);
+          document.getElementById("pick").addEventListener("click", async () => {
+            showErr("");
+            const picked = await invoke("cmd_pick_project_dialog");
+            if (picked) {
+              await chooseProject(picked);
+            }
+          });
+        } else {
+          showLaunching();
+        }
+      })().catch((e) => {
+        showErr("初始化失败：" + e);
+      });
+    </script>
+  </body>
+</html>

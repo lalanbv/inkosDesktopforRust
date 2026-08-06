@@ -385,13 +385,18 @@ const _: fn() = || {
 // cleanup 应由调用方保证幂等（`cleanup_sidecar` 已是）。
 
 /// 安装 SIGINT/SIGTERM 钩子：收到信号 → `cleanup()` → `exit(0)`。
-/// 在 Tauri `setup` 中调用；**不阻塞**，内部 `tokio::spawn` 立即返回。
+/// 在 Tauri `setup` 中调用；**不阻塞**，内部 `tauri::async_runtime::spawn` 立即返回。
+///
+/// M3b 修复：原用裸 `tokio::spawn`，但 Tauri `setup` 在主线程、不在 Tokio 运行时
+/// 上下文内 → "there is no reactor running" panic（M1/M2 侧 car curl 冒烟未启 GUI，
+/// 故未暴露；M3b 真 GUI 启动捕获）。改用 `tauri::async_runtime::spawn`——它内部
+/// 经 Tauri 运行时句柄派发，任意（非运行时内）上下文均可安全调用。
 pub fn install_signal_hooks(cleanup: Arc<dyn Fn() + Send + Sync>) {
     // SIGINT（Ctrl+C）—— 跨平台。
     // ctrl_c() 返回 Err 表示注册失败（runtime 已 shutdown 等），此时
     // 无监听可走，spawn 任务静默结束。
     let c_int = Arc::clone(&cleanup);
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             eprintln!("[lifecycle] 收到 SIGINT，触发 cleanup");
             c_int();
@@ -404,7 +409,7 @@ pub fn install_signal_hooks(cleanup: Arc<dyn Fn() + Send + Sync>) {
     {
         use tokio::signal::unix::{signal, SignalKind};
         let c_term = Arc::clone(&cleanup);
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             match signal(SignalKind::terminate()) {
                 Ok(mut s) => {
                     s.recv().await;

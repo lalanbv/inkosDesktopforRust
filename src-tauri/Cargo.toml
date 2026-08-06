@@ -9,6 +9,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
+# M3b：项目目录选择对话框（Rust 侧 DialogExt，不经 webview ACL）。
+tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["blocking", "stream"] }
 tokio-stream = "0.1"
