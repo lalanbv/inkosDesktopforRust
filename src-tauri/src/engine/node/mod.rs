@@ -25,6 +25,14 @@ pub const NODE_BOOTSTRAP_VERSION: &str = "22.11.0";
 /// 官方 nodejs.org dist 根（SHASUMS + 二进制权威源）。始终用于 SHASUMS 校验。
 pub const OFFICIAL_DIST_URL: &str = "https://nodejs.org/dist";
 
+/// Node tarball 下载硬上限（128 MiB）。实际官方包 ~30-50MB（含 darwin-arm64
+/// / win-x64 等各平台），128 MiB 留足未来版本增长余量。
+///
+/// **为何需要**：mirror 可被劫持或本身恶意（`CN_MIRROR` 为第三方 CDN）。
+/// 无上限时恶意 mirror 可无限写入撑满磁盘。SHA256 校验在**下载完成后**，
+/// 拦不住下载期的磁盘耗尽。
+const MAX_TARBALL_BYTES: u64 = 128 * 1024 * 1024;
+
 /// 进度回调（阶段文本，例如 "下载 45%" / "校验 SHA256" / "解压"）。None = 静默。
 pub type ProgressFn = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -301,6 +309,10 @@ impl BootstrappingResolver {
     }
 
     /// 流式下载（chunk，避免 ~30MB tarball 一次性入内存）。
+    ///
+    /// 累计字节上限 [`MAX_TARBALL_BYTES`]：mirror 不可信（被劫持 / 恶意镜像）时，
+    /// 无界写入可撑满磁盘。Content-Length 预检 + 流式累计**两道**——前者快速失败，
+    /// 后者兜住 chunked transfer（不发 Content-Length）与响应头撒谎。
     async fn download(&self, url: &str, dest: &Path) -> Result<()> {
         let mut resp = self
             .client
@@ -309,14 +321,28 @@ impl BootstrappingResolver {
             .await
             .and_then(|r| r.error_for_status())
             .with_context(|| format!("下载失败: {url}"))?;
+        if let Some(len) = resp.content_length() {
+            if len > MAX_TARBALL_BYTES {
+                anyhow::bail!(
+                    "tarball 声明体积 {len} 超上限 {MAX_TARBALL_BYTES}（镜像异常？拒绝）: {url}"
+                );
+            }
+        }
         let mut f = std::fs::File::create(dest)
             .with_context(|| format!("创建下载文件失败: {}", dest.display()))?;
         use std::io::Write;
+        let mut written: u64 = 0;
         while let Some(chunk) = resp
             .chunk()
             .await
             .with_context(|| format!("读取下载流失败: {url}"))?
         {
+            written = written.saturating_add(chunk.len() as u64);
+            if written > MAX_TARBALL_BYTES {
+                anyhow::bail!(
+                    "tarball 下载流超上限 {MAX_TARBALL_BYTES} 字节（已写 {written}，拒绝以防空盘）: {url}"
+                );
+            }
             f.write_all(&chunk)
                 .with_context(|| format!("写下载文件失败: {}", dest.display()))?;
         }
