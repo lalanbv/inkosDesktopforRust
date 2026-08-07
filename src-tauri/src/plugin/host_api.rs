@@ -341,14 +341,22 @@ pub fn is_internal_ip(host: &str) -> bool {
     let Ok(ip) = IpAddr::from_str(host) else {
         return false;
     };
+    is_internal_ip_addr(&ip)
+}
+
+/// `is_internal_ip` 的核心（已解析 IpAddr）。处理 IPv4-mapped IPv6
+/// （`::ffff:127.0.0.1`）——映射的 IPv4 经 v4 判定，防用 mapped 形式绕过。
+fn is_internal_ip_addr(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                // IPv4-mapped（::ffff:a.b.c.d）→ 检查映射的 IPv4，防 mapped 旁路
+                return is_internal_ip_addr(&IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
@@ -656,6 +664,8 @@ mod tests {
         assert!(is_internal_ip("10.0.0.1"));
         assert!(is_internal_ip("192.168.1.1"));
         assert!(is_internal_ip("::1")); // IPv6 loopback
+        assert!(is_internal_ip("::ffff:127.0.0.1")); // IPv4-mapped loopback（防旁路）
+        assert!(is_internal_ip("::ffff:169.254.169.254")); // mapped 云元数据
         assert!(!is_internal_ip("8.8.8.8")); // 公网
         assert!(!is_internal_ip("example.com")); // 域名（非 IP 字面量）
     }
