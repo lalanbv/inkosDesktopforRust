@@ -314,6 +314,24 @@ impl HostContext {
             "exec_command: 执行系统命令（已授权）"
         );
 
+        // 参数安全校验：NUL 字节 → OS 截断参数（行为未定义）；过长参数 → 防 ARG_MAX 超限。
+        // `Command::arg` 不使用 shell，无 shell injection 风险；
+        // 但 NUL 字节仍可绕过日志截断引发误判，过长参数可触发 E2BIG。
+        const MAX_ARG_LEN: usize = 4096;
+        for (i, arg) in args.iter().enumerate() {
+            if arg.contains('\0') {
+                return Err(PluginError::ExecutionFailed(format!(
+                    "参数 #{i} 含 NUL 字节（禁止）"
+                )));
+            }
+            if arg.len() > MAX_ARG_LEN {
+                return Err(PluginError::ExecutionFailed(format!(
+                    "参数 #{i} 超过最大长度 {MAX_ARG_LEN}（实际 {}）",
+                    arg.len()
+                )));
+            }
+        }
+
         // 执行命令
         let output = std::process::Command::new(command)
             .args(args)
@@ -944,5 +962,31 @@ mod tests {
                 result
             );
         }
+    }
+
+    #[test]
+    fn test_exec_command_rejects_nul_byte_in_arg() {
+        // NUL 字节在参数中会导致 OS 截断，必须在执行前拒绝。
+        let (ctx, _tmp) = create_test_context(vec![
+            Capability::SystemCommand { allowed_commands: vec!["echo".to_string()] },
+        ]);
+        let args = vec!["hello\0world".to_string()];
+        let result = ctx.exec_command("echo", &args);
+        assert!(result.is_err(), "含 NUL 字节的参数应被拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("NUL"), "错误信息应提及 NUL: {msg}");
+    }
+
+    #[test]
+    fn test_exec_command_rejects_overlong_arg() {
+        // 单个参数超过 MAX_ARG_LEN 字节 → 拒绝（防 E2BIG / ARG_MAX 超限）。
+        let (ctx, _tmp) = create_test_context(vec![
+            Capability::SystemCommand { allowed_commands: vec!["echo".to_string()] },
+        ]);
+        let long_arg = "x".repeat(4097); // MAX_ARG_LEN + 1
+        let result = ctx.exec_command("echo", &[long_arg]);
+        assert!(result.is_err(), "超长参数应被拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("最大长度"), "错误信息应提及长度: {msg}");
     }
 }
