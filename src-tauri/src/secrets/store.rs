@@ -106,12 +106,19 @@ const INDEX_KEY: &str = "__index__";
 /// `NoEntry` 在语义允许的位置（`delete` / 逐项 `read_all`）视为成功或跳过。
 pub struct KeyringStore {
     service: String,
+    /// 序列化对 `__index__` 的读-改-写。keyring crate 无事务，多线程并发 upsert/delete
+    /// 会使 index 的 RMW（read_index → 改 → write_index）**丢失更新 → 静默漏失 key**
+    /// （下次 read_all 读不到）。`SecretStore: Send+Sync` + 调用方 `Arc<dyn SecretStore>`
+    /// 在多线程 tokio 上，并发可达。MockStore 已用 Mutex 保护内部 map；KeyringStore
+    /// 同理序列化 index 操作（secrets 访问低频，锁开销可忽略）。
+    index_lock: Mutex<()>,
 }
 
 impl KeyringStore {
     pub fn new(service: &str) -> Self {
         Self {
             service: service.to_string(),
+            index_lock: Mutex::new(()),
         }
     }
 
@@ -180,6 +187,7 @@ impl KeyringStore {
 
 impl SecretStore for KeyringStore {
     fn read_all(&self) -> Result<HashMap<String, String>> {
+        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
         let keys = self.read_index()?;
         let mut out = HashMap::with_capacity(keys.len());
         for key in keys {
@@ -207,6 +215,7 @@ impl SecretStore for KeyringStore {
     }
 
     fn upsert(&self, key: &str, value: &str) -> Result<()> {
+        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
         // 1. 写 entry（即便后续 index 更新失败，secret 已落 keychain——下次 upsert 同 key 幂等覆盖）
         self.entry_for(key)?
             .set_password(value)
@@ -223,6 +232,7 @@ impl SecretStore for KeyringStore {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
+        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
         // 1. 删 entry（不存在视为成功，与 MockStore::delete 语义一致）
         // 注：keyring v3 的方法名是 `delete_credential`（v2 是 `delete_password`，v3 改名）。
         match self.entry_for(key)?.delete_credential() {
@@ -391,6 +401,32 @@ mod tests {
         assert_eq!(all.get("real_key").unwrap(), "real_val");
         assert!(!all.contains_key("ghost_key"));
 
+        cleanup(&store);
+    }
+
+    #[test]
+    #[ignore]
+    fn keyring_real_concurrent_upsert_no_lost_keys() {
+        // 并发 upsert 不应丢失 key：index_lock 序列化 __index__ 的读-改-写。
+        // 无锁时多线程 add_to_index 的 RMW 丢失更新 → read_all 漏 key（静默丢凭据）。
+        let service = unique_service("concurrent");
+        let store = std::sync::Arc::new(KeyringStore::new(&service));
+        const N: usize = 20;
+        let mut handles = Vec::with_capacity(N);
+        for i in 0..N {
+            let s = store.clone();
+            handles.push(std::thread::spawn(move || {
+                s.upsert(&format!("k{i}"), "v").unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let all = store.read_all().unwrap();
+        assert_eq!(all.len(), N, "并发 upsert 不应丢失 key（index_lock）");
+        for i in 0..N {
+            assert!(all.contains_key(&format!("k{i}")), "k{i} 丢失（index 竞态）");
+        }
         cleanup(&store);
     }
 }
