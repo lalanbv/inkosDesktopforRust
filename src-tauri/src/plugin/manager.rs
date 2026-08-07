@@ -407,6 +407,44 @@ impl PluginManager {
             .call(command, Some(args))
             .map_err(|e| PluginError::ExecutionFailed(format!("调用插件 {:?} 失败: {e}", id)))
     }
+
+    /// 向所有已启用 WASM 插件派发事件（`plugin.on-event`）。
+    ///
+    /// 进程隔离插件无 WIT 接口，当前仅 WASM 路径支持。事件为 best-effort：
+    /// 单个插件失败仅 warn + 继续，不阻断其他插件或调用方。
+    pub fn broadcast_event(&mut self, event: &str, payload: &str) {
+        // 收集需要 broadcast 的 WASM 插件 id（避免 borrow 冲突：先收集 id，再驱动）
+        let ids: Vec<String> = self
+            .installed
+            .values()
+            .filter(|m| m.enabled && m.entrypoint.ends_with(".wasm"))
+            .map(|m| m.id.clone())
+            .collect();
+
+        for id in &ids {
+            // 缓存未命中：按需编译（与 execute_plugin_inner 同等逻辑）
+            if !self.wasm_cache.contains_key(id) {
+                let metadata = match self.installed.get(id) {
+                    Some(m) => m.clone(),
+                    None => continue,
+                };
+                let plugin_dir = self.plugins_dir.join(id);
+                let entry = plugin_dir.join(&metadata.entrypoint);
+                match WasmPlugin::new(metadata, &entry, &plugin_dir) {
+                    Ok(p) => { self.wasm_cache.insert(id.clone(), p); }
+                    Err(e) => {
+                        tracing::warn!(plugin_id = %id, error = %e, "broadcast_event: 编译插件失败，跳过");
+                        continue;
+                    }
+                }
+            }
+            if let Some(plugin) = self.wasm_cache.get(id) {
+                if let Err(e) = plugin.broadcast_event(event, payload) {
+                    tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on-event 失败，继续");
+                }
+            }
+        }
+    }
 }
 
 /// 递归复制目录

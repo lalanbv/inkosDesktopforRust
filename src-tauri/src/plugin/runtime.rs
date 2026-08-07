@@ -237,7 +237,29 @@ impl WasmPlugin {
         Ok(result)
     }
 
-    /// 创建带资源限制的 Store
+    /// 向插件派发事件（调用 WIT `plugin.on-event`）。
+    ///
+    /// on-event 是可选 hook（无返回值，插件可忽略）。失败仅 warn + 继续，
+    /// 不阻断其他插件的事件处理。
+    pub fn broadcast_event(
+        &self,
+        event: &str,
+        payload: &str,
+    ) -> Result<(), PluginError> {
+        let mut store = self.create_store()?;
+        let bindings = InkosPlugin::instantiate(&mut store, &self.component, &self.linker)
+            .map_err(|e| PluginError::ExecutionFailed(format!("实例化 Component 失败（event）: {e}")))?;
+        // init 先于 on-event（WIT 契约顺序）
+        let _ = bindings
+            .inkos_plugin_plugin()
+            .call_init(&mut store, "{}")
+            .ok();
+        bindings
+            .inkos_plugin_plugin()
+            .call_on_event(&mut store, event, payload)
+            .map_err(|e| PluginError::ExecutionFailed(format!("调用 on-event 失败: {e}")))?;
+        Ok(())
+    }
     fn create_store(&self) -> Result<Store<PluginState>, PluginError> {
         let wasi = WasiCtxBuilder::new()
             .inherit_stdio()
