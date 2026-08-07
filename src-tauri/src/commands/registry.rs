@@ -73,26 +73,39 @@ fn read_cached_index(cache_path: &std::path::Path) -> Option<registry::PluginReg
 /// 单调新鲜性判定：新索引的 `generated_at` 比「上次接受的」缓存更旧 → `true`（判为
 /// 重放/降级，应回退缓存）。纯函数，可单测。
 ///
-/// fail-open 策略：缺 `generated_at`（冷启动 / 旧格式注册表）或非 RFC3339 时返回
-/// `false`（无法判定时不阻断可用性，仅依赖签名防伪造）。chrono 按**实际时刻**比较，
-/// 兼容任意合法 RFC3339 偏移（对齐「最佳兼容性」目标）。
+/// fail-open 边界（**非对称**）：
+/// - 缓存**无锚**（冷启动 / 双方都缺时间戳）→ 无法判定，fail-open（接受）。
+/// - 缓存**有锚**但新索引**缺** `generated_at` → 疑似重放「合法签名但无时间戳」的
+///   旧格式注册表以绕过单调性 → 判降级（拒绝）。
+/// - 任一 `generated_at` 非 RFC3339 → fail-open（兼容性，仅依赖签名）。
+///
+/// chrono 按**实际时刻**比较，兼容任意合法 RFC3339 偏移（对齐「最佳兼容性」目标）。
 fn is_registry_downgrade(
     new: &registry::PluginRegistryIndex,
     cached: &registry::PluginRegistryIndex,
 ) -> bool {
     use chrono::DateTime;
-    let (Some(prev), Some(new_g)) = (cached.generated_at.as_deref(), new.generated_at.as_deref())
-    else {
-        return false; // 缺时间戳 → 无法判定
-    };
-    let (Ok(prev_dt), Ok(new_dt)) = (
-        DateTime::parse_from_rfc3339(prev),
-        DateTime::parse_from_rfc3339(new_g),
-    ) else {
-        tracing::warn!("generated_at 非 RFC3339，跳过单调新鲜性校验");
-        return false; // 非法格式 → fail-open
-    };
-    new_dt < prev_dt // 新的更旧 → 倒退
+    match (cached.generated_at.as_deref(), new.generated_at.as_deref()) {
+        (Some(prev), Some(new_g)) => {
+            // 双方有时间戳：按时刻比较，新的更旧 → 倒退
+            match (
+                DateTime::parse_from_rfc3339(prev),
+                DateTime::parse_from_rfc3339(new_g),
+            ) {
+                (Ok(prev_dt), Ok(new_dt)) => new_dt < prev_dt,
+                _ => {
+                    tracing::warn!("generated_at 非 RFC3339，跳过单调新鲜性校验");
+                    false // 非法格式 → fail-open（兼容性）
+                }
+            }
+        }
+        (Some(_), None) => {
+            // 缓存有锚但新索引缺 generated_at → 疑似重放旧格式签名注册表绕过单调 → 拒
+            tracing::warn!("新注册表缺 generated_at 但缓存有锚，疑似降级，拒绝");
+            true
+        }
+        (None, _) => false, // 缓存无锚（冷启动）→ 无法判定，fail-open
+    }
 }
 
 /// 拉取并验签注册表索引（`MAX_REGISTRY_BYTES` 限流）+ **缓存**：
@@ -307,10 +320,15 @@ mod tests {
     }
 
     #[test]
-    fn downgrade_missing_new_timestamp_fail_open() {
+    fn downgrade_missing_new_timestamp_rejected() {
+        // 缓存有锚但新索引缺 generated_at → 疑似重放「合法签名但无时间戳」旧注册表
+        // 绕过单调性 → 判降级（拒）。非对称 fail-open：仅「双方都缺锚」才接受。
         let cached = idx(Some("2026-08-07T00:00:00Z"));
         let no_ts = idx(None);
-        assert!(!is_registry_downgrade(&no_ts, &cached), "缺 generated_at → fail-open");
+        assert!(
+            is_registry_downgrade(&no_ts, &cached),
+            "缓存有锚 + 新缺 generated_at 应判降级（防绕过）"
+        );
     }
 
     #[test]
