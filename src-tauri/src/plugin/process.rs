@@ -166,10 +166,21 @@ impl PluginProcess {
 /// 优雅关闭等待窗：先通知 → 等待进程自行退出 → 超时再 kill。
 /// 終止插件进程（优雅关闭：先 notify("shutdown") best-effort → 等待 GRACEFUL_SHUTDOWN_TIMEOUT_MS → kill）。
 ///
-/// 给插件机会清理资源（关文件句柄、保存状态等）。notify 失败（进程已死/pipe 断）不阻断关闭。
+/// 给插件机会清理资源（关文件句柄、保存状态等）。notify 在 detached 线程发送，
+/// 防 stdin pipe 满时阻塞 stop() 本身——超时倒计时与 notify 并行。
 pub fn stop(&self) -> Result<(), PluginError> {
-    // best-effort 优雅通知（已死进程的 writeln 会直接 Err，忽略即可）
-    let _ = self.notify("shutdown", None);
+    // detached 线程 fire-and-forget shutdown 通知：与超时倒计时并行，
+    // 防 stdin pipe 满时 writeln 阻塞 stop()（管道满 = 进程无响应，需 hard kill）。
+    let stdin_arc = Arc::clone(&self.stdin);
+    std::thread::spawn(move || {
+        let request = RpcRequest::notification("shutdown", None);
+        if let Ok(req_str) = serde_json::to_string(&request) {
+            if let Ok(mut stdin) = stdin_arc.lock() {
+                let _ = writeln!(stdin, "{}", req_str);
+                let _ = stdin.flush();
+            }
+        }
+    });
 
     // 轮询等待进程自行退出（最多 GRACEFUL_SHUTDOWN_TIMEOUT_MS）
     let deadline = std::time::Instant::now()
