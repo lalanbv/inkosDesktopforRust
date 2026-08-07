@@ -14,7 +14,15 @@ use std::time::Duration;
 /// 避免 config 读取 + client 构造逻辑重复。
 async fn registry_source_and_client(
     config_state: &AppState,
-) -> Result<(String, Vec<u8>, reqwest::Client, std::path::PathBuf), String> {
+) -> Result<
+    (
+        String,
+        Vec<u8>,
+        registry::NoRedirectClient,
+        std::path::PathBuf,
+    ),
+    String,
+> {
     // 单次取锁提取来源参数后立即释放——不在持 config 锁时做网络 I/O（同 update_config H1）
     let (url, pubkey_hex, timeout_secs) = {
         let mut mgr = config_state.config.lock().await;
@@ -31,13 +39,9 @@ async fn registry_source_and_client(
     };
     let pubkey = registry::decode_hex(&pubkey_hex)
         .map_err(|e| format!("注册表 pubkey 解码失败: {}", e))?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs.max(1) as u64))
-        // SSRF 防护：禁止跟随重定向。注册表条目的 download_url 应直接指向最终资源；
-        // 重定向可将合法域名跳转到内网（开放重定向 SSRF）。
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| format!("构造 HTTP client 失败: {}", e))?;
+    // NoRedirectClient 在类型层保证禁重定向（SSRF 不变量，见其文档）
+    let client = registry::NoRedirectClient::new(Duration::from_secs(timeout_secs.max(1) as u64))
+        .map_err(|e| format!("{}", e))?;
     // 缓存路径（网络失败时离线回退）
     let cache_path = config_state.config_loader.paths().registry_cache();
     Ok((url, pubkey, client, cache_path))
@@ -49,7 +53,7 @@ async fn registry_source_and_client(
 async fn download_verify_extract(
     entry: &RegistryEntry,
     pubkey: &[u8],
-    client: &reqwest::Client,
+    client: &registry::NoRedirectClient,
 ) -> Result<tempfile::TempDir, String> {
     entry
         .validate()
@@ -117,7 +121,7 @@ fn is_registry_downgrade(
 async fn fetch_registry_index(
     url: &str,
     pubkey: &[u8],
-    client: &reqwest::Client,
+    client: &registry::NoRedirectClient,
     cache_path: &std::path::Path,
 ) -> Result<registry::PluginRegistryIndex, String> {
     match registry::fetch_registry(url, pubkey, |u| {

@@ -323,6 +323,34 @@ where
     PluginRegistryIndex::parse(&toml_str)
 }
 
+/// 已禁用重定向的 reqwest client——SSRF 不变量的类型层载体。
+///
+/// [`http_fetch`] 只能校验传入的 URL；跟随重定向会让 `https://ok.example.com`
+/// 302 到内网地址，请求在 reqwest 内部已实际发出。reqwest 的 `Client` 不暴露
+/// 重定向策略查询接口，无法在 `http_fetch` 内运行时断言，故把该保证前移到类型：
+/// [`Self::new`] 是唯一构造入口且强制 `Policy::none()`，`as_inner` 只出借引用，
+/// 外部无法用任意 client 构造出本类型。
+#[derive(Clone)]
+pub struct NoRedirectClient(reqwest::Client);
+
+impl NoRedirectClient {
+    /// 构造禁重定向 client。`timeout` 为单请求超时（最小 1s）。
+    pub fn new(timeout: std::time::Duration) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .timeout(timeout.max(std::time::Duration::from_secs(1)))
+            // SSRF 防护：禁止跟随重定向。注册表条目的 download_url 应直接指向最终
+            // 资源；重定向可将合法域名跳到内网（开放重定向 SSRF）。
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("构造 HTTP client 失败")?;
+        Ok(Self(client))
+    }
+
+    fn as_inner(&self) -> &reqwest::Client {
+        &self.0
+    }
+}
+
 /// 注册表索引（registry.toml + .sig）最大字节数——防放大攻击 OOM
 pub const MAX_REGISTRY_BYTES: u64 = 8 * 1024 * 1024;
 /// 插件包（bundle）最大字节数——防超大下载 OOM
@@ -332,7 +360,22 @@ pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 ///
 /// Content-Length 预检（可伪造但挡多数放大）+ 流式累加超限中止（防伪造
 /// Content-Length 的真实放大）。
-pub async fn http_fetch(client: &reqwest::Client, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+///
+/// # SSRF 不变量：client 必须禁用重定向
+///
+/// 本函数只能校验**传入的 URL**；若 client 跟随重定向，`https://ok.example.com`
+/// 可 302 到 `http://169.254.169.254/`，请求在 reqwest 内部实际发出后才返回响应，
+/// 危害已经造成（响应码检查挡不住已发出的请求）。
+///
+/// 该不变量由 [`NoRedirectClient`] 在**类型层**保证：其构造函数是唯一入口且
+/// 强制 `Policy::none()`。reqwest 的 `Client` 不暴露策略查询接口，无法运行时断言，
+/// 故用新类型把「已禁重定向」变成编译期事实，而非调用方需记住的约定。
+pub async fn http_fetch(
+    client: &NoRedirectClient,
+    url: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>> {
+    let client = client.as_inner();
     // scheme 校验：仅允许 https://，拒绝 http://（防明文 MitM）和其他 scheme。
     // 注册表索引 + bundle 均须经 TLS 传输；bundle 有 Ed25519 签名（完整性保障），
     // 但明文传输仍暴露用户隐私（哪些插件被安装）和流量指纹。
@@ -1126,7 +1169,7 @@ capabilities = []{deps_line}
     #[tokio::test]
     async fn test_http_fetch_rejects_http_scheme() {
         // http:// URL → 在 scheme 检查阶段就拒绝（防明文 MitM）
-        let client = reqwest::Client::new();
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
         let err = http_fetch(&client, "http://example.com/plugin.tar.gz", 1024)
             .await
             .unwrap_err();
@@ -1139,7 +1182,7 @@ capabilities = []{deps_line}
     #[tokio::test]
     async fn test_http_fetch_rejects_internal_ipv4_literal() {
         // 127.0.0.1（loopback）→ 在连接前即被 SSRF 守卫拒绝
-        let client = reqwest::Client::new();
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
         let err = http_fetch(&client, "https://127.0.0.1/payload.tar.gz", 1024)
             .await
             .unwrap_err();
@@ -1152,7 +1195,7 @@ capabilities = []{deps_line}
     #[tokio::test]
     async fn test_http_fetch_rejects_private_network_literal() {
         // 192.168.x.x（私网）→ 拒绝
-        let client = reqwest::Client::new();
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
         let err = http_fetch(&client, "https://192.168.1.100/evil.tar.gz", 1024)
             .await
             .unwrap_err();
@@ -1165,7 +1208,7 @@ capabilities = []{deps_line}
     #[tokio::test]
     async fn test_http_fetch_rejects_cloud_metadata_literal() {
         // 169.254.169.254（AWS/GCP/Azure 云元数据服务）→ 链路本地地址，必须拒绝
-        let client = reqwest::Client::new();
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
         let err = http_fetch(&client, "https://169.254.169.254/latest/meta-data/", 1024)
             .await
             .unwrap_err();
@@ -1178,7 +1221,7 @@ capabilities = []{deps_line}
     #[tokio::test]
     async fn test_http_fetch_rejects_ipv6_loopback_literal() {
         // [::1]（IPv6 loopback）→ 拒绝
-        let client = reqwest::Client::new();
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
         let err = http_fetch(&client, "https://[::1]/evil.tar.gz", 1024)
             .await
             .unwrap_err();
