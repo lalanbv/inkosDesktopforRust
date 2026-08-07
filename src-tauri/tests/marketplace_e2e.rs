@@ -202,3 +202,78 @@ author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
         "list_plugins 应反映 v1.1.0"
     );
 }
+
+#[tokio::test]
+async fn marketplace_install_resolves_dependencies() {
+    // lib（无依赖）+ app（依赖 lib ^1.0.0）→ resolve_dependencies 后序 [lib, app]
+    // → 按序解压 + install_plugin → 两者均已装
+    let mk = |id: &str, ver: &str| {
+        let toml = format!(
+            "[plugin]\nid=\"{id}\"\nname=\"{id}\"\nversion=\"{ver}\"\ndescription=\"\"\n\
+author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
+        );
+        build_tar_gz(&[("plugin.toml", toml.as_bytes()), ("plugin.wasm", id.as_bytes())])
+    };
+    let sha = "0".repeat(64);
+    let sig = "0".repeat(128);
+    let registry_toml = format!(
+        r#"version = 1
+
+[[plugins]]
+id = "lib"
+name = "lib"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+min_host_version = "0.0.0"
+download_url = "https://x/lib.tar.gz"
+sha256 = "{sha}"
+signature = "{sig}"
+capabilities = []
+
+[[plugins]]
+id = "app"
+name = "app"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+min_host_version = "0.0.0"
+download_url = "https://x/app.tar.gz"
+sha256 = "{sha}"
+signature = "{sig}"
+capabilities = []
+dependencies = {{ lib = "^1.0.0" }}
+"#,
+    );
+    let idx = PluginRegistryIndex::parse(&registry_toml).expect("注册表解析");
+    let app = idx.find_latest("app").expect("含 app").clone();
+
+    // 后序拓扑：lib（无依赖）在前，app 在后
+    let order = registry::resolve_dependencies(&app, &idx).expect("依赖解析");
+    assert_eq!(
+        order.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        vec!["lib", "app"],
+        "安装顺序应为 [lib, app]"
+    );
+
+    // 按序解压 + 安装（模拟 cmd_install_from_registry 的依赖循环）
+    let plugins_root = tempfile::tempdir().unwrap();
+    let mut manager = PluginManager::new(plugins_root.path()).unwrap();
+    for e in &order {
+        let bundle = mk(&e.id, &e.version);
+        let t = tempfile::tempdir().unwrap();
+        registry::safe_extract_tar_gz(&bundle, t.path()).unwrap();
+        manager
+            .install_plugin(&t.path().to_string_lossy())
+            .await
+            .unwrap_or_else(|err| panic!("安装 {} 失败: {err}", e.id));
+    }
+
+    let installed: Vec<String> = manager.list_plugins().into_iter().map(|m| m.id).collect();
+    assert!(installed.contains(&"lib".to_string()), "lib 应已装");
+    assert!(installed.contains(&"app".to_string()), "app 应已装");
+}
