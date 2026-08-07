@@ -628,6 +628,15 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
 
+        // 拒绝符号链接：copy 会跟随符号链接读取目标内容，含指向沙箱外文件的
+        // symlink 可将 /etc/passwd 等敏感文件复制进插件目录。与 tar 解压侧一致。
+        if file_type.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("插件源目录含符号链接（禁止）: {}", src_path.display()),
+            ));
+        }
+
         if file_type.is_dir() {
             copy_dir_all(&src_path, &dst_path)?;
         } else {
