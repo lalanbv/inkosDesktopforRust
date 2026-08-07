@@ -98,9 +98,11 @@ impl HostContext {
         // 权限检查
         if !self.has_capability(&Capability::ReadProject) {
             warn!(
+                target: "inkos.plugin.security",
                 plugin_id = %self.metadata.id,
                 path = %path,
-                "read_file: 缺少 read_project 权限"
+                action = "read_file",
+                "能力拒绝: 缺少 read_project 权限"
             );
             return Err(PluginError::PermissionDenied(
                 "缺少 read_project 权限".to_string(),
@@ -113,9 +115,11 @@ impl HostContext {
         // 额外的文件系统权限检查
         if !self.has_filesystem_capability(&full_path) {
             warn!(
+                target: "inkos.plugin.security",
                 plugin_id = %self.metadata.id,
                 path = %full_path.display(),
-                "read_file: 路径不在允许列表中"
+                action = "read_file",
+                "路径拒绝: 不在 filesystem 白名单"
             );
             return Err(PluginError::PermissionDenied(format!(
                 "路径 {} 不在允许列表中",
@@ -149,9 +153,11 @@ impl HostContext {
         // 权限检查
         if !self.has_capability(&Capability::WriteProject) {
             warn!(
+                target: "inkos.plugin.security",
                 plugin_id = %self.metadata.id,
                 path = %path,
-                "write_file: 缺少 write_project 权限"
+                action = "write_file",
+                "能力拒绝: 缺少 write_project 权限"
             );
             return Err(PluginError::PermissionDenied(
                 "缺少 write_project 权限".to_string(),
@@ -173,6 +179,13 @@ impl HostContext {
                 }
                 std::path::Component::CurDir => {}
                 _ => {
+                    warn!(
+                        target: "inkos.plugin.security",
+                        plugin_id = %self.metadata.id,
+                        path = %path,
+                        action = "write_file",
+                        "路径拒绝: 含非法路径组件（绝对路径/跨盘前缀）"
+                    );
                     return Err(PluginError::PermissionDenied(
                         "路径包含非法组件".to_string(),
                     ));
@@ -182,6 +195,14 @@ impl HostContext {
 
         // 确保解析后的路径仍在沙箱内（`..` 折叠后若回到 work_dir 之上则拒绝）。
         if !normalized.starts_with(&self.work_dir) {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                path = %path,
+                normalized = %normalized.display(),
+                action = "write_file",
+                "路径逃逸: 规范化后超出工作目录"
+            );
             return Err(PluginError::PermissionDenied(
                 "路径逃逸: 不在工作目录内".to_string(),
             ));
@@ -215,6 +236,13 @@ impl HostContext {
     pub fn list_dir(&self, path: &str) -> Result<ListDirResponse, PluginError> {
         // 权限检查
         if !self.has_capability(&Capability::ReadProject) {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                path = %path,
+                action = "list_dir",
+                "能力拒绝: 缺少 read_project 权限"
+            );
             return Err(PluginError::PermissionDenied(
                 "缺少 read_project 权限".to_string(),
             ));
@@ -266,21 +294,24 @@ impl HostContext {
         // 命令白名单检查：须声明 SystemCommand 能力 且 command ∈ allowed_commands。
         if !self.can_exec(command) {
             warn!(
+                target: "inkos.plugin.security",
                 plugin_id = %self.metadata.id,
                 command = %command,
-                "exec_command: 拒绝（无 system_command 权限或命令不在白名单）"
+                action = "exec_command",
+                "能力拒绝: 命令不在 system_command.allowed_commands 白名单"
             );
             return Err(PluginError::PermissionDenied(
                 "缺少 system_command 权限或命令不在白名单".to_string(),
             ));
         }
 
-        // 审计日志
+        // 审计日志：exec_command 成功执行也要记录（高危操作，全程可追溯）
         tracing::warn!(
+            target: "inkos.plugin.security",
             plugin_id = %self.metadata.id,
             command = %command,
             args = ?args,
-            "exec_command: 执行系统命令"
+            "exec_command: 执行系统命令（已授权）"
         );
 
         // 执行命令
@@ -504,12 +535,24 @@ impl HostContext {
     /// 在 tokio 上下文（WASM execute 经 async manager 调用）的嵌套 runtime panic。
     pub fn http_get(&self, url: &str) -> Result<String, PluginError> {
         let allowed = self.network_allowed_domains().ok_or_else(|| {
-            warn!(plugin_id = %self.metadata.id, url = %url, "http_get: 缺少 network 权限");
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                url = %url,
+                action = "http_get",
+                "能力拒绝: 缺少 network 权限"
+            );
             PluginError::PermissionDenied("缺少 network 权限".to_string())
         })?;
 
         if !check_network_domain(url, allowed) {
-            warn!(plugin_id = %self.metadata.id, url = %url, "http_get: 域名不在白名单");
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                url = %url,
+                action = "http_get",
+                "域名拒绝: 不在 network.allowed_domains 白名单"
+            );
             return Err(PluginError::PermissionDenied(format!(
                 "域名不在白名单: {url}"
             )));
@@ -521,7 +564,14 @@ impl HostContext {
         // 本层仅拦字面量形式，与 resolver 层互为纵深（非残留风险）。
         if let Some(host) = extract_host(url) {
             if is_internal_ip(&host) {
-                warn!(plugin_id = %self.metadata.id, host = %host, "http_get: 拒内网 IP（SSRF）");
+                warn!(
+                    target: "inkos.plugin.security",
+                    plugin_id = %self.metadata.id,
+                    host = %host,
+                    url = %url,
+                    action = "http_get",
+                    "SSRF 拒绝: 内网/保留 IP 字面量"
+                );
                 return Err(PluginError::PermissionDenied(format!(
                     "拒访问内网/保留 IP: {host}"
                 )));
