@@ -67,9 +67,7 @@ pub struct WasmPlugin {
 struct PluginState {
     wasi: WasiCtx,
     table: ResourceTable,
-    /// Host 上下文。为未来通过 WASI host imports 把 read_file/exec_command 等
-    /// 暴露给 wasm 组件预留——届时 host functions 会从这个字段取权限校验器。
-    #[allow(dead_code)]
+    /// Host 上下文（权限检查；Host trait 实现中被 read_file/write_file/exec_command 等方法使用）。
     host: HostContext,
 }
 
