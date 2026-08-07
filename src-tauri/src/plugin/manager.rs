@@ -555,7 +555,8 @@ entrypoint = "plugin.wasm"
         let m = manager.metrics();
         assert_eq!(m.exec_count, 1);
         assert_eq!(m.exec_failures, 1);
-        assert!(m.exec_total_us > 0, "应记录耗时");
-        assert!(m.avg_us > 0);
+        // NotFound 路径常 < 1μs，as_micros 取整可能为 0——不强制 > 0（会 flaky）。
+        // timing 机制由 exec_count 记录验证；avg = total/count，count=1 时 avg==total。
+        assert_eq!(m.avg_us, m.exec_total_us);
     }
 }
