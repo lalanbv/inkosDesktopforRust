@@ -23,7 +23,7 @@ use super::host_api::HostContext;
 use super::types::{PluginError, PluginMetadata};
 use std::path::Path;
 use wasmtime::component::{Component, Linker, ResourceTable};
-use wasmtime::*;
+use wasmtime::{StoreLimits, StoreLimitsBuilder, *};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiView};
 
 // Phase 6.3：用 wit 契约生成宿主绑定（InkosPlugin 实例类型 + Host trait）。
@@ -40,6 +40,14 @@ const DEFAULT_FUEL: u64 = 10_000_000;
 
 /// 默认 epoch 超时：插件执行最多跑这么多轮 epoch tick。
 const DEFAULT_EPOCH_DEADLINE: u64 = 10;
+
+/// WASM 插件单实例内存上限（字节）。
+///
+/// 防止恶意/失控插件无限分配内存 OOM 宿主进程。64 MiB 足够典型插件
+/// （格式化、转换、LLM prompt 构造）；需要更多内存的插件应走进程隔离路径。
+/// `StoreLimitsBuilder::memory_size` 在插件尝试 `memory.grow` 超限时返回 OOM，
+/// 插件收到 trap，不传播到宿主。
+const WASM_MAX_MEMORY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 
 /// WASM 插件实例（已编译，可复用）
 ///
@@ -69,6 +77,10 @@ struct PluginState {
     table: ResourceTable,
     /// Host 上下文（权限检查；Host trait 实现中被 read_file/write_file/exec_command 等方法使用）。
     host: HostContext,
+    /// 内存/表 资源限制器（`WASM_MAX_MEMORY_BYTES`）。
+    /// `store.limiter(|s| &mut s.limits)` 将此接入 Wasmtime 的 `ResourceLimiter` 接口；
+    /// 插件超限 `memory.grow` 时得到 OOM trap，而非宿主崩溃。
+    limits: StoreLimits,
 }
 
 impl WasiView for PluginState {
@@ -263,13 +275,21 @@ impl WasmPlugin {
             .inherit_stdio()
             .build();
 
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(WASM_MAX_MEMORY_BYTES)
+            .build();
+
         let state = PluginState {
             wasi,
             table: ResourceTable::new(),
             host: self.host_context.clone(),
+            limits,
         };
 
         let mut store = Store::new(&self.engine, state);
+        // 内存限制器接入：超限 memory.grow → OOM trap（插件侧），不 OOM 宿主。
+        // 必须在 Store 创建后立即绑定——limiter 闭包每次内存增长时被查询。
+        store.limiter(|state| &mut state.limits);
         store
             .set_fuel(DEFAULT_FUEL)
             .map_err(|e| PluginError::ExecutionFailed(format!("设置 fuel 限制失败: {e}")))?;
