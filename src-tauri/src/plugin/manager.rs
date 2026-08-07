@@ -33,6 +33,10 @@ pub struct PluginManager {
     /// 运行中的插件进程 (id -> process)
     running: HashMap<String, PluginProcess>,
 
+    /// 已编译的 WASM 插件缓存（id -> compiled）——避免每次 execute 重新
+    /// Cranelift AOT 编译（WASM 路径的最大 perf 开销）。uninstall/update 时 evict。
+    wasm_cache: HashMap<String, WasmPlugin>,
+
     /// 遥测：execute_plugin 累计调用次数（含失败）—— AtomicU64 无锁统计
     exec_count: std::sync::atomic::AtomicU64,
 
@@ -56,6 +60,7 @@ impl PluginManager {
             plugins_dir: plugins_dir.to_path_buf(),
             installed: HashMap::new(),
             running: HashMap::new(),
+            wasm_cache: HashMap::new(),
             exec_count: std::sync::atomic::AtomicU64::new(0),
             exec_total_us: std::sync::atomic::AtomicU64::new(0),
             exec_failures: std::sync::atomic::AtomicU64::new(0),
@@ -181,6 +186,8 @@ impl PluginManager {
 
         // 覆盖：清理旧目录后复制新版（无「已安装」检查）
         let target_dir = self.plugins_dir.join(&manifest.id);
+        // evict 旧编译缓存（新版 .wasm 需重编译）
+        self.wasm_cache.remove(&manifest.id);
         if target_dir.exists() {
             std::fs::remove_dir_all(&target_dir).map_err(|e| {
                 PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e))
@@ -204,6 +211,9 @@ impl PluginManager {
         if !self.installed.contains_key(id) {
             return Err(PluginError::NotFound(format!("插件未安装: {}", id)));
         }
+
+        // 释放编译缓存（运行态终止，实例失效）
+        self.wasm_cache.remove(id);
 
         // 停止运行中的进程
         if let Some(process) = self.running.remove(id) {
@@ -255,6 +265,9 @@ impl PluginManager {
         if !metadata.enabled {
             return Ok(()); // 已禁用
         }
+
+        // 释放编译缓存（运行态终止，实例失效）
+        self.wasm_cache.remove(id);
 
         // 停止运行中的进程
         if let Some(process) = self.running.remove(id) {
@@ -347,10 +360,14 @@ impl PluginManager {
             )));
         }
 
-        // WASM 路径：走沙箱引擎
+        // WASM 路径：走沙箱引擎。编译缓存——避免每次 execute 重新 Cranelift AOT
+        // 编译（WASM 路径最大 perf 开销）；uninstall/update 时 evict 保证一致性。
         if metadata.entrypoint.ends_with(".wasm") {
-            let plugin = WasmPlugin::new(metadata, &entry, &plugin_dir)?;
-            // WasmPlugin::execute 当前返回明确的「需要 component model 绑定」错误
+            if !self.wasm_cache.contains_key(id) {
+                let compiled = WasmPlugin::new(metadata.clone(), &entry, &plugin_dir)?;
+                self.wasm_cache.insert(id.to_string(), compiled);
+            }
+            let plugin = self.wasm_cache.get(id).expect("wasm 缓存已就绪");
             return plugin.execute(command, args);
         }
 
