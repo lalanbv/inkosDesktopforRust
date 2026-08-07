@@ -15,7 +15,7 @@
 //!
 //! v1 约束：每个 `id` 唯一（一条目=最新版）；多版本列表为未来扩展。
 
-use crate::plugin::host_api::{extract_host, is_internal_ip};
+use crate::plugin::host_api::{extract_host, filter_public_addrs, is_internal_ip};
 use crate::plugin::manifest::parse_capability;
 use crate::updater::sig;
 use anyhow::{bail, Context, Result};
@@ -333,8 +333,44 @@ where
 #[derive(Clone)]
 pub struct NoRedirectClient(reqwest::Client);
 
+/// 解析 host 并校验所有解析结果均为公网 IP；有任一内网 IP 即 `Err`。
+///
+/// 关闭 [`is_internal_ip`] 字面量检查覆盖不到的窗口：`download_url` 用 A 记录指向
+/// `169.254.169.254` 的域名时，`is_internal_ip("evil.example.com")` parse 失败恒为
+/// false → 请求照发。注册表签名只证明索引未被中间人篡改，不证明发布者无恶意。
+///
+/// **不用** reqwest 的 `dns_resolver` 钩子：本项目实测该钩子未被调用（自定义
+/// resolver 返回 `Err` 时公网域名请求仍成功），故不可依赖。显式预解析不依赖库的
+/// 钩子行为，且失败时错误语义清晰可断言。
+///
+/// 过滤逻辑复用 [`filter_public_addrs`]——与 `host_api` 的 ureq resolver 同一实现，
+/// 单点定义防两侧 SSRF 判定漂移。
+async fn check_resolved_addrs_public(host: &str) -> Result<()> {
+    let host_owned = host.to_string();
+    // to_socket_addrs 阻塞（OS resolver），放 blocking 池避免占用 async worker。
+    // 端口 0 仅为满足 ToSocketAddrs 签名，不参与判定（filter 只看 IP）。
+    let filtered = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<std::net::SocketAddr>> {
+        let resolved: Vec<std::net::SocketAddr> =
+            std::net::ToSocketAddrs::to_socket_addrs(&(host_owned.as_str(), 0))?.collect();
+        filter_public_addrs(resolved)
+    })
+    .await
+    .context("DNS 解析任务执行失败")?;
+
+    match filtered {
+        Ok(addrs) if addrs.is_empty() => {
+            bail!("http_fetch: 拒绝 SSRF——host={host} 无可用公网地址")
+        }
+        Ok(_) => Ok(()),
+        Err(e) => bail!("http_fetch: 拒绝内网 SSRF（host={host} 解析到内网地址）: {e}"),
+    }
+}
+
 impl NoRedirectClient {
     /// 构造禁重定向 client。`timeout` 为单请求超时（最小 1s）。
+    ///
+    /// SSRF 的域名解析层校验在 [`http_fetch`] 内用 [`check_resolved_addrs_public`]
+    /// 完成（见其文档说明为何不用 reqwest 的 resolver 钩子）。
     pub fn new(timeout: std::time::Duration) -> Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(timeout.max(std::time::Duration::from_secs(1)))
@@ -383,17 +419,33 @@ pub async fn http_fetch(
         bail!("http_fetch: 仅允许 https:// URL，拒绝: {url}");
     }
 
-    // SSRF 防护：拒绝内网/保留 IP 字面量（无论注册表签名是否通过，下载 URL 均须
-    // 经此检查——签名只证明注册表未被中间人篡改，不证明发布者本身无恶意/被入侵）。
-    // 涵盖: loopback / 私网 / 链路本地 / 未指定 / 云元数据 (169.254.169.254) /
-    // IPv6 ULA + mapped 私网。DNS rebinding 由系统 resolver 解析后 connect 时校验
-    // （reqwest 使用 OS resolver，无 IP pinning；签名验证已覆盖条目完整性，此层
-    // 仅防 IP 字面量形式的直连内网）。
-    if let Some(host) = extract_host(url) {
-        if is_internal_ip(&host) {
-            bail!("http_fetch: 拒绝内网/保留 IP 字面量 SSRF: {url}（host={host}）");
-        }
+    // SSRF 防护（两层，均在发请求**前**完成——请求一旦发出危害已造成）：
+    // 无论注册表签名是否通过，下载 URL 均须经此检查——签名只证明注册表未被中间人
+    // 篡改，不证明发布者本身无恶意/被入侵。
+    let host = extract_host(url)
+        .ok_or_else(|| anyhow::anyhow!("http_fetch: 无法解析 host，拒绝: {url}"))?;
+
+    // 第一层：IP 字面量。涵盖 loopback / 私网 / 链路本地 / 未指定 /
+    // 云元数据 (169.254.169.254) / IPv6 ULA + mapped/6to4/NAT64 内嵌私网。
+    if is_internal_ip(&host) {
+        bail!("http_fetch: 拒绝内网/保留 IP 字面量 SSRF: {url}（host={host}）");
     }
+
+    // 第二层：域名解析结果。第一层覆盖不到——`is_internal_ip("evil.example.com")`
+    // parse 失败恒为 false，恶意发布者只需让 download_url 用 A 记录指向
+    // 169.254.169.254 的域名即可读取云元数据。
+    //
+    // 显式预解析而非 reqwest `dns_resolver` 钩子：钩子在本项目实测**未被调用**
+    // （resolver 返回 Err 仍能连通公网域名），不可依赖；预解析不依赖任何库钩子行为，
+    // 且错误语义直接可断言（对比钩子路径只暴露"连接失败"）。
+    // 过滤逻辑复用 filter_public_addrs（与 host_api 的 ureq resolver 同一实现，
+    // 单点定义防两侧漂移）。
+    //
+    // 残留窗口：预解析与实际连接是两次独立 DNS 查询，其间记录可变（TOCTOU
+    // rebinding）。彻底消除需 IP pinning（把已校验 IP 直接交给连接层），reqwest
+    // 无此接口；bundle 的 Ed25519 签名是该窗口的第二道防线——即使连到攻击者
+    // 控制的内网地址，返回内容也过不了验签。
+    check_resolved_addrs_public(&host).await?;
 
     let mut resp = client
         .get(url)
@@ -1228,6 +1280,27 @@ capabilities = []{deps_line}
         assert!(
             err.to_string().contains("SSRF") || err.to_string().contains("内网"),
             "[::1] 应被 SSRF 守卫拒绝: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_fetch_rejects_domain_resolving_to_internal() {
+        // 域名解析到内网 → 须由 check_resolved_addrs_public 在发请求前拒绝。
+        //
+        // 这是 is_internal_ip 的 host 字面量检查**覆盖不到**的路径：
+        // is_internal_ip("localhost") parse 失败恒为 false，旧实现会照发请求。
+        // 恶意发布者只需让 download_url 用 A 记录指向 169.254.169.254 的域名即可
+        // 读取云元数据——注册表签名不阻止这点（只证明索引未被篡改，不证明发布者无恶意）。
+        let client = NoRedirectClient::new(std::time::Duration::from_secs(5)).unwrap();
+        let err = http_fetch(&client, "https://localhost/evil.tar.gz", 1024)
+            .await
+            .unwrap_err();
+        // 断言错误携带 SSRF 语义，而非仅"连接失败"——后者可能只是本机无服务监听，
+        // 宿主有服务时会变假绿（本项目此前踩过：断言 is_err() 无法区分二者）。
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("SSRF") || chain.contains("内网"),
+            "localhost 应在发请求前被拒（须携带 SSRF 语义，而非单纯连接失败）: {chain}"
         );
     }
 }
