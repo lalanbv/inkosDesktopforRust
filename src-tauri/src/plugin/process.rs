@@ -35,10 +35,15 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 200;
 impl PluginProcess {
     /// 启动插件进程
     pub fn spawn(metadata: PluginMetadata, executable: &str) -> Result<Self> {
-        let mut child = Command::new(executable)
-            .stdin(Stdio::piped())
+        let mut cmd = Command::new(executable);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // 错误输出到主进程 stderr
+            .stderr(Stdio::inherit()); // 错误输出到主进程 stderr
+        // 环境隔离：清空后只注入白名单。插件是不可信第三方代码，继承宿主全部
+        // 环境变量等于把 GITHUB_TOKEN / AWS_* 等密钥交给它（绕过能力模型）。
+        // 与 host_api::exec_command 共用同一白名单，防两侧策略漂移。
+        super::host_api::apply_env_allowlist(&mut cmd);
+        let mut child = cmd
             .spawn()
             .context("Failed to spawn plugin process")?;
 

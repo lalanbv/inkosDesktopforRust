@@ -536,12 +536,15 @@ impl HostContext {
         // 不用 `.output()`：它 (a) 阻塞直到子进程退出——挂死的命令永久冻结宿主线程
         // （同 process.rs 的 RPC 超时缺陷）；(b) 先把**全部**输出读进内存再返回，
         // 子进程输出 10GB 时 OOM 发生在 `.output()` 内部，事后截断无法阻止峰值内存。
-        let mut child = std::process::Command::new(command)
-            .args(args)
+        let mut cmd = std::process::Command::new(command);
+        cmd.args(args)
             .current_dir(&self.work_dir)
             .stdin(std::process::Stdio::null()) // 防子进程等待输入而挂死
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // 环境隔离：清空后只注入白名单，防插件通过 env 读取宿主密钥
+        apply_env_allowlist(&mut cmd);
+        let mut child = cmd
             .spawn()
             .map_err(|e| PluginError::ExecutionFailed(format!("执行命令失败: {}", e)))?;
 
@@ -623,6 +626,45 @@ const EXEC_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 /// 单流输出上限（1 MiB）。达上限即**停止读取**，不再累积内存。
 const MAX_EXEC_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// 传给插件子进程的环境变量白名单（其余全部清除）。
+///
+/// 仅保留「进程能正常启动」所必需的：`PATH`（找可执行文件与动态库）、
+/// `HOME`（部分运行时启动即读，缺失会直接失败）、`LANG`/`LC_ALL`（编码，
+/// 缺失导致非 ASCII 输出乱码）、`TMPDIR`/`TEMP`/`TMP`（临时文件目录）、
+/// `SystemRoot`/`WINDIR`/`PATHEXT`（Windows 进程启动必需）。
+const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    // Windows：缺 SystemRoot 时 CreateProcess 直接失败
+    "SystemRoot",
+    "WINDIR",
+    "PATHEXT",
+];
+
+/// 清空子进程环境并只注入 [`ENV_ALLOWLIST`] 中实际存在的变量。
+///
+/// 插件是不可信第三方代码。默认继承宿主全部环境变量意味着一次
+/// `std::env::vars()` 即可读到 `GITHUB_TOKEN`、`AWS_SECRET_ACCESS_KEY`、
+/// 代理凭据等——**完全绕过能力模型**（无需任何 capability 声明）。
+///
+/// 白名单而非黑名单：密钥的变量名无穷（`*_TOKEN`、`*_KEY`、`*_SECRET`、
+/// 各家自定义），黑名单必然漏。两处 spawn（[`HostContext::exec_command`]
+/// 与 [`crate::plugin::process::PluginProcess::spawn`]）共用此函数，
+/// 防两侧策略漂移。
+pub(crate) fn apply_env_allowlist(cmd: &mut std::process::Command) {
+    cmd.env_clear();
+    for key in ENV_ALLOWLIST {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
+}
 
 /// 在独立线程读取管道，累计达 [`MAX_EXEC_OUTPUT_BYTES`] 后停止读取并追加截断标记。
 ///
@@ -1797,6 +1839,43 @@ mod tests {
         };
         assert_eq!(r.exit_code, 0, "echo 应成功退出");
         assert!(r.stdout.contains("hello"), "stdout 应含输出: {}", r.stdout);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_exec_command_env_isolation_hides_host_secrets() {
+        // 插件子进程不得继承宿主密钥类环境变量：一次 env 读取即可拿到
+        // GITHUB_TOKEN / AWS_* 等，完全绕过能力模型。
+        // 用真实进程读实际环境（不是断言白名单常量内容——那只是同义反复）。
+        let secret_key = "INKOS_TEST_FAKE_TOKEN";
+        let secret_val = "super-secret-value-must-not-leak";
+        std::env::set_var(secret_key, secret_val);
+
+        let (ctx, _tmp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["env".to_string()],
+        }]);
+        let result = ctx.exec_command("env", &[]);
+        std::env::remove_var(secret_key); // 先清理，断言失败也不污染后续测试
+
+        let Ok(r) = result else {
+            return; // env 不可用 → skip
+        };
+        assert!(
+            !r.stdout.contains(secret_val),
+            "子进程环境泄露了宿主密钥值，stdout: {}",
+            r.stdout
+        );
+        assert!(
+            !r.stdout.contains(secret_key),
+            "子进程环境泄露了宿主密钥名，stdout: {}",
+            r.stdout
+        );
+        // PATH 必须存活：否则子进程连可执行文件都找不到（白名单不能过严）
+        assert!(
+            r.stdout.contains("PATH="),
+            "PATH 应在白名单内存活，stdout: {}",
+            r.stdout
+        );
     }
 
     #[test]
