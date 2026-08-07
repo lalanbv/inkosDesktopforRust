@@ -705,6 +705,8 @@ entrypoint = "plugin.wasm"
         assert_eq!(m.exec_total_us, 0);
         assert_eq!(m.exec_failures, 0);
         assert_eq!(m.avg_us, 0);
+        assert_eq!(m.auto_disabled_count, 0);
+        assert!(m.per_plugin.is_empty());
     }
 
     #[tokio::test]
