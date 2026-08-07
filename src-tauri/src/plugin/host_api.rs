@@ -652,16 +652,24 @@ impl HostContext {
         tracing::info!(plugin_id = %self.metadata.id, url = %url, "http_get: 允许");
         // SSRF 防护：禁重定向 + DNS rebinding 防护（自定义 resolver 过滤内网 IP，
         // ureq 用过滤后的公网 IP 连接 = IP pinning，关闭解析-连接 TOCTOU）。
+        const MAX_HTTP_RESPONSE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB
         let agent = ureq::AgentBuilder::new()
             .redirects(0)
             .resolver(ssrf_resolve)
             .build();
-        agent
+        let resp = agent
             .get(url)
             .call()
-            .map_err(|e| PluginError::ExecutionFailed(format!("HTTP 请求失败: {e}")))?
-            .into_string()
-            .map_err(|e| PluginError::ExecutionFailed(format!("读取响应失败: {e}")))
+            .map_err(|e| PluginError::ExecutionFailed(format!("HTTP 请求失败: {e}")))?;
+        // 响应体大小守卫：ureq into_string() 不限制大小，超大响应 OOM 宿主。
+        // 用 read_to_string 配合 BufReader 限制字节数读取。
+        use std::io::Read;
+        let mut body = String::new();
+        resp.into_reader()
+            .take(MAX_HTTP_RESPONSE_BYTES)
+            .read_to_string(&mut body)
+            .map_err(|e| PluginError::ExecutionFailed(format!("读取响应失败: {e}")))?;
+        Ok(body)
     }
 }
 
