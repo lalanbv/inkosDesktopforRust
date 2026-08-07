@@ -220,6 +220,8 @@ impl PluginManager {
 
         let metadata = manifest;
         self.installed.insert(metadata.id.clone(), metadata.clone());
+        // 更新后清理连续失败计数——新版本插件应从零开始，不继承旧版残留
+        self.consec_failures.remove(&metadata.id);
 
         info!(id = %metadata.id, version = %metadata.version, "插件更新成功");
         Ok(metadata)
