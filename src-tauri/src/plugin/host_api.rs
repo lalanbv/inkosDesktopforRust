@@ -361,7 +361,12 @@ impl HostContext {
         }
 
         tracing::info!(plugin_id = %self.metadata.id, url = %url, "http_get: 允许");
-        ureq::get(url)
+        // SSRF 防护：禁用重定向跟随。允许域若 302 到内网/元数据 IP（如 169.254.169.254），
+        // 默认 ureq 跟随且不复核域名 → 重定向 SSRF。禁用后插件拿到 3xx；其手动跟进会
+        // 再经本 http_get 复核白名单。agent 每次新建（轻量，无连接池需求）。
+        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        agent
+            .get(url)
             .call()
             .map_err(|e| PluginError::ExecutionFailed(format!("HTTP 请求失败: {e}")))?
             .into_string()
@@ -601,5 +606,33 @@ mod tests {
         // 白名单外域名 → PermissionDenied（不发请求）
         let result = ctx.http_get("https://evil.com");
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_http_get_no_redirect_ssrf() {
+        // SSRF 防护：服务器 302 → 不可达内网端口。修复（redirects(0)）不跟随 → Ok（拿 3xx）；
+        // 缺陷（默认跟随 5 次）会尝试连 127.0.0.1:1 → 连接拒绝 → Err。
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/");
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let resp = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/internal\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        let (ctx, _temp) = create_test_context(vec![Capability::Network {
+            allowed_domains: vec!["*".to_string()],
+        }]);
+        let result = ctx.http_get(&url);
+        let _ = handle.join();
+        assert!(
+            result.is_ok(),
+            "http_get 不应跟随重定向（SSRF 防护，应返回 3xx）: {:?}",
+            result
+        );
     }
 }
