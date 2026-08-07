@@ -1010,10 +1010,21 @@ impl HostContext {
         // 响应体大小守卫：ureq into_string() 不限制大小，超大响应 OOM 宿主。
         // take() 上限取「单次上限」与「剩余字节配额」的较小值——否则最后一次
         // 请求可读满 8 MiB 而突破累计配额。
+        //
+        // 性能优化：预分配 String 容量（从 Content-Length 推测，避免增长重分配）。
+        // 对 256 MiB 配额的大响应，预分配节省 ~10 次 realloc（每次拷贝整个已有内容）。
         use std::io::Read;
         let remaining = self.http_byte_quota.saturating_sub(used_bytes);
         let read_cap = MAX_HTTP_RESPONSE_BYTES.min(remaining);
-        let mut body = String::new();
+
+        // 从 Content-Length header 预估容量（未声明时默认 8KB）
+        let content_len = resp
+            .header("Content-Length")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(8 * 1024);
+        let capacity = content_len.min(read_cap) as usize;
+
+        let mut body = String::with_capacity(capacity);
         resp.into_reader()
             .take(read_cap)
             .read_to_string(&mut body)
