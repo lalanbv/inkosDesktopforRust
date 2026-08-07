@@ -2681,6 +2681,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "bsdiff",
+ "chrono",
  "criterion",
  "dirs 5.0.1",
  "ed25519-dalek",

@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["blocking", "stream", "json"] }
 tokio-stream = "0.1"
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 # main.rs eval 错误消息用 serde_json::to_string 做规范 JS 字符串转义

@@ -63,6 +63,38 @@ async fn download_verify_extract(
     Ok(temp)
 }
 
+/// 读本地缓存注册表索引（上次已验签接受的，作单调新鲜性锚）。任一步失败 → None。
+fn read_cached_index(cache_path: &std::path::Path) -> Option<registry::PluginRegistryIndex> {
+    std::fs::read_to_string(cache_path)
+        .ok()
+        .and_then(|s| registry::PluginRegistryIndex::parse(&s).ok())
+}
+
+/// 单调新鲜性判定：新索引的 `generated_at` 比「上次接受的」缓存更旧 → `true`（判为
+/// 重放/降级，应回退缓存）。纯函数，可单测。
+///
+/// fail-open 策略：缺 `generated_at`（冷启动 / 旧格式注册表）或非 RFC3339 时返回
+/// `false`（无法判定时不阻断可用性，仅依赖签名防伪造）。chrono 按**实际时刻**比较，
+/// 兼容任意合法 RFC3339 偏移（对齐「最佳兼容性」目标）。
+fn is_registry_downgrade(
+    new: &registry::PluginRegistryIndex,
+    cached: &registry::PluginRegistryIndex,
+) -> bool {
+    use chrono::DateTime;
+    let (Some(prev), Some(new_g)) = (cached.generated_at.as_deref(), new.generated_at.as_deref())
+    else {
+        return false; // 缺时间戳 → 无法判定
+    };
+    let (Ok(prev_dt), Ok(new_dt)) = (
+        DateTime::parse_from_rfc3339(prev),
+        DateTime::parse_from_rfc3339(new_g),
+    ) else {
+        tracing::warn!("generated_at 非 RFC3339，跳过单调新鲜性校验");
+        return false; // 非法格式 → fail-open
+    };
+    new_dt < prev_dt // 新的更旧 → 倒退
+}
+
 /// 拉取并验签注册表索引（`MAX_REGISTRY_BYTES` 限流）+ **缓存**：
 /// 网络成功 → 序列化已验签索引到 cache_path；网络/验签/解析失败 → 回退本地缓存
 /// （离线韧性）。fetch / check / list 共用。
@@ -81,6 +113,17 @@ async fn fetch_registry_index(
     .await
     {
         Ok(index) => {
+            // R6 单调新鲜性：防重放降级。缓存即上次已验签接受的注册表（单调锚）——
+            // 若新拉取的 generated_at 比缓存的更旧，判为重放/降级攻击，回退缓存。
+            // 闭包返回 cached（Some 时）保证 is_registry_downgrade 为真则缓存必存在。
+            if let Some(cached) = read_cached_index(cache_path) {
+                if is_registry_downgrade(&index, &cached) {
+                    tracing::warn!(
+                        "注册表 generated_at 倒退（疑似重放/降级），拒绝并回退本地缓存"
+                    );
+                    return Ok(cached);
+                }
+            }
             // best-effort 缓存（序列化已验签索引；写失败仅 warn，不阻断本次）
             if let Ok(toml_str) = toml::to_string(&index) {
                 if let Err(e) = std::fs::write(cache_path, toml_str) {
@@ -222,4 +265,83 @@ pub async fn cmd_list_plugin_versions(
     let (url, pubkey, client, cache_path) = registry_source_and_client(&state).await?;
     let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
     Ok(index.find_all_versions(&id).into_iter().cloned().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn idx(generated_at: Option<&str>) -> registry::PluginRegistryIndex {
+        registry::PluginRegistryIndex {
+            version: 1,
+            generated_at: generated_at.map(|s| s.to_string()),
+            plugins: vec![],
+        }
+    }
+
+    #[test]
+    fn downgrade_rejects_older_generated_at() {
+        let cached = idx(Some("2026-08-14T00:00:00Z"));
+        let older = idx(Some("2026-08-07T00:00:00Z"));
+        assert!(
+            is_registry_downgrade(&older, &cached),
+            "更旧的 generated_at 应判降级（重放/降级）"
+        );
+    }
+
+    #[test]
+    fn downgrade_accepts_newer_generated_at() {
+        let cached = idx(Some("2026-08-07T00:00:00Z"));
+        let newer = idx(Some("2026-08-14T00:00:00Z"));
+        assert!(!is_registry_downgrade(&newer, &cached), "更新的应接受");
+    }
+
+    #[test]
+    fn downgrade_equal_not_flagged() {
+        let cached = idx(Some("2026-08-07T00:00:00Z"));
+        let same = idx(Some("2026-08-07T00:00:00Z"));
+        assert!(
+            !is_registry_downgrade(&same, &cached),
+            "相同时刻非降级（重放同份注册表 benign）"
+        );
+    }
+
+    #[test]
+    fn downgrade_missing_new_timestamp_fail_open() {
+        let cached = idx(Some("2026-08-07T00:00:00Z"));
+        let no_ts = idx(None);
+        assert!(!is_registry_downgrade(&no_ts, &cached), "缺 generated_at → fail-open");
+    }
+
+    #[test]
+    fn downgrade_missing_cached_timestamp_fail_open() {
+        let cached = idx(None);
+        let new = idx(Some("2026-08-07T00:00:00Z"));
+        assert!(!is_registry_downgrade(&new, &cached), "缓存无锚（冷启动）→ fail-open");
+    }
+
+    #[test]
+    fn downgrade_non_rfc3339_fail_open() {
+        let cached = idx(Some("2026-08-07T00:00:00Z"));
+        let bad = idx(Some("not-a-date"));
+        assert!(!is_registry_downgrade(&bad, &cached), "非 RFC3339 → fail-open（兼容性）");
+    }
+
+    #[test]
+    fn downgrade_compares_instant_across_offsets() {
+        // 缓存 13:00+02:00 = 11:00 UTC
+        let cached = idx(Some("2026-08-07T13:00:00+02:00"));
+        // 新 12:00+00:00 = 12:00 UTC（晚于 11:00）→ 非降级
+        let newer = idx(Some("2026-08-07T12:00:00+00:00"));
+        assert!(
+            !is_registry_downgrade(&newer, &cached),
+            "跨偏移按实际时刻比较：12:00Z 晚于 11:00Z → 接受"
+        );
+        // 新 10:00Z（早于 11:00）→ 降级
+        let older = idx(Some("2026-08-07T10:00:00+00:00"));
+        assert!(
+            is_registry_downgrade(&older, &cached),
+            "10:00Z 早于 11:00Z → 降级"
+        );
+    }
 }
