@@ -65,6 +65,15 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         ));
     }
 
+    // ABI 兼容性校验：插件 abi_version 须等于宿主 HOST_ABI_VERSION。
+    // 接口升级时旧版插件在此处被拒，防止 WIT export 名/类型错位的静默 UB。
+    if manifest.plugin.abi_version != HOST_ABI_VERSION {
+        return Err(PluginError::InvalidManifest(format!(
+            "abi_version 不兼容: 插件={}, 宿主={}",
+            manifest.plugin.abi_version, HOST_ABI_VERSION
+        )));
+    }
+
     // 解析能力声明
     let capabilities = manifest
         .capabilities
@@ -93,6 +102,13 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         enabled: true,
     })
 }
+
+/// 宿主支持的 ABI 版本（插件 manifest 的 `abi_version` 须匹配此值方可加载）。
+///
+/// 升级宿主 WIT 接口时递增；旧版插件在接口破坏后应被拒绝加载，以防
+/// 接口不匹配导致的静默 UB（类型大小/语义偏移、export 名变更等）。
+/// `pub`：命令层可将此值暴露给前端，告知可接受的插件 ABI 版本。
+pub const HOST_ABI_VERSION: &str = "1";
 
 /// 插件 id 安全格式白名单（防路径逃逸：id 直接 join 进 plugins_dir，须仅允许
 /// 字母数字 / `-` / `_`，长度 ≤64）。pub(crate)：registry 复用同一份校验。
@@ -443,5 +459,46 @@ entrypoint = "native/plugin.wasm"
 "#;
         fs::write(plugin_dir.join("plugin.toml"), ok_manifest).unwrap();
         assert!(parse_manifest(&plugin_dir).is_ok(), "合法 entrypoint 应通过");
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_incompatible_abi() {
+        // ABI 版本不匹配 → parse_manifest 拒绝（防接口错位静默 UB）。
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("abi-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+
+        let bad_abi = r#"[plugin]
+id = "abi-plugin"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "99"
+entrypoint = "plugin.wasm"
+"#;
+        fs::write(plugin_dir.join("plugin.toml"), bad_abi).unwrap();
+        let err = parse_manifest(&plugin_dir);
+        assert!(err.is_err(), "abi_version=99 应被拒绝（不兼容宿主）");
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("abi_version"),
+            "错误信息应包含 'abi_version'，实际: {msg}"
+        );
+
+        // 合法 abi_version 仍通过
+        let ok_abi = format!(r#"[plugin]
+id = "abi-plugin"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "{HOST_ABI_VERSION}"
+entrypoint = "plugin.wasm"
+"#);
+        fs::write(plugin_dir.join("plugin.toml"), &ok_abi).unwrap();
+        assert!(parse_manifest(&plugin_dir).is_ok(), "abi_version={HOST_ABI_VERSION} 应通过");
     }
 }
