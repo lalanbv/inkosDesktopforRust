@@ -365,6 +365,32 @@ fn is_internal_ip_addr(ip: &std::net::IpAddr) -> bool {
     }
 }
 
+/// 从解析结果中过滤掉内网/保留 IP。全为内网 → Err（SSRF 拒绝）。纯函数，可单测。
+pub fn filter_public_addrs(
+    addrs: Vec<std::net::SocketAddr>,
+) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    let public: Vec<_> = addrs
+        .into_iter()
+        .filter(|sa| !is_internal_ip_addr(&sa.ip()))
+        .collect();
+    if public.is_empty() {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "解析到的 IP 均为内网/保留地址（SSRF 防护：DNS rebinding 拒绝）",
+        ))
+    } else {
+        Ok(public)
+    }
+}
+
+/// ureq 自定义 Resolver：解析 netloc → 过滤内网 IP → 仅返公网 IP。
+/// ureq 用本 resolver 返回的 IP 连接（IP pinning），关闭「解析-连接」DNS rebinding 窗口。
+fn ssrf_resolve(netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    let addrs: Vec<std::net::SocketAddr> =
+        std::net::ToSocketAddrs::to_socket_addrs(netloc)?.collect();
+    filter_public_addrs(addrs)
+}
+
 /// 网络 API
 impl HostContext {
     /// 返回声明的网络白名单（无 Network capability → None）
@@ -406,10 +432,12 @@ impl HostContext {
         }
 
         tracing::info!(plugin_id = %self.metadata.id, url = %url, "http_get: 允许");
-        // SSRF 防护：禁用重定向跟随。允许域若 302 到内网/元数据 IP（如 169.254.169.254），
-        // 默认 ureq 跟随且不复核域名 → 重定向 SSRF。禁用后插件拿到 3xx；其手动跟进会
-        // 再经本 http_get 复核白名单。agent 每次新建（轻量，无连接池需求）。
-        let agent = ureq::AgentBuilder::new().redirects(0).build();
+        // SSRF 防护：禁重定向 + DNS rebinding 防护（自定义 resolver 过滤内网 IP，
+        // ureq 用过滤后的公网 IP 连接 = IP pinning，关闭解析-连接 TOCTOU）。
+        let agent = ureq::AgentBuilder::new()
+            .redirects(0)
+            .resolver(ssrf_resolve)
+            .build();
         agent
             .get(url)
             .call()
@@ -678,13 +706,28 @@ mod tests {
         assert!(!check_network_domain("http://evilallowed.com/", &allowed));
         assert!(!check_network_domain("http://notallowed.com/", &allowed));
         assert!(!check_network_domain("http://allowed.com.evil.com/", &allowed));
-        // 合法精确 + 子域通过
         assert!(check_network_domain("http://allowed.com/", &allowed));
         assert!(check_network_domain("http://sub.allowed.com/", &allowed));
-        // 通配 "*" 放行任意
         assert!(check_network_domain("http://anything.com/", &["*".to_string()]));
-        // 无效 URL（无 host）→ 拒
         assert!(!check_network_domain("not-a-url", &allowed));
+    }
+
+    #[test]
+    fn test_filter_public_addrs_dns_rebinding() {
+        use std::net::SocketAddr;
+        let sa = |s: &str| s.parse::<SocketAddr>().unwrap();
+        // 混合：127.0.0.1 滤掉，保留 8.8.8.8（IP pinning——解析到内网被滤）
+        let public = filter_public_addrs(vec![sa("127.0.0.1:80"), sa("8.8.8.8:80")]).unwrap();
+        assert_eq!(public.len(), 1);
+        assert_eq!(
+            public[0].ip(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8))
+        );
+        // 全内网 → Err（DNS rebinding 拒）
+        assert!(filter_public_addrs(vec![sa("127.0.0.1:80"), sa("10.0.0.1:80")]).is_err());
+        // 全公网 → 原样返回
+        let all = filter_public_addrs(vec![sa("8.8.8.8:80"), sa("1.1.1.1:80")]).unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     #[test]
