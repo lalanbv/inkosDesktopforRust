@@ -368,14 +368,69 @@
         ui: "UI",
       };
 
+      // 取 capability 的判别名（tag）。serde 对无字段变体序列化成字符串
+      // ("read_project")，带字段变体序列化成单键对象
+      // ({"system_command":{"allowed_commands":[...]}})。两种形态统一到 tag，
+      // 避免各处各写一遍字符串/对象判断而漏掉一种（历史缺陷：安装告警只比对字符串，
+      // system_command 加白名单字段后恒不匹配 → 告警静默失效）。
+      function capabilityTag(cap) {
+        if (typeof cap === "string") return cap;
+        if (cap && typeof cap === "object") return Object.keys(cap)[0] || "";
+        return "";
+      }
+
+      // 变体内部值 → 简短可读串。filesystem 是 { path: "..." }，
+      // network/system_command 是 { allowed_*: [...] }——直接内插对象会得到
+      // "[object Object]"，故按类型分派。
+      function capabilityDetail(inner) {
+        if (inner == null) return "";
+        if (typeof inner === "string") return inner;
+        if (Array.isArray(inner)) return inner.join(",");
+        if (typeof inner === "object") {
+          const vals = Object.values(inner);
+          if (vals.length === 1) return capabilityDetail(vals[0]);
+          return JSON.stringify(inner);
+        }
+        return String(inner);
+      }
+
       function capabilityLabel(cap) {
         if (typeof cap === "string") return CAP_LABELS[cap] || cap;
         if (cap && typeof cap === "object") {
-          // filesystem: { path } 形态
-          const key = Object.keys(cap)[0];
-          return CAP_LABELS[key] ? `${CAP_LABELS[key]}(${cap[key]})` : JSON.stringify(cap);
+          const key = capabilityTag(cap);
+          if (!CAP_LABELS[key]) return JSON.stringify(cap);
+          const detail = capabilityDetail(cap[key]);
+          return detail ? `${CAP_LABELS[key]}(${detail})` : CAP_LABELS[key];
         }
         return String(cap);
+      }
+
+      // 敏感权限 → 用户可读描述。进程隔离插件是原生进程，宿主无法强制这些边界
+      // （能力声明对它只是声明性的），故安装时须让用户做信任决策。
+      const SENSITIVE_CAPS = {
+        network: "网络访问",
+        system_command: "系统命令执行",
+        filesystem: "任意文件系统路径",
+        environment: "环境变量",
+      };
+
+      // 返回该 capabilities 列表中的敏感项描述（去重、保持 SENSITIVE_CAPS 顺序）。
+      function sensitiveCapWarnings(caps) {
+        const tags = new Set((caps || []).map(capabilityTag));
+        return Object.entries(SENSITIVE_CAPS)
+          .filter(([tag]) => tags.has(tag))
+          .map(([, label]) => label);
+      }
+
+      // 安装成功提示（含敏感权限知情）。两条安装路径（本地目录 / 注册表）共用，
+      // 防其中一条漏掉告警。
+      function alertInstalled(meta) {
+        const warnings = sensitiveCapWarnings(meta.capabilities);
+        const warnText =
+          warnings.length > 0
+            ? `\n⚠ 此插件声明：${warnings.join("、")}。请确认来源可信（进程隔离插件不受宿主沙箱限制）。`
+            : "";
+        alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}${warnText}`);
       }
 
       async function loadPlugins() {
@@ -518,23 +573,11 @@
           }).catch((e) => console.warn("[inkos] broadcast plugin.installed 失败:", e));
           await loadPlugins();
 
-          // 安装时安全知情：若声明网络/系统命令权限，提示用户做信任决策。
+          // 安装时安全知情：声明敏感权限则提示用户做信任决策。
           // 进程隔离插件是独立进程，OS 级网络沙箱无 root 跨平台不可行（unshare 需
-          // CAP_SYS_ADMIN），故在 UX 层告知敏感权限，由用户判断来源可信度。
+          // CAP_SYS_ADMIN），故在 UX 层告知，由用户判断来源可信度。
           // （WASM 插件则由 host_api 强制白名单，这是强隔离的安全替代。）
-          const caps = meta.capabilities || [];
-          const hasNetwork = caps.some(
-            (c) => c && typeof c === "object" && "network" in c
-          );
-          const hasSystemCmd = caps.some((c) => c === "system_command");
-          const warnings = [];
-          if (hasNetwork) warnings.push("网络访问");
-          if (hasSystemCmd) warnings.push("系统命令执行");
-          const warnText =
-            warnings.length > 0
-              ? `\n⚠ 此插件声明：${warnings.join("、")}。请确认来源可信（进程隔离插件不受宿主沙箱限制）。`
-              : "";
-          alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}${warnText}`);
+          alertInstalled(meta);
         } catch (e) {
           showErr("安装失败：" + String(e));
         }
@@ -807,6 +850,10 @@
           msgEl.className = "form-msg ok";
           msgEl.textContent = t("market.install_done") + (meta.name || meta.id);
           await loadPlugins(); // 刷新已安装列表
+          // 敏感权限知情——与本地目录安装同一函数。注册表插件虽经 Ed25519 验签，
+          // 但签名只证明「未被中间人篡改」，不证明发布者无恶意或未被入侵；
+          // 进程隔离插件的能力声明对宿主是声明性的，须由用户做信任决策。
+          alertInstalled(meta);
         } catch (e) {
           msgEl.className = "form-msg err";
           msgEl.textContent = t("market.install_fail") + String(e);

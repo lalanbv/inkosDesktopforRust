@@ -170,6 +170,63 @@ mod tests {
         assert!(json.contains("/tmp"));
     }
 
+    /// 前端 UI 契约：`settings.html` 的 `capabilityTag` / `sensitiveCapWarnings`
+    /// 依赖此处**精确**的序列化形态区分两类变体——
+    /// 无字段变体 → JSON 字符串，带字段变体 → 单键对象。
+    ///
+    /// 这不是冗余测试：`SystemCommand` 曾是无字段变体（序列化为 `"system_command"`），
+    /// 加 `allowed_commands` 白名单后变成对象，而 UI 侧的安装告警仍在做
+    /// `c === "system_command"` 字符串比较 → **系统命令权限告警静默失效**，
+    /// 用户安装可执行任意白名单命令的插件时不再收到任何提示。
+    ///
+    /// 既有 `test_capability_serialization` 用 `contains` 断言，形态从字符串变对象
+    /// 时照样通过——正是这个松散度让该缺陷溜过。故此处断言完整 JSON。
+    /// 任何改变变体形态的重构都会在此失败，提示同步更新 `capabilityTag`。
+    #[test]
+    fn test_capability_json_shape_matches_ui_contract() {
+        // 无字段变体 → 裸字符串（UI: typeof cap === "string"）
+        for (cap, expect) in [
+            (Capability::ReadProject, "\"read_project\""),
+            (Capability::WriteProject, "\"write_project\""),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&cap).unwrap(),
+                expect,
+                "无字段变体须序列化为裸字符串（UI capabilityTag 依赖）"
+            );
+        }
+
+        // 带字段变体 → 单键对象，键名即 UI 用的 tag
+        let cases = [
+            (
+                Capability::SystemCommand {
+                    allowed_commands: vec!["ls".to_string(), "git".to_string()],
+                },
+                r#"{"system_command":{"allowed_commands":["ls","git"]}}"#,
+            ),
+            (
+                Capability::Network {
+                    allowed_domains: vec!["*".to_string()],
+                },
+                r#"{"network":{"allowed_domains":["*"]}}"#,
+            ),
+            (
+                Capability::Filesystem {
+                    path: "/tmp".to_string(),
+                },
+                r#"{"filesystem":{"path":"/tmp"}}"#,
+            ),
+        ];
+        for (cap, expect) in cases {
+            let json = serde_json::to_string(&cap).unwrap();
+            assert_eq!(json, expect, "带字段变体形态变更须同步 settings.html");
+            // UI 取 Object.keys(cap)[0] 作 tag——断言确实是单键对象
+            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let obj = v.as_object().expect("带字段变体须为 JSON 对象");
+            assert_eq!(obj.len(), 1, "须为单键对象（UI 取 keys()[0] 作 tag）");
+        }
+    }
+
     #[test]
     fn test_plugin_state_serialization() {
         let state = PluginState::Loaded;
@@ -198,3 +255,4 @@ mod tests {
         assert_eq!(meta.capabilities.len(), 1);
     }
 }
+
