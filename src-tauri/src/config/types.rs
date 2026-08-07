@@ -223,4 +223,54 @@ mod tests {
             assert_eq!(parsed.auto_download, cfg.auto_download);
         }
     }
+
+    /// 前端 UI 契约：`settings.html` 的 `fillConfigForm` 用 `"fixed" in vp`
+    /// 判别策略、`buildConfigFromForm` 构造 `{fixed:"x"}` 回写——**双向**都依赖
+    /// 此处精确的 JSON 形态（单元变体 → 裸字符串，元组变体 → 单键对象）。
+    ///
+    /// 上面的 `test_version_policy_serialization` 只做 TOML round-trip：
+    /// 变体从元组改成结构体（`Fixed { version: String }` → `{"fixed":{"version":"x"}}`）
+    /// 时 round-trip 仍通过，而 UI 的 `vp.fixed` 会取到对象而非字符串，
+    /// 版本号静默变成 `[object Object]` 或空——与 `Capability::SystemCommand`
+    /// 已实证的失效模式同构（见变更记录 35）。故此处断言完整 JSON。
+    #[test]
+    fn test_version_policy_json_shape_matches_ui_contract() {
+        // 单元变体 → 裸字符串（UI: 非 object 即 latest 分支）
+        assert_eq!(
+            serde_json::to_string(&VersionPolicy::Latest).unwrap(),
+            "\"latest\"",
+            "Latest 须为裸字符串（UI fillConfigForm 默认分支依赖）"
+        );
+
+        // 元组变体 → 单键对象，值为**字符串**（UI 直接取 vp.fixed / vp.range 填输入框）
+        for (policy, expect, key) in [
+            (
+                VersionPolicy::Fixed("0.4.0".to_string()),
+                r#"{"fixed":"0.4.0"}"#,
+                "fixed",
+            ),
+            (
+                VersionPolicy::Range("^0.4.0".to_string()),
+                r#"{"range":"^0.4.0"}"#,
+                "range",
+            ),
+        ] {
+            let json = serde_json::to_string(&policy).unwrap();
+            assert_eq!(json, expect, "形态变更须同步 settings.html 的 fillConfigForm");
+            let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let obj = v.as_object().expect("元组变体须为 JSON 对象");
+            assert_eq!(obj.len(), 1, "须为单键对象（UI 用 `key in vp` 判别）");
+            assert!(
+                obj[key].is_string(),
+                "值须为字符串（UI 直接填入 <input>），实际: {}",
+                obj[key]
+            );
+        }
+
+        // 反向：UI 构造的形态须能被 Rust 接受（buildConfigFromForm 的输出）
+        for json in [r#""latest""#, r#"{"fixed":"1.2.3"}"#, r#"{"range":"^1.0"}"#] {
+            serde_json::from_str::<VersionPolicy>(json)
+                .unwrap_or_else(|e| panic!("UI 构造的 {json} 须能反序列化: {e}"));
+        }
+    }
 }
