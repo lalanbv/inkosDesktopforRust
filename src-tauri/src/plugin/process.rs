@@ -209,4 +209,33 @@ mod tests {
         let result = PluginProcess::spawn(metadata, "/nonexistent");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_is_alive_detects_killed_process() {
+        // 用 `cat`（macOS/Linux 均有）作长驻进程，kill 后验证 is_alive() 返回 false。
+        // 这直接测试死进程检测机制（execute_plugin_inner 依赖 is_alive() 触发 respawn）。
+        let metadata = PluginMetadata {
+            id: "alive-test".to_string(),
+            name: "Alive Test".to_string(),
+            version: "1.0.0".to_string(),
+            description: "".to_string(),
+            author: "".to_string(),
+            homepage: None,
+            license: "MIT".to_string(),
+            abi_version: "1".to_string(),
+            capabilities: vec![],
+            entrypoint: "cat".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        let Ok(process) = PluginProcess::spawn(metadata, "cat") else {
+            // cat 不可用（某些 CI 环境）→ skip
+            return;
+        };
+        assert!(process.is_alive(), "启动后应存活");
+        process.stop().unwrap();
+        // 进程被 kill 后稍等片刻确保 OS 更新状态
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!process.is_alive(), "kill 后 is_alive() 应返回 false");
+    }
 }
