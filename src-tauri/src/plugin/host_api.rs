@@ -387,34 +387,61 @@ fn is_internal_ip_addr(ip: &std::net::IpAddr) -> bool {
             v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
         }
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                // IPv4-mapped（::ffff:a.b.c.d）→ 检查映射的 IPv4，防 mapped 旁路
-                return is_internal_ip_addr(&IpAddr::V4(v4));
-            }
+            // 嵌入 IPv4 的解封装形式（命中即查嵌入 v4 是否内网）：
+            //   - mapped     (::ffff:a.b.c.d)        —— to_ipv4_mapped
+            //   - compatible (::a.b.c.d，RFC 4291 弃用，segs[0..6] 全零)
+            //   - 6to4       (2002::/16，封装在 segs[1..3])
+            //   - NAT64      (64:ff9b::/96，封装在 segs[6..8])
+            //
+            // **OR 结构（非提前 return）**：解封装判定与 v6 通用判定并联——确保 ::1
+            // （解封装为 0.0.0.1，v4 非内网）/ ::（0.0.0.0）等特殊地址仍被 is_loopback /
+            // is_unspecified 兜底，不因解封装误判而漏网（防回归）。
             let segs = v6.segments();
-            // 6to4（2002::/16）：封装的 IPv4 在 segs[1..3]，解封装后复用 v4 判定
-            // （防用 6to4 包装内网 IPv6 直连——OS 启用 6to4 时可路由到内网 v4）
-            if segs[0] == 0x2002 {
-                let v4 = std::net::Ipv4Addr::new(
-                    (segs[1] >> 8) as u8,
-                    segs[1] as u8,
-                    (segs[2] >> 8) as u8,
-                    segs[2] as u8,
-                );
-                return is_internal_ip_addr(&IpAddr::V4(v4));
-            }
-            // NAT64 well-known 前缀（64:ff9b::/96）：封装的 IPv4 在 segs[6..8]
-            // （IPv6-only 网络经 NAT64 可达内网 v4；防包装旁路）
-            if segs[0] == 0x0064 && segs[1] == 0xff9b {
-                let v4 = std::net::Ipv4Addr::new(
-                    (segs[6] >> 8) as u8,
-                    segs[6] as u8,
-                    (segs[7] >> 8) as u8,
-                    segs[7] as u8,
-                );
-                return is_internal_ip_addr(&IpAddr::V4(v4));
-            }
-            v6.is_loopback()
+            let embedded_internal = v6
+                .to_ipv4_mapped()
+                .or_else(|| {
+                    // IPv4-compatible：segs[0..6] 全零（排除 mapped 的 segs[5]=0xffff）
+                    if segs[0..6].iter().all(|s| *s == 0) {
+                        Some(std::net::Ipv4Addr::new(
+                            (segs[6] >> 8) as u8,
+                            segs[6] as u8,
+                            (segs[7] >> 8) as u8,
+                            segs[7] as u8,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    // 6to4（2002::/16）
+                    if segs[0] == 0x2002 {
+                        Some(std::net::Ipv4Addr::new(
+                            (segs[1] >> 8) as u8,
+                            segs[1] as u8,
+                            (segs[2] >> 8) as u8,
+                            segs[2] as u8,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    // NAT64 well-known（64:ff9b::/96）
+                    if segs[0] == 0x0064 && segs[1] == 0xff9b {
+                        Some(std::net::Ipv4Addr::new(
+                            (segs[6] >> 8) as u8,
+                            segs[6] as u8,
+                            (segs[7] >> 8) as u8,
+                            segs[7] as u8,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .map(|v4| is_internal_ip_addr(&IpAddr::V4(v4)))
+                .unwrap_or(false);
+            embedded_internal
+                || v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_unique_local()
                 || v6.is_unicast_link_local()
@@ -767,6 +794,7 @@ mod tests {
         assert!(is_internal_ip("::1")); // IPv6 loopback
         assert!(is_internal_ip("::ffff:127.0.0.1")); // IPv4-mapped loopback（防旁路）
         assert!(is_internal_ip("::ffff:169.254.169.254")); // mapped 云元数据
+        assert!(is_internal_ip("::192.168.1.1")); // IPv4-compatible 封装私网（RFC 4291 弃用，防旁路）
         assert!(is_internal_ip("fc00::1")); // IPv6 站点本地（unique local，≈私网）
         assert!(is_internal_ip("fe80::1")); // IPv6 链路本地
         assert!(is_internal_ip("2002:c0a8:0101::")); // 6to4 封装 192.168.1.1（防旁路）
