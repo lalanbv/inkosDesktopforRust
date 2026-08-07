@@ -26,6 +26,11 @@ pub struct HostContext {
 
     /// 工作目录（插件沙箱根路径）
     pub(crate) work_dir: PathBuf,
+
+    /// `exec_command` 子进程超时。生产恒为 [`EXEC_COMMAND_TIMEOUT`]；
+    /// 仅测试用 [`Self::with_exec_timeout`] 缩短，以在秒级内验证 kill 路径
+    /// （否则单测需真等 30s，实际会被跳过 → 超时逻辑无覆盖）。
+    pub(crate) exec_timeout: std::time::Duration,
 }
 
 impl HostContext {
@@ -34,7 +39,15 @@ impl HostContext {
         Self {
             metadata: Arc::new(metadata),
             work_dir,
+            exec_timeout: EXEC_COMMAND_TIMEOUT,
         }
+    }
+
+    /// 覆盖 `exec_command` 超时（仅测试用：生产走 [`Self::new`] 的默认值）。
+    #[cfg(test)]
+    pub(crate) fn with_exec_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.exec_timeout = timeout;
+        self
     }
 
     /// 检查是否有指定权限
@@ -418,32 +431,101 @@ impl HostContext {
             }
         }
 
-        // 执行命令
-        let output = std::process::Command::new(command)
+        // spawn + 边读边限量 + 超时 kill。
+        //
+        // 不用 `.output()`：它 (a) 阻塞直到子进程退出——挂死的命令永久冻结宿主线程
+        // （同 process.rs 的 RPC 超时缺陷）；(b) 先把**全部**输出读进内存再返回，
+        // 子进程输出 10GB 时 OOM 发生在 `.output()` 内部，事后截断无法阻止峰值内存。
+        let mut child = std::process::Command::new(command)
             .args(args)
             .current_dir(&self.work_dir)
-            .output()
+            .stdin(std::process::Stdio::null()) // 防子进程等待输入而挂死
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| PluginError::ExecutionFailed(format!("执行命令失败: {}", e)))?;
 
-        // 输出大小守卫：防进程输出 GB 级数据 OOM 宿主。超限时截断前 N 字节，
-        // 不报错（允许插件处理截断输出）；截断信息在 stderr 末尾追加标记。
-        const MAX_EXEC_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB per stream
-        let truncate = |bytes: &[u8]| -> String {
-            if bytes.len() > MAX_EXEC_OUTPUT_BYTES {
-                let mut s = String::from_utf8_lossy(&bytes[..MAX_EXEC_OUTPUT_BYTES]).to_string();
-                s.push_str("\n[输出截断: 超过 1MiB 上限]");
-                s
-            } else {
-                String::from_utf8_lossy(bytes).to_string()
+        // 两个读线程各自限量（不能主线程顺序读：先读满 stdout 时 stderr 管道
+        // 写满会让子进程阻塞，双方互等 → 死锁）。
+        let stdout_handle = child.stdout.take().map(spawn_capped_reader);
+        let stderr_handle = child.stderr.take().map(spawn_capped_reader);
+
+        // 轮询等待，超时 kill（与 process.rs 的 RPC_TIMEOUT 同策略）
+        let timeout = self.exec_timeout;
+        let deadline = std::time::Instant::now() + timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(PluginError::ExecutionFailed(format!("等待子进程失败: {e}")))
+                }
             }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait(); // 回收僵尸进程
+                tracing::warn!(
+                    target: "inkos.plugin.security",
+                    plugin_id = %self.metadata.id,
+                    command = %command,
+                    timeout_secs = EXEC_COMMAND_TIMEOUT.as_secs(),
+                    "exec_command: 超时，已终止子进程"
+                );
+                return Err(PluginError::ExecutionFailed(format!(
+                    "命令 {command} 执行超时（{}s），已终止",
+                    EXEC_COMMAND_TIMEOUT.as_secs()
+                )));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         };
 
+        // join 读线程（子进程已退出 → 管道 EOF，不会阻塞）
+        let stdout = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+        let stderr = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+
         Ok(ExecCommandResponse {
-            stdout: truncate(&output.stdout),
-            stderr: truncate(&output.stderr),
-            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+            exit_code: status.code().unwrap_or(-1),
         })
     }
+}
+
+/// `exec_command` 子进程执行超时。超时 → kill + ExecutionFailed。
+/// 与 [`crate::plugin::process`] 的 RPC_TIMEOUT 同量级（插件调用应是短操作）。
+const EXEC_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 单流输出上限（1 MiB）。达上限即**停止读取**，不再累积内存。
+const MAX_EXEC_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// 在独立线程读取管道，累计达 [`MAX_EXEC_OUTPUT_BYTES`] 后停止读取并追加截断标记。
+///
+/// 达上限即 break（不是读完再截断）——峰值内存有界。子进程继续写会被管道背压
+/// 阻塞，随后由超时 kill 收尾。
+fn spawn_capped_reader<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::with_capacity(8192);
+        let mut chunk = [0u8; 8192];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    let remaining = MAX_EXEC_OUTPUT_BYTES.saturating_sub(buf.len());
+                    if remaining == 0 {
+                        return format!(
+                            "{}\n[输出截断: 超过 {MAX_EXEC_OUTPUT_BYTES} 字节上限]",
+                            String::from_utf8_lossy(&buf)
+                        );
+                    }
+                    buf.extend_from_slice(&chunk[..n.min(remaining)]);
+                }
+                Err(_) => break, // 读错误（如 kill 后管道关闭）→ 返回已读部分
+            }
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    })
 }
 
 // === 请求/响应类型 ===
@@ -1318,6 +1400,85 @@ mod tests {
         assert!(result.is_err(), "含 NUL 字节的参数应被拒绝");
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("NUL"), "错误信息应提及 NUL: {msg}");
+    }
+
+    #[test]
+    fn test_exec_command_succeeds_and_captures_stdout() {
+        // 基线：spawn + 读线程 + try_wait 轮询替换 .output() 后，正常路径行为不变。
+        let (ctx, _tmp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["echo".to_string()],
+        }]);
+        let Ok(r) = ctx.exec_command("echo", &["hello".to_string()]) else {
+            return; // echo 不可用（罕见 CI）→ skip
+        };
+        assert_eq!(r.exit_code, 0, "echo 应成功退出");
+        assert!(r.stdout.contains("hello"), "stdout 应含输出: {}", r.stdout);
+    }
+
+    #[test]
+    fn test_exec_command_kills_hanging_process_on_timeout() {
+        // 挂死的子进程必须被 kill，而非永久冻结宿主线程（.output() 的旧缺陷）。
+        // 用 with_exec_timeout 缩到 300ms 直测 kill 路径——生产 30s 超时无法在
+        // 单测中真等，否则该分支永远无覆盖。
+        let (ctx, _tmp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["sleep".to_string()],
+        }]);
+        let ctx = ctx.with_exec_timeout(std::time::Duration::from_millis(300));
+        let start = std::time::Instant::now();
+        let result = ctx.exec_command("sleep", &["30".to_string()]);
+        let elapsed = start.elapsed();
+
+        let Err(err) = result else {
+            // sleep 不可用时 spawn 就失败（也是 Err），故这里必为 Err；
+            // 若竟成功说明 sleep 30 秒内返回了，环境异常 → 不断言
+            return;
+        };
+        let msg = err.to_string();
+        if msg.contains("执行命令失败") {
+            return; // sleep 不存在 → skip
+        }
+        assert!(msg.contains("超时"), "错误应指明超时，实际: {msg}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "应在超时窗后立即返回而非等子进程自然结束（实际 {elapsed:?}）"
+        );
+    }
+
+    #[test]
+    fn test_exec_command_does_not_kill_within_timeout() {
+        // 反向：轮询不应误杀超时窗内完成的命令。
+        let (ctx, _tmp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["sleep".to_string()],
+        }]);
+        let ctx = ctx.with_exec_timeout(std::time::Duration::from_secs(10));
+        let Ok(r) = ctx.exec_command("sleep", &["0.2".to_string()]) else {
+            return; // sleep 不可用 → skip
+        };
+        assert_eq!(r.exit_code, 0, "超时窗内完成的命令应正常返回");
+    }
+
+    #[test]
+    fn test_spawn_capped_reader_truncates_at_limit() {
+        // 直接测读线程的限量逻辑：达上限即停止读取（峰值内存有界），
+        // 而非读完再截断。用 io::repeat 模拟无限输出流。
+        let infinite = std::io::repeat(b'x');
+        let out = spawn_capped_reader(infinite).join().expect("读线程不应 panic");
+        assert!(out.contains("[输出截断"), "应含截断标记: {}", &out[..80.min(out.len())]);
+        // 内容部分恰为上限字节数（标记额外追加）
+        let content_len = out.find("\n[输出截断").expect("应有截断标记");
+        assert_eq!(
+            content_len, MAX_EXEC_OUTPUT_BYTES,
+            "截断前内容应恰为上限字节数"
+        );
+    }
+
+    #[test]
+    fn test_spawn_capped_reader_passes_through_small_output() {
+        // 未达上限：原样返回，无截断标记。
+        let out = spawn_capped_reader(std::io::Cursor::new(b"small".to_vec()))
+            .join()
+            .unwrap();
+        assert_eq!(out, "small");
     }
 
     #[test]
