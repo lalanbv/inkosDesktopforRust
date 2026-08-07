@@ -208,6 +208,12 @@ impl PluginManager {
         let target_dir = self.plugins_dir.join(&manifest.id);
         // evict 旧编译缓存（新版 .wasm 需重编译）
         self.wasm_cache.remove(&manifest.id);
+        // 停止运行中的旧版进程插件（更新后旧进程仍运行会复用旧版，必须终止）
+        if let Some(process) = self.running.remove(&manifest.id) {
+            if let Err(e) = process.stop() {
+                warn!(id = %manifest.id, error = %e, "停止旧版进程插件失败（继续更新）");
+            }
+        }
         if target_dir.exists() {
             std::fs::remove_dir_all(&target_dir).map_err(|e| {
                 PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e))
