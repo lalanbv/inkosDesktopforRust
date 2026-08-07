@@ -395,8 +395,15 @@
           const m = await invoke("get_plugin_metrics");
           const el = document.getElementById("metrics");
           if (m && typeof m.exec_count === "number") {
-            el.textContent =
-              `调用 ${m.exec_count} 次 · 均耗时 ${m.avg_us}μs · 失败 ${m.exec_failures} 次`;
+            let text = `调用 ${m.exec_count} 次 · 均耗时 ${m.avg_us}μs · 失败 ${m.exec_failures} 次`;
+            // per-plugin 连续失败预警：consec_failures > 0 说明插件处于故障累积中
+            if (Array.isArray(m.per_plugin) && m.per_plugin.length > 0) {
+              const warns = m.per_plugin
+                .map((p) => `${p.plugin_id}(${p.consecutive_failures}/${5})`)
+                .join(", ");
+              text += ` · ⚠ 连续失败：${warns}`;
+            }
+            el.textContent = text;
           }
         } catch (_) {
           /* 指标不可用（如插件子系统未初始化），忽略 */
