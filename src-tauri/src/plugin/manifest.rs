@@ -81,8 +81,8 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
     })
 }
 
-/// 解析能力字符串
-fn parse_capability(s: &str) -> Option<Capability> {
+/// 解析能力字符串（pub(crate)：registry 模块复用以校验条目 capability 语法一致）
+pub(crate) fn parse_capability(s: &str) -> Option<Capability> {
     match s {
         "read_project" => Some(Capability::ReadProject),
         "write_project" => Some(Capability::WriteProject),

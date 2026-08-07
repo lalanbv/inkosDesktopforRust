@@ -15,6 +15,7 @@ pub mod manager;
 pub mod manifest;
 pub mod process;
 pub mod protocol;
+pub mod registry;
 pub mod runtime;
 pub mod types;
 
@@ -24,5 +25,6 @@ pub use manager::{PluginManager, PluginMetrics};
 pub use manifest::{parse_manifest, PluginManifest};
 pub use process::PluginProcess;
 pub use protocol::{RpcError, RpcRequest, RpcResponse};
+pub use registry::{PluginRegistryIndex, RegistryEntry};
 pub use runtime::WasmPlugin;
 pub use types::{Capability, PluginError, PluginMetadata};
