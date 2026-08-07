@@ -210,6 +210,19 @@ impl WasmPlugin {
         let bindings = InkosPlugin::instantiate(&mut store, &self.component, &self.linker)
             .map_err(|e| PluginError::ExecutionFailed(format!("实例化 Component 失败: {e}")))?;
 
+        // WIT 契约要求 init 在 invoke 前调用（插件可在此做初始化）。
+        // Store 每次新建（状态隔离），故每次 execute 均调用一次 init。
+        // 失败 → 插件声明当次调用不可用，ExecutionFailed 向上传播。
+        let init_result = bindings
+            .inkos_plugin_plugin()
+            .call_init(&mut store, "{}")
+            .map_err(|e| PluginError::ExecutionFailed(format!("调用 plugin.init 失败: {e}")))?;
+        if let Err(e) = init_result {
+            return Err(PluginError::ExecutionFailed(format!(
+                "plugin.init 返回错误: {e}"
+            )));
+        }
+
         // call_invoke 返回 Result<Result<String, String>, wasmtime error>：
         // 外层是 wasmtime trap / 资源耗尽，内层是插件语义的 result<string,string>
         let inner = bindings
