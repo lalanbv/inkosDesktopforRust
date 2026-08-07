@@ -92,11 +92,31 @@ pub(crate) fn is_safe_plugin_id(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// 系统命令名安全格式（`SystemCommand { allowed_commands }` 白名单条目校验）。
+///
+/// 仅允许**裸可执行名**（字母数字 / `-` / `_` / `.`），**禁**：
+/// - `/`（路径 / 路径遍历，如 `/usr/bin/evil`、`../evil`）
+/// - 空格、shell 元字符（`;` `|` `&` `$` `` ` `` `<` `>` `(` `)` `{` `}` 等）
+///
+/// 防白名单本身成命令注入向量——白名单条目直接进 `Command::new(name)`，若有 `/` 或
+/// 元字符，攻击者可借此执行任意路径或注入 shell（虽然 `Command::new` 不经 shell，
+/// 但路径遍历仍可达任意二进制）。pub(crate)：parse_capability 复用。
+pub(crate) fn is_safe_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
 /// 解析能力字符串（pub(crate)：registry 模块复用以校验条目 capability 语法一致）
 pub(crate) fn parse_capability(s: &str) -> Option<Capability> {    match s {
         "read_project" => Some(Capability::ReadProject),
         "write_project" => Some(Capability::WriteProject),
-        "system_command" => Some(Capability::SystemCommand),
+        // bare = 空白名单（fail-closed；exec 不可达自 WASM，且「任意命令」违背白名单初衷）
+        "system_command" => Some(Capability::SystemCommand {
+            allowed_commands: Vec::new(),
+        }),
         "environment" => Some(Capability::Environment),
         "database" => Some(Capability::Database),
         "ui" => Some(Capability::Ui),
@@ -115,6 +135,24 @@ pub(crate) fn parse_capability(s: &str) -> Option<Capability> {    match s {
             Some(Capability::Network {
                 allowed_domains: domains,
             })
+        }
+        // 系统命令白名单：`system_command:ls,git` = 仅 ls/git。命令名经安全校验，
+        // 含非法名（路径/shell 元字符）→ 整个 capability 拒绝（fail-closed）。
+        _ if s.starts_with("system_command:") => {
+            let commands: Vec<String> = s
+                .strip_prefix("system_command:")
+                .unwrap()
+                .split(',')
+                .map(|c| c.trim().to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if commands.iter().all(|c| is_safe_command_name(c)) {
+                Some(Capability::SystemCommand {
+                    allowed_commands: commands,
+                })
+            } else {
+                None
+            }
         }
         _ if s.starts_with("filesystem:") => {
             let path = s.strip_prefix("filesystem:").unwrap().to_string();
@@ -153,7 +191,50 @@ mod tests {
                 path: "/tmp".to_string()
             })
         );
+        // system_command 白名单
+        assert_eq!(
+            parse_capability("system_command"),
+            Some(Capability::SystemCommand {
+                allowed_commands: vec![]
+            }),
+            "bare = 空白名单（fail-closed）"
+        );
+        assert_eq!(
+            parse_capability("system_command:ls,git"),
+            Some(Capability::SystemCommand {
+                allowed_commands: vec!["ls".to_string(), "git".to_string()]
+            })
+        );
+        // 非法命令名（路径遍历 / shell 元字符）→ 整个 capability 拒绝
+        assert_eq!(
+            parse_capability("system_command:ls,/usr/bin/evil"),
+            None,
+            "含路径的命令名必须拒绝"
+        );
+        assert_eq!(
+            parse_capability("system_command:ls;rm -rf"),
+            None,
+            "含 shell 元字符的命令名必须拒绝"
+        );
         assert_eq!(parse_capability("invalid"), None);
+    }
+
+    #[test]
+    fn test_is_safe_command_name() {
+        // 裸可执行名：通过
+        assert!(is_safe_command_name("ls"));
+        assert!(is_safe_command_name("git"));
+        assert!(is_safe_command_name("node-18"));
+        assert!(is_safe_command_name("python3"));
+        assert!(is_safe_command_name("my.tool"));
+        // 路径 / 遍历 / shell 元字符 / 空格：拒
+        assert!(!is_safe_command_name("/usr/bin/evil"), "绝对路径拒");
+        assert!(!is_safe_command_name("../evil"), "遍历拒");
+        assert!(!is_safe_command_name("ls;rm"), "分号拒");
+        assert!(!is_safe_command_name("ls|cat"), "管道拒");
+        assert!(!is_safe_command_name("ls && cat"), "空格/逻辑符拒");
+        assert!(!is_safe_command_name("$HOME/evil"), "变量/路径拒");
+        assert!(!is_safe_command_name(""), "空拒");
     }
 
     #[test]

@@ -239,27 +239,39 @@ impl HostContext {
 
 /// 系统 API
 impl HostContext {
+    /// `command` 是否在白名单内（`SystemCommand { allowed_commands }` 校验）。
+    /// 空白名单 → false（fail-closed）。纯函数，便于单测。
+    fn can_exec(&self, command: &str) -> bool {
+        self.metadata.capabilities.iter().any(|cap| match cap {
+            Capability::SystemCommand { allowed_commands } => {
+                allowed_commands.iter().any(|c| c == command)
+            }
+            _ => false,
+        })
+    }
+
     /// 执行系统命令。
     ///
     /// # 可达性与安全契约
     /// - **当前不可达自不可信边界**：WASM 插件经 Host trait（read_file/write_file/
     ///   list_dir/http_get/log）调用，**不暴露 exec_command**（wit/inkos.wit 无此导入）。
     ///   故 WASM 插件无法执行系统命令——强隔离边界的任意执行面为零。
-    /// - `Capability::SystemCommand` 是**全量信任**能力（无命令白名单，与 Network 的
-    ///   `allowed_domains` 不对称）。一旦具备即可执行任意二进制 + 任意参数。
-    /// - **未来接线约束**：若将本方法接入 WASI host imports 或 Tauri 命令，必须先引入
-    ///   命令白名单（如 `Capability::SystemCommand { allowed_commands }`），否则等于
-    ///   把任意代码执行暴露给不可信插件。当前仅在安装期 UX 告警（见 settings.html）。
+    /// - `Capability::SystemCommand { allowed_commands }` 现为**命令白名单**能力
+    ///   （对称 Network 的 `allowed_domains`）：仅 `allowed_commands` 内的裸命令名可执行。
+    ///   bare `system_command` = 空白名单（fail-closed，无命令可执行）。命令名经
+    ///   `is_safe_command_name` 校验（拒路径/shell 元字符），白名单本身不成注入向量。
+    /// - **接线就绪**：白名单已就位，若将本方法接入 WASI host imports / Tauri 命令，
+    ///   任意代码执行面已被收敛到插件声明的命令集（仍须逐命令审计其参数语义）。
     pub fn exec_command(&self, command: &str, args: &[String]) -> Result<ExecCommandResponse, PluginError> {
-        // 权限检查
-        if !self.has_capability(&Capability::SystemCommand) {
+        // 命令白名单检查：须声明 SystemCommand 能力 且 command ∈ allowed_commands。
+        if !self.can_exec(command) {
             warn!(
                 plugin_id = %self.metadata.id,
                 command = %command,
-                "exec_command: 缺少 system_command 权限"
+                "exec_command: 拒绝（无 system_command 权限或命令不在白名单）"
             );
             return Err(PluginError::PermissionDenied(
-                "缺少 system_command 权限".to_string(),
+                "缺少 system_command 权限或命令不在白名单".to_string(),
             ));
         }
 
@@ -668,6 +680,32 @@ mod tests {
         let (ctx, _temp) = create_test_context(vec![]);
         let result = ctx.exec_command("echo", &["test".to_string()]);
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_exec_command_whitelist_denies_non_listed() {
+        // 声明 system_command:echo 但执行 ls → 白名单拒绝（ls 不执行）。
+        let (ctx, _temp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["echo".to_string()],
+        }]);
+        let result = ctx.exec_command("ls", &[]);
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "白名单外命令应拒绝"
+        );
+    }
+
+    #[test]
+    fn test_exec_command_empty_whitelist_denies_all() {
+        // bare system_command = 空白名单 → 任何命令都拒（fail-closed）。
+        let (ctx, _temp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec![],
+        }]);
+        let result = ctx.exec_command("echo", &[]);
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "空白名单应 fail-closed 拒绝所有命令"
+        );
     }
 
     #[test]

@@ -97,8 +97,11 @@ pub enum Capability {
     /// 访问文件系统
     Filesystem { path: String },
 
-    /// 执行系统命令
-    SystemCommand,
+    /// 执行系统命令（命令白名单：仅允许 `allowed_commands` 内的裸命令名）。
+    /// 对称 Network 模型——`system_command`（bare）= 空白名单（fail-closed，无命令可执行）；
+    /// `system_command:ls,git` = 仅 ls/git。命令名经 `is_safe_command_name` 校验
+    /// （拒路径/shell 元字符），防白名单本身成注入向量。
+    SystemCommand { allowed_commands: Vec<String> },
 
     /// 访问环境变量
     Environment,
