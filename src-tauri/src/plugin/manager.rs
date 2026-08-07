@@ -337,13 +337,20 @@ impl PluginManager {
         command: &str,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, PluginError> {
-        let metadata = self
-            .installed
-            .get(id)
-            .cloned()
-            .ok_or_else(|| PluginError::NotFound(format!("插件未安装: {}", id)))?;
+        // 热路径 0GC：只取执行判定所需的最小字段——`enabled`（Copy）+ `entrypoint`
+        // （单 String）。避免每次调用 clone 整个 PluginMetadata（8+ String + Vec +
+        // dependencies HashMap）；完整 metadata 仅在缓存未命中（首次 WasmPlugin::new /
+        // Process::spawn）时按需 clone。内层作用域结束时即释放对 installed 的借用，
+        // 之后对 wasm_cache / running 的可变借用无冲突。
+        let (enabled, entrypoint) = {
+            let m = self
+                .installed
+                .get(id)
+                .ok_or_else(|| PluginError::NotFound(format!("插件未安装: {}", id)))?;
+            (m.enabled, m.entrypoint.clone())
+        };
 
-        if !metadata.enabled {
+        if !enabled {
             return Err(PluginError::ExecutionFailed(format!(
                 "插件未启用: {}",
                 id
@@ -351,7 +358,7 @@ impl PluginManager {
         }
 
         let plugin_dir = self.plugins_dir.join(id);
-        let entry = plugin_dir.join(&metadata.entrypoint);
+        let entry = plugin_dir.join(&entrypoint);
 
         if !entry.exists() {
             return Err(PluginError::ExecutionFailed(format!(
@@ -362,9 +369,16 @@ impl PluginManager {
 
         // WASM 路径：走沙箱引擎。编译缓存——避免每次 execute 重新 Cranelift AOT
         // 编译（WASM 路径最大 perf 开销）；uninstall/update 时 evict 保证一致性。
-        if metadata.entrypoint.ends_with(".wasm") {
+        if entrypoint.ends_with(".wasm") {
             if !self.wasm_cache.contains_key(id) {
-                let compiled = WasmPlugin::new(metadata.clone(), &entry, &plugin_dir)?;
+                // 缓存未命中：此处才需要完整 metadata（WasmPlugin::new 存它做权限校验）。
+                // execute_plugin_inner 内不修改 installed，刚校验过存在 → expect 安全。
+                let metadata = self
+                    .installed
+                    .get(id)
+                    .expect("installed 刚校验过存在，本方法内不修改它")
+                    .clone();
+                let compiled = WasmPlugin::new(metadata, &entry, &plugin_dir)?;
                 self.wasm_cache.insert(id.to_string(), compiled);
             }
             let plugin = self.wasm_cache.get(id).expect("wasm 缓存已就绪");
@@ -374,10 +388,15 @@ impl PluginManager {
         // 进程隔离路径：JSON-RPC over stdio
         // 长驻进程：首次调用 spawn，后续复用；uninstall/disable 时由对应方法 stop
         if !self.running.contains_key(id) {
+            let metadata = self
+                .installed
+                .get(id)
+                .expect("installed 刚校验过存在，本方法内不修改它")
+                .clone();
             let executable = entry.to_str().ok_or_else(|| {
                 PluginError::ExecutionFailed(format!("入口路径含非 UTF-8 字符: {}", entry.display()))
             })?;
-            let process = PluginProcess::spawn(metadata.clone(), executable)
+            let process = PluginProcess::spawn(metadata, executable)
                 .map_err(|e| PluginError::ExecutionFailed(format!("启动插件进程失败: {e}")))?;
             self.running.insert(id.to_string(), process);
             info!(id = %id, "插件进程已启动（长驻）");

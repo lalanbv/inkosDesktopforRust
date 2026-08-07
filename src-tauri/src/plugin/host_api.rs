@@ -8,22 +8,33 @@
 use super::types::{Capability, PluginError, PluginMetadata};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{error, warn};
 
 /// Host API 上下文
+///
+/// `metadata` 用 `Arc` 共享：WASM 执行热路径每次调用 `create_store` 都会
+/// `clone()` 一份 HostContext 给独立 Store（状态隔离）。metadata 含 8+ String +
+/// capabilities Vec，clone 成本高；改 Arc 后 clone 退化为单次原子递增（~0 分配）。
+/// metadata 构造后不可变（仅权限校验 + 日志读取），共享语义安全。`work_dir` 保持
+/// owned PathBuf——仅 1 次分配且多处需 owned 路径（join/canonicalize/starts_with），
+/// Arc 化反增 Deref/AsRef 摩擦，收益不抵成本。
 #[derive(Clone)]
 pub struct HostContext {
-    /// 插件元数据（包含权限声明）
-    pub(crate) metadata: PluginMetadata,
+    /// 插件元数据（包含权限声明）—— Arc 共享，clone 廉价
+    pub(crate) metadata: Arc<PluginMetadata>,
 
     /// 工作目录（插件沙箱根路径）
     pub(crate) work_dir: PathBuf,
 }
 
 impl HostContext {
-    /// 创建新的 Host 上下文
+    /// 创建新的 Host 上下文（metadata 包装进 Arc 供后续廉价 clone）
     pub fn new(metadata: PluginMetadata, work_dir: PathBuf) -> Self {
-        Self { metadata, work_dir }
+        Self {
+            metadata: Arc::new(metadata),
+            work_dir,
+        }
     }
 
     /// 检查是否有指定权限
