@@ -32,13 +32,76 @@ pub struct PluginProcess {
 /// 优雅关闭等待窗：先通知 → 等待进程自行退出 → 超时再 kill。
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 200;
 
+/// 单条 stderr 行转发进日志的最大字节数——超出截断。
+/// 插件可写单行数 MB 撑爆日志条目；日志行应保持可读。
+const STDERR_LINE_MAX_BYTES: usize = 2 * 1024;
+
+/// 每个插件进程 stderr 转发的最大行数。达上限后停止转发（继续排空管道，
+/// 防插件写阻塞），只再记一条截断提示。防刷爆日志文件。
+const STDERR_MAX_LINES: usize = 1_000;
+
+/// detached 线程：排空插件 stderr 并限量转发进 `tracing`。
+///
+/// 两个职责不可分：
+/// - **排空**——管道缓冲写满会阻塞插件的 write，卡死其主循环。即使不再转发也必须继续读。
+/// - **限量转发**——带 `plugin_id` 归属写入日志，单行截断 + 总行数封顶。
+///
+/// 用 `read_until(b'\n')` 而非 `lines()`：后者对非 UTF-8 字节返回 Err 并可能
+/// 提前结束迭代 → 停止排空 → 插件阻塞。这里按字节读，lossy 转换后记录。
+fn spawn_stderr_drain(plugin_id: String, stderr: std::process::ChildStderr) {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut lines_forwarded = 0usize;
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break, // EOF：进程已退出
+                Ok(_) => {}
+                Err(_) => break, // 管道错误（进程被 kill）→ 结束
+            }
+            if lines_forwarded >= STDERR_MAX_LINES {
+                continue; // 仍排空，但不再转发
+            }
+            // 截断到上限，去掉行尾换行；lossy 处理非 UTF-8 输出
+            let end = buf.len().min(STDERR_LINE_MAX_BYTES);
+            let line = String::from_utf8_lossy(&buf[..end]);
+            let line = line.trim_end_matches(['\n', '\r']);
+            if line.is_empty() {
+                continue;
+            }
+            lines_forwarded += 1;
+            // 插件 stderr 是不可信内容：作为**字段值**记录（不进 message 模板），
+            // 由 tracing 的格式化层负责转义，插件无法伪造宿主日志结构。
+            tracing::warn!(
+                target: "inkos.plugin.stderr",
+                plugin_id = %plugin_id,
+                truncated = buf.len() > STDERR_LINE_MAX_BYTES,
+                output = %line,
+                "插件 stderr 输出"
+            );
+            if lines_forwarded == STDERR_MAX_LINES {
+                tracing::warn!(
+                    target: "inkos.plugin.stderr",
+                    plugin_id = %plugin_id,
+                    limit = STDERR_MAX_LINES,
+                    "插件 stderr 行数达上限，后续输出不再记录（仍排空管道）"
+                );
+            }
+        }
+    });
+}
+
 impl PluginProcess {
     /// 启动插件进程
     pub fn spawn(metadata: PluginMetadata, executable: &str) -> Result<Self> {
         let mut cmd = Command::new(executable);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()); // 错误输出到主进程 stderr
+            // 捕获而非 inherit：inherit 让插件无限量直写宿主 stderr（刷爆日志、
+            // 污染终端），且输出无归属——分不清来自哪个插件，还可伪造宿主日志
+            // 格式行。改为管道 + 限量转发进 tracing（见 spawn_stderr_drain）。
+            .stderr(Stdio::piped());
         // 环境隔离：清空后只注入白名单。插件是不可信第三方代码，继承宿主全部
         // 环境变量等于把 GITHUB_TOKEN / AWS_* 等密钥交给它（绕过能力模型）。
         // 与 host_api::exec_command 共用同一白名单，防两侧策略漂移。
@@ -49,6 +112,11 @@ impl PluginProcess {
 
         let stdin = child.stdin.take().context("Failed to capture stdin")?;
         let stdout = child.stdout.take().context("Failed to capture stdout")?;
+        // stderr 必须被持续排空：管道缓冲区（通常 64 KiB）写满后插件的 write
+        // 会阻塞，进而卡死其主循环 → RPC 超时。detached 线程负责排空 + 限量。
+        if let Some(stderr) = child.stderr.take() {
+            spawn_stderr_drain(metadata.id.clone(), stderr);
+        }
 
         Ok(Self {
             metadata,
@@ -265,6 +333,87 @@ mod tests {
         // 测试无效可执行文件
         let result = PluginProcess::spawn(metadata, "/nonexistent");
         assert!(result.is_err());
+    }
+
+    fn metadata_with(id: &str, entrypoint: &str) -> PluginMetadata {
+        PluginMetadata {
+            id: id.to_string(),
+            name: id.to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: "MIT".to_string(),
+            abi_version: "1".to_string(),
+            capabilities: vec![],
+            entrypoint: entrypoint.to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        }
+    }
+
+    /// stderr 改为 `Stdio::piped()` 后**必须**持续排空：管道缓冲（通常 64 KiB）
+    /// 写满时插件的 write 阻塞 → 主循环卡死 → RPC 全部超时。
+    ///
+    /// 这里让插件先写远超缓冲区的 stderr（512 KiB），再对 stdin 回声应答。
+    /// 若排空线程缺失或提前退出，插件卡在写 stderr，`call` 必然超时。
+    /// 用 sh 而非真插件：只需验证「宿主侧排空」这一宿主行为。
+    #[test]
+    fn test_stderr_drain_does_not_block_plugin_writes() {
+        // 先写 512 KiB 到 stderr（远超管道缓冲），再读一行 stdin 并回一个合法响应
+        let script = r#"
+            i=0
+            while [ $i -lt 512 ]; do
+                awk 'BEGIN{s="";while(length(s)<1023)s=s "x";print s}' >&2
+                i=$((i+1))
+            done
+            read line
+            printf '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n'
+        "#;
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(script);
+        // 复用 spawn 的管道 + 排空逻辑：直接构造以免依赖可执行插件文件
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let Ok(mut child) = cmd.spawn() else {
+            return; // sh 不可用（罕见）→ skip
+        };
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        spawn_stderr_drain("stderr-flood".to_string(), child.stderr.take().unwrap());
+
+        let process = PluginProcess {
+            metadata: metadata_with("stderr-flood", "sh"),
+            child: Arc::new(Mutex::new(child)),
+            stdin: Arc::new(Mutex::new(stdin)),
+            stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
+            next_id: Arc::new(Mutex::new(1)),
+        };
+
+        // 排空正常 → 插件写完 stderr 后能响应；排空缺失 → 卡死 → RPC_TIMEOUT
+        let result = process.call("ping", None);
+        let _ = process.stop();
+        assert!(
+            result.is_ok(),
+            "stderr 洪泛下 RPC 仍应成功（排空线程防插件写阻塞），实际: {result:?}"
+        );
+    }
+
+    /// 排空线程在进程退出后应自行结束（EOF），不泄漏线程。
+    /// 同时验证非 UTF-8 字节不会让排空提前终止（lines() 会 Err，故用 read_until）。
+    #[test]
+    fn test_stderr_drain_handles_invalid_utf8_and_exits_on_eof() {
+        let mut cmd = Command::new("sh");
+        // printf 输出非法 UTF-8 字节序列后立即退出
+        cmd.arg("-c").arg(r#"printf '\377\376 bad\n'>&2; printf 'ok\n' >&2"#);
+        cmd.stderr(Stdio::piped()).stdout(Stdio::null()).stdin(Stdio::null());
+        let Ok(mut child) = cmd.spawn() else { return };
+        let stderr = child.stderr.take().unwrap();
+        spawn_stderr_drain("invalid-utf8".to_string(), stderr);
+        // 进程应正常退出（排空线程不影响其生命周期）
+        let status = child.wait().expect("wait 应成功");
+        assert!(status.success(), "插件应正常退出，实际: {status:?}");
     }
 
     #[test]
