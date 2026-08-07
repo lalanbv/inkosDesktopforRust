@@ -396,6 +396,10 @@
           const el = document.getElementById("metrics");
           if (m && typeof m.exec_count === "number") {
             let text = `调用 ${m.exec_count} 次 · 均耗时 ${m.avg_us}μs · 失败 ${m.exec_failures} 次`;
+            // 自动禁用计数（> 0 = 插件系统不稳定）
+            if (m.auto_disabled_count > 0) {
+              text += ` · ⛔ 自动禁用 ${m.auto_disabled_count} 次`;
+            }
             // per-plugin 连续失败预警：consec_failures > 0 说明插件处于故障累积中
             if (Array.isArray(m.per_plugin) && m.per_plugin.length > 0) {
               const warns = m.per_plugin
