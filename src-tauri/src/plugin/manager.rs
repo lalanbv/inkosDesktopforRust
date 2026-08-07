@@ -159,6 +159,45 @@ impl PluginManager {
         Ok(metadata)
     }
 
+    /// 更新插件（覆盖安装）：与 `install_plugin` 相同，但跳过「已安装」检查——
+    /// 清理旧目录 + 复制新版 + 重新注册。原子性优于「卸载后安装」（无中间缺失态）。
+    pub async fn update_plugin(&mut self, source: &str) -> Result<PluginMetadata, PluginError> {
+        let source_path = Path::new(source);
+        if !source_path.exists() {
+            return Err(PluginError::InstallFailed(format!(
+                "插件源不存在: {}",
+                source
+            )));
+        }
+
+        let manifest_file = source_path.join("plugin.toml");
+        if !manifest_file.exists() {
+            return Err(PluginError::InvalidManifest(format!(
+                "源目录缺少 plugin.toml: {}",
+                manifest_file.display()
+            )));
+        }
+        let manifest = parse_manifest(source_path)?;
+
+        // 覆盖：清理旧目录后复制新版（无「已安装」检查）
+        let target_dir = self.plugins_dir.join(&manifest.id);
+        if target_dir.exists() {
+            std::fs::remove_dir_all(&target_dir).map_err(|e| {
+                PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e))
+            })?;
+        }
+
+        copy_dir_all(source_path, &target_dir).map_err(|e| {
+            PluginError::InstallFailed(format!("复制插件文件失败: {}", e))
+        })?;
+
+        let metadata = manifest;
+        self.installed.insert(metadata.id.clone(), metadata.clone());
+
+        info!(id = %metadata.id, version = %metadata.version, "插件更新成功");
+        Ok(metadata)
+    }
+
     /// 卸载插件
     pub fn uninstall_plugin(&mut self, id: &str) -> Result<(), PluginError> {
         // 检查是否已安装

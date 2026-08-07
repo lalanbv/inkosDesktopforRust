@@ -213,6 +213,42 @@ fn is_hex_of_len(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// 插件更新信息（installed 版本 < registry 可用版本）
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UpdateInfo {
+    pub id: String,
+    pub installed_version: String,
+    pub available_version: String,
+}
+
+/// 比较已装插件与注册表，返回有更新（registry 版本 > installed）的列表。
+///
+/// 纯函数：注册表 v1 为 id-唯一（=最新版），故按 id 查找条目并做 semver 比较。
+/// 版本不可解析的条目跳过（不 panic）。
+pub fn check_updates(installed: &[(String, String)], registry: &PluginRegistryIndex) -> Vec<UpdateInfo> {
+    installed
+        .iter()
+        .filter_map(|(id, cur)| {
+            let entry = registry.find(id)?;
+            let Ok(avail) = Version::parse(&entry.version) else {
+                return None;
+            };
+            let Ok(cur_v) = Version::parse(cur) else {
+                return None;
+            };
+            if avail > cur_v {
+                Some(UpdateInfo {
+                    id: id.clone(),
+                    installed_version: cur.clone(),
+                    available_version: entry.version.clone(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// 拉取并验签注册表索引。
 ///
 /// `fetch` 注入 HTTP 传输（`Fn(&str) -> Future<Output = Result<Vec<u8>>>`）——
@@ -513,6 +549,25 @@ capabilities = []
         assert!(is_hex_of_len("ab12", 4));
         assert!(!is_hex_of_len("ab12", 5)); // 长度错
         assert!(!is_hex_of_len("xy", 2)); // 非 hex
+    }
+
+    #[test]
+    fn test_check_updates() {
+        let idx = PluginRegistryIndex::parse(&valid_registry_toml()).unwrap();
+        // registry: example-plugin@1.0.0, another-plugin@2.1.3
+
+        // 已装旧版 → 有更新
+        let up = check_updates(&[("example-plugin".to_string(), "0.9.0".to_string())], &idx);
+        assert_eq!(up.len(), 1);
+        assert_eq!(up[0].available_version, "1.0.0");
+        assert_eq!(up[0].installed_version, "0.9.0");
+
+        // 已装同版 → 无更新
+        assert!(check_updates(&[("example-plugin".to_string(), "1.0.0".to_string())], &idx).is_empty());
+        // 已装更新版（registry 旧）→ 无更新
+        assert!(check_updates(&[("example-plugin".to_string(), "2.0.0".to_string())], &idx).is_empty());
+        // 注册表无此 id → 无更新
+        assert!(check_updates(&[("not-in-registry".to_string(), "1.0.0".to_string())], &idx).is_empty());
     }
 
     /// 用签名钥对 bundle 签名 + 算 sha256，构造合法条目（verify_bundle 测试用）
