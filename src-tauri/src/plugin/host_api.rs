@@ -391,9 +391,12 @@ impl HostContext {
         }
 
         // 写入「已校验」的 normalized 路径（非原始 join 结果）。
-        // 残留风险：work_dir 内预置的符号链接（如恶意插件 bundle 解压产物）仍可能
-        // 将 normalized 解析到沙箱外——彻底闭环需在安装期拒绝符号链接条目
-        // （见 docs/security-audit.md「已知残留」），此处保证字面逃逸被阻断。
+        // 符号链接逃逸三层闭环：① 本函数父目录 canonicalize 校验（见上）；
+        // ② 安装期拒绝 symlink 条目——`safe_extract_tar_gz`（bundle）与
+        // `copy_dir_all`（本地目录）两条路径均拒；③ 读侧 `normalize_path` 的
+        // canonicalize 解析链接后再 starts_with。
+        // 覆盖：test_write_file_rejects_symlinked_parent_dir、
+        // test_read_file_rejects_symlink_to_outside、test_safe_extract_rejects_symlink。
         std::fs::write(&normalized, content).map_err(|e| {
             // 配额回滚：写失败未占用磁盘，不应消耗配额（否则反复失败的写入
             // 会把配额耗尽，插件即使从未成功写入也被永久拒绝）。
@@ -1154,6 +1157,57 @@ mod tests {
             !outside_path.join("pwned.txt").exists(),
             "沙箱外不应产生任何文件"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_read_file_rejects_symlink_to_outside() {
+        // 读路径的对称覆盖（写路径见 test_write_file_rejects_symlinked_parent_dir）。
+        // work_dir/leak -> /outside/secret.txt：normalize_path 的 canonicalize
+        // 解析链接后落在沙箱外 → starts_with 校验拦下。
+        // 缺了这条，读侧逃逸只靠「写侧同理」的推断，无实测。
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let temp_path = temp.path().canonicalize().unwrap();
+        let outside_path = outside.path().canonicalize().unwrap();
+
+        let secret = outside_path.join("secret.txt");
+        std::fs::write(&secret, "TOP-SECRET-CONTENT").unwrap();
+        std::os::unix::fs::symlink(&secret, temp_path.join("leak")).unwrap();
+
+        let metadata = PluginMetadata {
+            id: "symlink-read".to_string(),
+            name: "SymlinkRead".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: String::new(),
+            abi_version: "1".to_string(),
+            capabilities: vec![
+                Capability::ReadProject,
+                Capability::Filesystem {
+                    path: temp_path.to_string_lossy().to_string(),
+                },
+            ],
+            entrypoint: "plugin.wasm".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        let ctx = HostContext::new(metadata, temp_path.clone());
+
+        let result = ctx.read_file("leak");
+        match &result {
+            Err(PluginError::PermissionDenied(_)) => {}
+            other => panic!("经符号链接读沙箱外文件应被拒，实际: {other:?}"),
+        }
+        // 双重保险：即使返回 Ok 也不能含密文（防未来实现改动后静默泄露）
+        if let Ok(r) = &result {
+            assert!(
+                !r.content.contains("TOP-SECRET-CONTENT"),
+                "沙箱外文件内容泄露"
+            );
+        }
     }
 
     /// 构造带 WriteProject + Filesystem 能力的 ctx（配额测试共用）。
