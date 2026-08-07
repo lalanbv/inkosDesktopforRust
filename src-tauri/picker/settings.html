@@ -407,6 +407,10 @@
                 .join(", ");
               text += ` · ⚠ 连续失败：${warns}`;
             }
+            // 最近自动禁用插件列表（最新在末尾）：精确到具体插件，帮助快速定位不稳定源
+            if (Array.isArray(m.recently_auto_disabled) && m.recently_auto_disabled.length > 0) {
+              text += ` · 🔴 最近禁用：${m.recently_auto_disabled.join(", ")}`;
+            }
             el.textContent = text;
           }
         } catch (_) {

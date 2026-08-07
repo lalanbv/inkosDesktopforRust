@@ -49,6 +49,16 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         )));
     }
 
+    // entrypoint 路径安全校验：entrypoint 直接 join 进 plugin_dir，
+    // 恶意 `../../../etc/passwd` 可逃逸至插件目录外。
+    // 允许子目录（`native/plugin.wasm`）但禁止 ParentDir / 绝对路径 / 前缀。
+    if !is_safe_entrypoint(&manifest.plugin.entrypoint) {
+        return Err(PluginError::InvalidManifest(format!(
+            "entrypoint 含路径逃逸字符（禁 .. / 绝对路径）: {}",
+            manifest.plugin.entrypoint
+        )));
+    }
+
     if manifest.plugin.version.is_empty() {
         return Err(PluginError::InvalidManifest(
             "version 不能为空".to_string(),
@@ -90,6 +100,40 @@ pub(crate) fn is_safe_plugin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// entrypoint 路径安全守卫（防路径遍历）。
+///
+/// entrypoint 字段直接 `plugin_dir.join(entrypoint)` 用于定位插件入口文件；
+/// 若不校验，恶意 `../../../etc/passwd` 可读取插件目录外任意文件。
+///
+/// 规则（与 registry `is_safe_relative` 对齐）：
+/// - 必须非空且 ≤256 字节
+/// - 允许相对子路径（`native/plugin.wasm`、`./plugin.wasm`）
+/// - 禁止 `..` 组件（`ParentDir`）——包括折叠后逃逸（`a/../../x`）
+/// - 禁止绝对路径（`/etc/x`）及 Windows 前缀（`C:\`）
+/// - 不含 NUL 字节
+pub(crate) fn is_safe_entrypoint(s: &str) -> bool {
+    use std::path::{Component, Path};
+    if s.is_empty() || s.len() > 256 || s.contains('\0') {
+        return false;
+    }
+    let path = Path::new(s);
+    let mut depth: i32 = 0;
+    for comp in path.components() {
+        match comp {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}                              // `.` 忽略
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return false; // `..` 回到根之上
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return false, // 绝对 / 跨盘
+        }
+    }
+    depth >= 0
 }
 
 /// 系统命令名安全格式（`SystemCommand { allowed_commands }` 白名单条目校验）。
@@ -328,5 +372,76 @@ entrypoint = "plugin.wasm"
 "#;
         fs::write(plugin_dir.join("plugin.toml"), manifest).unwrap();
         assert!(parse_manifest(&plugin_dir).is_ok());
+    }
+
+    #[test]
+    fn test_is_safe_entrypoint() {
+        // 合法值
+        assert!(is_safe_entrypoint("plugin.wasm"));
+        assert!(is_safe_entrypoint("native/plugin.wasm"));
+        assert!(is_safe_entrypoint("./plugin.sh"));
+        assert!(is_safe_entrypoint("a/b/c.wasm"));
+
+        // 路径遍历：禁止
+        assert!(!is_safe_entrypoint("../evil"));
+        assert!(!is_safe_entrypoint("../../etc/passwd"));
+        assert!(!is_safe_entrypoint("a/../../etc/passwd"));
+
+        // 绝对路径：禁止
+        assert!(!is_safe_entrypoint("/etc/passwd"));
+        assert!(!is_safe_entrypoint("/usr/bin/sh"));
+
+        // 空串：禁止
+        assert!(!is_safe_entrypoint(""));
+
+        // NUL 字节：禁止
+        assert!(!is_safe_entrypoint("plug\0in.wasm"));
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_traversal_entrypoint() {
+        // entrypoint 路径遍历被 parse_manifest 在解析阶段拦截。
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("my-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+
+        let bad_entrypoints = [
+            "../../etc/passwd",
+            "../sibling/evil.wasm",
+            "/usr/bin/sh",
+        ];
+        for ep in &bad_entrypoints {
+            let manifest = format!(
+                r#"[plugin]
+id = "my-plugin"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+entrypoint = "{ep}"
+"#
+            );
+            fs::write(plugin_dir.join("plugin.toml"), &manifest).unwrap();
+            assert!(
+                parse_manifest(&plugin_dir).is_err(),
+                "entrypoint={ep:?} 应被拒绝（路径遍历）"
+            );
+        }
+
+        // 合法 entrypoint 仍通过
+        let ok_manifest = r#"[plugin]
+id = "my-plugin"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+entrypoint = "native/plugin.wasm"
+"#;
+        fs::write(plugin_dir.join("plugin.toml"), ok_manifest).unwrap();
+        assert!(parse_manifest(&plugin_dir).is_ok(), "合法 entrypoint 应通过");
     }
 }

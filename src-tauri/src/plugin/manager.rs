@@ -32,11 +32,20 @@ pub struct PluginMetrics {
     pub avg_us: u64,
     /// per-plugin 连续失败当前状态（仅含 consec_failures > 0 的插件）
     pub per_plugin: Vec<PluginExecMetrics>,
+    /// 最近自动禁用的插件 ID（最新在末尾，最多 `AUTO_DISABLED_RING_CAP` 条）
+    ///
+    /// 用于诊断哪些插件不稳定：`auto_disabled_count` 告知次数，此列表告知是谁。
+    /// 旧记录当容量满时从头部滚出；插件卸载不从此列表删除（保留历史）。
+    pub recently_auto_disabled: Vec<String>,
 }
 
 /// 插件连续失败自动禁用阈值：单插件连续 N 次执行失败 → 自动 disable_plugin。
 /// 保护运行时不被行为异常插件持续拖慢；成功时归零（插件恢复则重新累计）。
 const CONSECUTIVE_FAIL_THRESHOLD: u32 = 5;
+
+/// 最近自动禁用插件 ID 的 ring buffer 容量。
+/// 满时从头部滚出最旧条目，保留最近 N 次记录用于运维诊断。
+const AUTO_DISABLED_RING_CAP: usize = 5;
 
 /// 插件管理器
 pub struct PluginManager {
@@ -70,6 +79,11 @@ pub struct PluginManager {
     /// 达 `CONSECUTIVE_FAIL_THRESHOLD` 时自动 disable_plugin + tracing warn。
     /// 用 HashMap 非原子，因修改须在 execute_plugin（&mut self）持有期间进行。
     consec_failures: HashMap<String, u32>,
+
+    /// 遥测：最近 `AUTO_DISABLED_RING_CAP` 次自动禁用的插件 ID（时间序，旧的在前）。
+    /// `exec_auto_disabled` 告知总次数，此 ring buffer 告知是*哪些*插件，帮助定位不稳定源。
+    /// 容量满时从前端 pop_front 滚出最旧；插件卸载不从此处清除（保留历史诊断记录）。
+    recently_auto_disabled: std::collections::VecDeque<String>,
 }
 
 impl PluginManager {
@@ -90,6 +104,7 @@ impl PluginManager {
             exec_failures: std::sync::atomic::AtomicU64::new(0),
             exec_auto_disabled: std::sync::atomic::AtomicU64::new(0),
             consec_failures: HashMap::new(),
+            recently_auto_disabled: std::collections::VecDeque::with_capacity(AUTO_DISABLED_RING_CAP),
         };
 
         // 加载已安装的插件
@@ -380,6 +395,12 @@ impl PluginManager {
                 // disable_plugin 已处理: installed.enabled=false + wasm_cache evict
                 let _ = self.disable_plugin(id);
                 self.exec_auto_disabled.fetch_add(1, Relaxed);
+                // ring buffer：记录本次自动禁用的插件 ID，供诊断"哪些插件不稳定"。
+                // 容量满时滚出最旧条目（VecDeque FIFO），保持最近 N 条历史。
+                if self.recently_auto_disabled.len() >= AUTO_DISABLED_RING_CAP {
+                    self.recently_auto_disabled.pop_front();
+                }
+                self.recently_auto_disabled.push_back(id.to_string());
                 // 结构化健康事件：落进 JSON 日志 + 暴露给前端（与手动 disable 广播一致）
                 tracing::info!(
                     target: "inkos.plugin.health",
@@ -423,6 +444,7 @@ impl PluginManager {
             avg_us: if count > 0 { total_us / count } else { 0 },
             auto_disabled_count: self.exec_auto_disabled.load(Relaxed),
             per_plugin,
+            recently_auto_disabled: self.recently_auto_disabled.iter().cloned().collect(),
         }
     }
 
@@ -707,6 +729,53 @@ entrypoint = "plugin.wasm"
         assert_eq!(m.avg_us, 0);
         assert_eq!(m.auto_disabled_count, 0);
         assert!(m.per_plugin.is_empty());
+        assert!(m.recently_auto_disabled.is_empty(), "初始 ring buffer 应为空");
+    }
+
+    #[tokio::test]
+    async fn test_recently_auto_disabled_ring_buffer() {
+        // 验证：自动禁用记录追加到 ring buffer；超过 AUTO_DISABLED_RING_CAP 时
+        // 最旧条目从头部滚出，保持最近 N 条。
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let staging = temp.path().join("staging");
+        let mut manager = PluginManager::new(&plugins_dir).unwrap();
+
+        // 创建 AUTO_DISABLED_RING_CAP + 2 个插件（测试溢出）
+        let n = AUTO_DISABLED_RING_CAP + 2;
+        let mut plugin_ids: Vec<String> = Vec::new();
+        for i in 0..n {
+            let id = format!("flaky-{}", i);
+            create_test_plugin(&staging, &id);
+            manager.install_plugin(&staging.join(&id).to_string_lossy()).await.unwrap();
+            plugin_ids.push(id);
+        }
+
+        // 每个插件连续失败 THRESHOLD 次 → 自动禁用
+        for id in &plugin_ids {
+            for _ in 0..CONSECUTIVE_FAIL_THRESHOLD {
+                let _ = manager
+                    .execute_plugin(id, "cmd", serde_json::Value::Null)
+                    .await;
+            }
+        }
+
+        let m = manager.metrics();
+        // 总禁用次数 = n
+        assert_eq!(m.auto_disabled_count, n as u64, "auto_disabled_count 应等于禁用插件数");
+        // ring buffer 容量上限 = AUTO_DISABLED_RING_CAP
+        assert_eq!(
+            m.recently_auto_disabled.len(),
+            AUTO_DISABLED_RING_CAP,
+            "ring buffer 溢出后长度应钳位到 AUTO_DISABLED_RING_CAP"
+        );
+        // 最旧的 2 条应已被滚出；最后 AUTO_DISABLED_RING_CAP 条插件 ID 应在列表中
+        let expected_tail = &plugin_ids[n - AUTO_DISABLED_RING_CAP..];
+        assert_eq!(
+            m.recently_auto_disabled, expected_tail,
+            "ring buffer 应保留最近 N 条（最旧滚出）"
+        );
     }
 
     #[tokio::test]
