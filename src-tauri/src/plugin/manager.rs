@@ -54,6 +54,13 @@ const AUTO_DISABLED_RING_CAP: usize = 5;
 /// 被驱逐的插件下次调用时会重新 Cranelift AOT 编译（一次性开销）。
 const WASM_CACHE_CAPACITY: usize = 32;
 
+/// 最大可安装插件数。
+///
+/// 防止 DoS：无限安装会耗尽磁盘、增加 `load_installed_plugins` 启动扫描时间、
+/// 撑大 `wasm_cache` 编译队列。256 对正常用户完全够用（每个项目能用的插件数量
+/// 远低于此）；超出时 install_plugin 返回 InstallFailed，不影响已安装插件。
+const MAX_INSTALLED_PLUGINS: usize = 256;
+
 /// 插件管理器
 pub struct PluginManager {
     /// 插件安装目录
@@ -189,6 +196,13 @@ impl PluginManager {
             return Err(PluginError::InstallFailed(format!(
                 "插件已安装: {}",
                 manifest.id
+            )));
+        }
+
+        // 安装数量上限（防 DoS：无限安装耗尽磁盘 / 拖慢启动扫描）
+        if self.installed.len() >= MAX_INSTALLED_PLUGINS {
+            return Err(PluginError::InstallFailed(format!(
+                "已安装插件数达上限 {MAX_INSTALLED_PLUGINS}，无法安装更多"
             )));
         }
 

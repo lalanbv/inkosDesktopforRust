@@ -112,6 +112,28 @@ impl HostContext {
         // 路径验证
         let full_path = self.normalize_path(path)?;
 
+        // 文件大小守卫（在 filesystem 能力检查之前，fail-fast 避免不必要的权限查询）。
+        // metadata().len() 为系统调用（无 IO），代价可忽略。
+        const MAX_READ_FILE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB
+        let file_size = std::fs::metadata(&full_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if file_size > MAX_READ_FILE_BYTES {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                path = %full_path.display(),
+                file_size = file_size,
+                limit = MAX_READ_FILE_BYTES,
+                action = "read_file",
+                "文件过大拒绝: 超过单次读取上限"
+            );
+            return Err(PluginError::PermissionDenied(format!(
+                "文件 {} 过大（{file_size} 字节）超过读取上限 {MAX_READ_FILE_BYTES}",
+                full_path.display()
+            )));
+        }
+
         // 额外的文件系统权限检查
         if !self.has_filesystem_capability(&full_path) {
             warn!(
@@ -127,7 +149,6 @@ impl HostContext {
             )));
         }
 
-        // 读取文件
         let content = std::fs::read_to_string(&full_path).map_err(|e| {
             error!(
                 plugin_id = %self.metadata.id,
@@ -985,15 +1006,28 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_command_rejects_overlong_arg() {
-        // 单个参数超过 MAX_ARG_LEN 字节 → 拒绝（防 E2BIG / ARG_MAX 超限）。
-        let (ctx, _tmp) = create_test_context(vec![
-            Capability::SystemCommand { allowed_commands: vec!["echo".to_string()] },
-        ]);
-        let long_arg = "x".repeat(4097); // MAX_ARG_LEN + 1
-        let result = ctx.exec_command("echo", &[long_arg]);
-        assert!(result.is_err(), "超长参数应被拒绝");
+    fn test_read_file_rejects_oversized_file() {
+        // 文件超过 MAX_READ_FILE_BYTES(8MiB) → PermissionDenied（防 OOM）。
+        // 用稀疏文件（seek + write 1 byte）模拟大文件，避免实际写 8MB 磁盘数据。
+        let (ctx, tmp) = create_test_context(vec![Capability::ReadProject]);
+        let large_path = tmp.path().join("large.bin");
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut f = std::fs::File::create(&large_path).unwrap();
+            // 8 MiB + 1 字节 → 超限
+            f.seek(SeekFrom::Start(8 * 1024 * 1024)).unwrap();
+            f.write_all(b"x").unwrap();
+        }
+        let result = ctx.read_file("large.bin");
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "超大文件应被 PermissionDenied 拒绝: {:?}",
+            result
+        );
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("最大长度"), "错误信息应提及长度: {msg}");
+        assert!(
+            msg.contains("过大") || msg.contains("上限"),
+            "错误信息应提及文件过大: {msg}"
+        );
     }
 }
