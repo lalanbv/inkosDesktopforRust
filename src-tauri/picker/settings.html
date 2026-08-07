@@ -67,6 +67,13 @@
       .form-msg.ok { color: #166534; }
       .form-msg.err { color: #b91c1c; }
       .hidden { display: none !important; }
+
+      /* 插件市场列表（复用 plugin-info/name/meta/metrics 类） */
+      ul#market-list { list-style: none; padding: 0; margin: 0; }
+      ul#market-list > li {
+        padding: 0.8rem 1rem; border: 1px solid #e0e0e0; border-radius: 8px;
+        margin-bottom: 0.6rem; background: #fff;
+      }
     </style>
   </head>
   <body>
@@ -181,6 +188,16 @@
           </div>
         </form>
       </section>
+
+      <section id="market" style="margin-top:2rem; text-align:left;">
+        <h2 style="font-size:1rem; margin:0 0 0.5rem;" data-i18n="market.title">插件市场</h2>
+        <p class="muted" style="margin:0 0 0.5rem;" data-i18n="market.muted">浏览可安装的官方/社区插件（来自已配置的签名注册表）。市场安装能力待后续版本。</p>
+        <div class="toolbar">
+          <button id="market-refresh" class="small" data-i18n="market.refresh">刷新市场</button>
+          <span class="form-msg" id="market-msg" role="status" aria-live="polite"></span>
+        </div>
+        <ul id="market-list" role="list" aria-label="可安装插件列表"><!-- JS 注入 --></ul>
+      </section>
     </main>
 
     <script>
@@ -239,6 +256,12 @@
           "config.load_fail": "加载配置失败：",
           "config.save_fail": "保存失败：",
           "config.reset_fail": "重置失败：",
+          "market.title": "插件市场",
+          "market.muted": "浏览可安装的官方/社区插件（来自已配置的签名注册表）。市场安装能力待后续版本。",
+          "market.refresh": "刷新市场",
+          "market.loading": "加载市场中…",
+          "market.empty": "无可用插件（或当前宿主版本不兼容）。",
+          "market.load_fail": "加载市场失败：",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -285,6 +308,12 @@
           "config.load_fail": "Failed to load config: ",
           "config.save_fail": "Save failed: ",
           "config.reset_fail": "Reset failed: ",
+          "market.title": "Plugin Marketplace",
+          "market.muted": "Browse installable official/community plugins (from a configured, signed registry). Marketplace install is a future release.",
+          "market.refresh": "Refresh Marketplace",
+          "market.loading": "Loading marketplace…",
+          "market.empty": "No plugins available (or incompatible with current host version).",
+          "market.load_fail": "Failed to load marketplace: ",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -614,6 +643,63 @@
         }
       }
 
+      // === 插件市场：cmd_fetch_plugin_registry 拉取已兼容过滤的条目（首次端到端走通注册表管线）===
+      async function loadMarket() {
+        const listEl = document.getElementById("market-list");
+        const msgEl = document.getElementById("market-msg");
+        listEl.innerHTML = "";
+        msgEl.className = "form-msg";
+        msgEl.textContent = t("market.loading");
+        try {
+          const entries = await invoke("cmd_fetch_plugin_registry");
+          msgEl.textContent = "";
+          renderMarket(entries || []);
+        } catch (e) {
+          // 未配置 registry 等 → 提示去 config 设置
+          msgEl.className = "form-msg err";
+          msgEl.textContent = t("market.load_fail") + String(e);
+        }
+      }
+
+      function renderMarket(entries) {
+        const listEl = document.getElementById("market-list");
+        listEl.innerHTML = "";
+        if (entries.length === 0) {
+          const li = document.createElement("li");
+          li.className = "plugin-info";
+          li.textContent = t("market.empty");
+          listEl.appendChild(li);
+          return;
+        }
+        for (const e of entries) {
+          const li = document.createElement("li");
+          const info = document.createElement("div");
+          info.className = "plugin-info";
+
+          const name = document.createElement("div");
+          name.className = "plugin-name";
+          name.textContent = `${e.name || e.id} v${e.version || "?"}`;
+          info.appendChild(name);
+
+          const meta = document.createElement("div");
+          meta.className = "plugin-meta";
+          const caps = (e.capabilities || []).map(capabilityLabel).join("、") || "无权限声明";
+          meta.textContent = `${e.id} · ${e.author || "?"} · ${caps}`;
+          info.appendChild(meta);
+
+          if (e.description) {
+            const desc = document.createElement("div");
+            desc.className = "metrics";
+            desc.textContent = e.description;
+            info.appendChild(desc);
+          }
+          li.appendChild(info);
+          listEl.appendChild(li);
+        }
+      }
+
+      document.getElementById("market-refresh").addEventListener("click", loadMarket);
+
       document.getElementById("config-form").addEventListener("submit", saveConfig);
       document.getElementById("cfg-reset").addEventListener("click", resetConfig);
       document.getElementById("cfg-eng-policy").addEventListener("change", syncPolicyRows);
@@ -641,11 +727,12 @@
         event.preventDefault();
       });
 
-      // 初始加载：列表 + 指标 + 诊断 + 配置
+      // 初始加载：列表 + 指标 + 诊断 + 配置 + 市场
       loadPlugins();
       loadMetrics();
       loadDiagnostics();
       loadConfig();
+      loadMarket();
     </script>
   </body>
 </html>
