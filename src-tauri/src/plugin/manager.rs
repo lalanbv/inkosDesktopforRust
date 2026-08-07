@@ -471,7 +471,14 @@ impl PluginManager {
         }
 
         // 进程隔离路径：JSON-RPC over stdio
-        // 长驻进程：首次调用 spawn，后续复用；uninstall/disable 时由对应方法 stop
+        // 长驻进程：首次调用 spawn，后续复用；uninstall/disable 时由对应方法 stop。
+        // 死进程检测：超时 kill 后进程仍留 running，复用死进程会立即失败。
+        // is_alive() 检查通过 try_wait 非阻塞探测，无开销。
+        let process_dead = self.running.get(id).map(|p| !p.is_alive()).unwrap_or(false);
+        if process_dead {
+            tracing::warn!(plugin_id = %id, "进程插件已死亡，清理并重生");
+            self.running.remove(id);
+        }
         if !self.running.contains_key(id) {
             let metadata = self
                 .installed
