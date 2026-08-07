@@ -350,7 +350,22 @@ impl BootstrappingResolver {
     }
 }
 
+/// 解压产物累计字节上限（512 MiB）。Node 解压后 ~150-200MB（含 lib/ 与 npm），
+/// 512 MiB 留余量。
+///
+/// **为何需要**：压缩包可膨胀成任意体积（gz bomb：30MB → 数百 GB）。本函数由
+/// 两条路径共用，其信任模型不同：
+/// - Node bootstrap：SHA256 来自**独立**官方 nodejs.org SHASUMS，与 mirror 分离
+///   → 需先攻破 nodejs.org 才能到解压阶段，信任锚强。
+/// - updater engine bundle：`.sha256` 与 bundle 来自**同一** GitHub release，
+///   哈希只防传输损坏、不防来源篡改；Ed25519 验签在 `SigAction::WarnPass`
+///   （公钥未配置的过渡期）下被跳过 → 此时无来源认证，必须靠解压期上限兜底。
+const MAX_EXTRACTED_BYTES: u64 = 512 * 1024 * 1024;
+
 /// 解压 tarball 到 dest_dir（保留顶层 node-v{ver}-.../ 目录）。pub 供 updater engine 通道复用。
+///
+/// 逐条目累计校验解压体积（见 [`MAX_EXTRACTED_BYTES`]）；超限即中止，不写完整包。
+/// 路径穿越由 tar-rs `unpack_in` / zip `enclosed_name` 保证。
 pub fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
     let is_gz = tarball
         .file_name()
@@ -360,7 +375,23 @@ pub fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
         let f = std::fs::File::open(tarball).context("打开 tarball 失败")?;
         let gz = flate2::read::GzDecoder::new(f);
         let mut archive = tar::Archive::new(gz);
-        archive.unpack(dest_dir).context("解压 tar.gz 失败")?;
+        std::fs::create_dir_all(dest_dir)
+            .with_context(|| format!("创建解压目标目录失败: {}", dest_dir.display()))?;
+        // 逐条目解压而非 unpack()：后者无法在中途按累计体积中止（gz bomb 会写满盘）。
+        let mut total: u64 = 0;
+        for entry in archive.entries().context("读 tar 条目失败")? {
+            let mut entry = entry.context("读 tar 条目失败")?;
+            total = total.saturating_add(entry.header().size().unwrap_or(0));
+            if total > MAX_EXTRACTED_BYTES {
+                anyhow::bail!(
+                    "解压产物超上限 {MAX_EXTRACTED_BYTES} 字节（疑似压缩炸弹），已中止"
+                );
+            }
+            // unpack_in 校验条目路径不逃出 dest_dir（防路径穿越）。
+            entry
+                .unpack_in(dest_dir)
+                .context("解压 tar.gz 条目失败")?;
+        }
         Ok(())
     } else {
         extract_zip(tarball, dest_dir)
@@ -371,11 +402,17 @@ pub fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
 fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<()> {
     let f = std::fs::File::open(zip_path).context("打开 zip 失败")?;
     let mut archive = zip::ZipArchive::new(f).context("读 zip 失败")?;
+    // 与 tar 路径同一上限：zip 同样可构造为压缩炸弹。
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .with_context(|| format!("读 zip entry {i} 失败"))?;
         let Some(enclosed) = entry.enclosed_name() else { continue }; // 防 zip slip
+        total = total.saturating_add(entry.size());
+        if total > MAX_EXTRACTED_BYTES {
+            anyhow::bail!("解压产物超上限 {MAX_EXTRACTED_BYTES} 字节（疑似压缩炸弹），已中止");
+        }
         let outpath = dest_dir.join(enclosed);
         if entry.is_dir() {
             std::fs::create_dir_all(&outpath)
