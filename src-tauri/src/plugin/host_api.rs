@@ -229,6 +229,31 @@ impl HostContext {
             ));
         }
 
+        // 符号链接逃逸拦截：上面的组件解析只在**字符串层**折叠 `..`，若父目录是
+        // 指向沙箱外的符号链接（work_dir 为用户项目目录时，项目内 symlink 合法存在），
+        // starts_with 仍通过而实际写入会跟随链接落到沙箱外。父目录已存在故可
+        // canonicalize（解析真实符号链接目标）后重新校验。父目录不存在时跳过——
+        // create_dir_all 只会在沙箱内新建，无链接可跟随。
+        if let Some(parent) = normalized.parent() {
+            if let (Ok(canonical_parent), Ok(canonical_work_dir)) =
+                (parent.canonicalize(), self.work_dir.canonicalize())
+            {
+                if !canonical_parent.starts_with(&canonical_work_dir) {
+                    warn!(
+                        target: "inkos.plugin.security",
+                        plugin_id = %self.metadata.id,
+                        path = %path,
+                        canonical_parent = %canonical_parent.display(),
+                        action = "write_file",
+                        "路径逃逸: 父目录经符号链接指向工作目录外"
+                    );
+                    return Err(PluginError::PermissionDenied(
+                        "路径逃逸: 父目录经符号链接指向工作目录外".to_string(),
+                    ));
+                }
+            }
+        }
+
         // 写入内容大小守卫（防插件写入超大文件耗尽磁盘）。
         const MAX_WRITE_FILE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
         if content.len() > MAX_WRITE_FILE_BYTES {
@@ -732,6 +757,53 @@ mod tests {
         let (ctx, _temp) = create_test_context(vec![]);
         let result = ctx.write_file("test.txt", "content");
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_file_rejects_symlinked_parent_dir() {
+        // 字符串层的组件解析（折叠 `..`）无法发现「父目录是指向沙箱外的符号链接」：
+        // work_dir/escape -> /tmp/outside 时 normalized = work_dir/escape/x.txt，
+        // starts_with(work_dir) 通过，但写入会跟随链接落到 /tmp/outside/x.txt。
+        // 父目录 canonicalize 校验拦下这条路径。
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let temp_path = temp.path().canonicalize().unwrap();
+        let outside_path = outside.path().canonicalize().unwrap();
+
+        // work_dir 内建一个指向沙箱外目录的符号链接
+        std::os::unix::fs::symlink(&outside_path, temp_path.join("escape")).unwrap();
+
+        let metadata = PluginMetadata {
+            id: "symlink-parent".to_string(),
+            name: "SymlinkParent".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: String::new(),
+            abi_version: "1".to_string(),
+            capabilities: vec![
+                Capability::WriteProject,
+                Capability::Filesystem {
+                    path: temp_path.to_string_lossy().to_string(),
+                },
+            ],
+            entrypoint: "plugin.wasm".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        let ctx = HostContext::new(metadata, temp_path.clone());
+
+        let result = ctx.write_file("escape/pwned.txt", "payload");
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "经符号链接父目录写入沙箱外应被拒，实际: {result:?}"
+        );
+        assert!(
+            !outside_path.join("pwned.txt").exists(),
+            "沙箱外不应产生任何文件"
+        );
     }
 
     #[test]
