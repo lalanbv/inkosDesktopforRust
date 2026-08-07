@@ -17,6 +17,9 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub network: NetworkConfig,
+
+    #[serde(default)]
+    pub registry: PluginRegistryConfig,
 }
 
 
@@ -126,6 +129,21 @@ impl Default for NetworkConfig {
 
 fn default_timeout() -> u32 {
     30
+}
+
+/// 插件注册表配置（市场来源 + 信任锚）
+///
+/// `url`/`pubkey` 须同时配置（启用市场）或同时留空（禁用）。`pubkey` 为 Ed25519
+/// 公钥 hex（64 位 = 32 字节），用于验签 `registry.toml`（见 plugin::registry）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PluginRegistryConfig {
+    /// 注册表 `registry.toml` 的 URL（http/https；签名即信任锚，不强求 https）
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// 注册表签名公钥 hex（64 位）；与 `url` 同时配置
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pubkey: Option<String>,
 }
 
 /// 版本策略

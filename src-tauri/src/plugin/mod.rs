@@ -28,3 +28,6 @@ pub use protocol::{RpcError, RpcRequest, RpcResponse};
 pub use registry::{PluginRegistryIndex, RegistryEntry};
 pub use runtime::WasmPlugin;
 pub use types::{Capability, PluginError, PluginMetadata};
+
+/// 宿主 ABI 版本（插件兼容性检查用；与插件 `abi_version` 精确匹配）
+pub const HOST_ABI_VERSION: &str = "1";

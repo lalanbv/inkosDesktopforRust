@@ -1,6 +1,7 @@
 //! Tauri 命令模块
 
 pub mod config;
+pub mod registry;
 
 // 重新导出类型
 pub use config::AppState;

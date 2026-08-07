@@ -203,6 +203,7 @@ fn main() {
             commands::config::load_project_config,
             commands::config::start_config_watch,
             commands::config::stop_config_watch,
+            commands::registry::cmd_fetch_plugin_registry,
             inkos_desktop::project::commands::scan_projects,
             inkos_desktop::project::commands::add_project,
             inkos_desktop::project::commands::remove_project,

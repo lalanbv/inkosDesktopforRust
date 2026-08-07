@@ -12,6 +12,7 @@ impl AppConfig {
         self.validate_network()?;
         self.validate_numerics()?;
         self.validate_version_policy()?;
+        self.validate_registry()?;
         Ok(())
     }
 
@@ -89,6 +90,26 @@ impl AppConfig {
             VersionPolicy::Latest => {}
         }
         Ok(())
+    }
+
+    /// 注册表配置校验：url/pubkey 同时配置（启用）或同时留空（禁用）；url http(s)；pubkey 64 hex。
+    fn validate_registry(&self) -> Result<()> {
+        match (&self.registry.url, &self.registry.pubkey) {
+            (None, None) => Ok(()), // 未配置 = 市场禁用
+            (Some(url), Some(pubkey)) => {
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    bail!("注册表 url 必须为 http(s)://: {}", url);
+                }
+                if pubkey.len() != 64 || pubkey.bytes().any(|b| !b.is_ascii_hexdigit()) {
+                    bail!(
+                        "注册表 pubkey 必须为 64 位 hex（Ed25519 32 字节）: {}",
+                        pubkey
+                    );
+                }
+                Ok(())
+            }
+            _ => bail!("注册表 url 与 pubkey 必须同时配置或同时留空"),
+        }
     }
 }
 
@@ -180,6 +201,35 @@ mod tests {
         assert!(cfg.validate().is_ok());
 
         cfg.engine.version_policy = VersionPolicy::Range("^0.4.0".to_string());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_registry_config() {
+        // 默认（None,None）合法——市场禁用
+        assert!(AppConfig::default().validate().is_ok());
+
+        // url 无 http(s) 前缀 → 非法
+        let mut cfg = AppConfig::default();
+        cfg.registry.url = Some("x.com/r.toml".to_string());
+        cfg.registry.pubkey = Some("ab".repeat(32));
+        assert!(cfg.validate().is_err());
+
+        // pubkey 非 64 hex → 非法
+        let mut cfg = AppConfig::default();
+        cfg.registry.url = Some("https://x.com/r.toml".to_string());
+        cfg.registry.pubkey = Some("tooshort".to_string());
+        assert!(cfg.validate().is_err());
+
+        // 仅 url（缺 pubkey）→ 非法
+        let mut cfg = AppConfig::default();
+        cfg.registry.url = Some("https://x.com/r.toml".to_string());
+        assert!(cfg.validate().is_err());
+
+        // 合法：url + 64 hex pubkey
+        let mut cfg = AppConfig::default();
+        cfg.registry.url = Some("https://x.com/r.toml".to_string());
+        cfg.registry.pubkey = Some("ab".repeat(32));
         assert!(cfg.validate().is_ok());
     }
 }

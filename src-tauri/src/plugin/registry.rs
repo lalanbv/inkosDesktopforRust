@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
+// 复用 updater::sig 的 hex 解码，re-export 供命令层解码配置中的 pubkey（封装：命令
+// 仅依赖 plugin::registry API，不直接耦合 updater::sig）。
+pub use crate::updater::sig::decode_hex;
+
 /// 注册表索引格式版本（破坏性 schema 变更时递增；客户端拒绝对应不上者）
 pub const REGISTRY_FORMAT_VERSION: u32 = 1;
 
