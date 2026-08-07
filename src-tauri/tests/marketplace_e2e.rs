@@ -164,3 +164,41 @@ capabilities = []
         "篡改的 bundle 必须 verify_bundle 失败"
     );
 }
+
+#[tokio::test]
+async fn marketplace_update_overwrites_installed() {
+    // install v1.0.0 → update_plugin v1.1.0（覆盖，无中间缺失态）→ 断言版本升级
+    let mk = |ver: &str| {
+        let toml = format!(
+            "[plugin]\nid=\"up\"\nname=\"Up\"\nversion=\"{ver}\"\ndescription=\"\"\n\
+author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
+        );
+        build_tar_gz(&[("plugin.toml", toml.as_bytes()), ("plugin.wasm", ver.as_bytes())])
+    };
+    let v1_temp = tempfile::tempdir().unwrap();
+    let v2_temp = tempfile::tempdir().unwrap();
+    registry::safe_extract_tar_gz(&mk("1.0.0"), v1_temp.path()).unwrap();
+    registry::safe_extract_tar_gz(&mk("1.1.0"), v2_temp.path()).unwrap();
+
+    let plugins_root = tempfile::tempdir().unwrap();
+    let mut manager = PluginManager::new(plugins_root.path()).unwrap();
+    manager
+        .install_plugin(&v1_temp.path().to_string_lossy())
+        .await
+        .expect("初装 v1.0.0");
+    let meta = manager
+        .update_plugin(&v2_temp.path().to_string_lossy())
+        .await
+        .expect("update_plugin 覆盖到 v1.1.0");
+    assert_eq!(meta.version, "1.1.0");
+
+    let installed = manager.list_plugins();
+    assert_eq!(
+        installed
+            .iter()
+            .find(|m| m.id == "up")
+            .map(|m| m.version.as_str()),
+        Some("1.1.0"),
+        "list_plugins 应反映 v1.1.0"
+    );
+}
