@@ -483,9 +483,16 @@ pub struct ExecCommandResponse {
 /// `https://api.example.com/path?x=1` → `api.example.com`
 pub fn extract_host(url: &str) -> Option<String> {
     let after_scheme = url.split("://").nth(1).unwrap_or(url);
-    // authority 结束于首个 '/' '?' '#'（path/query/fragment 起始）
+    // authority 结束于首个 '/' '\' '?' '#'。
+    //
+    // 反斜杠必须计入：WHATWG URL 规范对 http/https 这类 special scheme 把 `\`
+    // 等同于 `/`，ureq 依赖的 `url` crate 遵循该规范。若此处不算终止符，
+    // `http://127.0.0.1\x@allowed.example.com/p` 会出现解析器分歧——
+    // 本函数经 rsplit_once('@') 剥 userinfo 得到白名单内的 allowed.example.com
+    // （放行，且 is_internal_ip 看不到 IP），而 ureq 实际连接 `\` 之前的
+    // 127.0.0.1。域名白名单与 SSRF 字面量拦截会被同时绕过。
     let authority_end = after_scheme
-        .find(['/', '?', '#'])
+        .find(['/', '\\', '?', '#'])
         .unwrap_or(after_scheme.len());
     let authority = &after_scheme[..authority_end];
     // 剥 userinfo：取最后一个 '@' 之后（`user:pass@host:port` → `host:port`）
@@ -1033,6 +1040,58 @@ mod tests {
             extract_host("https://[2002:c0a8:0101::]/").as_deref(),
             Some("2002:c0a8:0101::")
         );
+        // 反斜杠终止 authority（WHATWG special scheme：`\` 等同 `/`）。
+        // 不算终止符时 rsplit_once('@') 会取到 `\` 之后的白名单域，而 ureq
+        // 依赖的 url crate 连接 `\` 之前的主机 → 解析器分歧型绕过。
+        assert_eq!(
+            extract_host("http://127.0.0.1\\x@allowed.example.com/p").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            extract_host("http://evil.com\\@allowed.example.com/p").as_deref(),
+            Some("evil.com")
+        );
+        assert_eq!(
+            extract_host("http://evil.com\\.allowed.example.com/").as_deref(),
+            Some("evil.com")
+        );
+    }
+
+    /// 反斜杠 authority 分歧不得绕过域名白名单与 SSRF 字面量拦截。
+    ///
+    /// 断言的是端到端语义（白名单 + 内网拒绝），而非 extract_host 的返回值——
+    /// 即便将来换用 url crate 做解析，这两条约束也必须继续成立。
+    #[test]
+    fn test_backslash_authority_does_not_bypass_network_policy() {
+        let allowed = vec!["allowed.example.com".to_string()];
+        // `\` 之前是内网 IP / 未授权域，均须拒绝
+        for url in [
+            "http://127.0.0.1\\x@allowed.example.com/p",
+            "http://evil.com\\@allowed.example.com/p",
+            "http://evil.com\\.allowed.example.com/",
+            "http://169.254.169.254\\@allowed.example.com/latest/meta-data/",
+        ] {
+            assert!(
+                !check_network_domain(url, &allowed),
+                "反斜杠分歧绕过白名单: {url}"
+            );
+        }
+        // 内网 IP 字面量在 SSRF 层同样可见（纵深第二层）
+        assert!(is_internal_ip(
+            &extract_host("http://127.0.0.1\\x@allowed.example.com/p").unwrap()
+        ));
+        assert!(is_internal_ip(
+            &extract_host("http://169.254.169.254\\@allowed.example.com/l").unwrap()
+        ));
+        // 正常 URL 不受影响
+        assert!(check_network_domain(
+            "https://allowed.example.com/api",
+            &allowed
+        ));
+        assert!(check_network_domain(
+            "https://sub.allowed.example.com/api",
+            &allowed
+        ));
     }
 
     #[test]
