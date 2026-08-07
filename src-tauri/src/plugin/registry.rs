@@ -19,7 +19,7 @@ use crate::plugin::manifest::parse_capability;
 use crate::updater::sig;
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -406,6 +406,66 @@ fn is_safe_relative(path: &Path) -> bool {
     depth >= 0
 }
 
+/// 解析插件的传递依赖，返回**后序拓扑**（依赖在前，entry 自身最后）的安装顺序。
+///
+/// `dependencies: HashMap<id, version_req>`，按 semver `VersionReq` 在注册表中取
+/// **最新满足版本**，递归解析。环检测（DFS 栈）；缺失/不满足 → Err。
+/// 已在结果集中的 id 不重复（幂等）。
+pub fn resolve_dependencies(
+    entry: &RegistryEntry,
+    registry: &PluginRegistryIndex,
+) -> Result<Vec<RegistryEntry>> {
+    let mut order: Vec<RegistryEntry> = Vec::new();
+    let mut installed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack: std::collections::HashSet<String> = std::collections::HashSet::new();
+    resolve_recursive(entry, registry, &mut order, &mut installed, &mut stack)?;
+    Ok(order)
+}
+
+fn resolve_recursive(
+    entry: &RegistryEntry,
+    registry: &PluginRegistryIndex,
+    order: &mut Vec<RegistryEntry>,
+    installed: &mut std::collections::HashSet<String>,
+    stack: &mut std::collections::HashSet<String>,
+) -> Result<()> {
+    if installed.contains(&entry.id) {
+        return Ok(()); // 已解析（钻石依赖去重）
+    }
+    if !stack.insert(entry.id.clone()) {
+        bail!("插件依赖循环检测到: {}", entry.id);
+    }
+    for (dep_id, req_str) in &entry.dependencies {
+        let req = VersionReq::parse(req_str)
+            .with_context(|| format!("依赖 {} 的 version_req 非法: {}", dep_id, req_str))?;
+        let dep = find_matching(registry, dep_id, &req)?;
+        resolve_recursive(&dep, registry, order, installed, stack)?;
+    }
+    stack.remove(&entry.id);
+    if installed.insert(entry.id.clone()) {
+        order.push(entry.clone()); // 后序：依赖已 push，自身最后
+    }
+    Ok(())
+}
+
+/// 在注册表中找 `dep_id` 最新满足 `req` 的版本（find_all_versions 已降序）。
+fn find_matching(
+    registry: &PluginRegistryIndex,
+    dep_id: &str,
+    req: &VersionReq,
+) -> Result<RegistryEntry> {
+    registry
+        .find_all_versions(dep_id)
+        .into_iter()
+        .find_map(|e| {
+            Version::parse(&e.version)
+                .ok()
+                .filter(|v| req.matches(v))
+                .map(|_| e.clone())
+        })
+        .ok_or_else(|| anyhow::anyhow!("未找到满足依赖 {} {} 的注册表条目", dep_id, req))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,6 +626,78 @@ capabilities = []
         assert_eq!(versions[0].version, "2.1.3"); // 降序：最高在前
         assert_eq!(versions[1].version, "1.0.0");
         assert!(idx.find_all_versions("nope").is_empty());
+    }
+
+    /// 构造合法注册表条目 TOML（deps 为内联 dependencies 表内容，如 `y = "^1.0.0"`，或空）
+    fn entry_toml(id: &str, version: &str, deps: &str) -> String {
+        let deps_line = if deps.is_empty() {
+            String::new()
+        } else {
+            format!("\ndependencies = {{ {} }}", deps)
+        };
+        format!(
+            r#"[[plugins]]
+id = "{id}"
+name = "{id}"
+version = "{version}"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+min_host_version = "0.1.0"
+download_url = "https://example.com/{id}-{version}.tar.gz"
+sha256 = "{sha}"
+signature = "{sig}"
+capabilities = []{deps_line}
+"#,
+            sha = "0".repeat(64),
+            sig = "0".repeat(128),
+        )
+    }
+
+    #[test]
+    fn test_resolve_dependencies_post_order_and_version_req() {
+        // x(1.0.0)→y(^1.0.0)；注册表 y@1.5.0 + y@2.0.0；^1.0.0 选 1.5.0（非 2.0.0）；
+        // y(1.5.0)→z(^1.0.0)→z@1.0.0
+        let toml = format!(
+            "version = 1\n\n{}\n{}\n{}\n{}",
+            entry_toml("x", "1.0.0", "y = \"^1.0.0\""),
+            entry_toml("y", "1.5.0", "z = \"^1.0.0\""),
+            entry_toml("y", "2.0.0", ""),
+            entry_toml("z", "1.0.0", ""),
+        );
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let x = idx.find_latest("x").unwrap();
+        let order = resolve_dependencies(x, &idx).unwrap();
+        // 后序：z → y(1.5.0) → x
+        assert_eq!(order.len(), 3);
+        assert_eq!(order[0].id, "z");
+        assert_eq!(order[1].id, "y");
+        assert_eq!(order[1].version, "1.5.0"); // ^1.0.0 选 1.5.0 而非 2.0.0
+        assert_eq!(order[2].id, "x");
+    }
+
+    #[test]
+    fn test_resolve_dependencies_detects_cycle() {
+        let toml = format!(
+            "version = 1\n\n{}\n{}",
+            entry_toml("a", "1.0.0", "b = \"^1.0.0\""),
+            entry_toml("b", "1.0.0", "a = \"^1.0.0\""),
+        );
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let a = idx.find_latest("a").unwrap();
+        assert!(resolve_dependencies(a, &idx).is_err());
+    }
+
+    #[test]
+    fn test_resolve_dependencies_missing() {
+        let toml = format!(
+            "version = 1\n\n{}",
+            entry_toml("x", "1.0.0", "w = \"^1.0.0\""), // 无 w
+        );
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let x = idx.find_latest("x").unwrap();
+        assert!(resolve_dependencies(x, &idx).is_err());
     }
 
     #[test]
