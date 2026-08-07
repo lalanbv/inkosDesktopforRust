@@ -7,6 +7,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+/// 进程插件 RPC 调用超时：进程超过此时长未响应 → kill + ExecutionFailed。
+/// 防止行为异常插件的阻塞 read_line 永久冻结 execute_plugin（持 &mut self）。
+const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// 插件进程
 pub struct PluginProcess {
     /// 插件元数据
@@ -77,16 +81,39 @@ impl PluginProcess {
                 .map_err(|e| PluginError::ExecutionFailed(format!("Failed to flush stdin: {}", e)))?;
         }
 
-        // 读取响应
+        // 读取响应——带超时保护（spawn 读线程 + channel recv_timeout）。
+        // 直接 read_line 会永久阻塞：进程插件挂死时 execute_plugin 持 &mut self 冻结整个插件系统。
         let response_line = {
-            let mut stdout = self.stdout.lock().map_err(|_| {
-                PluginError::ExecutionFailed("Failed to lock stdout".to_string())
-            })?;
-
-            let mut line = String::new();
-            stdout.read_line(&mut line)
-                .map_err(|e| PluginError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
-            line
+            let stdout_arc = Arc::clone(&self.stdout);
+            let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+            std::thread::spawn(move || {
+                let result = stdout_arc.lock().map_err(|_| "Failed to lock stdout".to_string()).and_then(|mut out| {
+                    let mut line = String::new();
+                    out.read_line(&mut line)
+                        .map(|_| line)
+                        .map_err(|e| format!("Failed to read response: {}", e))
+                });
+                let _ = tx.send(result);
+            });
+            match rx.recv_timeout(RPC_TIMEOUT) {
+                Ok(Ok(line)) => line,
+                Ok(Err(e)) => return Err(PluginError::ExecutionFailed(e)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // 超时：kill 进程（best-effort），释放资源；调用方 execute_plugin
+                    // 收到 ExecutionFailed → consec_failures++ → 达阈值自动禁用。
+                    if let Ok(mut child) = self.child.lock() {
+                        let _ = child.kill();
+                    }
+                    return Err(PluginError::ExecutionFailed(format!(
+                        "插件进程 {} 响应超时（{}s），已终止",
+                        self.metadata.id,
+                        RPC_TIMEOUT.as_secs()
+                    )));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(PluginError::ExecutionFailed("读线程异常退出".to_string()));
+                }
+            }
         };
 
         // 解析响应
