@@ -461,6 +461,12 @@
         showErr("");
         try {
           await invoke(cmd, { id });
+          // 通知其他插件（best-effort）
+          const event = currentlyEnabled ? "plugin.disabled" : "plugin.enabled";
+          invoke("cmd_broadcast_event", {
+            event,
+            payload: JSON.stringify({ id }),
+          }).catch((e) => console.warn(`[inkos] broadcast ${event} 失败:`, e));
           await loadPlugins();
         } catch (e) {
           showErr(`${currentlyEnabled ? "禁用" : "启用"}失败：` + String(e));
@@ -472,6 +478,11 @@
         showErr("");
         try {
           await invoke("uninstall_plugin", { id });
+          // 通知其他插件（best-effort）
+          invoke("cmd_broadcast_event", {
+            event: "plugin.uninstalled",
+            payload: JSON.stringify({ id }),
+          }).catch((e) => console.warn("[inkos] broadcast plugin.uninstalled 失败:", e));
           await loadPlugins();
         } catch (e) {
           showErr("卸载失败：" + String(e));
@@ -485,6 +496,11 @@
           const picked = await invoke("cmd_pick_project_dialog");
           if (!picked) return;
           const meta = await invoke("install_plugin", { path: picked });
+          // 通知其他插件（best-effort）
+          invoke("cmd_broadcast_event", {
+            event: "plugin.installed",
+            payload: JSON.stringify({ id: meta.id, version: meta.version }),
+          }).catch((e) => console.warn("[inkos] broadcast plugin.installed 失败:", e));
           await loadPlugins();
 
           // 安装时安全知情：若声明网络/系统命令权限，提示用户做信任决策。
@@ -768,6 +784,11 @@
         msgEl.textContent = t("market.installing");
         try {
           const meta = await invoke("cmd_install_from_registry", { entry });
+          // 通知其他插件（best-effort）
+          invoke("cmd_broadcast_event", {
+            event: "plugin.installed",
+            payload: JSON.stringify({ id: meta.id, version: meta.version }),
+          }).catch((e) => console.warn("[inkos] broadcast plugin.installed 失败:", e));
           msgEl.className = "form-msg ok";
           msgEl.textContent = t("market.install_done") + (meta.name || meta.id);
           await loadPlugins(); // 刷新已安装列表
