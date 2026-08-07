@@ -502,21 +502,20 @@ impl PluginManager {
             .map_err(|e| PluginError::ExecutionFailed(format!("调用插件 {:?} 失败: {e}", id)))
     }
 
-    /// 向所有已启用 WASM 插件派发事件（`plugin.on-event`）。
+    /// 向所有已启用插件派发事件：WASM 路径（`plugin.on-event`）+ 进程隔离路径（JSON-RPC notify）。
     ///
-    /// 进程隔离插件无 WIT 接口，当前仅 WASM 路径支持。事件为 best-effort：
-    /// 单个插件失败仅 warn + 继续，不阻断其他插件或调用方。
+    /// 两路均 best-effort：单个插件失败 warn + 继续，不阻断其他插件或调用方。
     pub fn broadcast_event(&mut self, event: &str, payload: &str) {
-        // 收集需要 broadcast 的 WASM 插件 id（避免 borrow 冲突：先收集 id，再驱动）
-        let ids: Vec<String> = self
+        // ── WASM 路径 ──────────────────────────────────────────────────────────
+        // 收集 id 先于驱动（避免 borrow 冲突）
+        let wasm_ids: Vec<String> = self
             .installed
             .values()
             .filter(|m| m.enabled && m.entrypoint.ends_with(".wasm"))
             .map(|m| m.id.clone())
             .collect();
 
-        for id in &ids {
-            // 缓存未命中：按需编译（与 execute_plugin_inner 同等逻辑）
+        for id in &wasm_ids {
             if !self.wasm_cache.contains_key(id) {
                 let metadata = match self.installed.get(id) {
                     Some(m) => m.clone(),
@@ -534,7 +533,19 @@ impl PluginManager {
             }
             if let Some(plugin) = self.wasm_cache.get(id) {
                 if let Err(e) = plugin.broadcast_event(event, payload) {
-                    tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on-event 失败，继续");
+                    tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on-event(wasm) 失败，继续");
+                }
+            }
+        }
+
+        // ── 进程隔离路径 ───────────────────────────────────────────────────────
+        // 收到 notify("on_event", {event, payload}) 的进程插件可自行处理或忽略。
+        let params = serde_json::json!({ "event": event, "payload": payload });
+        let process_ids: Vec<String> = self.running.keys().cloned().collect();
+        for id in process_ids {
+            if let Some(process) = self.running.get(&id) {
+                if let Err(e) = process.notify("on_event", Some(params.clone())) {
+                    tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on_event(process) 通知失败，继续");
                 }
             }
         }
