@@ -616,4 +616,67 @@ entrypoint = "plugin.wasm"
         // timing 机制由 exec_count 记录验证；avg = total/count，count=1 时 avg==total。
         assert_eq!(m.avg_us, m.exec_total_us);
     }
+
+    #[test]
+    fn test_broadcast_event_noop_when_no_wasm_plugins() {
+        // 无已安装插件时 broadcast_event 应为 no-op（不 panic）。
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let mut manager = PluginManager::new(&plugins_dir).unwrap();
+        // 不 panic、不报错
+        manager.broadcast_event("project.opened", "{}");
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_skips_disabled_plugins() {
+        // 禁用插件不参与 broadcast（filter: enabled && .wasm）。
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+
+        // staging 目录与 plugins_dir 分开，避免 install_plugin 报"已安装"
+        let staging = temp.path().join("staging");
+        create_test_plugin(&staging, "wasm-plugin");
+
+        let mut manager = PluginManager::new(&plugins_dir).unwrap();
+        manager.install_plugin(&staging.join("wasm-plugin").to_string_lossy()).await.unwrap();
+        manager.disable_plugin("wasm-plugin").unwrap();
+
+        // 禁用插件 → filter 排除 → ids 为空 → no-op，不 panic。
+        manager.broadcast_event("test.event", "");
+    }
+
+    #[test]
+    fn test_broadcast_event_skips_process_plugins() {
+        // 进程隔离插件（非 .wasm entrypoint）不参与 broadcast。
+        let temp = TempDir::new().unwrap();
+        let plugins_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let plugin_dir = plugins_dir.join("proc-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let manifest = r#"capabilities = []
+[plugin]
+id = "proc-plugin"
+name = "Proc Plugin"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+entrypoint = "plugin.sh"
+"#;
+        std::fs::write(plugin_dir.join("plugin.toml"), manifest).unwrap();
+        std::fs::write(plugin_dir.join("plugin.sh"), b"#!/bin/sh").unwrap();
+
+        // 手动加入 installed（绕过 install_plugin 的 wasm 校验）
+        let mut manager = PluginManager::new(&plugins_dir).unwrap();
+        let meta = crate::plugin::manifest::parse_manifest(&plugin_dir).unwrap();
+        manager.installed.insert("proc-plugin".to_string(), meta);
+
+        // 进程隔离插件不满足 .wasm 过滤 → ids 为空 → no-op，不 panic
+        manager.broadcast_event("test.event", "{}");
+        // wasm_cache 应仍为空（未尝试编译非 wasm 插件）
+        assert!(!manager.wasm_cache.contains_key("proc-plugin"));
+    }
 }
