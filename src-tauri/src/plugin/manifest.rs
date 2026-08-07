@@ -65,6 +65,29 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         ));
     }
 
+    // 展示字段长度 + 控制字符校验：manifest 来自不可信插件包，这些字段长期驻留
+    // 内存、写日志、经 IPC 进 UI。见 is_safe_display_string 文档。
+    for (field, value, max) in [
+        ("name", &manifest.plugin.name, MAX_DISPLAY_FIELD_LEN),
+        ("author", &manifest.plugin.author, MAX_DISPLAY_FIELD_LEN),
+        ("license", &manifest.plugin.license, MAX_DISPLAY_FIELD_LEN),
+        ("version", &manifest.plugin.version, MAX_DISPLAY_FIELD_LEN),
+        ("description", &manifest.plugin.description, MAX_DESCRIPTION_LEN),
+    ] {
+        if !is_safe_display_string(value, max) {
+            return Err(PluginError::InvalidManifest(format!(
+                "{field} 超长（>{max}）或含控制字符"
+            )));
+        }
+    }
+    if let Some(homepage) = &manifest.plugin.homepage {
+        if !is_safe_display_string(homepage, MAX_URL_LEN) {
+            return Err(PluginError::InvalidManifest(format!(
+                "homepage 超长（>{MAX_URL_LEN}）或含控制字符"
+            )));
+        }
+    }
+
     // ABI 兼容性校验：插件 abi_version 须等于宿主 HOST_ABI_VERSION。
     // 接口升级时旧版插件在此处被拒，防止 WIT export 名/类型错位的静默 UB。
     if manifest.plugin.abi_version != HOST_ABI_VERSION {
@@ -116,6 +139,33 @@ pub(crate) fn is_safe_plugin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// 展示类字段（name / author / license）长度上限。
+/// 这些字段渲染进插件列表单行，超此长度必然是滥用而非正当元数据。
+pub(crate) const MAX_DISPLAY_FIELD_LEN: usize = 128;
+
+/// 描述字段长度上限（比展示字段宽松，允许一小段说明文字）。
+pub(crate) const MAX_DESCRIPTION_LEN: usize = 1024;
+
+/// URL 字段（homepage）长度上限。
+pub(crate) const MAX_URL_LEN: usize = 512;
+
+/// 展示类字符串安全守卫（长度 + 控制字符）。
+///
+/// manifest / registry 的 `name`、`description`、`author`、`license` 来自
+/// **不可信插件包**，且会长期驻留内存（`PluginMetadata` 随 `Arc` clone 进每个
+/// WASM Store）、写入日志、经 IPC 送进 UI。无上限则恶意 manifest 可用 MB 级
+/// 字符串放大内存占用、刷爆日志、撑坏插件列表布局。
+///
+/// 同时拒绝控制字符：
+/// - `\0` 截断 C 字符串（与 `is_safe_entrypoint` 一致）
+/// - `\n` / `\r` 伪造日志行（结构化日志注入，可伪造 `plugin.auto_disabled` 等事件）
+/// - 其余 C0 控制符可注入 ANSI 转义序列，污染终端输出
+///
+/// 允许空串（`homepage`/`description` 可选留空）；`max_len` 由调用方按字段给出。
+pub(crate) fn is_safe_display_string(s: &str, max_len: usize) -> bool {
+    s.len() <= max_len && !s.chars().any(|c| c.is_control())
 }
 
 /// entrypoint 路径安全守卫（防路径遍历）。
@@ -521,5 +571,120 @@ entrypoint = "plugin.wasm"
 "#);
         fs::write(plugin_dir.join("plugin.toml"), &ok_abi).unwrap();
         assert!(parse_manifest(&plugin_dir).is_ok(), "abi_version={HOST_ABI_VERSION} 应通过");
+    }
+
+    #[test]
+    fn test_is_safe_display_string() {
+        // 长度边界：恰好等于上限通过，超一字节拒绝
+        assert!(is_safe_display_string(&"a".repeat(128), 128), "恰好上限应通过");
+        assert!(!is_safe_display_string(&"a".repeat(129), 128), "超上限应拒绝");
+        assert!(is_safe_display_string("", 128), "空串应通过（可选字段留空）");
+
+        // 控制字符全类别拒绝
+        for (label, s) in [
+            ("NUL", "ab\0cd"),
+            ("换行（伪造日志行）", "ab\ncd"),
+            ("回车", "ab\rcd"),
+            ("制表", "ab\tcd"),
+            ("ANSI 转义", "ab\x1b[31mcd"),
+            ("退格", "ab\x08cd"),
+        ] {
+            assert!(
+                !is_safe_display_string(s, 128),
+                "{label} 应被拒绝: {s:?}"
+            );
+        }
+
+        // 正常多字节文本通过（中文插件名/描述是正当用法）
+        assert!(is_safe_display_string("我的插件 · Markdown 格式化", 128));
+        // 多字节按**字节**计长（防 UTF-8 放大绕过：128 个中文 = 384 字节）
+        assert!(
+            !is_safe_display_string(&"字".repeat(50), 128),
+            "50 个中文 = 150 字节，超 128 上限应拒绝"
+        );
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_oversized_and_control_char_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("disp-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+
+        // 每个字段单独超限/含控制字符 → 拒绝，且错误信息点名该字段
+        let long = "A".repeat(MAX_DISPLAY_FIELD_LEN + 1);
+        let long_desc = "B".repeat(MAX_DESCRIPTION_LEN + 1);
+        let cases: [(&str, String, &str); 5] = [
+            ("name", long.clone(), "name"),
+            ("author", long.clone(), "author"),
+            ("license", long.clone(), "license"),
+            ("description", long_desc, "description"),
+            // 换行可伪造结构化日志行（如假造 plugin.auto_disabled 事件）
+            ("name", "evil\nplugin.auto_disabled".to_string(), "name"),
+        ];
+
+        for (field, value, expect_in_msg) in cases {
+            // TOML 基础字段，逐个用 value 覆盖目标字段
+            let mut fields = std::collections::HashMap::from([
+                ("name", "x".to_string()),
+                ("description", String::new()),
+                ("author", String::new()),
+                ("license", "MIT".to_string()),
+            ]);
+            fields.insert(field, value.clone());
+            let manifest = format!(
+                r#"[plugin]
+id = "disp-plugin"
+name = {}
+version = "1.0.0"
+description = {}
+author = {}
+license = {}
+abi_version = "{HOST_ABI_VERSION}"
+entrypoint = "plugin.wasm"
+"#,
+                toml_str(&fields["name"]),
+                toml_str(&fields["description"]),
+                toml_str(&fields["author"]),
+                toml_str(&fields["license"]),
+            );
+            fs::write(plugin_dir.join("plugin.toml"), &manifest).unwrap();
+            let err = parse_manifest(&plugin_dir)
+                .expect_err(&format!("{field} 超长/含控制字符应被拒绝"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains(expect_in_msg),
+                "错误应点名字段 {expect_in_msg}，实际: {msg}"
+            );
+        }
+
+        // 反向：正常长度的中文字段仍通过（不过严）
+        let ok = format!(
+            r#"[plugin]
+id = "disp-plugin"
+name = "我的插件"
+version = "1.0.0"
+description = "一个用于格式化 Markdown 的插件"
+author = "张三"
+license = "MIT"
+abi_version = "{HOST_ABI_VERSION}"
+entrypoint = "plugin.wasm"
+"#
+        );
+        fs::write(plugin_dir.join("plugin.toml"), &ok).unwrap();
+        assert!(
+            parse_manifest(&plugin_dir).is_ok(),
+            "正常中文元数据应通过（校验不应过严）"
+        );
+    }
+
+    /// 把字符串包成 TOML 基本字符串字面量（转义反斜杠/引号/换行，
+    /// 否则含 `\n` 的测试值会破坏 TOML 语法，测试失败原因变成解析错误）。
+    fn toml_str(s: &str) -> String {
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r");
+        format!("\"{escaped}\"")
     }
 }

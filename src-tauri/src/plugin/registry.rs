@@ -16,7 +16,10 @@
 //! v1 约束：每个 `id` 唯一（一条目=最新版）；多版本列表为未来扩展。
 
 use crate::plugin::host_api::{extract_host, filter_public_addrs, is_internal_ip};
-use crate::plugin::manifest::parse_capability;
+use crate::plugin::manifest::{
+    is_safe_display_string, parse_capability, MAX_DESCRIPTION_LEN, MAX_DISPLAY_FIELD_LEN,
+    MAX_URL_LEN,
+};
 use crate::updater::sig;
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
@@ -209,6 +212,29 @@ impl RegistryEntry {
         for cap in &self.capabilities {
             if parse_capability(cap).is_none() {
                 bail!("插件 {} 含非法 capability 声明: {}", self.id, cap);
+            }
+        }
+        // 展示字段长度 + 控制字符：与 manifest 侧同一守卫（单点定义防漂移）。
+        // 注册表虽经 Ed25519 验签，但签名只证明未被中间人篡改，不证明发布方
+        // 未提交超长/含控制字符的字段——恶意发布者可借此刷爆日志或撑坏 UI 列表。
+        for (field, value, max) in [
+            ("name", &self.name, MAX_DISPLAY_FIELD_LEN),
+            ("author", &self.author, MAX_DISPLAY_FIELD_LEN),
+            ("license", &self.license, MAX_DISPLAY_FIELD_LEN),
+            ("version", &self.version, MAX_DISPLAY_FIELD_LEN),
+            ("abi_version", &self.abi_version, MAX_DISPLAY_FIELD_LEN),
+            ("description", &self.description, MAX_DESCRIPTION_LEN),
+        ] {
+            if !is_safe_display_string(value, max) {
+                bail!("插件 {} 的 {field} 超长（>{max}）或含控制字符", self.id);
+            }
+        }
+        if !is_safe_display_string(&self.download_url, MAX_URL_LEN) {
+            bail!("插件 {} download_url 超长或含控制字符", self.id);
+        }
+        if let Some(homepage) = &self.homepage {
+            if !is_safe_display_string(homepage, MAX_URL_LEN) {
+                bail!("插件 {} homepage 超长或含控制字符", self.id);
             }
         }
         Ok(())
@@ -986,6 +1012,53 @@ capabilities = []{deps_line}
             capabilities: Vec::new(),
             dependencies: HashMap::new(),
         }
+    }
+
+    /// 注册表条目的展示字段同样来自不可信发布方（Ed25519 签名只证明未被中间人
+    /// 篡改，不证明发布方未提交超长/含控制字符的字段）。与 manifest 侧同一守卫。
+    #[test]
+    fn test_entry_validate_rejects_oversized_and_control_char_fields() {
+        let base = entry_from_bundle("p", b"bundle", &SigningKey::generate(&mut OsRng));
+        assert!(base.validate().is_ok(), "基线条目应合法");
+
+        let long = "A".repeat(MAX_DISPLAY_FIELD_LEN + 1);
+        let long_desc = "B".repeat(MAX_DESCRIPTION_LEN + 1);
+        let long_url = format!("https://x.com/{}", "p".repeat(MAX_URL_LEN));
+        // 每种字段单独破坏 → validate 拒绝且错误点名该字段。
+        // 直接构造变体条目（而非 Box<dyn Fn> mutator）：字段名与坏值就地对照，更易读。
+        let bad_entries: [(&str, RegistryEntry); 6] = [
+            ("name", RegistryEntry { name: long.clone(), ..base.clone() }),
+            ("author", RegistryEntry { author: long.clone(), ..base.clone() }),
+            ("license", RegistryEntry { license: long.clone(), ..base.clone() }),
+            ("description", RegistryEntry { description: long_desc, ..base.clone() }),
+            // 换行可伪造结构化日志行
+            (
+                "name",
+                RegistryEntry {
+                    name: "evil\nplugin.auto_disabled".to_string(),
+                    ..base.clone()
+                },
+            ),
+            ("homepage", RegistryEntry { homepage: Some(long_url), ..base.clone() }),
+        ];
+
+        for (field, entry) in bad_entries {
+            let err = entry
+                .validate()
+                .expect_err(&format!("{field} 超长/含控制字符应被拒绝"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains(field),
+                "错误应点名字段 {field}，实际: {msg}"
+            );
+        }
+
+        // 反向：正常中文元数据通过（校验不过严）
+        let mut ok = base.clone();
+        ok.name = "我的插件".to_string();
+        ok.description = "一个用于格式化 Markdown 的插件".to_string();
+        ok.author = "张三".to_string();
+        assert!(ok.validate().is_ok(), "正常中文元数据应通过");
     }
 
     #[test]
