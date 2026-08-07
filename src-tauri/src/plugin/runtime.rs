@@ -277,9 +277,10 @@ impl WasmPlugin {
         Ok(())
     }
     fn create_store(&self) -> Result<Store<PluginState>, PluginError> {
-        let wasi = WasiCtxBuilder::new()
-            .inherit_stdio()
-            .build();
+        // WASI 上下文：空 stdio（插件不应读宿主 stdin / 写宿主 stdout）。
+        // `inherit_stdio` 会让插件能读取终端 stdin，在 Tauri GUI 场景下是无意义的特权泄漏。
+        // 如需调试输出，插件应通过 `host.log` WIT 接口而非直接 stdio。
+        let wasi = WasiCtxBuilder::new().build();
 
         let limits = StoreLimitsBuilder::new()
             .memory_size(WASM_MAX_MEMORY_BYTES)

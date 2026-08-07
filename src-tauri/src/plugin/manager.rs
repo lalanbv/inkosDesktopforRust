@@ -47,6 +47,13 @@ const CONSECUTIVE_FAIL_THRESHOLD: u32 = 5;
 /// 满时从头部滚出最旧条目，保留最近 N 次记录用于运维诊断。
 const AUTO_DISABLED_RING_CAP: usize = 5;
 
+/// WASM 编译缓存容量上限。
+///
+/// 防止安装大量插件时 wasm_cache 无界增长（每个编译产物 ~数MB）。
+/// 超出时驱逐一个任意条目（实践中插件数 ≪ 32，驱逐极罕见）；
+/// 被驱逐的插件下次调用时会重新 Cranelift AOT 编译（一次性开销）。
+const WASM_CACHE_CAPACITY: usize = 32;
+
 /// 插件管理器
 pub struct PluginManager {
     /// 插件安装目录
@@ -496,6 +503,14 @@ impl PluginManager {
                     .expect("installed 刚校验过存在，本方法内不修改它")
                     .clone();
                 let compiled = WasmPlugin::new(metadata, &entry, &plugin_dir)?;
+                // 缓存容量守卫：超出 WASM_CACHE_CAPACITY 时驱逐任意一个旧条目（防无界增长）。
+                // 实践中插件数通常 < 10，此分支极罕见；被驱逐者下次调用时重新编译（一次性开销）。
+                if self.wasm_cache.len() >= WASM_CACHE_CAPACITY {
+                    if let Some(evict_key) = self.wasm_cache.keys().next().cloned() {
+                        self.wasm_cache.remove(&evict_key);
+                        tracing::debug!(evicted_id = %evict_key, "wasm_cache 满，驱逐旧条目");
+                    }
+                }
                 self.wasm_cache.insert(id.to_string(), compiled);
             }
             let plugin = self.wasm_cache.get(id).expect("wasm 缓存已就绪");
@@ -554,7 +569,15 @@ impl PluginManager {
                 let plugin_dir = self.plugins_dir.join(id);
                 let entry = plugin_dir.join(&metadata.entrypoint);
                 match WasmPlugin::new(metadata, &entry, &plugin_dir) {
-                    Ok(p) => { self.wasm_cache.insert(id.clone(), p); }
+                    Ok(p) => {
+                        if self.wasm_cache.len() >= WASM_CACHE_CAPACITY {
+                            if let Some(evict_key) = self.wasm_cache.keys().next().cloned() {
+                                self.wasm_cache.remove(&evict_key);
+                                tracing::debug!(evicted_id = %evict_key, "broadcast_event: wasm_cache 满，驱逐旧条目");
+                            }
+                        }
+                        self.wasm_cache.insert(id.clone(), p);
+                    }
                     Err(e) => {
                         tracing::warn!(plugin_id = %id, error = %e, "broadcast_event: 编译插件失败，跳过");
                         continue;
