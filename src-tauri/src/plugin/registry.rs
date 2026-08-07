@@ -202,6 +202,54 @@ fn is_hex_of_len(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// 拉取并验签注册表索引。
+///
+/// `fetch` 注入 HTTP 传输（`Fn(&str) -> Future<Output = Result<Vec<u8>>>`）——
+/// 生产用 [`http_fetch`]（reqwest），测试用桩，使「验签 + 解析」逻辑脱离网络单测。
+/// 流程：拉 `registry_url` 字节 + `{url}.sig` hex → `verify_signature` → `parse`。
+///
+/// 注册表 URL 不强制 https：注册表本身经 Ed25519 签名，即便经 http 也无法被无私钥
+/// 的 MITM 伪造合法签名（签名是信任锚，https 仅纵深防御）。插件包 `download_url`
+/// 的 https 强制在条目校验中保留（包虽也签名，https 是安装链的额外保障）。
+pub async fn fetch_registry<F, Fut>(
+    registry_url: &str,
+    pubkey: &[u8],
+    fetch: F,
+) -> Result<PluginRegistryIndex>
+where
+    F: Fn(&str) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>>>,
+{
+    let toml_bytes = fetch(registry_url).await.context("拉取 registry.toml 失败")?;
+    let sig_bytes = fetch(&format!("{registry_url}.sig"))
+        .await
+        .context("拉取 registry.toml.sig 失败")?;
+    let sig_hex = String::from_utf8(sig_bytes)
+        .context("registry 签名非合法 UTF-8 hex")?
+        .trim()
+        .to_string();
+    PluginRegistryIndex::verify_signature(&toml_bytes, &sig_hex, pubkey)?;
+    let toml_str = String::from_utf8(toml_bytes).context("registry.toml 非合法 UTF-8")?;
+    PluginRegistryIndex::parse(&toml_str)
+}
+
+/// 生产 HTTP 传输：reqwest GET → bytes（注册表是小 TOML，无需流式）。
+pub async fn http_fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("GET {url} 失败"))?;
+    if !resp.status().is_success() {
+        bail!("GET {url} 返回非成功状态: {}", resp.status());
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .with_context(|| format!("读 {url} 响应体失败"))?;
+    Ok(bytes.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +496,85 @@ capabilities = []
         assert!(entry
             .verify_bundle(bundle, &signing_b.verifying_key().to_bytes())
             .is_err());
+    }
+
+    /// 构造 mock fetch 传输：`.sig` URL 返回 sig_hex 字节，其余返回 toml 字节。
+    /// 每次 clone，保证闭包可多次调用。
+    fn registry_fetch(
+        toml_bytes: Vec<u8>,
+        sig_hex: String,
+    ) -> impl Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>>>> {
+        move |url: &str| {
+            let payload = if url.ends_with(".sig") {
+                sig_hex.clone().into_bytes()
+            } else {
+                toml_bytes.clone()
+            };
+            Box::pin(async move { Ok(payload) })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fetch_registry_accepts_valid() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let toml = valid_registry_toml();
+        let sig_hex = sig::encode_hex(&signing.sign(toml.as_bytes()).to_bytes());
+        let pubkey = signing.verifying_key().to_bytes();
+        let index = fetch_registry(
+            "http://127.0.0.1/registry.toml",
+            &pubkey,
+            registry_fetch(toml.into_bytes(), sig_hex),
+        )
+        .await
+        .unwrap();
+        assert_eq!(index.plugins.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_registry_rejects_bad_signature() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let toml = valid_registry_toml();
+        // 用「别的数据」的签名 → verify_signature 失败
+        let sig_hex = sig::encode_hex(&signing.sign(b"totally different bytes").to_bytes());
+        let pubkey = signing.verifying_key().to_bytes();
+        let result = fetch_registry(
+            "http://127.0.0.1/registry.toml",
+            &pubkey,
+            registry_fetch(toml.into_bytes(), sig_hex),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_registry_rejects_bad_toml() {
+        let signing = SigningKey::generate(&mut OsRng);
+        // 非法 TOML——但用正确密钥对它签名（验签过、parse 挂）
+        let bad_toml = "invalid toml [[[";
+        let sig_hex = sig::encode_hex(&signing.sign(bad_toml.as_bytes()).to_bytes());
+        let pubkey = signing.verifying_key().to_bytes();
+        let result = fetch_registry(
+            "http://127.0.0.1/registry.toml",
+            &pubkey,
+            registry_fetch(bad_toml.as_bytes().to_vec(), sig_hex),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_registry_rejects_fetch_error() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let pubkey = signing.verifying_key().to_bytes();
+        let fetch_err = |_url: &str|
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>>>> {
+            Box::pin(async { Err(anyhow::anyhow!("网络不可达")) })
+        };
+        let result = fetch_registry("http://127.0.0.1/registry.toml", &pubkey, fetch_err).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("拉取 registry.toml 失败"));
     }
 }
