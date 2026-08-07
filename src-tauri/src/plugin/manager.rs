@@ -761,6 +761,8 @@ entrypoint = "plugin.wasm"
         );
         // consec_failures 应清零（disable 后清理）
         assert_eq!(manager.consec_failures.get("flaky-plugin"), None);
+        // auto_disabled_count 应递增（可观测性：session内自动禁用次数）
+        assert_eq!(manager.metrics().auto_disabled_count, 1);
     }
 
     #[tokio::test]
