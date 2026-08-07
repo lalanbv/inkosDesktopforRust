@@ -20,6 +20,7 @@ use crate::updater::sig;
 use anyhow::{bail, Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// 注册表索引格式版本（破坏性 schema 变更时递增；客户端拒绝对应不上者）
@@ -161,6 +162,39 @@ impl RegistryEntry {
         }
         Ok(())
     }
+
+    /// 是否与当前宿主兼容（`min_host_version` ≤ host_version 且 abi_version 精确匹配）。
+    ///
+    /// v1 用 abi 精确匹配（host 与插件 ABI 同为 "1"）；未来若引入 ABI 向后兼容矩阵，
+    /// 扩展为 `host_supported_abis.contains(&self.abi_version)`。
+    pub fn is_compatible_with(&self, host_version: &Version, host_abi: &str) -> bool {
+        let Ok(entry_min) = Version::parse(&self.min_host_version) else {
+            return false; // parse 已校验过，此处仅防御
+        };
+        host_version >= &entry_min && self.abi_version == host_abi
+    }
+
+    /// 校验下载的插件包字节：sha256 完整性 + Ed25519 来源签名。
+    ///
+    /// `pubkey` 为受信的插件签名公钥（与 registry 签名公钥可独立或共用，由发布约定）。
+    /// 下载后、安装前调用——任一失败拒绝该包。
+    pub fn verify_bundle(&self, bundle: &[u8], pubkey: &[u8]) -> Result<()> {
+        let hash = Sha256::digest(bundle);
+        let hash_hex = sig::encode_hex(&hash);
+        if hash_hex != self.sha256 {
+            bail!(
+                "插件 {} 包 sha256 不匹配：期望 {}，实际 {}（包可能损坏/被篡改）",
+                self.id,
+                self.sha256,
+                hash_hex
+            );
+        }
+        let sig_bytes = sig::decode_hex(&self.signature).context("插件签名 hex 解码失败")?;
+        sig::verify(bundle, &sig_bytes, pubkey).with_context(|| {
+            format!("插件 {} 包签名验证失败——拒绝（可能被篡改）", self.id)
+        })?;
+        Ok(())
+    }
 }
 
 /// 字符串是否为指定长度的 hex
@@ -173,6 +207,8 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
 
     /// 128 位 hex 占位签名（条目 bundle 签名格式校验用；真实值由发布方签 bundle 产生）
     fn placeholder_sig() -> String {
@@ -346,5 +382,71 @@ capabilities = []
         assert!(is_hex_of_len("ab12", 4));
         assert!(!is_hex_of_len("ab12", 5)); // 长度错
         assert!(!is_hex_of_len("xy", 2)); // 非 hex
+    }
+
+    /// 用签名钥对 bundle 签名 + 算 sha256，构造合法条目（verify_bundle 测试用）
+    fn entry_from_bundle(id: &str, bundle: &[u8], signing: &SigningKey) -> RegistryEntry {
+        let hash = Sha256::digest(bundle);
+        let sig_bytes = signing.sign(bundle);
+        RegistryEntry {
+            id: id.to_string(),
+            name: id.to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: "MIT".to_string(),
+            abi_version: "1".to_string(),
+            min_host_version: "0.1.0".to_string(),
+            download_url: "https://example.com/p.tar.gz".to_string(),
+            sha256: sig::encode_hex(&hash),
+            signature: sig::encode_hex(&sig_bytes.to_bytes()),
+            capabilities: Vec::new(),
+            dependencies: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_is_compatible_with() {
+        let entry = entry_from_bundle("p", b"bundle", &SigningKey::generate(&mut OsRng));
+        let host_0_1 = Version::parse("0.1.0").unwrap();
+        let host_0_0_5 = Version::parse("0.0.5").unwrap();
+        assert!(entry.is_compatible_with(&host_0_1, "1")); // 满足 min + abi
+        assert!(!entry.is_compatible_with(&host_0_0_5, "1")); // host 低于 min_host_version
+        assert!(!entry.is_compatible_with(&host_0_1, "2")); // abi 不匹配
+    }
+
+    #[test]
+    fn test_verify_bundle_accepts_valid() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let bundle = b"plugin bundle bytes";
+        let entry = entry_from_bundle("p", bundle, &signing);
+        entry
+            .verify_bundle(bundle, &signing.verifying_key().to_bytes())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_verify_bundle_rejects_tampered() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let bundle = b"plugin bundle bytes";
+        let entry = entry_from_bundle("p", bundle, &signing);
+        let mut tampered = bundle.to_vec();
+        tampered[0] ^= 0xff; // 篡改 → sha256 不匹配（签名也失效）
+        assert!(entry
+            .verify_bundle(&tampered, &signing.verifying_key().to_bytes())
+            .is_err());
+    }
+
+    #[test]
+    fn test_verify_bundle_rejects_wrong_pubkey() {
+        let signing_a = SigningKey::generate(&mut OsRng);
+        let signing_b = SigningKey::generate(&mut OsRng);
+        let bundle = b"plugin bundle bytes";
+        let entry = entry_from_bundle("p", bundle, &signing_a);
+        // 用 B 的公钥验 A 签的包 → 签名失败
+        assert!(entry
+            .verify_bundle(bundle, &signing_b.verifying_key().to_bytes())
+            .is_err());
     }
 }
