@@ -661,6 +661,23 @@ mod tests {
     }
 
     #[test]
+    fn test_check_network_domain_suffix_confusion() {
+        // 后缀混淆攻击防御：evilallowed.com 不应被 ["allowed.com"] 匹配
+        // （须精确匹配或 ".allowed.com" 子域后缀）。
+        let allowed = vec!["allowed.com".to_string()];
+        assert!(!check_network_domain("http://evilallowed.com/", &allowed));
+        assert!(!check_network_domain("http://notallowed.com/", &allowed));
+        assert!(!check_network_domain("http://allowed.com.evil.com/", &allowed));
+        // 合法精确 + 子域通过
+        assert!(check_network_domain("http://allowed.com/", &allowed));
+        assert!(check_network_domain("http://sub.allowed.com/", &allowed));
+        // 通配 "*" 放行任意
+        assert!(check_network_domain("http://anything.com/", &["*".to_string()]));
+        // 无效 URL（无 host）→ 拒
+        assert!(!check_network_domain("not-a-url", &allowed));
+    }
+
+    #[test]
     fn test_http_get_blocks_internal_ip() {
         // 即便 "*" 全开放，也拒直连内网/保留 IP（SSRF 纵深）
         let (ctx, _temp) = create_test_context(vec![Capability::Network {
