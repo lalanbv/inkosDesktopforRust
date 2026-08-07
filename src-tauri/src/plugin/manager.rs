@@ -349,6 +349,14 @@ impl PluginManager {
                 );
                 // disable_plugin 已处理: installed.enabled=false + wasm_cache evict
                 let _ = self.disable_plugin(id);
+                // 结构化健康事件：落进 JSON 日志 + 暴露给前端（与手动 disable 广播一致）
+                tracing::info!(
+                    target: "inkos.plugin.health",
+                    plugin_id = %id,
+                    reason = "consecutive_failures",
+                    threshold = CONSECUTIVE_FAIL_THRESHOLD,
+                    "plugin.auto_disabled"
+                );
                 self.consec_failures.remove(id); // 禁用后归零，避免重启-重新启用后误触发
             }
         } else {
