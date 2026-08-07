@@ -122,21 +122,58 @@ pub async fn cmd_fetch_plugin_registry(
     Ok(compatible)
 }
 
-/// 从注册表条目安装插件：下载→验签→安全解压→`install_plugin`（拒绝已安装）。
+/// 从注册表条目安装插件：无依赖→直接下载验签安装；有依赖→解析后序拓扑→按序安装
+/// 依赖（跳过已装）→entry 自身最后。下载→验签→安全解压→`install_plugin`。
 #[tauri::command]
 pub async fn cmd_install_from_registry(
     entry: RegistryEntry,
     config_state: tauri::State<'_, AppState>,
     plugin_state: tauri::State<'_, PluginState>,
 ) -> Result<PluginMetadata, String> {
-    let (_url, pubkey, client, _cache_path) = registry_source_and_client(&config_state).await?;
-    let temp = download_verify_extract(&entry, &pubkey, &client).await?;
-    let source = temp.path().to_string_lossy().to_string();
-    let mut manager = plugin_state.manager.lock().await;
-    manager
-        .install_plugin(&source)
-        .await
-        .map_err(|e| format!("安装失败: {}", e))
+    let (url, pubkey, client, cache_path) = registry_source_and_client(&config_state).await?;
+
+    // 无依赖：直接安装（避免为 deps-free 插件无谓拉取注册表）
+    if entry.dependencies.is_empty() {
+        let temp = download_verify_extract(&entry, &pubkey, &client).await?;
+        let source = temp.path().to_string_lossy().to_string();
+        let mut manager = plugin_state.manager.lock().await;
+        return manager
+            .install_plugin(&source)
+            .await
+            .map_err(|e| format!("安装失败: {}", e));
+    }
+
+    // 有依赖：解析后序拓扑（依赖在前、entry 最后）→ 按序安装，跳过已装
+    let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
+    let order = registry::resolve_dependencies(&entry, &index)
+        .map_err(|e| format!("依赖解析失败: {}", e))?;
+    let installed_ids: std::collections::HashSet<String> = {
+        let manager = plugin_state.manager.lock().await;
+        manager
+            .list_plugins()
+            .into_iter()
+            .map(|m| m.id)
+            .collect()
+    };
+    let mut last_meta: Option<PluginMetadata> = None;
+    for e in &order {
+        if installed_ids.contains(&e.id) {
+            continue; // 依赖已装，跳过
+        }
+        let temp = download_verify_extract(e, &pubkey, &client).await?;
+        let source = temp.path().to_string_lossy().to_string();
+        let meta = {
+            let mut manager = plugin_state.manager.lock().await;
+            manager
+                .install_plugin(&source)
+                .await
+                .map_err(|err| format!("安装依赖 {} 失败: {}", e.id, err))?
+        };
+        if e.id == entry.id {
+            last_meta = Some(meta);
+        }
+    }
+    last_meta.ok_or_else(|| "插件已安装（含依赖）".to_string())
 }
 
 /// 从注册表条目更新插件：下载→验签→安全解压→`update_plugin`（覆盖已安装，无中间缺失态）。
