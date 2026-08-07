@@ -229,6 +229,24 @@ impl HostContext {
             ));
         }
 
+        // 写入内容大小守卫（防插件写入超大文件耗尽磁盘）。
+        const MAX_WRITE_FILE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+        if content.len() > MAX_WRITE_FILE_BYTES {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                path = %normalized.display(),
+                content_len = content.len(),
+                limit = MAX_WRITE_FILE_BYTES,
+                action = "write_file",
+                "写入内容过大拒绝: 超过单次写入上限"
+            );
+            return Err(PluginError::PermissionDenied(format!(
+                "写入内容 {} 字节超过上限 {MAX_WRITE_FILE_BYTES}",
+                content.len()
+            )));
+        }
+
         // 写入「已校验」的 normalized 路径（非原始 join 结果）。
         // 残留风险：work_dir 内预置的符号链接（如恶意插件 bundle 解压产物）仍可能
         // 将 normalized 解析到沙箱外——彻底闭环需在安装期拒绝符号链接条目
@@ -272,15 +290,22 @@ impl HostContext {
         // 路径验证
         let full_path = self.normalize_path(path)?;
 
-        // 读取目录
+        // 读取目录：条目数上限，防海量目录项 OOM（每条 ~String alloc）
+        const MAX_DIR_ENTRIES: usize = 4096;
         let entries: Vec<String> = std::fs::read_dir(&full_path)
             .map_err(|e| PluginError::ExecutionFailed(format!("读取目录失败: {}", e)))?
+            .take(MAX_DIR_ENTRIES + 1) // +1 用于检测超限
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     e.file_name().to_str().map(|s| s.to_string())
                 })
             })
             .collect();
+        if entries.len() > MAX_DIR_ENTRIES {
+            return Err(PluginError::ExecutionFailed(format!(
+                "目录条目数超过上限 {MAX_DIR_ENTRIES}（防 OOM）"
+            )));
+        }
 
         Ok(ListDirResponse { entries })
     }
