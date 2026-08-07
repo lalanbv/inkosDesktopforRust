@@ -477,39 +477,38 @@ pub struct ExecCommandResponse {
 // Host trait 调用本 http_get，域名白名单在此强制——插件无法绕过。
 
 /// 从 URL 提取 host（小写，owned）。纯函数，便于单测。
-/// 正确处理 userinfo（`user:pass@host`）、端口、方括号 IPv6（`[::1]:443`）——
-/// 防 userinfo 混淆（`https://allowed.com@127.0.0.1` 的真实 host 是 127.0.0.1）与
-/// 方括号 IPv6 解析（`[` 非 IP 致 is_internal_ip 层失效），恢复 SSRF 2 层纵深。
+///
+/// **必须与 ureq 使用同一个解析器**（`url` crate，WHATWG 规范）。手写解析与它的
+/// 任何分歧都是可利用的绕过——白名单/SSRF 层看到的 host 与实际连接的主机不同：
+///
+/// | 形式 | 手写解析看到 | ureq 实际连接 |
+/// |---|---|---|
+/// | `http://127.0.0.1\x@allowed.com/` | `allowed.com`（放行） | `127.0.0.1` |
+/// | `http://①②⑧.⓪.⓪.①/`（IDNA 映射） | 圈号域名（非 IP） | `128.0.0.1` |
+/// | `http://12\n7.0.0.1/`（剥 LF） | 含 `\n` 的串（非 IP） | `127.0.0.1` |
+/// | `http://169.254.169。254/`（表意句号） | 非 IP | `169.254.169.254` |
+///
+/// 后三种在手写解析下 `is_internal_ip` 恒 false，第一层完全失效；`"*"` 通配插件
+/// 由此可直连 loopback 与云元数据。改用 `url::Url` 后 host 已完成 IDNA ToASCII、
+/// 控制字符剥离、端口/userinfo 剥离，与连接目标一致。
+///
+/// IPv6 走 `url::Host::Ipv6` 而非 `host_str()`——后者保留方括号（`"[::1]"`），
+/// 该形式 parse 为 IpAddr 会失败，使 `is_internal_ip` 恒 false。
+///
+/// 返回 None：URL 不合法、或无 host（如 `data:`/`file:` 这类无 authority 的 scheme）——
+/// 调用方 `check_network_domain` 据此 fail-closed 拒绝。
 /// `https://api.example.com/path?x=1` → `api.example.com`
 pub fn extract_host(url: &str) -> Option<String> {
-    let after_scheme = url.split("://").nth(1).unwrap_or(url);
-    // authority 结束于首个 '/' '\' '?' '#'。
-    //
-    // 反斜杠必须计入：WHATWG URL 规范对 http/https 这类 special scheme 把 `\`
-    // 等同于 `/`，ureq 依赖的 `url` crate 遵循该规范。若此处不算终止符，
-    // `http://127.0.0.1\x@allowed.example.com/p` 会出现解析器分歧——
-    // 本函数经 rsplit_once('@') 剥 userinfo 得到白名单内的 allowed.example.com
-    // （放行，且 is_internal_ip 看不到 IP），而 ureq 实际连接 `\` 之前的
-    // 127.0.0.1。域名白名单与 SSRF 字面量拦截会被同时绕过。
-    let authority_end = after_scheme
-        .find(['/', '\\', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    let authority = &after_scheme[..authority_end];
-    // 剥 userinfo：取最后一个 '@' 之后（`user:pass@host:port` → `host:port`）
-    let host_port = authority
-        .rsplit_once('@')
-        .map(|(_, h)| h)
-        .unwrap_or(authority);
-    // 剥端口 / 方括号 IPv6
-    let host = if let Some(rest) = host_port.strip_prefix('[') {
-        rest.split(']').next()? // [::1]:443 → ::1
-    } else {
-        host_port
-            .rsplit_once(':')
-            .map(|(h, _)| h)
-            .unwrap_or(host_port) // host:port → host
+    let parsed = url::Url::parse(url).ok()?;
+    // 用类型化的 Host 枚举而非 host_str()：后者对 IPv6 **保留方括号**
+    // （`https://[::1]/` → `"[::1]"`），而 `"[::1]".parse::<IpAddr>()` 失败 →
+    // is_internal_ip 恒 false → IPv6 内网字面量全部放行。Host::Ipv6 直接给出
+    // Ipv6Addr，其 Display 无括号，与 is_internal_ip 的 parse 契约一致。
+    let host = match parsed.host()? {
+        url::Host::Domain(d) => d.to_lowercase(), // IDNA 已 ToASCII
+        url::Host::Ipv4(v4) => v4.to_string(),
+        url::Host::Ipv6(v6) => v6.to_string(),
     };
-    let host = host.to_lowercase();
     if host.is_empty() {
         None
     } else {
@@ -1022,9 +1021,15 @@ mod tests {
             Some("api.example.com")
         );
         assert_eq!(extract_host("http://localhost:3000").as_deref(), Some("localhost"));
-        assert_eq!(extract_host("example.com").as_deref(), Some("example.com"));
         assert_eq!(extract_host("https://API.COM").as_deref(), Some("api.com"));
         assert!(extract_host("").is_none());
+        // 无 scheme 的裸串不是合法 URL——ureq 同样无法请求它。返回 None 使
+        // check_network_domain fail-closed 拒绝，与连接层行为一致（旧手写解析
+        // 曾把它当 host 放行，那是解析器分歧的另一面）。
+        assert!(extract_host("example.com").is_none());
+        // 无 authority 的 scheme（data:/file:/javascript:）同样无 host → 拒绝
+        assert!(extract_host("data:text/plain,hi").is_none());
+        assert!(extract_host("javascript:alert(1)").is_none());
         // userinfo 混淆：真实 host 在最后一个 '@' 之后（防 SSRF 用 userinfo 伪装白名单域）
         assert_eq!(
             extract_host("https://u:p@127.0.0.1/x").as_deref(),
@@ -1036,10 +1041,18 @@ mod tests {
         );
         // 方括号 IPv6 + 端口（此前 split(':') 截到 '[' 致 is_internal_ip 层失效）
         assert_eq!(extract_host("https://[::1]:443/").as_deref(), Some("::1"));
+        // Ipv6Addr::to_string 规范化：前导零压缩（0101 → 101）。
+        // is_internal_ip 会重新 parse，故文本形式差异无影响。
         assert_eq!(
             extract_host("https://[2002:c0a8:0101::]/").as_deref(),
-            Some("2002:c0a8:0101::")
+            Some("2002:c0a8:101::")
         );
+        // 方括号必须剥掉：保留 "[::1]" 会使 parse::<IpAddr> 失败 →
+        // is_internal_ip 恒 false → IPv6 内网字面量全部放行（曾真实回归）。
+        assert!(is_internal_ip(&extract_host("https://[::1]/").unwrap()));
+        assert!(is_internal_ip(
+            &extract_host("https://[::ffff:127.0.0.1]/").unwrap()
+        ));
         // 反斜杠终止 authority（WHATWG special scheme：`\` 等同 `/`）。
         // 不算终止符时 rsplit_once('@') 会取到 `\` 之后的白名单域，而 ureq
         // 依赖的 url crate 连接 `\` 之前的主机 → 解析器分歧型绕过。
@@ -1212,6 +1225,52 @@ mod tests {
                 matches!(result, Err(PluginError::PermissionDenied(_))),
                 "{internal} 应被内网 IP 拦截: {:?}",
                 result
+            );
+        }
+    }
+
+    /// WHATWG 宿主规范化形式（IDNA 映射 / 剥 tab-LF-CR）指向内网时不得连通。
+    ///
+    /// 这些形式 `extract_host` 不做规范化，故第一层 `is_internal_ip` 看不见：
+    /// `①②⑧.⓪.⓪.①` 与 `12\n7.0.0.1` 在 ureq 依赖的 url crate 侧分别归一为
+    /// `128.0.0.1` / `127.0.0.1`（已探针实测）。兜底在连接期——ssrf_resolve
+    /// 收到的 netloc 是 ureq 规范化后的结果，filter_public_addrs 过滤内网 IP。
+    ///
+    /// 用 `"*"` 通配（最宽松声明）确保测的是 SSRF 层而非白名单顺带拦下。
+    /// 断言"不成功"而非具体错误类型：拒绝可能来自 resolver（PermissionDenied
+    /// 经 io error 包装）或 url 解析失败，两者都是可接受的 fail-closed 结果；
+    /// 绑定具体层次会让这个测试在防护重构时假失败。
+    #[test]
+    fn test_http_get_normalized_internal_forms_not_reachable() {
+        let (ctx, _temp) = create_test_context(vec![Capability::Network {
+            allowed_domains: vec!["*".to_string()],
+        }]);
+        // 圈号形式 ①②⑦ 归一为 127.0.0.1（loopback）——注意 ①②⑧ 会得到
+        // 128.0.0.1，那是公网地址，不能用来验证 SSRF 拦截。
+        for (url, expect_ip) in [
+            ("http://\u{2460}\u{2461}\u{2466}.\u{24EA}.\u{24EA}.\u{2460}/", "127.0.0.1"), // 圈号 IDNA
+            ("http://１２７.０.０.１/", "127.0.0.1"),          // 全角
+            ("http://127.0.0.1\u{3002}/", "127.0.0.1"),      // 表意句号（IDNA 映射为 '.'）
+            ("http://12\n7.0.0.1/", "127.0.0.1"),            // LF 剥离
+            ("http://127.0.0.1\r/", "127.0.0.1"),            // CR 剥离
+            ("http://169.254.169\u{3002}254/", "169.254.169.254"), // 云元数据
+        ] {
+            // 第一层必须看到规范化后的真实 IP——否则 is_internal_ip 失效，
+            // 拒绝就只能靠"恰好无监听服务"，宿主机开了 :80 就变成真实 SSRF。
+            assert_eq!(
+                extract_host(url).as_deref(),
+                Some(expect_ip),
+                "extract_host 须与 ureq 的规范化一致: {url:?}"
+            );
+            assert!(
+                is_internal_ip(expect_ip),
+                "{expect_ip} 应被识别为内网/链路本地"
+            );
+            // 端到端：即使持 "*" 通配白名单，也在发起连接前被拒。
+            let err = ctx.http_get(url).unwrap_err().to_string();
+            assert!(
+                err.contains("内网") || err.contains("拒绝") || err.contains("白名单"),
+                "应在 SSRF 层拒绝而非连接失败: {url:?} -> {err}"
             );
         }
     }

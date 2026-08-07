@@ -81,6 +81,13 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 # 纯同步——reqwest::blocking 在 tokio 上下文（WASM execute 经 async manager 调用）
 # 会因嵌套 runtime panic；ureq 无 runtime，安全用于同步 Host trait。
 ureq = "2"
+
+# extract_host 用 WHATWG URL 解析器，与 ureq 内部使用的同一份（ureq 2.12 的传递
+# 依赖，显式声明后仍解析为同一版本）。手写解析与它必然产生分歧——反斜杠 authority、
+# IDNA 映射（①②⑧.⓪.⓪.① → 128.0.0.1）、tab/LF/CR 剥离都曾造成
+# 「白名单看到公网域名、ureq 连内网 IP」的绕过。同一解析器从根上消除该类缺陷。
+url = "2.5"
+
 [target.'cfg(windows)'.dependencies]
 zip = "2"
 
