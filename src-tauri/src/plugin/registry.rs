@@ -333,6 +333,13 @@ pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 /// Content-Length 预检（可伪造但挡多数放大）+ 流式累加超限中止（防伪造
 /// Content-Length 的真实放大）。
 pub async fn http_fetch(client: &reqwest::Client, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    // scheme 校验：仅允许 https://，拒绝 http://（防明文 MitM）和其他 scheme。
+    // 注册表索引 + bundle 均须经 TLS 传输；bundle 有 Ed25519 签名（完整性保障），
+    // 但明文传输仍暴露用户隐私（哪些插件被安装）和流量指纹。
+    if !url.starts_with("https://") {
+        bail!("http_fetch: 仅允许 https:// URL，拒绝: {url}");
+    }
+
     // SSRF 防护：拒绝内网/保留 IP 字面量（无论注册表签名是否通过，下载 URL 均须
     // 经此检查——签名只证明注册表未被中间人篡改，不证明发布者本身无恶意/被入侵）。
     // 涵盖: loopback / 私网 / 链路本地 / 未指定 / 云元数据 (169.254.169.254) /
@@ -1117,10 +1124,23 @@ capabilities = []{deps_line}
     // 不等待 TCP 连接失败（后者不可靠且不携带安全语义）。
 
     #[tokio::test]
+    async fn test_http_fetch_rejects_http_scheme() {
+        // http:// URL → 在 scheme 检查阶段就拒绝（防明文 MitM）
+        let client = reqwest::Client::new();
+        let err = http_fetch(&client, "http://example.com/plugin.tar.gz", 1024)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("https"),
+            "http:// 应被 scheme 守卫拒绝: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_http_fetch_rejects_internal_ipv4_literal() {
         // 127.0.0.1（loopback）→ 在连接前即被 SSRF 守卫拒绝
         let client = reqwest::Client::new();
-        let err = http_fetch(&client, "http://127.0.0.1/payload.tar.gz", 1024)
+        let err = http_fetch(&client, "https://127.0.0.1/payload.tar.gz", 1024)
             .await
             .unwrap_err();
         assert!(
@@ -1133,7 +1153,7 @@ capabilities = []{deps_line}
     async fn test_http_fetch_rejects_private_network_literal() {
         // 192.168.x.x（私网）→ 拒绝
         let client = reqwest::Client::new();
-        let err = http_fetch(&client, "http://192.168.1.100/evil.tar.gz", 1024)
+        let err = http_fetch(&client, "https://192.168.1.100/evil.tar.gz", 1024)
             .await
             .unwrap_err();
         assert!(
@@ -1146,7 +1166,7 @@ capabilities = []{deps_line}
     async fn test_http_fetch_rejects_cloud_metadata_literal() {
         // 169.254.169.254（AWS/GCP/Azure 云元数据服务）→ 链路本地地址，必须拒绝
         let client = reqwest::Client::new();
-        let err = http_fetch(&client, "http://169.254.169.254/latest/meta-data/", 1024)
+        let err = http_fetch(&client, "https://169.254.169.254/latest/meta-data/", 1024)
             .await
             .unwrap_err();
         assert!(
@@ -1159,7 +1179,7 @@ capabilities = []{deps_line}
     async fn test_http_fetch_rejects_ipv6_loopback_literal() {
         // [::1]（IPv6 loopback）→ 拒绝
         let client = reqwest::Client::new();
-        let err = http_fetch(&client, "http://[::1]/evil.tar.gz", 1024)
+        let err = http_fetch(&client, "https://[::1]/evil.tar.gz", 1024)
             .await
             .unwrap_err();
         assert!(
