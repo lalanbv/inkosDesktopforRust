@@ -357,13 +357,11 @@ async fn check_resolved_addrs_public(host: &str) -> Result<()> {
     .await
     .context("DNS 解析任务执行失败")?;
 
-    match filtered {
-        Ok(addrs) if addrs.is_empty() => {
-            bail!("http_fetch: 拒绝 SSRF——host={host} 无可用公网地址")
-        }
-        Ok(_) => Ok(()),
-        Err(e) => bail!("http_fetch: 拒绝内网 SSRF（host={host} 解析到内网地址）: {e}"),
-    }
+    // filter_public_addrs 在过滤后为空时已返回 Err（PermissionDenied），
+    // 故此处无需单独判空——Ok 即意味着至少一个公网地址。
+    filtered
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("http_fetch: 拒绝内网 SSRF（host={host}）: {e}"))
 }
 
 impl NoRedirectClient {
