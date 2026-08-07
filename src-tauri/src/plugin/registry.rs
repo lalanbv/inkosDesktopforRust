@@ -701,6 +701,26 @@ capabilities = []{deps_line}
     }
 
     #[test]
+    fn test_resolve_dependencies_diamond_idempotent() {
+        // 钻石依赖：a→b→c，a→c（c 经两条路径到达）。幂等：c 只入序一次。
+        let toml = format!(
+            "version = 1\n\n{}\n{}\n{}",
+            entry_toml("a", "1.0.0", "b = \"^1.0.0\", c = \"^1.0.0\""),
+            entry_toml("b", "1.0.0", "c = \"^1.0.0\""),
+            entry_toml("c", "1.0.0", ""),
+        );
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let a = idx.find_latest("a").unwrap();
+        let order = resolve_dependencies(a, &idx).unwrap();
+        // 后序 + 去重：c（最先无依赖）→ b → a；c 仅一次
+        assert_eq!(order.len(), 3);
+        assert_eq!(order.iter().filter(|e| e.id == "c").count(), 1);
+        assert_eq!(order[0].id, "c");
+        assert_eq!(order[1].id, "b");
+        assert_eq!(order[2].id, "a");
+    }
+
+    #[test]
     fn test_verify_signature_accepts_valid() {
         let signing = SigningKey::generate(&mut OsRng);
         let raw = valid_registry_toml();
