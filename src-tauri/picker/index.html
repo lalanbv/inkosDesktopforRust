@@ -205,6 +205,11 @@
 
         try {
           await invoke("cmd_choose_project", { path });
+          // 通知所有已启用 WASM 插件：项目已打开（best-effort，失败不阻断导航）。
+          invoke("cmd_broadcast_event", {
+            event: "project.opened",
+            payload: JSON.stringify({ path }),
+          }).catch((e) => console.warn("[inkos] broadcast project.opened 失败:", e));
           showLaunching(); // Rust 健康后导航窗口到 sidecar
         } catch (e) {
           console.error("选择项目失败:", e);
