@@ -694,7 +694,10 @@ mod tests {
         assert!(is_internal_ip("::1")); // IPv6 loopback
         assert!(is_internal_ip("::ffff:127.0.0.1")); // IPv4-mapped loopback（防旁路）
         assert!(is_internal_ip("::ffff:169.254.169.254")); // mapped 云元数据
+        assert!(is_internal_ip("fc00::1")); // IPv6 站点本地（unique local，≈私网）
+        assert!(is_internal_ip("fe80::1")); // IPv6 链路本地
         assert!(!is_internal_ip("8.8.8.8")); // 公网
+        assert!(!is_internal_ip("2001:4860:4860::8888")); // 公网 IPv6
         assert!(!is_internal_ip("example.com")); // 域名（非 IP 字面量）
     }
 
