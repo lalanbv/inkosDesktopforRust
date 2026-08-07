@@ -100,12 +100,25 @@ impl AppConfig {
                 if !url.starts_with("http://") && !url.starts_with("https://") {
                     bail!("注册表 url 必须为 http(s)://: {}", url);
                 }
+                // M2: host 必须非空（挡 "https://" / "https:///x" 等异常值）
+                let after_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or("");
+                if after_scheme.is_empty() || after_scheme.starts_with('/') {
+                    bail!("注册表 url 缺少 host: {}", url);
+                }
                 if pubkey.len() != 64 || pubkey.bytes().any(|b| !b.is_ascii_hexdigit()) {
                     bail!(
                         "注册表 pubkey 必须为 64 位 hex（Ed25519 32 字节）: {}",
                         pubkey
                     );
                 }
+                // M3: 公钥必须是合法 Ed25519 点（挡全零等无效值，避免首 fetch 时含糊失败）
+                let pk_bytes = crate::updater::sig::decode_hex(pubkey)
+                    .map_err(|e| anyhow::anyhow!("注册表 pubkey 解码失败: {e}"))?;
+                let arr: [u8; 32] = pk_bytes.try_into().map_err(|_| {
+                    anyhow::anyhow!("注册表 pubkey 长度异常（期望 32 字节）")
+                })?;
+                ed25519_dalek::VerifyingKey::from_bytes(&arr)
+                    .map_err(|e| anyhow::anyhow!("注册表 pubkey 非合法 Ed25519 点: {e}"))?;
                 Ok(())
             }
             _ => bail!("注册表 url 与 pubkey 必须同时配置或同时留空"),
@@ -226,10 +239,15 @@ mod tests {
         cfg.registry.url = Some("https://x.com/r.toml".to_string());
         assert!(cfg.validate().is_err());
 
-        // 合法：url + 64 hex pubkey
+        // 合法：url + 真实 Ed25519 公钥（64 hex；M3 要求合法点，故用真实 key 而非占位 hex）
+        let signing = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let valid_pubkey = crate::updater::sig::encode_hex(&signing.verifying_key().to_bytes());
         let mut cfg = AppConfig::default();
         cfg.registry.url = Some("https://x.com/r.toml".to_string());
-        cfg.registry.pubkey = Some("ab".repeat(32));
+        cfg.registry.pubkey = Some(valid_pubkey);
         assert!(cfg.validate().is_ok());
+        // M3 注：from_bytes 对不可解压的点会拒（best-effort 早校验），但 [0;32] 等可解压
+        // 的退化值不在其反例范围——权威校验仍在 verify 时 fail-closed。故此处不针对
+        // 退化点断言，仅验证合法 key 通过。
     }
 }

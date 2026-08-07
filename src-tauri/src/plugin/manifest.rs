@@ -42,8 +42,11 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
     })?;
 
     // 验证必需字段
-    if manifest.plugin.id.is_empty() {
-        return Err(PluginError::InvalidManifest("id 不能为空".to_string()));
+    if !is_safe_plugin_id(&manifest.plugin.id) {
+        return Err(PluginError::InvalidManifest(format!(
+            "id 含非法字符（仅字母数字/-/_，≤64）: {}",
+            manifest.plugin.id
+        )));
     }
 
     if manifest.plugin.version.is_empty() {
@@ -81,9 +84,16 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
     })
 }
 
+/// 插件 id 安全格式白名单（防路径逃逸：id 直接 join 进 plugins_dir，须仅允许
+/// 字母数字 / `-` / `_`，长度 ≤64）。pub(crate)：registry 复用同一份校验。
+pub(crate) fn is_safe_plugin_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// 解析能力字符串（pub(crate)：registry 模块复用以校验条目 capability 语法一致）
-pub(crate) fn parse_capability(s: &str) -> Option<Capability> {
-    match s {
+pub(crate) fn parse_capability(s: &str) -> Option<Capability> {    match s {
         "read_project" => Some(Capability::ReadProject),
         "write_project" => Some(Capability::WriteProject),
         "system_command" => Some(Capability::SystemCommand),
@@ -196,5 +206,46 @@ entrypoint = "plugin.wasm"
 
         let result = parse_manifest(temp_dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_manifest_rejects_unsafe_id() {
+        // H1：id 直接 join 进 plugins_dir，必须白名单——挡 "../pwned"、"/etc/x"、
+        // "a/b"（路径分隔）、空格、空串等（仅允许字母数字/-/_，≤64）。
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("p");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        for bad_id in ["../pwned", "/etc/x", "a/b", "bad space", ""] {
+            let manifest = format!(
+                r#"[plugin]
+id = "{bad_id}"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+entrypoint = "plugin.wasm"
+"#
+            );
+            fs::write(plugin_dir.join("plugin.toml"), manifest).unwrap();
+            assert!(
+                parse_manifest(&plugin_dir).is_err(),
+                "id={bad_id:?} 应被白名单拒绝"
+            );
+        }
+        // 合法 id 仍通过
+        let manifest = r#"[plugin]
+id = "ok-plugin_1"
+name = "x"
+version = "1.0.0"
+description = ""
+author = ""
+license = "MIT"
+abi_version = "1"
+entrypoint = "plugin.wasm"
+"#;
+        fs::write(plugin_dir.join("plugin.toml"), manifest).unwrap();
+        assert!(parse_manifest(&plugin_dir).is_ok());
     }
 }

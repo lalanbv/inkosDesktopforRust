@@ -47,7 +47,9 @@ pub async fn cmd_fetch_plugin_registry(
         // own url（future 不借用闭包参数 u 的生命周期）；client 为外层长效借用
         let url_owned = u.to_string();
         let client = &client;
-        async move { registry::http_fetch(client, &url_owned).await }
+        async move {
+            registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
+        }
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -75,6 +77,12 @@ pub async fn cmd_install_from_registry(
     config_state: tauri::State<'_, AppState>,
     plugin_state: tauri::State<'_, PluginState>,
 ) -> Result<PluginMetadata, String> {
+    // 0. 重新校验前端传入的 entry 字段——verify_bundle 是真信任闸，此为纵深防御
+    //（挡 http url、非法 id 等字段问题，错误更直观）
+    entry
+        .validate()
+        .map_err(|e| format!("注册表条目字段非法: {e}"))?;
+
     // 1. 配置公钥 + 超时（单次取锁，释放后再网络 I/O）
     let (pubkey_hex, timeout_secs) = {
         let mut mgr = config_state.config.lock().await;
@@ -94,7 +102,7 @@ pub async fn cmd_install_from_registry(
         .timeout(Duration::from_secs(timeout_secs.max(1) as u64))
         .build()
         .map_err(|e| format!("构造 HTTP client 失败: {}", e))?;
-    let bundle = registry::http_fetch(&client, &entry.download_url)
+    let bundle = registry::http_fetch(&client, &entry.download_url, registry::MAX_BUNDLE_BYTES)
         .await
         .map_err(|e| format!("下载插件包失败: {}", e))?;
 

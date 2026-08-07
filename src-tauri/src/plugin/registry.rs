@@ -127,11 +127,12 @@ impl PluginRegistryIndex {
 }
 
 impl RegistryEntry {
-    /// 校验单条目字段（id/version semver/min_host_version semver/url https/
-    /// sha256 64hex/signature 128hex/abi_version 非空/capabilities 语法合法）
-    fn validate(&self) -> Result<()> {
-        if self.id.is_empty() {
-            bail!("插件 id 不能为空");
+    /// 校验单条目字段（id 白名单/version semver/min_host_version semver/url https/
+    /// sha256 64hex/signature 128hex/abi_version 非空/capabilities 语法合法）。
+    /// pub：命令层 `cmd_install_from_registry` 收到前端传入 entry 后须重新校验。
+    pub fn validate(&self) -> Result<()> {
+        if !crate::plugin::manifest::is_safe_plugin_id(&self.id) {
+            bail!("插件 id 含非法字符（仅字母数字/-/_，≤64）: {}", self.id);
         }
         if self.version.is_empty() {
             bail!("插件 {} version 不能为空", self.id);
@@ -183,7 +184,10 @@ impl RegistryEntry {
 
     /// 校验下载的插件包字节：sha256 完整性 + Ed25519 来源签名。
     ///
-    /// `pubkey` 为受信的插件签名公钥（与 registry 签名公钥可独立或共用，由发布约定）。
+    /// `pubkey` 为受信公钥——当前实现使用**配置的 registry 公钥**（单 key 模型：
+    /// 同一密钥签注册表与插件包，见 `cmd_install_from_registry`）。未来若要分离
+    /// （注册表 key 与插件 key 独立，避免单 key 泄露同时崩两边），扩展
+    /// `PluginRegistryConfig` 加 `plugin_pubkey`，此处改用之。
     /// 下载后、安装前调用——任一失败拒绝该包。
     pub fn verify_bundle(&self, bundle: &[u8], pubkey: &[u8]) -> Result<()> {
         let hash = Sha256::digest(bundle);
@@ -240,9 +244,17 @@ where
     PluginRegistryIndex::parse(&toml_str)
 }
 
-/// 生产 HTTP 传输：reqwest GET → bytes（注册表是小 TOML，无需流式）。
-pub async fn http_fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
-    let resp = client
+/// 注册表索引（registry.toml + .sig）最大字节数——防放大攻击 OOM
+pub const MAX_REGISTRY_BYTES: u64 = 8 * 1024 * 1024;
+/// 插件包（bundle）最大字节数——防超大下载 OOM
+pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 生产 HTTP 传输：reqwest GET → bytes，带 `max_bytes` 流式上限（防放大/OOM）。
+///
+/// Content-Length 预检（可伪造但挡多数放大）+ 流式累加超限中止（防伪造
+/// Content-Length 的真实放大）。
+pub async fn http_fetch(client: &reqwest::Client, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    let mut resp = client
         .get(url)
         .send()
         .await
@@ -250,11 +262,23 @@ pub async fn http_fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> 
     if !resp.status().is_success() {
         bail!("GET {url} 返回非成功状态: {}", resp.status());
     }
-    let bytes = resp
-        .bytes()
+    if let Some(len) = resp.content_length() {
+        if len > max_bytes {
+            bail!("GET {url} 响应过大（Content-Length {len} > 上限 {max_bytes}）");
+        }
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
         .await
-        .with_context(|| format!("读 {url} 响应体失败"))?;
-    Ok(bytes.to_vec())
+        .with_context(|| format!("读 {url} 响应体失败"))?
+    {
+        if buf.len() + chunk.len() > max_bytes as usize {
+            bail!("GET {url} 响应超过上限 {max_bytes} 字节（防 OOM）");
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 /// 安全解压 tar.gz 到 `dest`——拒绝路径逃逸条目（防 tar-slip：`../` 越界、绝对路径、
