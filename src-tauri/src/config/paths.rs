@@ -25,6 +25,11 @@ impl ConfigPaths {
         self.app_data.join("config").join("user.toml")
     }
 
+    /// 注册表缓存文件路径（网络失败时离线回退用）
+    pub fn registry_cache(&self) -> PathBuf {
+        self.app_data.join("config").join("registry-cache.toml")
+    }
+
     /// 工作区配置文件路径
     pub fn workspace_config(&self, workspace_id: &str) -> PathBuf {
         self.app_data
@@ -83,6 +88,9 @@ mod tests {
 
         let user = paths.user_config();
         assert!(user.ends_with("config/user.toml"));
+
+        let cache = paths.registry_cache();
+        assert!(cache.ends_with("config/registry-cache.toml"));
 
         let workspace = paths.workspace_config("ws-123");
         assert!(workspace.ends_with("config/workspace-ws-123/config.toml"));

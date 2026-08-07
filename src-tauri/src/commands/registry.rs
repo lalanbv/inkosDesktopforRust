@@ -14,7 +14,7 @@ use std::time::Duration;
 /// 避免 config 读取 + client 构造逻辑重复。
 async fn registry_source_and_client(
     config_state: &AppState,
-) -> Result<(String, Vec<u8>, reqwest::Client), String> {
+) -> Result<(String, Vec<u8>, reqwest::Client, std::path::PathBuf), String> {
     // 单次取锁提取来源参数后立即释放——不在持 config 锁时做网络 I/O（同 update_config H1）
     let (url, pubkey_hex, timeout_secs) = {
         let mut mgr = config_state.config.lock().await;
@@ -35,7 +35,9 @@ async fn registry_source_and_client(
         .timeout(Duration::from_secs(timeout_secs.max(1) as u64))
         .build()
         .map_err(|e| format!("构造 HTTP client 失败: {}", e))?;
-    Ok((url, pubkey, client))
+    // 缓存路径（网络失败时离线回退）
+    let cache_path = config_state.config_loader.paths().registry_cache();
+    Ok((url, pubkey, client, cache_path))
 }
 
 /// 下载 + 验签 + 安全解压 bundle 到临时目录。install/update 命令共用（安全关键
@@ -61,21 +63,44 @@ async fn download_verify_extract(
     Ok(temp)
 }
 
-/// 拉取并验签注册表索引（registry.toml + .sig，`MAX_REGISTRY_BYTES` 限流）。
-/// fetch / check / list 命令共用，消除 fetch 闭包重复。
+/// 拉取并验签注册表索引（`MAX_REGISTRY_BYTES` 限流）+ **缓存**：
+/// 网络成功 → 序列化已验签索引到 cache_path；网络/验签/解析失败 → 回退本地缓存
+/// （离线韧性）。fetch / check / list 共用。
 async fn fetch_registry_index(
     url: &str,
     pubkey: &[u8],
     client: &reqwest::Client,
+    cache_path: &std::path::Path,
 ) -> Result<registry::PluginRegistryIndex, String> {
-    registry::fetch_registry(url, pubkey, |u| {
+    match registry::fetch_registry(url, pubkey, |u| {
         let url_owned = u.to_string();
         async move {
             registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
         }
     })
     .await
-    .map_err(|e| e.to_string())
+    {
+        Ok(index) => {
+            // best-effort 缓存（序列化已验签索引；写失败仅 warn，不阻断本次）
+            if let Ok(toml_str) = toml::to_string(&index) {
+                if let Err(e) = std::fs::write(cache_path, toml_str) {
+                    tracing::warn!("写注册表缓存失败（不影响本次）: {e}");
+                }
+            }
+            Ok(index)
+        }
+        Err(e) => {
+            // 网络/验签/解析失败 → 回退本地缓存（离线韧性；缓存来自上次已验签索引）
+            match std::fs::read_to_string(cache_path) {
+                Ok(cached) => {
+                    tracing::warn!("注册表拉取失败，使用本地缓存（可能过期）: {e}");
+                    registry::PluginRegistryIndex::parse(&cached)
+                        .map_err(|pe| format!("缓存解析失败: {pe}"))
+                }
+                Err(_) => Err(format!("注册表拉取失败且无本地缓存: {e}")),
+            }
+        }
+    }
 }
 
 /// 拉取插件注册表，按宿主兼容性过滤后返回可装条目。
@@ -83,8 +108,8 @@ async fn fetch_registry_index(
 pub async fn cmd_fetch_plugin_registry(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<RegistryEntry>, String> {
-    let (url, pubkey, client) = registry_source_and_client(&state).await?;
-    let index = fetch_registry_index(&url, &pubkey, &client).await?;
+    let (url, pubkey, client, cache_path) = registry_source_and_client(&state).await?;
+    let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
 
     let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
         .expect("CARGO_PKG_VERSION 须为合法 semver");
@@ -104,7 +129,7 @@ pub async fn cmd_install_from_registry(
     config_state: tauri::State<'_, AppState>,
     plugin_state: tauri::State<'_, PluginState>,
 ) -> Result<PluginMetadata, String> {
-    let (_url, pubkey, client) = registry_source_and_client(&config_state).await?;
+    let (_url, pubkey, client, _cache_path) = registry_source_and_client(&config_state).await?;
     let temp = download_verify_extract(&entry, &pubkey, &client).await?;
     let source = temp.path().to_string_lossy().to_string();
     let mut manager = plugin_state.manager.lock().await;
@@ -121,7 +146,7 @@ pub async fn cmd_update_plugin_from_registry(
     config_state: tauri::State<'_, AppState>,
     plugin_state: tauri::State<'_, PluginState>,
 ) -> Result<PluginMetadata, String> {
-    let (_url, pubkey, client) = registry_source_and_client(&config_state).await?;
+    let (_url, pubkey, client, _cache_path) = registry_source_and_client(&config_state).await?;
     let temp = download_verify_extract(&entry, &pubkey, &client).await?;
     let source = temp.path().to_string_lossy().to_string();
     let mut manager = plugin_state.manager.lock().await;
@@ -137,16 +162,8 @@ pub async fn cmd_check_plugin_updates(
     config_state: tauri::State<'_, AppState>,
     plugin_state: tauri::State<'_, PluginState>,
 ) -> Result<Vec<UpdateInfo>, String> {
-    let (url, pubkey, client) = registry_source_and_client(&config_state).await?;
-    let index = registry::fetch_registry(&url, &pubkey, |u| {
-        let url_owned = u.to_string();
-        let client = &client;
-        async move {
-            registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let (url, pubkey, client, cache_path) = registry_source_and_client(&config_state).await?;
+    let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
 
     let installed: Vec<(String, String)> = {
         let manager = plugin_state.manager.lock().await;
@@ -165,7 +182,7 @@ pub async fn cmd_list_plugin_versions(
     id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<RegistryEntry>, String> {
-    let (url, pubkey, client) = registry_source_and_client(&state).await?;
-    let index = fetch_registry_index(&url, &pubkey, &client).await?;
+    let (url, pubkey, client, cache_path) = registry_source_and_client(&state).await?;
+    let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
     Ok(index.find_all_versions(&id).into_iter().cloned().collect())
 }
