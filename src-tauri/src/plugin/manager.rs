@@ -279,6 +279,8 @@ impl PluginManager {
 
         metadata.enabled = true;
         self.installed.insert(id.to_string(), metadata);
+        // 启用时也清理残留计数（防御性：确保重新启用后从零开始）
+        self.consec_failures.remove(id);
 
         info!(id = %id, "插件已启用");
         Ok(())
