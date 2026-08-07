@@ -61,22 +61,30 @@ async fn download_verify_extract(
     Ok(temp)
 }
 
+/// 拉取并验签注册表索引（registry.toml + .sig，`MAX_REGISTRY_BYTES` 限流）。
+/// fetch / check / list 命令共用，消除 fetch 闭包重复。
+async fn fetch_registry_index(
+    url: &str,
+    pubkey: &[u8],
+    client: &reqwest::Client,
+) -> Result<registry::PluginRegistryIndex, String> {
+    registry::fetch_registry(url, pubkey, |u| {
+        let url_owned = u.to_string();
+        async move {
+            registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// 拉取插件注册表，按宿主兼容性过滤后返回可装条目。
 #[tauri::command]
 pub async fn cmd_fetch_plugin_registry(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<RegistryEntry>, String> {
     let (url, pubkey, client) = registry_source_and_client(&state).await?;
-    let index = registry::fetch_registry(&url, &pubkey, |u| {
-        // own url（future 不借用闭包参数 u 的生命周期）；client 为外层长效借用
-        let url_owned = u.to_string();
-        let client = &client;
-        async move {
-            registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let index = fetch_registry_index(&url, &pubkey, &client).await?;
 
     let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
         .expect("CARGO_PKG_VERSION 须为合法 semver");
@@ -149,4 +157,15 @@ pub async fn cmd_check_plugin_updates(
             .collect()
     };
     Ok(registry::check_updates(&installed, &index))
+}
+
+/// 列出某插件在注册表中的全部版本（降序），供版本选择器（锁定/回滚指定版本）。
+#[tauri::command]
+pub async fn cmd_list_plugin_versions(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<RegistryEntry>, String> {
+    let (url, pubkey, client) = registry_source_and_client(&state).await?;
+    let index = fetch_registry_index(&url, &pubkey, &client).await?;
+    Ok(index.find_all_versions(&id).into_iter().cloned().collect())
 }

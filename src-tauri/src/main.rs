@@ -207,6 +207,7 @@ fn main() {
             commands::registry::cmd_install_from_registry,
             commands::registry::cmd_update_plugin_from_registry,
             commands::registry::cmd_check_plugin_updates,
+            commands::registry::cmd_list_plugin_versions,
             inkos_desktop::project::commands::scan_projects,
             inkos_desktop::project::commands::add_project,
             inkos_desktop::project::commands::remove_project,

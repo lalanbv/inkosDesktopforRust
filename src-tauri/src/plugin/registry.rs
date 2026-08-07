@@ -133,6 +133,18 @@ impl PluginRegistryIndex {
             .find(|e| e.id == id && Version::parse(&e.version).ok().as_ref() == Some(version))
     }
 
+    /// 列出某 id 的全部版本条目，按 semver 降序（最高在前）。供版本选择器 UI。
+    pub fn find_all_versions(&self, id: &str) -> Vec<&RegistryEntry> {
+        let mut versions: Vec<(&RegistryEntry, Version)> = self
+            .plugins
+            .iter()
+            .filter(|e| e.id == id)
+            .filter_map(|e| Version::parse(&e.version).ok().map(|v| (e, v)))
+            .collect();
+        versions.sort_by(|a, b| b.1.cmp(&a.1)); // 降序
+        versions.into_iter().map(|(e, _)| e).collect()
+    }
+
     /// 返回每个 id 下**最高兼容版本**的条目（去重 + 兼容过滤）。
     /// 供 browse：一个插件只展示其最新可用版本。版本排序后 id 字典序，UI 稳定。
     pub fn latest_compatible(
@@ -542,6 +554,18 @@ capabilities = []
         let latest = idx.latest_compatible(&host, "1");
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].version, "2.1.3");
+    }
+
+    #[test]
+    fn test_find_all_versions_desc() {
+        let toml = valid_registry_toml()
+            .replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let versions = idx.find_all_versions("example-plugin");
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].version, "2.1.3"); // 降序：最高在前
+        assert_eq!(versions[1].version, "1.0.0");
+        assert!(idx.find_all_versions("nope").is_empty());
     }
 
     #[test]

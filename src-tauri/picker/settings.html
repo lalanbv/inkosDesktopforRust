@@ -275,6 +275,9 @@
           "market.updating": "更新中…",
           "market.update_done": "已更新：",
           "market.update_fail": "更新失败：",
+          "market.other_versions": "其他版本",
+          "market.install_this": "安装此版本",
+          "market.no_other_versions": "无其他版本",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -339,6 +342,9 @@
           "market.updating": "Updating…",
           "market.update_done": "Updated: ",
           "market.update_fail": "Update failed: ",
+          "market.other_versions": "Other Versions",
+          "market.install_this": "Install This Version",
+          "market.no_other_versions": "No other versions.",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -702,33 +708,33 @@
         }
         for (const e of entries) {
           const li = document.createElement("li");
-          li.style.display = "flex";
-          li.style.justifyContent = "space-between";
-          li.style.alignItems = "center";
-          li.style.gap = "0.8rem";
+
+          // 顶行：信息 + 动作（安装/更新 + 其他版本）
+          const topRow = document.createElement("div");
+          topRow.style.display = "flex";
+          topRow.style.justifyContent = "space-between";
+          topRow.style.alignItems = "center";
+          topRow.style.gap = "0.8rem";
+
           const info = document.createElement("div");
           info.className = "plugin-info";
-
           const name = document.createElement("div");
           name.className = "plugin-name";
           name.textContent = `${e.name || e.id} v${e.version || "?"}`;
           info.appendChild(name);
-
           const meta = document.createElement("div");
           meta.className = "plugin-meta";
           const caps = (e.capabilities || []).map(capabilityLabel).join("、") || "无权限声明";
           meta.textContent = `${e.id} · ${e.author || "?"} · ${caps}`;
           info.appendChild(meta);
-
           if (e.description) {
             const desc = document.createElement("div");
             desc.className = "metrics";
             desc.textContent = e.description;
             info.appendChild(desc);
           }
-          li.appendChild(info);
+          topRow.appendChild(info);
 
-          // 安装/更新按钮（upMap 命中→「更新」走 updateFromRegistry，否则「安装」）
           const actions = document.createElement("div");
           actions.className = "plugin-actions";
           const hasUpdate = upMap && upMap.has(e.id);
@@ -739,8 +745,19 @@
             hasUpdate ? updateFromRegistry(e) : installFromRegistry(e)
           );
           actions.appendChild(installBtn);
-          li.appendChild(actions);
+          // 「其他版本」展开（锁定/回滚指定版本）
+          const versionsBtn = document.createElement("button");
+          versionsBtn.className = "small";
+          versionsBtn.textContent = t("market.other_versions");
+          const versionsDiv = document.createElement("div");
+          versionsDiv.className = "hidden";
+          versionsDiv.style.marginTop = "0.5rem";
+          versionsBtn.addEventListener("click", () => toggleVersions(e.id, versionsDiv));
+          actions.appendChild(versionsBtn);
+          topRow.appendChild(actions);
 
+          li.appendChild(topRow);
+          li.appendChild(versionsDiv);
           listEl.appendChild(li);
         }
       }
@@ -794,6 +811,42 @@
         } catch (e) {
           msgEl.className = "form-msg err";
           msgEl.textContent = t("market.update_fail") + String(e);
+        }
+      }
+
+      // 展开/收起某插件的全部版本（锁定/回滚指定版本）。首次加载后仅切换显隐。
+      async function toggleVersions(id, container) {
+        if (container.dataset.loaded) {
+          container.classList.toggle("hidden");
+          return;
+        }
+        try {
+          const versions = await invoke("cmd_list_plugin_versions", { id });
+          container.innerHTML = "";
+          if (versions.length <= 1) {
+            container.textContent = t("market.no_other_versions");
+          } else {
+            for (const v of versions) {
+              const row = document.createElement("div");
+              row.style.margin = "0.25rem 0";
+              const label = document.createElement("span");
+              label.className = "metrics";
+              label.style.marginRight = "0.5rem";
+              label.textContent = `v${v.version}`;
+              row.appendChild(label);
+              const btn = document.createElement("button");
+              btn.className = "small";
+              btn.textContent = t("market.install_this");
+              btn.addEventListener("click", () => installFromRegistry(v));
+              row.appendChild(btn);
+              container.appendChild(row);
+            }
+          }
+          container.dataset.loaded = "1";
+          container.classList.remove("hidden");
+        } catch (e) {
+          container.textContent = t("market.load_fail") + String(e);
+          container.classList.remove("hidden");
         }
       }
 
