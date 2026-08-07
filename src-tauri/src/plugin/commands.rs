@@ -113,6 +113,20 @@ pub async fn get_plugin_metrics(
     Ok(manager.metrics())
 }
 
+/// 向所有已启用 WASM 插件派发事件（`plugin.on-event`）。
+///
+/// 调用方在项目打开、文件保存、配置变更等时机触发；单个插件失败 warn + 继续。
+#[tauri::command]
+pub async fn cmd_broadcast_event(
+    event: String,
+    payload: String,
+    state: State<'_, PluginState>,
+) -> Result<(), String> {
+    let mut manager = state.manager.lock().await;
+    manager.broadcast_event(&event, &payload);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

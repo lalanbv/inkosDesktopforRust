@@ -229,6 +229,7 @@ fn main() {
             inkos_desktop::plugin::commands::get_plugin,
             inkos_desktop::plugin::commands::execute_plugin,
             inkos_desktop::plugin::commands::get_plugin_metrics,
+            inkos_desktop::plugin::commands::cmd_broadcast_event,
         ])
         .manage(SidecarState::new())
         .manage(LoopbackGuardState::new())
