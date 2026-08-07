@@ -50,14 +50,22 @@ impl HostContext {
 
         self.metadata.capabilities.iter().any(|cap| {
             if let Capability::Filesystem { path: allowed_path } = cap {
+                // 只认绝对路径声明：相对路径的 canonicalize 相对**宿主进程 CWD**
+                // 解析（而非插件 work_dir），`filesystem:.` 在 CWD 恰为 work_dir
+                // 祖先时会静默放开全量访问。manifest 侧已 fail-closed 拒绝相对路径，
+                // 这里是纵深防御——覆盖绕过 manifest 写入的旧 metadata。
+                let allowed = Path::new(allowed_path);
+                if !allowed.is_absolute() {
+                    return false;
+                }
                 // 尝试规范化允许的路径
-                if let Ok(canonical_allowed) = Path::new(allowed_path).canonicalize() {
+                if let Ok(canonical_allowed) = allowed.canonicalize() {
                     if let (Some(ref cwd), Some(ref cp)) = (&canonical_work_dir, &canonical_path) {
                         // 比较规范化后的路径：允许的路径包含 work_dir 或者文件在允许路径下
                         return cwd.starts_with(&canonical_allowed) || cp.starts_with(&canonical_allowed);
                     }
                 }
-                // 回退到字符串比较
+                // 回退到字符串比较（allowed_path 已确认为绝对路径）
                 path.starts_with(allowed_path)
             } else {
                 false
@@ -757,6 +765,45 @@ mod tests {
         let (ctx, _temp) = create_test_context(vec![]);
         let result = ctx.write_file("test.txt", "content");
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
+    }
+
+    #[test]
+    fn test_filesystem_capability_ignores_relative_allowed_path() {
+        // 纵深防御：即使 metadata 绕过 manifest 校验带了相对路径声明，
+        // has_filesystem_capability 也不得据此放开访问（相对路径的
+        // canonicalize 相对宿主 CWD 解析，可意外覆盖 work_dir）。
+        let temp = TempDir::new().unwrap();
+        let temp_path = temp.path().canonicalize().unwrap();
+        let target = temp_path.join("data.txt");
+        std::fs::write(&target, "secret").unwrap();
+
+        for relative in [".", "..", "sub/dir", ""] {
+            let metadata = PluginMetadata {
+                id: "rel-fs".to_string(),
+                name: "RelFs".to_string(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                homepage: None,
+                license: String::new(),
+                abi_version: "1".to_string(),
+                capabilities: vec![
+                    Capability::ReadProject,
+                    Capability::Filesystem {
+                        path: relative.to_string(),
+                    },
+                ],
+                entrypoint: "plugin.wasm".to_string(),
+                dependencies: HashMap::new(),
+                enabled: true,
+            };
+            let ctx = HostContext::new(metadata, temp_path.clone());
+            let result = ctx.read_file("data.txt");
+            assert!(
+                matches!(result, Err(PluginError::PermissionDenied(_))),
+                "相对路径声明 {relative:?} 不应授予访问，实际: {result:?}"
+            );
+        }
     }
 
     #[test]

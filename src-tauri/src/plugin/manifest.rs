@@ -216,6 +216,13 @@ pub(crate) fn parse_capability(s: &str) -> Option<Capability> {    match s {
         }
         _ if s.starts_with("filesystem:") => {
             let path = s.strip_prefix("filesystem:").unwrap().to_string();
+            // 只接受绝对路径：相对路径在 has_filesystem_capability 中会相对
+            // **宿主进程 CWD** 解析（而非插件 work_dir），`filesystem:.` 之类
+            // 声明可意外匹配到 work_dir 全量访问，而安装时权限提示看起来无害。
+            // fail-closed 拒绝，逼迫声明方写明确的绝对路径。
+            if path.is_empty() || !Path::new(&path).is_absolute() {
+                return None;
+            }
             Some(Capability::Filesystem { path })
         }
         _ => None,
@@ -251,6 +258,20 @@ mod tests {
                 path: "/tmp".to_string()
             })
         );
+        // 相对路径 fail-closed：canonicalize 会相对宿主 CWD 解析，
+        // `filesystem:.` 在 CWD 为 work_dir 祖先时可绕过为全量访问。
+        assert_eq!(parse_capability("filesystem:."), None, "相对路径 `.` 应拒绝");
+        assert_eq!(
+            parse_capability("filesystem:../../etc"),
+            None,
+            "相对路径 `..` 应拒绝"
+        );
+        assert_eq!(
+            parse_capability("filesystem:sub/dir"),
+            None,
+            "无前导斜杠的相对路径应拒绝"
+        );
+        assert_eq!(parse_capability("filesystem:"), None, "空路径应拒绝");
         // system_command 白名单
         assert_eq!(
             parse_capability("system_command"),
