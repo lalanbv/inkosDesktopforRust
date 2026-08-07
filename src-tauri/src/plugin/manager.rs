@@ -26,6 +26,8 @@ pub struct PluginMetrics {
     pub exec_total_us: u64,
     /// 失败次数
     pub exec_failures: u64,
+    /// 连续失败自动禁用累计次数（session 内）：频繁 > 0 说明插件系统不稳定
+    pub auto_disabled_count: u64,
     /// 平均每次耗时（微秒）= total_us / count，count=0 时为 0
     pub avg_us: u64,
     /// per-plugin 连续失败当前状态（仅含 consec_failures > 0 的插件）
@@ -61,6 +63,9 @@ pub struct PluginManager {
     /// 遥测：execute_plugin 失败次数
     exec_failures: std::sync::atomic::AtomicU64,
 
+    /// 遥测：连续失败自动禁用累计次数（session 内）。前端可据此判断系统稳定性。
+    exec_auto_disabled: std::sync::atomic::AtomicU64,
+
     /// 遥测：per-plugin 连续失败计数（最近一次成功后归零）。
     /// 达 `CONSECUTIVE_FAIL_THRESHOLD` 时自动 disable_plugin + tracing warn。
     /// 用 HashMap 非原子，因修改须在 execute_plugin（&mut self）持有期间进行。
@@ -83,6 +88,7 @@ impl PluginManager {
             exec_count: std::sync::atomic::AtomicU64::new(0),
             exec_total_us: std::sync::atomic::AtomicU64::new(0),
             exec_failures: std::sync::atomic::AtomicU64::new(0),
+            exec_auto_disabled: std::sync::atomic::AtomicU64::new(0),
             consec_failures: HashMap::new(),
         };
 
@@ -373,6 +379,7 @@ impl PluginManager {
                 );
                 // disable_plugin 已处理: installed.enabled=false + wasm_cache evict
                 let _ = self.disable_plugin(id);
+                self.exec_auto_disabled.fetch_add(1, Relaxed);
                 // 结构化健康事件：落进 JSON 日志 + 暴露给前端（与手动 disable 广播一致）
                 tracing::info!(
                     target: "inkos.plugin.health",
@@ -414,6 +421,7 @@ impl PluginManager {
             exec_total_us: total_us,
             exec_failures: failures,
             avg_us: if count > 0 { total_us / count } else { 0 },
+            auto_disabled_count: self.exec_auto_disabled.load(Relaxed),
             per_plugin,
         }
     }
