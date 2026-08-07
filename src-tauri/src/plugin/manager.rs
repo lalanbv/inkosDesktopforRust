@@ -813,8 +813,10 @@ entrypoint = "plugin.wasm"
     }
 
     #[test]
-    fn test_broadcast_event_skips_process_plugins() {
-        // 进程隔离插件（非 .wasm entrypoint）不参与 broadcast。
+    fn test_broadcast_event_ignores_not_started_process_plugin() {
+        // 进程隔离插件在 installed 但未启动（不在 running）→ 两路均跳过：
+        // WASM 路径：非 .wasm entrypoint → 过滤；进程路径：不在 running → keys() 无此 id。
+        // wasm_cache 不应被污染（未尝试编译非 wasm 插件）。
         let temp = TempDir::new().unwrap();
         let plugins_dir = temp.path().join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
