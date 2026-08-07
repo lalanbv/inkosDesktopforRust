@@ -3,7 +3,7 @@
 use super::protocol::{RpcRequest, RpcResponse};
 use super::types::{PluginError, PluginMetadata};
 use anyhow::{Context, Result};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +31,11 @@ pub struct PluginProcess {
 
 /// 优雅关闭等待窗：先通知 → 等待进程自行退出 → 超时再 kill。
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 200;
+
+/// 单次 RPC 响应的最大字节数。插件是不可信代码，`read_line` 无上限时可单行
+/// 写数 GB 在 RPC_TIMEOUT 到达前撑爆内存——超时防挂死，不防 OOM。
+/// 8 MiB 对 JSON-RPC 响应远超充裕（与 `host_api` 的 HTTP 响应上限一致）。
+const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// 单条 stderr 行转发进日志的最大字节数——超出截断。
 /// 插件可写单行数 MB 撑爆日志条目；日志行应保持可读。
@@ -164,10 +169,22 @@ impl PluginProcess {
             let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
             std::thread::spawn(move || {
                 let result = stdout_arc.lock().map_err(|_| "Failed to lock stdout".to_string()).and_then(|mut out| {
-                    let mut line = String::new();
-                    out.read_line(&mut line)
-                        .map(|_| line)
-                        .map_err(|e| format!("Failed to read response: {}", e))
+                    // 限量读：read_line 无长度上限，插件可单行写数 GB 在 RPC 超时前
+                    // 撑爆内存（超时防挂死，不防 OOM——数百 MB/s 写入 5s 足以耗尽内存）。
+                    // Read::take 限制字节数，超限即判协议违规并 Err。
+                    let mut line = Vec::new();
+                    let mut limited = Read::take(&mut *out, MAX_RESPONSE_BYTES + 1);
+                    limited
+                        .read_until(b'\n', &mut line)
+                        .map_err(|e| format!("Failed to read response: {}", e))?;
+                    if line.len() as u64 > MAX_RESPONSE_BYTES {
+                        return Err(format!(
+                            "插件响应超上限 {} 字节（协议违规），拒绝",
+                            MAX_RESPONSE_BYTES
+                        ));
+                    }
+                    String::from_utf8(line)
+                        .map_err(|_| "插件响应非合法 UTF-8".to_string())
                 });
                 let _ = tx.send(result);
             });
@@ -414,6 +431,43 @@ mod tests {
         // 进程应正常退出（排空线程不影响其生命周期）
         let status = child.wait().expect("wait 应成功");
         assert!(status.success(), "插件应正常退出，实际: {status:?}");
+    }
+
+    /// 响应体积上限拦截：单行写超 MAX_RESPONSE_BYTES 应被拒，而非 OOM。
+    /// 用 dd 快速产出 8MiB+1 超量响应（awk 拼字符串太慢会超 RPC_TIMEOUT）。
+    #[test]
+    fn test_oversized_response_rejected() {
+        let oversized = (MAX_RESPONSE_BYTES / 1024) + 1; // KB 为单位给 dd
+        // dd 读 /dev/zero 输出 oversized KB，tr 把 \0 换成 x（可打印），后跟 \n
+        let script = format!(
+            r#"read line; dd if=/dev/zero bs=1024 count={} 2>/dev/null | tr '\0' 'x'; echo"#,
+            oversized
+        );
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(&script);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let Ok(mut child) = cmd.spawn() else { return };
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+
+        let process = PluginProcess {
+            metadata: metadata_with("oversized-resp", "sh"),
+            child: Arc::new(Mutex::new(child)),
+            stdin: Arc::new(Mutex::new(stdin)),
+            stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
+            next_id: Arc::new(Mutex::new(1)),
+        };
+
+        let result = process.call("whatever", None);
+        let _ = process.stop();
+        assert!(result.is_err(), "超上限响应应被拒绝");
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("超上限") || err_msg.contains("协议违规"),
+            "错误应指明体积超限，实际: {err_msg}"
+        );
     }
 
     #[test]
