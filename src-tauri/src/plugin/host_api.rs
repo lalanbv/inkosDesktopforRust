@@ -394,7 +394,7 @@ impl HostContext {
 
         // 输出大小守卫：防进程输出 GB 级数据 OOM 宿主。超限时截断前 N 字节，
         // 不报错（允许插件处理截断输出）；截断信息在 stderr 末尾追加标记。
-        const MAX_EXEC_OUTPUT_BYTES: usize = 1 * 1024 * 1024; // 1 MiB per stream
+        const MAX_EXEC_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB per stream
         let truncate = |bytes: &[u8]| -> String {
             if bytes.len() > MAX_EXEC_OUTPUT_BYTES {
                 let mut s = String::from_utf8_lossy(&bytes[..MAX_EXEC_OUTPUT_BYTES]).to_string();
