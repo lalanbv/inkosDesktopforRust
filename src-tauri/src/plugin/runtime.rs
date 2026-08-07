@@ -49,6 +49,12 @@ const DEFAULT_EPOCH_DEADLINE: u64 = 10;
 /// 插件收到 trap，不传播到宿主。
 const WASM_MAX_MEMORY_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 
+/// WASM 插件单实例函数表元素上限。
+///
+/// 防止 table.grow 攻击（分配数百万个引用型函数表槽位，每槽 ~8B → 消耗大量内存）。
+/// 1M 元素（~8 MiB 表空间）远超实际插件所需，同时限制恶意耗尽。
+const WASM_MAX_TABLE_ELEMENTS: usize = 1_000_000;
+
 /// WASM 插件实例（已编译，可复用）
 ///
 /// `Engine`、`Component`、`Linker` 在多次 `execute` 间复用，避免重复编译与
@@ -277,6 +283,7 @@ impl WasmPlugin {
 
         let limits = StoreLimitsBuilder::new()
             .memory_size(WASM_MAX_MEMORY_BYTES)
+            .table_elements(WASM_MAX_TABLE_ELEMENTS)
             .build();
 
         let state = PluginState {
