@@ -124,6 +124,21 @@ impl inkos::plugin::host::Host for PluginState {
             _ => tracing::trace!(plugin_log = %message),
         }
     }
+
+    fn exec_command(
+        &mut self,
+        command: String,
+        args: Vec<String>,
+    ) -> Result<inkos::plugin::host::ExecResult, String> {
+        self.host
+            .exec_command(&command, &args)
+            .map(|r| inkos::plugin::host::ExecResult {
+                stdout: r.stdout,
+                stderr: r.stderr,
+                exit_code: r.exit_code,
+            })
+            .map_err(|e| e.to_string())
+    }
 }
 
 impl WasmPlugin {

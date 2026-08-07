@@ -37,6 +37,16 @@ interface host {
 
     /// 结构化日志（level: error/warn/info/debug/trace）
     log: func(level: string, message: string);
+
+    /// 执行系统命令（需 system_command 权限 + 命令在 allowed_commands 白名单内）。
+    /// stdout/stderr/exit-code 封装于 exec-result；命令不在白名单 → err。
+    /// 仅允许裸命令名（宿主已经 is_safe_command_name 校验），args 由宿主原样传递。
+    record exec-result {
+        stdout: string,
+        stderr: string,
+        exit-code: s32,
+    }
+    exec-command: func(command: string, args: list<string>) -> result<exec-result, string>;
 }
 
 /// 插件必须实现的功能。宿主通过 bindgen 生成的类型化接口调用。
