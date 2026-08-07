@@ -22,7 +22,7 @@ use flate2::read::GzDecoder;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path};
 use tar::Archive;
 
@@ -89,7 +89,7 @@ impl PluginRegistryIndex {
         Ok(index)
     }
 
-    /// 校验：格式版本 + id 唯一 + 每条目字段
+    /// 校验：格式版本 + 每条目字段（多版本：同 id 允许多个条目，不同版本）
     fn validate(&self) -> Result<()> {
         if self.version != REGISTRY_FORMAT_VERSION {
             bail!(
@@ -98,14 +98,10 @@ impl PluginRegistryIndex {
                 REGISTRY_FORMAT_VERSION
             );
         }
-        let mut seen: HashSet<&str> = HashSet::new();
         for entry in self.plugins.iter() {
             // entry.validate 的消息已含 id（如「插件 X version 非法 semver」），
             // 不再套 with_context——避免 anyhow to_string 只露外层 context、埋掉根因。
             entry.validate()?;
-            if !seen.insert(entry.id.as_str()) {
-                bail!("注册表含重复插件 id: {}（v1 要求 id 唯一）", entry.id);
-            }
         }
         Ok(())
     }
@@ -120,9 +116,43 @@ impl PluginRegistryIndex {
             .context("注册表签名验证失败——拒绝该注册表（可能被篡改）")
     }
 
-    /// 按 id 查找条目
-    pub fn find(&self, id: &str) -> Option<&RegistryEntry> {
-        self.plugins.iter().find(|e| e.id == id)
+    /// 按 id 查找**最高版本**条目（多版本注册表：同 id 可有多条，取 semver 最高）。
+    pub fn find_latest(&self, id: &str) -> Option<&RegistryEntry> {
+        self.plugins
+            .iter()
+            .filter(|e| e.id == id)
+            .filter_map(|e| Version::parse(&e.version).ok().map(|v| (e, v)))
+            .max_by(|a, b| a.1.cmp(&b.1))
+            .map(|(e, _)| e)
+    }
+
+    /// 按 id + 精确版本查找（锁定/回滚指定版本用）。
+    pub fn find_version(&self, id: &str, version: &Version) -> Option<&RegistryEntry> {
+        self.plugins
+            .iter()
+            .find(|e| e.id == id && Version::parse(&e.version).ok().as_ref() == Some(version))
+    }
+
+    /// 返回每个 id 下**最高兼容版本**的条目（去重 + 兼容过滤）。
+    /// 供 browse：一个插件只展示其最新可用版本。版本排序后 id 字典序，UI 稳定。
+    pub fn latest_compatible(
+        &self,
+        host_version: &Version,
+        host_abi: &str,
+    ) -> Vec<&RegistryEntry> {
+        let mut ids: Vec<&str> = self.plugins.iter().map(|e| e.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+            .filter_map(|id| {
+                self.plugins
+                    .iter()
+                    .filter(|e| e.id == id && e.is_compatible_with(host_version, host_abi))
+                    .filter_map(|e| Version::parse(&e.version).ok().map(|v| (e, v)))
+                    .max_by(|a, b| a.1.cmp(&b.1))
+                    .map(|(e, _)| e)
+            })
+            .collect()
     }
 }
 
@@ -221,15 +251,15 @@ pub struct UpdateInfo {
     pub available_version: String,
 }
 
-/// 比较已装插件与注册表，返回有更新（registry 版本 > installed）的列表。
+/// 比较已装插件与注册表，返回有更新（registry 最高版本 > installed）的列表。
 ///
-/// 纯函数：注册表 v1 为 id-唯一（=最新版），故按 id 查找条目并做 semver 比较。
+/// 纯函数：注册表支持多版本（同 id 多条），`find_latest` 取最高版本做 semver 比较。
 /// 版本不可解析的条目跳过（不 panic）。
 pub fn check_updates(installed: &[(String, String)], registry: &PluginRegistryIndex) -> Vec<UpdateInfo> {
     installed
         .iter()
         .filter_map(|(id, cur)| {
-            let entry = registry.find(id)?;
+            let entry = registry.find_latest(id)?;
             let Ok(avail) = Version::parse(&entry.version) else {
                 return None;
             };
@@ -490,11 +520,28 @@ capabilities = []
     }
 
     #[test]
-    fn test_parse_rejects_duplicate_id() {
-        // 把 another-plugin 的 id 改成与 example-plugin 重复
-        let toml = valid_registry_toml().replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
-        let err = PluginRegistryIndex::parse(&toml).unwrap_err();
-        assert!(err.to_string().contains("重复插件 id"));
+    fn test_multi_version_find_latest_and_compatible() {
+        // 多版本：把 another-plugin 改成 example-plugin 的另一版本（2.1.3）
+        let toml = valid_registry_toml()
+            .replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
+        let idx = PluginRegistryIndex::parse(&toml).unwrap(); // 多版本（同 id）允许
+
+        // find_latest 取最高版本
+        assert_eq!(
+            idx.find_latest("example-plugin").map(|e| e.version.as_str()),
+            Some("2.1.3")
+        );
+        // find_version 取指定版本（锁定/回滚）
+        let v100 = Version::parse("1.0.0").unwrap();
+        assert_eq!(
+            idx.find_version("example-plugin", &v100).map(|e| e.version.as_str()),
+            Some("1.0.0")
+        );
+        // latest_compatible 去重：两个 example-plugin 条目 → 一个最高兼容版
+        let host = Version::parse("0.1.0").unwrap();
+        let latest = idx.latest_compatible(&host, "1");
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].version, "2.1.3");
     }
 
     #[test]
@@ -538,10 +585,13 @@ capabilities = []
     }
 
     #[test]
-    fn test_find_by_id() {
+    fn test_find_latest_by_id() {
         let idx = PluginRegistryIndex::parse(&valid_registry_toml()).unwrap();
-        assert_eq!(idx.find("example-plugin").map(|e| e.version.as_str()), Some("1.0.0"));
-        assert!(idx.find("nope").is_none());
+        assert_eq!(
+            idx.find_latest("example-plugin").map(|e| e.version.as_str()),
+            Some("1.0.0")
+        );
+        assert!(idx.find_latest("nope").is_none());
     }
 
     #[test]

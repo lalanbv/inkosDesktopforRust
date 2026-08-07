@@ -80,10 +80,11 @@ pub async fn cmd_fetch_plugin_registry(
 
     let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
         .expect("CARGO_PKG_VERSION 须为合法 semver");
+    // 多版本去重：每 id 取最高兼容版本（browse 一个插件只展示最新可用版）
     let compatible: Vec<RegistryEntry> = index
-        .plugins
+        .latest_compatible(&host_version, HOST_ABI_VERSION)
         .into_iter()
-        .filter(|e| e.is_compatible_with(&host_version, HOST_ABI_VERSION))
+        .cloned()
         .collect();
     Ok(compatible)
 }
