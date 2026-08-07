@@ -204,6 +204,7 @@ fn main() {
             commands::config::start_config_watch,
             commands::config::stop_config_watch,
             commands::registry::cmd_fetch_plugin_registry,
+            commands::registry::cmd_install_from_registry,
             inkos_desktop::project::commands::scan_projects,
             inkos_desktop::project::commands::add_project,
             inkos_desktop::project::commands::remove_project,

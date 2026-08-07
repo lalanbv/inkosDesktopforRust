@@ -262,6 +262,10 @@
           "market.loading": "加载市场中…",
           "market.empty": "无可用插件（或当前宿主版本不兼容）。",
           "market.load_fail": "加载市场失败：",
+          "market.install": "安装",
+          "market.installing": "安装中…",
+          "market.install_done": "已安装：",
+          "market.install_fail": "安装失败：",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -314,6 +318,10 @@
           "market.loading": "Loading marketplace…",
           "market.empty": "No plugins available (or incompatible with current host version).",
           "market.load_fail": "Failed to load marketplace: ",
+          "market.install": "Install",
+          "market.installing": "Installing…",
+          "market.install_done": "Installed: ",
+          "market.install_fail": "Install failed: ",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -673,6 +681,10 @@
         }
         for (const e of entries) {
           const li = document.createElement("li");
+          li.style.display = "flex";
+          li.style.justifyContent = "space-between";
+          li.style.alignItems = "center";
+          li.style.gap = "0.8rem";
           const info = document.createElement("div");
           info.className = "plugin-info";
 
@@ -694,7 +706,33 @@
             info.appendChild(desc);
           }
           li.appendChild(info);
+
+          // 安装按钮（复用 plugin-actions 样式）
+          const actions = document.createElement("div");
+          actions.className = "plugin-actions";
+          const installBtn = document.createElement("button");
+          installBtn.className = "small primary";
+          installBtn.textContent = t("market.install");
+          installBtn.addEventListener("click", () => installFromRegistry(e));
+          actions.appendChild(installBtn);
+          li.appendChild(actions);
+
           listEl.appendChild(li);
+        }
+      }
+
+      async function installFromRegistry(entry) {
+        const msgEl = document.getElementById("market-msg");
+        msgEl.className = "form-msg";
+        msgEl.textContent = t("market.installing");
+        try {
+          const meta = await invoke("cmd_install_from_registry", { entry });
+          msgEl.className = "form-msg ok";
+          msgEl.textContent = t("market.install_done") + (meta.name || meta.id);
+          await loadPlugins(); // 刷新已安装列表
+        } catch (e) {
+          msgEl.className = "form-msg err";
+          msgEl.textContent = t("market.install_fail") + String(e);
         }
       }
 

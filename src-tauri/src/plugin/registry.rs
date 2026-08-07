@@ -18,10 +18,13 @@
 use crate::plugin::manifest::parse_capability;
 use crate::updater::sig;
 use anyhow::{bail, Context, Result};
+use flate2::read::GzDecoder;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
+use tar::Archive;
 
 // 复用 updater::sig 的 hex 解码，re-export 供命令层解码配置中的 pubkey（封装：命令
 // 仅依赖 plugin::registry API，不直接耦合 updater::sig）。
@@ -254,13 +257,65 @@ pub async fn http_fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> 
     Ok(bytes.to_vec())
 }
 
+/// 安全解压 tar.gz 到 `dest`——拒绝路径逃逸条目（防 tar-slip：`../` 越界、绝对路径、
+/// 跨盘前缀）。注册表 bundle 须为 tar.gz，**条目置于根**（`plugin.toml` + `.wasm`，
+/// 无外层目录），解压后 `dest` 即可安装。
+///
+/// 安全关键：归档字节虽经 `verify_bundle` 验签，仍防御性校验路径——签名防伪造，路径
+/// 校验防合法发布方的工具链意外产出越界条目，也防验签密钥未来泄露后的恶意归档。
+pub fn safe_extract_tar_gz(archive: &[u8], dest: &Path) -> Result<()> {
+    let gz = GzDecoder::new(archive);
+    let mut tar = Archive::new(gz);
+    std::fs::create_dir_all(dest)
+        .with_context(|| format!("创建解压目录失败: {}", dest.display()))?;
+
+    for entry in tar.entries().context("枚举 tar 条目失败")? {
+        let mut entry = entry.context("读 tar 条目失败")?;
+        let raw_path = entry.path().context("读条目路径失败")?.into_owned();
+        if !is_safe_relative(&raw_path) {
+            bail!("tar 含路径逃逸条目，拒绝解压: {}", raw_path.display());
+        }
+        // 关闭权限位保留（跨平台一致；避免解压出 setuid 等危险位）
+        entry.set_preserve_permissions(false);
+        entry
+            .unpack_in(dest)
+            .with_context(|| format!("解压条目失败: {}", raw_path.display()))?;
+    }
+    Ok(())
+}
+
+/// 路径是否为安全相对路径：仅 Normal/CurDir/ParentDir，且 `..` 折叠不回到根之上
+/// （depth 不为负）；拒 RootDir（绝对）/Prefix（跨盘）。
+fn is_safe_relative(path: &Path) -> bool {
+    let mut depth: i32 = 0;
+    for comp in path.components() {
+        match comp {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {} // `.` 忽略
+            Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return false; // `..` 回到根之上
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return false, // 绝对 / 跨盘
+        }
+    }
+    depth >= 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
     use std::collections::HashMap;
+    use std::io::Write;
+    use tar::{Builder, Header};
+    use tempfile::TempDir;
 
     /// 128 位 hex 占位签名（条目 bundle 签名格式校验用；真实值由发布方签 bundle 产生）
     fn placeholder_sig() -> String {
@@ -581,4 +636,50 @@ capabilities = []
             .to_string()
             .contains("拉取 registry.toml 失败"));
     }
+
+    /// 构造 tar.gz（entries: (name, content)）——安全解压测试用
+    fn build_tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = Builder::new(&mut tar_buf);
+            for (name, data) in entries {
+                let mut header = Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, *name, std::io::Cursor::new(*data))
+                    .unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_buf).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn test_is_safe_relative_logic() {
+        assert!(is_safe_relative(Path::new("plugin.toml")));
+        assert!(is_safe_relative(Path::new("a/b/plugin.wasm")));
+        assert!(is_safe_relative(Path::new("./x"))); // CurDir
+        assert!(!is_safe_relative(Path::new("../x"))); // 回到根之上
+        assert!(!is_safe_relative(Path::new("a/../../x"))); // 折叠后逃逸
+        assert!(!is_safe_relative(Path::new("/etc/x"))); // 绝对路径
+    }
+
+    #[test]
+    fn test_safe_extract_valid() {
+        let archive = build_tar_gz(&[("plugin.toml", b"id=\"x\""), ("plugin.wasm", b"WASM")]);
+        let dest = TempDir::new().unwrap();
+        safe_extract_tar_gz(&archive, dest.path()).unwrap();
+        assert!(dest.path().join("plugin.toml").exists());
+        assert!(dest.path().join("plugin.wasm").exists());
+    }
+
+    // 路径逃逸拒绝说明：解压侧守卫是 `is_safe_relative`（上方 test_is_safe_relative_logic
+    // 已钉死），`safe_extract` 在每个条目 `unpack_in` 前调用它。Rust `tar` Builder 额外
+    // 在**创建侧**拒绝 `..`/绝对路径（"paths in archives must not have `..`"），故无法
+    // 用它构造攻击归档来跑解压侧的端到端拒绝测试——这本身就是一层防护。真实场景中
+    // 其他工具产出的恶意归档由 `is_safe_relative` 在解压侧拦截。
 }

@@ -6,7 +6,7 @@
 use crate::commands::AppState;
 use inkos_desktop::plugin::{
     registry::{self, RegistryEntry},
-    HOST_ABI_VERSION,
+    PluginMetadata, PluginState, HOST_ABI_VERSION,
 };
 use semver::Version;
 use std::time::Duration;
@@ -61,4 +61,59 @@ pub async fn cmd_fetch_plugin_registry(
         .filter(|e| e.is_compatible_with(&host_version, HOST_ABI_VERSION))
         .collect();
     Ok(compatible)
+}
+
+/// 从注册表条目安装插件：下载 tar.gz → 验签包（sha256+Ed25519，用配置公钥）→
+/// 安全解压（防 tar-slip）→ 复用既有 `install_plugin`。
+///
+/// 信任链：注册表已验签（`cmd_fetch_plugin_registry`）→ entry 可信 → bundle 用
+/// **配置的 registry 公钥**验签。即便前端被攻破传入伪造 entry，其 bundle 签名也
+/// 签不过配置公钥（攻击者无私钥）→ 无法安装恶意包。
+#[tauri::command]
+pub async fn cmd_install_from_registry(
+    entry: RegistryEntry,
+    config_state: tauri::State<'_, AppState>,
+    plugin_state: tauri::State<'_, PluginState>,
+) -> Result<PluginMetadata, String> {
+    // 1. 配置公钥 + 超时（单次取锁，释放后再网络 I/O）
+    let (pubkey_hex, timeout_secs) = {
+        let mut mgr = config_state.config.lock().await;
+        let cfg = mgr.merged();
+        let pubkey = cfg
+            .registry
+            .pubkey
+            .clone()
+            .ok_or_else(|| "插件注册表未配置（registry.pubkey 缺失，无法验签插件包）".to_string())?;
+        (pubkey, cfg.network.timeout_seconds)
+    };
+    let pubkey = registry::decode_hex(&pubkey_hex)
+        .map_err(|e| format!("注册表 pubkey 解码失败: {}", e))?;
+
+    // 2. 下载插件包（bundle = tar.gz）
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs.max(1) as u64))
+        .build()
+        .map_err(|e| format!("构造 HTTP client 失败: {}", e))?;
+    let bundle = registry::http_fetch(&client, &entry.download_url)
+        .await
+        .map_err(|e| format!("下载插件包失败: {}", e))?;
+
+    // 3. 验签包（sha256 完整性 + Ed25519 来源签名，用配置公钥）——任一失败拒绝
+    entry
+        .verify_bundle(&bundle, &pubkey)
+        .map_err(|e| format!("插件包校验失败（可能被篡改）: {}", e))?;
+
+    // 4. 安全解压到临时目录（防 tar-slip 路径逃逸）。temp 活到函数末尾，install_plugin
+    //    在其 drop 前完成文件复制。
+    let temp = tempfile::tempdir().map_err(|e| format!("创建临时目录失败: {}", e))?;
+    registry::safe_extract_tar_gz(&bundle, temp.path())
+        .map_err(|e| format!("解压插件包失败: {}", e))?;
+
+    // 5. 复用既有安装流（解析 plugin.toml + 复制到 plugins_dir）
+    let source = temp.path().to_string_lossy().to_string();
+    let mut manager = plugin_state.manager.lock().await;
+    manager
+        .install_plugin(&source)
+        .await
+        .map_err(|e| format!("安装失败: {}", e))
 }
