@@ -540,13 +540,12 @@ impl PluginManager {
 
         // ── 进程隔离路径 ───────────────────────────────────────────────────────
         // 收到 notify("on_event", {event, payload}) 的进程插件可自行处理或忽略。
+        // notify_nonblocking：detached 线程发送，防 stdin pipe 满时阻塞整个广播。
         let params = serde_json::json!({ "event": event, "payload": payload });
         let process_ids: Vec<String> = self.running.keys().cloned().collect();
         for id in process_ids {
             if let Some(process) = self.running.get(&id) {
-                if let Err(e) = process.notify("on_event", Some(params.clone())) {
-                    tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on_event(process) 通知失败，继续");
-                }
+                process.notify_nonblocking("on_event", Some(params.clone()));
             }
         }
     }

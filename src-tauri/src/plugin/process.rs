@@ -163,6 +163,23 @@ impl PluginProcess {
         Ok(())
     }
 
+    /// 非阻塞通知（detached 线程 fire-and-forget）。
+    ///
+    /// 与 `notify` 语义相同，但在独立线程发送，防 stdin pipe 满时阻塞调用方。
+    /// 用于 broadcast_event 等不等待结果的批量通知场景。
+    pub fn notify_nonblocking(&self, method: &str, params: Option<serde_json::Value>) {
+        let stdin_arc = Arc::clone(&self.stdin);
+        let request = RpcRequest::notification(method, params);
+        std::thread::spawn(move || {
+            if let Ok(req_str) = serde_json::to_string(&request) {
+                if let Ok(mut stdin) = stdin_arc.lock() {
+                    let _ = writeln!(stdin, "{}", req_str);
+                    let _ = stdin.flush();
+                }
+            }
+        });
+    }
+
 /// 优雅关闭等待窗：先通知 → 等待进程自行退出 → 超时再 kill。
 /// 終止插件进程（优雅关闭：先 notify("shutdown") best-effort → 等待 GRACEFUL_SHUTDOWN_TIMEOUT_MS → kill）。
 ///
