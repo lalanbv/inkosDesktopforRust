@@ -76,6 +76,17 @@ pub struct PluginManager {
     /// Cranelift AOT 编译（WASM 路径的最大 perf 开销）。uninstall/update 时 evict。
     wasm_cache: HashMap<String, WasmPlugin>,
 
+    /// LRU 记账：id -> 最近使用序号（越大越新）。容量满时驱逐序号最小者。
+    ///
+    /// 不用 `HashMap::keys().next()` 驱逐：那取哈希序首个，与热度无关，可能踢掉
+    /// 正被反复调用的热插件 → 「编译→插入→又被驱逐→重编译」抖动，每轮是数十至
+    /// 数百毫秒 Cranelift 开销。与 `wasm_cache` 同生命周期（insert/remove 成对）。
+    wasm_lru_tick: HashMap<String, u64>,
+
+    /// LRU 单调计数器（每次缓存命中/插入 +1，作使用序号）。
+    /// u64 溢出需约 5.8 亿年@1M ops/s，不做回绕处理。
+    wasm_lru_counter: u64,
+
     /// 遥测：execute_plugin 累计调用次数（含失败）—— AtomicU64 无锁统计
     exec_count: std::sync::atomic::AtomicU64,
 
@@ -113,6 +124,8 @@ impl PluginManager {
             installed: HashMap::new(),
             running: HashMap::new(),
             wasm_cache: HashMap::new(),
+            wasm_lru_tick: HashMap::new(),
+            wasm_lru_counter: 0,
             exec_count: std::sync::atomic::AtomicU64::new(0),
             exec_total_us: std::sync::atomic::AtomicU64::new(0),
             exec_failures: std::sync::atomic::AtomicU64::new(0),
@@ -249,7 +262,8 @@ impl PluginManager {
         // 覆盖：清理旧目录后复制新版（无「已安装」检查）
         let target_dir = self.plugins_dir.join(&manifest.id);
         // evict 旧编译缓存（新版 .wasm 需重编译）
-        self.wasm_cache.remove(&manifest.id);
+        let update_id = manifest.id.clone();
+        self.wasm_cache_evict(&update_id);
         // 停止运行中的旧版进程插件（更新后旧进程仍运行会复用旧版，必须终止）
         if let Some(process) = self.running.remove(&manifest.id) {
             if let Err(e) = process.stop() {
@@ -283,7 +297,7 @@ impl PluginManager {
         }
 
         // 释放编译缓存（运行态终止，实例失效）
-        self.wasm_cache.remove(id);
+        self.wasm_cache_evict(id);
 
         // 停止运行中的进程
         if let Some(process) = self.running.remove(id) {
@@ -341,7 +355,7 @@ impl PluginManager {
         }
 
         // 释放编译缓存（运行态终止，实例失效）
-        self.wasm_cache.remove(id);
+        self.wasm_cache_evict(id);
 
         // 停止运行中的进程
         if let Some(process) = self.running.remove(id) {
@@ -469,6 +483,39 @@ impl PluginManager {
         }
     }
 
+    /// 从缓存移除插件并同步清理 LRU 记账（生命周期事件：uninstall/disable/update）。
+    ///
+    /// 单点定义防漂移：`wasm_cache` 与 `wasm_lru_tick` 必须成对增删，否则卸载后
+    /// 残留 tick 条目永不回收 → 无界增长。
+    fn wasm_cache_evict(&mut self, id: &str) {
+        self.wasm_cache.remove(id);
+        self.wasm_lru_tick.remove(id);
+    }
+
+    /// 标记 `id` 为最近使用（LRU 记账）。缓存命中与插入后都要调，否则热插件
+    /// 序号不更新会被误判为冷条目驱逐。
+    fn wasm_lru_touch(&mut self, id: &str) {
+        self.wasm_lru_counter += 1;
+        self.wasm_lru_tick
+            .insert(id.to_string(), self.wasm_lru_counter);
+    }
+
+    /// 为新条目腾出容量：缓存达上限时驱逐**最久未使用**者（LRU）。
+    ///
+    /// 安全/性能关键逻辑单点定义——此前 execute_plugin_inner 与 broadcast_event
+    /// 各有一份 `keys().next()` 驱逐，既非 LRU 也易漂移。
+    fn wasm_cache_make_room(&mut self) {
+        if self.wasm_cache.len() < WASM_CACHE_CAPACITY {
+            return;
+        }
+        let keys: Vec<&str> = self.wasm_cache.keys().map(|k| k.as_str()).collect();
+        let evict_key = select_lru_victim(&keys, &self.wasm_lru_tick).map(str::to_string);
+        if let Some(key) = evict_key {
+            self.wasm_cache_evict(&key);
+            tracing::debug!(evicted_id = %key, "wasm_cache 满，驱逐最久未使用条目（LRU）");
+        }
+    }
+
     async fn execute_plugin_inner(
         &mut self,
         id: &str,
@@ -517,16 +564,13 @@ impl PluginManager {
                     .expect("installed 刚校验过存在，本方法内不修改它")
                     .clone();
                 let compiled = WasmPlugin::new(metadata, &entry, &plugin_dir)?;
-                // 缓存容量守卫：超出 WASM_CACHE_CAPACITY 时驱逐任意一个旧条目（防无界增长）。
-                // 实践中插件数通常 < 10，此分支极罕见；被驱逐者下次调用时重新编译（一次性开销）。
-                if self.wasm_cache.len() >= WASM_CACHE_CAPACITY {
-                    if let Some(evict_key) = self.wasm_cache.keys().next().cloned() {
-                        self.wasm_cache.remove(&evict_key);
-                        tracing::debug!(evicted_id = %evict_key, "wasm_cache 满，驱逐旧条目");
-                    }
-                }
+                // 缓存容量守卫（防无界增长）：满则驱逐最久未使用者。
+                // 被驱逐者下次调用时重新编译（一次性 Cranelift 开销）。
+                self.wasm_cache_make_room();
                 self.wasm_cache.insert(id.to_string(), compiled);
             }
+            // 命中与插入都记账：热插件序号持续刷新，不会被误驱逐
+            self.wasm_lru_touch(id);
             let plugin = self.wasm_cache.get(id).expect("wasm 缓存已就绪");
             return plugin.execute(command, args);
         }
@@ -584,12 +628,7 @@ impl PluginManager {
                 let entry = plugin_dir.join(&metadata.entrypoint);
                 match WasmPlugin::new(metadata, &entry, &plugin_dir) {
                     Ok(p) => {
-                        if self.wasm_cache.len() >= WASM_CACHE_CAPACITY {
-                            if let Some(evict_key) = self.wasm_cache.keys().next().cloned() {
-                                self.wasm_cache.remove(&evict_key);
-                                tracing::debug!(evicted_id = %evict_key, "broadcast_event: wasm_cache 满，驱逐旧条目");
-                            }
-                        }
+                        self.wasm_cache_make_room();
                         self.wasm_cache.insert(id.clone(), p);
                     }
                     Err(e) => {
@@ -598,6 +637,7 @@ impl PluginManager {
                     }
                 }
             }
+            self.wasm_lru_touch(id);
             if let Some(plugin) = self.wasm_cache.get(id) {
                 if let Err(e) = plugin.broadcast_event(event, payload) {
                     tracing::warn!(plugin_id = %id, event = %event, error = %e, "broadcast_event: on-event(wasm) 失败，继续");
@@ -619,6 +659,17 @@ impl PluginManager {
 }
 
 /// 递归复制目录
+/// 选出 LRU 驱逐受害者：`keys` 中 `tick` 序号最小者（最久未使用）。
+///
+/// 纯函数便于单测——驱逐**选择**正是此前的缺陷所在（`keys().next()` 取哈希序，
+/// 与访问热度无关，可能把当前热插件踢出致重编译抖动）。
+/// 无 tick 记账的条目视作最冷（缺失 → 0），确保未 touch 过的先出。
+fn select_lru_victim<'a>(keys: &[&'a str], tick: &HashMap<String, u64>) -> Option<&'a str> {
+    keys.iter()
+        .min_by_key(|k| tick.get(**k).copied().unwrap_or(0))
+        .copied()
+}
+
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
 
@@ -759,6 +810,37 @@ entrypoint = "plugin.wasm"
         manager.enable_plugin("test-plugin").unwrap();
         let plugin = manager.get_plugin("test-plugin").unwrap();
         assert!(plugin.enabled);
+    }
+
+    #[test]
+    fn test_select_lru_victim_picks_least_recently_used() {
+        // 场景：hot 反复使用（tick 高），cold 很久未用（tick 低）→ 必须驱逐 cold。
+        // 旧实现用 keys().next() 取哈希序，可能踢掉 hot 致重编译抖动。
+        let mut tick = HashMap::new();
+        tick.insert("cold".to_string(), 3u64);
+        tick.insert("warm".to_string(), 17u64);
+        tick.insert("hot".to_string(), 42u64);
+
+        let keys = ["hot", "cold", "warm"];
+        assert_eq!(select_lru_victim(&keys, &tick), Some("cold"));
+
+        // hot 再次使用后序号更新，最冷者变 warm
+        tick.insert("cold".to_string(), 99);
+        assert_eq!(select_lru_victim(&keys, &tick), Some("warm"));
+    }
+
+    #[test]
+    fn test_select_lru_victim_untracked_is_coldest() {
+        // 无 tick 记账的条目（未 touch 过）视作最冷，优先驱逐
+        let mut tick = HashMap::new();
+        tick.insert("tracked".to_string(), 5u64);
+        let keys = ["tracked", "untracked"];
+        assert_eq!(select_lru_victim(&keys, &tick), Some("untracked"));
+    }
+
+    #[test]
+    fn test_select_lru_victim_empty_is_none() {
+        assert_eq!(select_lru_victim(&[], &HashMap::new()), None);
     }
 
     #[test]
