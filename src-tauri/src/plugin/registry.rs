@@ -359,23 +359,62 @@ pub async fn http_fetch(client: &reqwest::Client, url: &str, max_bytes: u64) -> 
     Ok(buf)
 }
 
-/// 安全解压 tar.gz 到 `dest`——拒绝路径逃逸条目（防 tar-slip：`../` 越界、绝对路径、
-/// 跨盘前缀）。注册表 bundle 须为 tar.gz，**条目置于根**（`plugin.toml` + `.wasm`，
-/// 无外层目录），解压后 `dest` 即可安装。
+/// 解压后累计字节上限（防 tar-bomb / zip-bomb DoS）。
 ///
-/// 安全关键：归档字节虽经 `verify_bundle` 验签，仍防御性校验路径——签名防伪造，路径
-/// 校验防合法发布方的工具链意外产出越界条目，也防验签密钥未来泄露后的恶意归档。
+/// 下载侧 `MAX_BUNDLE_BYTES` 仅限**压缩**字节；gzip 对高度重复数据压缩比可达
+/// 1000×+，64 MiB 压缩可解压为数十 GB。此上限约束**解压后累计声明大小**，是
+/// 「签了但恶意/畸形」威胁模型（密钥泄露 / 发布方工具链意外）下的 DoS 防线。
+const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+
+/// tar 条目数上限（防海量小条目耗尽 inode / 拖慢解压的 DoS）。
+const MAX_TAR_ENTRIES: usize = 4_096;
+
+/// 安全解压 tar.gz 到 `dest`，逐条目防御性校验，拒绝：
+/// - **路径逃逸**（`../` 越界、绝对路径、跨盘前缀）—— `is_safe_relative`
+/// - **symlink / hardlink 条目**——防落地恶意符号链接被后续 `write_file` 经字面校验
+///   利用（闭环 security-audit R1）。tar 0.4.46 的 `validate_inside_dst` 仅防**解压期**
+///   经链接逃逸，不阻止链接**落地**，故须在此显式拒。
+/// - **累计解压字节 / 条目数超限**——防 tar-bomb DoS
+///
+/// 注册表 bundle 须为 tar.gz，**条目置于根**（`plugin.toml` + `.wasm`，无外层目录）。
+///
+/// 安全关键：归档字节虽经 `verify_bundle` 验签，仍防御性校验——签名防伪造，结构校验
+/// 防合法发布方工具链意外产出越界/恶意条目，也防验签密钥未来泄露后的恶意归档。
 pub fn safe_extract_tar_gz(archive: &[u8], dest: &Path) -> Result<()> {
     let gz = GzDecoder::new(archive);
     let mut tar = Archive::new(gz);
     std::fs::create_dir_all(dest)
         .with_context(|| format!("创建解压目录失败: {}", dest.display()))?;
 
+    let mut total_bytes: u64 = 0;
+    let mut entry_count: usize = 0;
     for entry in tar.entries().context("枚举 tar 条目失败")? {
+        entry_count += 1;
+        if entry_count > MAX_TAR_ENTRIES {
+            bail!("tar 条目数超上限 {MAX_TAR_ENTRIES}，拒绝解压（防 DoS）");
+        }
         let mut entry = entry.context("读 tar 条目失败")?;
         let raw_path = entry.path().context("读条目路径失败")?.into_owned();
         if !is_safe_relative(&raw_path) {
             bail!("tar 含路径逃逸条目，拒绝解压: {}", raw_path.display());
+        }
+        let kind = entry.header().entry_type();
+        if kind.is_hard_link() || kind.is_symlink() {
+            bail!(
+                "插件 bundle 不允许 symlink/hardlink 条目（防符号链接逃逸）: {}",
+                raw_path.display()
+            );
+        }
+        // 累计解压字节（用条目 header 声明的 size——足够防 zip-bomb，且无需实际写盘即可判定）
+        let size = entry
+            .header()
+            .size()
+            .with_context(|| format!("读条目 size 失败: {}", raw_path.display()))?;
+        total_bytes = total_bytes.saturating_add(size);
+        if total_bytes > MAX_EXTRACTED_BYTES {
+            bail!(
+                "tar 解压累计 {total_bytes} 字节超上限 {MAX_EXTRACTED_BYTES}，拒绝（防 DoS）"
+            );
         }
         // 关闭权限位保留（跨平台一致；避免解压出 setuid 等危险位）
         entry.set_preserve_permissions(false);
@@ -1005,4 +1044,57 @@ capabilities = []{deps_line}
     // 在**创建侧**拒绝 `..`/绝对路径（"paths in archives must not have `..`"），故无法
     // 用它构造攻击归档来跑解压侧的端到端拒绝测试——这本身就是一层防护。真实场景中
     // 其他工具产出的恶意归档由 `is_safe_relative` 在解压侧拦截。
+
+    /// 构造含一个 symlink 条目的 tar.gz（合法相对路径 `link_path` → 逃逸 target）。
+    /// 用 raw `Builder::append` + 手配 Symlink header，绕过 append_data 的常规文件假设。
+    fn build_tar_gz_symlink(link_path: &str, target: &str) -> Vec<u8> {
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = Builder::new(&mut tar_buf);
+            let mut header = Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_mode(0o777);
+            header.set_size(0);
+            header.set_path(link_path).unwrap();
+            header.set_link_name(target).unwrap();
+            header.set_cksum();
+            builder.append(&header, std::io::empty()).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_buf).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn test_safe_extract_rejects_symlink() {
+        // 合法相对路径的 symlink 指向 dest 外 → 必须拒绝落地（闭环 R1）。
+        // tar 0.4.46 validate_inside_dst 仅防解压期逃逸，不阻止 symlink 落地；
+        // 落地后会被 write_file 经字面校验利用。故 safe_extract 须显式拒 symlink 条目。
+        let archive = build_tar_gz_symlink("lnk", "/etc/cron.d");
+        let dest = TempDir::new().unwrap();
+        let err = safe_extract_tar_gz(&archive, dest.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("symlink"),
+            "应明确拒绝 symlink 条目: {err}"
+        );
+        assert!(!dest.path().join("lnk").exists(), "symlink 不应落地");
+    }
+
+    #[test]
+    fn test_safe_extract_rejects_too_many_entries() {
+        // MAX_TAR_ENTRIES + 1 个空条目 → 第 4097 个触发条目数上限中止（防海量条目 DoS）。
+        let names: Vec<String> = (0..(MAX_TAR_ENTRIES + 1)).map(|i| format!("f{i}")).collect();
+        let entries: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|n| (n.as_str(), b"" as &[u8]))
+            .collect();
+        let archive = build_tar_gz(&entries);
+        let dest = TempDir::new().unwrap();
+        let err = safe_extract_tar_gz(&archive, dest.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("条目数"),
+            "应因条目数超限拒绝: {err}"
+        );
+    }
 }

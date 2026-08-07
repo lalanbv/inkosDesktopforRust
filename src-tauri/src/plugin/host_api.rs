@@ -344,8 +344,9 @@ pub fn check_network_domain(url: &str, allowed: &[String]) -> bool {
 }
 
 /// 是否为内网/保留 IP 字面量（SSRF 防护：拒直连 loopback/private/link-local/unspecified）。
-/// 非 IP 字面量（域名）返回 false——域名解析到内网（DNS rebinding）为残留向量，
-/// 需连接期 IP pinning，超出本层职责。
+/// 非 IP 字面量（域名）返回 false——本层仅拦截直接 IP 字面量（含 IPv4-mapped/
+/// 6to4/NAT64 包装）。域名解析到内网的 DNS rebinding 由 `ssrf_resolve` 连接期
+/// IP pinning 缓解（见 `http_get`），本层为该防护的纵深一层，非残留。
 pub fn is_internal_ip(host: &str) -> bool {
     use std::net::IpAddr;
     use std::str::FromStr;
@@ -366,6 +367,29 @@ fn is_internal_ip_addr(ip: &std::net::IpAddr) -> bool {
         IpAddr::V6(v6) => {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 // IPv4-mapped（::ffff:a.b.c.d）→ 检查映射的 IPv4，防 mapped 旁路
+                return is_internal_ip_addr(&IpAddr::V4(v4));
+            }
+            let segs = v6.segments();
+            // 6to4（2002::/16）：封装的 IPv4 在 segs[1..3]，解封装后复用 v4 判定
+            // （防用 6to4 包装内网 IPv6 直连——OS 启用 6to4 时可路由到内网 v4）
+            if segs[0] == 0x2002 {
+                let v4 = std::net::Ipv4Addr::new(
+                    (segs[1] >> 8) as u8,
+                    segs[1] as u8,
+                    (segs[2] >> 8) as u8,
+                    segs[2] as u8,
+                );
+                return is_internal_ip_addr(&IpAddr::V4(v4));
+            }
+            // NAT64 well-known 前缀（64:ff9b::/96）：封装的 IPv4 在 segs[6..8]
+            // （IPv6-only 网络经 NAT64 可达内网 v4；防包装旁路）
+            if segs[0] == 0x0064 && segs[1] == 0xff9b {
+                let v4 = std::net::Ipv4Addr::new(
+                    (segs[6] >> 8) as u8,
+                    segs[6] as u8,
+                    (segs[7] >> 8) as u8,
+                    segs[7] as u8,
+                );
                 return is_internal_ip_addr(&IpAddr::V4(v4));
             }
             v6.is_loopback()
@@ -430,9 +454,10 @@ impl HostContext {
             )));
         }
 
-        // SSRF：拒直连内网/loopback/链路本地/未指定 IP（即便 "*" 全开放插件，
-        // 也不应访问云元数据 169.254.169.254 / localhost / 私网）。域名→内网
-        // （DNS rebinding）为残留向量，需连接期 IP pinning，超出本层。
+        // SSRF 纵深一层：拒直连内网/loopback/链路本地/未指定 IP 字面量（即便 "*"
+        // 全开放插件，也不应访问云元数据 169.254.169.254 / localhost / 私网）。
+        // 域名解析到内网的 DNS rebinding 由下方 ssrf_resolve 连接期 IP pinning 缓解——
+        // 本层仅拦字面量形式，与 resolver 层互为纵深（非残留风险）。
         if let Some(host) = extract_host(url) {
             if is_internal_ip(&host) {
                 warn!(plugin_id = %self.metadata.id, host = %host, "http_get: 拒内网 IP（SSRF）");
@@ -707,8 +732,11 @@ mod tests {
         assert!(is_internal_ip("::ffff:169.254.169.254")); // mapped 云元数据
         assert!(is_internal_ip("fc00::1")); // IPv6 站点本地（unique local，≈私网）
         assert!(is_internal_ip("fe80::1")); // IPv6 链路本地
+        assert!(is_internal_ip("2002:c0a8:0101::")); // 6to4 封装 192.168.1.1（防旁路）
+        assert!(is_internal_ip("64:ff9b::7f00:1")); // NAT64 封装 127.0.0.1（防旁路）
         assert!(!is_internal_ip("8.8.8.8")); // 公网
         assert!(!is_internal_ip("2001:4860:4860::8888")); // 公网 IPv6
+        assert!(!is_internal_ip("2002:0808:0808::")); // 6to4 封装 8.8.8.8（公网→放行，非误拦）
         assert!(!is_internal_ip("example.com")); // 域名（非 IP 字面量）
     }
 
