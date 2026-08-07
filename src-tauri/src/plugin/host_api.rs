@@ -31,6 +31,18 @@ pub struct HostContext {
     /// 仅测试用 [`Self::with_exec_timeout`] 缩短，以在秒级内验证 kill 路径
     /// （否则单测需真等 30s，实际会被跳过 → 超时逻辑无覆盖）。
     pub(crate) exec_timeout: std::time::Duration,
+
+    /// 累计写入字节数（跨调用共享）。
+    ///
+    /// 单次 `write_file` 上限（[`MAX_WRITE_FILE_BYTES`]）不防循环写入：
+    /// 1000 次 8 MiB = 8 GiB，每次都"合法"。`Arc<AtomicU64>` 而非普通字段——
+    /// `HostContext` 每次 `execute` 被 clone 进新 Store（见 `runtime::create_store`），
+    /// 普通字段会随 clone 归零，配额形同虚设。
+    pub(crate) written_bytes: Arc<std::sync::atomic::AtomicU64>,
+
+    /// 累计写入上限。生产为 [`DEFAULT_WRITE_QUOTA_BYTES`]，测试可用
+    /// [`Self::with_write_quota`] 缩小以避免真写 GB 级数据。
+    pub(crate) write_quota: u64,
 }
 
 impl HostContext {
@@ -40,6 +52,8 @@ impl HostContext {
             metadata: Arc::new(metadata),
             work_dir,
             exec_timeout: EXEC_COMMAND_TIMEOUT,
+            written_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            write_quota: DEFAULT_WRITE_QUOTA_BYTES,
         }
     }
 
@@ -48,6 +62,18 @@ impl HostContext {
     pub(crate) fn with_exec_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.exec_timeout = timeout;
         self
+    }
+
+    /// 覆盖累计写入配额（仅测试用：避免为验证配额真写 GB 级数据）。
+    #[cfg(test)]
+    pub(crate) fn with_write_quota(mut self, quota: u64) -> Self {
+        self.write_quota = quota;
+        self
+    }
+
+    /// 累计已写字节数（供指标/诊断）。
+    pub fn written_bytes(&self) -> u64 {
+        self.written_bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 检查是否有指定权限
@@ -276,7 +302,6 @@ impl HostContext {
         }
 
         // 写入内容大小守卫（防插件写入超大文件耗尽磁盘）。
-        const MAX_WRITE_FILE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
         if content.len() > MAX_WRITE_FILE_BYTES {
             warn!(
                 target: "inkos.plugin.security",
@@ -293,11 +318,47 @@ impl HostContext {
             )));
         }
 
+        // 累计配额检查（单次上限之上的第二道）：单次 8 MiB 合法，但 1000 次循环
+        // 写入 = 8 GiB。fetch_update 做 CAS 原子「检查+累加」——先 load 再 store
+        // 的两步写法在并发调用下可双双通过检查后超额（TOCTOU）。
+        //
+        // 只在**实际写入前**累加：写失败不应消耗配额。但若写入失败，已累加的字节
+        // 需回滚——见下方 fetch_sub。
+        use std::sync::atomic::Ordering;
+        let content_len = content.len() as u64;
+        let quota = self.write_quota;
+        if self
+            .written_bytes
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                let next = cur.saturating_add(content_len);
+                (next <= quota).then_some(next)
+            })
+            .is_err()
+        {
+            let used = self.written_bytes.load(Ordering::Relaxed);
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                path = %normalized.display(),
+                used_bytes = used,
+                quota_bytes = quota,
+                requested = content_len,
+                action = "write_file",
+                "累计写入配额耗尽拒绝"
+            );
+            return Err(PluginError::PermissionDenied(format!(
+                "累计写入配额耗尽（已用 {used} / 上限 {quota} 字节）"
+            )));
+        }
+
         // 写入「已校验」的 normalized 路径（非原始 join 结果）。
         // 残留风险：work_dir 内预置的符号链接（如恶意插件 bundle 解压产物）仍可能
         // 将 normalized 解析到沙箱外——彻底闭环需在安装期拒绝符号链接条目
         // （见 docs/security-audit.md「已知残留」），此处保证字面逃逸被阻断。
         std::fs::write(&normalized, content).map_err(|e| {
+            // 配额回滚：写失败未占用磁盘，不应消耗配额（否则反复失败的写入
+            // 会把配额耗尽，插件即使从未成功写入也被永久拒绝）。
+            self.written_bytes.fetch_sub(content_len, Ordering::SeqCst);
             error!(
                 plugin_id = %self.metadata.id,
                 path = %normalized.display(),
@@ -490,6 +551,20 @@ impl HostContext {
         })
     }
 }
+
+/// 单次 `write_file` 内容上限（8 MiB）。
+const MAX_WRITE_FILE_BYTES: usize = 8 * 1024 * 1024;
+
+/// 单个 `HostContext` 生命周期内的累计写入上限（256 MiB）。
+///
+/// 与单次上限（[`MAX_WRITE_FILE_BYTES`]）互补：单次防一发超大写入，累计防
+/// 循环小写入累积耗尽磁盘。配额随 `HostContext` 存活——WASM 路径每次
+/// `execute` clone 共享同一 `Arc<AtomicU64>`（见 `written_bytes` 字段文档），
+/// 故配额跨调用累积，插件重装/重启后重置。
+///
+/// 256 MiB 对正常插件（格式化、转换、生成配置）远超所需，对磁盘耗尽攻击
+/// 则是有效上限。
+const DEFAULT_WRITE_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
 
 /// `exec_command` 子进程执行超时。超时 → kill + ExecutionFailed。
 /// 与 [`crate::plugin::process`] 的 RPC_TIMEOUT 同量级（插件调用应是短操作）。
@@ -938,6 +1013,98 @@ mod tests {
         assert!(
             !outside_path.join("pwned.txt").exists(),
             "沙箱外不应产生任何文件"
+        );
+    }
+
+    /// 构造带 WriteProject + Filesystem 能力的 ctx（配额测试共用）。
+    fn write_ctx(work_dir: &Path, quota: u64) -> HostContext {
+        let metadata = PluginMetadata {
+            id: "quota-test".to_string(),
+            name: "QuotaTest".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: String::new(),
+            abi_version: "1".to_string(),
+            capabilities: vec![
+                Capability::WriteProject,
+                Capability::Filesystem {
+                    path: work_dir.to_string_lossy().to_string(),
+                },
+            ],
+            entrypoint: "plugin.wasm".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        HostContext::new(metadata, work_dir.to_path_buf()).with_write_quota(quota)
+    }
+
+    #[test]
+    fn test_write_quota_denies_after_exhausted() {
+        // 单次上限（8 MiB）不防循环写入；累计配额是第二道。用 100 字节配额
+        // 直测边界，避免真写 256 MiB。
+        let temp = TempDir::new().unwrap();
+        let ctx = write_ctx(temp.path(), 100);
+
+        // 60 + 40 = 100，正好用满 → 都应成功（边界是 `<=`）
+        assert!(ctx.write_file("a.txt", &"x".repeat(60)).is_ok(), "首次应成功");
+        assert!(ctx.write_file("b.txt", &"x".repeat(40)).is_ok(), "用满配额应成功");
+        assert_eq!(ctx.written_bytes(), 100, "累计应精确等于已写字节");
+
+        // 再写 1 字节即超 → 拒绝
+        let result = ctx.write_file("c.txt", "x");
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "配额耗尽后应拒绝，实际: {result:?}"
+        );
+        assert!(!temp.path().join("c.txt").exists(), "被拒绝的写入不应落盘");
+        assert_eq!(ctx.written_bytes(), 100, "拒绝的写入不应计入累计");
+    }
+
+    #[test]
+    fn test_write_quota_shared_across_clones() {
+        // 关键不变量：HostContext 每次 execute 被 clone 进新 Store
+        // （runtime::create_store）。配额若随 clone 归零则形同虚设——
+        // 插件只需每次调用重新计数即可无限写入。
+        let temp = TempDir::new().unwrap();
+        let ctx = write_ctx(temp.path(), 100);
+
+        ctx.write_file("a.txt", &"x".repeat(80)).unwrap();
+
+        let cloned = ctx.clone();
+        assert_eq!(cloned.written_bytes(), 80, "clone 应看到已累计的字节");
+
+        // clone 上再写 30 → 累计 110 > 100 → 拒绝
+        let result = cloned.write_file("b.txt", &"x".repeat(30));
+        assert!(
+            matches!(result, Err(PluginError::PermissionDenied(_))),
+            "clone 必须共享配额，实际: {result:?}"
+        );
+        // 原 ctx 也应看到 clone 的写入（双向共享）
+        assert_eq!(ctx.written_bytes(), 80, "原 ctx 与 clone 共享同一计数");
+    }
+
+    #[test]
+    fn test_write_quota_refunded_on_write_failure() {
+        // 写失败未占磁盘，不应消耗配额——否则反复失败的写入会耗尽配额，
+        // 插件即使从未成功写入也被永久拒绝。
+        // 触发写失败：目标路径是一个已存在的**目录**（fs::write 必失败）。
+        let temp = TempDir::new().unwrap();
+        let ctx = write_ctx(temp.path(), 1000);
+        std::fs::create_dir(temp.path().join("adir")).unwrap();
+
+        let result = ctx.write_file("adir", &"x".repeat(50));
+        assert!(
+            matches!(result, Err(PluginError::ExecutionFailed(_))),
+            "写入目录路径应失败，实际: {result:?}"
+        );
+        assert_eq!(ctx.written_bytes(), 0, "写失败应回滚配额，实际未回滚");
+
+        // 回滚后配额可正常使用
+        assert!(
+            ctx.write_file("ok.txt", &"x".repeat(50)).is_ok(),
+            "回滚后应能继续写入"
         );
     }
 
