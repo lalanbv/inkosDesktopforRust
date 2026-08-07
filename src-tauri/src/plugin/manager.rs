@@ -960,7 +960,14 @@ entrypoint = "plugin.wasm"
         assert_eq!(manager.consec_failures.get("flaky-plugin"), None);
         // auto_disabled_count 应递增（可观测性：session内自动禁用次数）
         assert_eq!(manager.metrics().auto_disabled_count, 1);
+        // ring buffer 应记录被禁用的插件 ID（诊断「哪些插件不稳定」，UI 展示用）
+        assert_eq!(
+            manager.metrics().recently_auto_disabled,
+            vec!["flaky-plugin".to_string()],
+            "ring buffer 应含本次自动禁用的插件 ID"
+        );
     }
+
 
     #[tokio::test]
     async fn test_consecutive_failures_reset_on_success() {
