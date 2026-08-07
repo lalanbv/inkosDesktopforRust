@@ -1152,9 +1152,41 @@ mod tests {
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
     }
 
-    // 注：重定向 SSRF（redirects(0)）的 e2e 测试无法在此层跑——测试服务器只能用
-    // 127.0.0.1，而下方内网 IP 拦截会挡掉它（http_get 在连接前就拒）。redirects(0)
-    // 由代码显式构造 + 安全文档保证；内网 IP 拦截由下方纯函数 + http_get 测试覆盖。
+    // 注：`redirects(0)` 本身（ureq 不跟随 3xx）无 e2e 覆盖——测试服务器只能绑
+    // 127.0.0.1，而域名白名单 + IP 字面量拦截会在连接前就拒掉它。
+    //
+    // 但重定向 SSRF 的**实际拦截点**是 `ssrf_resolve`：即使 redirects 被误改为
+    // 非 0，重定向目标仍须经该 resolver 解析，内网 IP 在此被过滤（IP pinning，
+    // 同时关闭 DNS rebinding 窗口）。它是纯函数式钩子，可直接单测——见下方
+    // `test_ssrf_resolve_*`，这比断言「构造代码里写了 redirects(0)」更有价值。
+
+    #[test]
+    fn test_ssrf_resolve_rejects_internal_target() {
+        // 重定向目标 / rebinding 目标解析到内网 → resolver 拒绝，ureq 拿不到可连地址。
+        // netloc 用 IP 字面量：to_socket_addrs 不走 DNS，零网络往返。
+        for netloc in [
+            "127.0.0.1:80",
+            "169.254.169.254:80", // 云元数据
+            "10.0.0.1:80",
+            "192.168.1.1:443",
+            "[::1]:80",
+            "[fc00::1]:80",
+        ] {
+            let result = ssrf_resolve(netloc);
+            assert!(
+                result.is_err(),
+                "netloc {netloc} 解析到内网，resolver 应拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ssrf_resolve_allows_public_target() {
+        // 公网 IP 字面量 → 放行（确认拦截非「一律失败」）
+        let addrs = ssrf_resolve("8.8.8.8:443").expect("公网地址应放行");
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].ip().to_string(), "8.8.8.8");
+    }
 
     #[test]
     fn test_is_internal_ip_classification() {
