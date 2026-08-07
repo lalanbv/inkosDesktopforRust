@@ -250,6 +250,8 @@ impl PluginManager {
 
         // 从注册表中移除
         self.installed.remove(id);
+        // 清理连续失败计数——避免同名插件重装后继承残留计数误触发自动禁用
+        self.consec_failures.remove(id);
 
         info!(id = %id, "插件卸载成功");
         Ok(())
@@ -298,6 +300,8 @@ impl PluginManager {
 
         metadata.enabled = false;
         self.installed.insert(id.to_string(), metadata);
+        // 手动禁用时也清理连续失败计数——重新启用后从零开始积累，不误触发阈值
+        self.consec_failures.remove(id);
 
         info!(id = %id, "插件已禁用");
         Ok(())
