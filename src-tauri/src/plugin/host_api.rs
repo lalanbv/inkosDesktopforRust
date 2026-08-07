@@ -43,6 +43,23 @@ pub struct HostContext {
     /// 累计写入上限。生产为 [`DEFAULT_WRITE_QUOTA_BYTES`]，测试可用
     /// [`Self::with_write_quota`] 缩小以避免真写 GB 级数据。
     pub(crate) write_quota: u64,
+
+    /// 累计 `http_get` 请求次数（跨调用共享，同 [`Self::written_bytes`] 的 Arc 理由）。
+    ///
+    /// 单次响应上限（8 MiB）不防高频调用：插件可循环发请求，既耗宿主带宽，
+    /// 也把宿主当作对第三方的流量放大器——目标站点看到的是**宿主 IP**，
+    /// 被封禁的是用户而非插件作者。
+    pub(crate) http_requests: Arc<std::sync::atomic::AtomicU64>,
+
+    /// 累计 `http_get` 响应字节数（跨调用共享）。请求数上限防高频小请求，
+    /// 字节上限防低频大响应——两个维度都需要。
+    pub(crate) http_bytes: Arc<std::sync::atomic::AtomicU64>,
+
+    /// `http_get` 累计请求次数上限。生产 [`DEFAULT_HTTP_REQUEST_QUOTA`]。
+    pub(crate) http_request_quota: u64,
+
+    /// `http_get` 累计响应字节上限。生产 [`DEFAULT_HTTP_BYTE_QUOTA`]。
+    pub(crate) http_byte_quota: u64,
 }
 
 impl HostContext {
@@ -54,6 +71,10 @@ impl HostContext {
             exec_timeout: EXEC_COMMAND_TIMEOUT,
             written_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             write_quota: DEFAULT_WRITE_QUOTA_BYTES,
+            http_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            http_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            http_request_quota: DEFAULT_HTTP_REQUEST_QUOTA,
+            http_byte_quota: DEFAULT_HTTP_BYTE_QUOTA,
         }
     }
 
@@ -74,6 +95,24 @@ impl HostContext {
     /// 累计已写字节数（供指标/诊断）。
     pub fn written_bytes(&self) -> u64 {
         self.written_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 覆盖 `http_get` 配额（仅测试用：避免为验证配额真发上千请求）。
+    #[cfg(test)]
+    pub(crate) fn with_http_quota(mut self, requests: u64, bytes: u64) -> Self {
+        self.http_request_quota = requests;
+        self.http_byte_quota = bytes;
+        self
+    }
+
+    /// 累计 `http_get` 请求次数（供指标/诊断）。
+    pub fn http_requests(&self) -> u64 {
+        self.http_requests.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 累计 `http_get` 响应字节数（供指标/诊断）。
+    pub fn http_bytes(&self) -> u64 {
+        self.http_bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 检查是否有指定权限
@@ -566,6 +605,18 @@ const MAX_WRITE_FILE_BYTES: usize = 8 * 1024 * 1024;
 /// 则是有效上限。
 const DEFAULT_WRITE_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
 
+/// 单个 `HostContext` 生命周期内的 `http_get` 累计请求次数上限。
+///
+/// 防流量放大：插件循环发请求时，第三方站点看到的是**宿主 IP**——被封禁的是
+/// 用户而非插件作者。1000 次对正常插件（拉取 API、检查版本）远超所需。
+const DEFAULT_HTTP_REQUEST_QUOTA: u64 = 1000;
+
+/// 单个 `HostContext` 生命周期内的 `http_get` 累计响应字节上限（256 MiB）。
+///
+/// 与请求数上限互补：请求数防高频小请求，字节数防低频大响应（单次 8 MiB
+/// 合法，32 次即 256 MiB）。两个维度都需要。
+const DEFAULT_HTTP_BYTE_QUOTA: u64 = 256 * 1024 * 1024;
+
 /// `exec_command` 子进程执行超时。超时 → kill + ExecutionFailed。
 /// 与 [`crate::plugin::process`] 的 RPC_TIMEOUT 同量级（插件调用应是短操作）。
 const EXEC_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -858,6 +909,47 @@ impl HostContext {
             }
         }
 
+        // 配额检查（在发请求前——被拒的请求不该消耗配额，也不该产生出网流量）。
+        // 两个维度独立检查：请求数防高频小请求，字节数防低频大响应。
+        use std::sync::atomic::Ordering;
+        let req_quota = self.http_request_quota;
+        if self
+            .http_requests
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                (cur < req_quota).then(|| cur + 1)
+            })
+            .is_err()
+        {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                url = %url,
+                quota = req_quota,
+                action = "http_get",
+                "累计请求次数配额耗尽拒绝"
+            );
+            return Err(PluginError::PermissionDenied(format!(
+                "http_get 累计请求次数超上限 {req_quota}"
+            )));
+        }
+        // 字节配额已耗尽时同样在发请求前拒绝（响应必然超额，无谓出网）。
+        let used_bytes = self.http_bytes.load(Ordering::Relaxed);
+        if used_bytes >= self.http_byte_quota {
+            warn!(
+                target: "inkos.plugin.security",
+                plugin_id = %self.metadata.id,
+                url = %url,
+                used_bytes,
+                quota = self.http_byte_quota,
+                action = "http_get",
+                "累计响应字节配额耗尽拒绝"
+            );
+            return Err(PluginError::PermissionDenied(format!(
+                "http_get 累计响应字节超上限 {}（已用 {used_bytes}）",
+                self.http_byte_quota
+            )));
+        }
+
         tracing::info!(plugin_id = %self.metadata.id, url = %url, "http_get: 允许");
         // SSRF 防护：禁重定向 + DNS rebinding 防护（自定义 resolver 过滤内网 IP，
         // ureq 用过滤后的公网 IP 连接 = IP pinning，关闭解析-连接 TOCTOU）。
@@ -871,13 +963,19 @@ impl HostContext {
             .call()
             .map_err(|e| PluginError::ExecutionFailed(format!("HTTP 请求失败: {e}")))?;
         // 响应体大小守卫：ureq into_string() 不限制大小，超大响应 OOM 宿主。
-        // 用 read_to_string 配合 BufReader 限制字节数读取。
+        // take() 上限取「单次上限」与「剩余字节配额」的较小值——否则最后一次
+        // 请求可读满 8 MiB 而突破累计配额。
         use std::io::Read;
+        let remaining = self.http_byte_quota.saturating_sub(used_bytes);
+        let read_cap = MAX_HTTP_RESPONSE_BYTES.min(remaining);
         let mut body = String::new();
         resp.into_reader()
-            .take(MAX_HTTP_RESPONSE_BYTES)
+            .take(read_cap)
             .read_to_string(&mut body)
             .map_err(|e| PluginError::ExecutionFailed(format!("读取响应失败: {e}")))?;
+        // 累加实际读取字节（不是 read_cap——短响应不该多记）。
+        self.http_bytes
+            .fetch_add(body.len() as u64, Ordering::Relaxed);
         Ok(body)
     }
 }
@@ -1106,6 +1204,125 @@ mod tests {
             ctx.write_file("ok.txt", &"x".repeat(50)).is_ok(),
             "回滚后应能继续写入"
         );
+    }
+
+    /// 带 Network{"*"} 能力 + 可调 http 配额的 ctx。
+    fn http_ctx(work_dir: &Path, requests: u64, bytes: u64) -> HostContext {
+        let metadata = PluginMetadata {
+            id: "http-quota".to_string(),
+            name: "HttpQuota".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: String::new(),
+            abi_version: "1".to_string(),
+            capabilities: vec![Capability::Network {
+                allowed_domains: vec!["*".to_string()],
+            }],
+            entrypoint: "plugin.wasm".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        HostContext::new(metadata, work_dir.to_path_buf()).with_http_quota(requests, bytes)
+    }
+
+    #[test]
+    fn test_http_request_quota_denies_after_exhausted() {
+        // 单次响应上限（8 MiB）不防高频调用：插件循环发请求可把宿主当作对
+        // 第三方的流量放大器（被封禁的是宿主 IP）。累计请求数是第二道。
+        //
+        // 用不可达域名：配额检查在发请求**前**，故配额耗尽时应返回
+        // PermissionDenied 而非网络 ExecutionFailed——错误类型即证明拦截位置。
+        let temp = TempDir::new().unwrap();
+        let ctx = http_ctx(temp.path(), 2, 1024 * 1024);
+        let url = "https://quota-test.invalid/x";
+
+        // 前 2 次消耗配额（网络必失败，但配额已记账 → ExecutionFailed）
+        for i in 0..2 {
+            let r = ctx.http_get(url);
+            assert!(
+                matches!(r, Err(PluginError::ExecutionFailed(_))),
+                "第 {i} 次应过配额检查后因网络失败，实际: {r:?}"
+            );
+        }
+        assert_eq!(ctx.http_requests(), 2, "两次请求都应计入");
+
+        // 第 3 次：配额耗尽 → PermissionDenied（未出网）
+        let r = ctx.http_get(url);
+        assert!(
+            matches!(r, Err(PluginError::PermissionDenied(_))),
+            "配额耗尽应拒绝且不出网，实际: {r:?}"
+        );
+        assert_eq!(ctx.http_requests(), 2, "被拒的请求不应计入配额");
+    }
+
+    #[test]
+    fn test_http_quota_shared_across_clones() {
+        // 同 write 配额：HostContext 每次 execute 被 clone 进新 Store。
+        // 配额若随 clone 归零则形同虚设——插件每次调用重新计数即可无限请求。
+        let temp = TempDir::new().unwrap();
+        let ctx = http_ctx(temp.path(), 1, 1024 * 1024);
+        let url = "https://quota-clone.invalid/x";
+
+        let _ = ctx.http_get(url); // 用掉唯一配额
+        assert_eq!(ctx.http_requests(), 1);
+
+        let cloned = ctx.clone();
+        assert_eq!(cloned.http_requests(), 1, "clone 应看到已用配额");
+        let r = cloned.http_get(url);
+        assert!(
+            matches!(r, Err(PluginError::PermissionDenied(_))),
+            "clone 必须共享请求配额，实际: {r:?}"
+        );
+    }
+
+    #[test]
+    fn test_http_byte_quota_denies_when_exhausted() {
+        // 字节配额与请求数配额互补：请求数防高频小请求，字节数防低频大响应
+        // （单次 8 MiB 合法，32 次即 256 MiB）。
+        // 直接把已用字节抬到配额线，验证下次请求在出网前被拒。
+        let temp = TempDir::new().unwrap();
+        let ctx = http_ctx(temp.path(), 1000, 500);
+        ctx.http_bytes
+            .store(500, std::sync::atomic::Ordering::Relaxed);
+
+        let r = ctx.http_get("https://byte-quota.invalid/x");
+        assert!(
+            matches!(r, Err(PluginError::PermissionDenied(_))),
+            "字节配额耗尽应在出网前拒绝，实际: {r:?}"
+        );
+        assert_eq!(ctx.http_requests(), 1, "请求数已先自增（配额检查顺序）");
+    }
+
+    #[test]
+    fn test_http_quota_not_consumed_by_capability_denial() {
+        // 无 Network 能力的插件被 check_network_domain 拒绝——该拒绝发生在
+        // 配额检查**之前**，不应消耗配额（否则无权插件可耗尽自己的配额，
+        // 掩盖真实的权限错误）。
+        let temp = TempDir::new().unwrap();
+        let metadata = PluginMetadata {
+            id: "no-net".to_string(),
+            name: "NoNet".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            homepage: None,
+            license: String::new(),
+            abi_version: "1".to_string(),
+            capabilities: vec![], // 无 Network
+            entrypoint: "plugin.wasm".to_string(),
+            dependencies: HashMap::new(),
+            enabled: true,
+        };
+        let ctx = HostContext::new(metadata, temp.path().to_path_buf());
+
+        let r = ctx.http_get("https://example.com/x");
+        assert!(
+            matches!(r, Err(PluginError::PermissionDenied(_))),
+            "无 Network 能力应拒绝，实际: {r:?}"
+        );
+        assert_eq!(ctx.http_requests(), 0, "能力拒绝不应消耗请求配额");
     }
 
     #[test]
