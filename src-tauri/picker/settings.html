@@ -194,6 +194,7 @@
         <p class="muted" style="margin:0 0 0.5rem;" data-i18n="market.muted">浏览可安装的官方/社区插件（来自已配置的签名注册表）。市场安装能力待后续版本。</p>
         <div class="toolbar">
           <button id="market-refresh" class="small" data-i18n="market.refresh">刷新市场</button>
+          <button id="market-check-updates" class="small" data-i18n="market.check_updates">检查更新</button>
           <span class="form-msg" id="market-msg" role="status" aria-live="polite"></span>
         </div>
         <ul id="market-list" role="list" aria-label="可安装插件列表"><!-- JS 注入 --></ul>
@@ -266,6 +267,14 @@
           "market.installing": "安装中…",
           "market.install_done": "已安装：",
           "market.install_fail": "安装失败：",
+          "market.check_updates": "检查更新",
+          "market.checking_updates": "检查更新中…",
+          "market.no_updates": "所有插件均为最新。",
+          "market.updates_found": "{n} 个插件有更新。",
+          "market.update": "更新",
+          "market.updating": "更新中…",
+          "market.update_done": "已更新：",
+          "market.update_fail": "更新失败：",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -322,6 +331,14 @@
           "market.installing": "Installing…",
           "market.install_done": "Installed: ",
           "market.install_fail": "Install failed: ",
+          "market.check_updates": "Check for Updates",
+          "market.checking_updates": "Checking for updates…",
+          "market.no_updates": "All plugins are up to date.",
+          "market.updates_found": "{n} plugin(s) have updates.",
+          "market.update": "Update",
+          "market.updating": "Updating…",
+          "market.update_done": "Updated: ",
+          "market.update_fail": "Update failed: ",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -651,6 +668,9 @@
         }
       }
 
+      // 缓存最近一次市场拉取的条目，供「检查更新」对照渲染更新按钮
+      let marketCache = [];
+
       // === 插件市场：cmd_fetch_plugin_registry 拉取已兼容过滤的条目（首次端到端走通注册表管线）===
       async function loadMarket() {
         const listEl = document.getElementById("market-list");
@@ -661,7 +681,8 @@
         try {
           const entries = await invoke("cmd_fetch_plugin_registry");
           msgEl.textContent = "";
-          renderMarket(entries || []);
+          marketCache = entries || [];
+          renderMarket(marketCache, null);
         } catch (e) {
           // 未配置 registry 等 → 提示去 config 设置
           msgEl.className = "form-msg err";
@@ -669,7 +690,7 @@
         }
       }
 
-      function renderMarket(entries) {
+      function renderMarket(entries, upMap) {
         const listEl = document.getElementById("market-list");
         listEl.innerHTML = "";
         if (entries.length === 0) {
@@ -707,13 +728,16 @@
           }
           li.appendChild(info);
 
-          // 安装按钮（复用 plugin-actions 样式）
+          // 安装/更新按钮（upMap 命中→「更新」走 updateFromRegistry，否则「安装」）
           const actions = document.createElement("div");
           actions.className = "plugin-actions";
+          const hasUpdate = upMap && upMap.has(e.id);
           const installBtn = document.createElement("button");
-          installBtn.className = "small primary";
-          installBtn.textContent = t("market.install");
-          installBtn.addEventListener("click", () => installFromRegistry(e));
+          installBtn.className = "small" + (hasUpdate ? " primary" : "");
+          installBtn.textContent = hasUpdate ? t("market.update") : t("market.install");
+          installBtn.addEventListener("click", () =>
+            hasUpdate ? updateFromRegistry(e) : installFromRegistry(e)
+          );
           actions.appendChild(installBtn);
           li.appendChild(actions);
 
@@ -736,7 +760,45 @@
         }
       }
 
+      async function checkUpdates() {
+        const msgEl = document.getElementById("market-msg");
+        msgEl.className = "form-msg";
+        msgEl.textContent = t("market.checking_updates");
+        try {
+          const updates = await invoke("cmd_check_plugin_updates");
+          if (updates.length === 0) {
+            msgEl.className = "form-msg ok";
+            msgEl.textContent = t("market.no_updates");
+            renderMarket(marketCache, null);
+          } else {
+            msgEl.className = "form-msg ok";
+            msgEl.textContent = t("market.updates_found").replace("{n}", updates.length);
+            renderMarket(marketCache, new Map(updates.map((u) => [u.id, u])));
+          }
+        } catch (e) {
+          msgEl.className = "form-msg err";
+          msgEl.textContent = t("market.load_fail") + String(e);
+        }
+      }
+
+      async function updateFromRegistry(entry) {
+        const msgEl = document.getElementById("market-msg");
+        msgEl.className = "form-msg";
+        msgEl.textContent = t("market.updating");
+        try {
+          const meta = await invoke("cmd_update_plugin_from_registry", { entry });
+          msgEl.className = "form-msg ok";
+          msgEl.textContent = t("market.update_done") + (meta.name || meta.id);
+          await loadPlugins(); // 刷新已安装列表
+          await checkUpdates(); // 刷新更新状态（已更新的插件不再标记）
+        } catch (e) {
+          msgEl.className = "form-msg err";
+          msgEl.textContent = t("market.update_fail") + String(e);
+        }
+      }
+
       document.getElementById("market-refresh").addEventListener("click", loadMarket);
+      document.getElementById("market-check-updates").addEventListener("click", checkUpdates);
 
       document.getElementById("config-form").addEventListener("submit", saveConfig);
       document.getElementById("cfg-reset").addEventListener("click", resetConfig);
