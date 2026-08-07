@@ -350,8 +350,10 @@ fn main() {
             // =========================================================
             // M3d：updater 状态（engine + shell 通道）
             // =========================================================
+            // 格式校验在 EngineChannel::new 内（非法 → 回退 DEFAULT_REPO + warn）：
+            // repo 会被拼进 GitHub API URL，未校验可劫持更新源。
             let repo = std::env::var("INKOS_REPO")
-                .unwrap_or_else(|_| "lalanbv/inkosDesktopforRust".to_string());
+                .unwrap_or_else(|_| inkos_desktop::updater::engine::DEFAULT_REPO.to_string());
             let current_engine_version = {
                 let manifest_path =
                     resolve_launch_engine(&app_handle).join(config::ENGINE_MANIFEST_FILE);

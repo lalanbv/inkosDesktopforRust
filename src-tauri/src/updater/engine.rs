@@ -134,8 +134,46 @@ pub struct EngineChannel {
     pub client: reqwest::Client,
 }
 
+/// 校验 `owner/repo` 形如 GitHub slug：恰一个 `/`，两段非空，字符限
+/// 字母数字 + `-`/`_`/`.`，各段 ≤ 100。
+///
+/// **安全关键**：`repo` 来自 `INKOS_REPO` 环境变量并被拼进
+/// `https://api.github.com/repos/{repo}/releases/latest`。未校验时
+/// `x/y@evil.com/` 的 userinfo 语义会把实际 host 变成 `evil.com`，
+/// `../../` 可跳出 `/repos/` 路径——两者都能劫持更新源。
+/// bundle 验签在公钥未配置时为 WarnPass（过渡期），不能作为唯一防线。
+pub(super) fn is_valid_repo_slug(repo: &str) -> bool {
+    let Some((owner, name)) = repo.split_once('/') else {
+        return false;
+    };
+    // split_once 只切首个 '/'，name 内残留的 '/' 会被下面字符白名单拒绝
+    let ok_seg = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 100
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    };
+    ok_seg(owner) && ok_seg(name)
+}
+
 impl EngineChannel {
+    /// 构造 engine 更新通道。`repo` 非法（见 [`is_valid_repo_slug`]）时回退到内置
+    /// 默认仓库并 warn——fail-safe：宁可查官方源，不可查攻击者指定的源。
     pub fn new(repo: String, current_version: String) -> Self {
+        let repo = if is_valid_repo_slug(&repo) {
+            repo
+        } else {
+            tracing::warn!(
+                target: "inkos.updater.security",
+                invalid_repo = %repo,
+                "INKOS_REPO 格式非法（须为 owner/repo），回退内置默认仓库"
+            );
+            DEFAULT_REPO.to_string()
+        };
+        Self::new_unchecked(repo, current_version)
+    }
+
+    fn new_unchecked(repo: String, current_version: String) -> Self {
         // H3：总超时 300s（下载 + 校验预算）；防 mirror 慢流永久挂起。
         let client = reqwest::Client::builder()
             .user_agent("inkosDesktop-updater")
@@ -316,11 +354,27 @@ fn asset<'a>(rel: &'a GithubRelease, name: &str) -> Result<&'a GithubAsset> {
         .with_context(|| format!("release 未含 asset: {name}"))
 }
 
+/// 内置默认仓库（`INKOS_REPO` 未设或格式非法时的 fail-safe 目标）。
+/// 单点定义：`main.rs` 读 env 的默认值也用此常量，避免两处漂移。
+pub const DEFAULT_REPO: &str = "lalanbv/inkosDesktopforRust";
+
+/// 无已知 asset size 时的下载硬上限（`.sha256` / `.sig` 等小文本附件）。
+/// 这些文件实际仅数十至数百字节；1 MiB 留足余量同时封住无界写入。
+const SMALL_ASSET_MAX_BYTES: u64 = 1024 * 1024;
+
 /// 下载到 `dest`（NamedTempFile + persist，崩溃不留半成品 L4）。
-/// `max_bytes > 0` 时按 GitHub asset size 封顶（H3 防 DoS；超 2× 拒绝）。
+/// `max_bytes > 0` 时按 GitHub asset size 封顶（H3 防 DoS；超 2× 拒绝）；
+/// `max_bytes == 0`（大小未知）时用 [`SMALL_ASSET_MAX_BYTES`]。
 /// 写错误用 `?`（H1，不再 `.ok()` 吞）。
 async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
     use std::io::Write;
+    // 实际生效的字节上限。max_bytes>0 → 已知 asset size 的 2×（镜像可能有微小差异）；
+    // ==0 → 小附件默认上限。恒 >0，故流式循环始终有界。
+    let limit = if max_bytes > 0 {
+        max_bytes.saturating_mul(2)
+    } else {
+        SMALL_ASSET_MAX_BYTES
+    };
     let parent = dest.parent().context("dest 应有父目录")?;
     let mut tmp = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("创建下载临时文件失败: {}", parent.display()))?;
@@ -330,21 +384,24 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes
         .await
         .and_then(|r| r.error_for_status())
         .with_context(|| format!("下载失败: {url}"))?;
-    // H3：Content-Length 封顶（超已知 asset size 的 2× → 拒绝，防巨包/慢流 DoS）。
-    if max_bytes > 0 {
-        if let Some(len) = resp.content_length() {
-            if len > max_bytes.saturating_mul(2) {
-                anyhow::bail!(
-                    "下载体积 {len} 远超预期 {max_bytes}（镜像异常？拒绝以防空盘）"
-                );
-            }
+    // H3：Content-Length 预检——声明即超限则不必开始下载（快速失败）。
+    if let Some(len) = resp.content_length() {
+        if len > limit {
+            anyhow::bail!("下载体积 {len} 超上限 {limit}（镜像异常？拒绝以防空盘）");
         }
     }
+    // 流式累计校验：Content-Length 可缺失（chunked transfer）或撒谎，仅靠预检
+    // 等于无上限——服务器不发 Content-Length 即可无限写入直到磁盘满。
+    let mut written: u64 = 0;
     while let Some(chunk) = resp
         .chunk()
         .await
         .with_context(|| format!("读取下载流失败: {url}"))?
     {
+        written = written.saturating_add(chunk.len() as u64);
+        if written > limit {
+            anyhow::bail!("下载流超上限 {limit} 字节（已写 {written}，拒绝以防空盘）: {url}");
+        }
         tmp.write_all(&chunk)
             .with_context(|| format!("写下载文件失败: {}", dest.display()))?;
     }
@@ -367,6 +424,50 @@ mod tests {
 
     fn write(dir: &Path, name: &str, content: &str) {
         fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[test]
+    fn test_is_valid_repo_slug_accepts_normal() {
+        assert!(is_valid_repo_slug("lalanbv/inkosDesktopforRust"));
+        assert!(is_valid_repo_slug("a/b"));
+        assert!(is_valid_repo_slug("org-name/repo_name.js"));
+    }
+
+    #[test]
+    fn test_is_valid_repo_slug_rejects_url_hijack() {
+        // userinfo 语义：拼进 https://api.github.com/repos/{repo}/... 后
+        // 实际 host 变成 evil.com（第一层 URL 解析即被劫持）
+        assert!(!is_valid_repo_slug("x/y@evil.com"));
+        // 路径穿越：跳出 /repos/ 命名空间
+        assert!(!is_valid_repo_slug("../../evil"));
+        assert!(!is_valid_repo_slug("a/../../b"));
+        // 多段：split_once 后 name 含 '/'，被字符白名单拒
+        assert!(!is_valid_repo_slug("a/b/c"));
+        // query/fragment 改写
+        assert!(!is_valid_repo_slug("a/b?x=1"));
+        assert!(!is_valid_repo_slug("a/b#f"));
+        // 控制字符与空白
+        assert!(!is_valid_repo_slug("a/b\nc"));
+        assert!(!is_valid_repo_slug("a /b"));
+    }
+
+    #[test]
+    fn test_is_valid_repo_slug_rejects_malformed() {
+        assert!(!is_valid_repo_slug(""));
+        assert!(!is_valid_repo_slug("noslash"));
+        assert!(!is_valid_repo_slug("/b")); // owner 空
+        assert!(!is_valid_repo_slug("a/")); // name 空
+        assert!(!is_valid_repo_slug(&format!("a/{}", "x".repeat(101)))); // 超长
+    }
+
+    #[test]
+    fn test_engine_channel_falls_back_on_invalid_repo() {
+        // fail-safe：非法 repo 不应被用于拼 URL，须回退内置默认仓库
+        let ch = EngineChannel::new("x/y@evil.com".into(), "0.0.1".into());
+        assert_eq!(ch.repo, DEFAULT_REPO, "非法 repo 须回退 DEFAULT_REPO");
+        // 合法值原样保留
+        let ch = EngineChannel::new("owner/name".into(), "0.0.1".into());
+        assert_eq!(ch.repo, "owner/name");
     }
 
     #[test]
