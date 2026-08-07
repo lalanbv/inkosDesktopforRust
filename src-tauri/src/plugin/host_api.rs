@@ -318,6 +318,13 @@ impl HostContext {
         // `Command::arg` 不使用 shell，无 shell injection 风险；
         // 但 NUL 字节仍可绕过日志截断引发误判，过长参数可触发 E2BIG。
         const MAX_ARG_LEN: usize = 4096;
+        const MAX_ARG_COUNT: usize = 64;
+        if args.len() > MAX_ARG_COUNT {
+            return Err(PluginError::ExecutionFailed(format!(
+                "参数数量 {} 超过上限 {MAX_ARG_COUNT}（防 ARG_MAX 耗尽）",
+                args.len()
+            )));
+        }
         for (i, arg) in args.iter().enumerate() {
             if arg.contains('\0') {
                 return Err(PluginError::ExecutionFailed(format!(

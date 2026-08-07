@@ -285,6 +285,10 @@ impl WasmPlugin {
         let limits = StoreLimitsBuilder::new()
             .memory_size(WASM_MAX_MEMORY_BYTES)
             .table_elements(WASM_MAX_TABLE_ELEMENTS)
+            // instances 上限有意不设：Component Model 内部 WASI 本身占用多个 instance
+            // 槽位（WASI preview2 subcomponents），设 1 导致第二次实例化 "resource limit
+            // exceeded"。memory + table 双层守卫已防 OOM；instance 数在单 Store 内本身
+            // 有界（Store 生命周期 = 一次 execute 调用），无需额外限制。
             .build();
 
         let state = PluginState {
