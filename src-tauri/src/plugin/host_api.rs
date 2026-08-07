@@ -317,10 +317,32 @@ pub struct ExecCommandResponse {
 // Host trait 调用本 http_get，域名白名单在此强制——插件无法绕过。
 
 /// 从 URL 提取 host（小写，owned）。纯函数，便于单测。
+/// 正确处理 userinfo（`user:pass@host`）、端口、方括号 IPv6（`[::1]:443`）——
+/// 防 userinfo 混淆（`https://allowed.com@127.0.0.1` 的真实 host 是 127.0.0.1）与
+/// 方括号 IPv6 解析（`[` 非 IP 致 is_internal_ip 层失效），恢复 SSRF 2 层纵深。
 /// `https://api.example.com/path?x=1` → `api.example.com`
 pub fn extract_host(url: &str) -> Option<String> {
     let after_scheme = url.split("://").nth(1).unwrap_or(url);
-    let host = after_scheme.split('/').next()?.split(':').next()?.to_lowercase();
+    // authority 结束于首个 '/' '?' '#'（path/query/fragment 起始）
+    let authority_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..authority_end];
+    // 剥 userinfo：取最后一个 '@' 之后（`user:pass@host:port` → `host:port`）
+    let host_port = authority
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(authority);
+    // 剥端口 / 方括号 IPv6
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next()? // [::1]:443 → ::1
+    } else {
+        host_port
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port) // host:port → host
+    };
+    let host = host.to_lowercase();
     if host.is_empty() {
         None
     } else {
@@ -670,6 +692,21 @@ mod tests {
         assert_eq!(extract_host("example.com").as_deref(), Some("example.com"));
         assert_eq!(extract_host("https://API.COM").as_deref(), Some("api.com"));
         assert!(extract_host("").is_none());
+        // userinfo 混淆：真实 host 在最后一个 '@' 之后（防 SSRF 用 userinfo 伪装白名单域）
+        assert_eq!(
+            extract_host("https://u:p@127.0.0.1/x").as_deref(),
+            Some("127.0.0.1")
+        );
+        assert_eq!(
+            extract_host("https://allowed.com@evil.com/").as_deref(),
+            Some("evil.com")
+        );
+        // 方括号 IPv6 + 端口（此前 split(':') 截到 '[' 致 is_internal_ip 层失效）
+        assert_eq!(extract_host("https://[::1]:443/").as_deref(), Some("::1"));
+        assert_eq!(
+            extract_host("https://[2002:c0a8:0101::]/").as_deref(),
+            Some("2002:c0a8:0101::")
+        );
     }
 
     #[test]
