@@ -33,6 +33,9 @@ async fn registry_source_and_client(
         .map_err(|e| format!("注册表 pubkey 解码失败: {}", e))?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs.max(1) as u64))
+        // SSRF 防护：禁止跟随重定向。注册表条目的 download_url 应直接指向最终资源；
+        // 重定向可将合法域名跳转到内网（开放重定向 SSRF）。
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("构造 HTTP client 失败: {}", e))?;
     // 缓存路径（网络失败时离线回退）

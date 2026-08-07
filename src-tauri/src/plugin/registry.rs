@@ -15,6 +15,7 @@
 //!
 //! v1 约束：每个 `id` 唯一（一条目=最新版）；多版本列表为未来扩展。
 
+use crate::plugin::host_api::{extract_host, is_internal_ip};
 use crate::plugin::manifest::parse_capability;
 use crate::updater::sig;
 use anyhow::{bail, Context, Result};
@@ -332,6 +333,18 @@ pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 /// Content-Length 预检（可伪造但挡多数放大）+ 流式累加超限中止（防伪造
 /// Content-Length 的真实放大）。
 pub async fn http_fetch(client: &reqwest::Client, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    // SSRF 防护：拒绝内网/保留 IP 字面量（无论注册表签名是否通过，下载 URL 均须
+    // 经此检查——签名只证明注册表未被中间人篡改，不证明发布者本身无恶意/被入侵）。
+    // 涵盖: loopback / 私网 / 链路本地 / 未指定 / 云元数据 (169.254.169.254) /
+    // IPv6 ULA + mapped 私网。DNS rebinding 由系统 resolver 解析后 connect 时校验
+    // （reqwest 使用 OS resolver，无 IP pinning；签名验证已覆盖条目完整性，此层
+    // 仅防 IP 字面量形式的直连内网）。
+    if let Some(host) = extract_host(url) {
+        if is_internal_ip(&host) {
+            bail!("http_fetch: 拒绝内网/保留 IP 字面量 SSRF: {url}（host={host}）");
+        }
+    }
+
     let mut resp = client
         .get(url)
         .send()
@@ -1095,6 +1108,63 @@ capabilities = []{deps_line}
         assert!(
             err.to_string().contains("条目数"),
             "应因条目数超限拒绝: {err}"
+        );
+    }
+
+    // ── http_fetch SSRF 防护测试 ──────────────────────────────────────────────
+    // http_fetch 在发请求前调用 extract_host + is_internal_ip 校验；
+    // 内网 IP 字面量（loopback / 私网 / 云元数据 / IPv6 loopback）须在请求前就拒绝，
+    // 不等待 TCP 连接失败（后者不可靠且不携带安全语义）。
+
+    #[tokio::test]
+    async fn test_http_fetch_rejects_internal_ipv4_literal() {
+        // 127.0.0.1（loopback）→ 在连接前即被 SSRF 守卫拒绝
+        let client = reqwest::Client::new();
+        let err = http_fetch(&client, "http://127.0.0.1/payload.tar.gz", 1024)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("SSRF") || err.to_string().contains("内网"),
+            "127.0.0.1 应被 SSRF 守卫拒绝: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_fetch_rejects_private_network_literal() {
+        // 192.168.x.x（私网）→ 拒绝
+        let client = reqwest::Client::new();
+        let err = http_fetch(&client, "http://192.168.1.100/evil.tar.gz", 1024)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("SSRF") || err.to_string().contains("内网"),
+            "192.168.x.x 应被 SSRF 守卫拒绝: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_fetch_rejects_cloud_metadata_literal() {
+        // 169.254.169.254（AWS/GCP/Azure 云元数据服务）→ 链路本地地址，必须拒绝
+        let client = reqwest::Client::new();
+        let err = http_fetch(&client, "http://169.254.169.254/latest/meta-data/", 1024)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("SSRF") || err.to_string().contains("内网"),
+            "169.254.169.254 应被 SSRF 守卫拒绝: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_http_fetch_rejects_ipv6_loopback_literal() {
+        // [::1]（IPv6 loopback）→ 拒绝
+        let client = reqwest::Client::new();
+        let err = http_fetch(&client, "http://[::1]/evil.tar.gz", 1024)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("SSRF") || err.to_string().contains("内网"),
+            "[::1] 应被 SSRF 守卫拒绝: {err}"
         );
     }
 }
