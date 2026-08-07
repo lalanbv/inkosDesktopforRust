@@ -9,6 +9,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// 单个插件的执行指标
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PluginExecMetrics {
+    pub plugin_id: String,
+    /// 连续失败次数（未达阈值前的当前累计；自动禁用后归零）
+    pub consecutive_failures: u32,
+}
+
 /// 插件执行聚合指标（遥测快照）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PluginMetrics {
@@ -20,6 +28,8 @@ pub struct PluginMetrics {
     pub exec_failures: u64,
     /// 平均每次耗时（微秒）= total_us / count，count=0 时为 0
     pub avg_us: u64,
+    /// per-plugin 连续失败当前状态（仅含 consec_failures > 0 的插件）
+    pub per_plugin: Vec<PluginExecMetrics>,
 }
 
 /// 插件连续失败自动禁用阈值：单插件连续 N 次执行失败 → 自动 disable_plugin。
@@ -376,11 +386,21 @@ impl PluginManager {
         let count = self.exec_count.load(Relaxed);
         let total_us = self.exec_total_us.load(Relaxed);
         let failures = self.exec_failures.load(Relaxed);
+        let per_plugin: Vec<PluginExecMetrics> = self
+            .consec_failures
+            .iter()
+            .filter(|(_, &v)| v > 0)
+            .map(|(id, &v)| PluginExecMetrics {
+                plugin_id: id.clone(),
+                consecutive_failures: v,
+            })
+            .collect();
         PluginMetrics {
             exec_count: count,
             exec_total_us: total_us,
             exec_failures: failures,
             avg_us: if count > 0 { total_us / count } else { 0 },
+            per_plugin,
         }
     }
 
