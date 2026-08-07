@@ -43,8 +43,9 @@ const DEFAULT_EPOCH_DEADLINE: u64 = 10;
 
 /// WASM 插件实例（已编译，可复用）
 ///
-/// `Engine` 与 `Component` 在多次 `execute` 间复用，避免重复编译；`Store` 每次调用
-/// 新建，保证插件状态隔离（一次执行 = 一个干净的实例）。
+/// `Engine`、`Component`、`Linker` 在多次 `execute` 间复用，避免重复编译与
+/// 重复注册 host imports；`Store` 每次调用新建，保证插件状态隔离（一次执行 =
+/// 一个干净的实例）。Linker 是实例化模板（不持 Store 状态），跨实例化复用安全。
 pub struct WasmPlugin {
     /// 插件元数据
     metadata: PluginMetadata,
@@ -57,6 +58,9 @@ pub struct WasmPlugin {
 
     /// Host 上下文（权限检查；每次 execute clone 一份给独立 Store）
     host_context: HostContext,
+
+    /// 预构建的 Linker（WASI + host imports 注册一次，execute 复用——高性能）
+    linker: Linker<PluginState>,
 }
 
 /// 每次执行所依附的 WASI + Host 状态
@@ -152,6 +156,15 @@ impl WasmPlugin {
             "WASM Component 加载成功"
         );
 
+        // Linker 一次性构建并复用（高性能：避免每次 execute 重建 + 重注册 WASI/host imports）。
+        // WASI 注册必需：component（wasm32-wasip2 target）默认依赖 wasi:io/poll 等，
+        // 不注册会在实例化时报 "imports not found in linker"。
+        let mut linker = Linker::<PluginState>::new(&engine);
+        wasmtime_wasi::add_to_linker_sync(&mut linker)
+            .map_err(|e| PluginError::ExecutionFailed(format!("注册 WASI 失败: {e}")))?;
+        InkosPlugin::add_to_linker(&mut linker, |state: &mut PluginState| state)
+            .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
+
         let host_context = HostContext::new(metadata.clone(), work_dir.to_path_buf());
 
         Ok(Self {
@@ -159,6 +172,7 @@ impl WasmPlugin {
             engine,
             component,
             host_context,
+            linker,
         })
     }
 
@@ -176,17 +190,9 @@ impl WasmPlugin {
         let args_str = serde_json::to_string(&args)
             .map_err(|e| PluginError::ExecutionFailed(format!("序列化参数失败: {e}")))?;
 
-        let mut linker = Linker::<PluginState>::new(&self.engine);
-        // 注册 WASI：component（wasm32-wasip2 target）默认依赖 wasi:io/poll 等，
-        // 不注册会在实例化时报 "imports not found in linker"。
-        wasmtime_wasi::add_to_linker_sync(&mut linker)
-            .map_err(|e| PluginError::ExecutionFailed(format!("注册 WASI 失败: {e}")))?;
-        InkosPlugin::add_to_linker(&mut linker, |state: &mut PluginState| state)
-            .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
-
         let mut store = self.create_store()?;
 
-        let bindings = InkosPlugin::instantiate(&mut store, &self.component, &linker)
+        let bindings = InkosPlugin::instantiate(&mut store, &self.component, &self.linker)
             .map_err(|e| PluginError::ExecutionFailed(format!("实例化 Component 失败: {e}")))?;
 
         // call_invoke 返回 Result<Result<String, String>, wasmtime error>：
