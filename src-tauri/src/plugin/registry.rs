@@ -701,6 +701,24 @@ capabilities = []{deps_line}
     }
 
     #[test]
+    fn test_resolve_dependencies_unsatisfied_version_constraint() {
+        // app 依赖 lib ^1.0.0，但注册表仅 lib@2.0.0（^1.0.0 = >=1.0.0,<2.0.0，不匹配）
+        // → find_matching 遍历所有版本均不满足 → Err，而非误装 2.0.0 或静默通过。
+        // 安全关键：依赖版本范围不被满足时必须干净失败。
+        let toml = format!(
+            "version = 1\n\n{}\n{}",
+            entry_toml("app", "1.0.0", "lib = \"^1.0.0\""),
+            entry_toml("lib", "2.0.0", ""),
+        );
+        let idx = PluginRegistryIndex::parse(&toml).unwrap();
+        let app = idx.find_latest("app").unwrap();
+        assert!(
+            resolve_dependencies(app, &idx).is_err(),
+            "依赖版本约束不满足时应报错，而非误装 lib@2.0.0"
+        );
+    }
+
+    #[test]
     fn test_resolve_dependencies_diamond_idempotent() {
         // 钻石依赖：a→b→c，a→c（c 经两条路径到达）。幂等：c 只入序一次。
         let toml = format!(
