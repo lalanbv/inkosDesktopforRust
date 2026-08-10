@@ -1,0 +1,5 @@
+# 生成的 TS 绑定（ts-rs 产出，cargo test --features export-bindings 时生成）
+/bindings/
+
+# 构建产物
+/target/

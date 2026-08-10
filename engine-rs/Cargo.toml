@@ -1,0 +1,37 @@
+[package]
+name = "inkos-engine"
+version = "0.0.1"
+edition = "2021"
+description = "inkos 业务引擎的 Rust 移植目标（packages/core → Rust）。Phase 0 骨架：模块占位 + 类型同步通道。"
+license = "AGPL-3.0-only"
+publish = false
+
+# 设计原则（见 开发时SpecCoding'sPlan/.../全面Rust化迁移规划_v1.md）：
+# - 与 src-tauri 壳层同款技术栈（tokio/serde/anyhow/thiserror/tracing），经验复用
+# - 类型真源在本 crate，经 ts-rs 单向生成 .ts 供前端/Node 消费
+# - 每个业务域一个模块，与 packages/core/src 的 16 域一一对应
+# - 暂为纯库（无 main），由 src-tauri 或独立 axum 服务挂载
+
+[lib]
+name = "inkos_engine"
+path = "src/lib.rs"
+
+[features]
+# 默认不导出 TS 绑定（避免每次 build 都写文件）；CI/发布用 --features export-bindings
+export-bindings = ["ts-rs"]
+
+[dependencies]
+# 与壳层对齐的核心栈
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+# 类型同步：Rust→TS 单向生成（见 src/models.rs 的 PoC）
+# 默认 optional（feature 门控），保证骨架零额外依赖即可编译
+ts-rs = { version = "10", optional = true }
+
+[dev-dependencies]
+# 差分测试：Rust 实现 vs TS golden 向量（Phase 0.4 产出）
+serde_json = "1"
