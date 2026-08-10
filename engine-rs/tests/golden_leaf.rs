@@ -26,6 +26,10 @@ struct LeafGolden {
     is_safe_book_id: Vec<Case>,
     infer_language: Vec<Case>,
     to_posix_path: Vec<Case>,
+    count_chapter_length: Vec<Case>,
+    build_length_spec: Vec<Case>,
+    format_length_count: Vec<Case>,
+    resolve_length_counting_mode: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -79,5 +83,73 @@ fn to_posix_path_matches_ts() {
         let got = inkos_engine::utils::to_posix_path(input);
         let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
         assert_eq!(got, want, "case `{}`: to_posix_path 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn count_chapter_length_matches_ts() {
+    use inkos_engine::models::length_governance::LengthCountingMode;
+    for c in &load().count_chapter_length {
+        let content = c.input["content"].as_str().unwrap_or_else(|| panic!("case {}: content 缺失", c.name));
+        let mode = match c.input["mode"].as_str().unwrap_or_else(|| panic!("case {}: mode 缺失", c.name)) {
+            "zh_chars" => LengthCountingMode::ZhChars,
+            "en_words" => LengthCountingMode::EnWords,
+            other => panic!("case {}: 未知 mode {other}", c.name),
+        };
+        let got = inkos_engine::utils::count_chapter_length(content, mode);
+        let want = c.expected.as_u64().unwrap_or_else(|| panic!("case {}: expected 非 u64", c.name));
+        assert_eq!(got as u64, want, "case `{}`: count_chapter_length 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn build_length_spec_matches_ts() {
+    use inkos_engine::utils::WritingLanguage;
+    for c in &load().build_length_spec {
+        let target = c.input["target"].as_u64().unwrap_or_else(|| panic!("case {}: target 缺失", c.name)) as u32;
+        let lang = match c.input["language"].as_str().unwrap_or_else(|| panic!("case {}: language 缺失", c.name)) {
+            "zh" => WritingLanguage::Zh,
+            "en" => WritingLanguage::En,
+            other => panic!("case {}: 未知 language {other}", c.name),
+        };
+        let got = inkos_engine::utils::build_length_spec(target, lang);
+        // 序列化为 JSON 后逐字段比对（验证 camelCase 字段名 + 数值都对齐 TS）
+        let got_json = serde_json::to_value(&got).expect("LengthSpec 序列化失败");
+        assert_eq!(got_json, c.expected, "case `{}`: build_length_spec 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn format_length_count_matches_ts() {
+    use inkos_engine::models::length_governance::LengthCountingMode;
+    for c in &load().format_length_count {
+        let count = c.input["count"].as_u64().unwrap_or_else(|| panic!("case {}: count 缺失", c.name)) as u32;
+        let mode = match c.input["mode"].as_str().unwrap_or_else(|| panic!("case {}: mode 缺失", c.name)) {
+            "zh_chars" => LengthCountingMode::ZhChars,
+            "en_words" => LengthCountingMode::EnWords,
+            other => panic!("case {}: 未知 mode {other}", c.name),
+        };
+        let got = inkos_engine::utils::format_length_count(count, mode);
+        let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(got, want, "case `{}`: format_length_count 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn resolve_length_counting_mode_matches_ts() {
+    use inkos_engine::utils::WritingLanguage;
+    for c in &load().resolve_length_counting_mode {
+        let lang = match c.input.as_str().unwrap_or_else(|| panic!("case {}: input 非 string", c.name)) {
+            "zh" => WritingLanguage::Zh,
+            "en" => WritingLanguage::En,
+            other => panic!("case {}: 未知 language {other}", c.name),
+        };
+        let got = inkos_engine::utils::resolve_length_counting_mode(lang);
+        let got_str = match got {
+            inkos_engine::models::length_governance::LengthCountingMode::ZhChars => "zh_chars",
+            inkos_engine::models::length_governance::LengthCountingMode::EnWords => "en_words",
+        };
+        let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(got_str, want, "case `{}`: resolve_length_counting_mode 与 TS 不一致", c.name);
     }
 }

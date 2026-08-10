@@ -6,15 +6,22 @@
 //! ## 已移植
 //! - [`book_id`]：书 ID 派生 + 安全校验（路径遍历/控制字符/shell 元字符防护）
 //! - [`language`]：写作语言推断（CJK vs Latin 占比）
+//! - [`length_metrics`]：章节长度度量（zh_chars / en_words + 软硬区间规格）
 //! - [`path`]：项目相对路径归一化（Windows `\` → POSIX `/`）
 //!
 //! ## 待移植（按依赖序）
-//! length-metrics / chapter-memo-parser / story-markdown / ...
+//! chapter-memo-parser / story-markdown / context-filter / ...
 
 pub mod book_id;
 pub mod language;
+pub mod length_metrics;
 pub mod path;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};
 pub use language::{infer_language, WritingLanguage};
+pub use length_metrics::{
+    build_length_spec, choose_normalize_mode, count_chapter_length, default_chapter_length,
+    format_length_count, is_outside_hard_range, is_outside_soft_range,
+    resolve_length_counting_mode,
+};
 pub use path::to_posix_path;

@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { deriveBookIdFromTitle, isSafeBookId } from "../utils/book-id.js";
 import { inferLanguage } from "../utils/language.js";
 import { toPosixPath } from "../utils/posix-path.js";
+import { countChapterLength, buildLengthSpec, formatLengthCount, resolveLengthCountingMode } from "../utils/length-metrics.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -75,6 +76,33 @@ const posixCases: Array<{ name: string; input: string }> = [
   { name: "root-bs", input: "\\" },
 ];
 
+// length-metrics：count_chapter_length(zh_chars / en_words) + build_length_spec + format
+const lengthCountCases: Array<{ name: string; content: string; mode: "zh_chars" | "en_words" }> = [
+  { name: "zh-plain", content: "正文内容。", mode: "zh_chars" },
+  { name: "zh-strips-header", content: "# 标题\n正文内容", mode: "zh_chars" },
+  { name: "zh-strips-frontmatter", content: "---\ntitle: x\n---\n正文", mode: "zh_chars" },
+  { name: "zh-strips-fence", content: "正文\n```\ncode\n```\n更多", mode: "zh_chars" },
+  { name: "zh-collapses-ws", content: "a  b\tc\n\n d", mode: "zh_chars" },
+  { name: "zh-emoji-utf16", content: "😀哈哈", mode: "zh_chars" }, // 😀=2 UTF-16 码元
+  { name: "en-words-basic", content: "hello world foo", mode: "en_words" },
+  { name: "en-words-apostrophe", content: "don't it's won't", mode: "en_words" },
+  { name: "en-words-strips-header", content: "# Title\nA dark fantasy novel", mode: "en_words" },
+  { name: "en-words-empty", content: "```\ncode only\n```", mode: "en_words" },
+];
+
+const lengthSpecCases: Array<{ name: string; target: number; language: "zh" | "en" }> = [
+  { name: "zh-2200", target: 2200, language: "zh" },
+  { name: "zh-1000", target: 1000, language: "zh" },
+  { name: "zh-3000", target: 3000, language: "zh" },
+  { name: "en-2000", target: 2000, language: "en" },
+  { name: "zh-100-small", target: 100, language: "zh" },
+];
+
+const formatCases: Array<{ name: string; count: number; mode: "zh_chars" | "en_words" }> = [
+  { name: "zh-format", count: 3000, mode: "zh_chars" },
+  { name: "en-format", count: 2000, mode: "en_words" },
+];
+
 describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
   it("writes leaf-domain golden vectors", () => {
     const payload = {
@@ -83,6 +111,25 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       is_safe_book_id: bookIdSafe.map((c) => ({ name: c.name, input: c.input, expected: isSafeBookId(c.input) })),
       infer_language: languageCases.map((c) => ({ name: c.name, input: c.input, expected: inferLanguage(c.input) })),
       to_posix_path: posixCases.map((c) => ({ name: c.name, input: c.input, expected: toPosixPath(c.input) })),
+      count_chapter_length: lengthCountCases.map((c) => ({
+        name: c.name,
+        input: { content: c.content, mode: c.mode },
+        expected: countChapterLength(c.content, c.mode),
+      })),
+      build_length_spec: lengthSpecCases.map((c) => ({
+        name: c.name,
+        input: { target: c.target, language: c.language },
+        expected: buildLengthSpec(c.target, c.language),
+      })),
+      format_length_count: formatCases.map((c) => ({
+        name: c.name,
+        input: { count: c.count, mode: c.mode },
+        expected: formatLengthCount(c.count, c.mode),
+      })),
+      resolve_length_counting_mode: [
+        { name: "zh", input: "zh", expected: resolveLengthCountingMode("zh") },
+        { name: "en", input: "en", expected: resolveLengthCountingMode("en") },
+      ],
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）

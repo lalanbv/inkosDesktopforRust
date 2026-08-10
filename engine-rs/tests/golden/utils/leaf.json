@@ -215,5 +215,199 @@
       "input": "\\",
       "expected": "/"
     }
+  ],
+  "count_chapter_length": [
+    {
+      "name": "zh-plain",
+      "input": {
+        "content": "正文内容。",
+        "mode": "zh_chars"
+      },
+      "expected": 5
+    },
+    {
+      "name": "zh-strips-header",
+      "input": {
+        "content": "# 标题\n正文内容",
+        "mode": "zh_chars"
+      },
+      "expected": 4
+    },
+    {
+      "name": "zh-strips-frontmatter",
+      "input": {
+        "content": "---\ntitle: x\n---\n正文",
+        "mode": "zh_chars"
+      },
+      "expected": 2
+    },
+    {
+      "name": "zh-strips-fence",
+      "input": {
+        "content": "正文\n```\ncode\n```\n更多",
+        "mode": "zh_chars"
+      },
+      "expected": 4
+    },
+    {
+      "name": "zh-collapses-ws",
+      "input": {
+        "content": "a  b\tc\n\n d",
+        "mode": "zh_chars"
+      },
+      "expected": 4
+    },
+    {
+      "name": "zh-emoji-utf16",
+      "input": {
+        "content": "😀哈哈",
+        "mode": "zh_chars"
+      },
+      "expected": 4
+    },
+    {
+      "name": "en-words-basic",
+      "input": {
+        "content": "hello world foo",
+        "mode": "en_words"
+      },
+      "expected": 3
+    },
+    {
+      "name": "en-words-apostrophe",
+      "input": {
+        "content": "don't it's won't",
+        "mode": "en_words"
+      },
+      "expected": 3
+    },
+    {
+      "name": "en-words-strips-header",
+      "input": {
+        "content": "# Title\nA dark fantasy novel",
+        "mode": "en_words"
+      },
+      "expected": 4
+    },
+    {
+      "name": "en-words-empty",
+      "input": {
+        "content": "```\ncode only\n```",
+        "mode": "en_words"
+      },
+      "expected": 0
+    }
+  ],
+  "build_length_spec": [
+    {
+      "name": "zh-2200",
+      "input": {
+        "target": 2200,
+        "language": "zh"
+      },
+      "expected": {
+        "target": 2200,
+        "softMin": 1900,
+        "softMax": 2500,
+        "hardMin": 1600,
+        "hardMax": 2800,
+        "countingMode": "zh_chars",
+        "normalizeMode": "none"
+      }
+    },
+    {
+      "name": "zh-1000",
+      "input": {
+        "target": 1000,
+        "language": "zh"
+      },
+      "expected": {
+        "target": 1000,
+        "softMin": 864,
+        "softMax": 1136,
+        "hardMin": 728,
+        "hardMax": 1272,
+        "countingMode": "zh_chars",
+        "normalizeMode": "none"
+      }
+    },
+    {
+      "name": "zh-3000",
+      "input": {
+        "target": 3000,
+        "language": "zh"
+      },
+      "expected": {
+        "target": 3000,
+        "softMin": 2591,
+        "softMax": 3409,
+        "hardMin": 2182,
+        "hardMax": 3818,
+        "countingMode": "zh_chars",
+        "normalizeMode": "none"
+      }
+    },
+    {
+      "name": "en-2000",
+      "input": {
+        "target": 2000,
+        "language": "en"
+      },
+      "expected": {
+        "target": 2000,
+        "softMin": 1728,
+        "softMax": 2272,
+        "hardMin": 1455,
+        "hardMax": 2545,
+        "countingMode": "en_words",
+        "normalizeMode": "none"
+      }
+    },
+    {
+      "name": "zh-100-small",
+      "input": {
+        "target": 100,
+        "language": "zh"
+      },
+      "expected": {
+        "target": 100,
+        "softMin": 87,
+        "softMax": 113,
+        "hardMin": 73,
+        "hardMax": 127,
+        "countingMode": "zh_chars",
+        "normalizeMode": "none"
+      }
+    }
+  ],
+  "format_length_count": [
+    {
+      "name": "zh-format",
+      "input": {
+        "count": 3000,
+        "mode": "zh_chars"
+      },
+      "expected": "3000字"
+    },
+    {
+      "name": "en-format",
+      "input": {
+        "count": 2000,
+        "mode": "en_words"
+      },
+      "expected": "2000 words"
+    }
+  ],
+  "resolve_length_counting_mode": [
+    {
+      "name": "zh",
+      "input": "zh",
+      "expected": "zh_chars"
+    },
+    {
+      "name": "en",
+      "input": "en",
+      "expected": "en_words"
+    }
   ]
 }
