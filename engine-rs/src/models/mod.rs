@@ -5,14 +5,15 @@
 //!
 //! ## 已移植
 //! - [`book`] / [`chapter`] / [`state`] / [`genre_profile`] / [`style_profile`]
-//! - [`length_governance`] / [`input_governance`]
+//! - [`detection`] / [`context_compression`] / [`length_governance`] / [`input_governance`]
 //!
 //! ## 待移植
-//! project / runtime-state / detection / context-compression / play / book-rules
-//! （注：genre_profile.parseGenreProfile 的 YAML 解析待加 serde_yaml 依赖）
+//! project / runtime-state / play / book-rules（注：genre_profile.parseGenreProfile 待 serde_yaml）
 
 pub mod book;
 pub mod chapter;
+pub mod context_compression;
+pub mod detection;
 pub mod genre_profile;
 pub mod input_governance;
 pub mod length_governance;
