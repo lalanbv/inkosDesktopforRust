@@ -4,19 +4,20 @@
 //! 经 ts-rs 生成 `.ts` 供前端与 Node sidecar 消费（迁移规划 v1 §5.1 单一真源）。
 //!
 //! ## 已移植
-//! - [`book`]：书籍配置（Platform/BookStatus/FanficMode + normalize/resolve 函数）
-//! - [`chapter`]：章节状态机（13 态）+ ChapterMeta + TokenUsage
-//! - [`length_governance`]：长度计量/归一化/规格/遥测类型
-//! - [`input_governance`]：输入治理类型（ChapterMemo）
+//! - [`book`] / [`chapter`] / [`state`] / [`genre_profile`] / [`style_profile`]
+//! - [`length_governance`] / [`input_governance`]
 //!
 //! ## 待移植
-//! state / runtime-state / genre-profile / style-profile / detection /
-//! context-compression / play / project / book-rules
+//! project / runtime-state / detection / context-compression / play / book-rules
+//! （注：genre_profile.parseGenreProfile 的 YAML 解析待加 serde_yaml 依赖）
 
 pub mod book;
 pub mod chapter;
+pub mod genre_profile;
 pub mod input_governance;
 pub mod length_governance;
+pub mod state;
+pub mod style_profile;
 
 // PoC 占位类型（后续迁到各自文件）——保留以维持 ts-rs 导出测试不破坏。
 pub use self::placeholders::{BookMeta, ChapterStatus};
