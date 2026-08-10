@@ -106,7 +106,12 @@ pub async fn update_config(
     // 持久化成功后再取锁更新内存（set_* 是纯内存操作，持锁极短）
     let mut mgr = state.config.lock().await;
     match layer {
-        ConfigLayer::System => unreachable!("System 在上 match 已 return"),
+        ConfigLayer::System => {
+            // 防御性返回：System 在上文 match 已 return，正常流程到不了这里。
+            // 用显式错误替代 unreachable!()——若未来重构破坏不变式，调用方收到
+            // 可读错误而非 panic（panic 在 Tauri 命令里会让前端拿到不友好的崩溃）。
+            return Err("内部错误：System 层不应进入此分支".to_string());
+        }
         ConfigLayer::User => mgr.set_user(config),
         ConfigLayer::Workspace => mgr.set_workspace(config),
         ConfigLayer::Project => mgr.set_project(config),
@@ -138,7 +143,12 @@ pub async fn reset_config(
 
     let mut mgr = state.config.lock().await;
     match layer {
-        ConfigLayer::System => unreachable!("System 在上 match 已 return"),
+        ConfigLayer::System => {
+            // 防御性返回：System 在上文 match 已 return，正常流程到不了这里。
+            // 用显式错误替代 unreachable!()——若未来重构破坏不变式，调用方收到
+            // 可读错误而非 panic（panic 在 Tauri 命令里会让前端拿到不友好的崩溃）。
+            return Err("内部错误：System 层不应进入此分支".to_string());
+        }
         ConfigLayer::User => mgr.clear_user(),
         ConfigLayer::Workspace => mgr.clear_workspace(),
         ConfigLayer::Project => mgr.clear_project(),

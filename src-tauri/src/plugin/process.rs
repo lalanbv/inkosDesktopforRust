@@ -270,51 +270,50 @@ impl PluginProcess {
         });
     }
 
-/// 优雅关闭等待窗：先通知 → 等待进程自行退出 → 超时再 kill。
-/// 終止插件进程（优雅关闭：先 notify("shutdown") best-effort → 等待 GRACEFUL_SHUTDOWN_TIMEOUT_MS → kill）。
-///
-/// 给插件机会清理资源（关文件句柄、保存状态等）。notify 在 detached 线程发送，
-/// 防 stdin pipe 满时阻塞 stop() 本身——超时倒计时与 notify 并行。
-pub fn stop(&self) -> Result<(), PluginError> {
-    // detached 线程 fire-and-forget shutdown 通知：与超时倒计时并行，
-    // 防 stdin pipe 满时 writeln 阻塞 stop()（管道满 = 进程无响应，需 hard kill）。
-    let stdin_arc = Arc::clone(&self.stdin);
-    std::thread::spawn(move || {
-        let request = RpcRequest::notification("shutdown", None);
-        if let Ok(req_str) = serde_json::to_string(&request) {
-            if let Ok(mut stdin) = stdin_arc.lock() {
-                let _ = writeln!(stdin, "{}", req_str);
-                let _ = stdin.flush();
+    /// 終止插件进程（优雅关闭：先 notify("shutdown") best-effort → 等待 GRACEFUL_SHUTDOWN_TIMEOUT_MS → kill）。
+    ///
+    /// 给插件机会清理资源（关文件句柄、保存状态等）。notify 在 detached 线程发送，
+    /// 防 stdin pipe 满时阻塞 stop() 本身——超时倒计时与 notify 并行。
+    pub fn stop(&self) -> Result<(), PluginError> {
+        // detached 线程 fire-and-forget shutdown 通知：与超时倒计时并行，
+        // 防 stdin pipe 满时 writeln 阻塞 stop()（管道满 = 进程无响应，需 hard kill）。
+        let stdin_arc = Arc::clone(&self.stdin);
+        std::thread::spawn(move || {
+            let request = RpcRequest::notification("shutdown", None);
+            if let Ok(req_str) = serde_json::to_string(&request) {
+                if let Ok(mut stdin) = stdin_arc.lock() {
+                    let _ = writeln!(stdin, "{}", req_str);
+                    let _ = stdin.flush();
+                }
             }
-        }
-    });
+        });
 
-    // 轮询等待进程自行退出（最多 GRACEFUL_SHUTDOWN_TIMEOUT_MS）
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
-    loop {
-        if let Ok(mut child) = self.child.lock() {
-            if child.try_wait().ok().flatten().is_some() {
-                return Ok(()); // 进程已退出
+        // 轮询等待进程自行退出（最多 GRACEFUL_SHUTDOWN_TIMEOUT_MS）
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+        loop {
+            if let Ok(mut child) = self.child.lock() {
+                if child.try_wait().ok().flatten().is_some() {
+                    return Ok(()); // 进程已退出
+                }
             }
+            if std::time::Instant::now() >= deadline {
+                break; // 超时 → hard kill
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        if std::time::Instant::now() >= deadline {
-            break; // 超时 → hard kill
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // 超时：hard kill
+        let mut child = self.child.lock().map_err(|_| {
+            PluginError::ExecutionFailed("Failed to lock child process for kill".to_string())
+        })?;
+        child.kill().map_err(|e| {
+            PluginError::ExecutionFailed(format!("Failed to kill process: {}", e))
+        })?;
+        Ok(())
     }
 
-    // 超时：hard kill
-    let mut child = self.child.lock().map_err(|_| {
-        PluginError::ExecutionFailed("Failed to lock child process for kill".to_string())
-    })?;
-    child.kill().map_err(|e| {
-        PluginError::ExecutionFailed(format!("Failed to kill process: {}", e))
-    })?;
-    Ok(())
-}
-
-    /// 检查进程是否存活
+        /// 检查进程是否存活
     pub fn is_alive(&self) -> bool {
         let mut child = match self.child.lock() {
             Ok(c) => c,
