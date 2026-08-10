@@ -4,14 +4,15 @@
 //! 经 ts-rs 生成 `.ts` 供前端与 Node sidecar 消费（迁移规划 v1 §5.1 单一真源）。
 //!
 //! ## 已移植
-//! - [`book`] / [`chapter`] / [`state`] / [`genre_profile`] / [`style_profile`]
+//! - [`book`] / [`book_rules`] / [`chapter`] / [`state`] / [`genre_profile`] / [`style_profile`]
 //! - [`detection`] / [`context_compression`] / [`length_governance`] / [`input_governance`]
 //! - [`project`] / [`runtime_state`]
 //!
 //! ## 待移植
-//! play / book-rules（注：genre_profile.parseGenreProfile 待 serde_yaml）
+//! play（interactive-film 游戏状态，复杂）
 
 pub mod book;
+pub mod book_rules;
 pub mod chapter;
 pub mod context_compression;
 pub mod detection;
