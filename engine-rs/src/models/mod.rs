@@ -23,6 +23,7 @@ pub mod project;
 pub mod runtime_state;
 pub mod state;
 pub mod style_profile;
+pub mod play;
 
 // PoC 占位类型（后续迁到各自文件）——保留以维持 ts-rs 导出测试不破坏。
 pub use self::placeholders::{BookMeta, ChapterStatus};
