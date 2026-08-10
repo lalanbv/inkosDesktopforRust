@@ -32,6 +32,9 @@ struct LeafGolden {
     format_length_count: Vec<Case>,
     resolve_length_counting_mode: Vec<Case>,
     resolve_cadence_pressure: Vec<Case>,
+    extract_pov_from_outline: Vec<Case>,
+    filter_matrix_by_pov: Vec<Case>,
+    filter_hooks_by_pov: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -180,6 +183,47 @@ fn resolve_cadence_pressure_matches_ts() {
             _ => panic!("case `{}`: expected 非 string/null", c.name),
         };
         assert_eq!(got_str, want, "case `{}`: resolve_cadence_pressure 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn extract_pov_from_outline_matches_ts() {
+    use inkos_engine::utils::extract_pov_from_outline;
+    for c in &load().extract_pov_from_outline {
+        let outline = c.input["outline"].as_str().unwrap_or_else(|| panic!("case {}: outline 缺失", c.name));
+        let chapter = c.input["chapter"].as_u64().unwrap_or(0) as u32;
+        let got = extract_pov_from_outline(outline, chapter);
+        let want: Option<&str> = match &c.expected {
+            Value::String(s) => Some(s.as_str()),
+            Value::Null => None,
+            _ => panic!("case `{}`: expected 非 string/null", c.name),
+        };
+        assert_eq!(got.as_deref(), want, "case `{}`: extract_pov_from_outline 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn filter_matrix_by_pov_matches_ts() {
+    use inkos_engine::utils::filter_matrix_by_pov;
+    for c in &load().filter_matrix_by_pov {
+        let matrix = c.input["matrix"].as_str().unwrap_or_else(|| panic!("case {}: matrix 缺失", c.name));
+        let pov = c.input["pov"].as_str().unwrap_or_default();
+        let got = filter_matrix_by_pov(matrix, pov);
+        let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(got, want, "case `{}`: filter_matrix_by_pov 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn filter_hooks_by_pov_matches_ts() {
+    use inkos_engine::utils::filter_hooks_by_pov;
+    for c in &load().filter_hooks_by_pov {
+        let hooks = c.input["hooks"].as_str().unwrap_or_else(|| panic!("case {}: hooks 缺失", c.name));
+        let pov = c.input["pov"].as_str().unwrap_or_default();
+        let summaries = c.input["summaries"].as_str().unwrap_or_default();
+        let got = filter_hooks_by_pov(hooks, pov, summaries);
+        let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(got, want, "case `{}`: filter_hooks_by_pov 与 TS 不一致", c.name);
     }
 }
 

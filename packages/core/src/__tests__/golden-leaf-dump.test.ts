@@ -16,6 +16,7 @@ import { toPosixPath } from "../utils/posix-path.js";
 import { countChapterLength, buildLengthSpec, formatLengthCount, resolveLengthCountingMode } from "../utils/length-metrics.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 import { resolveCadencePressure } from "../utils/cadence-policy.js";
+import { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "../utils/pov-filter.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -164,6 +165,20 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "medium-with-floor", input: { count: 2, total: 4, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 2, total: 4, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
         { name: "medium-below-floor", input: { count: 2, total: 3, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 2, total: 3, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
         { name: "none-below", input: { count: 1, total: 10, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 1, total: 10, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
+      ],
+      extract_pov_from_outline: [
+        { name: "zh-decl", input: { outline: "第3章 觉醒\nPOV: 林动\n内容", chapter: 3 }, expected: extractPOVFromOutline("第3章 觉醒\nPOV: 林动\n内容", 3) },
+        { name: "en-decl", input: { outline: "Chapter 5 Fight\nPOV: Alice\n...", chapter: 5 }, expected: extractPOVFromOutline("Chapter 5 Fight\nPOV: Alice\n...", 5) },
+        { name: "absent", input: { outline: "第3章 觉醒\n本章无相关声明", chapter: 3 }, expected: extractPOVFromOutline("第3章 觉醒\n本章无相关声明", 3) },
+      ],
+      filter_matrix_by_pov: [
+        { name: "uncreated", input: { matrix: "(文件尚未创建)", pov: "林动" }, expected: filterMatrixByPOV("(文件尚未创建)", "林动") },
+        { name: "empty-pov", input: { matrix: "x", pov: "" }, expected: filterMatrixByPOV("x", "") },
+        { name: "filters-info-boundary", input: { matrix: "### 角色矩阵\n| 角色 | 已知 |\n| --- | --- |\n| 林动 | 系统秘密 |\n| 王胖 | 其他 |\n\n### 信息边界\n| 角色 | 已知 |\n| --- | --- |\n| 林动 | 知道A |\n| 王胖 | 知道B |\n", pov: "林动" }, expected: filterMatrixByPOV("### 角色矩阵\n| 角色 | 已知 |\n| --- | --- |\n| 林动 | 系统秘密 |\n| 王胖 | 其他 |\n\n### 信息边界\n| 角色 | 已知 |\n| --- | --- |\n| 林动 | 知道A |\n| 王胖 | 知道B |\n", "林动") },
+      ],
+      filter_hooks_by_pov: [
+        { name: "uncreated", input: { hooks: "(文件尚未创建)", pov: "林动", summaries: "" }, expected: filterHooksByPOV("(文件尚未创建)", "林动", "") },
+        { name: "pov-present", input: { hooks: "| hook_id | 章节 | 描述 |\n| --- | --- | --- |\n| H1 | 1 | 伏笔一 |\n| H2 | 2 | 伏笔二 |\n", pov: "林动", summaries: "| 1 | 林动登场 |\n" }, expected: filterHooksByPOV("| hook_id | 章节 | 描述 |\n| --- | --- | --- |\n| H1 | 1 | 伏笔一 |\n| H2 | 2 | 伏笔二 |\n", "林动", "| 1 | 林动登场 |\n") },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };
