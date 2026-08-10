@@ -17,6 +17,7 @@ import { countChapterLength, buildLengthSpec, formatLengthCount, resolveLengthCo
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 import { resolveCadencePressure } from "../utils/cadence-policy.js";
 import { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "../utils/pov-filter.js";
+import { splitChapters } from "../utils/chapter-splitter.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -179,6 +180,14 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       filter_hooks_by_pov: [
         { name: "uncreated", input: { hooks: "(文件尚未创建)", pov: "林动", summaries: "" }, expected: filterHooksByPOV("(文件尚未创建)", "林动", "") },
         { name: "pov-present", input: { hooks: "| hook_id | 章节 | 描述 |\n| --- | --- | --- |\n| H1 | 1 | 伏笔一 |\n| H2 | 2 | 伏笔二 |\n", pov: "林动", summaries: "| 1 | 林动登场 |\n" }, expected: filterHooksByPOV("| hook_id | 章节 | 描述 |\n| --- | --- | --- |\n| H1 | 1 | 伏笔一 |\n| H2 | 2 | 伏笔二 |\n", "林动", "| 1 | 林动登场 |\n") },
+      ],
+      split_chapters: [
+        { name: "zh-zhang", input: { text: "序言\n第一章 觉醒\n主角醒来。\n第二章 出发\n他们离开了。", pattern: null }, expected: splitChapters("序言\n第一章 觉醒\n主角醒来。\n第二章 出发\n他们离开了。", undefined) },
+        { name: "hash-prefix", input: { text: "## 第3章 转折\n内容。\n## 第4章 结局\n结尾。", pattern: null }, expected: splitChapters("## 第3章 转折\n内容。\n## 第4章 结局\n结尾。", undefined) },
+        { name: "en-roman", input: { text: "Intro\nCHAPTER I.\nFirst.\nCHAPTER II.\nSecond.", pattern: null }, expected: splitChapters("Intro\nCHAPTER I.\nFirst.\nCHAPTER II.\nSecond.", undefined) },
+        { name: "no-match", input: { text: "只有普通文本\n没有章节标题", pattern: null }, expected: splitChapters("只有普通文本\n没有章节标题", undefined) },
+        { name: "gutenberg-strip", input: { text: "第一章 内容\n正文。\nProject Gutenberg Literary Archive\n", pattern: null }, expected: splitChapters("第一章 内容\n正文。\nProject Gutenberg Literary Archive\n", undefined) },
+        { name: "custom-pattern", input: { text: "### A\n内容a\n### B\n内容b", pattern: "^###\\s+(.*)" }, expected: splitChapters("### A\n内容a\n### B\n内容b", "^###\\s+(.*)") },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };

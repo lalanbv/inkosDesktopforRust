@@ -526,6 +526,97 @@
       "expected": "\n| hook_id | 章节 | 描述 |\n| --- | --- | --- |\n| H1 | 1 | 伏笔一 |"
     }
   ],
+  "split_chapters": [
+    {
+      "name": "zh-zhang",
+      "input": {
+        "text": "序言\n第一章 觉醒\n主角醒来。\n第二章 出发\n他们离开了。",
+        "pattern": null
+      },
+      "expected": [
+        {
+          "title": "觉醒",
+          "content": "主角醒来。"
+        },
+        {
+          "title": "出发",
+          "content": "他们离开了。"
+        }
+      ]
+    },
+    {
+      "name": "hash-prefix",
+      "input": {
+        "text": "## 第3章 转折\n内容。\n## 第4章 结局\n结尾。",
+        "pattern": null
+      },
+      "expected": [
+        {
+          "title": "转折",
+          "content": "内容。"
+        },
+        {
+          "title": "结局",
+          "content": "结尾。"
+        }
+      ]
+    },
+    {
+      "name": "en-roman",
+      "input": {
+        "text": "Intro\nCHAPTER I.\nFirst.\nCHAPTER II.\nSecond.",
+        "pattern": null
+      },
+      "expected": [
+        {
+          "title": "Chapter 1",
+          "content": "First."
+        },
+        {
+          "title": "Chapter 2",
+          "content": "Second."
+        }
+      ]
+    },
+    {
+      "name": "no-match",
+      "input": {
+        "text": "只有普通文本\n没有章节标题",
+        "pattern": null
+      },
+      "expected": []
+    },
+    {
+      "name": "gutenberg-strip",
+      "input": {
+        "text": "第一章 内容\n正文。\nProject Gutenberg Literary Archive\n",
+        "pattern": null
+      },
+      "expected": [
+        {
+          "title": "内容",
+          "content": "正文。"
+        }
+      ]
+    },
+    {
+      "name": "custom-pattern",
+      "input": {
+        "text": "### A\n内容a\n### B\n内容b",
+        "pattern": "^###\\s+(.*)"
+      },
+      "expected": [
+        {
+          "title": "A",
+          "content": "内容a"
+        },
+        {
+          "title": "B",
+          "content": "内容b"
+        }
+      ]
+    }
+  ],
   "parse_memo": [
     {
       "name": "valid-short-goal",

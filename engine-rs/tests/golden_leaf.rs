@@ -35,6 +35,7 @@ struct LeafGolden {
     extract_pov_from_outline: Vec<Case>,
     filter_matrix_by_pov: Vec<Case>,
     filter_hooks_by_pov: Vec<Case>,
+    split_chapters: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -224,6 +225,18 @@ fn filter_hooks_by_pov_matches_ts() {
         let got = filter_hooks_by_pov(hooks, pov, summaries);
         let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
         assert_eq!(got, want, "case `{}`: filter_hooks_by_pov 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn split_chapters_matches_ts() {
+    use inkos_engine::utils::split_chapters;
+    for c in &load().split_chapters {
+        let text = c.input["text"].as_str().unwrap_or_else(|| panic!("case {}: text 缺失", c.name));
+        let pattern = c.input["pattern"].as_str(); // null → None
+        let got = split_chapters(text, pattern);
+        let got_json = serde_json::to_value(&got).expect("SplitChapter vec 序列化失败");
+        assert_eq!(got_json, c.expected, "case `{}`: split_chapters 与 TS 不一致", c.name);
     }
 }
 
