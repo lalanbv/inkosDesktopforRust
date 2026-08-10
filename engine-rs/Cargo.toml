@@ -28,6 +28,9 @@ anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
+# 正则：解析器移植用（chapter-memo-parser 等非热路径）。须与 TS 严格一致，手写易分歧；
+# regex crate 配合 OnceLock 编译一次，零运行时多余分配。
+regex = "1"
 # 类型同步：Rust→TS 单向生成（见 src/models.rs 的 PoC）
 # 默认 optional（feature 门控），保证骨架零额外依赖即可编译
 ts-rs = { version = "10", optional = true }

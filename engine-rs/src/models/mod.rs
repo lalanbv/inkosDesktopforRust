@@ -5,12 +5,14 @@
 //!
 //! ## 已移植
 //! - [`length_governance`]：长度计量/归一化/规格类型（zh_chars / en_words 等）
+//! - [`input_governance`]：输入治理类型（ChapterMemo）
 //! - PoC 占位：`ChapterStatus` / `BookMeta`（将在 Phase 1 后续按 core 实际模型补全）
 //!
 //! ## 待移植
 //! book / chapter / state / runtime-state / genre-profile / style-profile / detection /
-//! input-governance / context-compression / play / project / book-rules
+//! context-compression / play / project / book-rules
 
+pub mod input_governance;
 pub mod length_governance;
 
 // PoC 占位类型（后续迁到各自文件）——保留以维持 ts-rs 导出测试不破坏。

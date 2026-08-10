@@ -5,19 +5,22 @@
 //!
 //! ## 已移植
 //! - [`book_id`]：书 ID 派生 + 安全校验（路径遍历/控制字符/shell 元字符防护）
+//! - [`chapter_memo_parser`]：LLM planner 备忘录解析（栅栏/散文剥离 + 严格小节校验）
 //! - [`language`]：写作语言推断（CJK vs Latin 占比）
 //! - [`length_metrics`]：章节长度度量（zh_chars / en_words + 软硬区间规格）
 //! - [`path`]：项目相对路径归一化（Windows `\` → POSIX `/`）
 //!
 //! ## 待移植（按依赖序）
-//! chapter-memo-parser / story-markdown / context-filter / ...
+//! story-markdown / context-filter / narrative-control / pov-filter / ...
 
 pub mod book_id;
+pub mod chapter_memo_parser;
 pub mod language;
 pub mod length_metrics;
 pub mod path;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};
+pub use chapter_memo_parser::{parse_memo, PlannerParseError};
 pub use language::{infer_language, WritingLanguage};
 pub use length_metrics::{
     build_length_spec, choose_normalize_mode, count_chapter_length, default_chapter_length,

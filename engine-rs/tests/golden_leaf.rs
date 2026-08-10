@@ -30,6 +30,7 @@ struct LeafGolden {
     build_length_spec: Vec<Case>,
     format_length_count: Vec<Case>,
     resolve_length_counting_mode: Vec<Case>,
+    parse_memo: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -151,5 +152,30 @@ fn resolve_length_counting_mode_matches_ts() {
         };
         let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
         assert_eq!(got_str, want, "case `{}`: resolve_length_counting_mode 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn parse_memo_matches_ts() {
+    use inkos_engine::utils::chapter_memo_parser::parse_memo;
+    for c in &load().parse_memo {
+        let raw = c.input["raw"].as_str().unwrap_or_else(|| panic!("case {}: raw 缺失", c.name));
+        let chapter = c.input["chapter"].as_u64().unwrap_or_else(|| panic!("case {}: chapter 缺失", c.name)) as u32;
+        let golden = c.input["isGoldenOpening"].as_bool().unwrap_or(false);
+        let got = parse_memo(raw, chapter, golden);
+
+        let ts_ok = c.expected["ok"].as_bool().unwrap_or_else(|| panic!("case {}: expected.ok 缺失", c.name));
+        match (got, ts_ok) {
+            (Ok(memo), true) => {
+                let got_json = serde_json::to_value(&memo).expect("ChapterMemo 序列化失败");
+                assert_eq!(got_json, c.expected["value"], "case `{}`: parse_memo 成功值与 TS 不一致", c.name);
+            }
+            (Err(e), false) => {
+                let want = c.expected["error"].as_str().unwrap_or_else(|| panic!("case {}: expected.error 缺失", c.name));
+                assert_eq!(e.0, want, "case `{}`: parse_memo 错误消息与 TS 不一致", c.name);
+            }
+            (Ok(_), false) => panic!("case `{}`: TS 失败但 Rust 成功", c.name),
+            (Err(e), true) => panic!("case `{}`: TS 成功但 Rust 失败: {}", c.name, e.0),
+        }
     }
 }

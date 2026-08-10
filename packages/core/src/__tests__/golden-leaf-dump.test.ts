@@ -14,6 +14,7 @@ import { deriveBookIdFromTitle, isSafeBookId } from "../utils/book-id.js";
 import { inferLanguage } from "../utils/language.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import { countChapterLength, buildLengthSpec, formatLengthCount, resolveLengthCountingMode } from "../utils/length-metrics.js";
+import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -103,6 +104,33 @@ const formatCases: Array<{ name: string; count: number; mode: "zh_chars" | "en_w
   { name: "en-format", count: 2000, mode: "en_words" },
 ];
 
+// parse_memo：成功 + 各类错误（缺小节 / 空小节 / 空目标）。完整 memo 文本驱动真值。
+const MEMO_BODY = [
+  "## 当前任务\n推进主角觉醒系统面板，并完成第一次战斗场景。",
+  "## 读者此刻在等什么\n等待主角如何应对突如其来的危机，以及力量的边界。",
+  "## 该兑现的 / 暂不掀的\n兑现：系统面板功能；暂不掀：幕后黑手身份。",
+  "## 日常/过渡承担什么任务\n用早餐场景建立主角与同伴的关系，埋下后续冲突的种子。",
+  "## 关键抉择过三连问\n是否暴露能力？是否信任同伴？是否追击敌人？",
+  "## 章尾必须发生的改变\n主角公开表明自己的身份，世界对他的态度彻底转变。",
+  "## 本章 hook 账\n埋伏：神秘符文；呼唤：未完成的誓言；悬念：暗处窥视者。",
+  "## 不要做\n无",
+].join("\n\n");
+
+function buildMemo(goal: string, extra = ""): string {
+  return `## 本章目标\n${goal}\n\n${MEMO_BODY}${extra}`;
+}
+
+const parseMemoCases: Array<{ name: string; raw: string; chapter: number; golden: boolean }> = [
+  { name: "valid-short-goal", raw: buildMemo("主角觉醒"), chapter: 3, golden: false },
+  { name: "valid-long-goal-truncated", raw: buildMemo("一二三四五六七八九零".repeat(8)), chapter: 1, golden: false },
+  { name: "valid-thread-refs", raw: buildMemo("目标", "\n\n## 关联线索\nT1 T2 T1 FOO3"), chapter: 1, golden: true },
+  { name: "valid-thread-none", raw: buildMemo("目标", "\n\n## 关联线索\n无"), chapter: 1, golden: false },
+  { name: "valid-fence-and-prose", raw: `好的，下面是规划：\n\`\`\`md\n${buildMemo("目标")}\n\`\`\``, chapter: 2, golden: false },
+  { name: "missing-section", raw: buildMemo("目标").replace("## 章尾必须发生的改变\n主角公开表明自己的身份，世界对他的态度彻底转变。", "").replace(/\n\n\n+/g, "\n\n"), chapter: 1, golden: false },
+  { name: "empty-section", raw: buildMemo("目标").replace("推进主角觉醒系统面板，并完成第一次战斗场景。", "短"), chapter: 1, golden: false },
+  { name: "empty-goal", raw: MEMO_BODY, chapter: 1, golden: false }, // 无 ## 本章目标
+];
+
 describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
   it("writes leaf-domain golden vectors", () => {
     const payload = {
@@ -130,6 +158,19 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "zh", input: "zh", expected: resolveLengthCountingMode("zh") },
         { name: "en", input: "en", expected: resolveLengthCountingMode("en") },
       ],
+      parse_memo: parseMemoCases.map((c) => {
+        let outcome: { ok: true; value: unknown } | { ok: false; error: string };
+        try {
+          outcome = { ok: true, value: parseMemo(c.raw, c.chapter, c.golden) };
+        } catch (e) {
+          outcome = { ok: false, error: e instanceof PlannerParseError ? e.message : String(e) };
+        }
+        return {
+          name: c.name,
+          input: { raw: c.raw, chapter: c.chapter, isGoldenOpening: c.golden },
+          expected: outcome,
+        };
+      }),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
