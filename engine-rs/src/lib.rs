@@ -29,6 +29,7 @@ pub mod models;
 pub mod notify;
 pub mod pipeline;
 pub mod play;
+pub mod play_parser;
 pub mod prompts;
 pub mod server;
 pub mod skills;
