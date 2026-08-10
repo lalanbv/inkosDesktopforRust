@@ -10,6 +10,7 @@
 //! ## 待移植
 //! context-filter（依赖本模块 DEFAULT_CHAPTER_CADENCE_WINDOW）/ writing-methodology / ...
 
+pub mod analytics;
 pub mod book_id;
 pub mod cadence_policy;
 pub mod chapter_cadence;
