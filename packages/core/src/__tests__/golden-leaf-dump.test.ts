@@ -15,6 +15,7 @@ import { inferLanguage } from "../utils/language.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import { countChapterLength, buildLengthSpec, formatLengthCount, resolveLengthCountingMode } from "../utils/length-metrics.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
+import { resolveCadencePressure } from "../utils/cadence-policy.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -157,6 +158,12 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       resolve_length_counting_mode: [
         { name: "zh", input: "zh", expected: resolveLengthCountingMode("zh") },
         { name: "en", input: "en", expected: resolveLengthCountingMode("en") },
+      ],
+      resolve_cadence_pressure: [
+        { name: "high", input: { count: 3, total: 10, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 3, total: 10, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
+        { name: "medium-with-floor", input: { count: 2, total: 4, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 2, total: 4, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
+        { name: "medium-below-floor", input: { count: 2, total: 3, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 2, total: 3, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
+        { name: "none-below", input: { count: 1, total: 10, high: 3, medium: 2, floor: 4 }, expected: resolveCadencePressure({ count: 1, total: 10, highThreshold: 3, mediumThreshold: 2, mediumWindowFloor: 4 }) },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };

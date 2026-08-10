@@ -17,6 +17,7 @@ struct Case {
     name: String,
     #[serde(default)]
     input: Value,
+    #[serde(default)]
     expected: Value,
 }
 
@@ -30,6 +31,7 @@ struct LeafGolden {
     build_length_spec: Vec<Case>,
     format_length_count: Vec<Case>,
     resolve_length_counting_mode: Vec<Case>,
+    resolve_cadence_pressure: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -152,6 +154,32 @@ fn resolve_length_counting_mode_matches_ts() {
         };
         let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
         assert_eq!(got_str, want, "case `{}`: resolve_length_counting_mode 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn resolve_cadence_pressure_matches_ts() {
+    use inkos_engine::utils::{resolve_cadence_pressure, CadencePressure, CadencePressureParams};
+    for c in &load().resolve_cadence_pressure {
+        let params = CadencePressureParams {
+            count: c.input["count"].as_u64().unwrap_or(0) as u32,
+            total: c.input["total"].as_u64().unwrap_or(0) as u32,
+            high_threshold: c.input["high"].as_u64().unwrap_or(0) as u32,
+            medium_threshold: c.input["medium"].as_u64().unwrap_or(0) as u32,
+            medium_window_floor: c.input["floor"].as_u64().unwrap_or(0) as u32,
+        };
+        let got = resolve_cadence_pressure(params);
+        let got_str = got.map(|p| match p {
+            CadencePressure::Medium => "medium",
+            CadencePressure::High => "high",
+        });
+        // TS expected 是字符串（"medium"/"high"）或 null
+        let want: Option<&str> = match &c.expected {
+            Value::String(s) => Some(s.as_str()),
+            Value::Null => None,
+            _ => panic!("case `{}`: expected 非 string/null", c.name),
+        };
+        assert_eq!(got_str, want, "case `{}`: resolve_cadence_pressure 与 TS 不一致", c.name);
     }
 }
 

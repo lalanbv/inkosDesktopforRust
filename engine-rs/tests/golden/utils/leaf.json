@@ -410,6 +410,50 @@
       "expected": "en_words"
     }
   ],
+  "resolve_cadence_pressure": [
+    {
+      "name": "high",
+      "input": {
+        "count": 3,
+        "total": 10,
+        "high": 3,
+        "medium": 2,
+        "floor": 4
+      },
+      "expected": "high"
+    },
+    {
+      "name": "medium-with-floor",
+      "input": {
+        "count": 2,
+        "total": 4,
+        "high": 3,
+        "medium": 2,
+        "floor": 4
+      },
+      "expected": "medium"
+    },
+    {
+      "name": "medium-below-floor",
+      "input": {
+        "count": 2,
+        "total": 3,
+        "high": 3,
+        "medium": 2,
+        "floor": 4
+      }
+    },
+    {
+      "name": "none-below",
+      "input": {
+        "count": 1,
+        "total": 10,
+        "high": 3,
+        "medium": 2,
+        "floor": 4
+      }
+    }
+  ],
   "parse_memo": [
     {
       "name": "valid-short-goal",
