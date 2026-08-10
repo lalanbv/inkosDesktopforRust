@@ -308,9 +308,10 @@ fn main() {
             std::fs::create_dir_all(&app_data).ok();
 
             // =========================================================
-            // M5b：初始化配置管理器
+            // M5b：配置管理器已在 .build() 前 .manage(config_state) 托管（见上方
+            // commands::config::AppState），此处无需重复构造。历史遗留的本地
+            // `_config_state` 是死代码（构造后丢弃，浪费一次 ConfigManager 初始化）——已移除。
             // =========================================================
-            let _config_state = commands::AppState::new(app_data.clone());
 
             // =========================================================
             // M5a（Phase 3）：工作区迁移（Phase 2 → Phase 3）
