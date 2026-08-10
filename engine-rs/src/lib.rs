@@ -30,6 +30,7 @@ pub mod notify;
 pub mod pipeline;
 pub mod play;
 pub mod prompts;
+pub mod server;
 pub mod skills;
 pub mod state;
 pub mod translation;
