@@ -96,10 +96,11 @@ const ENGLISH_STOP_WORDS: &[&str] = &[
 /// 分析最近窗口内的三类节奏压力。
 pub fn analyze_chapter_cadence(rows: &[CadenceSummaryRow], language: WritingLanguage) -> ChapterCadenceAnalysis {
     let lookback = window_defaults::SUMMARY_LOOKBACK as usize;
-    // 按章节号升序后取末尾 lookback 个
+    // 按章节号升序后取末尾 lookback 个（保持升序）
     let mut sorted: Vec<CadenceSummaryRow> = rows.to_vec();
     sorted.sort_by_key(|r| r.chapter);
-    let recent: Vec<CadenceSummaryRow> = sorted.into_iter().rev().take(lookback).collect::<Vec<_>>().into_iter().rev().collect();
+    let start = sorted.len().saturating_sub(lookback);
+    let recent: Vec<CadenceSummaryRow> = sorted[start..].to_vec();
 
     ChapterCadenceAnalysis {
         scene_pressure: analyze_scene_pressure(&recent),

@@ -19,6 +19,7 @@ import { resolveCadencePressure } from "../utils/cadence-policy.js";
 import { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "../utils/pov-filter.js";
 import { splitChapters } from "../utils/chapter-splitter.js";
 import { analyzeChapterCadence, isHighTensionMood } from "../utils/chapter-cadence.js";
+import { capContextBlock, filterHooks, filterSummaries } from "../utils/context-filter.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -198,6 +199,17 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       analyze_chapter_cadence: [
         { name: "scene-high", input: { rows: [{ chapter: 1, title: "t1", mood: "平静", chapterType: "日常" }, { chapter: 2, title: "t2", mood: "紧张", chapterType: "战斗" }, { chapter: 3, title: "t3", mood: "压抑", chapterType: "战斗" }, { chapter: 4, title: "t4", mood: "危机", chapterType: "战斗" }], language: "zh" }, expected: analyzeChapterCadence({ rows: [{ chapter: 1, title: "t1", mood: "平静", chapterType: "日常" }, { chapter: 2, title: "t2", mood: "紧张", chapterType: "战斗" }, { chapter: 3, title: "t3", mood: "压抑", chapterType: "战斗" }, { chapter: 4, title: "t4", mood: "危机", chapterType: "战斗" }], language: "zh" }) },
         { name: "too-short", input: { rows: [{ chapter: 1, title: "t", mood: "x", chapterType: "y" }], language: "zh" }, expected: analyzeChapterCadence({ rows: [{ chapter: 1, title: "t", mood: "x", chapterType: "y" }], language: "zh" }) },
+      ],
+      cap_context_block: [
+        { name: "uncreated", input: { content: "(文件尚未创建)", label: "x", maxChars: 100, headRatio: null }, expected: capContextBlock("(文件尚未创建)", { label: "x", maxChars: 100 }) },
+        { name: "fits", input: { content: "short", label: "x", maxChars: 100, headRatio: null }, expected: capContextBlock("short", { label: "x", maxChars: 100 }) },
+        { name: "capped", input: { content: "A".repeat(300), label: "test", maxChars: 150, headRatio: 0.5 }, expected: capContextBlock("A".repeat(300), { label: "test", maxChars: 150, headRatio: 0.5 }) },
+      ],
+      filter_hooks: [
+        { name: "removes-resolved", input: "| hook_id | 状态 |\n| --- | --- |\n| H1 | 进行中 |\n| H2 | 已回收 |\n| H3 | resolved |\n", expected: filterHooks("| hook_id | 状态 |\n| --- | --- |\n| H1 | 进行中 |\n| H2 | 已回收 |\n| H3 | resolved |\n") },
+      ],
+      filter_summaries: [
+        { name: "keeps-recent", input: { summaries: "| 章节 | 标题 |\n| --- | --- |\n| 1 | 旧 |\n| 8 | 新 |\n", currentChapter: 10, keepRecent: 4 }, expected: filterSummaries("| 章节 | 标题 |\n| --- | --- |\n| 1 | 旧 |\n| 8 | 新 |\n", 10, 4) },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };

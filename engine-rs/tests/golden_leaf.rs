@@ -38,6 +38,9 @@ struct LeafGolden {
     split_chapters: Vec<Case>,
     is_high_tension_mood: Vec<Case>,
     analyze_chapter_cadence: Vec<Case>,
+    cap_context_block: Vec<Case>,
+    filter_hooks: Vec<Case>,
+    filter_summaries: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -276,6 +279,45 @@ fn analyze_chapter_cadence_matches_ts() {
         let got = analyze_chapter_cadence(&rows, lang);
         let got_json = serde_json::to_value(&got).expect("ChapterCadenceAnalysis 序列化失败");
         assert_eq!(got_json, c.expected, "case `{}`: analyze_chapter_cadence 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn cap_context_block_matches_ts() {
+    use inkos_engine::utils::context_filter::{cap_context_block, ContextCapOptions};
+    for c in &load().cap_context_block {
+        let content = c.input["content"].as_str().unwrap_or("");
+        let label = c.input["label"].as_str().unwrap_or("x");
+        let max_chars = c.input["maxChars"].as_u64().unwrap_or(0) as usize;
+        let head_ratio = c.input["headRatio"].as_f64();
+        let opts = ContextCapOptions { label, max_chars, head_ratio };
+        let got = cap_context_block(content, opts);
+        let want = c.expected.as_str().unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(got, want, "case `{}`: cap_context_block 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn filter_hooks_matches_ts() {
+    use inkos_engine::utils::context_filter::filter_hooks;
+    for c in &load().filter_hooks {
+        let input = c.input.as_str().unwrap_or_else(|| panic!("case {}: input 非 string", c.name));
+        let got = filter_hooks(input);
+        let want = c.expected.as_str().unwrap_or("");
+        assert_eq!(got, want, "case `{}`: filter_hooks 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn filter_summaries_matches_ts() {
+    use inkos_engine::utils::context_filter::filter_summaries;
+    for c in &load().filter_summaries {
+        let s = c.input["summaries"].as_str().unwrap_or("");
+        let cur = c.input["currentChapter"].as_u64().unwrap_or(0) as u32;
+        let keep = c.input["keepRecent"].as_u64().map(|n| n as u32);
+        let got = filter_summaries(s, cur, keep);
+        let want = c.expected.as_str().unwrap_or("");
+        assert_eq!(got, want, "case `{}`: filter_summaries 与 TS 不一致", c.name);
     }
 }
 

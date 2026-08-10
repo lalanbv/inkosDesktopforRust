@@ -699,6 +699,56 @@
       "expected": {}
     }
   ],
+  "cap_context_block": [
+    {
+      "name": "uncreated",
+      "input": {
+        "content": "(文件尚未创建)",
+        "label": "x",
+        "maxChars": 100,
+        "headRatio": null
+      },
+      "expected": "(文件尚未创建)"
+    },
+    {
+      "name": "fits",
+      "input": {
+        "content": "short",
+        "label": "x",
+        "maxChars": 100,
+        "headRatio": null
+      },
+      "expected": "short"
+    },
+    {
+      "name": "capped",
+      "input": {
+        "content": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "label": "test",
+        "maxChars": 150,
+        "headRatio": 0.5
+      },
+      "expected": "AAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n[InkOS context budget: omitted about 150 chars from test; kept beginning and latest tail.]\n\nAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ],
+  "filter_hooks": [
+    {
+      "name": "removes-resolved",
+      "input": "| hook_id | 状态 |\n| --- | --- |\n| H1 | 进行中 |\n| H2 | 已回收 |\n| H3 | resolved |\n",
+      "expected": "\n| hook_id | 状态 |\n| --- | --- |\n| H1 | 进行中 |"
+    }
+  ],
+  "filter_summaries": [
+    {
+      "name": "keeps-recent",
+      "input": {
+        "summaries": "| 章节 | 标题 |\n| --- | --- |\n| 1 | 旧 |\n| 8 | 新 |\n",
+        "currentChapter": 10,
+        "keepRecent": 4
+      },
+      "expected": "\n| 章节 | 标题 |\n| --- | --- |\n| 8 | 新 |"
+    }
+  ],
   "parse_memo": [
     {
       "name": "valid-short-goal",
