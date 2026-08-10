@@ -749,6 +749,92 @@
       "expected": "\n| 章节 | 标题 |\n| --- | --- |\n| 8 | 新 |"
     }
   ],
+  "normalize_platform_id": [
+    {
+      "name": "fanqie-cjk",
+      "input": "番茄小说",
+      "expected": "tomato"
+    },
+    {
+      "name": "fanqie-pinyin",
+      "input": "FanqieNovel",
+      "expected": "tomato"
+    },
+    {
+      "name": "qidian-cjk",
+      "input": "起点中文网",
+      "expected": "qidian"
+    },
+    {
+      "name": "feilu",
+      "input": "飞卢",
+      "expected": "feilu"
+    },
+    {
+      "name": "other-cjk",
+      "input": "其他",
+      "expected": "other"
+    },
+    {
+      "name": "unknown-default",
+      "input": "未知平台",
+      "expected": "other"
+    },
+    {
+      "name": "empty",
+      "input": "   ",
+      "expected": null
+    },
+    {
+      "name": "compact-strips",
+      "input": "qi dian",
+      "expected": "qidian"
+    }
+  ],
+  "resolve_chapter_review_mode": [
+    {
+      "name": "book-overrides",
+      "input": {
+        "bookReviewMode": "manual",
+        "projectReviewMode": "auto"
+      },
+      "expected": "manual"
+    },
+    {
+      "name": "project-fallback",
+      "input": {
+        "bookReviewMode": null,
+        "projectReviewMode": "manual"
+      },
+      "expected": "manual"
+    },
+    {
+      "name": "default-auto",
+      "input": {
+        "bookReviewMode": null,
+        "projectReviewMode": null
+      },
+      "expected": "auto"
+    }
+  ],
+  "resolve_revision_gate": [
+    {
+      "name": "book-overrides",
+      "input": {
+        "bookGate": "always",
+        "projectGate": "strict"
+      },
+      "expected": "always"
+    },
+    {
+      "name": "default-strict",
+      "input": {
+        "bookGate": null,
+        "projectGate": null
+      },
+      "expected": "strict"
+    }
+  ],
   "parse_memo": [
     {
       "name": "valid-short-goal",

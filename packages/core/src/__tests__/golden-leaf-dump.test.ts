@@ -20,6 +20,7 @@ import { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "../u
 import { splitChapters } from "../utils/chapter-splitter.js";
 import { analyzeChapterCadence, isHighTensionMood } from "../utils/chapter-cadence.js";
 import { capContextBlock, filterHooks, filterSummaries } from "../utils/context-filter.js";
+import { normalizePlatformId, resolveChapterReviewMode, resolveRevisionGate } from "../models/book.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -210,6 +211,25 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       ],
       filter_summaries: [
         { name: "keeps-recent", input: { summaries: "| 章节 | 标题 |\n| --- | --- |\n| 1 | 旧 |\n| 8 | 新 |\n", currentChapter: 10, keepRecent: 4 }, expected: filterSummaries("| 章节 | 标题 |\n| --- | --- |\n| 1 | 旧 |\n| 8 | 新 |\n", 10, 4) },
+      ],
+      normalize_platform_id: [
+        { name: "fanqie-cjk", input: "番茄小说", expected: normalizePlatformId("番茄小说") ?? null },
+        { name: "fanqie-pinyin", input: "FanqieNovel", expected: normalizePlatformId("FanqieNovel") ?? null },
+        { name: "qidian-cjk", input: "起点中文网", expected: normalizePlatformId("起点中文网") ?? null },
+        { name: "feilu", input: "飞卢", expected: normalizePlatformId("飞卢") ?? null },
+        { name: "other-cjk", input: "其他", expected: normalizePlatformId("其他") ?? null },
+        { name: "unknown-default", input: "未知平台", expected: normalizePlatformId("未知平台") ?? null },
+        { name: "empty", input: "   ", expected: normalizePlatformId("   ") ?? null },
+        { name: "compact-strips", input: "qi dian", expected: normalizePlatformId("qi dian") ?? null },
+      ],
+      resolve_chapter_review_mode: [
+        { name: "book-overrides", input: { bookReviewMode: "manual", projectReviewMode: "auto" }, expected: resolveChapterReviewMode({ writing: { reviewMode: "manual" } }, { reviewMode: "auto" }) },
+        { name: "project-fallback", input: { bookReviewMode: null, projectReviewMode: "manual" }, expected: resolveChapterReviewMode({ writing: {} }, { reviewMode: "manual" }) },
+        { name: "default-auto", input: { bookReviewMode: null, projectReviewMode: null }, expected: resolveChapterReviewMode({ writing: {} }, undefined) },
+      ],
+      resolve_revision_gate: [
+        { name: "book-overrides", input: { bookGate: "always", projectGate: "strict" }, expected: resolveRevisionGate({ writing: { revisionGate: "always" } }, { revisionGate: "strict" }) },
+        { name: "default-strict", input: { bookGate: null, projectGate: null }, expected: resolveRevisionGate({ writing: {} }, undefined) },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };

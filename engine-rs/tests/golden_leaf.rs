@@ -41,6 +41,9 @@ struct LeafGolden {
     cap_context_block: Vec<Case>,
     filter_hooks: Vec<Case>,
     filter_summaries: Vec<Case>,
+    normalize_platform_id: Vec<Case>,
+    resolve_chapter_review_mode: Vec<Case>,
+    resolve_revision_gate: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -318,6 +321,63 @@ fn filter_summaries_matches_ts() {
         let got = filter_summaries(s, cur, keep);
         let want = c.expected.as_str().unwrap_or("");
         assert_eq!(got, want, "case `{}`: filter_summaries 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn normalize_platform_id_matches_ts() {
+    use inkos_engine::models::book::{normalize_platform_id, Platform};
+    for c in &load().normalize_platform_id {
+        let input = c.input.as_str().unwrap_or_else(|| panic!("case {}: input 非 string", c.name));
+        let got = normalize_platform_id(input);
+        let got_str = got.map(|p| match p {
+            Platform::Tomato => "tomato",
+            Platform::Feilu => "feilu",
+            Platform::Qidian => "qidian",
+            Platform::Other => "other",
+        });
+        let want: Option<&str> = c.expected.as_str();
+        assert_eq!(got_str, want, "case `{}`: normalize_platform_id 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn resolve_chapter_review_mode_matches_ts() {
+    use inkos_engine::models::book::{resolve_chapter_review_mode, BookWritingConfig, ChapterReviewModeVal};
+    for c in &load().resolve_chapter_review_mode {
+        let book_cfg = c.input["bookReviewMode"].as_str().map(|s| BookWritingConfig {
+            review_mode: if s == "manual" { Some(ChapterReviewModeVal::Manual) } else { Some(ChapterReviewModeVal::Auto) },
+            revision_gate: None,
+        });
+        let proj = c.input["projectReviewMode"].as_str().map(|s| if s == "manual" { ChapterReviewModeVal::Manual } else { ChapterReviewModeVal::Auto });
+        let got = resolve_chapter_review_mode(book_cfg.as_ref(), proj);
+        let got_str = match got { ChapterReviewModeVal::Auto => "auto", ChapterReviewModeVal::Manual => "manual" };
+        let want = c.expected.as_str().unwrap_or("auto");
+        assert_eq!(got_str, want, "case `{}`: resolve_chapter_review_mode 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn resolve_revision_gate_matches_ts() {
+    use inkos_engine::models::book::{resolve_revision_gate, BookWritingConfig, RevisionGateVal};
+    for c in &load().resolve_revision_gate {
+        let book_cfg = c.input["bookGate"].as_str().map(|s| BookWritingConfig {
+            review_mode: None,
+            revision_gate: Some(match s {
+                "lenient" => RevisionGateVal::Lenient,
+                "always" => RevisionGateVal::Always,
+                _ => RevisionGateVal::Strict,
+            }),
+        });
+        let proj = c.input["projectGate"].as_str().map(|s| match s {
+            "lenient" => RevisionGateVal::Lenient,
+            "always" => RevisionGateVal::Always,
+            _ => RevisionGateVal::Strict,
+        });
+        let got = resolve_revision_gate(book_cfg.as_ref(), proj);
+        let got_str = match got { RevisionGateVal::Strict => "strict", RevisionGateVal::Lenient => "lenient", RevisionGateVal::Always => "always" };
+        let want = c.expected.as_str().unwrap_or("strict");
+        assert_eq!(got_str, want, "case `{}`: resolve_revision_gate 与 TS 不一致", c.name);
     }
 }
 
