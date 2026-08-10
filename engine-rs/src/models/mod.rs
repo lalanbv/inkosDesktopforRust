@@ -6,9 +6,10 @@
 //! ## 已移植
 //! - [`book`] / [`chapter`] / [`state`] / [`genre_profile`] / [`style_profile`]
 //! - [`detection`] / [`context_compression`] / [`length_governance`] / [`input_governance`]
+//! - [`project`]（inkos.json 顶层配置 + LLM/通知/detection/daemon 子配置）
 //!
 //! ## 待移植
-//! project / runtime-state / play / book-rules（注：genre_profile.parseGenreProfile 待 serde_yaml）
+//! runtime-state / play / book-rules（注：genre_profile.parseGenreProfile 待 serde_yaml）
 
 pub mod book;
 pub mod chapter;
@@ -17,6 +18,7 @@ pub mod detection;
 pub mod genre_profile;
 pub mod input_governance;
 pub mod length_governance;
+pub mod project;
 pub mod state;
 pub mod style_profile;
 
