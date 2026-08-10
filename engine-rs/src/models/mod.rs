@@ -5,15 +5,16 @@
 //!
 //! ## 已移植
 //! - [`book`]：书籍配置（Platform/BookStatus/FanficMode + normalize/resolve 函数）
-//! - [`length_governance`]：长度计量/归一化/规格类型
+//! - [`chapter`]：章节状态机（13 态）+ ChapterMeta + TokenUsage
+//! - [`length_governance`]：长度计量/归一化/规格/遥测类型
 //! - [`input_governance`]：输入治理类型（ChapterMemo）
-//! - PoC 占位：`ChapterStatus` / `BookMeta`
 //!
 //! ## 待移植
-//! chapter / state / runtime-state / genre-profile / style-profile / detection /
+//! state / runtime-state / genre-profile / style-profile / detection /
 //! context-compression / play / project / book-rules
 
 pub mod book;
+pub mod chapter;
 pub mod input_governance;
 pub mod length_governance;
 

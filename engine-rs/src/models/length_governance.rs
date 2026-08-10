@@ -50,3 +50,23 @@ pub struct LengthSpec {
     pub counting_mode: LengthCountingMode,
     pub normalize_mode: LengthNormalizeMode,
 }
+
+/// 长度遥测（移植自 TS `LengthTelemetrySchema`）。计数类字段对齐 `z.number().int().min(0)`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct LengthTelemetry {
+    pub target: u32,
+    pub soft_min: u32,
+    pub soft_max: u32,
+    pub hard_min: u32,
+    pub hard_max: u32,
+    pub counting_mode: LengthCountingMode,
+    pub writer_count: u32,
+    pub post_writer_normalize_count: u32,
+    pub post_revise_count: u32,
+    pub final_count: u32,
+    pub normalize_applied: bool,
+    pub length_warning: bool,
+}
