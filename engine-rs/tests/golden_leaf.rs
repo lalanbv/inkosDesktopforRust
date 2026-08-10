@@ -36,6 +36,8 @@ struct LeafGolden {
     filter_matrix_by_pov: Vec<Case>,
     filter_hooks_by_pov: Vec<Case>,
     split_chapters: Vec<Case>,
+    is_high_tension_mood: Vec<Case>,
+    analyze_chapter_cadence: Vec<Case>,
     parse_memo: Vec<Case>,
 }
 
@@ -237,6 +239,43 @@ fn split_chapters_matches_ts() {
         let got = split_chapters(text, pattern);
         let got_json = serde_json::to_value(&got).expect("SplitChapter vec 序列化失败");
         assert_eq!(got_json, c.expected, "case `{}`: split_chapters 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn is_high_tension_mood_matches_ts() {
+    use inkos_engine::utils::is_high_tension_mood;
+    for c in &load().is_high_tension_mood {
+        let input = c.input.as_str().unwrap_or_else(|| panic!("case {}: input 非 string", c.name));
+        let got = is_high_tension_mood(input);
+        let want = c.expected.as_bool().unwrap_or_else(|| panic!("case {}: expected 非 bool", c.name));
+        assert_eq!(got, want, "case `{}`: is_high_tension_mood 与 TS 不一致", c.name);
+    }
+}
+
+#[test]
+fn analyze_chapter_cadence_matches_ts() {
+    use inkos_engine::utils::{analyze_chapter_cadence, CadenceSummaryRow, WritingLanguage};
+    for c in &load().analyze_chapter_cadence {
+        let lang = match c.input["language"].as_str().unwrap_or("zh") {
+            "zh" => WritingLanguage::Zh,
+            "en" => WritingLanguage::En,
+            _ => WritingLanguage::Zh,
+        };
+        let rows: Vec<CadenceSummaryRow> = c.input["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("case {}: rows 非数组", c.name))
+            .iter()
+            .map(|r| CadenceSummaryRow {
+                chapter: r["chapter"].as_u64().unwrap_or(0) as u32,
+                title: r["title"].as_str().unwrap_or("").to_string(),
+                mood: r["mood"].as_str().unwrap_or("").to_string(),
+                chapter_type: r["chapterType"].as_str().unwrap_or("").to_string(),
+            })
+            .collect();
+        let got = analyze_chapter_cadence(&rows, lang);
+        let got_json = serde_json::to_value(&got).expect("ChapterCadenceAnalysis 序列化失败");
+        assert_eq!(got_json, c.expected, "case `{}`: analyze_chapter_cadence 与 TS 不一致", c.name);
     }
 }
 

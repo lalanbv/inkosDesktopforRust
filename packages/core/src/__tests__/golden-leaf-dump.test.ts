@@ -18,6 +18,7 @@ import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 import { resolveCadencePressure } from "../utils/cadence-policy.js";
 import { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "../utils/pov-filter.js";
 import { splitChapters } from "../utils/chapter-splitter.js";
+import { analyzeChapterCadence, isHighTensionMood } from "../utils/chapter-cadence.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -188,6 +189,15 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "no-match", input: { text: "只有普通文本\n没有章节标题", pattern: null }, expected: splitChapters("只有普通文本\n没有章节标题", undefined) },
         { name: "gutenberg-strip", input: { text: "第一章 内容\n正文。\nProject Gutenberg Literary Archive\n", pattern: null }, expected: splitChapters("第一章 内容\n正文。\nProject Gutenberg Literary Archive\n", undefined) },
         { name: "custom-pattern", input: { text: "### A\n内容a\n### B\n内容b", pattern: "^###\\s+(.*)" }, expected: splitChapters("### A\n内容a\n### B\n内容b", "^###\\s+(.*)") },
+      ],
+      is_high_tension_mood: [
+        { name: "zh-tense", input: "紧张的对峙", expected: isHighTensionMood("紧张的对峙") },
+        { name: "en-cold", input: "Cold and grim", expected: isHighTensionMood("Cold and grim") },
+        { name: "calm", input: "轻松愉快", expected: isHighTensionMood("轻松愉快") },
+      ],
+      analyze_chapter_cadence: [
+        { name: "scene-high", input: { rows: [{ chapter: 1, title: "t1", mood: "平静", chapterType: "日常" }, { chapter: 2, title: "t2", mood: "紧张", chapterType: "战斗" }, { chapter: 3, title: "t3", mood: "压抑", chapterType: "战斗" }, { chapter: 4, title: "t4", mood: "危机", chapterType: "战斗" }], language: "zh" }, expected: analyzeChapterCadence({ rows: [{ chapter: 1, title: "t1", mood: "平静", chapterType: "日常" }, { chapter: 2, title: "t2", mood: "紧张", chapterType: "战斗" }, { chapter: 3, title: "t3", mood: "压抑", chapterType: "战斗" }, { chapter: 4, title: "t4", mood: "危机", chapterType: "战斗" }], language: "zh" }) },
+        { name: "too-short", input: { rows: [{ chapter: 1, title: "t", mood: "x", chapterType: "y" }], language: "zh" }, expected: analyzeChapterCadence({ rows: [{ chapter: 1, title: "t", mood: "x", chapterType: "y" }], language: "zh" }) },
       ],
       parse_memo: parseMemoCases.map((c) => {
         let outcome: { ok: true; value: unknown } | { ok: false; error: string };

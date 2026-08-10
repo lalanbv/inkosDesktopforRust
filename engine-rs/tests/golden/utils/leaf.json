@@ -617,6 +617,88 @@
       ]
     }
   ],
+  "is_high_tension_mood": [
+    {
+      "name": "zh-tense",
+      "input": "紧张的对峙",
+      "expected": true
+    },
+    {
+      "name": "en-cold",
+      "input": "Cold and grim",
+      "expected": true
+    },
+    {
+      "name": "calm",
+      "input": "轻松愉快",
+      "expected": false
+    }
+  ],
+  "analyze_chapter_cadence": [
+    {
+      "name": "scene-high",
+      "input": {
+        "rows": [
+          {
+            "chapter": 1,
+            "title": "t1",
+            "mood": "平静",
+            "chapterType": "日常"
+          },
+          {
+            "chapter": 2,
+            "title": "t2",
+            "mood": "紧张",
+            "chapterType": "战斗"
+          },
+          {
+            "chapter": 3,
+            "title": "t3",
+            "mood": "压抑",
+            "chapterType": "战斗"
+          },
+          {
+            "chapter": 4,
+            "title": "t4",
+            "mood": "危机",
+            "chapterType": "战斗"
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": {
+        "scenePressure": {
+          "pressure": "high",
+          "repeatedType": "战斗",
+          "streak": 3
+        },
+        "moodPressure": {
+          "pressure": "high",
+          "highTensionStreak": 3,
+          "recentMoods": [
+            "紧张",
+            "压抑",
+            "危机"
+          ]
+        }
+      }
+    },
+    {
+      "name": "too-short",
+      "input": {
+        "rows": [
+          {
+            "chapter": 1,
+            "title": "t",
+            "mood": "x",
+            "chapterType": "y"
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": {}
+    }
+  ],
   "parse_memo": [
     {
       "name": "valid-short-goal",
