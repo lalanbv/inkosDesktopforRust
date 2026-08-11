@@ -11,3 +11,4 @@ pub mod ai_tells;
 pub mod detection_insights;
 pub mod settler_delta_parser;
 pub mod settler_parser;
+pub mod style_analyzer;
