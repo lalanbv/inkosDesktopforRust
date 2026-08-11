@@ -9,6 +9,7 @@
 //! createStreamMonitor（定时器）/ estimatePiContextTokens（依赖 pi-ai PiContext）/
 //! withTransientLLMRetry / config-migration / service-resolver / secrets
 
+pub mod lookup;
 pub mod provider;
 pub mod providers;
 pub mod secrets;
