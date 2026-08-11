@@ -20,6 +20,8 @@ pub mod context_filter;
 pub mod hook_governance;
 pub mod hook_lifecycle;
 pub mod hook_policy;
+pub mod hook_promotion;
+pub mod hook_stale_detection;
 pub mod language;
 pub mod length_metrics;
 pub mod llm_endpoint_auth;

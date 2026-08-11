@@ -7,5 +7,6 @@
 //! state-reducer（依赖 hook-governance + hook-lifecycle + validator）/ state-projections /
 //! memory-db（node:sqlite）/ manager / state-bootstrap（持久化编排）。
 
+pub mod projections;
 pub mod reducer;
 pub mod validator;
