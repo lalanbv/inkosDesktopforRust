@@ -10,6 +10,7 @@
 //! withTransientLLMRetry / config-migration / service-resolver / secrets
 
 pub mod provider;
+pub mod providers;
 pub mod secrets;
 pub mod service_presets;
 pub mod sse_parser;
