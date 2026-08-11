@@ -17,6 +17,7 @@ pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
 pub mod context_filter;
+pub mod hook_arbiter;
 pub mod hook_governance;
 pub mod hook_lifecycle;
 pub mod hook_policy;
@@ -31,6 +32,7 @@ pub mod narrative_control;
 pub mod path;
 pub mod spot_fix_patches;
 pub mod pov_filter;
+pub mod story_markdown;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};
 pub use cadence_policy::{resolve_cadence_pressure, CadencePressure, CadencePressureParams};
