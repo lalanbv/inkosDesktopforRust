@@ -2,9 +2,12 @@
 //!
 //! 自 `packages/core/src/llm/*.ts` 移植。当前：
 //! - [`think_tag_stripper`]：剥离响应起始处的完整 `<think>...</think>` 块。
+//! - [`provider`]：纯函数基础（token 估算 / 瞬时错误判定 / 头部清洗 / 消息类型）。
 //!
 //! ## 待移植（按依赖序）
-//! provider（1414 行流式/多格式/重试/工具调用，多会话工程）/ config-migration /
-//! service-resolver / service-presets / secrets / cover-providers
+//! createLLMClient（流式 chat/responses 客户端，需 reqwest + 录制回放测试）/
+//! createStreamMonitor（定时器）/ estimatePiContextTokens（依赖 pi-ai PiContext）/
+//! withTransientLLMRetry / config-migration / service-resolver / secrets
 
+pub mod provider;
 pub mod think_tag_stripper;
