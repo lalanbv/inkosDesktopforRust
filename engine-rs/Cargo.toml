@@ -48,6 +48,8 @@ ts-rs = { version = "10", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 # async trait：state-bootstrap/runtime-state-store/manager 等 async 编排的 fs 抽象基座（StateStore trait）。
 async-trait = "0.1"
+# UUID：chapter-workspace 版本归档的版本 id 生成（v4，与 TS crypto.randomUUID 对齐）。
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 # 差分测试：Rust 实现 vs TS golden 向量（Phase 0.4 产出）

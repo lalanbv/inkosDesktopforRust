@@ -9,6 +9,7 @@
 //! manager / state-bootstrap（持久化编排）/ runtime-state-store（依赖本模块）。
 
 pub mod chapter_word_sync;
+pub mod chapter_workspace;
 pub mod memory_db;
 pub mod projections;
 pub mod reducer;

@@ -38,6 +38,9 @@ pub trait StateStore: Send + Sync {
     /// 列出目录下的直接条目名（不含路径）；目录不存在 → 空 Vec。
     async fn list_dir(&self, path: &str) -> Result<Vec<String>>;
 
+    /// 删除文件；文件不存在 → no-op（不报错）。对齐 TS `rm(path, { force: true })`。
+    async fn remove_file(&self, path: &str) -> Result<()>;
+
     /// 路径是否存在（文件或目录）。
     async fn exists(&self, path: &str) -> Result<bool>;
 }
@@ -77,6 +80,14 @@ impl StateStore for FsStateStore {
                 Ok(names)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn remove_file(&self, path: &str) -> Result<()> {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
@@ -159,6 +170,11 @@ impl StateStore for InMemoryStateStore {
         children.sort();
         children.dedup();
         Ok(children)
+    }
+
+    async fn remove_file(&self, path: &str) -> Result<()> {
+        self.files.lock().expect("files mutex").remove(path);
+        Ok(())
     }
 
     async fn exists(&self, path: &str) -> Result<bool> {
