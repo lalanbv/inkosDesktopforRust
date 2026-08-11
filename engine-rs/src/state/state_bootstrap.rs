@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 
 use crate::models::runtime_state::{
     ChapterSummariesState, CurrentStateFact, CurrentStateState, HookRecord, HookStatus, HooksState,
+    StateManifest,
 };
 use crate::state::store::{join_path, StateStore};
 use crate::utils::story_markdown::normalize_hook_id;
@@ -593,6 +594,228 @@ pub async fn load_markdown_bootstrap_state(
     })
 }
 
+// =============================================================================
+// load_or_bootstrap_* + 主入口 bootstrap_structured_state_from_markdown
+// =============================================================================
+
+/// `bootstrap_structured_state_from_markdown` 的返回值。对齐 TS `BootstrapStructuredStateResult`。
+#[derive(Debug, Clone)]
+pub struct BootstrapStructuredStateResult {
+    pub created_files: Vec<String>,
+    pub warnings: Vec<String>,
+    pub manifest: StateManifest,
+}
+
+/// 读 summaries JSON；失败/缺失/强制 → 用预加载 markdown 状态或现读；写回；记录新文件。
+/// 对齐 TS `loadOrBootstrapSummaries`。
+///
+/// 即使从 JSON 加载也去重（历史数据可能含重复）。
+pub async fn load_or_bootstrap_summaries(
+    store: &dyn StateStore,
+    story_dir: &str,
+    state_path: &str,
+    created_files: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+    bootstrap_state: Option<ChapterSummariesState>,
+) -> crate::Result<ChapterSummariesState> {
+    if let Some(existing) =
+        load_json_if_valid::<ChapterSummariesState>(store, state_path, warnings, "chapter_summaries.json").await?
+    {
+        let deduped = deduplicate_summary_rows(&existing.rows, |r| r.chapter as i64);
+        if deduped.len() < existing.rows.len() {
+            let repaired = ChapterSummariesState { rows: deduped };
+            let json = serde_json::to_string_pretty(&repaired)?;
+            store.write_string(state_path, &json).await?;
+            return Ok(repaired);
+        }
+        return Ok(existing);
+    }
+
+    let summaries = match bootstrap_state {
+        Some(s) => s,
+        None => load_markdown_summaries_state(store, story_dir).await?,
+    };
+    let existed = store.exists(state_path).await?;
+    let json = serde_json::to_string_pretty(&summaries)?;
+    store.write_string(state_path, &json).await?;
+    if !existed {
+        created_files.push("chapter_summaries.json".to_string());
+    }
+    Ok(summaries)
+}
+
+/// 读 hooks JSON（含 repair）；失败/缺失 → 用预加载 markdown 状态或现读；写回；记录新文件。
+/// 对齐 TS `loadOrBootstrapHooks`。
+pub async fn load_or_bootstrap_hooks(
+    store: &dyn StateStore,
+    story_dir: &str,
+    state_path: &str,
+    created_files: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+    bootstrap_state: Option<HooksState>,
+) -> crate::Result<HooksState> {
+    if let Some((state, repaired)) =
+        load_hooks_state_if_valid(store, state_path, warnings, "hooks.json").await?
+    {
+        if repaired {
+            let json = serde_json::to_string_pretty(&state)?;
+            store.write_string(state_path, &json).await?;
+        }
+        return Ok(state);
+    }
+
+    let hooks = match bootstrap_state {
+        Some(h) => h,
+        None => load_markdown_hooks_state(store, story_dir, warnings).await?,
+    };
+    let existed = store.exists(state_path).await?;
+    let json = serde_json::to_string_pretty(&hooks)?;
+    store.write_string(state_path, &json).await?;
+    if !existed {
+        created_files.push("hooks.json".to_string());
+    }
+    Ok(hooks)
+}
+
+/// 读 current_state JSON；失败/缺失 → 用预加载 markdown 状态或现读；写回；记录新文件。
+/// 对齐 TS `loadOrBootstrapCurrentState`。
+pub async fn load_or_bootstrap_current_state(
+    store: &dyn StateStore,
+    story_dir: &str,
+    state_path: &str,
+    fallback_chapter: u32,
+    created_files: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+    bootstrap_state: Option<CurrentStateState>,
+) -> crate::Result<CurrentStateState> {
+    if let Some(existing) =
+        load_json_if_valid::<CurrentStateState>(store, state_path, warnings, "current_state.json").await?
+    {
+        return Ok(existing);
+    }
+
+    let current = match bootstrap_state {
+        Some(c) => c,
+        None => load_markdown_current_state(store, story_dir, fallback_chapter, warnings).await?,
+    };
+    let existed = store.exists(state_path).await?;
+    let json = serde_json::to_string_pretty(&current)?;
+    store.write_string(state_path, &json).await?;
+    if !existed {
+        created_files.push("current_state.json".to_string());
+    }
+    Ok(current)
+}
+
+/// 主入口：从 markdown 引导结构化状态（manifest/current_state/hooks/chapter_summaries 四文件编排）。
+///
+/// 对齐 TS `bootstrapStructuredStateFromMarkdown`。幂等：已存在的 JSON 保留并校验/修复；
+/// 缺失则从 markdown 引导并写入。manifest 始终按 durable progress 重算并写回。
+///
+/// `book_dir` 下的 `story/state/` 为状态目录；`story/*.md` 为 markdown 源。
+pub async fn bootstrap_structured_state_from_markdown(
+    store: &dyn StateStore,
+    book_dir: &str,
+    fallback_chapter: Option<u32>,
+) -> crate::Result<BootstrapStructuredStateResult> {
+    let story_dir = join_path(book_dir, "story");
+    let state_dir = join_path(&story_dir, "state");
+    let manifest_path = join_path(&state_dir, "manifest.json");
+    let current_state_path = join_path(&state_dir, "current_state.json");
+    let hooks_path = join_path(&state_dir, "hooks.json");
+    let summaries_path = join_path(&state_dir, "chapter_summaries.json");
+
+    store.mkdir_p(&state_dir).await?;
+
+    let mut created_files: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let existing_manifest: Option<StateManifest> =
+        load_json_if_valid(store, &manifest_path, &mut warnings, "manifest.json").await?;
+    // language：existing manifest 合法值优先，否则读 book.json（仅 "zh" 认定，其余 "en"）。
+    let language_str: String = match &existing_manifest {
+        Some(m) if m.language == "zh" || m.language == "en" => m.language.clone(),
+        _ => match resolve_runtime_language(store, book_dir).await? {
+            crate::utils::language::WritingLanguage::Zh => "zh".to_string(),
+            crate::utils::language::WritingLanguage::En => "en".to_string(),
+        },
+    };
+
+    let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
+    let markdown_state =
+        load_markdown_bootstrap_state(store, book_dir, &story_dir, markdown_fallback, &mut warnings).await?;
+
+    let _summaries = load_or_bootstrap_summaries(
+        store,
+        &story_dir,
+        &summaries_path,
+        &mut created_files,
+        &mut warnings,
+        Some(markdown_state.summaries_state.clone()),
+    )
+    .await?;
+    let _hooks = load_or_bootstrap_hooks(
+        store,
+        &story_dir,
+        &hooks_path,
+        &mut created_files,
+        &mut warnings,
+        Some(markdown_state.hooks_state.clone()),
+    )
+    .await?;
+    let _current = load_or_bootstrap_current_state(
+        store,
+        &story_dir,
+        &current_state_path,
+        markdown_state.durable_story_progress,
+        &mut created_files,
+        &mut warnings,
+        Some(markdown_state.current_state.clone()),
+    )
+    .await?;
+
+    let derived_progress = markdown_state.durable_story_progress;
+    if let Some(m) = &existing_manifest {
+        if m.last_applied_chapter > derived_progress {
+            append_warning(
+                &mut warnings,
+                &format!(
+                    "manifest lastAppliedChapter normalized from {} to {derived_progress}",
+                    m.last_applied_chapter
+                ),
+            );
+        }
+    }
+
+    let migration_warnings = {
+        let existing = existing_manifest.as_ref().map(|m| m.migration_warnings.clone()).unwrap_or_default();
+        unique_strings(&[existing, warnings.clone()].concat())
+    };
+    let manifest = StateManifest {
+        schema_version: 2,
+        language: language_str,
+        last_applied_chapter: derived_progress,
+        projection_version: existing_manifest
+            .as_ref()
+            .map(|m| m.projection_version)
+            .unwrap_or(1),
+        migration_warnings,
+    };
+
+    let manifest_existed = existing_manifest.is_some();
+    let json = serde_json::to_string_pretty(&manifest)?;
+    store.write_string(&manifest_path, &json).await?;
+    if !manifest_existed {
+        created_files.push("manifest.json".to_string());
+    }
+
+    Ok(BootstrapStructuredStateResult {
+        created_files,
+        warnings: manifest.migration_warnings.clone(),
+        manifest,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1093,5 +1316,147 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bs.durable_story_progress, 3);
+    }
+
+    // --- load_or_bootstrap + 主入口 ---------------------------------------------
+
+    #[tokio::test]
+    async fn bootstrap_creates_all_files_when_state_absent() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"zh"}"#);
+        store.set("book/chapters/1_a.md", "x");
+        store.set("book/chapters/2_b.md", "x");
+        store.set("book/story/chapter_summaries.md", "| 1 | t1 |");
+        store.set(
+            "book/story/pending_hooks.md",
+            "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |",
+        );
+        store.set("book/story/current_state.md", "| 字段 | 值 |\n|---|---|\n| 当前章节 | 2 |\n| 当前位置 | 森林 |");
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        // 4 个文件全部新建。
+        assert_eq!(result.created_files.len(), 4);
+        assert!(result.created_files.contains(&"manifest.json".to_string()));
+        assert!(result.created_files.contains(&"current_state.json".to_string()));
+        assert!(result.created_files.contains(&"hooks.json".to_string()));
+        assert!(result.created_files.contains(&"chapter_summaries.json".to_string()));
+        // manifest 用 durable progress（2）+ zh。
+        assert_eq!(result.manifest.language, "zh");
+        assert_eq!(result.manifest.last_applied_chapter, 2);
+        assert_eq!(result.manifest.schema_version, 2);
+        // 文件确实写入 store。
+        assert!(store.read_to_string("book/story/state/manifest.json").await.unwrap().is_some());
+        assert!(store.read_to_string("book/story/state/hooks.json").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_preserves_existing_valid_json_and_recomputes_manifest() {
+        let store = InMemoryStateStore::new();
+        // 预置合法 JSON 状态。
+        store.set(
+            "book/story/state/manifest.json",
+            r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":99,"projectionVersion":3,"migrationWarnings":[]}"#,
+        );
+        store.set(
+            "book/story/state/chapter_summaries.json",
+            r#"{"rows":[{"chapter":1,"title":"t1","characters":"","events":"","stateChanges":"","hookActivity":"","mood":"","chapterType":""}]}"#,
+        );
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        store.set("book/chapters/1_a.md", "x");
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        // manifest 存在 → 不在 createdFiles。
+        assert!(!result.created_files.contains(&"manifest.json".to_string()));
+        // lastAppliedChapter=99 > derived(1) → 规范化到 1 + warning。
+        assert_eq!(result.manifest.last_applied_chapter, 1);
+        assert!(result.warnings.iter().any(|w| w.contains("normalized from 99 to 1")));
+        // projection_version 保留。
+        assert_eq!(result.manifest.projection_version, 3);
+        // 已存在的 summaries.json 不新建（load_or_bootstrap 命中 existing 分支）。
+        assert!(!result.created_files.contains(&"chapter_summaries.json".to_string()));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_repairs_hooks_with_empty_type_and_persists() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        // hooks.json 含空 type（完整字段以便反序列化）。
+        store.set(
+            "book/story/state/hooks.json",
+            r#"{"hooks":[{"hookId":"h1","startChapter":1,"type":"  ","status":"open","lastAdvancedChapter":1,"expectedPayoff":"x","notes":"n"}]}"#,
+        );
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        // 修复后的 hooks.json 写回（repaired=true）。
+        let written = store
+            .read_to_string("book/story/state/hooks.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(written.contains("\"unspecified\""), "修复后 type 应为 unspecified");
+        assert!(result.warnings.iter().any(|w| w.contains("empty hook type")));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_invalid_json_warns_and_rebuilds_from_markdown() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        store.set("book/chapters/1_a.md", "x");
+        // 损坏的 summaries.json（不是 JSON）。
+        store.set("book/story/state/chapter_summaries.json", "not json");
+        store.set("book/story/chapter_summaries.md", "| 1 | from-md |");
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        // 损坏 → warning + 从 markdown 重建（因 state 文件已存在，不计入 createdFiles）。
+        assert!(result.warnings.iter().any(|w| w.contains("chapter_summaries.json invalid")));
+        let written = store
+            .read_to_string("book/story/state/chapter_summaries.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(written.contains("from-md"), "从 markdown 重建");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_deduplicates_summaries_loaded_from_json() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        // summaries.json 含重复 chapter（1 出现两次）。
+        store.set(
+            "book/story/state/chapter_summaries.json",
+            r#"{"rows":[{"chapter":1,"title":"old","characters":"","events":"","stateChanges":"","hookActivity":"","mood":"","chapterType":""},{"chapter":1,"title":"new","characters":"","events":"","stateChanges":"","hookActivity":"","mood":"","chapterType":""}]}"#,
+        );
+
+        bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        let written = store
+            .read_to_string("book/story/state/chapter_summaries.json")
+            .await
+            .unwrap()
+            .unwrap();
+        // 去重后只剩 1 行（后覆盖），写回。
+        let parsed: ChapterSummariesState = serde_json::from_str(&written).unwrap();
+        assert_eq!(parsed.rows.len(), 1);
+        assert_eq!(parsed.rows[0].title, "new");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_uses_fallback_when_no_artifacts() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        // 无章节产物，无 md → durable = max(fallback=5, 0) = 5。
+        let result = bootstrap_structured_state_from_markdown(&store, "book", Some(5))
+            .await
+            .unwrap();
+        assert_eq!(result.manifest.last_applied_chapter, 5);
     }
 }
