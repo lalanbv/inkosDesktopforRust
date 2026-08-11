@@ -12,6 +12,7 @@ pub mod chapter_word_sync;
 pub mod memory_db;
 pub mod projections;
 pub mod reducer;
+pub mod runtime_state_store;
 pub mod state_bootstrap;
 pub mod store;
 pub mod validator;
