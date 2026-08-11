@@ -46,9 +46,13 @@ ts-rs = { version = "10", optional = true }
 # SQLite：memory-db 移植（node:sqlite → rusqlite）。用 bundled 从源码编译并静态链接，
 # 与 crate 已有「rustls-tls 避系统 OpenSSL」的自包含哲学一致，跨平台一致行为、零系统依赖。
 rusqlite = { version = "0.32", features = ["bundled"] }
+# async trait：state-bootstrap/runtime-state-store/manager 等 async 编排的 fs 抽象基座（StateStore trait）。
+async-trait = "0.1"
 
 [dev-dependencies]
 # 差分测试：Rust 实现 vs TS golden 向量（Phase 0.4 产出）
 serde_json = "1"
 # HTTP handler 单测（oneshot，不绑端口）
 tower = { version = "0.5", features = ["util"] }
+# 临时目录：FsStateStore 的集成测试用真实临时文件系统（验证 tokio::fs 路径正确）。
+tempfile = "3"

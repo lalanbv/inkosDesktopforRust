@@ -1,15 +1,11 @@
-//! 状态引导（state-bootstrap）纯逻辑子集。
+//! 状态引导（state-bootstrap）。
 //!
-//! 移植自 `packages/core/src/state/state-bootstrap.ts`（645 行）的**纯逻辑函数**。
-//! async fs 编排（`bootstrapStructuredStateFromMarkdown` / `loadOrBootstrap*` / `loadMarkdown*State` /
-//! `resolveRuntimeLanguage` / `resolveDurableStoryProgress` 等）与 JSON 修复（`repairHooksStateInput`，
-//! 操作反序列化前的 unknown）留待后续阶段——后者在 Rust 强类型下需重新设计为 deserialize 后验证。
-//!
-//! ## 当前模块含
-//! - [`resolve_contiguous_chapter_prefix`]：连续章节前缀（export，durable progress 核心）
-//! - [`deduplicate_summary_rows`]：按 chapter 去重 + 升序
-//! - [`normalize_hook_status`]：模糊正则归一（warning 收集中英文状态词）
-//! - [`normalize_hook_type`] / [`parse_strict_integer_cell`] 等 integer/hook 字段归一
+//! 移植自 `packages/core/src/state/state-bootstrap.ts`（645 行）。分两阶段移植：
+//! - **纯逻辑**（已移植）：[`resolve_contiguous_chapter_prefix`] / [`deduplicate_summary_rows`] /
+//!   [`normalize_hook_status`] 等 integer/hook 字段归一
+//! - **async fs 编排**（逐步移植）：本模块已含 [`resolve_durable_story_progress`]（durable 进度，
+//!   首个 [`StateStore`](crate::state::store::StateStore) 消费者）；完整 `bootstrapStructuredStateFromMarkdown`
+//!   / `loadOrBootstrap*` 系列待后续阶段
 //!
 //! ## 移植纪律
 //! `normalize_hook_status` 的正则模式（resolved/deferred/progressing/open 四类 + 中英文同义词）须与
@@ -19,6 +15,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use crate::models::runtime_state::HookStatus;
+use crate::state::store::{join_path, StateStore};
 use crate::utils::story_markdown::normalize_hook_id;
 
 fn resolved_status_re() -> &'static Regex {
@@ -214,9 +211,77 @@ pub fn unique_strings(values: &[String]) -> Vec<String> {
     out
 }
 
+fn chapter_filename_re() -> &'static Regex {
+    // TS loadDurableArtifactChapterNumbers: /^(\d+)_/（章节文件名前缀 N_）
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^(\d+)_").expect("chapter filename regex"))
+}
+
+/// 计算 durable story progress：max(连续章节产物前缀, 显式 fallback)。
+///
+/// 对齐 TS `resolveDurableStoryProgress`（export）。`fallback` 非正整数视为 0。
+/// 「只信任 durable 产物进度」是关键设计——current_state.chapter 来自 markdown，
+/// 可能含幻觉数字（如 1988 年被误读为第 1988 章）。
+pub async fn resolve_durable_story_progress(
+    store: &dyn StateStore,
+    book_dir: &str,
+    fallback: Option<i64>,
+) -> crate::Result<i64> {
+    let explicit_fallback = normalize_explicit_chapter(fallback);
+    let artifact_progress = resolve_contiguous_artifact_chapter_progress(store, book_dir).await?;
+    Ok(artifact_progress.max(explicit_fallback))
+}
+
+/// 连续章节产物前缀：从章节 index.json + 章节文件名提取章节数，取连续前缀。
+/// 对齐 TS `resolveContiguousArtifactChapterProgress`。
+async fn resolve_contiguous_artifact_chapter_progress(
+    store: &dyn StateStore,
+    book_dir: &str,
+) -> crate::Result<i64> {
+    let chapter_numbers = load_durable_artifact_chapter_numbers(store, book_dir).await?;
+    Ok(i64::from(resolve_contiguous_chapter_prefix(&chapter_numbers)))
+}
+
+/// 从 `{book_dir}/chapters/index.json`（数组 number 字段）+ `chapters/` 目录文件名（`N_*`）提取章节数。
+/// 对齐 TS `loadDurableArtifactChapterNumbers`：两个源任一失败 → 空，最终合并。
+async fn load_durable_artifact_chapter_numbers(
+    store: &dyn StateStore,
+    book_dir: &str,
+) -> crate::Result<Vec<i64>> {
+    let chapters_dir = join_path(book_dir, "chapters");
+    let index_path = join_path(&chapters_dir, "index.json");
+
+    // index.json：解析为 [{number}, ...]，取正整数。
+    let index_chapters: Vec<i64> = match store.read_to_string(&index_path).await? {
+        Some(raw) => serde_json::from_str::<Vec<serde_json::Value>>(&raw)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|entry| entry.get("number")?.as_i64())
+            .filter(|n| n.is_positive())
+            .collect(),
+        None => Vec::new(),
+    };
+
+    // chapters/ 目录：文件名 N_xxx 提取 N。
+    let entries = store.list_dir(&chapters_dir).await?;
+    let file_chapters: Vec<i64> = entries
+        .iter()
+        .filter_map(|name| {
+            chapter_filename_re()
+                .captures(name)
+                .and_then(|c| c.get(1)?.as_str().parse::<i64>().ok())
+        })
+        .collect();
+
+    let mut all = index_chapters;
+    all.extend(file_chapters);
+    Ok(all)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::store::InMemoryStateStore;
 
     #[test]
     fn resolve_contiguous_chapter_prefix_counts_from_one() {
@@ -353,5 +418,105 @@ mod tests {
     fn unique_strings_drops_empty_and_dedups_preserving_order() {
         let v: Vec<String> = vec!["a".into(), "".into(), "b".into(), "a".into(), "  ".into(), "c".into()];
         assert_eq!(unique_strings(&v), vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    // --- async fs 编排（durable progress）----------------------------------------
+
+    fn setup_book_with_chapters(store: &InMemoryStateStore, book_dir: &str, files: &[(&str, &str)]) {
+        for (name, content) in files {
+            store.set(&format!("{book_dir}/chapters/{name}"), content);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_from_chapter_filename_prefix() {
+        let store = InMemoryStateStore::new();
+        setup_book_with_chapters(&store, "book", &[
+            ("1_intro.md", "x"),
+            ("2_rise.md", "x"),
+            ("3_climax.md", "x"),
+            ("notes.md", "x"), // 无 N_ 前缀，忽略
+        ]);
+        // 1/2/3 连续 → 前缀 3。
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_takes_max_with_fallback() {
+        let store = InMemoryStateStore::new();
+        setup_book_with_chapters(&store, "book", &[("1_a.md", "x"), ("2_b.md", "x")]);
+        // 连续前缀 2，fallback 5 → max = 5。
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", Some(5)).await.unwrap(),
+            5
+        );
+        // 连续前缀 2，fallback 1 → max = 2。
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", Some(1)).await.unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_ignores_non_positive_fallback() {
+        let store = InMemoryStateStore::new();
+        setup_book_with_chapters(&store, "book", &[("1_a.md", "x")]);
+        // fallback=0 / 负数 → 视为 0，取连续前缀 1。
+        assert_eq!(resolve_durable_story_progress(&store, "book", Some(0)).await.unwrap(), 1);
+        assert_eq!(resolve_durable_story_progress(&store, "book", Some(-3)).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_merges_index_json_and_filenames() {
+        let store = InMemoryStateStore::new();
+        // index.json 给 1,2；文件名给 3,4 → 合并后连续前缀 4。
+        store.set(
+            "book/chapters/index.json",
+            r#"[{"number":1,"title":"a"},{"number":2,"title":"b"}]"#,
+        );
+        setup_book_with_chapters(&store, "book", &[("3_c.md", "x"), ("4_d.md", "x")]);
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_index_json_with_invalid_entries_filtered() {
+        let store = InMemoryStateStore::new();
+        // 非 number / 非正整数 / 非整数 全部过滤。
+        store.set(
+            "book/chapters/index.json",
+            r#"[{"number":1},{"number":"x"},{"number":0},{"number":-5},{"title":"no-num"},{"number":2}]"#,
+        );
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_empty_book_returns_fallback() {
+        let store = InMemoryStateStore::new();
+        // 无任何章节产物 → 前缀 0，取 fallback。
+        assert_eq!(resolve_durable_story_progress(&store, "book", Some(7)).await.unwrap(), 7);
+        assert_eq!(resolve_durable_story_progress(&store, "book", None).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_durable_progress_gap_caps_at_contiguous_prefix() {
+        let store = InMemoryStateStore::new();
+        setup_book_with_chapters(&store, "book", &[
+            ("1_a.md", "x"),
+            ("2_b.md", "x"),
+            ("4_d.md", "x"), // 缺 3，连续前缀只到 2
+        ]);
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            2
+        );
     }
 }
