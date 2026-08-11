@@ -69,6 +69,23 @@ pub mod activity_thresholds {
     pub const FRESH_PROMISE_AGE: u32 = 1;
 }
 
+/// hook 健康度检查默认阈值。对齐 TS `HOOK_HEALTH_DEFAULTS`。
+pub const HOOK_HEALTH_DEFAULTS: HookHealthDefaults = HookHealthDefaults {
+    max_active_hooks: 12,
+    stale_after_chapters: 10,
+    no_advance_window: 5,
+    new_hook_burst_threshold: 2,
+};
+
+/// hook 健康度阈值集合。对齐 TS `HOOK_HEALTH_DEFAULTS`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookHealthDefaults {
+    pub max_active_hooks: u32,
+    pub stale_after_chapters: u32,
+    pub no_advance_window: u32,
+    pub new_hook_burst_threshold: u32,
+}
+
 /// 按 timing 的可见窗口（章节数）。
 pub fn hook_visibility_window(timing: HookPayoffTiming) -> u32 {
     match timing {
