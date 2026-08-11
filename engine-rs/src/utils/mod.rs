@@ -17,6 +17,7 @@ pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
 pub mod context_filter;
+pub mod hook_lifecycle;
 pub mod hook_policy;
 pub mod language;
 pub mod length_metrics;
