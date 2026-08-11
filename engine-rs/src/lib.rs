@@ -45,6 +45,8 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error("序列化错误: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("SQLite 错误: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("LLM 调用失败: {0}")]
     Llm(String),
     #[error("业务约束违反: {0}")]
