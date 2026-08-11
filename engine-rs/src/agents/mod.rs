@@ -8,6 +8,7 @@
 //! - [`settler_parser`]：结算输出 `=== TAG ===` 段提取
 
 pub mod ai_tells;
+pub mod detector;
 pub mod detection_insights;
 pub mod settler_delta_parser;
 pub mod settler_parser;
