@@ -47,7 +47,9 @@ pub fn parse_settlement_output(content: &str, genre_profile: &GenreProfile) -> S
 ///
 /// 对齐 TS regex 的 lookahead 语义，但 Rust regex crate 不支持 lookahead——
 /// 改用手动扫描：定位 `=== {tag} ===` 后，从下一个 `=== ` 起始处截断。
-fn extract_tag(content: &str, tag: &str) -> String {
+///
+/// `pub(crate)` 以供 [`crate::agents::settler_delta_parser`] 复用（同形态 TAG 提取）。
+pub(crate) fn extract_tag(content: &str, tag: &str) -> String {
     let header = format!("=== {tag} ===");
     let start = match content.find(&header) {
         Some(i) => i + header.len(),
