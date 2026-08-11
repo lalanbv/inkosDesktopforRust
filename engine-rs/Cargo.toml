@@ -34,6 +34,8 @@ regex = "1"
 # HTTP 服务（strangler 切换面）：让已移植函数作为 /api/v1/* 端点服务，逐步替换 Node sidecar。
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+# URL 解析：guessServiceFromBaseUrl 提取 hostname，须与 TS new URL().hostname 同源（避免手写解析分歧）
+url = "2"
 # 类型同步：Rust→TS 单向生成（见 src/models.rs 的 PoC）
 # 默认 optional（feature 门控），保证骨架零额外依赖即可编译
 ts-rs = { version = "10", optional = true }
