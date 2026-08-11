@@ -22,6 +22,7 @@ pub mod length_metrics;
 pub mod llm_endpoint_auth;
 pub mod llm_env;
 pub mod long_span_fatigue;
+pub mod narrative_control;
 pub mod path;
 pub mod spot_fix_patches;
 pub mod pov_filter;
