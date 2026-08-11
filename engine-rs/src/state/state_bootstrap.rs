@@ -14,7 +14,9 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-use crate::models::runtime_state::HookStatus;
+use crate::models::runtime_state::{
+    ChapterSummariesState, CurrentStateFact, CurrentStateState, HookRecord, HookStatus, HooksState,
+};
 use crate::state::store::{join_path, StateStore};
 use crate::utils::story_markdown::normalize_hook_id;
 
@@ -391,10 +393,210 @@ pub async fn load_hooks_state_if_valid(
     }
 }
 
+// =============================================================================
+// markdown 引导层（从 *.md 重建结构化状态）
+// =============================================================================
+
+/// 从 `pending_hooks.md` 重建 [`HooksState`]。
+///
+/// 对齐 TS `parsePendingHooksStateMarkdown`：调用 [`parse_pending_hooks_markdown`]（已含初步 status 归一）
+/// → 对每个 hook 的 type 走 [`normalize_hook_type`]。
+///
+/// **与 TS 的等价性说明**：TS 在此对 status 也走 `normalizeHookStatus`（模糊正则）；Rust 的
+/// [`parse_pending_hooks_markdown`] 已用精确匹配把 status 收敛为 [`HookStatus`] 枚举，
+/// 故此处不再二次 normalize（语义等价——精确匹配是模糊正则的子集命中）。
+/// bullet fallback（无表格时 `- xxx` → notes-only hook）已在 [`parse_pending_hooks_markdown`] 内处理。
+pub fn parse_pending_hooks_state_markdown(
+    markdown: &str,
+    warnings: &mut Vec<String>,
+) -> HooksState {
+    use crate::utils::story_markdown::parse_pending_hooks_markdown;
+    let hooks: Vec<HookRecord> = parse_pending_hooks_markdown(markdown)
+        .into_iter()
+        .map(|mut h| {
+            h.hook_type = normalize_hook_type(Some(&h.hook_type), warnings, &h.hook_id);
+            h
+        })
+        .collect();
+    HooksState { hooks }
+}
+
+/// 从 `current_state.md` 重建 [`CurrentStateState`]。
+///
+/// 对齐 TS `parseCurrentStateStateMarkdown`：字段/值表格（含「当前章节」行定 chapter）→ facts；
+/// bullet fallback → note_N facts。chapter 经 [`parse_integer_with_fallback`]（含 warning）。
+pub fn parse_current_state_state_markdown(
+    markdown: &str,
+    fallback_chapter: u32,
+    warnings: &mut Vec<String>,
+) -> CurrentStateState {
+    use crate::utils::story_markdown::{infer_fact_subject, is_current_chapter_label, parse_markdown_table_rows};
+
+    let table_rows = parse_markdown_table_rows(markdown);
+    let field_value_rows: Vec<&Vec<String>> = table_rows
+        .iter()
+        .filter(|row| row.len() >= 2)
+        .filter(|row| !crate::utils::story_markdown::is_state_table_header_row(row))
+        .collect();
+
+    if !field_value_rows.is_empty() {
+        let state_chapter = field_value_rows
+            .iter()
+            .find(|row| row.first().is_some_and(|c| is_current_chapter_label(c)))
+            .and_then(|row| row.get(1).map(|s| s.as_str()))
+            .map(|v| parse_integer_with_fallback(Some(v), fallback_chapter as i64, warnings, "current_state:chapter"))
+            .unwrap_or(fallback_chapter as i64)
+            .max(0) as u32;
+
+        let facts: Vec<CurrentStateFact> = field_value_rows
+            .iter()
+            .filter(|row| row.first().is_some_and(|c| !is_current_chapter_label(c)))
+            .filter_map(|row| {
+                let label = row.first().map(|s| s.trim()).unwrap_or("");
+                let value = row.get(1).map(|s| s.trim()).unwrap_or("");
+                if label.is_empty() || value.is_empty() {
+                    return None;
+                }
+                Some(CurrentStateFact {
+                    subject: infer_fact_subject(label),
+                    predicate: label.to_string(),
+                    object: value.to_string(),
+                    valid_from_chapter: state_chapter,
+                    valid_until_chapter: None,
+                    source_chapter: state_chapter,
+                })
+            })
+            .collect();
+
+        return CurrentStateState { chapter: state_chapter, facts };
+    }
+
+    // bullet fallback：predicate=note_N，subject=current_state。
+    let bullet_facts: Vec<String> = markdown
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| line.starts_with('-'))
+        .map(|line| line.replacen("- ", "", 1).replacen('-', "", 1).trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    let chapter = fallback_chapter;
+    let facts: Vec<CurrentStateFact> = bullet_facts
+        .into_iter()
+        .enumerate()
+        .map(|(index, object)| CurrentStateFact {
+            subject: "current_state".to_string(),
+            predicate: format!("note_{}", index + 1),
+            object,
+            valid_from_chapter: chapter,
+            valid_until_chapter: None,
+            source_chapter: chapter,
+        })
+        .collect();
+    CurrentStateState { chapter, facts }
+}
+
+/// 读 `chapter_summaries.md` → [`ChapterSummariesState`]（去重 + 升序）。
+/// 对齐 TS `loadMarkdownSummariesState`。
+pub async fn load_markdown_summaries_state(
+    store: &dyn StateStore,
+    story_dir: &str,
+) -> crate::Result<ChapterSummariesState> {
+    use crate::models::runtime_state::ChapterSummaryRow;
+    use crate::utils::story_markdown::parse_chapter_summaries_markdown;
+    let markdown = store
+        .read_to_string(&join_path(story_dir, "chapter_summaries.md"))
+        .await?
+        .unwrap_or_default();
+    let raw_rows = parse_chapter_summaries_markdown(&markdown);
+    // ChapterSummaryRow 与 StoredSummary 字段一致；去重按 chapter。
+    let rows: Vec<ChapterSummaryRow> = raw_rows
+        .into_iter()
+        .map(|s| ChapterSummaryRow {
+            chapter: s.chapter.max(0) as u32,
+            title: s.title,
+            characters: s.characters,
+            events: s.events,
+            state_changes: s.state_changes,
+            hook_activity: s.hook_activity,
+            mood: s.mood,
+            chapter_type: s.chapter_type,
+        })
+        .collect();
+    let rows = deduplicate_summary_rows(&rows, |r| r.chapter as i64);
+    Ok(ChapterSummariesState { rows })
+}
+
+/// 读 `pending_hooks.md` → [`HooksState`]。
+/// 对齐 TS `loadMarkdownHooksState`。
+pub async fn load_markdown_hooks_state(
+    store: &dyn StateStore,
+    story_dir: &str,
+    warnings: &mut Vec<String>,
+) -> crate::Result<HooksState> {
+    let markdown = store
+        .read_to_string(&join_path(story_dir, "pending_hooks.md"))
+        .await?
+        .unwrap_or_default();
+    Ok(parse_pending_hooks_state_markdown(&markdown, warnings))
+}
+
+/// 读 `current_state.md` → [`CurrentStateState`]。
+/// 对齐 TS `loadMarkdownCurrentState`。
+pub async fn load_markdown_current_state(
+    store: &dyn StateStore,
+    story_dir: &str,
+    fallback_chapter: u32,
+    warnings: &mut Vec<String>,
+) -> crate::Result<CurrentStateState> {
+    let markdown = store
+        .read_to_string(&join_path(story_dir, "current_state.md"))
+        .await?
+        .unwrap_or_default();
+    Ok(parse_current_state_state_markdown(&markdown, fallback_chapter, warnings))
+}
+
+/// markdown 引导状态的聚合（summaries + hooks + currentState + durableStoryProgress）。
+///
+/// 对齐 TS `MarkdownBootstrapState` / `loadMarkdownBootstrapState`。
+/// authoritativeProgress = max(显式 fallback, durable 产物前缀)，作为 current_state 的 fallback。
+#[derive(Debug, Clone, Default)]
+pub struct MarkdownBootstrapState {
+    pub summaries_state: ChapterSummariesState,
+    pub hooks_state: HooksState,
+    pub current_state: CurrentStateState,
+    /// durable story progress（max(显式 fallback, 章节产物前缀)）。
+    pub durable_story_progress: u32,
+}
+
+/// 聚合加载 markdown 引导状态。
+/// 对齐 TS `loadMarkdownBootstrapState`。
+pub async fn load_markdown_bootstrap_state(
+    store: &dyn StateStore,
+    book_dir: &str,
+    story_dir: &str,
+    fallback_chapter: u32,
+    warnings: &mut Vec<String>,
+) -> crate::Result<MarkdownBootstrapState> {
+    let summaries_state = load_markdown_summaries_state(store, story_dir).await?;
+    let hooks_state = load_markdown_hooks_state(store, story_dir, warnings).await?;
+    let durable_artifact_progress =
+        resolve_contiguous_artifact_chapter_progress(store, book_dir).await? as u32;
+    let authoritative_progress = fallback_chapter.max(durable_artifact_progress);
+    let current_state =
+        load_markdown_current_state(store, story_dir, authoritative_progress, warnings).await?;
+    Ok(MarkdownBootstrapState {
+        summaries_state,
+        hooks_state,
+        current_state,
+        durable_story_progress: authoritative_progress,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::runtime_state::{HooksState, StateManifest};
+    use crate::models::runtime_state::{ChapterSummaryRow, StateManifest};
     use crate::state::store::InMemoryStateStore;
     use crate::utils::language::WritingLanguage;
 
@@ -775,5 +977,121 @@ mod tests {
         assert!(result.is_none());
         assert!(warnings.is_empty(), "缺失不产 warning");
         let _ = (HooksState::default(),); // 确认类型可构造（compile check）
+    }
+
+    // --- markdown 引导层 --------------------------------------------------------
+
+    #[test]
+    fn parse_pending_hooks_state_markdown_normalizes_empty_type() {
+        // 8 列 hook，type 为空 → normalize "unspecified" + warning。
+        let md = "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |\n| h02 | 2 |    | open | 2 | y | mid-arc | n2 |";
+        let mut warnings = Vec::new();
+        let state = parse_pending_hooks_state_markdown(md, &mut warnings);
+        assert_eq!(state.hooks.len(), 2);
+        assert_eq!(state.hooks[0].hook_type, "mystery");
+        assert_eq!(state.hooks[1].hook_type, "unspecified");
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn parse_pending_hooks_state_markdown_bullet_fallback() {
+        let md = "- 线索一\n- 线索二";
+        let mut warnings = Vec::new();
+        let state = parse_pending_hooks_state_markdown(md, &mut warnings);
+        assert_eq!(state.hooks.len(), 2);
+        assert_eq!(state.hooks[0].hook_id, "hook-1");
+        assert_eq!(state.hooks[0].hook_type, "unspecified", "bullet fallback type 已是 unspecified，不再 warning");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_current_state_state_markdown_table_extracts_facts_and_chapter() {
+        let md = "| 字段 | 值 |\n|---|---|\n| 当前章节 | 7 |\n| 当前位置 | 森林 |\n| 当前目标 | 圣杯 |";
+        let mut warnings = Vec::new();
+        let state = parse_current_state_state_markdown(md, 99, &mut warnings);
+        assert_eq!(state.chapter, 7);
+        assert_eq!(state.facts.len(), 2, "「当前章节」行不产 fact");
+        assert_eq!(state.facts[0].predicate, "当前位置");
+        assert_eq!(state.facts[0].subject, "protagonist");
+        assert_eq!(state.facts[0].valid_from_chapter, 7);
+        assert_eq!(state.facts[1].predicate, "当前目标");
+    }
+
+    #[test]
+    fn parse_current_state_state_markdown_invalid_chapter_warns_and_uses_fallback() {
+        // 「当前章节」值非数字 → parse_integer_with_fallback warning + fallback。
+        let md = "| 字段 | 值 |\n|---|---|\n| 当前章节 | abc |\n| 当前目标 | x |";
+        let mut warnings = Vec::new();
+        let state = parse_current_state_state_markdown(md, 5, &mut warnings);
+        assert_eq!(state.chapter, 5, "无效 chapter → fallback 5");
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn parse_current_state_state_markdown_bullet_fallback_uses_fallback_chapter() {
+        let md = "- 笔记一";
+        let mut warnings = Vec::new();
+        let state = parse_current_state_state_markdown(md, 3, &mut warnings);
+        assert_eq!(state.chapter, 3);
+        assert_eq!(state.facts.len(), 1);
+        assert_eq!(state.facts[0].predicate, "note_1");
+        assert_eq!(state.facts[0].subject, "current_state");
+        assert_eq!(state.facts[0].valid_from_chapter, 3);
+    }
+
+    #[tokio::test]
+    async fn load_markdown_summaries_state_deduplicates_and_sorts() {
+        let store = InMemoryStateStore::new();
+        store.set(
+            "story/chapter_summaries.md",
+            "| 2 | t2 |\n| 1 | t1-old |\n| 1 | t1-new |\n| note | x |",
+        );
+        let state = load_markdown_summaries_state(&store, "story").await.unwrap();
+        let chapters: Vec<u32> = state.rows.iter().map(|r| r.chapter).collect();
+        assert_eq!(chapters, vec![1, 2], "去重（后覆盖）+ 升序；非数字首列过滤");
+        assert_eq!(state.rows[0].title, "t1-new");
+        let _ = ChapterSummaryRow::default();
+    }
+
+    #[tokio::test]
+    async fn load_markdown_summaries_state_absent_returns_empty() {
+        let store = InMemoryStateStore::new();
+        let state = load_markdown_summaries_state(&store, "story").await.unwrap();
+        assert!(state.rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_markdown_bootstrap_state_aggregates_all_three_with_durable_progress() {
+        let store = InMemoryStateStore::new();
+        store.set("book/chapters/1_a.md", "x");
+        store.set("book/chapters/2_b.md", "x");
+        store.set("story/chapter_summaries.md", "| 1 | t1 |");
+        store.set("story/pending_hooks.md", "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |");
+        store.set("story/current_state.md", "| 字段 | 值 |\n|---|---|\n| 当前章节 | 5 |\n| 当前位置 | 森林 |");
+
+        let mut warnings = Vec::new();
+        let bs = load_markdown_bootstrap_state(&store, "book", "story", 3, &mut warnings)
+            .await
+            .unwrap();
+        assert_eq!(bs.summaries_state.rows.len(), 1);
+        assert_eq!(bs.hooks_state.hooks.len(), 1);
+        assert_eq!(bs.current_state.facts.len(), 1);
+        assert_eq!(bs.current_state.chapter, 5);
+        // durable = max(fallback=3, 产物前缀=2) = 3。
+        assert_eq!(bs.durable_story_progress, 3);
+    }
+
+    #[tokio::test]
+    async fn load_markdown_bootstrap_state_durable_caps_when_no_explicit_fallback() {
+        let store = InMemoryStateStore::new();
+        store.set("book/chapters/1_a.md", "x");
+        store.set("book/chapters/2_b.md", "x");
+        store.set("book/chapters/3_c.md", "x");
+        // fallback=0 → durable = max(0, 3) = 3。
+        let mut warnings = Vec::new();
+        let bs = load_markdown_bootstrap_state(&store, "book", "story", 0, &mut warnings)
+            .await
+            .unwrap();
+        assert_eq!(bs.durable_story_progress, 3);
     }
 }
