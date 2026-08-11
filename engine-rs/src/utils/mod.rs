@@ -19,6 +19,7 @@ pub mod chapter_splitter;
 pub mod context_filter;
 pub mod hook_arbiter;
 pub mod hook_governance;
+pub mod hook_ledger_validator;
 pub mod hook_lifecycle;
 pub mod hook_policy;
 pub mod hook_promotion;
