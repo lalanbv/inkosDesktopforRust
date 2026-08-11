@@ -23,6 +23,7 @@ pub mod llm_endpoint_auth;
 pub mod llm_env;
 pub mod long_span_fatigue;
 pub mod path;
+pub mod spot_fix_patches;
 pub mod pov_filter;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};
