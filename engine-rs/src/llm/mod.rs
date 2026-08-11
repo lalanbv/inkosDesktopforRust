@@ -12,4 +12,5 @@
 pub mod provider;
 pub mod secrets;
 pub mod service_presets;
+pub mod sse_parser;
 pub mod think_tag_stripper;
