@@ -36,6 +36,10 @@ axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 # URL 解析：guessServiceFromBaseUrl 提取 hostname，须与 TS new URL().hostname 同源（避免手写解析分歧）
 url = "2"
+# HTTP 客户端：流式 LLM 客户端用（chat completions SSE 流）。
+# 用 rustls-tls 避免系统 OpenSSL 依赖；streaming 取 bytes_stream。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+futures-util = "0.3"
 # 类型同步：Rust→TS 单向生成（见 src/models.rs 的 PoC）
 # 默认 optional（feature 门控），保证骨架零额外依赖即可编译
 ts-rs = { version = "10", optional = true }

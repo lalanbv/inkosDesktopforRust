@@ -16,4 +16,5 @@ pub mod registry;
 pub mod secrets;
 pub mod service_presets;
 pub mod sse_parser;
+pub mod streaming_client;
 pub mod think_tag_stripper;
