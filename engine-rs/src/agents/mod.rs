@@ -11,6 +11,7 @@ pub mod ai_tells;
 pub mod continuity;
 pub mod detector;
 pub mod detection_insights;
+pub mod sensitive_words;
 pub mod settler_delta_parser;
 pub mod settler_parser;
 pub mod style_analyzer;
