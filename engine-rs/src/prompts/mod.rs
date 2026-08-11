@@ -9,9 +9,14 @@
 //! loadPromptPackPrompt / appendPromptPackGuidance（prompt-pack.ts，读项目/用户 prompt 覆盖）。
 //! short-fiction.ts（568 行短篇模板数据）后续按需移植。
 
+//! ## 已移植（追加）
+//! - [`prompt_pack`]：project/user/builtin 三级覆盖加载（StateStore 注入）
+
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
+
+pub mod prompt_pack;
 
 /// prompt 来源。对齐 TS `z.enum(["builtin","project","user","external"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
