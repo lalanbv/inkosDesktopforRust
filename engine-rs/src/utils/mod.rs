@@ -20,6 +20,7 @@ pub mod context_filter;
 pub mod language;
 pub mod length_metrics;
 pub mod llm_endpoint_auth;
+pub mod llm_env;
 pub mod path;
 pub mod pov_filter;
 
