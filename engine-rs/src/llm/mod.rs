@@ -12,6 +12,7 @@
 pub mod lookup;
 pub mod provider;
 pub mod providers;
+pub mod registry;
 pub mod secrets;
 pub mod service_presets;
 pub mod sse_parser;
