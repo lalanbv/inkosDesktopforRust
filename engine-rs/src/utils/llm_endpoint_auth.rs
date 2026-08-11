@@ -3,9 +3,12 @@
 //! 移植自 `packages/core/src/utils/llm-endpoint-auth.ts`。
 //! 本地/私网端点（localhost/127/私网 IP/.local/docker internal）可免 API key。
 
-use url::Url;
+use url::{Host, Url};
 
 /// 判定端点是否可免 API key：anthropic 永不；本地/私网 hostname 免。
+///
+/// 用 `url::Host` 枚举匹配，避免 IPv6 字符串表示分歧；`Ipv4Addr::is_private` 的范围
+/// （10/8、172.16/12、192.168/16）与 TS `isPrivateIpv4` 完全一致。
 pub fn is_api_key_optional_for_endpoint(provider: Option<&str>, base_url: Option<&str>) -> bool {
     if provider == Some("anthropic") {
         return false;
@@ -16,39 +19,18 @@ pub fn is_api_key_optional_for_endpoint(provider: Option<&str>, base_url: Option
     let Ok(url) = Url::parse(base_url) else {
         return false;
     };
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    let hostname = host.to_lowercase();
-    hostname == "localhost"
-        || hostname == "127.0.0.1"
-        || hostname == "::1"
-        || hostname == "0.0.0.0"
-        || hostname == "host.docker.internal"
-        || hostname.ends_with(".local")
-        || is_private_ipv4(&hostname)
-}
-
-/// 私网 IPv4 判定：10.x / 192.168.x / 172.16-31.x。
-fn is_private_ipv4(hostname: &str) -> bool {
-    let parts: Vec<&str> = hostname.split('.').collect();
-    if parts.len() != 4 {
-        return false;
+    match url.host() {
+        Some(Host::Ipv6(ip)) => ip.is_loopback(), // ::1
+        Some(Host::Ipv4(ip)) => {
+            let o = ip.octets();
+            o == [127, 0, 0, 1] || o == [0, 0, 0, 0] || ip.is_private()
+        }
+        Some(Host::Domain(d)) => {
+            let h = d.to_lowercase();
+            h == "localhost" || h == "host.docker.internal" || h.ends_with(".local")
+        }
+        _ => false,
     }
-    let Ok(nums) = parts.iter().map(|s| s.parse::<u8>()).collect::<Result<Vec<_>, _>>() else {
-        return false;
-    };
-    // u8 parse 已保证 0-255（TS 还需显式检查，Rust 类型保证）
-    if nums[0] == 10 {
-        return true;
-    }
-    if nums[0] == 192 && nums[1] == 168 {
-        return true;
-    }
-    if nums[0] == 172 && (16..=31).contains(&nums[1]) {
-        return true;
-    }
-    false
 }
 
 #[cfg(test)]
