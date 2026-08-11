@@ -10,4 +10,5 @@
 //! withTransientLLMRetry / config-migration / service-resolver / secrets
 
 pub mod provider;
+pub mod secrets;
 pub mod think_tag_stripper;
