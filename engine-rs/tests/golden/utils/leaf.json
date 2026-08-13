@@ -966,5 +966,474 @@
         "error": "goal must be a non-empty string"
       }
     }
+  ],
+  "parse_genre_profile": [
+    {
+      "name": "full",
+      "input": "---\nname: 通用\nid: other\nlanguage: en\nchapterTypes: [\"推进章\", \"布局章\"]\nfatigueWords: [\"震惊\", \"仿佛\"]\nnumericalSystem: true\npowerScaling: false\neraResearch: true\npacingRule: \"每2-3章有一个明确的进展或反馈\"\nsatisfactionTypes: [\"目标达成\", \"真相揭示\"]\nauditDimensions: [1, 2, 3, 6, 7]\n---\n\n## 题材禁忌\n\n- 无逻辑的巧合推进剧情\n",
+      "expected": {
+        "ok": true,
+        "value": {
+          "profile": {
+            "name": "通用",
+            "id": "other",
+            "language": "en",
+            "chapterTypes": [
+              "推进章",
+              "布局章"
+            ],
+            "fatigueWords": [
+              "震惊",
+              "仿佛"
+            ],
+            "numericalSystem": true,
+            "powerScaling": false,
+            "eraResearch": true,
+            "pacingRule": "每2-3章有一个明确的进展或反馈",
+            "satisfactionTypes": [
+              "目标达成",
+              "真相揭示"
+            ],
+            "auditDimensions": [
+              1,
+              2,
+              3,
+              6,
+              7
+            ]
+          },
+          "body": "## 题材禁忌\n\n- 无逻辑的巧合推进剧情"
+        }
+      }
+    },
+    {
+      "name": "minimal-defaults",
+      "input": "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\n---\n\n正文  \n",
+      "expected": {
+        "ok": true,
+        "value": {
+          "profile": {
+            "name": "X",
+            "id": "x",
+            "language": "zh",
+            "chapterTypes": [],
+            "fatigueWords": [],
+            "numericalSystem": false,
+            "powerScaling": false,
+            "eraResearch": false,
+            "pacingRule": "",
+            "satisfactionTypes": [],
+            "auditDimensions": []
+          },
+          "body": "正文"
+        }
+      }
+    },
+    {
+      "name": "int-audit-dimensions",
+      "input": "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\nauditDimensions: [3, 10]\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "profile": {
+            "name": "X",
+            "id": "x",
+            "language": "zh",
+            "chapterTypes": [],
+            "fatigueWords": [],
+            "numericalSystem": false,
+            "powerScaling": false,
+            "eraResearch": false,
+            "pacingRule": "",
+            "satisfactionTypes": [],
+            "auditDimensions": [
+              3,
+              10
+            ]
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "unknown-keys-stripped",
+      "input": "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\nextra: 1\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "profile": {
+            "name": "X",
+            "id": "x",
+            "language": "zh",
+            "chapterTypes": [],
+            "fatigueWords": [],
+            "numericalSystem": false,
+            "powerScaling": false,
+            "eraResearch": false,
+            "pacingRule": "",
+            "satisfactionTypes": [],
+            "auditDimensions": []
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "missing-frontmatter",
+      "input": "# 无 frontmatter\n正文",
+      "expected": {
+        "ok": false,
+        "error": "Genre profile missing YAML frontmatter (--- ... ---)"
+      }
+    },
+    {
+      "name": "closing-dash-no-newline",
+      "input": "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\n---",
+      "expected": {
+        "ok": false,
+        "error": "Genre profile missing YAML frontmatter (--- ... ---)"
+      }
+    },
+    {
+      "name": "missing-required-name",
+      "input": "---\nid: x\nchapterTypes: []\nfatigueWords: []\n---\nbody",
+      "expected": {
+        "ok": false,
+        "error": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"string\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"name\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+      }
+    },
+    {
+      "name": "missing-required-chapter-types",
+      "input": "---\nname: X\nid: x\nfatigueWords: []\n---\nbody",
+      "expected": {
+        "ok": false,
+        "error": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"array\",\n    \"received\": \"undefined\",\n    \"path\": [\n      \"chapterTypes\"\n    ],\n    \"message\": \"Required\"\n  }\n]"
+      }
+    },
+    {
+      "name": "invalid-language",
+      "input": "---\nname: X\nid: x\nlanguage: fr\nchapterTypes: []\nfatigueWords: []\n---\nbody",
+      "expected": {
+        "ok": false,
+        "error": "[\n  {\n    \"received\": \"fr\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"zh\",\n      \"en\"\n    ],\n    \"path\": [\n      \"language\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'zh' | 'en', received 'fr'\"\n  }\n]"
+      }
+    },
+    {
+      "name": "non-object-yaml",
+      "input": "---\n- a\n- b\n---\nbody",
+      "expected": {
+        "ok": false,
+        "error": "[\n  {\n    \"code\": \"invalid_type\",\n    \"expected\": \"object\",\n    \"received\": \"array\",\n    \"path\": [],\n    \"message\": \"Expected object, received array\"\n  }\n]"
+      }
+    }
+  ],
+  "parse_book_rules": [
+    {
+      "name": "frontmatter-full",
+      "input": "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\n  resourceTypes: [灵石]\nfanficMode: canon\n---\n\n正文规则说明\n",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "2.0",
+            "protagonist": {
+              "name": "林动",
+              "personalityLock": [
+                "冷静",
+                "果决"
+              ],
+              "behavioralConstraints": [
+                "不滥杀"
+              ]
+            },
+            "genreLock": {
+              "primary": "仙侠",
+              "forbidden": [
+                "科幻"
+              ]
+            },
+            "numericalSystemOverrides": {
+              "hardCap": 100,
+              "resourceTypes": [
+                "灵石"
+              ]
+            },
+            "eraConstraints": {
+              "enabled": true,
+              "period": "宋代"
+            },
+            "prohibitions": [
+              "无逻辑巧合"
+            ],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [
+              "震惊"
+            ],
+            "additionalAuditDimensions": [
+              5,
+              "战力崩坏"
+            ],
+            "enableFullCastTracking": false,
+            "fanficMode": "canon",
+            "allowedDeviations": []
+          },
+          "body": "正文规则说明"
+        }
+      }
+    },
+    {
+      "name": "frontmatter-empty",
+      "input": "---\n\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "---\n\n---\nbody"
+        }
+      }
+    },
+    {
+      "name": "fenced",
+      "input": "```md\n---\nprohibitions: [a]\n---\n正文\n```",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [
+              "a"
+            ],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "正文"
+        }
+      }
+    },
+    {
+      "name": "frontmatter-after-prose",
+      "input": "前置说明文字\n---\nprohibitions: [x]\n---\n正文",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [
+              "x"
+            ],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "正文"
+        }
+      }
+    },
+    {
+      "name": "narrative-person-valid",
+      "input": "---\nnarrativePerson: first\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "narrativePerson": "first",
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "narrative-person-catch",
+      "input": "---\nnarrativePerson: sideways\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "invalid-fanfic-falls-back",
+      "input": "---\nfanficMode: bogus\n---\n\n## 主角\n\n名字: 林动\n",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "protagonist": {
+              "name": "林动",
+              "personalityLock": [],
+              "behavioralConstraints": []
+            },
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "---\nfanficMode: bogus\n---\n\n## 主角\n\n名字: 林动"
+        }
+      }
+    },
+    {
+      "name": "hard-cap-string",
+      "input": "---\nnumericalSystemOverrides:\n  hardCap: unlimited\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "numericalSystemOverrides": {
+              "hardCap": "unlimited",
+              "resourceTypes": []
+            },
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "flags-and-lists",
+      "input": "---\nenableFullCastTracking: true\nallowedDeviations: [a, b]\nchapterTypesOverride: [布局章]\n---\nbody",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [],
+            "chapterTypesOverride": [
+              "布局章"
+            ],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": true,
+            "allowedDeviations": [
+              "a",
+              "b"
+            ]
+          },
+          "body": "body"
+        }
+      }
+    },
+    {
+      "name": "markdown-full",
+      "input": "# 主角\n\n名字：林动\n性格锁：冷静、果决\n行为约束：不滥杀；不弃队友\n\n## 题材锁\n\n主类型：仙侠\n禁止混入：科幻、悬疑\n\n## 禁止事项\n\n- 无逻辑的巧合推进剧情\n- 配角降智配合主角\n\n## 同人模式\n\n模式：原作向（正典）\n允许偏离：口头禅\n\n## 数值/资源规则\n\n核心资源：灵石、贡献点\n硬上限：100\n\n## 年代限制\n\n时期：宋代\n地域：江南\n\n全文第一人称叙述。\n",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "protagonist": {
+              "name": "林动",
+              "personalityLock": [
+                "冷静",
+                "果决"
+              ],
+              "behavioralConstraints": [
+                "不滥杀",
+                "不弃队友"
+              ]
+            },
+            "genreLock": {
+              "primary": "仙侠",
+              "forbidden": [
+                "科幻",
+                "悬疑"
+              ]
+            },
+            "narrativePerson": "first",
+            "numericalSystemOverrides": {
+              "hardCap": "100",
+              "resourceTypes": [
+                "灵石",
+                "贡献点"
+              ]
+            },
+            "eraConstraints": {
+              "enabled": true,
+              "period": "宋代",
+              "region": "江南"
+            },
+            "prohibitions": [
+              "无逻辑的巧合推进剧情",
+              "配角降智配合主角"
+            ],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "fanficMode": "canon",
+            "allowedDeviations": [
+              "口头禅"
+            ]
+          },
+          "body": "# 主角\n\n名字：林动\n性格锁：冷静、果决\n行为约束：不滥杀；不弃队友\n\n## 题材锁\n\n主类型：仙侠\n禁止混入：科幻、悬疑\n\n## 禁止事项\n\n- 无逻辑的巧合推进剧情\n- 配角降智配合主角\n\n## 同人模式\n\n模式：原作向（正典）\n允许偏离：口头禅\n\n## 数值/资源规则\n\n核心资源：灵石、贡献点\n硬上限：100\n\n## 年代限制\n\n时期：宋代\n地域：江南\n\n全文第一人称叙述。"
+        }
+      }
+    },
+    {
+      "name": "markdown-plain",
+      "input": "只是普通正文，无任何规则段。",
+      "expected": {
+        "ok": true,
+        "value": {
+          "rules": {
+            "version": "1.0",
+            "prohibitions": [],
+            "chapterTypesOverride": [],
+            "fatigueWordsOverride": [],
+            "additionalAuditDimensions": [],
+            "enableFullCastTracking": false,
+            "allowedDeviations": []
+          },
+          "body": "只是普通正文，无任何规则段。"
+        }
+      }
+    },
+    {
+      "name": "shim",
+      "input": "# 本书规则（兼容指针——已废弃）\n本文件仅为外部读取保留",
+      "expected": {
+        "ok": true,
+        "value": null
+      }
+    }
   ]
 }

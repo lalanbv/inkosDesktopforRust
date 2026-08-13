@@ -21,6 +21,8 @@ import { splitChapters } from "../utils/chapter-splitter.js";
 import { analyzeChapterCadence, isHighTensionMood } from "../utils/chapter-cadence.js";
 import { capContextBlock, filterHooks, filterSummaries } from "../utils/context-filter.js";
 import { normalizePlatformId, resolveChapterReviewMode, resolveRevisionGate } from "../models/book.js";
+import { parseGenreProfile } from "../models/genre-profile.js";
+import { parseBookRules } from "../models/book-rules.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -125,6 +127,45 @@ const MEMO_BODY = [
 function buildMemo(goal: string, extra = ""): string {
   return `## 本章目标\n${goal}\n\n${MEMO_BODY}${extra}`;
 }
+
+// parseGenreProfile：frontmatter 成功 + 各类失败（缺 frontmatter / 缺必填 / 非法 language / 非对象 YAML）。
+const genreProfileCases: Array<{ name: string; raw: string }> = [
+  {
+    name: "full",
+    raw: "---\nname: 通用\nid: other\nlanguage: en\nchapterTypes: [\"推进章\", \"布局章\"]\nfatigueWords: [\"震惊\", \"仿佛\"]\nnumericalSystem: true\npowerScaling: false\neraResearch: true\npacingRule: \"每2-3章有一个明确的进展或反馈\"\nsatisfactionTypes: [\"目标达成\", \"真相揭示\"]\nauditDimensions: [1, 2, 3, 6, 7]\n---\n\n## 题材禁忌\n\n- 无逻辑的巧合推进剧情\n",
+  },
+  { name: "minimal-defaults", raw: "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\n---\n\n正文  \n" },
+  { name: "int-audit-dimensions", raw: "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\nauditDimensions: [3, 10]\n---\nbody" },
+  { name: "unknown-keys-stripped", raw: "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\nextra: 1\n---\nbody" },
+  { name: "missing-frontmatter", raw: "# 无 frontmatter\n正文" },
+  { name: "closing-dash-no-newline", raw: "---\nname: X\nid: x\nchapterTypes: []\nfatigueWords: []\n---" },
+  { name: "missing-required-name", raw: "---\nid: x\nchapterTypes: []\nfatigueWords: []\n---\nbody" },
+  { name: "missing-required-chapter-types", raw: "---\nname: X\nid: x\nfatigueWords: []\n---\nbody" },
+  { name: "invalid-language", raw: "---\nname: X\nid: x\nlanguage: fr\nchapterTypes: []\nfatigueWords: []\n---\nbody" },
+  { name: "non-object-yaml", raw: "---\n- a\n- b\n---\nbody" },
+];
+
+// parseBookRules：frontmatter 优先 + shim + markdown 回退 + 栅栏剥离 + catch 降级。
+const bookRulesCases: Array<{ name: string; raw: string }> = [
+  {
+    name: "frontmatter-full",
+    raw: "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\n  resourceTypes: [灵石]\nfanficMode: canon\n---\n\n正文规则说明\n",
+  },
+  { name: "frontmatter-empty", raw: "---\n\n---\nbody" },
+  { name: "fenced", raw: "```md\n---\nprohibitions: [a]\n---\n正文\n```" },
+  { name: "frontmatter-after-prose", raw: "前置说明文字\n---\nprohibitions: [x]\n---\n正文" },
+  { name: "narrative-person-valid", raw: "---\nnarrativePerson: first\n---\nbody" },
+  { name: "narrative-person-catch", raw: "---\nnarrativePerson: sideways\n---\nbody" },
+  { name: "invalid-fanfic-falls-back", raw: "---\nfanficMode: bogus\n---\n\n## 主角\n\n名字: 林动\n" },
+  { name: "hard-cap-string", raw: "---\nnumericalSystemOverrides:\n  hardCap: unlimited\n---\nbody" },
+  { name: "flags-and-lists", raw: "---\nenableFullCastTracking: true\nallowedDeviations: [a, b]\nchapterTypesOverride: [布局章]\n---\nbody" },
+  {
+    name: "markdown-full",
+    raw: "# 主角\n\n名字：林动\n性格锁：冷静、果决\n行为约束：不滥杀；不弃队友\n\n## 题材锁\n\n主类型：仙侠\n禁止混入：科幻、悬疑\n\n## 禁止事项\n\n- 无逻辑的巧合推进剧情\n- 配角降智配合主角\n\n## 同人模式\n\n模式：原作向（正典）\n允许偏离：口头禅\n\n## 数值/资源规则\n\n核心资源：灵石、贡献点\n硬上限：100\n\n## 年代限制\n\n时期：宋代\n地域：江南\n\n全文第一人称叙述。\n",
+  },
+  { name: "markdown-plain", raw: "只是普通正文，无任何规则段。" },
+  { name: "shim", raw: "# 本书规则（兼容指针——已废弃）\n本文件仅为外部读取保留" },
+];
 
 const parseMemoCases: Array<{ name: string; raw: string; chapter: number; golden: boolean }> = [
   { name: "valid-short-goal", raw: buildMemo("主角觉醒"), chapter: 3, golden: false },
@@ -244,10 +285,25 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           expected: outcome,
         };
       }),
+      parse_genre_profile: genreProfileCases.map((c) => {
+        let outcome: { ok: true; value: unknown } | { ok: false; error: string };
+        try {
+          outcome = { ok: true, value: parseGenreProfile(c.raw) };
+        } catch (e) {
+          outcome = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+        return { name: c.name, input: c.raw, expected: outcome };
+      }),
+      parse_book_rules: bookRulesCases.map((c) => {
+        // parseBookRules 不抛错：null（shim）也是合法返回。
+        return { name: c.name, input: c.raw, expected: { ok: true, value: parseBookRules(c.raw) } };
+      }),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
     expect(payload.derive_book_id.length).toBeGreaterThan(0);
     expect(payload.is_safe_book_id.length).toBeGreaterThan(0);
+    expect(payload.parse_genre_profile.length).toBeGreaterThan(0);
+    expect(payload.parse_book_rules.length).toBeGreaterThan(0);
   });
 });
