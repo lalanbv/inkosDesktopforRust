@@ -43,10 +43,18 @@ pub struct AuditIssue {
 }
 
 /// 问题严重度。对齐 TS `"critical" | "warning" | "info"`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"critical\" | \"warning\" | \"info\"")
+)]
 pub enum AuditSeverity {
+    #[serde(rename = "critical")]
     Critical,
+    #[serde(rename = "warning")]
     Warning,
+    #[serde(rename = "info")]
     Info,
 }
 

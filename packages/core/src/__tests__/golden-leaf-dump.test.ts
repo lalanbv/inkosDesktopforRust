@@ -23,6 +23,8 @@ import { capContextBlock, filterHooks, filterSummaries } from "../utils/context-
 import { normalizePlatformId, resolveChapterReviewMode, resolveRevisionGate } from "../models/book.js";
 import { parseGenreProfile } from "../models/genre-profile.js";
 import { parseBookRules } from "../models/book-rules.js";
+import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
+import { getFanficDimensionConfig } from "../agents/fanfic-dimensions.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -167,6 +169,56 @@ const bookRulesCases: Array<{ name: string; raw: string }> = [
   { name: "shim", raw: "# 本书规则（兼容指针——已废弃）\n本文件仅为外部读取保留" },
 ];
 
+// buildGovernedMemoryEvidenceBlocks：全桶 / 空包 / 单桶 / 回退 reason / 双计入。
+type GovCtxSource = { source: string; reason: string; excerpt?: string };
+const govCtxCases: Array<{ name: string; pkg: { chapter: number; selectedContext: GovCtxSource[] }; language: "zh" | "en" | null }> = [
+  {
+    name: "full-zh",
+    language: null,
+    pkg: {
+      chapter: 7,
+      selectedContext: [
+        { source: "story/pending_hooks.md#h-mentor", reason: "伏笔债", excerpt: "导师欠款未回收" },
+        { source: "runtime/hook_debt#h-mentor", reason: "hook 债", excerpt: "受阻 3 章" },
+        { source: "story/chapter_summaries.md#c5", reason: "第 5 章摘要" },
+        { source: "story/chapter_summaries.md#recent_titles", reason: "标题历史" },
+        { source: "story/chapter_summaries.md#recent_mood_type_trail", reason: "情绪轨迹" },
+        { source: "story/volume_summaries.md#v1", reason: "卷摘要", excerpt: "第一卷收束" },
+        { source: "story/parent_canon.md", reason: "正传正典", excerpt: "力量上限" },
+        { source: "story/fanfic_canon.md", reason: "同人正典" },
+        { source: "story/other.md", reason: "不进任何桶" },
+      ],
+    },
+  },
+  {
+    name: "full-en",
+    language: "en",
+    pkg: {
+      chapter: 3,
+      selectedContext: [
+        { source: "story/pending_hooks.md#h1", reason: "hook", excerpt: "undelivered" },
+        { source: "runtime/hook_debt#h1", reason: "debt", excerpt: "blocked 2" },
+        { source: "story/chapter_summaries.md#c1", reason: "summary" },
+        { source: "story/volume_summaries.md#v2", reason: "volume" },
+        { source: "story/chapter_summaries.md#recent_titles", reason: "titles" },
+        { source: "story/chapter_summaries.md#recent_mood_type_trail", reason: "mood" },
+        { source: "story/parent_canon.md", reason: "canon" },
+      ],
+    },
+  },
+  { name: "empty", language: null, pkg: { chapter: 1, selectedContext: [] } },
+  {
+    name: "hooks-only-reason-fallback",
+    language: null,
+    pkg: { chapter: 2, selectedContext: [{ source: "story/pending_hooks.md#x", reason: "仅有 reason" }] },
+  },
+  {
+    name: "recent-titles-dual-counted",
+    language: null,
+    pkg: { chapter: 4, selectedContext: [{ source: "story/chapter_summaries.md#recent_titles", reason: "标题" }] },
+  },
+];
+
 const parseMemoCases: Array<{ name: string; raw: string; chapter: number; golden: boolean }> = [
   { name: "valid-short-goal", raw: buildMemo("主角觉醒"), chapter: 3, golden: false },
   { name: "valid-long-goal-truncated", raw: buildMemo("一二三四五六七八九零".repeat(8)), chapter: 1, golden: false },
@@ -298,6 +350,26 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         // parseBookRules 不抛错：null（shim）也是合法返回。
         return { name: c.name, input: c.raw, expected: { ok: true, value: parseBookRules(c.raw) } };
       }),
+      build_governed_memory_evidence_blocks: govCtxCases.map((c) => {
+        return {
+          name: c.name,
+          input: { contextPackage: c.pkg, language: c.language },
+          expected: buildGovernedMemoryEvidenceBlocks(c.pkg, c.language ?? undefined),
+        };
+      }),
+      get_fanfic_dimension_config: (["canon", "au", "ooc", "cp"] as const).map((mode) => {
+        const cfg = getFanficDimensionConfig(mode, ["口头禅"]);
+        return {
+          name: mode,
+          input: { mode, allowedDeviations: ["口头禅"] },
+          expected: {
+            activeIds: cfg.activeIds,
+            severityOverrides: Object.fromEntries(cfg.severityOverrides),
+            deactivatedIds: cfg.deactivatedIds,
+            notes: Object.fromEntries(cfg.notes),
+          },
+        };
+      }),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -305,5 +377,7 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.is_safe_book_id.length).toBeGreaterThan(0);
     expect(payload.parse_genre_profile.length).toBeGreaterThan(0);
     expect(payload.parse_book_rules.length).toBeGreaterThan(0);
+    expect(payload.build_governed_memory_evidence_blocks.length).toBeGreaterThan(0);
+    expect(payload.get_fanfic_dimension_config.length).toBeGreaterThan(0);
   });
 });

@@ -8,11 +8,13 @@
 //! - [`settler_parser`]：结算输出 `=== TAG ===` 段提取
 //! - [`rules_reader`]：规则读取链（genre 画像 / book_rules / book.json language），
 //!   ContinuityAuditor 等编排 agent 的数据入口
+//! - [`fanfic_dimensions`]：同人维度配置（模式 → 维度 34-37 激活/严重度/注记）
 
 pub mod ai_tells;
 pub mod continuity;
 pub mod detection_insights;
 pub mod detector;
+pub mod fanfic_dimensions;
 pub mod rules_reader;
 pub mod sensitive_words;
 pub mod settler_delta_parser;

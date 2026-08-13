@@ -1435,5 +1435,310 @@
         "value": null
       }
     }
+  ],
+  "build_governed_memory_evidence_blocks": [
+    {
+      "name": "full-zh",
+      "input": {
+        "contextPackage": {
+          "chapter": 7,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#h-mentor",
+              "reason": "伏笔债",
+              "excerpt": "导师欠款未回收"
+            },
+            {
+              "source": "runtime/hook_debt#h-mentor",
+              "reason": "hook 债",
+              "excerpt": "受阻 3 章"
+            },
+            {
+              "source": "story/chapter_summaries.md#c5",
+              "reason": "第 5 章摘要"
+            },
+            {
+              "source": "story/chapter_summaries.md#recent_titles",
+              "reason": "标题历史"
+            },
+            {
+              "source": "story/chapter_summaries.md#recent_mood_type_trail",
+              "reason": "情绪轨迹"
+            },
+            {
+              "source": "story/volume_summaries.md#v1",
+              "reason": "卷摘要",
+              "excerpt": "第一卷收束"
+            },
+            {
+              "source": "story/parent_canon.md",
+              "reason": "正传正典",
+              "excerpt": "力量上限"
+            },
+            {
+              "source": "story/fanfic_canon.md",
+              "reason": "同人正典"
+            },
+            {
+              "source": "story/other.md",
+              "reason": "不进任何桶"
+            }
+          ]
+        },
+        "language": null
+      },
+      "expected": {
+        "hookDebtBlock": "\n## Hook Debt Briefs\n- 受阻 3 章\n",
+        "hooksBlock": "\n## 已选伏笔证据\n- story/pending_hooks.md#h-mentor: 导师欠款未回收\n",
+        "summariesBlock": "\n## 已选章节摘要证据\n- story/chapter_summaries.md#c5: 第 5 章摘要\n- story/chapter_summaries.md#recent_titles: 标题历史\n- story/chapter_summaries.md#recent_mood_type_trail: 情绪轨迹\n",
+        "volumeSummariesBlock": "\n## 已选卷级摘要证据\n- story/volume_summaries.md#v1: 第一卷收束\n",
+        "titleHistoryBlock": "\n## 近期标题历史\n- story/chapter_summaries.md#recent_titles: 标题历史\n",
+        "moodTrailBlock": "\n## 近期情绪/章节类型轨迹\n- story/chapter_summaries.md#recent_mood_type_trail: 情绪轨迹\n",
+        "canonBlock": "\n## 正典约束证据\n- story/parent_canon.md: 力量上限\n- story/fanfic_canon.md: 同人正典\n"
+      }
+    },
+    {
+      "name": "full-en",
+      "input": {
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#h1",
+              "reason": "hook",
+              "excerpt": "undelivered"
+            },
+            {
+              "source": "runtime/hook_debt#h1",
+              "reason": "debt",
+              "excerpt": "blocked 2"
+            },
+            {
+              "source": "story/chapter_summaries.md#c1",
+              "reason": "summary"
+            },
+            {
+              "source": "story/volume_summaries.md#v2",
+              "reason": "volume"
+            },
+            {
+              "source": "story/chapter_summaries.md#recent_titles",
+              "reason": "titles"
+            },
+            {
+              "source": "story/chapter_summaries.md#recent_mood_type_trail",
+              "reason": "mood"
+            },
+            {
+              "source": "story/parent_canon.md",
+              "reason": "canon"
+            }
+          ]
+        },
+        "language": "en"
+      },
+      "expected": {
+        "hookDebtBlock": "\n## Hook Debt Briefs\n- blocked 2\n",
+        "hooksBlock": "\n## Selected Hook Evidence\n- story/pending_hooks.md#h1: undelivered\n",
+        "summariesBlock": "\n## Selected Chapter Summary Evidence\n- story/chapter_summaries.md#c1: summary\n- story/chapter_summaries.md#recent_titles: titles\n- story/chapter_summaries.md#recent_mood_type_trail: mood\n",
+        "volumeSummariesBlock": "\n## Selected Volume Summary Evidence\n- story/volume_summaries.md#v2: volume\n",
+        "titleHistoryBlock": "\n## Recent Title History\n- story/chapter_summaries.md#recent_titles: titles\n",
+        "moodTrailBlock": "\n## Recent Mood / Chapter Type Trail\n- story/chapter_summaries.md#recent_mood_type_trail: mood\n",
+        "canonBlock": "\n## Canon Evidence\n- story/parent_canon.md: canon\n"
+      }
+    },
+    {
+      "name": "empty",
+      "input": {
+        "contextPackage": {
+          "chapter": 1,
+          "selectedContext": []
+        },
+        "language": null
+      },
+      "expected": {}
+    },
+    {
+      "name": "hooks-only-reason-fallback",
+      "input": {
+        "contextPackage": {
+          "chapter": 2,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#x",
+              "reason": "仅有 reason"
+            }
+          ]
+        },
+        "language": null
+      },
+      "expected": {
+        "hooksBlock": "\n## 已选伏笔证据\n- story/pending_hooks.md#x: 仅有 reason\n"
+      }
+    },
+    {
+      "name": "recent-titles-dual-counted",
+      "input": {
+        "contextPackage": {
+          "chapter": 4,
+          "selectedContext": [
+            {
+              "source": "story/chapter_summaries.md#recent_titles",
+              "reason": "标题"
+            }
+          ]
+        },
+        "language": null
+      },
+      "expected": {
+        "summariesBlock": "\n## 已选章节摘要证据\n- story/chapter_summaries.md#recent_titles: 标题\n",
+        "titleHistoryBlock": "\n## 近期标题历史\n- story/chapter_summaries.md#recent_titles: 标题\n"
+      }
+    }
+  ],
+  "get_fanfic_dimension_config": [
+    {
+      "name": "canon",
+      "input": {
+        "mode": "canon",
+        "allowedDeviations": [
+          "口头禅"
+        ]
+      },
+      "expected": {
+        "activeIds": [
+          34,
+          35,
+          36,
+          37
+        ],
+        "severityOverrides": {
+          "34": "critical",
+          "35": "critical",
+          "36": "warning",
+          "37": "critical"
+        },
+        "deactivatedIds": [
+          28,
+          29,
+          30,
+          31
+        ],
+        "notes": {
+          "1": "原作向同人：角色必须严格遵守性格底色。参照 fanfic_canon.md 角色档案中的性格底色和行为模式。",
+          "34": "检查角色的语癖、说话风格、行为模式是否与 fanfic_canon.md 角色档案一致。偏离必须有情境驱动。 （严格检查）",
+          "35": "检查章节内容是否违反 fanfic_canon.md 中的世界规则（地理、力量体系、阵营关系）。 （严格检查）",
+          "36": "检查角色之间的关系互动是否合理，是否与 fanfic_canon.md 中标注的关键关系一致或有合理发展。 （警告级别）",
+          "37": "检查章节是否与 fanfic_canon.md 关键事件时间线矛盾。 （严格检查）"
+        }
+      }
+    },
+    {
+      "name": "au",
+      "input": {
+        "mode": "au",
+        "allowedDeviations": [
+          "口头禅"
+        ]
+      },
+      "expected": {
+        "activeIds": [
+          34,
+          35,
+          36,
+          37
+        ],
+        "severityOverrides": {
+          "34": "critical",
+          "35": "info",
+          "36": "warning",
+          "37": "info"
+        },
+        "deactivatedIds": [
+          28,
+          29,
+          30,
+          31
+        ],
+        "notes": {
+          "34": "检查角色的语癖、说话风格、行为模式是否与 fanfic_canon.md 角色档案一致。偏离必须有情境驱动。 （严格检查）",
+          "35": "检查章节内容是否违反 fanfic_canon.md 中的世界规则（地理、力量体系、阵营关系）。 （仅记录，不判定失败）",
+          "36": "检查角色之间的关系互动是否合理，是否与 fanfic_canon.md 中标注的关键关系一致或有合理发展。 （警告级别）",
+          "37": "检查章节是否与 fanfic_canon.md 关键事件时间线矛盾。 （仅记录，不判定失败）"
+        }
+      }
+    },
+    {
+      "name": "ooc",
+      "input": {
+        "mode": "ooc",
+        "allowedDeviations": [
+          "口头禅"
+        ]
+      },
+      "expected": {
+        "activeIds": [
+          34,
+          35,
+          36,
+          37
+        ],
+        "severityOverrides": {
+          "1": "info",
+          "34": "info",
+          "35": "warning",
+          "36": "warning",
+          "37": "info"
+        },
+        "deactivatedIds": [
+          28,
+          29,
+          30,
+          31
+        ],
+        "notes": {
+          "1": "OOC模式下角色可偏离性格底色，此维度仅记录不判定失败。参照 fanfic_canon.md 角色档案评估偏离程度。",
+          "34": "检查角色的语癖、说话风格、行为模式是否与 fanfic_canon.md 角色档案一致。偏离必须有情境驱动。 （仅记录，不判定失败）",
+          "35": "检查章节内容是否违反 fanfic_canon.md 中的世界规则（地理、力量体系、阵营关系）。 （警告级别）",
+          "36": "检查角色之间的关系互动是否合理，是否与 fanfic_canon.md 中标注的关键关系一致或有合理发展。 （警告级别）",
+          "37": "检查章节是否与 fanfic_canon.md 关键事件时间线矛盾。 （仅记录，不判定失败）"
+        }
+      }
+    },
+    {
+      "name": "cp",
+      "input": {
+        "mode": "cp",
+        "allowedDeviations": [
+          "口头禅"
+        ]
+      },
+      "expected": {
+        "activeIds": [
+          34,
+          35,
+          36,
+          37
+        ],
+        "severityOverrides": {
+          "34": "warning",
+          "35": "warning",
+          "36": "critical",
+          "37": "info"
+        },
+        "deactivatedIds": [
+          28,
+          29,
+          30,
+          31
+        ],
+        "notes": {
+          "34": "检查角色的语癖、说话风格、行为模式是否与 fanfic_canon.md 角色档案一致。偏离必须有情境驱动。 （警告级别）",
+          "35": "检查章节内容是否违反 fanfic_canon.md 中的世界规则（地理、力量体系、阵营关系）。 （警告级别）",
+          "36": "检查角色之间的关系互动是否合理，是否与 fanfic_canon.md 中标注的关键关系一致或有合理发展。 （严格检查）",
+          "37": "检查章节是否与 fanfic_canon.md 关键事件时间线矛盾。 （仅记录，不判定失败）"
+        }
+      }
+    }
   ]
 }

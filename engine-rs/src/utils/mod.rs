@@ -17,6 +17,7 @@ pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
 pub mod context_filter;
+pub mod governed_context;
 pub mod hook_arbiter;
 pub mod hook_governance;
 pub mod hook_health;

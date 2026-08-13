@@ -47,6 +47,8 @@ struct LeafGolden {
     parse_memo: Vec<Case>,
     parse_genre_profile: Vec<Case>,
     parse_book_rules: Vec<Case>,
+    build_governed_memory_evidence_blocks: Vec<Case>,
+    get_fanfic_dimension_config: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -676,5 +678,54 @@ fn parse_book_rules_matches_ts() {
             (Some(_), true) => panic!("case `{}`: TS 为 null（shim）但 Rust 解析出规则", c.name),
             (None, false) => panic!("case `{}`: TS 解析成功但 Rust 为 None", c.name),
         }
+    }
+}
+
+#[test]
+fn build_governed_memory_evidence_blocks_matches_ts() {
+    use inkos_engine::models::input_governance::ContextPackage;
+    use inkos_engine::utils::governed_context::build_governed_memory_evidence_blocks;
+    use inkos_engine::utils::language::WritingLanguage;
+    for c in &load().build_governed_memory_evidence_blocks {
+        let pkg: ContextPackage = serde_json::from_value(c.input["contextPackage"].clone())
+            .unwrap_or_else(|e| panic!("case {}: contextPackage 反序列化失败: {e}", c.name));
+        let language = match c.input["language"].as_str() {
+            Some("en") => Some(WritingLanguage::En),
+            Some("zh") => Some(WritingLanguage::Zh),
+            _ => None, // null / 缺失 → 默认 zh（对齐 TS language ?? "zh"）
+        };
+        let got = build_governed_memory_evidence_blocks(&pkg, language);
+        let got_json =
+            serde_json::to_value(&got).expect("GovernedMemoryEvidenceBlocks 序列化失败");
+        // Rust None 字段经 skip_serializing_if 省略，与 TS undefined 被 JSON.stringify 丢弃对齐。
+        assert_eq!(
+            got_json, c.expected,
+            "case `{}`: build_governed_memory_evidence_blocks 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn get_fanfic_dimension_config_matches_ts() {
+    use inkos_engine::agents::fanfic_dimensions::get_fanfic_dimension_config;
+    use inkos_engine::models::book::FanficMode;
+    for c in &load().get_fanfic_dimension_config {
+        let mode = match c.input["mode"].as_str() {
+            Some("canon") => FanficMode::Canon,
+            Some("au") => FanficMode::Au,
+            Some("ooc") => FanficMode::Ooc,
+            Some("cp") => FanficMode::Cp,
+            other => panic!("case {}: 未知 fanfic mode {other:?}", c.name),
+        };
+        // allowedDeviations 参数未被实现使用（对齐 TS），空切片即可。
+        let cfg = get_fanfic_dimension_config(mode, &[]);
+        let got_json = serde_json::to_value(&cfg).expect("FanficDimensionConfig 序列化失败");
+        // TS 侧 Map 经 Object.fromEntries → 数字键字符串化；Rust BTreeMap<u32> 序列化同形。
+        assert_eq!(
+            got_json, c.expected,
+            "case `{}`: get_fanfic_dimension_config 与 TS 不一致",
+            c.name
+        );
     }
 }
