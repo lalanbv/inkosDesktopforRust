@@ -25,6 +25,7 @@ import { parseGenreProfile } from "../models/genre-profile.js";
 import { parseBookRules } from "../models/book-rules.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import { getFanficDimensionConfig } from "../agents/fanfic-dimensions.js";
+import { isCurrentStateSeedPlaceholder } from "../utils/outline-paths.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -370,6 +371,18 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           },
         };
       }),
+      is_current_state_seed_placeholder: [
+        { name: "empty", input: "", expected: isCurrentStateSeedPlaceholder("") },
+        { name: "whitespace-only", input: "   \n\t ", expected: isCurrentStateSeedPlaceholder("   \n\t ") },
+        { name: "zh-marker", input: "# 当前状态\n建书时占位，待整合器追加", expected: isCurrentStateSeedPlaceholder("# 当前状态\n建书时占位，待整合器追加") },
+        { name: "en-marker", input: "# Current State\nSeeded at book creation", expected: isCurrentStateSeedPlaceholder("# Current State\nSeeded at book creation") },
+        { name: "real-content", input: "林动已经突破至凝魂境三层", expected: isCurrentStateSeedPlaceholder("林动已经突破至凝魂境三层") },
+        { name: "long-with-marker", input: `建书时占位\n${"稳".repeat(700)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"稳".repeat(700)}`) },
+        { name: "long-without-marker", input: "x".repeat(700), expected: isCurrentStateSeedPlaceholder("x".repeat(700)) },
+        { name: "utf16-boundary-600", input: `建书时占位\n${"稳".repeat(594)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"稳".repeat(594)}`) },
+        { name: "utf16-boundary-601", input: `建书时占位\n${"稳".repeat(595)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"稳".repeat(595)}`) },
+        { name: "surrogate-pair-length", input: `建书时占位\n${"😀".repeat(300)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"😀".repeat(300)}`) },
+      ],
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -379,5 +392,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.parse_book_rules.length).toBeGreaterThan(0);
     expect(payload.build_governed_memory_evidence_blocks.length).toBeGreaterThan(0);
     expect(payload.get_fanfic_dimension_config.length).toBeGreaterThan(0);
+    expect(payload.is_current_state_seed_placeholder.length).toBeGreaterThan(0);
   });
 });

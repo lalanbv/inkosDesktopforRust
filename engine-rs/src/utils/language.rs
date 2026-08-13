@@ -31,6 +31,13 @@ fn is_cjk_ideograph(c: char) -> bool {
     ('\u{4E00}'..='\u{9FFF}').contains(&c)
 }
 
+/// 字符串的 UTF-16 码元长度。与 JS `String.prototype.length` 同源
+/// （BMP 外字符计 2），是所有「字符数阈值」分支点的 JS parity 基准。
+#[inline]
+pub fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
 /// 从自由文本（简介/premise）推断写作语言。None/空文本 → `Zh`（保守默认）。
 pub fn infer_language(text: Option<&str>) -> WritingLanguage {
     let t = text.unwrap_or("");
@@ -87,6 +94,15 @@ mod tests {
             infer_language(Some("这是一段中文 but mostly English content here")),
             WritingLanguage::En
         );
+    }
+
+    #[test]
+    fn utf16_len_counts_surrogate_pairs_as_two() {
+        assert_eq!(utf16_len("abc"), 3);
+        assert_eq!(utf16_len("中文"), 2);
+        // U+1F600（emoji）在 UTF-16 中是代理对，占 2 码元。
+        assert_eq!(utf16_len("a😀b"), 4);
+        assert_eq!(utf16_len(""), 0);
     }
 
     #[test]

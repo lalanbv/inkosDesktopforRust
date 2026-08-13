@@ -9,6 +9,9 @@
 //! - [`rules_reader`]：规则读取链（genre 画像 / book_rules / book.json language），
 //!   ContinuityAuditor 等编排 agent 的数据入口
 //! - [`fanfic_dimensions`]：同人维度配置（模式 → 维度 34-37 激活/严重度/注记）
+//! - [`continuity`]：ContinuityAuditor 全量——类型层 + 37 维度注记/激活集 +
+//!   四策略结果解析 + [`continuity::audit_chapter`] 编排（[`continuity::AuditorChat`]
+//!   trait 注入 LLM 调用，生产实现待 BaseAgent/LLMRouter 移植）
 
 pub mod ai_tells;
 pub mod continuity;

@@ -12,6 +12,7 @@
 //! - `minContentChars` 与 goal 显示截断按 **UTF-16 码元** 计数（对齐 JS `.length`/`slice`）
 
 use crate::models::input_governance::ChapterMemo;
+use crate::utils::language::utf16_len;
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -77,10 +78,7 @@ fn empty_marker_re() -> &'static Regex {
 }
 
 // ---- UTF-16 感知工具（对齐 JS .length / slice）----
-
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
-}
+// utf16_len 已提升至 crate::utils::language（多域共用的 JS parity 基准）。
 
 /// 取前 `n` 个 UTF-16 码元（不劈开代理对；JS slice 会劈，但规划目标不含 emoji，实际等价）。
 fn utf16_take(s: &str, n: usize) -> String {

@@ -6,9 +6,11 @@
 //! ## 已移植
 //! - [`book_id`] / [`cadence_policy`] / [`chapter_cadence`] / [`chapter_memo_parser`]
 //! - [`chapter_splitter`] / [`language`] / [`length_metrics`] / [`path`] / [`pov_filter`]
+//! - [`outline_paths`]：Phase 5 散文大纲路径解析（story_frame/volume_map/roles/
+//!   current_state 派生回退）——ContinuityAuditor 等编排 agent 的真相文件入口
 //!
 //! ## 待移植
-//! context-filter（依赖本模块 DEFAULT_CHAPTER_CADENCE_WINDOW）/ writing-methodology / ...
+//! writing-methodology / ...
 
 pub mod analytics;
 pub mod book_id;
@@ -32,6 +34,7 @@ pub mod llm_endpoint_auth;
 pub mod llm_env;
 pub mod long_span_fatigue;
 pub mod narrative_control;
+pub mod outline_paths;
 pub mod path;
 pub mod spot_fix_patches;
 pub mod pov_filter;
@@ -43,7 +46,7 @@ pub use chapter_cadence::{analyze_chapter_cadence, is_high_tension_mood, Chapter
 pub use chapter_memo_parser::{parse_memo, PlannerParseError};
 pub use chapter_splitter::{split_chapters, SplitChapter};
 pub use pov_filter::{extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov};
-pub use language::{infer_language, WritingLanguage};
+pub use language::{infer_language, utf16_len, WritingLanguage};
 pub use length_metrics::{
     build_length_spec, choose_normalize_mode, count_chapter_length, default_chapter_length,
     format_length_count, is_outside_hard_range, is_outside_soft_range,

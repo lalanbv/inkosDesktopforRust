@@ -1740,5 +1740,57 @@
         }
       }
     }
+  ],
+  "is_current_state_seed_placeholder": [
+    {
+      "name": "empty",
+      "input": "",
+      "expected": true
+    },
+    {
+      "name": "whitespace-only",
+      "input": "   \n\t ",
+      "expected": true
+    },
+    {
+      "name": "zh-marker",
+      "input": "# 当前状态\n建书时占位，待整合器追加",
+      "expected": true
+    },
+    {
+      "name": "en-marker",
+      "input": "# Current State\nSeeded at book creation",
+      "expected": true
+    },
+    {
+      "name": "real-content",
+      "input": "林动已经突破至凝魂境三层",
+      "expected": false
+    },
+    {
+      "name": "long-with-marker",
+      "input": "建书时占位\n稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳",
+      "expected": false
+    },
+    {
+      "name": "long-without-marker",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": false
+    },
+    {
+      "name": "utf16-boundary-600",
+      "input": "建书时占位\n稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳",
+      "expected": true
+    },
+    {
+      "name": "utf16-boundary-601",
+      "input": "建书时占位\n稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳稳",
+      "expected": false
+    },
+    {
+      "name": "surrogate-pair-length",
+      "input": "建书时占位\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "expected": false
+    }
   ]
 }

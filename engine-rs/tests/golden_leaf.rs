@@ -49,6 +49,7 @@ struct LeafGolden {
     parse_book_rules: Vec<Case>,
     build_governed_memory_evidence_blocks: Vec<Case>,
     get_fanfic_dimension_config: Vec<Case>,
+    is_current_state_seed_placeholder: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -726,6 +727,28 @@ fn get_fanfic_dimension_config_matches_ts() {
             got_json, c.expected,
             "case `{}`: get_fanfic_dimension_config 与 TS 不一致",
             c.name
+        );
+    }
+}
+
+#[test]
+fn is_current_state_seed_placeholder_matches_ts() {
+    use inkos_engine::utils::outline_paths::is_current_state_seed_placeholder;
+    for c in &load().is_current_state_seed_placeholder {
+        let input = c
+            .input
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: input 非 string", c.name));
+        let got = is_current_state_seed_placeholder(input);
+        let want = c
+            .expected
+            .as_bool()
+            .unwrap_or_else(|| panic!("case {}: expected 非 bool", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: is_current_state_seed_placeholder 与 TS 不一致 (input 前缀={:?})",
+            c.name,
+            &input[..input.len().min(20)]
         );
     }
 }
