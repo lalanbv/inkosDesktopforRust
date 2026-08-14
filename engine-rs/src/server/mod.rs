@@ -9,6 +9,8 @@
 //! - 路由集中导出 [`router`]，供 Tauri 命令或独立 bin 复用
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
+pub mod task_store;
+
 use crate::utils::{
     context_filter::{cap_context_block, ContextCapOptions},
     derive_book_id_from_title,
