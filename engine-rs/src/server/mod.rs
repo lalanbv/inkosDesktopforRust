@@ -9,7 +9,9 @@
 //! - 路由集中导出 [`router`]，供 Tauri 命令或独立 bin 复用
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
+pub mod sse;
 pub mod task_store;
+pub mod write_next_route;
 
 use crate::utils::{
     context_filter::{cap_context_block, ContextCapOptions},
@@ -123,6 +125,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/utils/count-length", post(count_length))
         .route("/api/v1/utils/cap-context", post(cap_context))
         .with_state(state)
+}
+
+/// 带运行时句柄的组合路由（utility + SSE + write-next）。
+pub fn router_with_runtime(state: AppState, hub: std::sync::Arc<sse::BroadcastHub>, write_next: write_next_route::WriteNextRuntime) -> Router {
+    router(state)
+        .route("/api/v1/events", get(sse::events_handler).with_state(hub))
+        .route("/api/v1/books/:id/write-next", post(write_next_route::write_next).with_state(write_next))
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

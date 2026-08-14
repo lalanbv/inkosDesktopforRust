@@ -708,7 +708,7 @@ struct ParagraphShape {
     max_consecutive_short: usize,
 }
 
-fn detect_paragraph_shape_warnings(content: &str, language: WritingLanguage) -> Vec<PostWriteViolation> {
+pub fn detect_paragraph_shape_warnings(content: &str, language: WritingLanguage) -> Vec<PostWriteViolation> {
     let mut violations = Vec::new();
     append_paragraph_shape_warnings(&mut violations, content, language);
     violations

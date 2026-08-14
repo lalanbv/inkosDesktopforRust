@@ -616,3 +616,338 @@ mod tests {
         assert!(parse_summary_row("| 3 | t | a | b | c | d | m |").is_none());
     }
 }
+
+// ---- analyzeLongSpanFatigue 编排层（32 号预留，42 号 write-next 消费） ----
+
+use crate::agents::continuity::AuditIssue;
+use crate::utils::cadence_policy::long_span_fatigue_thresholds;
+
+/// 长跨度疲劳问题。对齐 TS `LongSpanFatigueIssue`（severity 恒 warning）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LongSpanFatigueIssue {
+    pub severity: &'static str,
+    pub category: String,
+    pub description: String,
+    pub suggestion: String,
+}
+
+impl From<LongSpanFatigueIssue> for AuditIssue {
+    fn from(issue: LongSpanFatigueIssue) -> AuditIssue {
+        AuditIssue {
+            severity: crate::agents::continuity::AuditSeverity::Warning,
+            category: issue.category,
+            description: issue.description,
+            suggestion: issue.suggestion,
+            repair_scope: None,
+        }
+    }
+}
+
+/// analyze 入参。
+pub struct AnalyzeLongSpanFatigueInput<'a> {
+    pub book_dir: &'a Path,
+    pub chapter_number: u32,
+    pub chapter_content: &'a str,
+    /// 本章摘要表行（持久化产物的 chapterSummary）。
+    pub chapter_summary: Option<&'a str>,
+    pub language: WritingLanguage,
+}
+
+/// 长跨度疲劳分析：章节类型/情绪/标题三压力 + 首尾句式同构。
+pub async fn analyze_long_span_fatigue(
+    input: &AnalyzeLongSpanFatigueInput<'_>,
+) -> Vec<LongSpanFatigueIssue> {
+    let en = input.language == WritingLanguage::En;
+    let mut issues: Vec<LongSpanFatigueIssue> = Vec::new();
+
+    let summary_rows =
+        load_summary_rows(&input.book_dir.join("story").join("chapter_summaries.md")).await;
+    let merged_rows = merge_current_summary(summary_rows, input.chapter_summary);
+    let recent: Vec<CadenceSummaryRow> = merged_rows
+        .into_iter()
+        .filter(|row| row.chapter <= input.chapter_number)
+        .collect();
+    let cadence = analyze_chapter_cadence(&recent, input.language);
+
+    if let Some(scene) = &cadence.scene_pressure {
+        if scene.pressure == CadencePressure::High {
+            issues.push(LongSpanFatigueIssue {
+                severity: "warning",
+                category: (if en { "Pacing Monotony" } else { "节奏单调" }).to_string(),
+                description: if en {
+                    format!(
+                        "The last {} chapter types have stayed on {}, which suggests macro pacing monotony.",
+                        scene.streak, scene.repeated_type
+                    )
+                } else {
+                    format!(
+                        "最近{}章章节类型持续停留在“{}”，长篇节奏可能开始固化。",
+                        scene.streak, scene.repeated_type
+                    )
+                },
+                suggestion: if en {
+                    "Switch the next chapter's function instead of extending the same beat again. Rotate setup, payoff, reversal, and fallout more deliberately.".to_string()
+                } else {
+                    "下一章应切换章节功能，不要连续重复同一种布局/推进节拍。".to_string()
+                },
+            });
+        }
+    }
+
+    if let Some(mood) = &cadence.mood_pressure {
+        if mood.pressure == CadencePressure::High {
+            issues.push(LongSpanFatigueIssue {
+                severity: "warning",
+                category: (if en { "Mood Monotony" } else { "情绪单调" }).to_string(),
+                description: if en {
+                    format!(
+                        "High-tension mood has locked in for {} chapters ({}), with no visible emotional release.",
+                        mood.high_tension_streak,
+                        mood.recent_moods.join(" -> ")
+                    )
+                } else {
+                    format!(
+                        "最近{}章持续高压（{}），缺少明显的情绪释放。",
+                        mood.high_tension_streak,
+                        mood.recent_moods.join(" -> ")
+                    )
+                },
+                suggestion: if en {
+                    "Insert a release beat, warmth, humor, intimacy, or reflective quiet before escalating again.".to_string()
+                } else {
+                    "下一章安排一次喘息、温情、幽默或静场释放，再继续加压。".to_string()
+                },
+            });
+        }
+    }
+
+    if let Some(title) = &cadence.title_pressure {
+        if title.pressure == CadencePressure::High {
+            issues.push(LongSpanFatigueIssue {
+                severity: "warning",
+                category: (if en { "Title Collapse" } else { "标题重复" }).to_string(),
+                description: if en {
+                    format!(
+                        "Recent titles keep collapsing around \"{}\" ({} hits in the current window), which makes chapter naming feel formulaic.",
+                        title.repeated_token, title.count
+                    )
+                } else {
+                    format!(
+                        "最近标题持续围绕“{}”命名（当前窗口命中{}次），命名开始坍缩。",
+                        title.repeated_token, title.count
+                    )
+                },
+                suggestion: if en {
+                    "Change the next title anchor. Use a new image, action, consequence, or character vector instead of the same keyword shell.".to_string()
+                } else {
+                    "下一章标题换一个新的意象、动作、后果或人物焦点，不要继续套同一个关键词壳。".to_string()
+                },
+            });
+        }
+    }
+
+    let bodies = load_recent_chapter_bodies(
+        input.book_dir,
+        input.chapter_number,
+        input.chapter_content,
+    )
+    .await;
+    if let Some(issue) =
+        build_sentence_pattern_issue(&bodies, Boundary::Opening, input.language)
+    {
+        issues.push(issue);
+    }
+    if let Some(issue) =
+        build_sentence_pattern_issue(&bodies, Boundary::Ending, input.language)
+    {
+        issues.push(issue);
+    }
+
+    issues
+}
+
+/// 当前摘要行并入（同章节号替换）。
+fn merge_current_summary(
+    rows: Vec<CadenceSummaryRow>,
+    current_summary: Option<&str>,
+) -> Vec<CadenceSummaryRow> {
+    let Some(current) = current_summary.and_then(parse_summary_row) else {
+        return rows;
+    };
+    let mut next: Vec<CadenceSummaryRow> = rows
+        .into_iter()
+        .filter(|row| row.chapter != current.chapter)
+        .collect();
+    next.push(current);
+    next
+}
+
+/// 前章正文（含当前正文）：近 2 章不足 2 篇时返回空（模式检测不成立）。
+async fn load_recent_chapter_bodies(
+    book_dir: &Path,
+    current_chapter: u32,
+    current_content: &str,
+) -> Vec<String> {
+    let previous = load_previous_chapter_bodies(
+        book_dir,
+        current_chapter,
+        window_defaults::RECENT_BOUNDARY_PATTERN_BODIES,
+    )
+    .await;
+    if previous.len() < window_defaults::RECENT_BOUNDARY_PATTERN_BODIES as usize {
+        return Vec::new();
+    }
+    let mut bodies = previous;
+    bodies.push(current_content.to_string());
+    bodies
+}
+
+/// 首尾句式同构检测：三体两两相邻 Dice 相似度均 ≥ 0.72 才报。
+fn build_sentence_pattern_issue(
+    chapter_bodies: &[String],
+    boundary: Boundary,
+    language: WritingLanguage,
+) -> Option<LongSpanFatigueIssue> {
+    let en = language == WritingLanguage::En;
+    if chapter_bodies.len() < long_span_fatigue_thresholds::BOUNDARY_PATTERN_MIN_BODIES as usize {
+        return None;
+    }
+
+    let sentences: Vec<String> = chapter_bodies
+        .iter()
+        .map(|body| extract_boundary_sentence(body, boundary))
+        .collect::<Option<Vec<_>>>()?;
+    let normalized: Vec<String> = sentences
+        .iter()
+        .map(|sentence| normalize_sentence(sentence, language))
+        .collect();
+    if normalized
+        .iter()
+        .any(|sentence| sentence.chars().count()
+            < long_span_fatigue_thresholds::BOUNDARY_SENTENCE_MIN_LENGTH as usize)
+    {
+        return None;
+    }
+
+    let first = dice_coefficient(&normalized[0], &normalized[1]);
+    let second = dice_coefficient(&normalized[1], &normalized[2]);
+    if first.min(second) < long_span_fatigue_thresholds::BOUNDARY_SIMILARITY_FLOOR {
+        return None;
+    }
+
+    let sample = summarize_sentence(&sentences[2], language);
+    let pair_text = format!("{first:.2}/{second:.2}");
+
+    Some(LongSpanFatigueIssue {
+        severity: "warning",
+        category: match (boundary, en) {
+            (Boundary::Opening, true) => "Opening Pattern Repetition".to_string(),
+            (Boundary::Ending, true) => "Ending Pattern Repetition".to_string(),
+            (Boundary::Opening, false) => "开头同构".to_string(),
+            (Boundary::Ending, false) => "结尾同构".to_string(),
+        },
+        description: if en {
+            let position = if boundary == Boundary::Opening { "openings" } else { "endings" };
+            let boundary_label = if boundary == Boundary::Opening { "opening" } else { "ending" };
+            format!(
+                "The last 3 chapter {position} are highly similar (adjacent similarity {pair_text}), which risks a formulaic rhythm. Current {boundary_label} signature: \"{sample}\"."
+            )
+        } else {
+            let position = if boundary == Boundary::Opening { "开头" } else { "结尾" };
+            let tail = if boundary == Boundary::Opening { "开篇" } else { "章尾" };
+            format!(
+                "最近3章{position}句式高度相似（相邻相似度{pair_text}），容易形成模板化{tail}。当前句式近似“{sample}”。"
+            )
+        },
+        suggestion: if boundary == Boundary::Opening {
+            if en {
+                "Change the next chapter opening vector. Start from action, consequence, or surprise instead of repeating the same camera move.".to_string()
+            } else {
+                "下一章换一个开篇入口，用动作、后果或异常信息切入，不要连续沿用同一种抬镜句。".to_string()
+            }
+        } else if en {
+            "Change the next chapter landing pattern. End on consequence, decision, or a new variable instead of repeating the same explanatory cadence.".to_string()
+        } else {
+            "下一章换一个收束方式，用行动后果、角色决断或新变量落板，不要连续用解释性句子收尾。".to_string()
+        },
+    })
+}
+
+#[cfg(test)]
+mod fatigue_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn no_issues_on_empty_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let issues = analyze_long_span_fatigue(&AnalyzeLongSpanFatigueInput {
+            book_dir: dir.path(),
+            chapter_number: 1,
+            chapter_content: "正文。",
+            chapter_summary: None,
+            language: WritingLanguage::Zh,
+        })
+        .await;
+        assert!(issues.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scene_monotony_and_boundary_patterns_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let story = dir.path().join("story");
+        let chapters = dir.path().join("chapters");
+        tokio::fs::create_dir_all(&story).await.unwrap();
+        tokio::fs::create_dir_all(&chapters).await.unwrap();
+
+        // 高压情绪 + 同类型章节连续（节奏/情绪双单调）。
+        let header = "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n";
+        let rows = (1..=6)
+            .map(|n| format!("| {n} | 风波{n} | 甲 | e | s | h | 紧张 | 推进章 |\n"))
+            .collect::<String>();
+        tokio::fs::write(
+            story.join("chapter_summaries.md"),
+            format!("{header}{rows}"),
+        )
+        .await
+        .unwrap();
+
+        // 前两章开头/结尾句式相同（Dice ≥ 0.72）。
+        let opening = "夜色如墨，他攥紧了手中的令牌，指节因用力而发白。";
+        let ending = "远处的钟声悠悠响起，他知道，一切才刚刚开始而已。";
+        for n in [1u32, 2] {
+            tokio::fs::write(
+                chapters.join(format!("{n:04}_章.md")),
+                format!("{opening}\n\n正文填充{noto}。\n\n{ending}", noto = "内容".repeat(8)),
+            )
+            .await
+            .unwrap();
+        }
+        let current = format!("{opening}\n\n正文填充。\n\n{ending}");
+
+        let issues = analyze_long_span_fatigue(&AnalyzeLongSpanFatigueInput {
+            book_dir: dir.path(),
+            chapter_number: 3,
+            chapter_content: &current,
+            chapter_summary: Some("| 3 | 风波3 | 甲 | e | s | h | 紧张 | 推进章 |"),
+            language: WritingLanguage::Zh,
+        })
+        .await;
+
+        let categories: Vec<&str> = issues.iter().map(|i| i.category.as_str()).collect();
+        assert!(categories.contains(&"节奏单调"), "categories: {categories:?}");
+        assert!(categories.contains(&"情绪单调"), "categories: {categories:?}");
+        assert!(categories.contains(&"开头同构"), "categories: {categories:?}");
+        assert!(categories.contains(&"结尾同构"), "categories: {categories:?}");
+        assert!(issues.iter().all(|i| i.severity == "warning"));
+        // chapterSummary 同章节号替换：3 号行不重复计数。
+        let pacing = issues.iter().find(|i| i.category == "节奏单调").unwrap();
+        assert!(pacing.description.contains("推进章"));
+    }
+
+    #[test]
+    fn boundary_issue_requires_three_bodies() {
+        // 两体不足三——直接 None。
+        let bodies = vec!["a".to_string(), "b".to_string()];
+        assert!(build_sentence_pattern_issue(&bodies, Boundary::Opening, WritingLanguage::Zh).is_none());
+    }
+}
