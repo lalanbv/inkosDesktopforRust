@@ -147,6 +147,11 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         .unwrap_or_else(|| parse_pending_hooks_markdown(&hooks_markdown));
     let active_hooks = filter_active_hooks(&hooks);
 
+    // Send 纪律：rusqlite Connection 非 Sync——不得跨 await 持有。
+    // markdown 预读提前到 DB 打开之前，DB 分支收敛为纯同步段。
+    let summaries_markdown =
+        read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
+
     if let Ok(memory_db) = MemoryDb::open(params.book_dir) {
         let selection = assemble_db_selection(
             &memory_db,
@@ -156,16 +161,13 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
             &narrative_query_terms,
             &fact_query_terms,
             &structured_summaries,
-            &story_dir,
+            &summaries_markdown,
             volume_summaries,
-        )
-        .await;
+        );
         let _ = memory_db.close().ok();
         return selection;
     }
 
-    let summaries_markdown =
-        read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
     let summaries = structured_summaries
         .map(|state| state.rows.iter().map(summary_from_row).collect())
         .unwrap_or_else(|| parse_chapter_summaries_markdown(&summaries_markdown));
@@ -183,7 +185,7 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
 
 /// DB 路径的选集装配：空库回填 + 摘要窗口检索 + dbPath 标注。
 #[allow(clippy::too_many_arguments)]
-async fn assemble_db_selection(
+fn assemble_db_selection(
     memory_db: &MemoryDb,
     params: &RetrieveMemoryParams<'_>,
     active_hooks: &[HookRecord],
@@ -191,16 +193,15 @@ async fn assemble_db_selection(
     narrative_query_terms: &[String],
     fact_query_terms: &[String],
     structured_summaries: &Option<ChapterSummariesState>,
-    story_dir: &Path,
+    summaries_markdown: &str,
     volume_summaries: Vec<VolumeSummarySelection>,
 ) -> MemorySelection {
-    // 空库回填：摘要来自结构化 rows，缺失时读 markdown 真相文件。
+    // 空库回填：摘要来自结构化 rows，缺失时用预读 markdown。
     if memory_db.get_chapter_count().unwrap_or(0) == 0 {
         let summaries: Vec<StoredSummary> = if let Some(state) = structured_summaries {
             state.rows.iter().map(summary_from_row).collect()
         } else {
-            let markdown = read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
-            parse_chapter_summaries_markdown(&markdown)
+            parse_chapter_summaries_markdown(summaries_markdown)
         };
         if !summaries.is_empty() {
             let _ = memory_db.replace_summaries(&summaries);
@@ -245,7 +246,13 @@ async fn assemble_db_selection(
         recyclable_hooks: compute_recyclable_hooks(&effective_active_hooks, params.chapter_number),
         facts: select_relevant_facts(&db_facts, fact_query_terms),
         volume_summaries,
-        db_path: Some(story_dir.join("memory.db").to_string_lossy().into_owned()),
+        db_path: Some(
+            params.book_dir
+                .join("story")
+                .join("memory.db")
+                .to_string_lossy()
+                .into_owned(),
+        ),
     }
 }
 

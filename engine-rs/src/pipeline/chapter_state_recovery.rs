@@ -159,8 +159,10 @@ pub trait SettlePort: Send + Sync {
     async fn settle(&self, params: SettleRequest<'_>) -> Result<WriteChapterOutput, String>;
 }
 
-/// settle 入参（治理子集 + 重放/反馈开关）。
+/// settle 入参（治理子集 + 重放/反馈开关 + 书面上下文）。
 pub struct SettleRequest<'a> {
+    pub book: &'a crate::models::book::BookConfig,
+    pub book_dir: &'a std::path::Path,
     pub title: &'a str,
     pub content: &'a str,
     pub allow_reapply: bool,
@@ -203,6 +205,8 @@ pub enum SettlementRetryResult {
 pub struct SettlementRetryParams<'a> {
     pub writer: &'a dyn SettlePort,
     pub validator: &'a dyn ValidatePort,
+    pub book: &'a crate::models::book::BookConfig,
+    pub book_dir: &'a std::path::Path,
     pub chapter_number: u32,
     pub title: &'a str,
     pub content: &'a str,
@@ -241,6 +245,8 @@ pub async fn retry_settlement_after_validation_failure(
     let retry_output = params
         .writer
         .settle(SettleRequest {
+            book: params.book,
+            book_dir: params.book_dir,
             title: params.title,
             content: params.content,
             allow_reapply: true,
@@ -398,6 +404,24 @@ pub fn build_state_degraded_persistence_output(
 mod retry_tests {
     use super::*;
     use crate::agents::continuity::AuditSeverity;
+
+    fn test_book() -> crate::models::book::BookConfig {
+        crate::models::book::BookConfig {
+            id: "b".to_string(),
+            title: "t".to_string(),
+            platform: crate::models::book::Platform::Other,
+            genre: "xianxia".to_string(),
+            status: crate::models::book::BookStatus::Active,
+            target_chapters: 10,
+            chapter_word_count: 3000,
+            language: Some("zh".to_string()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            parent_book_id: None,
+            fanfic_mode: None,
+            writing: None,
+        }
+    }
     use crate::agents::state_validator::{ValidationResult, ValidationWarning};
 
     fn warning(category: &str, description: &str) -> ValidationWarning {
@@ -439,6 +463,7 @@ mod retry_tests {
     #[async_trait::async_trait]
     impl SettlePort for ScriptSettle {
         async fn settle(&self, params: SettleRequest<'_>) -> Result<WriteChapterOutput, String> {
+            let _ = (params.book, params.book_dir);
             assert!(params.allow_reapply);
             assert!(params.validation_feedback.is_some());
             Ok(WriteChapterOutput {
@@ -489,10 +514,13 @@ mod retry_tests {
         writer: &'a ScriptSettle,
         validator: &'a ScriptValidate,
         original: &'a ValidationResult,
+        book: &'a crate::models::book::BookConfig,
     ) -> SettlementRetryParams<'a> {
         SettlementRetryParams {
             writer,
             validator,
+            book,
+            book_dir: std::path::Path::new("/tmp"),
             chapter_number: 3,
             title: "t",
             content: "c",
@@ -521,7 +549,8 @@ mod retry_tests {
             warnings: vec![warning("c", "d")],
             passed: false,
         };
-        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original))
+        let book = test_book();
+        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
             .await
             .unwrap()
         {
@@ -546,7 +575,8 @@ mod retry_tests {
             }]),
         };
         let original = ValidationResult { warnings: vec![], passed: false };
-        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original))
+        let book = test_book();
+        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
             .await
             .unwrap()
         {

@@ -10,6 +10,7 @@
 //! withTransientLLMRetry / config-migration / service-resolver / secrets
 
 pub mod lookup;
+pub mod agent_router;
 pub mod provider;
 pub mod providers;
 pub mod registry;

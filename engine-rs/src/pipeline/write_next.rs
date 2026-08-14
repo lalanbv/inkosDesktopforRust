@@ -752,6 +752,8 @@ async fn write_next_chapter_locked(
     let truth = validate_chapter_truth_persistence(TruthValidationParams {
         writer: agents.settler,
         validator: &validator,
+        book: &book,
+        book_dir: &book_dir,
         chapter_number,
         title: &persistence_output.title,
         content: &final_content,

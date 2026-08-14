@@ -56,7 +56,7 @@ pub struct WriteNextBody {
     pub word_count: Option<u32>,
     #[serde(rename = "temperature", default)]
     pub temperature: Option<f64>,
-    #[serde(default)]
+    #[serde(rename = "sessionId", default)]
     pub session_id: Option<String>,
 }
 

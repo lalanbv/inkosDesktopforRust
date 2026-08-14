@@ -20,6 +20,8 @@ use crate::utils::language::WritingLanguage;
 pub struct TruthValidationParams<'a> {
     pub writer: &'a dyn SettlePort,
     pub validator: &'a dyn ValidatePort,
+    pub book: &'a crate::models::book::BookConfig,
+    pub book_dir: &'a std::path::Path,
     pub chapter_number: u32,
     pub title: &'a str,
     pub content: &'a str,
@@ -128,6 +130,8 @@ pub async fn validate_chapter_truth_persistence(
             crate::pipeline::chapter_state_recovery::SettlementRetryParams {
                 writer: params.writer,
                 validator: params.validator,
+                book: params.book,
+                book_dir: params.book_dir,
                 chapter_number: params.chapter_number,
                 title: params.title,
                 content: params.content,
@@ -191,6 +195,24 @@ mod tests {
     use super::*;
     use crate::agents::state_validator::ValidationResult;
     use crate::pipeline::chapter_state_recovery::{SettleRequest, ValidateRequest};
+
+    fn test_book() -> crate::models::book::BookConfig {
+        crate::models::book::BookConfig {
+            id: "b".to_string(),
+            title: "t".to_string(),
+            platform: crate::models::book::Platform::Other,
+            genre: "xianxia".to_string(),
+            status: crate::models::book::BookStatus::Active,
+            target_chapters: 10,
+            chapter_word_count: 3000,
+            language: Some("zh".to_string()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            parent_book_id: None,
+            fanfic_mode: None,
+            writing: None,
+        }
+    }
 
     fn base_output() -> WriteChapterOutput {
         WriteChapterOutput {
@@ -260,10 +282,13 @@ mod tests {
 
     fn params<'a>(
         validator: &'a ScriptValidate,
+        book: &'a crate::models::book::BookConfig,
     ) -> TruthValidationParams<'a> {
         TruthValidationParams {
             writer: &NoopSettle,
             validator,
+            book,
+            book_dir: std::path::Path::new("/tmp"),
             chapter_number: 3,
             title: "t",
             content: "c",
@@ -288,7 +313,8 @@ mod tests {
             })]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
-        let outcome = validate_chapter_truth_persistence(params(&validator)).await.unwrap();
+        let book = test_book();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
         assert!(outcome.chapter_status.is_none());
         assert_eq!(outcome.persistence_output.updated_state, "new-state");
         assert!(outcome.degraded_issues.is_empty());
@@ -300,7 +326,8 @@ mod tests {
             results: std::sync::Mutex::new(vec![Err("network boom".to_string())]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
-        let outcome = validate_chapter_truth_persistence(params(&validator)).await.unwrap();
+        let book = test_book();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
         assert_eq!(outcome.chapter_status, Some("state-degraded"));
         assert_eq!(outcome.degraded_issues.len(), 1);
         assert!(outcome.degraded_issues[0].description.contains("状态校验不可用"));
@@ -319,7 +346,8 @@ mod tests {
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
-        let outcome = validate_chapter_truth_persistence(params(&validator)).await.unwrap();
+        let book = test_book();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
         assert!(outcome.chapter_status.is_none());
         assert_eq!(outcome.persistence_output.updated_state, "retried-state");
         // 两次校验：初始产物 + 重试产物。
@@ -338,7 +366,8 @@ mod tests {
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
-        let outcome = validate_chapter_truth_persistence(params(&validator)).await.unwrap();
+        let book = test_book();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
         assert_eq!(outcome.chapter_status, Some("state-degraded"));
         assert_eq!(outcome.persistence_output.updated_state, "old-state");
         assert_eq!(outcome.persistence_output.updated_ledger, "old-ledger");
