@@ -55,7 +55,8 @@ pub struct PlanChapterInput<'a> {
 }
 
 /// planChapter 出参。对齐 TS `PlanChapterOutput`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanChapterOutput {
     pub intent: ChapterIntent,
     pub memo: ChapterMemo,

@@ -461,3 +461,143 @@ mod audit_e2e {
         assert!(second.data.contains("\"chapter\":1"));
     }
 }
+
+// ---- 45 号：books 域端点 E2E（mock LLM 主链） ----
+
+mod books_e2e {
+    use super::*;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::{plan, revise, BooksRuntime};
+
+    /// mock：planner（memo 脚本）/ reviser（修稿 TAG 输出）分发。
+    async fn mock_books_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let content = if system.contains("创作总编") {
+            PLANNER_RESPONSE.to_string()
+        } else if system.contains("修稿编辑") {
+            // revise 输出（TAG 协议）。
+            "=== FIXED_ISSUES ===\n修正了措辞\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺着经脉游走。他攥紧拳头——多年屈辱，今日起一笔一笔讨回来。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock_books_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn books_runtime(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_endpoint_returns_plan_chapter_result_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = spawn_mock().await;
+        let runtime = books_runtime(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/plan", axum::routing::post(plan))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/plan")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // TS PlanChapterResult 形状。
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["chapterNumber"], 1);
+        assert!(parsed["intentPath"].as_str().unwrap().contains("chapter-0001.intent.md"));
+        assert_eq!(parsed["conflicts"], serde_json::json!([]));
+        assert!(!parsed["goal"].as_str().unwrap().is_empty());
+        // plan.md 持久化落盘。
+        assert!(root
+            .join("books")
+            .join("b1")
+            .join("story")
+            .join("runtime")
+            .join("chapter-0001.plan.md")
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn revise_endpoint_returns_revised_output_and_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(
+            root.join("books").join("b1").join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        let llm = spawn_mock().await;
+        let runtime = books_runtime(&root, &llm);
+        let hub = runtime.hub.clone();
+        let mut subscriber = hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/revise/1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"mode":"polish","brief":"收紧措辞"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // ReviseOutput camelCase 形状。
+        assert!(parsed["revisedContent"].as_str().unwrap().contains("一笔一笔讨回来"));
+        assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
+        assert!(parsed["updatedState"].as_str().unwrap().contains("当前章节"));
+        assert!(parsed["updatedHooks"].as_str().unwrap().contains("H01"));
+
+        // SSE：start → complete。
+        assert_eq!(subscriber.recv().await.unwrap().event, "revise:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "revise:complete");
+    }
+}

@@ -78,7 +78,8 @@ pub enum AutoOutputMode {
 }
 
 /// 修稿出参。对齐 TS `ReviseOutput`。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviseOutput {
     pub revised_content: String,
     pub word_count: u64,

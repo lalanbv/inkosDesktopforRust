@@ -10,6 +10,7 @@
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
 pub mod audit_route;
+pub mod books_routes;
 pub mod sse;
 pub mod task_store;
 pub mod write_next_route;
@@ -146,6 +147,21 @@ pub fn router_full(
 ) -> Router {
     router_with_runtime(state, hub, write_next)
         .route("/api/v1/books/:id/audit/:chapter", post(audit_route::audit_chapter).with_state(audit))
+}
+
+/// books 域全量组合路由（+ plan/settle/draft/revise）。
+pub fn router_books(
+    state: AppState,
+    hub: std::sync::Arc<sse::BroadcastHub>,
+    write_next: write_next_route::WriteNextRuntime,
+    audit: audit_route::AuditRuntime,
+    books: books_routes::BooksRuntime,
+) -> Router {
+    router_full(state, hub, write_next, audit)
+        .route("/api/v1/books/:id/plan", post(books_routes::plan).with_state(books.clone()))
+        .route("/api/v1/books/:id/settle", post(books_routes::settle).with_state(books.clone()))
+        .route("/api/v1/books/:id/draft", post(books_routes::draft).with_state(books.clone()))
+        .route("/api/v1/books/:id/revise/:chapter", post(books_routes::revise).with_state(books))
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

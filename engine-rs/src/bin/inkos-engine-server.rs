@@ -168,18 +168,25 @@ fn build_router() -> axum::Router {
     };
     let audit = inkos_engine::server::audit_route::AuditRuntime {
         hub: hub.clone(),
-        state,
+        state: state.clone(),
         router: std::sync::Arc::new(router.clone()),
         builtin_genres_dir: std::path::PathBuf::from(env(
             "INKOS_BUILTIN_GENRES_DIR",
             "assets/genres",
         )),
     };
-    inkos_engine::server::router_full(
+    let books = inkos_engine::server::books_routes::BooksRuntime {
+        hub: hub.clone(),
+        state,
+        router: std::sync::Arc::new(router.clone()),
+        builtin_genres_dir: audit.builtin_genres_dir.clone(),
+    };
+    inkos_engine::server::router_books(
         AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },
         hub,
         runtime,
         audit,
+        books,
     )
 }
 
