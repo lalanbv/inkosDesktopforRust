@@ -38,6 +38,17 @@ import {
   detectDuplicateTitle,
   resolveDuplicateTitle,
 } from "../agents/post-write-validator.js";
+import { renderHookSnapshot } from "../utils/story-markdown.js";
+import {
+  buildGovernedHookWorkingSet,
+  buildGovernedCharacterMatrixWorkingSet,
+  mergeTableMarkdownByKey,
+  mergeCharacterMatrixMarkdown,
+} from "../utils/governed-working-set.js";
+import { WriterAgent } from "../agents/writer.js";
+import type { RuntimeStateDelta } from "../models/runtime-state.js";
+import type { LengthSpec } from "../models/length-governance.js";
+import type { ContextPackage, ChapterMemo, RuleStack } from "../models/input-governance.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
@@ -264,6 +275,25 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     });
     const fullCastRules = { enableFullCastTracking: true } as unknown as BookRules;
     const PLACEHOLDER = "(文件尚未创建)";
+
+    // writer 私有纯函数的实例访问口（仅测试取真值；client 不被调用）。
+    const writerPriv = new WriterAgent({
+      client: {} as never,
+      model: "golden",
+      projectRoot: "/golden",
+    }) as unknown as {
+      buildUserPrompt(p: Record<string, unknown>): string;
+      buildGovernedUserPrompt(p: Record<string, unknown>): string;
+      buildChapterContextBlock(externalContext: string | undefined, language: "zh" | "en"): string;
+      buildSettlerGovernedControlBlock(chapterIntent: string, contextPackage: ContextPackage, ruleStack: RuleStack, language: "zh" | "en"): string;
+      buildLengthRequirementBlock(spec: LengthSpec, language: "zh" | "en"): string;
+      sanitizeFilename(title: string): string;
+      extractDialogueFingerprints(recentChapters: string, storyBible: string): string;
+      findRelevantSummaries(chapterSummaries: string, volumeOutline: string, chapterNumber: number): string;
+      buildStyleFingerprint(styleProfileRaw: string): string | undefined;
+      renderDeltaSummaryRow(delta: RuntimeStateDelta): string;
+      normalizeRuntimeStateDeltaChapter(delta: RuntimeStateDelta, authoritativeChapterNumber: number): RuntimeStateDelta;
+    };
 
     const payload = {
       // 注：每个 expected 直接调用真实 TS 实现取得——这些就是真值。
@@ -582,6 +612,201 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "counter-fallback", input: { newTitle: "同一标题", existing: ["同一标题"], language: "zh", content: undefined }, expected: resolveDuplicateTitle("同一标题", ["同一标题"], "zh") },
         { name: "clean", input: { newTitle: "全新标题", existing: ["其他标题"], language: "zh", content: undefined }, expected: resolveDuplicateTitle("全新标题", ["其他标题"], "zh") },
       ],
+
+      // ── 32 号：governed-working-set + renderHookSnapshot + writer 私有纯函数 ──
+      // writer 私有方法经实例括号访问（TS private 仅编译期；测试取真值专用）。
+      render_hook_snapshot: (() => {
+        const hooks = [
+          { hookId: "H01", startChapter: 1, type: "main", status: "progressing", lastAdvancedChapter: 3, expectedPayoff: "第10章", notes: "种子伏笔", dependsOn: ["H00"], paysOffInArc: "一卷", coreHook: true, halfLifeChapters: 5, promoted: true },
+          { hookId: "H02", startChapter: 2, type: "support", status: "open", lastAdvancedChapter: 0, expectedPayoff: "", notes: "含|竖线" },
+        ] as const;
+        return [
+          { name: "zh-full", input: { hooks, language: "zh" }, expected: renderHookSnapshot(hooks as unknown as Parameters<typeof renderHookSnapshot>[0], "zh") },
+          { name: "en-full", input: { hooks, language: "en" }, expected: renderHookSnapshot(hooks as unknown as Parameters<typeof renderHookSnapshot>[0], "en") },
+        ];
+      })(),
+      build_governed_hook_working_set: (() => {
+        const md = "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | near-term | 无 | 一卷 | 否 | 5 | 否 | 种子 |\n| H02 | 40 | main | open | 0 | 50 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 远期 |\n";
+        const pkg = (sources: string[]): ContextPackage => ({
+          chapter: 3,
+          selectedContext: sources.map((source) => ({ source, reason: "选中", excerpt: undefined })),
+        }) as ContextPackage;
+        const intent = "## Hook Agenda\n### Must Advance\n- H02\n### Something\n- H01\n";
+        return [
+          { name: "selected-over-window", input: { hooksMarkdown: md, contextPackage: pkg(["story/pending_hooks.md#H02"]), chapterIntent: undefined, chapterNumber: 3, language: "zh", keepRecent: 0 }, expected: buildGovernedHookWorkingSet({ hooksMarkdown: md, contextPackage: pkg(["story/pending_hooks.md#H02"]), chapterNumber: 3, language: "zh", keepRecent: 0 }) },
+          { name: "agenda-and-window", input: { hooksMarkdown: md, contextPackage: pkg([]), chapterIntent: intent, chapterNumber: 3, language: "en" }, expected: buildGovernedHookWorkingSet({ hooksMarkdown: md, contextPackage: pkg([]), chapterIntent: intent, chapterNumber: 3, language: "en" }) },
+          { name: "full-set-passthrough", input: { hooksMarkdown: md, contextPackage: pkg([]), chapterIntent: undefined, chapterNumber: 3, language: "zh" }, expected: buildGovernedHookWorkingSet({ hooksMarkdown: md, contextPackage: pkg([]), chapterNumber: 3, language: "zh" }) },
+        ];
+      })(),
+      merge_table_markdown_by_key: [
+        {
+          name: "update-and-append",
+          input: { original: "# 标题\n\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | open |\n| 乙 | open |\n", updated: "| 名字 | 状态 |\n| --- | --- |\n| 甲 | resolved |\n| 丙 | open |\n", keyColumns: [0] },
+          expected: mergeTableMarkdownByKey("# 标题\n\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | open |\n| 乙 | open |\n", "| 名字 | 状态 |\n| --- | --- |\n| 甲 | resolved |\n| 丙 | open |\n", [0]),
+        },
+        {
+          name: "no-table-original",
+          input: { original: "纯文本", updated: "| a | b |\n| --- | --- |\n| 1 | 2 |", keyColumns: [0] },
+          expected: mergeTableMarkdownByKey("纯文本", "| a | b |\n| --- | --- |\n| 1 | 2 |", [0]),
+        },
+      ],
+      merge_character_matrix_markdown: [
+        {
+          name: "three-section-merge",
+          input: {
+            original: "# 矩阵\n### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 强 |\n### 压力源\n| 名字 | 压力 |\n| --- | --- |\n| 甲 | 大 |\n",
+            updated: "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 弱 |\n### 新节\n| x | y |\n| --- | --- |\n",
+          },
+          expected: mergeCharacterMatrixMarkdown(
+            "# 矩阵\n### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 强 |\n### 压力源\n| 名字 | 压力 |\n| --- | --- |\n| 甲 | 大 |\n",
+            "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 弱 |\n### 新节\n| x | y |\n| --- | --- |\n",
+          ),
+        },
+      ],
+      build_governed_character_matrix_working_set: (() => {
+        const matrix = "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n| 乙 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 强 |\n";
+        const pkg = {
+          chapter: 5,
+          selectedContext: [{ source: "story/current_state.md#甲", reason: "甲在场", excerpt: "甲 拔剑" }],
+        } as ContextPackage;
+        const pkgEn = {
+          chapter: 5,
+          selectedContext: [{ source: "story/current_state.md#Alice", reason: "Alice present", excerpt: "Alice drew her sword" }],
+        } as ContextPackage;
+        const matrixEn = "### Tier One\n| 名字 | 状态 |\n| --- | --- |\n| Alice | high |\n| Bob | low |\n";
+        return [
+          { name: "cjk-filter", input: { matrixMarkdown: matrix, chapterIntent: "本章甲独行", contextPackage: pkg, protagonistName: undefined }, expected: buildGovernedCharacterMatrixWorkingSet({ matrixMarkdown: matrix, chapterIntent: "本章甲独行", contextPackage: pkg }) },
+          { name: "latin-protagonist", input: { matrixMarkdown: matrixEn, chapterIntent: "unrelated text", contextPackage: pkgEn, protagonistName: "alice" }, expected: buildGovernedCharacterMatrixWorkingSet({ matrixMarkdown: matrixEn, chapterIntent: "unrelated text", contextPackage: pkgEn, protagonistName: "alice" }) },
+        ];
+      })(),
+      writer_build_user_prompt: (() => {
+        const spec = buildLengthSpec(3000, "zh");
+        const zhParams = {
+          chapterNumber: 2, storyBible: "世界观", currentState: "状态卡", ledger: "", hooks: "伏笔池",
+          recentChapters: "", lengthSpec: spec, externalContext: "加入伏笔",
+          chapterSummaries: "(文件尚未创建)", subplotBoard: "(文件尚未创建)", emotionalArcs: "(文件尚未创建)",
+          characterMatrix: "(文件尚未创建)", dialogueFingerprints: undefined, relevantSummaries: undefined,
+          parentCanon: undefined, language: "zh" as const,
+        };
+        const enParams = {
+          chapterNumber: 1, storyBible: "world", currentState: "state", ledger: "ledger", hooks: "hooks",
+          recentChapters: "previous", lengthSpec: buildLengthSpec(2000, "en"), externalContext: undefined,
+          chapterSummaries: "| old |", subplotBoard: "| sub |", emotionalArcs: "(文件尚未创建)",
+          characterMatrix: "(文件尚未创建)", dialogueFingerprints: "A：短句为主", relevantSummaries: "| 1 |",
+          parentCanon: "canon", language: "en" as const,
+        };
+        return [
+          { name: "zh-first-chapter", input: zhParams, expected: writerPriv.buildUserPrompt(zhParams) },
+          { name: "en-full-blocks", input: enParams, expected: writerPriv.buildUserPrompt(enParams) },
+        ];
+      })(),
+      writer_build_governed_user_prompt: (() => {
+        const memo: ChapterMemo = { chapter: 3, goal: "目标", isGoldenOpening: false, body: "正文要求", threadRefs: ["H01"] };
+        const pkg = {
+          chapter: 3,
+          selectedContext: [
+            { source: "story/author_intent.md", reason: "长期方向", excerpt: "主角成长" },
+            { source: "story/pending_hooks.md#H01", reason: "本章回收", excerpt: undefined },
+          ],
+        } as ContextPackage;
+        const stack = {
+          layers: [{ id: "global", name: "全局", precedence: 1, scope: "global" }],
+          sections: { hard: ["不越级", "不换主角"], soft: [], diagnostic: ["节奏诊断"] },
+          overrideEdges: [], activeOverrides: [{ from: "soft", to: "hard", target: "章节", reason: "卷首" }],
+        } as unknown as RuleStack;
+        const spec = buildLengthSpec(3000, "zh");
+        return [
+          {
+            name: "zh-direction-first",
+            input: { chapterNumber: 3, chapterMemo: memo, contextPackage: pkg, ruleStack: stack, lengthSpec: spec, externalContext: "本章指令", language: "zh" },
+            expected: writerPriv.buildGovernedUserPrompt({ chapterNumber: 3, chapterMemo: memo, contextPackage: pkg, ruleStack: stack, externalContext: "本章指令", lengthSpec: spec, language: "zh" }),
+          },
+          {
+            name: "en-minimal",
+            input: { chapterNumber: 4, chapterMemo: memo, contextPackage: pkg, ruleStack: { layers: [], sections: { hard: [], soft: [], diagnostic: [] }, overrideEdges: [], activeOverrides: [] } as unknown as RuleStack, lengthSpec: buildLengthSpec(2000, "en"), externalContext: undefined, language: "en" },
+            expected: writerPriv.buildGovernedUserPrompt({ chapterNumber: 4, chapterMemo: memo, contextPackage: pkg, ruleStack: { layers: [], sections: { hard: [], soft: [], diagnostic: [] }, overrideEdges: [], activeOverrides: [] } as unknown as RuleStack, lengthSpec: buildLengthSpec(2000, "en"), language: "en" }),
+          },
+        ];
+      })(),
+      writer_build_chapter_context_block: [
+        { name: "zh", input: { externalContext: "  写打斗  ", language: "zh" }, expected: writerPriv.buildChapterContextBlock("  写打斗  ", "zh") },
+        { name: "en-empty", input: { externalContext: "   ", language: "en" }, expected: writerPriv.buildChapterContextBlock("   ", "en") },
+      ],
+      writer_build_settler_governed_control_block: (() => {
+        const pkg = {
+          chapter: 3,
+          selectedContext: [{ source: "story/pending_hooks.md#H01", reason: "回收", excerpt: undefined }],
+        } as ContextPackage;
+        const stack = {
+          layers: [], sections: { hard: ["不越级"], soft: ["语气克制"], diagnostic: [] },
+          overrideEdges: [], activeOverrides: [{ from: "soft", to: "hard", target: "章节", reason: "卷首" }],
+        } as unknown as RuleStack;
+        return [
+          { name: "zh", input: { chapterIntent: "## Goal\n推进主线", contextPackage: pkg, ruleStack: stack, language: "zh" }, expected: writerPriv.buildSettlerGovernedControlBlock("## Goal\n推进主线", pkg, stack, "zh") },
+          { name: "en-no-overrides", input: { chapterIntent: "## Goal\npush plot", contextPackage: pkg, ruleStack: { ...stack, activeOverrides: [] } as unknown as RuleStack, language: "en" }, expected: writerPriv.buildSettlerGovernedControlBlock("## Goal\npush plot", pkg, { ...stack, activeOverrides: [] } as unknown as RuleStack, "en") },
+        ];
+      })(),
+      writer_build_length_requirement_block: [
+        { name: "zh", input: { target: 3000, language: "zh" }, expected: writerPriv.buildLengthRequirementBlock(buildLengthSpec(3000, "zh"), "zh") },
+        { name: "en", input: { target: 2000, language: "en" }, expected: writerPriv.buildLengthRequirementBlock(buildLengthSpec(2000, "en"), "en") },
+      ],
+      writer_sanitize_filename: [
+        { name: "illegal-chars", input: "夜/港:账本?", expected: writerPriv.sanitizeFilename("夜/港:账本?") },
+        { name: "whitespace-underscore", input: "a b  c", expected: writerPriv.sanitizeFilename("a b  c") },
+        { name: "truncate-50", input: "字".repeat(60), expected: writerPriv.sanitizeFilename("字".repeat(60)) },
+      ],
+      writer_extract_dialogue_fingerprints: [
+        {
+          name: "greedy-speaker-quirk",
+          input: "林动冷声道：\"你敢再来？\"\n林动冷声道：\"滚出去？\"\n苏檀儿笑道：\"人家才不怕呢，人家才不怕呢，人家才不怕呢。\"\n路人说道：\"不知道。\"",
+          expected: writerPriv.extractDialogueFingerprints("林动冷声道：\"你敢再来？\"\n林动冷声道：\"滚出去？\"\n苏檀儿笑道：\"人家才不怕呢，人家才不怕呢，人家才不怕呢。\"\n路人说道：\"不知道。\"", ""),
+        },
+        { name: "empty", input: "", expected: writerPriv.extractDialogueFingerprints("", "") },
+      ],
+      writer_find_relevant_summaries: [
+        {
+          name: "name-and-hook-match",
+          input: { chapterSummaries: "# 章节摘要\n\n| 章节 | 标题 |\n|---|---|\n| 1 | 林动初醒 |\n| 2 | 无关章节 |\n| 3 | H01 推进 |\n| 5 | 林动再战 |\n", volumeOutline: "本卷主线：林动，回收 H01 伏笔，绫清竹出场。", chapterNumber: 6 },
+          expected: writerPriv.findRelevantSummaries("# 章节摘要\n\n| 章节 | 标题 |\n|---|---|\n| 1 | 林动初醒 |\n| 2 | 无关章节 |\n| 3 | H01 推进 |\n| 5 | 林动再战 |\n", "本卷主线：林动，回收 H01 伏笔，绫清竹出场。", 6),
+        },
+        { name: "placeholder", input: { chapterSummaries: "(文件尚未创建)", volumeOutline: "卷纲", chapterNumber: 3 }, expected: writerPriv.findRelevantSummaries("(文件尚未创建)", "卷纲", 3) },
+      ],
+      writer_build_style_fingerprint: [
+        {
+          name: "truthy-fields",
+          input: { raw: "{\"avgSentenceLength\": 18.5, \"sentenceLengthStdDev\": 6, \"avgParagraphLength\": 88, \"paragraphLengthRange\": {\"min\": 20, \"max\": 200}, \"vocabularyDiversity\": 0.62, \"topPatterns\": [\"排比\", \"对仗\"], \"rhetoricalFeatures\": [\"隐喻\"]}" },
+          expected: writerPriv.buildStyleFingerprint("{\"avgSentenceLength\": 18.5, \"sentenceLengthStdDev\": 6, \"avgParagraphLength\": 88, \"paragraphLengthRange\": {\"min\": 20, \"max\": 200}, \"vocabularyDiversity\": 0.62, \"topPatterns\": [\"排比\", \"对仗\"], \"rhetoricalFeatures\": [\"隐喻\"]}"),
+        },
+        { name: "all-falsy", input: { raw: "{\"avgSentenceLength\": 0, \"topPatterns\": []}" }, expected: writerPriv.buildStyleFingerprint("{\"avgSentenceLength\": 0, \"topPatterns\": []}") },
+      ],
+      writer_render_delta_summary_row: (() => {
+        const delta = {
+          chapter: 3,
+          hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          newHookCandidates: [],
+          chapterSummary: { chapter: 3, title: "风|起", characters: "林动", events: "夺舍", stateChanges: "境界+1", hookActivity: "H01 推进", mood: "紧张", chapterType: "推进章" },
+          subplotOps: [], emotionalArcOps: [], characterMatrixOps: [], notes: [],
+        } as unknown as RuntimeStateDelta;
+        const empty = { chapter: 1, hookOps: { upsert: [], mention: [], resolve: [], defer: [] }, newHookCandidates: [], subplotOps: [], emotionalArcOps: [], characterMatrixOps: [], notes: [] } as unknown as RuntimeStateDelta;
+        return [
+          { name: "escapes-pipes", input: { delta }, expected: writerPriv.renderDeltaSummaryRow(delta) },
+          { name: "no-summary", input: { delta: empty }, expected: writerPriv.renderDeltaSummaryRow(empty) },
+        ];
+      })(),
+      writer_normalize_runtime_state_delta_chapter: (() => {
+        const clamp = {
+          chapter: 9,
+          hookOps: { upsert: [{ hookId: "H01", startChapter: 12, lastAdvancedChapter: 15, type: "main", status: "open", expectedPayoff: "", notes: "" }], mention: [], resolve: [], defer: [] },
+          newHookCandidates: [],
+          chapterSummary: { chapter: 9, title: "t", characters: "", events: "", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+          subplotOps: [], emotionalArcOps: [], characterMatrixOps: [], notes: [],
+        } as unknown as RuntimeStateDelta;
+        const clean = { chapter: 7, hookOps: { upsert: [], mention: [], resolve: [], defer: [] }, newHookCandidates: [], subplotOps: [], emotionalArcOps: [], characterMatrixOps: [], notes: [] } as unknown as RuntimeStateDelta;
+        return [
+          { name: "clamps-and-flips", input: { delta: clamp, authority: 7 }, expected: writerPriv.normalizeRuntimeStateDeltaChapter(clamp, 7) },
+          { name: "no-change", input: { delta: clean, authority: 7 }, expected: writerPriv.normalizeRuntimeStateDeltaChapter(clean, 7) },
+        ];
+      })(),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -599,6 +824,10 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_observer_system_prompt.length).toBeGreaterThan(0);
     expect(payload.build_observer_user_prompt.length).toBeGreaterThan(0);
     expect(payload.normalize_post_write_surface.length).toBeGreaterThan(0);
+    expect(payload.render_hook_snapshot.length).toBeGreaterThan(0);
+    expect(payload.build_governed_hook_working_set.length).toBeGreaterThan(0);
+    expect(payload.writer_build_user_prompt.length).toBeGreaterThan(0);
+    expect(payload.writer_normalize_runtime_state_delta_chapter.length).toBeGreaterThan(0);
     expect(payload.validate_post_write.length).toBeGreaterThan(0);
     expect(payload.detect_cross_chapter_repetition.length).toBeGreaterThan(0);
     expect(payload.detect_paragraph_length_drift.length).toBeGreaterThan(0);

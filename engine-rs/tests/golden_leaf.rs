@@ -62,6 +62,22 @@ struct LeafGolden {
     detect_paragraph_length_drift: Vec<Case>,
     detect_duplicate_title: Vec<Case>,
     resolve_duplicate_title: Vec<Case>,
+    render_hook_snapshot: Vec<Case>,
+    build_governed_hook_working_set: Vec<Case>,
+    merge_table_markdown_by_key: Vec<Case>,
+    merge_character_matrix_markdown: Vec<Case>,
+    build_governed_character_matrix_working_set: Vec<Case>,
+    writer_build_user_prompt: Vec<Case>,
+    writer_build_governed_user_prompt: Vec<Case>,
+    writer_build_chapter_context_block: Vec<Case>,
+    writer_build_settler_governed_control_block: Vec<Case>,
+    writer_build_length_requirement_block: Vec<Case>,
+    writer_sanitize_filename: Vec<Case>,
+    writer_extract_dialogue_fingerprints: Vec<Case>,
+    writer_find_relevant_summaries: Vec<Case>,
+    writer_build_style_fingerprint: Vec<Case>,
+    writer_render_delta_summary_row: Vec<Case>,
+    writer_normalize_runtime_state_delta_chapter: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1155,5 +1171,265 @@ fn resolve_duplicate_title_matches_ts() {
             "case `{}`: resolve_duplicate_title 与 TS 不一致（title/issues 形状 diff）",
             c.name
         );
+    }
+}
+
+// ---- 32 号：governed-working-set / renderHookSnapshot / writer 私有纯函数 ----
+
+#[test]
+fn render_hook_snapshot_matches_ts() {
+    use inkos_engine::models::runtime_state::HookRecord;
+    use inkos_engine::utils::story_markdown::render_hook_snapshot;
+    for c in &load().render_hook_snapshot {
+        let hooks: Vec<HookRecord> = serde_json::from_value(c.input["hooks"].clone())
+            .unwrap_or_else(|e| panic!("case {}: hooks 反序列化失败: {e}", c.name));
+        let got = render_hook_snapshot(&hooks, lang_opt(&c.input).expect("language 必填"));
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn build_governed_hook_working_set_matches_ts() {
+    use inkos_engine::models::input_governance::ContextPackage;
+    use inkos_engine::utils::governed_working_set::{
+        build_governed_hook_working_set, GovernedHookWorkingSetInput,
+    };
+    for c in &load().build_governed_hook_working_set {
+        let pkg: ContextPackage = serde_json::from_value(c.input["contextPackage"].clone())
+            .unwrap_or_else(|e| panic!("case {}: contextPackage: {e}", c.name));
+        let got = build_governed_hook_working_set(&GovernedHookWorkingSetInput {
+            hooks_markdown: c.input["hooksMarkdown"].as_str().unwrap(),
+            context_package: &pkg,
+            chapter_intent: c.input["chapterIntent"].as_str(),
+            chapter_number: c.input["chapterNumber"].as_u64().unwrap() as u32,
+            language: lang_opt(&c.input).expect("language 必填"),
+            keep_recent: c.input["keepRecent"].as_u64().map(|v| v as u32),
+        });
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn merge_table_markdown_by_key_matches_ts() {
+    use inkos_engine::utils::governed_working_set::merge_table_markdown_by_key;
+    for c in &load().merge_table_markdown_by_key {
+        let keys: Vec<usize> = c.input["keyColumns"]
+            .as_array()
+            .map(|a| a.iter().map(|v| v.as_u64().unwrap() as usize).collect())
+            .unwrap_or_default();
+        let got = merge_table_markdown_by_key(
+            c.input["original"].as_str().unwrap(),
+            c.input["updated"].as_str().unwrap(),
+            &keys,
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn merge_character_matrix_markdown_matches_ts() {
+    use inkos_engine::utils::governed_working_set::merge_character_matrix_markdown;
+    for c in &load().merge_character_matrix_markdown {
+        let got = merge_character_matrix_markdown(
+            c.input["original"].as_str().unwrap(),
+            c.input["updated"].as_str().unwrap(),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn build_governed_character_matrix_working_set_matches_ts() {
+    use inkos_engine::models::input_governance::ContextPackage;
+    use inkos_engine::utils::governed_working_set::{
+        build_governed_character_matrix_working_set, GovernedMatrixWorkingSetInput,
+    };
+    for c in &load().build_governed_character_matrix_working_set {
+        let pkg: ContextPackage = serde_json::from_value(c.input["contextPackage"].clone())
+            .unwrap_or_else(|e| panic!("case {}: contextPackage: {e}", c.name));
+        let got = build_governed_character_matrix_working_set(&GovernedMatrixWorkingSetInput {
+            matrix_markdown: c.input["matrixMarkdown"].as_str().unwrap(),
+            chapter_intent: c.input["chapterIntent"].as_str().unwrap(),
+            context_package: &pkg,
+            protagonist_name: c.input["protagonistName"].as_str(),
+        });
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_user_prompt_matches_ts() {
+    use inkos_engine::agents::writer::{build_user_prompt, UserPromptInput};
+    use inkos_engine::models::length_governance::LengthSpec;
+    for c in &load().writer_build_user_prompt {
+        let i = &c.input;
+        let spec: LengthSpec = serde_json::from_value(i["lengthSpec"].clone())
+            .unwrap_or_else(|e| panic!("case {}: lengthSpec: {e}", c.name));
+        let got = build_user_prompt(&UserPromptInput {
+            chapter_number: i["chapterNumber"].as_u64().unwrap() as u32,
+            story_bible: i["storyBible"].as_str().unwrap(),
+            current_state: i["currentState"].as_str().unwrap(),
+            ledger: i["ledger"].as_str().unwrap(),
+            hooks: i["hooks"].as_str().unwrap(),
+            recent_chapters: i["recentChapters"].as_str().unwrap(),
+            length_spec: &spec,
+            external_context: i["externalContext"].as_str(),
+            chapter_summaries: i["chapterSummaries"].as_str().unwrap(),
+            subplot_board: i["subplotBoard"].as_str().unwrap(),
+            emotional_arcs: i["emotionalArcs"].as_str().unwrap(),
+            character_matrix: i["characterMatrix"].as_str().unwrap(),
+            dialogue_fingerprints: i["dialogueFingerprints"].as_str(),
+            relevant_summaries: i["relevantSummaries"].as_str(),
+            parent_canon: i["parentCanon"].as_str(),
+            language: lang_opt(i),
+        });
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_governed_user_prompt_matches_ts() {
+    use inkos_engine::agents::writer::{build_governed_user_prompt, GovernedUserPromptInput};
+    use inkos_engine::models::input_governance::{ChapterMemo, ContextPackage, RuleStack};
+    use inkos_engine::models::length_governance::LengthSpec;
+    for c in &load().writer_build_governed_user_prompt {
+        let i = &c.input;
+        let memo: ChapterMemo = serde_json::from_value(i["chapterMemo"].clone())
+            .unwrap_or_else(|e| panic!("case {}: chapterMemo: {e}", c.name));
+        let pkg: ContextPackage = serde_json::from_value(i["contextPackage"].clone())
+            .unwrap_or_else(|e| panic!("case {}: contextPackage: {e}", c.name));
+        let stack: RuleStack = serde_json::from_value(i["ruleStack"].clone())
+            .unwrap_or_else(|e| panic!("case {}: ruleStack: {e}", c.name));
+        let spec: LengthSpec = serde_json::from_value(i["lengthSpec"].clone())
+            .unwrap_or_else(|e| panic!("case {}: lengthSpec: {e}", c.name));
+        let got = build_governed_user_prompt(&GovernedUserPromptInput {
+            chapter_number: i["chapterNumber"].as_u64().unwrap() as u32,
+            chapter_memo: &memo,
+            chapter_intent_data: None,
+            context_package: &pkg,
+            rule_stack: &stack,
+            external_context: i["externalContext"].as_str(),
+            length_spec: &spec,
+            language: lang_opt(i),
+            variance_brief: None,
+            selected_evidence_block: None,
+        });
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_chapter_context_block_matches_ts() {
+    use inkos_engine::agents::writer::build_chapter_context_block;
+    for c in &load().writer_build_chapter_context_block {
+        let got = build_chapter_context_block(
+            c.input["externalContext"].as_str(),
+            lang_opt(&c.input).expect("language 必填"),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_settler_governed_control_block_matches_ts() {
+    use inkos_engine::agents::writer::build_settler_governed_control_block;
+    use inkos_engine::models::input_governance::{ContextPackage, RuleStack};
+    for c in &load().writer_build_settler_governed_control_block {
+        let pkg: ContextPackage = serde_json::from_value(c.input["contextPackage"].clone())
+            .unwrap_or_else(|e| panic!("case {}: contextPackage: {e}", c.name));
+        let stack: RuleStack = serde_json::from_value(c.input["ruleStack"].clone())
+            .unwrap_or_else(|e| panic!("case {}: ruleStack: {e}", c.name));
+        let got = build_settler_governed_control_block(
+            c.input["chapterIntent"].as_str().unwrap(),
+            &pkg,
+            &stack,
+            lang_opt(&c.input).expect("language 必填"),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_length_requirement_block_matches_ts() {
+    use inkos_engine::agents::writer::build_length_requirement_block;
+    use inkos_engine::utils::length_metrics::build_length_spec;
+    for c in &load().writer_build_length_requirement_block {
+        let spec = build_length_spec(
+            c.input["target"].as_u64().unwrap() as u32,
+            lang_opt(&c.input).expect("language 必填"),
+        );
+        let got = build_length_requirement_block(&spec, Some(lang_opt(&c.input).expect("language 必填")));
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_sanitize_filename_matches_ts() {
+    use inkos_engine::agents::writer::sanitize_filename;
+    for c in &load().writer_sanitize_filename {
+        let got = sanitize_filename(c.input.as_str().unwrap());
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_extract_dialogue_fingerprints_matches_ts() {
+    use inkos_engine::agents::writer::extract_dialogue_fingerprints;
+    for c in &load().writer_extract_dialogue_fingerprints {
+        let got = extract_dialogue_fingerprints(c.input.as_str().unwrap());
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_find_relevant_summaries_matches_ts() {
+    use inkos_engine::agents::writer::find_relevant_summaries;
+    for c in &load().writer_find_relevant_summaries {
+        let got = find_relevant_summaries(
+            c.input["chapterSummaries"].as_str().unwrap(),
+            c.input["volumeOutline"].as_str().unwrap(),
+            c.input["chapterNumber"].as_u64().unwrap() as u32,
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_build_style_fingerprint_matches_ts() {
+    use inkos_engine::agents::writer::build_style_fingerprint;
+    for c in &load().writer_build_style_fingerprint {
+        let got = build_style_fingerprint(c.input["raw"].as_str().unwrap());
+        assert_eq!(
+            got.as_deref(),
+            c.expected.as_str(),
+            "case `{}`: build_style_fingerprint 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn writer_render_delta_summary_row_matches_ts() {
+    use inkos_engine::agents::writer::render_delta_summary_row;
+    use inkos_engine::models::runtime_state::RuntimeStateDelta;
+    for c in &load().writer_render_delta_summary_row {
+        let delta: RuntimeStateDelta = serde_json::from_value(c.input["delta"].clone())
+            .unwrap_or_else(|e| panic!("case {}: delta: {e}", c.name));
+        let got = render_delta_summary_row(&delta);
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn writer_normalize_runtime_state_delta_chapter_matches_ts() {
+    use inkos_engine::agents::writer::normalize_runtime_state_delta_chapter;
+    use inkos_engine::models::runtime_state::RuntimeStateDelta;
+    for c in &load().writer_normalize_runtime_state_delta_chapter {
+        let delta: RuntimeStateDelta = serde_json::from_value(c.input["delta"].clone())
+            .unwrap_or_else(|e| panic!("case {}: delta: {e}", c.name));
+        let authority = c.input["authority"].as_u64().unwrap() as u32;
+        let got = normalize_runtime_state_delta_chapter(&delta, authority);
+        let got_val = serde_json::to_value(&got).expect("序列化");
+        assert_eq!(got_val, c.expected, "case `{}`", c.name);
     }
 }

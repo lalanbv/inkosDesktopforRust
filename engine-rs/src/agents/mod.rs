@@ -36,3 +36,4 @@ pub mod settler_prompts;
 pub mod style_analyzer;
 pub mod writer_parser;
 pub mod writer_prompts;
+pub mod writer;

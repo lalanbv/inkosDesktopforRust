@@ -2241,5 +2241,709 @@
         "issues": []
       }
     }
+  ],
+  "render_hook_snapshot": [
+    {
+      "name": "zh-full",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "main",
+            "status": "progressing",
+            "lastAdvancedChapter": 3,
+            "expectedPayoff": "第10章",
+            "notes": "种子伏笔",
+            "dependsOn": [
+              "H00"
+            ],
+            "paysOffInArc": "一卷",
+            "coreHook": true,
+            "halfLifeChapters": 5,
+            "promoted": true
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 2,
+            "type": "support",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "含|竖线"
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | progressing | 3 | 第10章 | 中程 | [H00] | 一卷 | 是 | 5 | 是 | 种子伏笔 |\n| H02 | 2 | support | open | 0 |  | 中程 | 无 |  | 否 |  |  | 含\\|竖线 |"
+    },
+    {
+      "name": "en-full",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "main",
+            "status": "progressing",
+            "lastAdvancedChapter": 3,
+            "expectedPayoff": "第10章",
+            "notes": "种子伏笔",
+            "dependsOn": [
+              "H00"
+            ],
+            "paysOffInArc": "一卷",
+            "coreHook": true,
+            "halfLifeChapters": 5,
+            "promoted": true
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 2,
+            "type": "support",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "含|竖线"
+          }
+        ],
+        "language": "en"
+      },
+      "expected": "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | progressing | 3 | 第10章 | mid-arc | [H00] | 一卷 | true | 5 | true | 种子伏笔 |\n| H02 | 2 | support | open | 0 |  | mid-arc | none |  | false |  |  | 含\\|竖线 |"
+    }
+  ],
+  "build_governed_hook_working_set": [
+    {
+      "name": "selected-over-window",
+      "input": {
+        "hooksMarkdown": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | near-term | 无 | 一卷 | 否 | 5 | 否 | 种子 |\n| H02 | 40 | main | open | 0 | 50 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 远期 |\n",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#H02",
+              "reason": "选中"
+            }
+          ]
+        },
+        "chapterNumber": 3,
+        "language": "zh",
+        "keepRecent": 0
+      },
+      "expected": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H02 | 40 | main | open | 0 | 50 | 慢烧 | 无 | 二卷 | 否 | 8 | 否 | 远期 |"
+    },
+    {
+      "name": "agenda-and-window",
+      "input": {
+        "hooksMarkdown": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | near-term | 无 | 一卷 | 否 | 5 | 否 | 种子 |\n| H02 | 40 | main | open | 0 | 50 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 远期 |\n",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": []
+        },
+        "chapterIntent": "## Hook Agenda\n### Must Advance\n- H02\n### Something\n- H01\n",
+        "chapterNumber": 3,
+        "language": "en"
+      },
+      "expected": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | near-term | 无 | 一卷 | 否 | 5 | 否 | 种子 |\n| H02 | 40 | main | open | 0 | 50 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 远期 |\n"
+    },
+    {
+      "name": "full-set-passthrough",
+      "input": {
+        "hooksMarkdown": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | near-term | 无 | 一卷 | 否 | 5 | 否 | 种子 |\n| H02 | 40 | main | open | 0 | 50 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 远期 |\n",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": []
+        },
+        "chapterNumber": 3,
+        "language": "zh"
+      },
+      "expected": "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| H01 | 1 | main | open | 1 | 10 | 近期 | 无 | 一卷 | 否 | 5 | 否 | 种子 |"
+    }
+  ],
+  "merge_table_markdown_by_key": [
+    {
+      "name": "update-and-append",
+      "input": {
+        "original": "# 标题\n\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | open |\n| 乙 | open |\n",
+        "updated": "| 名字 | 状态 |\n| --- | --- |\n| 甲 | resolved |\n| 丙 | open |\n",
+        "keyColumns": [
+          0
+        ]
+      },
+      "expected": "# 标题\n\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | resolved |\n| 乙 | open |\n| 丙 | open |"
+    },
+    {
+      "name": "no-table-original",
+      "input": {
+        "original": "纯文本",
+        "updated": "| a | b |\n| --- | --- |\n| 1 | 2 |",
+        "keyColumns": [
+          0
+        ]
+      },
+      "expected": "| a | b |\n| --- | --- |\n| 1 | 2 |"
+    }
+  ],
+  "merge_character_matrix_markdown": [
+    {
+      "name": "three-section-merge",
+      "input": {
+        "original": "# 矩阵\n### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 强 |\n### 压力源\n| 名字 | 压力 |\n| --- | --- |\n| 甲 | 大 |\n",
+        "updated": "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 弱 |\n### 新节\n| x | y |\n| --- | --- |\n"
+      },
+      "expected": "# 矩阵\n### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 弱 |\n### 压力源\n| x | y |\n| --- | --- |"
+    }
+  ],
+  "build_governed_character_matrix_working_set": [
+    {
+      "name": "cjk-filter",
+      "input": {
+        "matrixMarkdown": "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n| 乙 | 低 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |\n| 甲 | 乙 | 强 |\n",
+        "chapterIntent": "本章甲独行",
+        "contextPackage": {
+          "chapter": 5,
+          "selectedContext": [
+            {
+              "source": "story/current_state.md#甲",
+              "reason": "甲在场",
+              "excerpt": "甲 拔剑"
+            }
+          ]
+        }
+      },
+      "expected": "### 一级角色\n| 名字 | 状态 |\n| --- | --- |\n| 甲 | 高 |\n### 关系\n| 左 | 右 | 强度 |\n| --- | --- | --- |"
+    },
+    {
+      "name": "latin-protagonist",
+      "input": {
+        "matrixMarkdown": "### Tier One\n| 名字 | 状态 |\n| --- | --- |\n| Alice | high |\n| Bob | low |\n",
+        "chapterIntent": "unrelated text",
+        "contextPackage": {
+          "chapter": 5,
+          "selectedContext": [
+            {
+              "source": "story/current_state.md#Alice",
+              "reason": "Alice present",
+              "excerpt": "Alice drew her sword"
+            }
+          ]
+        },
+        "protagonistName": "alice"
+      },
+      "expected": "### Tier One\n| 名字 | 状态 |\n| --- | --- |\n| Alice | high |"
+    }
+  ],
+  "writer_build_user_prompt": [
+    {
+      "name": "zh-first-chapter",
+      "input": {
+        "chapterNumber": 2,
+        "storyBible": "世界观",
+        "currentState": "状态卡",
+        "ledger": "",
+        "hooks": "伏笔池",
+        "recentChapters": "",
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2591,
+          "softMax": 3409,
+          "hardMin": 2182,
+          "hardMax": 3818,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        },
+        "externalContext": "加入伏笔",
+        "chapterSummaries": "(文件尚未创建)",
+        "subplotBoard": "(文件尚未创建)",
+        "emotionalArcs": "(文件尚未创建)",
+        "characterMatrix": "(文件尚未创建)",
+        "language": "zh"
+      },
+      "expected": "请续写第2章。\n\n## 外部指令\n以下是来自外部系统的创作指令，请在本章中融入：\n\n加入伏笔\n\n## 当前状态卡\n状态卡\n\n## 伏笔池\n伏笔池\n\n## 最近章节\n(这是第一章，无前文)\n\n## 世界观设定\n世界观\n\n要求：\n- 目标字数：3000字\n- 允许区间：2591-3409字\n- 先输出写作自检表，再写正文\n      - 只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块"
+    },
+    {
+      "name": "en-full-blocks",
+      "input": {
+        "chapterNumber": 1,
+        "storyBible": "world",
+        "currentState": "state",
+        "ledger": "ledger",
+        "hooks": "hooks",
+        "recentChapters": "previous",
+        "lengthSpec": {
+          "target": 2000,
+          "softMin": 1728,
+          "softMax": 2272,
+          "hardMin": 1455,
+          "hardMax": 2545,
+          "countingMode": "en_words",
+          "normalizeMode": "none"
+        },
+        "chapterSummaries": "| old |",
+        "subplotBoard": "| sub |",
+        "emotionalArcs": "(文件尚未创建)",
+        "characterMatrix": "(文件尚未创建)",
+        "dialogueFingerprints": "A：短句为主",
+        "relevantSummaries": "| 1 |",
+        "parentCanon": "canon",
+        "language": "en"
+      },
+      "expected": "Write chapter 1.\n\n## Current State\nstate\n\n## 资源账本\nledger\n\n## Plot Threads\nhooks\n\n## 章节摘要（全部历史章节压缩上下文）\n| old |\n\n## 支线进度板\n| sub |\n\n## 角色对话指纹\nA：短句为主\n\n## 相关历史章节摘要\n| 1 |\n\n## 正传正典参照（番外写作专用）\n本书是番外作品。以下正典约束不可违反，角色不得引用超出其信息边界的信息。\ncanon\n\n## Recent Chapters\nprevious\n\n## Worldbuilding\nworld\n\nRequirements:\n- Target length: 2000 words\n- Acceptable range: 1728-2272 words\n- Output PRE_WRITE_CHECK first, then the chapter\n- Output only PRE_WRITE_CHECK, CHAPTER_TITLE, and CHAPTER_CONTENT blocks"
+    }
+  ],
+  "writer_build_governed_user_prompt": [
+    {
+      "name": "zh-direction-first",
+      "input": {
+        "chapterNumber": 3,
+        "chapterMemo": {
+          "chapter": 3,
+          "goal": "目标",
+          "isGoldenOpening": false,
+          "body": "正文要求",
+          "threadRefs": [
+            "H01"
+          ]
+        },
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/author_intent.md",
+              "reason": "长期方向",
+              "excerpt": "主角成长"
+            },
+            {
+              "source": "story/pending_hooks.md#H01",
+              "reason": "本章回收"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [
+            {
+              "id": "global",
+              "name": "全局",
+              "precedence": 1,
+              "scope": "global"
+            }
+          ],
+          "sections": {
+            "hard": [
+              "不越级",
+              "不换主角"
+            ],
+            "soft": [],
+            "diagnostic": [
+              "节奏诊断"
+            ]
+          },
+          "overrideEdges": [],
+          "activeOverrides": [
+            {
+              "from": "soft",
+              "to": "hard",
+              "target": "章节",
+              "reason": "卷首"
+            }
+          ]
+        },
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2591,
+          "softMax": 3409,
+          "hardMin": 2182,
+          "hardMax": 3818,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        },
+        "externalContext": "本章指令",
+        "language": "zh"
+      },
+      "expected": "请续写第3章。\n\n## 本章用户指令（最高优先级）\n本章指令\n\n这是用户对当前章节的直接指令。若其中指定章节标题，CHAPTER_TITLE 必须原样使用该标题。保持连续性，但不要用卷纲兜底替换这条指令。\n\n## 用户方向（优先于模型默认，必须遵循）\n### 证据 1\n- 原因: 长期方向\n- 细节: 主角成长\n\n## 目标\n- 目标\n\n## 关联线索\n- H01\n\n正文要求\n\n## 已选上下文\n### 证据 1\n- 原因: 本章回收\n\n\n## 规则栈\n- 硬护栏：不越级、不换主角\n- 软约束：(无)\n- 诊断规则：节奏诊断\n\n\n要求：\n- 目标字数：3000字\n- 允许区间：2591-3409字\n- 先输出写作自检表，再写正文\n- 只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块"
+    },
+    {
+      "name": "en-minimal",
+      "input": {
+        "chapterNumber": 4,
+        "chapterMemo": {
+          "chapter": 3,
+          "goal": "目标",
+          "isGoldenOpening": false,
+          "body": "正文要求",
+          "threadRefs": [
+            "H01"
+          ]
+        },
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/author_intent.md",
+              "reason": "长期方向",
+              "excerpt": "主角成长"
+            },
+            {
+              "source": "story/pending_hooks.md#H01",
+              "reason": "本章回收"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [],
+            "soft": [],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": []
+        },
+        "lengthSpec": {
+          "target": 2000,
+          "softMin": 1728,
+          "softMax": 2272,
+          "hardMin": 1455,
+          "hardMax": 2545,
+          "countingMode": "en_words",
+          "normalizeMode": "none"
+        },
+        "language": "en"
+      },
+      "expected": "Write chapter 4.\n\n\n\n## User direction (overrides model defaults — must follow)\n### Evidence 1\n- reason: 长期方向\n- detail: 主角成长\n\n## Goal\n- 目标\n\n## Thread Refs\n- H01\n\n正文要求\n\n## Selected Context\n### Evidence 1\n- reason: 本章回收\n\n\n## Rule Stack\n- Hard: (none)\n- Soft: (none)\n- Diagnostic: none\n\n\nRequirements:\n- Target length: 2000 words\n- Acceptable range: 1728-2272 words\n- Output PRE_WRITE_CHECK first, then the chapter\n- Output only PRE_WRITE_CHECK, CHAPTER_TITLE, and CHAPTER_CONTENT blocks"
+    }
+  ],
+  "writer_build_chapter_context_block": [
+    {
+      "name": "zh",
+      "input": {
+        "externalContext": "  写打斗  ",
+        "language": "zh"
+      },
+      "expected": "## 本章用户指令（最高优先级）\n写打斗\n\n这是用户对当前章节的直接指令。若其中指定章节标题，CHAPTER_TITLE 必须原样使用该标题。保持连续性，但不要用卷纲兜底替换这条指令。"
+    },
+    {
+      "name": "en-empty",
+      "input": {
+        "externalContext": "   ",
+        "language": "en"
+      },
+      "expected": ""
+    }
+  ],
+  "writer_build_settler_governed_control_block": [
+    {
+      "name": "zh",
+      "input": {
+        "chapterIntent": "## Goal\n推进主线",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#H01",
+              "reason": "回收"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [
+              "不越级"
+            ],
+            "soft": [
+              "语气克制"
+            ],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": [
+            {
+              "from": "soft",
+              "to": "hard",
+              "target": "章节",
+              "reason": "卷首"
+            }
+          ]
+        },
+        "language": "zh"
+      },
+      "expected": "\n## 本章控制输入\n## 目标\n- 推进主线\n\n### 已选上下文\n- 证据 1\n- 原因: 回收\n\n### 规则栈\n- 硬护栏：不越级\n- 软约束：语气克制\n- 诊断规则：(无)\n\n### 当前覆盖\n- soft -> hard: 卷首 (章节)\n"
+    },
+    {
+      "name": "en-no-overrides",
+      "input": {
+        "chapterIntent": "## Goal\npush plot",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/pending_hooks.md#H01",
+              "reason": "回收"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [
+              "不越级"
+            ],
+            "soft": [
+              "语气克制"
+            ],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": []
+        },
+        "language": "en"
+      },
+      "expected": "\n## Chapter Control Inputs\n## Goal\n- push plot\n\n### Selected Context\n- Evidence 1\n- reason: 回收\n\n### Rule Stack\n- Hard guardrails: 不越级\n- Soft constraints: 语气克制\n- Diagnostic rules: (none)\n\n### Active Overrides\n- none\n"
+    }
+  ],
+  "writer_build_length_requirement_block": [
+    {
+      "name": "zh",
+      "input": {
+        "target": 3000,
+        "language": "zh"
+      },
+      "expected": "要求：\n- 目标字数：3000字\n- 允许区间：2591-3409字"
+    },
+    {
+      "name": "en",
+      "input": {
+        "target": 2000,
+        "language": "en"
+      },
+      "expected": "Requirements:\n- Target length: 2000 words\n- Acceptable range: 1728-2272 words"
+    }
+  ],
+  "writer_sanitize_filename": [
+    {
+      "name": "illegal-chars",
+      "input": "夜/港:账本?",
+      "expected": "夜港账本"
+    },
+    {
+      "name": "whitespace-underscore",
+      "input": "a b  c",
+      "expected": "a_b_c"
+    },
+    {
+      "name": "truncate-50",
+      "input": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字",
+      "expected": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+    }
+  ],
+  "writer_extract_dialogue_fingerprints": [
+    {
+      "name": "greedy-speaker-quirk",
+      "input": "林动冷声道：\"你敢再来？\"\n林动冷声道：\"滚出去？\"\n苏檀儿笑道：\"人家才不怕呢，人家才不怕呢，人家才不怕呢。\"\n路人说道：\"不知道。\"",
+      "expected": "林动冷声：短句为主，反问多"
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected": ""
+    }
+  ],
+  "writer_find_relevant_summaries": [
+    {
+      "name": "name-and-hook-match",
+      "input": {
+        "chapterSummaries": "# 章节摘要\n\n| 章节 | 标题 |\n|---|---|\n| 1 | 林动初醒 |\n| 2 | 无关章节 |\n| 3 | H01 推进 |\n| 5 | 林动再战 |\n",
+        "volumeOutline": "本卷主线：林动，回收 H01 伏笔，绫清竹出场。",
+        "chapterNumber": 6
+      },
+      "expected": "| 1 | 林动初醒 |\n| 3 | H01 推进 |"
+    },
+    {
+      "name": "placeholder",
+      "input": {
+        "chapterSummaries": "(文件尚未创建)",
+        "volumeOutline": "卷纲",
+        "chapterNumber": 3
+      },
+      "expected": ""
+    }
+  ],
+  "writer_build_style_fingerprint": [
+    {
+      "name": "truthy-fields",
+      "input": {
+        "raw": "{\"avgSentenceLength\": 18.5, \"sentenceLengthStdDev\": 6, \"avgParagraphLength\": 88, \"paragraphLengthRange\": {\"min\": 20, \"max\": 200}, \"vocabularyDiversity\": 0.62, \"topPatterns\": [\"排比\", \"对仗\"], \"rhetoricalFeatures\": [\"隐喻\"]}"
+      },
+      "expected": "- 平均句长：18.5字\n- 句长标准差：6\n- 平均段落长度：88字\n- 段落长度范围：20-200字\n- 词汇多样性(TTR)：0.62\n- 高频句式：排比、对仗\n- 修辞特征：隐喻"
+    },
+    {
+      "name": "all-falsy",
+      "input": {
+        "raw": "{\"avgSentenceLength\": 0, \"topPatterns\": []}"
+      }
+    }
+  ],
+  "writer_render_delta_summary_row": [
+    {
+      "name": "escapes-pipes",
+      "input": {
+        "delta": {
+          "chapter": 3,
+          "hookOps": {
+            "upsert": [],
+            "mention": [],
+            "resolve": [],
+            "defer": []
+          },
+          "newHookCandidates": [],
+          "chapterSummary": {
+            "chapter": 3,
+            "title": "风|起",
+            "characters": "林动",
+            "events": "夺舍",
+            "stateChanges": "境界+1",
+            "hookActivity": "H01 推进",
+            "mood": "紧张",
+            "chapterType": "推进章"
+          },
+          "subplotOps": [],
+          "emotionalArcOps": [],
+          "characterMatrixOps": [],
+          "notes": []
+        }
+      },
+      "expected": "| 3 | 风\\|起 | 林动 | 夺舍 | 境界+1 | H01 推进 | 紧张 | 推进章 |"
+    },
+    {
+      "name": "no-summary",
+      "input": {
+        "delta": {
+          "chapter": 1,
+          "hookOps": {
+            "upsert": [],
+            "mention": [],
+            "resolve": [],
+            "defer": []
+          },
+          "newHookCandidates": [],
+          "subplotOps": [],
+          "emotionalArcOps": [],
+          "characterMatrixOps": [],
+          "notes": []
+        }
+      },
+      "expected": ""
+    }
+  ],
+  "writer_normalize_runtime_state_delta_chapter": [
+    {
+      "name": "clamps-and-flips",
+      "input": {
+        "delta": {
+          "chapter": 9,
+          "hookOps": {
+            "upsert": [
+              {
+                "hookId": "H01",
+                "startChapter": 12,
+                "lastAdvancedChapter": 15,
+                "type": "main",
+                "status": "open",
+                "expectedPayoff": "",
+                "notes": ""
+              }
+            ],
+            "mention": [],
+            "resolve": [],
+            "defer": []
+          },
+          "newHookCandidates": [],
+          "chapterSummary": {
+            "chapter": 9,
+            "title": "t",
+            "characters": "",
+            "events": "",
+            "stateChanges": "",
+            "hookActivity": "",
+            "mood": "",
+            "chapterType": ""
+          },
+          "subplotOps": [],
+          "emotionalArcOps": [],
+          "characterMatrixOps": [],
+          "notes": []
+        },
+        "authority": 7
+      },
+      "expected": {
+        "chapter": 7,
+        "hookOps": {
+          "upsert": [
+            {
+              "hookId": "H01",
+              "startChapter": 7,
+              "lastAdvancedChapter": 7,
+              "type": "main",
+              "status": "open",
+              "expectedPayoff": "",
+              "notes": ""
+            }
+          ],
+          "mention": [],
+          "resolve": [],
+          "defer": []
+        },
+        "newHookCandidates": [],
+        "chapterSummary": {
+          "chapter": 7,
+          "title": "t",
+          "characters": "",
+          "events": "",
+          "stateChanges": "",
+          "hookActivity": "",
+          "mood": "",
+          "chapterType": ""
+        },
+        "subplotOps": [],
+        "emotionalArcOps": [],
+        "characterMatrixOps": [],
+        "notes": []
+      }
+    },
+    {
+      "name": "no-change",
+      "input": {
+        "delta": {
+          "chapter": 7,
+          "hookOps": {
+            "upsert": [],
+            "mention": [],
+            "resolve": [],
+            "defer": []
+          },
+          "newHookCandidates": [],
+          "subplotOps": [],
+          "emotionalArcOps": [],
+          "characterMatrixOps": [],
+          "notes": []
+        },
+        "authority": 7
+      },
+      "expected": {
+        "chapter": 7,
+        "hookOps": {
+          "upsert": [],
+          "mention": [],
+          "resolve": [],
+          "defer": []
+        },
+        "newHookCandidates": [],
+        "subplotOps": [],
+        "emotionalArcOps": [],
+        "characterMatrixOps": [],
+        "notes": []
+      }
+    }
   ]
 }

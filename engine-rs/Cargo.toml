@@ -53,11 +53,11 @@ uuid = { version = "1", features = ["v4"] }
 # YAML：genre-profile / book-rules 的 frontmatter 解析（TS js-yaml 的对应物）。
 # serde_yaml 0.9 已停止维护但仍是事实标准；解析面仅为受控 frontmatter，风险可控。
 serde_yaml = "0.9"
+# 临时目录：atomic-file-set 的事务目录 + 测试 fixture。
+tempfile = "3"
 
 [dev-dependencies]
 # 差分测试：Rust 实现 vs TS golden 向量（Phase 0.4 产出）
 serde_json = "1"
 # HTTP handler 单测（oneshot，不绑端口）
 tower = { version = "0.5", features = ["util"] }
-# 临时目录：FsStateStore 的集成测试用真实临时文件系统（验证 tokio::fs 路径正确）。
-tempfile = "3"

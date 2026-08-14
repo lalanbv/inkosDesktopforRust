@@ -17,7 +17,7 @@ use crate::utils::hook_lifecycle::resolve_hook_payoff_timing;
 use thiserror::Error;
 
 /// 运行时状态快照（四部分）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct RuntimeStateSnapshot {
     pub manifest: StateManifest,
     pub current_state: CurrentStateState,

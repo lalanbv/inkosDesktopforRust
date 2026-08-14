@@ -6,8 +6,8 @@
 //!   [`parse_chapter_summaries_markdown`] / [`parse_pending_hooks_markdown`] /
 //!   [`parse_current_state_facts`] 及其辅助函数
 //!
-//! 渲染函数（`renderSummarySnapshot` / `renderHookSnapshot`）未移植——它们服务 pipeline/agents
-//! 的 ledger 快照写入，语义与 [`state::projections`] 的全量投影不同，留待 pipeline 阶段勘测。
+//! 渲染函数：[`render_hook_snapshot`]（governed-working-set 内联快照）。
+//! `renderSummarySnapshot` 未移植——服务 pipeline 的 ledger 快照写入，留待 pipeline 阶段勘测。
 //!
 //! ## 移植纪律
 //! 所有解析逻辑须与 TS **逐字一致**——markdown 表格行/单元格切分、章节号严格解析（防止
@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 
 use crate::models::runtime_state::{HookRecord, HookStatus};
 use crate::state::memory_db::{NewFact, StoredSummary};
+use crate::utils::hook_lifecycle::{localize_hook_payoff_timing, resolve_hook_payoff_timing};
 
 fn unwrap_re() -> &'static Regex {
     // 七种 markdown 包装，按 TS 顺序迭代剥离（[text](url) / ** / __ / * / _ / ` / ~~）。
@@ -255,6 +256,132 @@ pub fn parse_pending_hooks_markdown(markdown: &str) -> Vec<HookRecord> {
             promoted: None,
         })
         .collect()
+}
+
+/// 渲染 hook 快照表（无标题行，空表 → `- none`）。
+///
+/// 对齐 TS `renderHookSnapshot`（governed-working-set 的结算工作集渲染）。
+/// 与 [`crate::state::projections::render_hooks_projection`] 的差异：无 `# 伏笔池`
+/// 标题、无诊断标注、无排序（保持传入顺序）、无尾随空行——它是嵌入 prompt 的
+/// 内联片段，不是独立真相文件。
+pub fn render_hook_snapshot(
+    hooks: &[HookRecord],
+    language: crate::utils::language::WritingLanguage,
+) -> String {
+    if hooks.is_empty() {
+        return "- none".to_string();
+    }
+
+    let en = language == crate::utils::language::WritingLanguage::En;
+    let headers: [&str; 2] = if en {
+        [
+            "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    } else {
+        [
+            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    };
+
+    let mut lines: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    for hook in hooks {
+        let timing = resolve_hook_payoff_timing(
+            hook.payoff_timing.map(hook_payoff_timing_str),
+            Some(&hook.expected_payoff),
+            Some(&hook.notes),
+        );
+        let cells = [
+            hook.hook_id.clone(),
+            hook.start_chapter.to_string(),
+            hook.hook_type.clone(),
+            hook_status_str(hook.status).to_string(),
+            hook.last_advanced_chapter.to_string(),
+            hook.expected_payoff.clone(),
+            localize_hook_payoff_timing(timing, language).to_string(),
+            render_depends_on_cell(hook.depends_on.as_deref(), language),
+            hook.pays_off_in_arc.clone().unwrap_or_default(),
+            render_core_hook_cell(hook.core_hook == Some(true), language),
+            render_half_life_cell(hook.half_life_chapters),
+            render_promoted_cell(hook.promoted, language),
+            hook.notes.clone(),
+        ];
+        let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
+        lines.push(format!("| {} |", escaped.join(" | ")));
+    }
+    lines.join("\n")
+}
+
+fn hook_payoff_timing_str(t: crate::models::runtime_state::HookPayoffTiming) -> &'static str {
+    use crate::models::runtime_state::HookPayoffTiming;
+    match t {
+        HookPayoffTiming::Immediate => "immediate",
+        HookPayoffTiming::NearTerm => "near-term",
+        HookPayoffTiming::MidArc => "mid-arc",
+        HookPayoffTiming::SlowBurn => "slow-burn",
+        HookPayoffTiming::Endgame => "endgame",
+    }
+}
+
+fn hook_status_str(s: HookStatus) -> &'static str {
+    match s {
+        HookStatus::Open => "open",
+        HookStatus::Progressing => "progressing",
+        HookStatus::Deferred => "deferred",
+        HookStatus::Resolved => "resolved",
+    }
+}
+
+fn render_depends_on_cell(
+    ids: Option<&[String]>,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
+    let empty = ids.map(|v| v.is_empty()).unwrap_or(true);
+    if empty {
+        return if language == crate::utils::language::WritingLanguage::En {
+            "none".to_string()
+        } else {
+            "无".to_string()
+        };
+    }
+    format!("[{}]", ids.unwrap().join(", "))
+}
+
+fn render_core_hook_cell(is_core: bool, language: crate::utils::language::WritingLanguage) -> String {
+    if language == crate::utils::language::WritingLanguage::En {
+        return if is_core { "true" } else { "false" }.to_string();
+    }
+    if is_core { "是" } else { "否" }.to_string()
+}
+
+fn render_half_life_cell(value: Option<u32>) -> String {
+    match value {
+        Some(v) if v > 0 => v.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn render_promoted_cell(
+    value: Option<bool>,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
+    match value {
+        None => String::new(),
+        Some(v) => {
+            if language == crate::utils::language::WritingLanguage::En {
+                v.to_string()
+            } else if v {
+                "是".to_string()
+            } else {
+                "否".to_string()
+            }
+        }
+    }
+}
+
+fn escape_table_cell(value: &str) -> String {
+    value.replace('|', "\\|").trim().to_string()
 }
 
 /// 解析 current_state markdown → [`NewFact`] 列表。
