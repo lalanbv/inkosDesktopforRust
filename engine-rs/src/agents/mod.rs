@@ -15,6 +15,9 @@
 //! - [`fanfic_prompt_sections`] / [`en_prompt_sections`]：同人/英文 prompt 段（writer
 //!   system prompt 的 section 依赖）
 //! - [`writer_prompts`]：writer system prompt 总装（zh 21 段 / en 19 段）+ 黄金三章纪律
+//! - [`settler_prompts`] / [`observer_prompts`]：writer 编排 Phase 2a/2b（Observer 事实
+//!   提取 + Settler 状态回写）的 system/user prompt 构造——纯函数，与 [`settler_parser`]
+//!   / [`settler_delta_parser`] 输出端配对
 
 pub mod ai_tells;
 pub mod continuity;
@@ -23,10 +26,12 @@ pub mod detector;
 pub mod en_prompt_sections;
 pub mod fanfic_dimensions;
 pub mod fanfic_prompt_sections;
+pub mod observer_prompts;
 pub mod rules_reader;
 pub mod sensitive_words;
 pub mod settler_delta_parser;
 pub mod settler_parser;
+pub mod settler_prompts;
 pub mod style_analyzer;
 pub mod writer_parser;
 pub mod writer_prompts;

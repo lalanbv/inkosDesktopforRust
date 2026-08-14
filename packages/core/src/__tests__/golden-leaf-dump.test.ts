@@ -28,6 +28,11 @@ import { getFanficDimensionConfig } from "../agents/fanfic-dimensions.js";
 import { isCurrentStateSeedPlaceholder } from "../utils/outline-paths.js";
 import { buildGoldenOpeningDiscipline } from "../agents/writer-prompts.js";
 import { buildFanficCanonSection } from "../agents/fanfic-prompt-sections.js";
+import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "../agents/settler-prompts.js";
+import { buildObserverSystemPrompt, buildObserverUserPrompt } from "../agents/observer-prompts.js";
+import type { BookConfig } from "../models/book.js";
+import type { GenreProfile } from "../models/genre-profile.js";
+import type { BookRules } from "../models/book-rules.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -235,6 +240,23 @@ const parseMemoCases: Array<{ name: string; raw: string; chapter: number; golden
 
 describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
   it("writes leaf-domain golden vectors", () => {
+    // ── settler/observer prompt 差分 fixture ──
+    // prompt 输出测试：book/profile/rules 仅取 settler/observer 真正读取的字段
+    // （title/genre/platform；name/language/numericalSystem/chapterTypes；
+    // enableFullCastTracking）。其余字段不影响输出，用 as unknown 收敛类型噪音。
+    const settlerBook: BookConfig = {
+      id: "golden", title: "黄金之书", platform: "tomato", genre: "都市脑洞",
+      status: "active", targetChapters: 300, chapterWordCount: 2000,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const settlerGp = (numerical: boolean, lang: "zh" | "en", types: string[]): GenreProfile => ({
+      name: "都市脑洞", id: "urban", language: lang, chapterTypes: types,
+      fatigueWords: ["震惊", "仿佛"], numericalSystem: numerical, powerScaling: false,
+      eraResearch: false, pacingRule: "每2-3章进展", satisfactionTypes: [], auditDimensions: [],
+    });
+    const fullCastRules = { enableFullCastTracking: true } as unknown as BookRules;
+    const PLACEHOLDER = "(文件尚未创建)";
+
     const payload = {
       // 注：每个 expected 直接调用真实 TS 实现取得——这些就是真值。
       derive_book_id: bookIdDerive.map((c) => ({ name: c.name, input: c.input, expected: deriveBookIdFromTitle(c.input) })),
@@ -401,6 +423,102 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           expected: buildFanficCanonSection("原作设定文本", mode),
         };
       }),
+      build_settler_system_prompt: [
+        {
+          name: "zh-numerical-with-types",
+          input: { language: "zh", numericalSystem: true, chapterTypes: ["主线推进", "情感过渡"], fullCast: false },
+          expected: buildSettlerSystemPrompt(settlerBook, settlerGp(true, "zh", ["主线推进", "情感过渡"]), null, "zh"),
+        },
+        {
+          name: "zh-no-numerical-no-types",
+          input: { language: undefined, numericalSystem: false, chapterTypes: [], fullCast: false },
+          expected: buildSettlerSystemPrompt(settlerBook, settlerGp(false, "zh", []), null, undefined),
+        },
+        {
+          name: "en-override",
+          input: { language: "en", numericalSystem: true, chapterTypes: ["伏笔回收"], fullCast: false },
+          expected: buildSettlerSystemPrompt(settlerBook, settlerGp(true, "zh", ["伏笔回收"]), null, "en"),
+        },
+        {
+          name: "explicit-zh-overrides-en-genre",
+          input: { language: "zh", numericalSystem: false, chapterTypes: ["主线推进"], fullCast: false, genreLanguage: "en" },
+          expected: buildSettlerSystemPrompt(settlerBook, settlerGp(false, "en", ["主线推进"]), null, "zh"),
+        },
+        {
+          name: "full-cast-enabled",
+          input: { language: "zh", numericalSystem: true, chapterTypes: ["主线推进"], fullCast: true },
+          expected: buildSettlerSystemPrompt(settlerBook, settlerGp(true, "zh", ["主线推进"]), fullCastRules, "zh"),
+        },
+      ],
+      build_settler_user_prompt: [
+        {
+          name: "minimal",
+          input: { chapterNumber: 12, allBlocks: false },
+          expected: buildSettlerUserPrompt({
+            chapterNumber: 12, title: "试炼", content: "正文内容。", currentState: "状态卡内容",
+            ledger: "", hooks: "伏笔池内容", chapterSummaries: PLACEHOLDER, subplotBoard: PLACEHOLDER,
+            emotionalArcs: PLACEHOLDER, characterMatrix: PLACEHOLDER, volumeOutline: "第一卷：开局",
+            observations: undefined, selectedEvidenceBlock: undefined, governedControlBlock: undefined,
+            validationFeedback: undefined,
+          }),
+        },
+        {
+          name: "all-blocks",
+          input: { chapterNumber: 3, allBlocks: true },
+          expected: buildSettlerUserPrompt({
+            chapterNumber: 3, title: "转折", content: "内容", currentState: "状态",
+            ledger: "灵石 120", hooks: "H01", chapterSummaries: "| 章节 |", subplotBoard: "支线A",
+            emotionalArcs: "弧线", characterMatrix: "矩阵", volumeOutline: "不该出现的卷纲",
+            observations: "观察1", selectedEvidenceBlock: "证据块",
+            governedControlBlock: "\n## 本章控制输入\nintent", validationFeedback: "状态矛盾：X",
+          }),
+        },
+        {
+          name: "governed-mutex-outline-hidden",
+          input: { chapterNumber: 1, governed: true },
+          expected: buildSettlerUserPrompt({
+            chapterNumber: 1, title: "t", content: "c", currentState: "s",
+            ledger: "L", hooks: "h", chapterSummaries: "摘要", subplotBoard: "支", emotionalArcs: "情",
+            characterMatrix: "矩", volumeOutline: "卷纲应被隐藏",
+            observations: "obs", selectedEvidenceBlock: "ev",
+            governedControlBlock: "\n## 本章控制输入\nctrl", validationFeedback: "fb",
+          }),
+        },
+      ],
+      build_observer_system_prompt: [
+        {
+          name: "zh-default",
+          input: { language: undefined, genreLanguage: "zh" },
+          expected: buildObserverSystemPrompt(settlerBook, settlerGp(false, "zh", []), undefined),
+        },
+        {
+          name: "en-explicit",
+          input: { language: "en", genreLanguage: "zh" },
+          expected: buildObserverSystemPrompt(settlerBook, settlerGp(false, "zh", []), "en"),
+        },
+        {
+          name: "genre-fallback",
+          input: { language: undefined, genreLanguage: "en" },
+          expected: buildObserverSystemPrompt(settlerBook, settlerGp(false, "en", []), undefined),
+        },
+      ],
+      build_observer_user_prompt: [
+        {
+          name: "zh-none",
+          input: { chapterNumber: 7, title: "暗涌", content: "正文。", language: undefined },
+          expected: buildObserverUserPrompt(7, "暗涌", "正文。", undefined),
+        },
+        {
+          name: "zh-explicit",
+          input: { chapterNumber: 7, title: "暗涌", content: "正文。", language: "zh" },
+          expected: buildObserverUserPrompt(7, "暗涌", "正文。", "zh"),
+        },
+        {
+          name: "en",
+          input: { chapterNumber: 7, title: "Undercurrent", content: "Body.", language: "en" },
+          expected: buildObserverUserPrompt(7, "Undercurrent", "Body.", "en"),
+        },
+      ],
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -413,5 +531,9 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.is_current_state_seed_placeholder.length).toBeGreaterThan(0);
     expect(payload.build_golden_opening_discipline.length).toBeGreaterThan(0);
     expect(payload.build_fanfic_canon_section.length).toBeGreaterThan(0);
+    expect(payload.build_settler_system_prompt.length).toBeGreaterThan(0);
+    expect(payload.build_settler_user_prompt.length).toBeGreaterThan(0);
+    expect(payload.build_observer_system_prompt.length).toBeGreaterThan(0);
+    expect(payload.build_observer_user_prompt.length).toBeGreaterThan(0);
   });
 });

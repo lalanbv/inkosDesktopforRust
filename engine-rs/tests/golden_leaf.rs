@@ -52,6 +52,10 @@ struct LeafGolden {
     is_current_state_seed_placeholder: Vec<Case>,
     build_golden_opening_discipline: Vec<Case>,
     build_fanfic_canon_section: Vec<Case>,
+    build_settler_system_prompt: Vec<Case>,
+    build_settler_user_prompt: Vec<Case>,
+    build_observer_system_prompt: Vec<Case>,
+    build_observer_user_prompt: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -802,6 +806,201 @@ fn build_fanfic_canon_section_matches_ts() {
         assert_eq!(
             got, want,
             "case `{}`: build_fanfic_canon_section 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+// ── settler/observer prompt 差分 fixture（对齐 TS golden-leaf-dump 的 settlerBook/settlerGp）──
+// prompt 输出差分：fixture 仅取 prompt 真正读取的字段；未被读取的字段用 default 填充
+// 不影响输出字符串（settler/observer 只读 name/language/numericalSystem/chapterTypes）。
+fn settler_book() -> inkos_engine::models::book::BookConfig {
+    use inkos_engine::models::book::{BookConfig, BookStatus, Platform};
+    BookConfig {
+        id: "golden".into(),
+        title: "黄金之书".into(),
+        platform: Platform::Tomato,
+        genre: "都市脑洞".into(),
+        status: BookStatus::Active,
+        target_chapters: 300,
+        chapter_word_count: 2000,
+        language: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        updated_at: "2026-01-01T00:00:00.000Z".into(),
+        parent_book_id: None,
+        fanfic_mode: None,
+        writing: None,
+    }
+}
+
+fn settler_gp(numerical: bool, lang: &str, types: &[&str]) -> inkos_engine::models::genre_profile::GenreProfile {
+    inkos_engine::models::genre_profile::GenreProfile {
+        name: "都市脑洞".into(),
+        id: "urban".into(),
+        language: lang.into(),
+        chapter_types: types.iter().map(|&s| s.to_string()).collect(),
+        fatigue_words: vec!["震惊".into(), "仿佛".into()],
+        numerical_system: numerical,
+        ..Default::default()
+    }
+}
+
+/// 从 dump input 读 language 标志：undefined/缺失 → None（对齐 TS `=== "en"` 判定）。
+fn lang_opt(input: &Value) -> Option<inkos_engine::utils::language::WritingLanguage> {
+    use inkos_engine::utils::language::WritingLanguage;
+    match input["language"].as_str() {
+        Some("en") => Some(WritingLanguage::En),
+        Some("zh") => Some(WritingLanguage::Zh),
+        _ => None,
+    }
+}
+
+#[test]
+fn build_settler_system_prompt_matches_ts() {
+    use inkos_engine::agents::settler_prompts::build_settler_system_prompt;
+    use inkos_engine::models::book_rules::BookRules;
+    let book = settler_book();
+    for c in &load().build_settler_system_prompt {
+        let lang = lang_opt(&c.input);
+        let genre_lang = c.input["genreLanguage"].as_str().unwrap_or("zh");
+        let numerical = c.input["numericalSystem"].as_bool().unwrap_or(false);
+        let types: Vec<&str> = c.input["chapterTypes"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        let gp = settler_gp(numerical, genre_lang, &types);
+        let full_cast = c.input["fullCast"].as_bool().unwrap_or(false);
+        let rules = if full_cast {
+            Some(BookRules {
+                enable_full_cast_tracking: true,
+                ..BookRules::default()
+            })
+        } else {
+            None
+        };
+        let got = build_settler_system_prompt(&book, &gp, rules.as_ref(), lang);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_settler_system_prompt 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn build_settler_user_prompt_matches_ts() {
+    use inkos_engine::agents::settler_prompts::{build_settler_user_prompt, SettlerUserPromptInput};
+    const PH: &str = "(文件尚未创建)";
+    for c in &load().build_settler_user_prompt {
+        // 3 个固定向量：params 全字段在 Rust 侧按命名重建（对齐 TS dump 的字面量）。
+        let params = match c.name.as_str() {
+            "minimal" => SettlerUserPromptInput {
+                chapter_number: 12,
+                title: "试炼",
+                content: "正文内容。",
+                current_state: "状态卡内容",
+                ledger: "",
+                hooks: "伏笔池内容",
+                chapter_summaries: PH,
+                subplot_board: PH,
+                emotional_arcs: PH,
+                character_matrix: PH,
+                volume_outline: "第一卷：开局",
+                observations: None,
+                selected_evidence_block: None,
+                governed_control_block: None,
+                validation_feedback: None,
+            },
+            "all-blocks" => SettlerUserPromptInput {
+                chapter_number: 3,
+                title: "转折",
+                content: "内容",
+                current_state: "状态",
+                ledger: "灵石 120",
+                hooks: "H01",
+                chapter_summaries: "| 章节 |",
+                subplot_board: "支线A",
+                emotional_arcs: "弧线",
+                character_matrix: "矩阵",
+                volume_outline: "不该出现的卷纲",
+                observations: Some("观察1"),
+                selected_evidence_block: Some("证据块"),
+                governed_control_block: Some("\n## 本章控制输入\nintent"),
+                validation_feedback: Some("状态矛盾：X"),
+            },
+            "governed-mutex-outline-hidden" => SettlerUserPromptInput {
+                chapter_number: 1,
+                title: "t",
+                content: "c",
+                current_state: "s",
+                ledger: "L",
+                hooks: "h",
+                chapter_summaries: "摘要",
+                subplot_board: "支",
+                emotional_arcs: "情",
+                character_matrix: "矩",
+                volume_outline: "卷纲应被隐藏",
+                observations: Some("obs"),
+                selected_evidence_block: Some("ev"),
+                governed_control_block: Some("\n## 本章控制输入\nctrl"),
+                validation_feedback: Some("fb"),
+            },
+            other => panic!("未知 build_settler_user_prompt case: {other}"),
+        };
+        let got = build_settler_user_prompt(&params);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_settler_user_prompt 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn build_observer_system_prompt_matches_ts() {
+    use inkos_engine::agents::observer_prompts::build_observer_system_prompt;
+    let book = settler_book();
+    for c in &load().build_observer_system_prompt {
+        let lang = lang_opt(&c.input);
+        let genre_lang = c.input["genreLanguage"].as_str().unwrap_or("zh");
+        let gp = settler_gp(false, genre_lang, &[]);
+        let got = build_observer_system_prompt(&book, &gp, lang);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_observer_system_prompt 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn build_observer_user_prompt_matches_ts() {
+    use inkos_engine::agents::observer_prompts::build_observer_user_prompt;
+    for c in &load().build_observer_user_prompt {
+        let chapter = c.input["chapterNumber"].as_i64().unwrap() as u32;
+        let title = c.input["title"].as_str().unwrap();
+        let content = c.input["content"].as_str().unwrap();
+        let lang = lang_opt(&c.input);
+        let got = build_observer_user_prompt(chapter, title, content, lang);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_observer_user_prompt 与 TS 不一致（字节级文案 diff）",
             c.name
         );
     }
