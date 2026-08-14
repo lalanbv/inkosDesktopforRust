@@ -56,6 +56,11 @@ import {
 } from "../agents/planner-context.js";
 import { PlannerAgent } from "../agents/planner.js";
 import {
+  buildGovernedRuleStack,
+  buildGovernedTrace,
+  isProtectedContextSource,
+} from "../utils/context-assembly.js";
+import {
   buildGovernedHookWorkingSet,
   buildGovernedCharacterMatrixWorkingSet,
   mergeTableMarkdownByKey,
@@ -940,6 +945,46 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "empty", input: { hooks: [], chapterNumber: 9, language: "zh" }, expected: formatRecyclableHooks([], 9, "zh") },
         ];
       })(),
+      // ── 35 号：context-assembly（composer 模块级私有函数不可从 dump 访问，
+      //     由 Rust 单测镜像覆盖）──
+      build_governed_rule_stack: (() => {
+        const plan = {
+          intent: { chapter: 7, goal: "g", outlineNode: "n", arcContext: undefined, mustKeep: [], mustAvoid: ["禁止降智", "不要圣母"], styleEmphasis: ["POV 收紧"] },
+          memo: { chapter: 7, goal: "g", isGoldenOpening: false, body: "b", threadRefs: [] },
+          intentMarkdown: "",
+          plannerInputs: [],
+          runtimePath: "/tmp/x",
+        } as unknown as Parameters<typeof buildGovernedRuleStack>[0];
+        return [
+          { name: "overrides-from-intent", input: { mustAvoid: plan.intent.mustAvoid, styleEmphasis: plan.intent.styleEmphasis, chapterNumber: 7 }, expected: buildGovernedRuleStack(plan, 7) },
+          { name: "empty-intent", input: { mustAvoid: [], styleEmphasis: [], chapterNumber: 1 }, expected: buildGovernedRuleStack({ ...plan, intent: { chapter: 1, goal: "g", outlineNode: undefined, arcContext: undefined, mustKeep: [], mustAvoid: [], styleEmphasis: [] } } as unknown as Parameters<typeof buildGovernedRuleStack>[0], 1) },
+        ];
+      })(),
+      build_governed_trace: (() => {
+        const plan = {
+          intent: { chapter: 4, goal: "推进主线", outlineNode: "节点", arcContext: undefined, mustKeep: ["保一"], mustAvoid: [], styleEmphasis: [] },
+          memo: { chapter: 4, goal: "推进主线", isGoldenOpening: true, body: "memo 正文", threadRefs: ["H01"] },
+          intentMarkdown: "",
+          plannerInputs: ["story/author_intent.md"],
+          runtimePath: "/tmp/chapter-0004.intent.md",
+        } as unknown as Parameters<typeof buildGovernedRuleStack>[0];
+        const contextPackage = {
+          chapter: 4,
+          selectedContext: [
+            { source: "runtime/chapter_memo", reason: "memo", excerpt: "goal=推进主线" },
+            { source: "story/chapter_summaries.md#3", reason: "episodic", excerpt: "第3章摘要内容" },
+          ],
+        };
+        return [
+          { name: "tiers-and-budget", input: { plan, contextPackage, composerInputs: [plan.runtimePath], notes: ["note-a"] }, expected: buildGovernedTrace({ chapterNumber: 4, plan, contextPackage, composerInputs: [plan.runtimePath], notes: ["note-a"] }) },
+        ];
+      })(),
+      is_protected_context_source: [
+        { name: "protected", input: { source: "story/outline/volume_map.md#卷一" }, expected: isProtectedContextSource("story/outline/volume_map.md#卷一") },
+        { name: "hook-debt", input: { source: "runtime/hook_debt#H01" }, expected: isProtectedContextSource("runtime/hook_debt#H01") },
+        { name: "summary-not-protected", input: { source: "story/chapter_summaries.md#3" }, expected: isProtectedContextSource("story/chapter_summaries.md#3") },
+        { name: "recent-endings-not-protected", input: { source: "story/chapters#recent_endings" }, expected: isProtectedContextSource("story/chapters#recent_endings") },
+      ],
       planner_private_suite: (() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const planner = new PlannerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
@@ -1001,5 +1046,8 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.planner_system_prompt.length).toBeGreaterThan(0);
     expect(payload.planner_build_user_message.length).toBeGreaterThan(0);
     expect(payload.planner_private_suite.length).toBeGreaterThan(0);
+    expect(payload.build_governed_rule_stack.length).toBeGreaterThan(0);
+    expect(payload.build_governed_trace.length).toBeGreaterThan(0);
+    expect(payload.is_protected_context_source.length).toBeGreaterThan(0);
   });
 });

@@ -91,6 +91,9 @@ struct LeafGolden {
     planner_extract_relevant_threads: Vec<Case>,
     planner_format_recyclable_hooks: Vec<Case>,
     planner_private_suite: Vec<Case>,
+    build_governed_rule_stack: Vec<Case>,
+    build_governed_trace: Vec<Case>,
+    is_protected_context_source: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1735,5 +1738,57 @@ fn planner_private_suite_matches_ts() {
             other => panic!("未知 private suite case: {other}"),
         };
         assert_eq!(got, c.expected, "case `{}`", c.name);
+    }
+}
+
+// ---- 35 号：context-assembly ----
+
+#[test]
+fn build_governed_rule_stack_matches_ts() {
+    use inkos_engine::utils::context_assembly::build_governed_rule_stack;
+    for c in &load().build_governed_rule_stack {
+        let must_avoid: Vec<String> = serde_json::from_value(c.input["mustAvoid"].clone()).unwrap();
+        let style_emphasis: Vec<String> =
+            serde_json::from_value(c.input["styleEmphasis"].clone()).unwrap();
+        let chapter = c.input["chapterNumber"].as_u64().unwrap() as u32;
+        let got = build_governed_rule_stack(&must_avoid, &style_emphasis, chapter);
+        let expected = serde_json::to_value(&got).unwrap();
+        let want: serde_json::Value = serde_json::from_value(c.expected.clone()).unwrap();
+        assert_eq!(expected, want, "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn build_governed_trace_matches_ts() {
+    use inkos_engine::models::input_governance::ContextPackage;
+    use inkos_engine::utils::context_assembly::{build_governed_trace, GovernedTraceParams};
+    for c in &load().build_governed_trace {
+        let context_package: ContextPackage =
+            serde_json::from_value(c.input["contextPackage"].clone()).unwrap();
+        let notes: Vec<String> = serde_json::from_value(c.input["notes"].clone()).unwrap();
+        let composer_inputs: Vec<String> =
+            serde_json::from_value(c.input["composerInputs"].clone()).unwrap();
+        let planner_inputs: Vec<String> =
+            serde_json::from_value(c.input["plan"]["plannerInputs"].clone()).unwrap();
+        let chapter = c.input["plan"]["intent"]["chapter"].as_u64().unwrap() as u32;
+        let got = build_governed_trace(&GovernedTraceParams {
+            chapter_number: chapter,
+            planner_inputs: &planner_inputs,
+            composer_inputs: &composer_inputs,
+            context_package: &context_package,
+            notes: &notes,
+            prompt_packs: None,
+            compression: None,
+        });
+        assert_eq!(serde_json::to_value(&got).unwrap(), c.expected, "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn is_protected_context_source_matches_ts() {
+    use inkos_engine::utils::context_assembly::is_protected_context_source;
+    for c in &load().is_protected_context_source {
+        let got = is_protected_context_source(c.input["source"].as_str().unwrap());
+        assert_eq!(got, c.expected.as_bool().unwrap(), "case `{}`", c.name);
     }
 }

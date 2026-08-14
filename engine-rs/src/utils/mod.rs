@@ -19,6 +19,7 @@ pub mod cadence_policy;
 pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
+pub mod context_assembly;
 pub mod context_filter;
 pub mod governed_context;
 pub mod governed_working_set;
@@ -42,6 +43,7 @@ pub mod path;
 pub mod planning_materials;
 pub mod spot_fix_patches;
 pub mod pov_filter;
+pub mod runtime_writer;
 pub mod story_markdown;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};

@@ -3487,6 +3487,296 @@
       "expected": "（暂无陈旧 hook——账本干净）"
     }
   ],
+  "build_governed_rule_stack": [
+    {
+      "name": "overrides-from-intent",
+      "input": {
+        "mustAvoid": [
+          "禁止降智",
+          "不要圣母"
+        ],
+        "styleEmphasis": [
+          "POV 收紧"
+        ],
+        "chapterNumber": 7
+      },
+      "expected": {
+        "layers": [
+          {
+            "id": "L1",
+            "name": "hard_facts",
+            "precedence": 100,
+            "scope": "global"
+          },
+          {
+            "id": "L2",
+            "name": "author_intent",
+            "precedence": 80,
+            "scope": "book"
+          },
+          {
+            "id": "L3",
+            "name": "planning",
+            "precedence": 60,
+            "scope": "arc"
+          },
+          {
+            "id": "L4",
+            "name": "current_task",
+            "precedence": 70,
+            "scope": "local"
+          }
+        ],
+        "sections": {
+          "hard": [
+            "story_frame",
+            "current_state",
+            "book_rules",
+            "roles"
+          ],
+          "soft": [
+            "author_intent",
+            "current_focus",
+            "volume_map"
+          ],
+          "diagnostic": [
+            "anti_ai_checks",
+            "continuity_audit",
+            "style_regression_checks"
+          ]
+        },
+        "overrideEdges": [
+          {
+            "from": "L4",
+            "to": "L3",
+            "allowed": true,
+            "scope": "current_chapter"
+          },
+          {
+            "from": "L4",
+            "to": "L2",
+            "allowed": false,
+            "scope": "current_chapter"
+          },
+          {
+            "from": "L4",
+            "to": "L1",
+            "allowed": false,
+            "scope": "current_chapter"
+          }
+        ],
+        "activeOverrides": [
+          {
+            "from": "L4",
+            "to": "L3",
+            "target": "chapter:7/mustAvoid",
+            "reason": "禁止降智"
+          },
+          {
+            "from": "L4",
+            "to": "L3",
+            "target": "chapter:7/mustAvoid",
+            "reason": "不要圣母"
+          },
+          {
+            "from": "L4",
+            "to": "L3",
+            "target": "chapter:7/styleEmphasis",
+            "reason": "POV 收紧"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-intent",
+      "input": {
+        "mustAvoid": [],
+        "styleEmphasis": [],
+        "chapterNumber": 1
+      },
+      "expected": {
+        "layers": [
+          {
+            "id": "L1",
+            "name": "hard_facts",
+            "precedence": 100,
+            "scope": "global"
+          },
+          {
+            "id": "L2",
+            "name": "author_intent",
+            "precedence": 80,
+            "scope": "book"
+          },
+          {
+            "id": "L3",
+            "name": "planning",
+            "precedence": 60,
+            "scope": "arc"
+          },
+          {
+            "id": "L4",
+            "name": "current_task",
+            "precedence": 70,
+            "scope": "local"
+          }
+        ],
+        "sections": {
+          "hard": [
+            "story_frame",
+            "current_state",
+            "book_rules",
+            "roles"
+          ],
+          "soft": [
+            "author_intent",
+            "current_focus",
+            "volume_map"
+          ],
+          "diagnostic": [
+            "anti_ai_checks",
+            "continuity_audit",
+            "style_regression_checks"
+          ]
+        },
+        "overrideEdges": [
+          {
+            "from": "L4",
+            "to": "L3",
+            "allowed": true,
+            "scope": "current_chapter"
+          },
+          {
+            "from": "L4",
+            "to": "L2",
+            "allowed": false,
+            "scope": "current_chapter"
+          },
+          {
+            "from": "L4",
+            "to": "L1",
+            "allowed": false,
+            "scope": "current_chapter"
+          }
+        ],
+        "activeOverrides": []
+      }
+    }
+  ],
+  "build_governed_trace": [
+    {
+      "name": "tiers-and-budget",
+      "input": {
+        "plan": {
+          "intent": {
+            "chapter": 4,
+            "goal": "推进主线",
+            "outlineNode": "节点",
+            "mustKeep": [
+              "保一"
+            ],
+            "mustAvoid": [],
+            "styleEmphasis": []
+          },
+          "memo": {
+            "chapter": 4,
+            "goal": "推进主线",
+            "isGoldenOpening": true,
+            "body": "memo 正文",
+            "threadRefs": [
+              "H01"
+            ]
+          },
+          "intentMarkdown": "",
+          "plannerInputs": [
+            "story/author_intent.md"
+          ],
+          "runtimePath": "/tmp/chapter-0004.intent.md"
+        },
+        "contextPackage": {
+          "chapter": 4,
+          "selectedContext": [
+            {
+              "source": "runtime/chapter_memo",
+              "reason": "memo",
+              "excerpt": "goal=推进主线"
+            },
+            {
+              "source": "story/chapter_summaries.md#3",
+              "reason": "episodic",
+              "excerpt": "第3章摘要内容"
+            }
+          ]
+        },
+        "composerInputs": [
+          "/tmp/chapter-0004.intent.md"
+        ],
+        "notes": [
+          "note-a"
+        ]
+      },
+      "expected": {
+        "chapter": 4,
+        "plannerInputs": [
+          "story/author_intent.md"
+        ],
+        "composerInputs": [
+          "/tmp/chapter-0004.intent.md"
+        ],
+        "selectedSources": [
+          "runtime/chapter_memo",
+          "story/chapter_summaries.md#3"
+        ],
+        "promptPacks": [],
+        "contextTiers": {
+          "protectedSources": [
+            "runtime/chapter_memo"
+          ],
+          "compressibleSources": [
+            "story/chapter_summaries.md#3"
+          ]
+        },
+        "tokenBudget": {
+          "protectedTokens": 12,
+          "compressibleTokens": 16,
+          "totalSelectedTokens": 28
+        },
+        "notes": [
+          "note-a"
+        ]
+      }
+    }
+  ],
+  "is_protected_context_source": [
+    {
+      "name": "protected",
+      "input": {
+        "source": "story/outline/volume_map.md#卷一"
+      },
+      "expected": true
+    },
+    {
+      "name": "hook-debt",
+      "input": {
+        "source": "runtime/hook_debt#H01"
+      },
+      "expected": true
+    },
+    {
+      "name": "summary-not-protected",
+      "input": {
+        "source": "story/chapter_summaries.md#3"
+      },
+      "expected": false
+    },
+    {
+      "name": "recent-endings-not-protected",
+      "input": {
+        "source": "story/chapters#recent_endings"
+      },
+      "expected": false
+    }
+  ],
   "planner_private_suite": [
     {
       "name": "derive-goal-chain",

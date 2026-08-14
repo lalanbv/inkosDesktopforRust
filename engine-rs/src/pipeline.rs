@@ -1,2 +1,7 @@
-//! pipeline 域（Phase P3 占位）。待自下而上移植：从 packages/core/src/pipeline 搬运逻辑 + golden 差分测试守门。
-//! 见迁移规划 v1 附录 A 的域→Phase 矩阵。
+//! pipeline 域（编排层）。
+//!
+//! 自下而上移植自 `packages/core/src/pipeline`：当前含
+//! [`persisted_governed_plan`]（治理计划 plan.md 存取 + legacy intent 回退）；
+//! runner 编排本体（writeNextChapter 全链路）待 agents 域齐备后迁移。
+
+pub mod persisted_governed_plan;
