@@ -26,6 +26,8 @@ import { parseBookRules } from "../models/book-rules.js";
 import { buildGovernedMemoryEvidenceBlocks } from "../utils/governed-context.js";
 import { getFanficDimensionConfig } from "../agents/fanfic-dimensions.js";
 import { isCurrentStateSeedPlaceholder } from "../utils/outline-paths.js";
+import { buildGoldenOpeningDiscipline } from "../agents/writer-prompts.js";
+import { buildFanficCanonSection } from "../agents/fanfic-prompt-sections.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = resolve(here, "../../../../engine-rs/tests/golden/utils");
@@ -383,6 +385,22 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "utf16-boundary-601", input: `建书时占位\n${"稳".repeat(595)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"稳".repeat(595)}`) },
         { name: "surrogate-pair-length", input: `建书时占位\n${"😀".repeat(300)}`, expected: isCurrentStateSeedPlaceholder(`建书时占位\n${"😀".repeat(300)}`) },
       ],
+      build_golden_opening_discipline: [
+        { name: "zh-1", input: { chapterNumber: 1, language: "zh" }, expected: buildGoldenOpeningDiscipline(1, "zh") },
+        { name: "zh-2", input: { chapterNumber: 2, language: "zh" }, expected: buildGoldenOpeningDiscipline(2, "zh") },
+        { name: "zh-3", input: { chapterNumber: 3, language: "zh" }, expected: buildGoldenOpeningDiscipline(3, "zh") },
+        { name: "zh-none", input: { chapterNumber: null, language: "zh" }, expected: buildGoldenOpeningDiscipline(undefined, "zh") },
+        { name: "en-1", input: { chapterNumber: 1, language: "en" }, expected: buildGoldenOpeningDiscipline(1, "en") },
+        { name: "en-3", input: { chapterNumber: 3, language: "en" }, expected: buildGoldenOpeningDiscipline(3, "en") },
+        { name: "en-5-skipped", input: { chapterNumber: 5, language: "en" }, expected: buildGoldenOpeningDiscipline(5, "en") },
+      ],
+      build_fanfic_canon_section: (["canon", "au", "ooc", "cp"] as const).map((mode) => {
+        return {
+          name: mode,
+          input: { fanficCanon: "原作设定文本", mode },
+          expected: buildFanficCanonSection("原作设定文本", mode),
+        };
+      }),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -393,5 +411,7 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_governed_memory_evidence_blocks.length).toBeGreaterThan(0);
     expect(payload.get_fanfic_dimension_config.length).toBeGreaterThan(0);
     expect(payload.is_current_state_seed_placeholder.length).toBeGreaterThan(0);
+    expect(payload.build_golden_opening_discipline.length).toBeGreaterThan(0);
+    expect(payload.build_fanfic_canon_section.length).toBeGreaterThan(0);
   });
 });

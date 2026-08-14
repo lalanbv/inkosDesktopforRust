@@ -21,6 +21,18 @@ pub enum Platform {
     Other,
 }
 
+impl Platform {
+    /// 序列化同值字符串（prompt 插值用，对齐 TS `${book.platform}`）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Platform::Tomato => "tomato",
+            Platform::Feilu => "feilu",
+            Platform::Qidian => "qidian",
+            Platform::Other => "other",
+        }
+    }
+}
+
 /// 书籍状态。对齐 TS `BookStatusSchema`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]

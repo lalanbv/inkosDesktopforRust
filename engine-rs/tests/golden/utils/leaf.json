@@ -1792,5 +1792,97 @@
       "input": "建书时占位\n😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
       "expected": false
     }
+  ],
+  "build_golden_opening_discipline": [
+    {
+      "name": "zh-1",
+      "input": {
+        "chapterNumber": 1,
+        "language": "zh"
+      },
+      "expected": "## 黄金三章写作纪律 — 第 1 章\n\n这是开篇三章中的第 1 章——你写出的每一句话都直接决定读者是否留下来。黄金三章法则对你不是建议，是对句子的硬约束。第 1 章：主角出场 800 字以内必须触发主线冲突（追杀、死局、被夺权、穿越即危机），禁止长段背景铺垫，世界观要通过主角的行动自然带出，不要整段解释。**第 1 章正文前 300 字（手机屏第一页）的最后一句必须是带戏剧性/反差/反转的收尾——警察叔叔我穿越了这类、我大概明天就要死了这类、我躺在自己的葬礼上这类——而不是介绍背景或交代环境。读者第一屏刷到页尾时必须产生\"下一句是什么\"的拉力。** 第 2 章：金手指/能力/系统/重生记忆/信息差必须\"做出来\"——一次具体使用的事件、一个看得见的后果——而不是\"说出来\"——旁白介绍它存在。第 3 章：本章中段必须让主角下一个可量化的短期目标浮上水面，读者合上页面要能说出\"接下来他要干什么\"。\n\n贯穿开篇三章的纪律：段落 3-5 行（手机阅读节奏），动词压过形容词，每一章结尾必有小钩子——小悬念、未解之问、情绪缺口。**本章场景 ≤ 2 个、有名有姓参与正面冲突的人物 ≤ 2 个（主角 + 1 个触发者或对手；路人甲乙只报身份不给名字，不展开）。开篇人物上限从 3 收紧到 2：3 个已经够读者记混，2 个最稳。** 信息分层植入到动作里：基础信息（外貌、身份、处境）通过主角行动自然带出；关键设定（系统规则、世界底层）结合剧情节点揭示；禁止整段 exposition。"
+    },
+    {
+      "name": "zh-2",
+      "input": {
+        "chapterNumber": 2,
+        "language": "zh"
+      },
+      "expected": "## 黄金三章写作纪律 — 第 2 章\n\n这是开篇三章中的第 2 章——你写出的每一句话都直接决定读者是否留下来。黄金三章法则对你不是建议，是对句子的硬约束。第 1 章：主角出场 800 字以内必须触发主线冲突（追杀、死局、被夺权、穿越即危机），禁止长段背景铺垫，世界观要通过主角的行动自然带出，不要整段解释。**第 1 章正文前 300 字（手机屏第一页）的最后一句必须是带戏剧性/反差/反转的收尾——警察叔叔我穿越了这类、我大概明天就要死了这类、我躺在自己的葬礼上这类——而不是介绍背景或交代环境。读者第一屏刷到页尾时必须产生\"下一句是什么\"的拉力。** 第 2 章：金手指/能力/系统/重生记忆/信息差必须\"做出来\"——一次具体使用的事件、一个看得见的后果——而不是\"说出来\"——旁白介绍它存在。第 3 章：本章中段必须让主角下一个可量化的短期目标浮上水面，读者合上页面要能说出\"接下来他要干什么\"。\n\n贯穿开篇三章的纪律：段落 3-5 行（手机阅读节奏），动词压过形容词，每一章结尾必有小钩子——小悬念、未解之问、情绪缺口。**本章场景 ≤ 2 个、有名有姓参与正面冲突的人物 ≤ 2 个（主角 + 1 个触发者或对手；路人甲乙只报身份不给名字，不展开）。开篇人物上限从 3 收紧到 2：3 个已经够读者记混，2 个最稳。** 信息分层植入到动作里：基础信息（外貌、身份、处境）通过主角行动自然带出；关键设定（系统规则、世界底层）结合剧情节点揭示；禁止整段 exposition。"
+    },
+    {
+      "name": "zh-3",
+      "input": {
+        "chapterNumber": 3,
+        "language": "zh"
+      },
+      "expected": "## 黄金三章写作纪律 — 第 3 章\n\n这是开篇三章中的第 3 章——你写出的每一句话都直接决定读者是否留下来。黄金三章法则对你不是建议，是对句子的硬约束。第 1 章：主角出场 800 字以内必须触发主线冲突（追杀、死局、被夺权、穿越即危机），禁止长段背景铺垫，世界观要通过主角的行动自然带出，不要整段解释。**第 1 章正文前 300 字（手机屏第一页）的最后一句必须是带戏剧性/反差/反转的收尾——警察叔叔我穿越了这类、我大概明天就要死了这类、我躺在自己的葬礼上这类——而不是介绍背景或交代环境。读者第一屏刷到页尾时必须产生\"下一句是什么\"的拉力。** 第 2 章：金手指/能力/系统/重生记忆/信息差必须\"做出来\"——一次具体使用的事件、一个看得见的后果——而不是\"说出来\"——旁白介绍它存在。第 3 章：本章中段必须让主角下一个可量化的短期目标浮上水面，读者合上页面要能说出\"接下来他要干什么\"。\n\n贯穿开篇三章的纪律：段落 3-5 行（手机阅读节奏），动词压过形容词，每一章结尾必有小钩子——小悬念、未解之问、情绪缺口。**本章场景 ≤ 2 个、有名有姓参与正面冲突的人物 ≤ 2 个（主角 + 1 个触发者或对手；路人甲乙只报身份不给名字，不展开）。开篇人物上限从 3 收紧到 2：3 个已经够读者记混，2 个最稳。** 信息分层植入到动作里：基础信息（外貌、身份、处境）通过主角行动自然带出；关键设定（系统规则、世界底层）结合剧情节点揭示；禁止整段 exposition。"
+    },
+    {
+      "name": "zh-none",
+      "input": {
+        "chapterNumber": null,
+        "language": "zh"
+      },
+      "expected": ""
+    },
+    {
+      "name": "en-1",
+      "input": {
+        "chapterNumber": 1,
+        "language": "en"
+      },
+      "expected": "## Golden Opening Discipline — Chapter 1\n\nThis is chapter 1 of the opening three — your prose directly decides whether the reader stays. The Golden Three Chapters rule is a hard constraint on your sentences, not advice. Chapter 1: within the first 800 words the protagonist must trip the main-line conflict (chase, dead-end, dispossession, transmigration-as-crisis); long background paragraphs are forbidden, and worldbuilding rides on the protagonist's actions instead of being explained in a block. **The last sentence of the first 300 words (the reader's first phone screen) must land a dramatic / reversal / striking beat — \"Officer, I transmigrated\"-level, \"I'll probably die tomorrow\"-level, \"I'm attending my own funeral\"-level — not background or scene-setting. When the reader scrolls to the bottom of the first screen they must feel pulled into the next line.** Chapter 2: the edge — power, system, rebirth-memory, information advantage — must be **performed** (one concrete event of using it, with a visible consequence), not **announced** (a narrator paragraph saying it exists). Chapter 3: somewhere in this chapter the protagonist's next quantifiable short-term goal must surface, so the reader can name what comes next when they close the page.\n\nThe discipline that runs across all three opening chapters: paragraphs of three to five lines (mobile reading), verbs over adjectives, and every chapter ends on a small hook — a cliff, an unresolved question, or an emotional gap. **At most two scenes and at most two named characters who actually clash in the chapter (protagonist + one trigger/opponent; walk-on roles get a role label only, no name, no expansion). Editor Cong Yue's rule tightens the cap from 3 to 2 — readers already mix up 3.** Information is layered into action: basic facts (looks, status, situation) emerge from what the protagonist does; key world rules (system mechanics, the deeper logic) attach to plot triggers; a paragraph of pure exposition is forbidden."
+    },
+    {
+      "name": "en-3",
+      "input": {
+        "chapterNumber": 3,
+        "language": "en"
+      },
+      "expected": "## Golden Opening Discipline — Chapter 3\n\nThis is chapter 3 of the opening three — your prose directly decides whether the reader stays. The Golden Three Chapters rule is a hard constraint on your sentences, not advice. Chapter 1: within the first 800 words the protagonist must trip the main-line conflict (chase, dead-end, dispossession, transmigration-as-crisis); long background paragraphs are forbidden, and worldbuilding rides on the protagonist's actions instead of being explained in a block. **The last sentence of the first 300 words (the reader's first phone screen) must land a dramatic / reversal / striking beat — \"Officer, I transmigrated\"-level, \"I'll probably die tomorrow\"-level, \"I'm attending my own funeral\"-level — not background or scene-setting. When the reader scrolls to the bottom of the first screen they must feel pulled into the next line.** Chapter 2: the edge — power, system, rebirth-memory, information advantage — must be **performed** (one concrete event of using it, with a visible consequence), not **announced** (a narrator paragraph saying it exists). Chapter 3: somewhere in this chapter the protagonist's next quantifiable short-term goal must surface, so the reader can name what comes next when they close the page.\n\nThe discipline that runs across all three opening chapters: paragraphs of three to five lines (mobile reading), verbs over adjectives, and every chapter ends on a small hook — a cliff, an unresolved question, or an emotional gap. **At most two scenes and at most two named characters who actually clash in the chapter (protagonist + one trigger/opponent; walk-on roles get a role label only, no name, no expansion). Editor Cong Yue's rule tightens the cap from 3 to 2 — readers already mix up 3.** Information is layered into action: basic facts (looks, status, situation) emerge from what the protagonist does; key world rules (system mechanics, the deeper logic) attach to plot triggers; a paragraph of pure exposition is forbidden."
+    },
+    {
+      "name": "en-5-skipped",
+      "input": {
+        "chapterNumber": 5,
+        "language": "en"
+      },
+      "expected": ""
+    }
+  ],
+  "build_fanfic_canon_section": [
+    {
+      "name": "canon",
+      "input": {
+        "fanficCanon": "原作设定文本",
+        "mode": "canon"
+      },
+      "expected": "\n## 同人正典参照\n\n你正在写**原作向同人**。严格遵守正典：\n- 角色的语癖、说话风格、行为模式必须与原作一致\n- 世界规则不可违反\n- 关键事件时间线不可矛盾\n- 可以填充原作空白、探索未详述的角度\n\n以下是原作正典信息，写作时必须参照：\n\n原作设定文本"
+    },
+    {
+      "name": "au",
+      "input": {
+        "fanficCanon": "原作设定文本",
+        "mode": "au"
+      },
+      "expected": "\n## 同人正典参照\n\n你正在写**AU（平行世界）同人**：\n- 世界规则可以改变（已在 allowedDeviations 中声明的偏离）\n- 角色的核心性格和说话方式应保持辨识度——读者要能认出是谁\n- AU 设定偏离必须内部一致（改了一条规则，相关的都要跟着变）\n\n以下是原作正典信息，写作时必须参照：\n\n原作设定文本"
+    },
+    {
+      "name": "ooc",
+      "input": {
+        "fanficCanon": "原作设定文本",
+        "mode": "ooc"
+      },
+      "expected": "\n## 同人正典参照\n\n你正在写**OOC 同人**：\n- 角色在极端情境下可以偏离性格底色\n- 但偏离必须有情境驱动，不能无缘无故变性格\n- 保留角色的语癖和说话特征——即使性格变了，说话方式也应有辨识度\n\n以下是原作正典信息，写作时必须参照：\n\n原作设定文本"
+    },
+    {
+      "name": "cp",
+      "input": {
+        "fanficCanon": "原作设定文本",
+        "mode": "cp"
+      },
+      "expected": "\n## 同人正典参照\n\n你正在写**CP 同人**，以角色互动和关系发展为核心：\n- 配对双方每章必须有有效互动\n- 互动风格要有化学反应——不是两个人在同一个场景各干各的\n- 关系发展应有节奏感：推进、试探、阻碍、突破\n\n以下是原作正典信息，写作时必须参照：\n\n原作设定文本"
+    }
   ]
 }

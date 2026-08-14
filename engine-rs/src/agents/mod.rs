@@ -12,15 +12,21 @@
 //! - [`continuity`]：ContinuityAuditor 全量——类型层 + 37 维度注记/激活集 +
 //!   四策略结果解析 + [`continuity::audit_chapter`] 编排（[`continuity::AuditorChat`]
 //!   trait 注入 LLM 调用，生产实现待 BaseAgent/LLMRouter 移植）
+//! - [`fanfic_prompt_sections`] / [`en_prompt_sections`]：同人/英文 prompt 段（writer
+//!   system prompt 的 section 依赖）
+//! - [`writer_prompts`]：writer system prompt 总装（zh 21 段 / en 19 段）+ 黄金三章纪律
 
 pub mod ai_tells;
 pub mod continuity;
 pub mod detection_insights;
 pub mod detector;
+pub mod en_prompt_sections;
 pub mod fanfic_dimensions;
+pub mod fanfic_prompt_sections;
 pub mod rules_reader;
 pub mod sensitive_words;
 pub mod settler_delta_parser;
 pub mod settler_parser;
 pub mod style_analyzer;
 pub mod writer_parser;
+pub mod writer_prompts;

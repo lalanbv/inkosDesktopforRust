@@ -50,6 +50,8 @@ struct LeafGolden {
     build_governed_memory_evidence_blocks: Vec<Case>,
     get_fanfic_dimension_config: Vec<Case>,
     is_current_state_seed_placeholder: Vec<Case>,
+    build_golden_opening_discipline: Vec<Case>,
+    build_fanfic_canon_section: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -749,6 +751,58 @@ fn is_current_state_seed_placeholder_matches_ts() {
             "case `{}`: is_current_state_seed_placeholder 与 TS 不一致 (input 前缀={:?})",
             c.name,
             &input[..input.len().min(20)]
+        );
+    }
+}
+
+#[test]
+fn build_golden_opening_discipline_matches_ts() {
+    use inkos_engine::agents::writer_prompts::build_golden_opening_discipline;
+    use inkos_engine::utils::language::WritingLanguage;
+    for c in &load().build_golden_opening_discipline {
+        let lang = match c.input["language"].as_str() {
+            Some("en") => WritingLanguage::En,
+            _ => WritingLanguage::Zh,
+        };
+        let chapter = c.input["chapterNumber"].as_i64().map(|n| n as u32);
+        let got = build_golden_opening_discipline(chapter, lang);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_golden_opening_discipline 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn build_fanfic_canon_section_matches_ts() {
+    use inkos_engine::agents::fanfic_prompt_sections::build_fanfic_canon_section;
+    use inkos_engine::models::book::FanficMode;
+    for c in &load().build_fanfic_canon_section {
+        let mode = match c.input["mode"].as_str() {
+            Some("canon") => FanficMode::Canon,
+            Some("au") => FanficMode::Au,
+            Some("ooc") => FanficMode::Ooc,
+            Some("cp") => FanficMode::Cp,
+            other => panic!("case {}: 未知 mode {other:?}", c.name),
+        };
+        let canon = c
+            .input["fanficCanon"]
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: fanficCanon 非 string", c.name));
+        let got = build_fanfic_canon_section(canon, mode);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: build_fanfic_canon_section 与 TS 不一致（字节级文案 diff）",
+            c.name
         );
     }
 }
