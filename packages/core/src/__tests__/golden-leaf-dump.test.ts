@@ -58,6 +58,7 @@ import { PlannerAgent } from "../agents/planner.js";
 import { ReviserAgent } from "../agents/reviser.js";
 import { LengthNormalizerAgent } from "../agents/length-normalizer.js";
 import { StateValidatorAgent } from "../agents/state-validator.js";
+import { ChapterAnalyzerAgent } from "../agents/chapter-analyzer.js";
 import {
   buildStateDegradedReviewNote,
   parseStateDegradedReviewNote,
@@ -999,6 +1000,37 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       //     resolveAutoOutputMode 由 Rust 单测镜像覆盖）──
       // ── 37 号：length-normalizer 私有方法（实例括号访问）+ state-degraded note ──
       // ── 38 号：state-validator 私有方法（实例括号访问）──
+      // ── 40 号：chapter-analyzer 私有方法（实例括号访问）──
+      chapter_analyzer_suite: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const agent = new ChapterAnalyzerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const a = agent as any;
+        const book = { id: "b", title: "测试书", platform: "other", genre: "other" } as const;
+        const gpZh = { name: "都市", numericalSystem: true } as const;
+        const gpEn = { name: "urban", numericalSystem: false } as const;
+        const summaries = [
+          { chapter: 2, title: "含|竖线", characters: "", events: "多行\n事件", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+        ];
+        const contextPackage = { chapter: 3, selectedContext: [{ source: "story/current_focus.md", reason: "焦点", excerpt: "聚焦夺符" }] };
+        const ruleStack = { layers: [], sections: { hard: ["story_frame"], soft: ["author_intent"], diagnostic: [] }, overrideEdges: [], activeOverrides: [{ from: "L4", to: "L3", target: "chapter:3/mustAvoid", reason: "禁止降智" }] };
+        return [
+          { name: "system-zh-numerical", input: { language: "zh", book, genreProfile: gpZh, genreBody: "题材正文", bookRulesBody: "规则正文" }, expected: a.buildSystemPrompt(book, gpZh, "题材正文", "规则正文", "zh") },
+          { name: "system-en-no-rules", input: { language: "en", book, genreProfile: gpEn, genreBody: "", bookRulesBody: "" }, expected: a.buildSystemPrompt(book, gpEn, "", "", "en") },
+          { name: "user-zh-full", input: { language: "zh", chapterNumber: 3, chapterContent: "正文内容。", chapterTitle: "夜探", currentState: "| 状态 |", ledger: "账本", hooksBlock: "\n## 当前伏笔池\nhooks\n", summariesBlock: "", volumeSummariesBlock: "", subplotBlock: "", emotionalBlock: "", matrixBlock: "", bibleBlock: "", outlineOrControlBlock: "\n## 卷纲\n卷\n" }, expected: a.buildUserPrompt({ language: "zh", chapterNumber: 3, chapterContent: "正文内容。", chapterTitle: "夜探", currentState: "| 状态 |", ledger: "账本", hooksBlock: "\n## 当前伏笔池\nhooks\n", summariesBlock: "", volumeSummariesBlock: "", subplotBlock: "", emotionalBlock: "", matrixBlock: "", bibleBlock: "", outlineOrControlBlock: "\n## 卷纲\n卷\n" }) },
+          { name: "user-en-minimal", input: { language: "en", chapterNumber: 3, chapterContent: "Body.", chapterTitle: undefined, currentState: "| state |", ledger: "", hooksBlock: "", summariesBlock: "", volumeSummariesBlock: "", subplotBlock: "", emotionalBlock: "", matrixBlock: "", bibleBlock: "", outlineOrControlBlock: "" }, expected: a.buildUserPrompt({ language: "en", chapterNumber: 3, chapterContent: "Body.", chapterTitle: undefined, currentState: "| state |", ledger: "", hooksBlock: "", summariesBlock: "", volumeSummariesBlock: "", subplotBlock: "", emotionalBlock: "", matrixBlock: "", bibleBlock: "", outlineOrControlBlock: "" }) },
+          { name: "reduced-control-zh", input: { chapterIntent: "意图文本", contextPackage, ruleStack, language: "zh" }, expected: a.buildReducedControlBlock("意图文本", contextPackage, ruleStack, "zh") },
+          { name: "reduced-control-en", input: { chapterIntent: "intent", contextPackage, ruleStack, language: "en" }, expected: a.buildReducedControlBlock("intent", contextPackage, ruleStack, "en") },
+          { name: "memory-goal", input: { chapterTitle: "夜探", chapterContent: "正文。" }, expected: a.buildMemoryGoal("夜探", "正文。") },
+          { name: "memory-goal-no-title", input: { chapterTitle: undefined, chapterContent: "正文。" }, expected: a.buildMemoryGoal(undefined, "正文。") },
+          { name: "outline-node-next-line", input: { volumeOutline: "## Chapter 3 大比\n林动登场。\n## 其他\n无关", chapterNumber: 3 }, expected: a.findOutlineNode("## Chapter 3 大比\n林动登场。\n## 其他\n无关", 3) ?? null },
+          { name: "outline-node-heading-only", input: { volumeOutline: "## 第 3 章\n## 后续", chapterNumber: 3 }, expected: a.findOutlineNode("## 第 3 章\n## 后续", 3) ?? null },
+          { name: "outline-node-placeholder", input: { volumeOutline: "(文件尚未创建)", chapterNumber: 3 }, expected: a.findOutlineNode("(文件尚未创建)", 3) ?? null },
+          { name: "outline-node-word-boundary", input: { volumeOutline: "## Chapter 34 后章\n内容", chapterNumber: 3 }, expected: a.findOutlineNode("## Chapter 34 后章\n内容", 3) ?? null },
+          { name: "summary-snapshot-zh", input: { summaries, language: "zh" }, expected: a.renderSummarySnapshot(summaries, "zh") },
+          { name: "summary-snapshot-empty-en", input: { summaries: [], language: "en" }, expected: a.renderSummarySnapshot([], "en") },
+        ];
+      })(),
       state_validator_suite: (() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const agent = new StateValidatorAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });

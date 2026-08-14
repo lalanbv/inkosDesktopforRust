@@ -3777,6 +3777,237 @@
       "expected": false
     }
   ],
+  "chapter_analyzer_suite": [
+    {
+      "name": "system-zh-numerical",
+      "input": {
+        "language": "zh",
+        "book": {
+          "id": "b",
+          "title": "测试书",
+          "platform": "other",
+          "genre": "other"
+        },
+        "genreProfile": {
+          "name": "都市",
+          "numericalSystem": true
+        },
+        "genreBody": "题材正文",
+        "bookRulesBody": "规则正文"
+      },
+      "expected": "你是小说连续性分析师。你的任务是分析一章已完成的小说正文，从中提取所有状态变化并更新追踪文件。\n\n## 工作模式\n\n你不是在写作，而是在分析已有正文。你需要：\n1. 仔细阅读正文，提取所有关键信息\n2. 基于\"当前追踪文件\"做增量更新\n3. 输出格式与写作模块完全一致\n\n## 分析维度\n\n从正文中提取以下信息：\n- 角色出场、退场、状态变化（受伤/突破/死亡等）\n- 位置移动、场景转换\n- 物品/资源的获得与消耗\n- 伏笔的埋设、推进、回收\n- 情感弧线变化\n- 支线进展\n- 角色间关系变化、新的信息边界\n\n## 书籍信息\n\n- 标题：测试书\n- 题材：都市（other）\n- 平台：other\n\n- 本题材有数值/资源体系，你必须在 UPDATED_LEDGER 中追踪正文中出现的所有资源变动\n\n## 题材特征\n\n题材正文\n\n## 本书规则\n\n规则正文\n\n## 输出格式（必须严格遵循）\n\n使用 === TAG === 分隔各部分，与写作模块完全一致：\n\n=== CHAPTER_TITLE ===\n（从正文标题行提取或推断章节标题，只输出标题文字）\n\n=== CHAPTER_CONTENT ===\n（原样输出正文内容，不做任何修改）\n\n=== PRE_WRITE_CHECK ===\n（留空，分析模式不需要写作自检）\n\n=== POST_SETTLEMENT ===\n（留空，分析模式不需要写后结算）\n\n=== UPDATED_STATE ===\n更新后的状态卡（Markdown表格），反映本章结束时的最新状态：\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | {章节号} |\n| 当前位置 | ... |\n| 主角状态 | ... |\n| 当前目标 | ... |\n| 当前限制 | ... |\n| 当前敌我 | ... |\n| 当前冲突 | ... |\n\n=== UPDATED_LEDGER ===\n（如有数值系统：更新后的完整资源账本表格；无则留空）\n\n=== UPDATED_HOOKS ===\n更新后的伏笔池（Markdown表格），包含所有已知伏笔的最新状态：\n| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 备注 |\n\n=== CHAPTER_SUMMARY ===\n本章摘要（Markdown表格行）：\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\n=== UPDATED_SUBPLOTS ===\n更新后的支线进度板（Markdown表格）\n\n=== UPDATED_EMOTIONAL_ARCS ===\n更新后的情感弧线（Markdown表格）\n\n=== UPDATED_CHARACTER_MATRIX ===\n更新后的角色矩阵（每个角色一个 ## 块，字段用 bullet list）：\n\n## 角色名\n- **定位**: 主角 / 反派 / 盟友 / 配角 / 提及\n- **标签**: 核心身份标签\n- **反差**: 打破刻板印象的独特细节\n- **说话**: 说话风格概述\n- **性格**: 性格底色\n- **动机**: 根本驱动力\n- **当前**: 本章即时目标\n- **关系**: 某角色(关系性质/Ch#) | ...\n- **已知**: 该角色已知的信息（仅限亲历或被告知）\n- **未知**: 该角色不知道的信息\n\n（每个角色重复以上格式。新角色追加新 ## 块，已有角色做增量更新。）\n\n## 关键规则\n\n1. 状态卡和伏笔池必须基于\"当前追踪文件\"做增量更新，不是从零开始\n2. 正文中的每一个事实性变化都必须反映在对应的追踪文件中\n3. 不要遗漏细节：数值变化、位置变化、关系变化、信息变化都要记录\n4. 角色矩阵中的\"已知/未知\"要准确——角色只知道他在场时发生的事"
+    },
+    {
+      "name": "system-en-no-rules",
+      "input": {
+        "language": "en",
+        "book": {
+          "id": "b",
+          "title": "测试书",
+          "platform": "other",
+          "genre": "other"
+        },
+        "genreProfile": {
+          "name": "urban",
+          "numericalSystem": false
+        },
+        "genreBody": "",
+        "bookRulesBody": ""
+      },
+      "expected": "【LANGUAGE OVERRIDE】ALL output MUST be in English. The === TAG === markers remain unchanged.\n\nYou are a fiction continuity analyst. Analyze a finished chapter, extract every state change, and update the tracking files.\n\n## Working Mode\n\nYou are not writing new prose. You are reading completed chapter text and updating the book's truth files.\n1. Read the chapter carefully and extract all important facts.\n2. Update the existing tracking files incrementally rather than rebuilding them from scratch.\n3. Keep the output contract identical to the writer pipeline.\n\n## What To Extract\n\n- Character entrances, exits, injuries, breakthroughs, deaths, and other status changes\n- Location movement and scene transitions\n- Item or resource gains and losses\n- Hook setup, advancement, and payoff\n- Emotional arc movement\n- Subplot progress\n- Relationship changes and information-boundary changes\n\n## Book Information\n\n- Title: 测试书\n- Genre: urban (other)\n- Platform: other\n\n- This genre has no numerical system; leave UPDATED_LEDGER empty.\n\n## Genre Guidance\n\n\n\n\n\n## Output Format\n\nUse === TAG === delimiters exactly as shown:\n\n=== CHAPTER_TITLE ===\n(Extract or infer the chapter title. Output title text only.)\n\n=== CHAPTER_CONTENT ===\n(Repeat the original chapter content exactly. Do not rewrite.)\n\n=== PRE_WRITE_CHECK ===\n(Leave empty in analysis mode.)\n\n=== POST_SETTLEMENT ===\n(Leave empty in analysis mode.)\n\n=== UPDATED_STATE ===\nUpdated state card as a Markdown table reflecting the end-of-chapter state:\n| Field | Value |\n| --- | --- |\n| Current Chapter | {chapter_number} |\n| Current Location | ... |\n| Protagonist State | ... |\n| Current Goal | ... |\n| Current Constraint | ... |\n| Current Alliances | ... |\n| Current Conflict | ... |\n\n=== UPDATED_LEDGER ===\n(If the genre has a numerical system: output the fully updated resource ledger table. Otherwise leave empty.)\n\n=== UPDATED_HOOKS ===\nUpdated hooks pool as a Markdown table with the latest status of every known hook:\n| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |\n\n=== CHAPTER_SUMMARY ===\nSingle Markdown table row:\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n\n=== UPDATED_SUBPLOTS ===\nUpdated subplot board (Markdown table)\n\n=== UPDATED_EMOTIONAL_ARCS ===\nUpdated emotional arcs (Markdown table)\n\n=== UPDATED_CHARACTER_MATRIX ===\nUpdated character matrix (one ## section per character, bullet-list fields):\n\n## Character Name\n- **Role**: protagonist / antagonist / ally / minor / mentioned\n- **Tags**: core identity tags\n- **Contrast**: distinctive details that defy expectations\n- **Speech**: speaking style summary\n- **Personality**: core personality traits\n- **Motivation**: fundamental driving force\n- **Current**: immediate goal this chapter\n- **Relationships**: OtherChar(type/Ch#) | ...\n- **Known**: what this character knows (only witnessed or told)\n- **Unknown**: what this character does not know\n\n(Repeat for each character. Add new characters; keep existing ones updated.)\n\n## Rules\n\n1. UPDATED_STATE and UPDATED_HOOKS must be incremental updates based on the current tracking files.\n2. Every factual change in the chapter must appear in the corresponding tracking file.\n3. Do not miss resource changes, movement, relationship changes, or information changes.\n4. Information boundaries in the character matrix must stay exact: each character only knows what they directly witnessed or learned."
+    },
+    {
+      "name": "user-zh-full",
+      "input": {
+        "language": "zh",
+        "chapterNumber": 3,
+        "chapterContent": "正文内容。",
+        "chapterTitle": "夜探",
+        "currentState": "| 状态 |",
+        "ledger": "账本",
+        "hooksBlock": "\n## 当前伏笔池\nhooks\n",
+        "summariesBlock": "",
+        "volumeSummariesBlock": "",
+        "subplotBlock": "",
+        "emotionalBlock": "",
+        "matrixBlock": "",
+        "bibleBlock": "",
+        "outlineOrControlBlock": "\n## 卷纲\n卷\n"
+      },
+      "expected": "请分析第3章正文，更新所有追踪文件。\n章节标题：夜探\n\n## 正文内容\n\n正文内容。\n\n## 当前状态卡\n| 状态 |\n\n## 当前资源账本\n账本\n\n\n## 当前伏笔池\nhooks\n\n## 卷纲\n卷\n\n\n请严格按照 === TAG === 格式输出分析结果。"
+    },
+    {
+      "name": "user-en-minimal",
+      "input": {
+        "language": "en",
+        "chapterNumber": 3,
+        "chapterContent": "Body.",
+        "currentState": "| state |",
+        "ledger": "",
+        "hooksBlock": "",
+        "summariesBlock": "",
+        "volumeSummariesBlock": "",
+        "subplotBlock": "",
+        "emotionalBlock": "",
+        "matrixBlock": "",
+        "bibleBlock": "",
+        "outlineOrControlBlock": ""
+      },
+      "expected": "Analyze chapter 3 and update all tracking files.\n\n## Chapter Content\n\nBody.\n\n## Current State\n| state |\n\n\n\nPlease return the result strictly in the === TAG === format."
+    },
+    {
+      "name": "reduced-control-zh",
+      "input": {
+        "chapterIntent": "意图文本",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/current_focus.md",
+              "reason": "焦点",
+              "excerpt": "聚焦夺符"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [
+              "story_frame"
+            ],
+            "soft": [
+              "author_intent"
+            ],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": [
+            {
+              "from": "L4",
+              "to": "L3",
+              "target": "chapter:3/mustAvoid",
+              "reason": "禁止降智"
+            }
+          ]
+        },
+        "language": "zh"
+      },
+      "expected": "\n## 本章控制输入（由 Planner/Composer 编译）\n意图文本\n\n### 已选上下文\n- story/current_focus.md: 焦点 | 聚焦夺符\n\n### 规则栈\n- 硬护栏：story_frame\n- 软约束：author_intent\n- 诊断规则：(无)\n\n### 当前覆盖\n- L4 -> L3: 禁止降智 (chapter:3/mustAvoid)\n"
+    },
+    {
+      "name": "reduced-control-en",
+      "input": {
+        "chapterIntent": "intent",
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/current_focus.md",
+              "reason": "焦点",
+              "excerpt": "聚焦夺符"
+            }
+          ]
+        },
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [
+              "story_frame"
+            ],
+            "soft": [
+              "author_intent"
+            ],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": [
+            {
+              "from": "L4",
+              "to": "L3",
+              "target": "chapter:3/mustAvoid",
+              "reason": "禁止降智"
+            }
+          ]
+        },
+        "language": "en"
+      },
+      "expected": "\n## Chapter Control Inputs (compiled by Planner/Composer)\nintent\n\n### Selected Context\n- story/current_focus.md: 焦点 | 聚焦夺符\n\n### Rule Stack\n- Hard guardrails: story_frame\n- Soft constraints: author_intent\n- Diagnostic rules: (none)\n\n### Active Overrides\n- L4 -> L3: 禁止降智 (chapter:3/mustAvoid)\n"
+    },
+    {
+      "name": "memory-goal",
+      "input": {
+        "chapterTitle": "夜探",
+        "chapterContent": "正文。"
+      },
+      "expected": "夜探\n\n正文。"
+    },
+    {
+      "name": "memory-goal-no-title",
+      "input": {
+        "chapterContent": "正文。"
+      },
+      "expected": "正文。"
+    },
+    {
+      "name": "outline-node-next-line",
+      "input": {
+        "volumeOutline": "## Chapter 3 大比\n林动登场。\n## 其他\n无关",
+        "chapterNumber": 3
+      },
+      "expected": "林动登场。"
+    },
+    {
+      "name": "outline-node-heading-only",
+      "input": {
+        "volumeOutline": "## 第 3 章\n## 后续",
+        "chapterNumber": 3
+      },
+      "expected": "第 3 章"
+    },
+    {
+      "name": "outline-node-placeholder",
+      "input": {
+        "volumeOutline": "(文件尚未创建)",
+        "chapterNumber": 3
+      },
+      "expected": null
+    },
+    {
+      "name": "outline-node-word-boundary",
+      "input": {
+        "volumeOutline": "## Chapter 34 后章\n内容",
+        "chapterNumber": 3
+      },
+      "expected": null
+    },
+    {
+      "name": "summary-snapshot-zh",
+      "input": {
+        "summaries": [
+          {
+            "chapter": 2,
+            "title": "含|竖线",
+            "characters": "",
+            "events": "多行\n事件",
+            "stateChanges": "",
+            "hookActivity": "",
+            "mood": "",
+            "chapterType": ""
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 2 | 含\\|竖线 |  | 多行<br>事件 |  |  |  |  |"
+    },
+    {
+      "name": "summary-snapshot-empty-en",
+      "input": {
+        "summaries": [],
+        "language": "en"
+      },
+      "expected": "(file not created yet)"
+    }
+  ],
   "state_validator_suite": [
     {
       "name": "diff-none-equal",

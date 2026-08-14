@@ -21,6 +21,7 @@
 
 pub mod ai_tells;
 pub mod composer;
+pub mod chapter_analyzer;
 pub mod continuity;
 pub mod detection_insights;
 pub mod detector;

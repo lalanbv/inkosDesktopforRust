@@ -98,6 +98,7 @@ struct LeafGolden {
     length_normalizer_suite: Vec<Case>,
     state_degraded_note: Vec<Case>,
     state_validator_suite: Vec<Case>,
+    chapter_analyzer_suite: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -2125,5 +2126,113 @@ fn state_validator_suite_matches_ts() {
         } else {
             assert_eq!(got, c.expected, "case `{}`", c.name);
         }
+    }
+}
+
+// ---- 40 号：chapter-analyzer ----
+
+#[test]
+fn chapter_analyzer_suite_matches_ts() {
+    use inkos_engine::agents::chapter_analyzer::{
+        build_memory_goal, build_reduced_control_block, build_system_prompt, build_user_prompt,
+        find_outline_node, render_summary_snapshot,
+    };
+    use inkos_engine::models::book::{BookConfig, BookStatus, Platform};
+    use inkos_engine::models::genre_profile::GenreProfile;
+    use inkos_engine::models::input_governance::{ContextPackage, RuleStack};
+    use inkos_engine::state::memory_db::StoredSummary;
+    use inkos_engine::utils::language::WritingLanguage;
+
+    let lang = |value: &str| {
+        if value == "en" {
+            WritingLanguage::En
+        } else {
+            WritingLanguage::Zh
+        }
+    };
+    let book = BookConfig {
+        id: "b".to_string(),
+        title: "测试书".to_string(),
+        platform: Platform::Other,
+        genre: "other".to_string(),
+        status: BookStatus::Active,
+        target_chapters: 0,
+        chapter_word_count: 0,
+        language: None,
+        created_at: String::new(),
+        updated_at: String::new(),
+        parent_book_id: None,
+        fanfic_mode: None,
+        writing: None,
+    };
+    let profile = |value: &serde_json::Value| GenreProfile {
+        name: value["name"].as_str().unwrap().to_string(),
+        numerical_system: value["numericalSystem"].as_bool().unwrap(),
+        ..Default::default()
+    };
+
+    for c in &load().chapter_analyzer_suite {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            name if name.starts_with("system-") => serde_json::to_value(build_system_prompt(
+                &book,
+                &profile(&input["genreProfile"]),
+                input["genreBody"].as_str().unwrap(),
+                input["bookRulesBody"].as_str().unwrap(),
+                lang(input["language"].as_str().unwrap()),
+            ))
+            .unwrap(),
+            name if name.starts_with("user-") => serde_json::to_value(build_user_prompt(
+                lang(input["language"].as_str().unwrap()),
+                input["chapterNumber"].as_u64().unwrap() as u32,
+                input["chapterContent"].as_str().unwrap(),
+                input["chapterTitle"].as_str(),
+                input["currentState"].as_str().unwrap(),
+                input["ledger"].as_str().unwrap(),
+                input["hooksBlock"].as_str().unwrap(),
+                input["summariesBlock"].as_str().unwrap(),
+                input["volumeSummariesBlock"].as_str().unwrap(),
+                input["subplotBlock"].as_str().unwrap(),
+                input["emotionalBlock"].as_str().unwrap(),
+                input["matrixBlock"].as_str().unwrap(),
+                input["bibleBlock"].as_str().unwrap(),
+                input["outlineOrControlBlock"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            name if name.starts_with("reduced-control-") => {
+                let package: ContextPackage =
+                    serde_json::from_value(input["contextPackage"].clone()).unwrap();
+                let rule_stack: RuleStack =
+                    serde_json::from_value(input["ruleStack"].clone()).unwrap();
+                serde_json::to_value(build_reduced_control_block(
+                    input["chapterIntent"].as_str().unwrap(),
+                    &package,
+                    &rule_stack,
+                    lang(input["language"].as_str().unwrap()),
+                ))
+                .unwrap()
+            }
+            name if name.starts_with("memory-goal") => serde_json::to_value(build_memory_goal(
+                input["chapterTitle"].as_str(),
+                input["chapterContent"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            name if name.starts_with("outline-node-") => serde_json::to_value(find_outline_node(
+                input["volumeOutline"].as_str().unwrap(),
+                input["chapterNumber"].as_u64().unwrap() as u32,
+            ))
+            .unwrap(),
+            name if name.starts_with("summary-snapshot-") => {
+                let summaries: Vec<StoredSummary> = serde_json::from_value(input["summaries"].clone())
+                    .unwrap();
+                serde_json::to_value(render_summary_snapshot(
+                    &summaries,
+                    lang(input["language"].as_str().unwrap()),
+                ))
+                .unwrap()
+            }
+            other => panic!("未知 analyzer case: {other}"),
+        };
+        assert_eq!(got, c.expected, "case `{}`", c.name);
     }
 }
