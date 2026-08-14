@@ -10,6 +10,7 @@
 
 pub mod chapter_word_sync;
 pub mod chapter_workspace;
+pub mod manager;
 pub mod memory_db;
 pub mod projections;
 pub mod reducer;
