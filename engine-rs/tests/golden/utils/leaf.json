@@ -3777,6 +3777,149 @@
       "expected": false
     }
   ],
+  "state_validator_suite": [
+    {
+      "name": "diff-none-equal",
+      "input": {
+        "oldText": "a\nb",
+        "newText": "a\nb",
+        "label": "State Card"
+      },
+      "expected": null
+    },
+    {
+      "name": "diff-reorder",
+      "input": {
+        "oldText": "a\nb",
+        "newText": "b\na",
+        "label": "L"
+      },
+      "expected": null
+    },
+    {
+      "name": "diff-added-removed",
+      "input": {
+        "oldText": "a\nb\n\n",
+        "newText": "a\nc",
+        "label": "State Card"
+      },
+      "expected": "### State Card\nRemoved:\n- b\nAdded:\n+ c"
+    },
+    {
+      "name": "diff-blank-ignored",
+      "input": {
+        "oldText": "a\n\n",
+        "newText": "a",
+        "label": "L"
+      },
+      "expected": null
+    },
+    {
+      "name": "authority-none",
+      "input": {},
+      "expected": "## Authority / Cross-Truth Context\n(no authority context provided)"
+    },
+    {
+      "name": "authority-empty",
+      "input": {
+        "authorityContext": {}
+      },
+      "expected": "## Authority / Cross-Truth Context\nAuthority priority: current chapter text > runtime truth files/current summaries > story_frame/book_rules > legacy story_bible intro or marketing-style prose. If the current chapter establishes a numbered/name mapping, new truth files must follow that mapping instead of preserving an older intro-only version.\n\n### story_frame / legacy story_bible excerpt\n(empty)\n\n### book_rules excerpt\n(empty)\n\n### recent chapter_summaries excerpt\n(empty)"
+    },
+    {
+      "name": "authority-full",
+      "input": {
+        "authorityContext": {
+          "storyFrame": " 框架 ",
+          "bookRules": "规则",
+          "chapterSummaries": "摘要"
+        }
+      },
+      "expected": "## Authority / Cross-Truth Context\nAuthority priority: current chapter text > runtime truth files/current summaries > story_frame/book_rules > legacy story_bible intro or marketing-style prose. If the current chapter establishes a numbered/name mapping, new truth files must follow that mapping instead of preserving an older intro-only version.\n\n### story_frame / legacy story_bible excerpt\n框架\n\n### book_rules excerpt\n规则\n\n### recent chapter_summaries excerpt\n摘要"
+    },
+    {
+      "name": "parse-pass-categories",
+      "input": {
+        "content": "PASS\n[unsupported_change] 状态卡说角色移动了，正文只有意图\n- 一般警告行\n短\nFAIL"
+      },
+      "expected": {
+        "warnings": [
+          {
+            "category": "unsupported_change",
+            "description": "状态卡说角色移动了，正文只有意图"
+          },
+          {
+            "category": "general",
+            "description": "一般警告行"
+          }
+        ],
+        "passed": true
+      }
+    },
+    {
+      "name": "parse-fail",
+      "input": {
+        "content": "FAIL\n[contradiction] 状态说角色已死但正文在说话"
+      },
+      "expected": {
+        "warnings": [
+          {
+            "category": "contradiction",
+            "description": "状态说角色已死但正文在说话"
+          }
+        ],
+        "passed": false
+      }
+    },
+    {
+      "name": "parse-json-direct",
+      "input": {
+        "content": "{\"passed\":false,\"warnings\":[{\"category\":\"c1\",\"description\":\"d1\"}]}"
+      },
+      "expected": {
+        "warnings": [
+          {
+            "category": "c1",
+            "description": "d1"
+          }
+        ],
+        "passed": false
+      }
+    },
+    {
+      "name": "parse-json-missing-fields",
+      "input": {
+        "content": "{\"passed\":false,\"warnings\":[{}]}"
+      },
+      "expected": {
+        "warnings": [
+          {
+            "category": "unknown",
+            "description": ""
+          }
+        ],
+        "passed": false
+      }
+    },
+    {
+      "name": "parse-invalid",
+      "input": {
+        "content": "MAYBE"
+      },
+      "expected": {
+        "__error": "Error: State validator returned invalid response"
+      }
+    },
+    {
+      "name": "parse-empty",
+      "input": {
+        "content": "  "
+      },
+      "expected": {
+        "__error": "Error: LLM returned empty response"
+      }
+    }
+  ],
   "length_normalizer_suite": [
     {
       "name": "system-compress",

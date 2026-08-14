@@ -57,6 +57,7 @@ import {
 import { PlannerAgent } from "../agents/planner.js";
 import { ReviserAgent } from "../agents/reviser.js";
 import { LengthNormalizerAgent } from "../agents/length-normalizer.js";
+import { StateValidatorAgent } from "../agents/state-validator.js";
 import {
   buildStateDegradedReviewNote,
   parseStateDegradedReviewNote,
@@ -997,6 +998,35 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       // ── 36 号：reviser（类方法经实例括号访问；模块级私有 buildTieredIssueList /
       //     resolveAutoOutputMode 由 Rust 单测镜像覆盖）──
       // ── 37 号：length-normalizer 私有方法（实例括号访问）+ state-degraded note ──
+      // ── 38 号：state-validator 私有方法（实例括号访问）──
+      state_validator_suite: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const agent = new StateValidatorAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const v = agent as any;
+        const safe = (fn: () => unknown): unknown => {
+          try {
+            return fn();
+          } catch (error) {
+            return { __error: String(error) };
+          }
+        };
+        return [
+          { name: "diff-none-equal", input: { oldText: "a\nb", newText: "a\nb", label: "State Card" }, expected: v.computeDiff("a\nb", "a\nb", "State Card") },
+          { name: "diff-reorder", input: { oldText: "a\nb", newText: "b\na", label: "L" }, expected: v.computeDiff("a\nb", "b\na", "L") },
+          { name: "diff-added-removed", input: { oldText: "a\nb\n\n", newText: "a\nc", label: "State Card" }, expected: v.computeDiff("a\nb\n\n", "a\nc", "State Card") },
+          { name: "diff-blank-ignored", input: { oldText: "a\n\n", newText: "a", label: "L" }, expected: v.computeDiff("a\n\n", "a", "L") },
+          { name: "authority-none", input: { authorityContext: undefined }, expected: v.buildAuthorityContextBlock(undefined) },
+          { name: "authority-empty", input: { authorityContext: { storyFrame: undefined, bookRules: undefined, chapterSummaries: undefined } }, expected: v.buildAuthorityContextBlock({ storyFrame: undefined, bookRules: undefined, chapterSummaries: undefined }) },
+          { name: "authority-full", input: { authorityContext: { storyFrame: " 框架 ", bookRules: "规则", chapterSummaries: "摘要" } }, expected: v.buildAuthorityContextBlock({ storyFrame: " 框架 ", bookRules: "规则", chapterSummaries: "摘要" }) },
+          { name: "parse-pass-categories", input: { content: "PASS\n[unsupported_change] 状态卡说角色移动了，正文只有意图\n- 一般警告行\n短\nFAIL" }, expected: safe(() => v.parseResult("PASS\n[unsupported_change] 状态卡说角色移动了，正文只有意图\n- 一般警告行\n短\nFAIL")) },
+          { name: "parse-fail", input: { content: "FAIL\n[contradiction] 状态说角色已死但正文在说话" }, expected: safe(() => v.parseResult("FAIL\n[contradiction] 状态说角色已死但正文在说话")) },
+          { name: "parse-json-direct", input: { content: "{\"passed\":false,\"warnings\":[{\"category\":\"c1\",\"description\":\"d1\"}]}" }, expected: safe(() => v.parseResult("{\"passed\":false,\"warnings\":[{\"category\":\"c1\",\"description\":\"d1\"}]}")) },
+          { name: "parse-json-missing-fields", input: { content: "{\"passed\":false,\"warnings\":[{}]}" }, expected: safe(() => v.parseResult("{\"passed\":false,\"warnings\":[{}]}")) },
+          { name: "parse-invalid", input: { content: "MAYBE" }, expected: safe(() => v.parseResult("MAYBE")) },
+          { name: "parse-empty", input: { content: "  " }, expected: safe(() => v.parseResult("  ")) },
+        ];
+      })(),
       length_normalizer_suite: (() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const agent = new LengthNormalizerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });

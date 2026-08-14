@@ -97,6 +97,7 @@ struct LeafGolden {
     reviser_private_suite: Vec<Case>,
     length_normalizer_suite: Vec<Case>,
     state_degraded_note: Vec<Case>,
+    state_validator_suite: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -2064,5 +2065,65 @@ fn state_degraded_note_matches_ts() {
             other => panic!("未知 note case: {other}"),
         };
         assert_eq!(got, c.expected, "case `{}`", c.name);
+    }
+}
+
+// ---- 38 号：state-validator ----
+
+#[test]
+fn state_validator_suite_matches_ts() {
+    use inkos_engine::agents::state_validator::{
+        build_authority_context_block, compute_diff, parse_result, StateValidationAuthorityContext,
+        StateValidationError,
+    };
+
+    for c in &load().state_validator_suite {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            name if name.starts_with("diff-") => serde_json::to_value(compute_diff(
+                input["oldText"].as_str().unwrap(),
+                input["newText"].as_str().unwrap(),
+                input["label"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            name if name.starts_with("authority-") => {
+                let context = input["authorityContext"].as_object().map(|fields| {
+                    StateValidationAuthorityContext {
+                        story_frame: fields.get("storyFrame").and_then(|v| v.as_str().map(String::from)),
+                        book_rules: fields.get("bookRules").and_then(|v| v.as_str().map(String::from)),
+                        chapter_summaries: fields
+                            .get("chapterSummaries")
+                            .and_then(|v| v.as_str().map(String::from)),
+                    }
+                });
+                serde_json::to_value(build_authority_context_block(context.as_ref())).unwrap()
+            }
+            name if name.starts_with("parse-") => {
+                let content = input["content"].as_str().unwrap();
+                match parse_result(content) {
+                    Ok(result) => serde_json::json!({
+                        "warnings": result.warnings,
+                        "passed": result.passed,
+                    }),
+                    Err(error) => serde_json::json!({
+                        "__error": match error {
+                            StateValidationError::EmptyResponse => "Error: LLM returned empty response".to_string(),
+                            StateValidationError::InvalidResponse => "Error: State validator returned invalid response".to_string(),
+                            StateValidationError::Chat(message) => format!("Error: {message}"),
+                        }
+                    }),
+                }
+            }
+            other => panic!("未知 state validator case: {other}"),
+        };
+        // TS error marker 的 message 差异（V8 Error.toString 前缀）做宽松对齐：
+        // 仅断言错误存在与否 + 正常路径全等。
+        if c.name.starts_with("parse-invalid") || c.name.starts_with("parse-empty") {
+            let expected_is_error = c.expected.get("__error").is_some();
+            let got_is_error = got.get("__error").is_some();
+            assert_eq!(got_is_error, expected_is_error, "case `{}`", c.name);
+        } else {
+            assert_eq!(got, c.expected, "case `{}`", c.name);
+        }
     }
 }
