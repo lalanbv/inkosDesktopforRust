@@ -161,7 +161,10 @@ pub fn router_books(
         .route("/api/v1/books/:id/plan", post(books_routes::plan).with_state(books.clone()))
         .route("/api/v1/books/:id/settle", post(books_routes::settle).with_state(books.clone()))
         .route("/api/v1/books/:id/draft", post(books_routes::draft).with_state(books.clone()))
-        .route("/api/v1/books/:id/revise/:chapter", post(books_routes::revise).with_state(books))
+        .route("/api/v1/books/:id/revise/:chapter", post(books_routes::revise).with_state(books.clone()))
+        .route("/api/v1/books/:id/compose", post(books_routes::compose).with_state(books.clone()))
+        .route("/api/v1/books/:id/consolidate", post(books_routes::consolidate_endpoint).with_state(books.clone()))
+        .route("/api/v1/books/:id/repair-state/:chapter", post(books_routes::repair_state).with_state(books))
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

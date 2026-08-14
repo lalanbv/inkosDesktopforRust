@@ -475,11 +475,18 @@ mod books_e2e {
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
         let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let temperature = body["temperature"].as_f64();
         let content = if system.contains("创作总编") {
             PLANNER_RESPONSE.to_string()
         } else if system.contains("修稿编辑") {
-            // revise 输出（TAG 协议）。
+            // 修稿提示含"审稿意见"——须先于 audit 分派。
             "=== FIXED_ISSUES ===\n修正了措辞\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺着经脉游走。他攥紧拳头——多年屈辱，今日起一笔一笔讨回来。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
+        } else if system.contains("审") || system.contains("连续") {
+            if temperature == Some(0.0) {
+                r#"{"passed": true, "overallScore": 91, "summary": "修订后连贯。", "issues": []}"#.to_string()
+            } else {
+                r#"{"passed": false, "overallScore": 70, "summary": "有一处问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "略缓。", "suggestion": "压缩。"}]}"#.to_string()
+            }
         } else {
             "PASS".to_string()
         };
@@ -590,13 +597,251 @@ mod books_e2e {
         assert_eq!(response.status(), 200);
         let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        // ReviseOutput camelCase 形状。
+        // 46 号起为审核环结果（ReviseChainResult 形状）。
+        assert_eq!(parsed["applied"], true, "body: {parsed}");
+        assert_eq!(parsed["status"], "revised");
         assert!(parsed["revisedContent"].as_str().unwrap().contains("一笔一笔讨回来"));
         assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
-        assert!(parsed["updatedState"].as_str().unwrap().contains("当前章节"));
-        assert!(parsed["updatedHooks"].as_str().unwrap().contains("H01"));
 
         // SSE：start → complete。
+        assert_eq!(subscriber.recv().await.unwrap().event, "revise:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "revise:complete");
+    }
+}
+
+// ---- 46 号：compose / consolidate / repair-state / revise 审核环 E2E ----
+
+mod books46_e2e {
+    use super::*;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::{
+        compose, consolidate_endpoint, repair_state, revise, BooksRuntime,
+    };
+    use inkos_engine::state::manager::StateManager;
+
+    async fn mock46_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let temperature = body["temperature"].as_f64();
+        let content = if system.contains("创作总编") {
+            PLANNER_RESPONSE.to_string()
+        } else if system.contains("修稿编辑") {
+            // 修稿提示含"审稿意见"——须先于 audit 分派。
+            "=== FIXED_ISSUES ===\n压缩了中段\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——屈辱自今日起讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
+        } else if system.contains("审") || system.contains("连续") {
+            // 审计：pre（默认温）1 个 warning；post（temp 0）PASS。
+            if temperature == Some(0.0) {
+                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#.to_string()
+            } else {
+                r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
+            }
+        } else if system.contains("summarizer") {
+            "第一卷概括：主角觉醒，进入宗门修行。".to_string()
+        } else if system.contains("校验") || system.contains("validator") || system.contains("continuity validator") {
+            "PASS".to_string()
+        } else if system.contains("结算") || system.contains("settler") {
+            WRITER_RESPONSE.to_string()
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock46() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock46_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compose_endpoint_returns_compose_result_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = spawn_mock46().await;
+        let runtime = rt(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/compose", axum::routing::post(compose))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/compose")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // ComposeChapterResult 形状。
+        assert_eq!(parsed["bookId"], "b1");
+        assert!(parsed["intentPath"].as_str().unwrap().contains("chapter-0001.intent.md"));
+        assert!(parsed["contextPath"].as_str().unwrap().contains("chapter-0001.context.json"));
+        assert!(parsed["ruleStackPath"].as_str().unwrap().contains("chapter-0001.rule-stack.yaml"));
+        assert!(parsed["tracePath"].as_str().unwrap().contains("chapter-0001.trace.json"));
+        // 工件落盘。
+        let runtime_dir = root.join("books").join("b1").join("story").join("runtime");
+        assert!(runtime_dir.join("chapter-0001.context.json").exists());
+        assert!(runtime_dir.join("chapter-0001.rule-stack.yaml").exists());
+        assert!(runtime_dir.join("chapter-0001.trace.json").exists());
+    }
+
+    #[tokio::test]
+    async fn consolidate_endpoint_archives_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let story = root.join("books").join("b1").join("story");
+        let outline = story.join("outline");
+        std::fs::create_dir_all(&outline).unwrap();
+        std::fs::write(
+            outline.join("volume_map.md"),
+            "## 第一卷（第1-2章）觉醒\n\n- 第 1 章：开端\n- 第 2 章：推进\n",
+        )
+        .unwrap();
+        std::fs::write(
+            story.join("chapter_summaries.md"),
+            "| 章节 | 标题 |\n| --- | --- |\n| 1 | a |\n| 2 | b |\n| 3 | c |\n",
+        )
+        .unwrap();
+        let llm = spawn_mock46().await;
+        let runtime = rt(&root, &llm);
+        let hub = runtime.hub.clone();
+        let mut subscriber = hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/consolidate", axum::routing::post(consolidate_endpoint))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/consolidate")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["archivedVolumes"], 1);
+        assert_eq!(parsed["retainedChapters"], 1);
+        assert!(parsed["volumeSummaries"].as_str().unwrap().contains("第一卷"));
+        assert_eq!(subscriber.recv().await.unwrap().event, "consolidate:complete");
+    }
+
+    #[tokio::test]
+    async fn repair_state_requires_degraded_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(
+            root.join("books").join("b1").join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        let llm = spawn_mock46().await;
+        let runtime = rt(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/repair-state/:chapter", axum::routing::post(repair_state))
+            .with_state(runtime);
+
+        // 索引里的 1 号章非降级 → Node 文案错误。
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/repair-state/1")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 500);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "Chapter 1 is not state-degraded.");
+    }
+
+    #[tokio::test]
+    async fn revise_chain_runs_audit_fix_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let book = root.join("books").join("b1");
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        let llm = spawn_mock46().await;
+        let runtime = rt(&root, &llm);
+        let hub = runtime.hub.clone();
+        let mut subscriber = hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/revise/1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"mode":"polish"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // 审核环：pre 有 warning → 修稿 → applied。
+        assert_eq!(parsed["applied"], true, "body: {parsed}");
+        assert_eq!(parsed["status"], "revised");
+        eprintln!("REV46: {parsed}");
+        assert!(parsed["revisedContent"].as_str().unwrap().contains("屈辱自今日起讨回"));
+        assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
+
+        // 章节文件被改写（标题保留）。
+        let saved = std::fs::read_to_string(book.join("chapters").join("0001_风起.md")).unwrap();
+        assert!(saved.starts_with("# 第1章 风起"));
+        assert!(saved.contains("屈辱自今日起讨回"));
+
+        // SSE。
         assert_eq!(subscriber.recv().await.unwrap().event, "revise:start");
         assert_eq!(subscriber.recv().await.unwrap().event, "revise:complete");
     }

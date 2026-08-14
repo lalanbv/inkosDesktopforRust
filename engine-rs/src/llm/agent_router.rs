@@ -183,6 +183,16 @@ impl_simple_chat!(LengthNormalizerChat);
 impl_simple_chat!(ChapterAnalyzerChat);
 impl_simple_chat!(StateValidatorChat);
 #[async_trait]
+impl crate::agents::consolidator::ConsolidatorChat for RoutedAgent {
+    async fn chat(
+        &self,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+    ) -> Result<ChatOutcome, String> {
+        self.router.chat(self.agent, messages, temperature, None).await
+    }
+}
+#[async_trait]
 impl crate::agents::continuity::AuditorChat for RoutedAgent {
     async fn chat(
         &self,
