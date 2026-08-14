@@ -56,6 +56,12 @@ struct LeafGolden {
     build_settler_user_prompt: Vec<Case>,
     build_observer_system_prompt: Vec<Case>,
     build_observer_user_prompt: Vec<Case>,
+    normalize_post_write_surface: Vec<Case>,
+    validate_post_write: Vec<Case>,
+    detect_cross_chapter_repetition: Vec<Case>,
+    detect_paragraph_length_drift: Vec<Case>,
+    detect_duplicate_title: Vec<Case>,
+    resolve_duplicate_title: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1001,6 +1007,152 @@ fn build_observer_user_prompt_matches_ts() {
         assert_eq!(
             got, want,
             "case `{}`: build_observer_user_prompt 与 TS 不一致（字节级文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn normalize_post_write_surface_matches_ts() {
+    use inkos_engine::agents::post_write_validator::normalize_post_write_surface;
+    for c in &load().normalize_post_write_surface {
+        let content = c.input["content"].as_str().unwrap();
+        let lang = lang_opt(&c.input);
+        let got = normalize_post_write_surface(content, lang);
+        let want = c
+            .expected
+            .as_str()
+            .unwrap_or_else(|| panic!("case {}: expected 非 string", c.name));
+        assert_eq!(
+            got, want,
+            "case `{}`: normalize_post_write_surface 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn validate_post_write_matches_ts() {
+    use inkos_engine::agents::post_write_validator::validate_post_write;
+    use inkos_engine::models::book_rules::{BookRules, NarrativePerson, Protagonist};
+    let gp = settler_gp(false, "zh", &[]);
+    for c in &load().validate_post_write {
+        let content = c.input["content"].as_str().unwrap();
+        let lang = lang_opt(&c.input);
+        let rules = match c.input["rules"].as_str() {
+            Some("first") => Some(BookRules {
+                narrative_person: Some(NarrativePerson::First),
+                protagonist: Some(Protagonist {
+                    name: "陆承烬".into(),
+                    ..Protagonist::default()
+                }),
+                ..BookRules::default()
+            }),
+            _ => None,
+        };
+        let got = validate_post_write(content, &gp, rules.as_ref(), lang);
+        let got_val = serde_json::to_value(&got).expect("violations 序列化");
+        assert_eq!(
+            got_val, c.expected,
+            "case `{}`: validate_post_write 与 TS 不一致（violations 数组形状/顺序/文案 diff）",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn detect_cross_chapter_repetition_matches_ts() {
+    use inkos_engine::agents::post_write_validator::detect_cross_chapter_repetition;
+    use inkos_engine::utils::language::WritingLanguage;
+    for c in &load().detect_cross_chapter_repetition {
+        // current/recent 由 TS IIFE 构造，Rust 按 scenario 名重建相同字符串。
+        let (got, lang) = match c.name.as_str() {
+            "zh-three" => {
+                let p1 = "风吹过山岗上";
+                let p2 = "雨落在屋檐下";
+                let p3 = "雪覆盖了田野";
+                let current = format!("{p1}{p1}{p2}{p2}{p3}{p3}其他内容填充。");
+                let recent = format!("历史章节提到{p1}和{p2}与{p3}。{}填充。", "长".repeat(100));
+                (detect_cross_chapter_repetition(&current, &recent, WritingLanguage::Zh), WritingLanguage::Zh)
+            }
+            "en-three" => {
+                let current = "the dark shadow moved the dark shadow moved the silent figure stood the silent figure stood the cold wind blew the cold wind blew trailing prose.";
+                let recent = format!(
+                    "earlier the dark shadow moved and the silent figure stood while the cold wind blew. {}",
+                    "x".repeat(100)
+                );
+                (detect_cross_chapter_repetition(current, &recent, WritingLanguage::En), WritingLanguage::En)
+            }
+            other => panic!("未知 detect_cross_chapter_repetition case: {other}"),
+        };
+        let _ = lang;
+        let got_val = serde_json::to_value(&got).expect("violations 序列化");
+        assert_eq!(
+            got_val, c.expected,
+            "case `{}`: detect_cross_chapter_repetition 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn detect_paragraph_length_drift_matches_ts() {
+    use inkos_engine::agents::post_write_validator::detect_paragraph_length_drift;
+    use inkos_engine::utils::language::WritingLanguage;
+    for c in &load().detect_paragraph_length_drift {
+        let got = match c.name.as_str() {
+            "zh-shrink" => {
+                let long_para = "长段落内容".repeat(20);
+                let recent = format!("{long_para}\n\n{long_para}\n\n{long_para}\n\n{long_para}");
+                let current = "短。\n\n短。\n\n短。\n\n短。";
+                detect_paragraph_length_drift(current, &recent, WritingLanguage::Zh)
+            }
+            other => panic!("未知 detect_paragraph_length_drift case: {other}"),
+        };
+        let got_val = serde_json::to_value(&got).expect("violations 序列化");
+        assert_eq!(
+            got_val, c.expected,
+            "case `{}`: detect_paragraph_length_drift 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn detect_duplicate_title_matches_ts() {
+    use inkos_engine::agents::post_write_validator::detect_duplicate_title;
+    for c in &load().detect_duplicate_title {
+        let new_title = c.input["newTitle"].as_str().unwrap();
+        let existing: Vec<String> = c.input["existing"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let got = detect_duplicate_title(new_title, &existing);
+        let got_val = serde_json::to_value(&got).expect("violations 序列化");
+        assert_eq!(
+            got_val, c.expected,
+            "case `{}`: detect_duplicate_title 与 TS 不一致",
+            c.name
+        );
+    }
+}
+
+#[test]
+fn resolve_duplicate_title_matches_ts() {
+    use inkos_engine::agents::post_write_validator::resolve_duplicate_title;
+    use inkos_engine::utils::language::WritingLanguage;
+    for c in &load().resolve_duplicate_title {
+        let new_title = c.input["newTitle"].as_str().unwrap();
+        let existing: Vec<String> = c.input["existing"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let lang = lang_opt(&c.input).unwrap_or(WritingLanguage::Zh);
+        let got = resolve_duplicate_title(new_title, &existing, lang, None);
+        let got_val = serde_json::to_value(&got).expect("result 序列化");
+        assert_eq!(
+            got_val, c.expected,
+            "case `{}`: resolve_duplicate_title 与 TS 不一致（title/issues 形状 diff）",
             c.name
         );
     }

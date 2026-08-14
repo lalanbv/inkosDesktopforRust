@@ -27,6 +27,7 @@ pub mod en_prompt_sections;
 pub mod fanfic_dimensions;
 pub mod fanfic_prompt_sections;
 pub mod observer_prompts;
+pub mod post_write_validator;
 pub mod rules_reader;
 pub mod sensitive_words;
 pub mod settler_delta_parser;

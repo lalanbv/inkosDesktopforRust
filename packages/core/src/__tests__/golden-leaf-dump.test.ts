@@ -30,6 +30,14 @@ import { buildGoldenOpeningDiscipline } from "../agents/writer-prompts.js";
 import { buildFanficCanonSection } from "../agents/fanfic-prompt-sections.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "../agents/settler-prompts.js";
 import { buildObserverSystemPrompt, buildObserverUserPrompt } from "../agents/observer-prompts.js";
+import {
+  normalizePostWriteSurface,
+  validatePostWrite,
+  detectCrossChapterRepetition,
+  detectParagraphLengthDrift,
+  detectDuplicateTitle,
+  resolveDuplicateTitle,
+} from "../agents/post-write-validator.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
@@ -519,6 +527,61 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           expected: buildObserverUserPrompt(7, "Undercurrent", "Body.", "en"),
         },
       ],
+      // ── post-write-validator：输出为 PostWriteViolation[]，整体序列化差分（含顺序/文案）──
+      normalize_post_write_surface: [
+        { name: "zh-dash", input: { content: "前——后  \n", language: undefined }, expected: normalizePostWriteSurface("前——后  \n", undefined) },
+        { name: "en-keep-dash", input: { content: "a——b", language: "en" }, expected: normalizePostWriteSurface("a——b", "en") },
+        { name: "strip-meta", input: { content: "[writer-note]备注\n正文", language: undefined }, expected: normalizePostWriteSurface("[writer-note]备注\n正文", undefined) },
+      ],
+      validate_post_write: [
+        {
+          name: "zh-clean",
+          input: { content: "他走进房间，看了看四周。一切如常。", language: undefined, rules: "null" },
+          expected: validatePostWrite("他走进房间，看了看四周。一切如常。", settlerGp(false, "zh", []), null, undefined),
+        },
+        {
+          name: "zh-multi",
+          input: { content: "他来了——然后停下。第3章开始了。显然不对。", language: undefined, rules: "null" },
+          expected: validatePostWrite("他来了——然后停下。第3章开始了。显然不对。", settlerGp(false, "zh", []), null, undefined),
+        },
+        {
+          name: "zh-first-person-drift",
+          input: { content: "他觉得一阵寒意涌上心头。", language: undefined, rules: "first" },
+          expected: validatePostWrite("他觉得一阵寒意涌上心头。", settlerGp(false, "zh", []), { narrativePerson: "first", protagonist: { name: "陆承烬" } } as unknown as BookRules, undefined),
+        },
+        {
+          name: "en-ai-tell",
+          input: { content: "delve delve delve into the matter.", language: "en", rules: "null" },
+          expected: validatePostWrite("delve delve delve into the matter.", settlerGp(false, "zh", []), null, "en"),
+        },
+      ],
+      detect_cross_chapter_repetition: (() => {
+        const p1 = "风吹过山岗上", p2 = "雨落在屋檐下", p3 = "雪覆盖了田野";
+        const zhCurrent = `${p1}${p1}${p2}${p2}${p3}${p3}其他内容填充。`;
+        const zhRecent = `历史章节提到${p1}和${p2}与${p3}。${"长".repeat(100)}填充。`;
+        const enCurrent = "the dark shadow moved the dark shadow moved the silent figure stood the silent figure stood the cold wind blew the cold wind blew trailing prose.";
+        const enRecent = `earlier the dark shadow moved and the silent figure stood while the cold wind blew. ${"x".repeat(100)}`;
+        return [
+          { name: "zh-three", input: { scenario: "three-phrases", language: "zh" }, expected: detectCrossChapterRepetition(zhCurrent, zhRecent, "zh") },
+          { name: "en-three", input: { scenario: "three-phrases", language: "en" }, expected: detectCrossChapterRepetition(enCurrent, enRecent, "en") },
+        ];
+      })(),
+      detect_paragraph_length_drift: (() => {
+        const longPara = "长段落内容".repeat(20);
+        const recent = `${longPara}\n\n${longPara}\n\n${longPara}\n\n${longPara}`;
+        const current = "短。\n\n短。\n\n短。\n\n短。";
+        return [
+          { name: "zh-shrink", input: { scenario: "shrink", language: "zh" }, expected: detectParagraphLengthDrift(current, recent, "zh") },
+        ];
+      })(),
+      detect_duplicate_title: [
+        { name: "exact", input: { newTitle: "开局", existing: ["开局", "转折"] }, expected: detectDuplicateTitle("开局", ["开局", "转折"]) },
+        { name: "near", input: { newTitle: "开局", existing: ["开局！"] }, expected: detectDuplicateTitle("开局", ["开局！"]) },
+      ],
+      resolve_duplicate_title: [
+        { name: "counter-fallback", input: { newTitle: "同一标题", existing: ["同一标题"], language: "zh", content: undefined }, expected: resolveDuplicateTitle("同一标题", ["同一标题"], "zh") },
+        { name: "clean", input: { newTitle: "全新标题", existing: ["其他标题"], language: "zh", content: undefined }, expected: resolveDuplicateTitle("全新标题", ["其他标题"], "zh") },
+      ],
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -535,5 +598,11 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_settler_user_prompt.length).toBeGreaterThan(0);
     expect(payload.build_observer_system_prompt.length).toBeGreaterThan(0);
     expect(payload.build_observer_user_prompt.length).toBeGreaterThan(0);
+    expect(payload.normalize_post_write_surface.length).toBeGreaterThan(0);
+    expect(payload.validate_post_write.length).toBeGreaterThan(0);
+    expect(payload.detect_cross_chapter_repetition.length).toBeGreaterThan(0);
+    expect(payload.detect_paragraph_length_drift.length).toBeGreaterThan(0);
+    expect(payload.detect_duplicate_title.length).toBeGreaterThan(0);
+    expect(payload.resolve_duplicate_title.length).toBeGreaterThan(0);
   });
 });

@@ -2026,5 +2026,220 @@
       },
       "expected": "Extract all facts from Chapter 7 \"Undercurrent\":\n\nBody."
     }
+  ],
+  "normalize_post_write_surface": [
+    {
+      "name": "zh-dash",
+      "input": {
+        "content": "前——后  \n"
+      },
+      "expected": "前，后"
+    },
+    {
+      "name": "en-keep-dash",
+      "input": {
+        "content": "a——b",
+        "language": "en"
+      },
+      "expected": "a——b"
+    },
+    {
+      "name": "strip-meta",
+      "input": {
+        "content": "[writer-note]备注\n正文"
+      },
+      "expected": "正文"
+    }
+  ],
+  "validate_post_write": [
+    {
+      "name": "zh-clean",
+      "input": {
+        "content": "他走进房间，看了看四周。一切如常。",
+        "rules": "null"
+      },
+      "expected": []
+    },
+    {
+      "name": "zh-multi",
+      "input": {
+        "content": "他来了——然后停下。第3章开始了。显然不对。",
+        "rules": "null"
+      },
+      "expected": [
+        {
+          "rule": "禁止破折号",
+          "severity": "error",
+          "description": "出现了破折号「——」",
+          "suggestion": "用逗号或句号断句"
+        },
+        {
+          "rule": "章节号指称",
+          "severity": "error",
+          "description": "正文中出现了章节号指称：\"第3章\"。角色不知道自己在第几章。",
+          "suggestion": "改成自然表达：\"那天晚上\"、\"仓库出事那次\"、\"码头上的事\""
+        },
+        {
+          "rule": "作者说教",
+          "severity": "warning",
+          "description": "出现说教词：\"显然\"",
+          "suggestion": "删除说教词，让读者自己从情节中判断"
+        }
+      ]
+    },
+    {
+      "name": "zh-first-person-drift",
+      "input": {
+        "content": "他觉得一阵寒意涌上心头。",
+        "rules": "first"
+      },
+      "expected": [
+        {
+          "rule": "叙事人称",
+          "severity": "error",
+          "description": "本书设定为第一人称，但出现了第三人称内感叙述：\"他觉得一阵寒意涌上心头。\"",
+          "suggestion": "把这类主观感受、意识、脑内活动改回「我」的内心视角；不要切到第三人称或全知视角。"
+        }
+      ]
+    },
+    {
+      "name": "en-ai-tell",
+      "input": {
+        "content": "delve delve delve into the matter.",
+        "language": "en",
+        "rules": "null"
+      },
+      "expected": [
+        {
+          "rule": "AI-tell word density",
+          "severity": "warning",
+          "description": "\"delve\" appears 3 times (limit: 1 per 3000 chars)",
+          "suggestion": "Replace with a more specific word"
+        }
+      ]
+    }
+  ],
+  "detect_cross_chapter_repetition": [
+    {
+      "name": "zh-three",
+      "input": {
+        "scenario": "three-phrases",
+        "language": "zh"
+      },
+      "expected": [
+        {
+          "rule": "跨章重复",
+          "severity": "warning",
+          "description": "3个重复短语在近期章节中也出现过：\"风吹过山岗上\"(×2)、\"雨落在屋檐下\"(×2)、\"雪覆盖了田野\"(×2)",
+          "suggestion": "变换动作描写和场景用语，避免跨章节机械重复"
+        }
+      ]
+    },
+    {
+      "name": "en-three",
+      "input": {
+        "scenario": "three-phrases",
+        "language": "en"
+      },
+      "expected": [
+        {
+          "rule": "Cross-chapter repetition",
+          "severity": "warning",
+          "description": "6 repeated phrases also found in recent chapters: \"the dark shadow\" (×2), \"dark shadow moved\" (×2), \"the silent figure\" (×2), \"silent figure stood\" (×2), \"the cold wind\" (×2)",
+          "suggestion": "Vary action verbs and descriptive phrases to avoid cross-chapter repetition"
+        }
+      ]
+    }
+  ],
+  "detect_paragraph_length_drift": [
+    {
+      "name": "zh-shrink",
+      "input": {
+        "scenario": "shrink",
+        "language": "zh"
+      },
+      "expected": [
+        {
+          "rule": "段落密度漂移",
+          "severity": "warning",
+          "description": "当前章平均段长从近期章节的100字降到2字，缩短了98%。",
+          "suggestion": "不要把每个动作都切成单独短句；适当把动作、观察和反应并入同一段，恢复段落层次。"
+        }
+      ]
+    }
+  ],
+  "detect_duplicate_title": [
+    {
+      "name": "exact",
+      "input": {
+        "newTitle": "开局",
+        "existing": [
+          "开局",
+          "转折"
+        ]
+      },
+      "expected": [
+        {
+          "rule": "duplicate-title",
+          "severity": "warning",
+          "description": "章节标题\"开局\"与已有章节标题完全相同",
+          "suggestion": "更换一个不同的章节标题"
+        }
+      ]
+    },
+    {
+      "name": "near",
+      "input": {
+        "newTitle": "开局",
+        "existing": [
+          "开局！"
+        ]
+      },
+      "expected": [
+        {
+          "rule": "near-duplicate-title",
+          "severity": "warning",
+          "description": "章节标题\"开局\"与已有标题\"开局！\"高度相似",
+          "suggestion": "避免使用相似的章节标题"
+        }
+      ]
+    }
+  ],
+  "resolve_duplicate_title": [
+    {
+      "name": "counter-fallback",
+      "input": {
+        "newTitle": "同一标题",
+        "existing": [
+          "同一标题"
+        ],
+        "language": "zh"
+      },
+      "expected": {
+        "title": "同一标题（2）",
+        "issues": [
+          {
+            "rule": "duplicate-title",
+            "severity": "warning",
+            "description": "章节标题\"同一标题\"与已有章节标题完全相同",
+            "suggestion": "更换一个不同的章节标题"
+          }
+        ]
+      }
+    },
+    {
+      "name": "clean",
+      "input": {
+        "newTitle": "全新标题",
+        "existing": [
+          "其他标题"
+        ],
+        "language": "zh"
+      },
+      "expected": {
+        "title": "全新标题",
+        "issues": []
+      }
+    }
   ]
 }
