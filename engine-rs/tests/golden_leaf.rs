@@ -81,6 +81,16 @@ struct LeafGolden {
     compute_recyclable_hooks: Vec<Case>,
     extract_query_terms: Vec<Case>,
     render_summary_snapshot: Vec<Case>,
+    planner_system_prompt: Vec<Case>,
+    planner_build_user_message: Vec<Case>,
+    planner_golden_opening_guidance: Vec<Case>,
+    planner_format_recent_summaries: Vec<Case>,
+    planner_compose_current_arc_prose: Vec<Case>,
+    planner_extract_protagonist_row: Vec<Case>,
+    planner_extract_relation_rows: Vec<Case>,
+    planner_extract_relevant_threads: Vec<Case>,
+    planner_format_recyclable_hooks: Vec<Case>,
+    planner_private_suite: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1492,5 +1502,238 @@ fn render_summary_snapshot_matches_ts() {
             .unwrap_or_else(|e| panic!("case {}: summaries 反序列化失败: {e}", c.name));
         let got = render_summary_snapshot(&summaries, lang_opt(&c.input).expect("language 必填"));
         assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+// ---- 34 号：planner 三件套 ----
+
+#[test]
+fn planner_system_prompt_matches_ts() {
+    use inkos_engine::agents::planner_prompts::get_planner_memo_system_prompt;
+    for c in &load().planner_system_prompt {
+        let got = get_planner_memo_system_prompt(lang_opt(&c.input).expect("language 必填"));
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_build_user_message_matches_ts() {
+    use inkos_engine::agents::planner_prompts::{build_planner_user_message, PlannerUserMessageInput};
+    for c in &load().planner_build_user_message {
+        let input = &c.input;
+        let got = build_planner_user_message(&PlannerUserMessageInput {
+            chapter_number: input["chapterNumber"].as_u64().unwrap() as u32,
+            previous_chapter_ending_excerpt: input["previousChapterEndingExcerpt"].as_str().unwrap_or(""),
+            recent_summaries: input["recentSummaries"].as_str().unwrap_or(""),
+            current_arc_prose: input["currentArcProse"].as_str().unwrap_or(""),
+            protagonist_matrix_row: input["protagonistMatrixRow"].as_str().unwrap_or(""),
+            opponent_rows: input["opponentRows"].as_str().unwrap_or(""),
+            collaborator_rows: input["collaboratorRows"].as_str().unwrap_or(""),
+            relevant_threads: input["relevantThreads"].as_str().unwrap_or(""),
+            recyclable_hooks: input["recyclableHooks"].as_str().unwrap_or(""),
+            is_golden_opening: input["isGoldenOpening"].as_bool().unwrap_or(false),
+            book_rules_relevant: input["bookRulesRelevant"].as_str().unwrap_or(""),
+            brief: input["brief"].as_str(),
+            chapter_context: input["chapterContext"].as_str(),
+            language: lang_opt(&c.input).expect("language 必填"),
+        });
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_golden_opening_guidance_matches_ts() {
+    use inkos_engine::agents::planner_prompts::build_golden_opening_guidance;
+    for c in &load().planner_golden_opening_guidance {
+        let got = build_golden_opening_guidance(
+            c.input["chapterNumber"].as_u64().unwrap() as u32,
+            lang_opt(&c.input).expect("language 必填"),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_format_recent_summaries_matches_ts() {
+    use inkos_engine::agents::planner_context::format_recent_summaries;
+    for c in &load().planner_format_recent_summaries {
+        let got = format_recent_summaries(
+            c.input["raw"].as_str().unwrap(),
+            c.input["chapterNumber"].as_u64().unwrap() as u32,
+            c.input["limit"].as_u64().unwrap() as usize,
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_compose_current_arc_prose_matches_ts() {
+    use inkos_engine::agents::planner_context::compose_current_arc_prose;
+    for c in &load().planner_compose_current_arc_prose {
+        let got = compose_current_arc_prose(
+            c.input["subplotBoardRaw"].as_str().unwrap(),
+            c.input["emotionalArcsRaw"].as_str().unwrap(),
+            c.input["chapterNumber"].as_u64().unwrap() as u32,
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_extract_protagonist_row_matches_ts() {
+    use inkos_engine::agents::planner_context::extract_protagonist_row;
+    for c in &load().planner_extract_protagonist_row {
+        let got = extract_protagonist_row(c.input["raw"].as_str().unwrap());
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_extract_relation_rows_matches_ts() {
+    use inkos_engine::agents::planner_context::{
+        extract_collaborator_rows, extract_opponent_rows,
+    };
+    for c in &load().planner_extract_relation_rows {
+        let raw = c.input["raw"].as_str().unwrap();
+        let limit = c.input["limit"].as_u64().unwrap() as usize;
+        let got = if c.input["kind"].as_str() == Some("opponent") {
+            extract_opponent_rows(raw, limit)
+        } else {
+            extract_collaborator_rows(raw, limit)
+        };
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_extract_relevant_threads_matches_ts() {
+    use inkos_engine::agents::planner_context::extract_relevant_threads;
+    for c in &load().planner_extract_relevant_threads {
+        let got = extract_relevant_threads(
+            c.input["pendingHooksRaw"].as_str().unwrap(),
+            c.input["subplotBoardRaw"].as_str().unwrap(),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_format_recyclable_hooks_matches_ts() {
+    use inkos_engine::agents::planner_context::format_recyclable_hooks;
+    use inkos_engine::models::runtime_state::HookRecord;
+    for c in &load().planner_format_recyclable_hooks {
+        let hooks: Vec<HookRecord> = serde_json::from_value(c.input["hooks"].clone())
+            .unwrap_or_else(|e| panic!("case {}: hooks 反序列化失败: {e}", c.name));
+        let got = format_recyclable_hooks(
+            &hooks,
+            c.input["chapterNumber"].as_u64().unwrap() as u32,
+            lang_opt(&c.input).expect("language 必填"),
+        );
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn planner_private_suite_matches_ts() {
+    use inkos_engine::agents::planner::{
+        build_arc_context, collect_must_avoid, collect_must_keep, collect_style_emphasis,
+        derive_goal, extract_section, find_outline_node, is_golden_opening_chapter,
+        render_hook_budget, render_intent_markdown,
+    };
+    use inkos_engine::models::input_governance::{ChapterIntent, ChapterMemo};
+
+    for c in &load().planner_private_suite {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            "derive-goal-chain" => serde_json::to_value(derive_goal(
+                input["externalContext"].as_str(),
+                input["currentFocus"].as_str().unwrap(),
+                input["authorIntent"].as_str().unwrap(),
+                input["outlineNode"].as_str(),
+                input["chapterNumber"].as_u64().unwrap() as u32,
+            ))
+            .unwrap(),
+            "derive-goal-default" => serde_json::to_value(derive_goal(
+                input["externalContext"].as_str(),
+                input["currentFocus"].as_str().unwrap(),
+                input["authorIntent"].as_str().unwrap(),
+                input["outlineNode"].as_str(),
+                input["chapterNumber"].as_u64().unwrap() as u32,
+            ))
+            .unwrap(),
+            "find-outline-exact" | "find-outline-range-beats" | "find-outline-tricky-numbers" => {
+                serde_json::to_value(find_outline_node(
+                    input["volumeOutline"].as_str().unwrap(),
+                    input["chapterNumber"].as_u64().unwrap() as u32,
+                ))
+                .unwrap()
+            }
+            "collect-must-keep" => serde_json::to_value(collect_must_keep(
+                input["currentState"].as_str().unwrap(),
+                input["storyBible"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            "collect-must-avoid" => {
+                let prohibitions: Vec<String> = input["prohibitions"]
+                    .as_array()
+                    .map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                serde_json::to_value(collect_must_avoid(
+                    input["currentFocus"].as_str().unwrap(),
+                    &prohibitions,
+                ))
+                .unwrap()
+            }
+            "collect-style-emphasis" => serde_json::to_value(collect_style_emphasis(
+                input["authorIntent"].as_str().unwrap(),
+                input["currentFocus"].as_str().unwrap(),
+            ))
+            .unwrap(),
+            "extract-section" => {
+                let headings: Vec<&str> = input["headings"]
+                    .as_array()
+                    .map(|v| v.iter().filter_map(|x| x.as_str()).collect())
+                    .unwrap_or_default();
+                serde_json::to_value(extract_section(
+                    input["content"].as_str().unwrap(),
+                    &headings,
+                ))
+                .unwrap()
+            }
+            "arc-context" | "arc-context-placeholder" => serde_json::to_value(build_arc_context(
+                input["language"].as_str(),
+                input["volumeOutline"].as_str().unwrap(),
+                input["outlineNode"].as_str(),
+            ))
+            .unwrap(),
+            "golden-window-zh" | "golden-window-en" => serde_json::to_value(
+                is_golden_opening_chapter(
+                    input["language"].as_str(),
+                    input["chapterNumber"].as_u64().unwrap() as u32,
+                ),
+            )
+            .unwrap(),
+            "hook-budget-under" | "hook-budget-over" => serde_json::to_value(render_hook_budget(
+                input["activeCount"].as_u64().unwrap() as usize,
+                lang_opt(input).expect("language 必填"),
+            ))
+            .unwrap(),
+            "render-intent-markdown" => {
+                let intent: ChapterIntent =
+                    serde_json::from_value(input["intent"].clone()).unwrap();
+                let memo: ChapterMemo = serde_json::from_value(input["memo"].clone()).unwrap();
+                serde_json::to_value(render_intent_markdown(
+                    &intent,
+                    &memo,
+                    lang_opt(input).expect("language 必填"),
+                    input["pendingHooks"].as_str().unwrap(),
+                    input["chapterSummaries"].as_str().unwrap(),
+                    input["activeHookCount"].as_u64().unwrap() as usize,
+                ))
+                .unwrap()
+            }
+            other => panic!("未知 private suite case: {other}"),
+        };
+        assert_eq!(got, c.expected, "case `{}`", c.name);
     }
 }

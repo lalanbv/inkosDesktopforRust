@@ -41,6 +41,21 @@ import {
 import { renderHookSnapshot, renderSummarySnapshot } from "../utils/story-markdown.js";
 import { computeRecyclableHooks, extractQueryTerms } from "../utils/memory-retrieval.js";
 import {
+  buildPlannerUserMessage,
+  getPlannerMemoSystemPrompt,
+  buildGoldenOpeningGuidance,
+} from "../agents/planner-prompts.js";
+import {
+  formatRecentSummaries,
+  composeCurrentArcProse,
+  extractProtagonistRow,
+  extractOpponentRows,
+  extractCollaboratorRows,
+  extractRelevantThreads,
+  formatRecyclableHooks,
+} from "../agents/planner-context.js";
+import { PlannerAgent } from "../agents/planner.js";
+import {
   buildGovernedHookWorkingSet,
   buildGovernedCharacterMatrixWorkingSet,
   mergeTableMarkdownByKey,
@@ -840,6 +855,120 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "empty", input: { summaries: [], language: "zh" }, expected: renderSummarySnapshot([], "zh") },
         ];
       })(),
+
+      // ── 34 号：planner 三件套（prompts / context 提取器 / 编排私有纯函数）──
+      // planner 私有方法经实例括号访问（TS private 仅编译期；同 32 号 writerPriv 模式）。
+      planner_system_prompt: [
+        { name: "zh", input: { language: "zh" }, expected: getPlannerMemoSystemPrompt("zh") },
+        { name: "en", input: { language: "en" }, expected: getPlannerMemoSystemPrompt("en") },
+      ],
+      planner_build_user_message: (() => {
+        const base = {
+          chapterNumber: 2,
+          previousChapterEndingExcerpt: "林动握紧玉符。",
+          recentSummaries: "| 章节 |",
+          currentArcProse: "活跃支线：\n- S1 | 推进中",
+          protagonistMatrixRow: "| 林动 | 主角本人 |",
+          opponentRows: "（暂无明确对手登场）",
+          collaboratorRows: "| 乙 | 盟友 |",
+          relevantThreads: "- H01: progressing",
+          recyclableHooks: "（暂无陈旧 hook——账本干净）",
+          isGoldenOpening: true,
+          bookRulesRelevant: "（暂无 book_rules 条目）",
+        };
+        const enBase = { ...base, isGoldenOpening: false };
+        return [
+          { name: "zh-full", input: { ...base, brief: "都市异能", chapterContext: "本章加入新导师", language: "zh" }, expected: buildPlannerUserMessage({ ...base, brief: "都市异能", chapterContext: "本章加入新导师", language: "zh" }) },
+          { name: "en-no-blocks", input: { ...enBase, language: "en" }, expected: buildPlannerUserMessage({ ...enBase, language: "en" }) },
+        ];
+      })(),
+      planner_golden_opening_guidance: [
+        { name: "zh-ch2", input: { chapterNumber: 2, language: "zh" }, expected: buildGoldenOpeningGuidance(2, "zh") },
+        { name: "en-ch3", input: { chapterNumber: 3, language: "en" }, expected: buildGoldenOpeningGuidance(3, "en") },
+        { name: "absent-ch4", input: { chapterNumber: 4, language: "zh" }, expected: buildGoldenOpeningGuidance(4, "zh") },
+      ],
+      planner_format_recent_summaries: (() => {
+        const md = "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | a | 甲 | e | s | h | m | t |\n| 2 | b | 乙 | e | s | h | m | t |\n| 9 | c | 丙 | e | s | h | m | t |\n";
+        return [
+          { name: "last-n", input: { raw: md, chapterNumber: 10, limit: 2 }, expected: formatRecentSummaries(md, 10, 2) },
+          { name: "filters-future", input: { raw: md, chapterNumber: 5, limit: 3 }, expected: formatRecentSummaries(md, 5, 3) },
+          { name: "empty", input: { raw: "", chapterNumber: 3, limit: 3 }, expected: formatRecentSummaries("", 3, 3) },
+        ];
+      })(),
+      planner_compose_current_arc_prose: (() => {
+        const subplot = "| id | 状态 |\n| --- | --- |\n| S1 | 推进中 |\n| S2 | 暂挂 |\n";
+        const arcs = "| 角色 | 章节 | 情绪 |\n| --- | --- | --- |\n| 甲 | 1 | 焦虑 |\n| 乙 | 4 | 坚定 |\n";
+        const bulletSubplot = "- 支线甲\n- 支线乙";
+        return [
+          { name: "table", input: { subplotBoardRaw: subplot, emotionalArcsRaw: arcs, chapterNumber: 5 }, expected: composeCurrentArcProse(subplot, arcs, 5) },
+          { name: "bullet", input: { subplotBoardRaw: bulletSubplot, emotionalArcsRaw: "", chapterNumber: 5 }, expected: composeCurrentArcProse(bulletSubplot, "", 5) },
+          { name: "empty", input: { subplotBoardRaw: "", emotionalArcsRaw: "", chapterNumber: 5 }, expected: composeCurrentArcProse("", "", 5) },
+        ];
+      })(),
+      planner_extract_protagonist_row: (() => {
+        const explicit = "| 角色 | 与主角关系 |\n| --- | --- |\n| 甲 | 兄长 |\n| 乙 | protagonist |\n";
+        const noExplicit = "| 角色 | 与主角关系 |\n| --- | --- |\n| 甲 | 兄长 |\n";
+        return [
+          { name: "explicit", input: { raw: explicit }, expected: extractProtagonistRow(explicit) },
+          { name: "first-data-row", input: { raw: noExplicit }, expected: extractProtagonistRow(noExplicit) },
+          { name: "no-table", input: { raw: "无表格" }, expected: extractProtagonistRow("无表格") },
+        ];
+      })(),
+      planner_extract_relation_rows: (() => {
+        const matrix = "| 名字 | 关系 |\n| --- | --- |\n| 主角 | 主角 |\n| 甲 | 敌对 |\n| 乙 | 盟友 |\n| 丙 | 阻力方 |\n";
+        return [
+          { name: "opponent", input: { raw: matrix, kind: "opponent", limit: 3 }, expected: extractOpponentRows(matrix, 3) },
+          { name: "collaborator", input: { raw: matrix, kind: "collaborator", limit: 3 }, expected: extractCollaboratorRows(matrix, 3) },
+        ];
+      })(),
+      planner_extract_relevant_threads: (() => {
+        const hooks = "| hook_id | 状态 |\n| --- | --- |\n| H01 | progressing |\n| H02 | resolved |\n";
+        const subplots = "| id | 状态 |\n| --- | --- |\n| S1 | open |\n";
+        return [
+          { name: "mixed", input: { pendingHooksRaw: hooks, subplotBoardRaw: subplots }, expected: extractRelevantThreads(hooks, subplots) },
+          { name: "empty", input: { pendingHooksRaw: "", subplotBoardRaw: "" }, expected: extractRelevantThreads("", "") },
+        ];
+      })(),
+      planner_format_recyclable_hooks: (() => {
+        const hooks = [
+          { hookId: "H01", startChapter: 1, type: "plot", status: "pressured", lastAdvancedChapter: 2, expectedPayoff: "第10章兑现", notes: "备注", coreHook: true },
+          { hookId: "H02", startChapter: 3, type: "plot", status: "open", lastAdvancedChapter: 0, expectedPayoff: "", notes: "仅用备注", coreHook: false },
+        ] as const;
+        return [
+          { name: "zh", input: { hooks, chapterNumber: 9, language: "zh" }, expected: formatRecyclableHooks(hooks as unknown as Parameters<typeof formatRecyclableHooks>[0], 9, "zh") },
+          { name: "en", input: { hooks, chapterNumber: 9, language: "en" }, expected: formatRecyclableHooks(hooks as unknown as Parameters<typeof formatRecyclableHooks>[0], 9, "en") },
+          { name: "empty", input: { hooks: [], chapterNumber: 9, language: "zh" }, expected: formatRecyclableHooks([], 9, "zh") },
+        ];
+      })(),
+      planner_private_suite: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const planner = new PlannerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const p = planner as any;
+        const tricky = "- Chapter 12: mid clash\n- Chapter 123: later\n- Chapter 12-15: span";
+        const rangeBeats = "## 卷一 试炼\n第 1-5 章\n1. 觉醒\n2. 夺符\n3. 结怨";
+        const intent = { chapter: 2, goal: "目标句", outlineNode: "节点", arcContext: undefined, mustKeep: ["保A"], mustAvoid: [], styleEmphasis: ["紧凑"] };
+        const memo = { chapter: 2, goal: "目标句", isGoldenOpening: true, body: "正文 memo", threadRefs: ["H01"] };
+        const focus = "## 当前聚焦\n- 聚焦夺符\n\n## avoid\n- 降智\n- 圣母";
+        return [
+          { name: "derive-goal-chain", input: { externalContext: "先夺回玉符", currentFocus: focus, authorIntent: "- 节奏快", outlineNode: undefined, chapterNumber: 3 }, expected: p.deriveGoal("先夺回玉符", focus, "- 节奏快", undefined, 3) },
+          { name: "derive-goal-default", input: { externalContext: undefined, currentFocus: "", authorIntent: "", outlineNode: undefined, chapterNumber: 7 }, expected: p.deriveGoal(undefined, "", "", undefined, 7) },
+          { name: "find-outline-exact", input: { volumeOutline: "- 第 3 章：林动夺符\n- 第 4 章：杂役反扑", chapterNumber: 3 }, expected: p.findOutlineNode("- 第 3 章：林动夺符\n- 第 4 章：杂役反扑", 3) },
+          { name: "find-outline-range-beats", input: { volumeOutline: rangeBeats, chapterNumber: 3 }, expected: p.findOutlineNode(rangeBeats, 3) },
+          { name: "find-outline-tricky-numbers", input: { volumeOutline: tricky, chapterNumber: 123 }, expected: p.findOutlineNode(tricky, 123) },
+          { name: "collect-must-keep", input: { currentState: "- 保一\n- 保二", storyBible: "- 保一\n- 保三" }, expected: p.collectMustKeep("- 保一\n- 保二", "- 保一\n- 保三") },
+          { name: "collect-must-avoid", input: { currentFocus: focus, prohibitions: ["禁止穿越回现代"] }, expected: p.collectMustAvoid(focus, ["禁止穿越回现代"]) },
+          { name: "collect-style-emphasis", input: { authorIntent: "- 节奏快", currentFocus: focus }, expected: p.collectStyleEmphasis("- 节奏快", focus) },
+          { name: "extract-section", input: { content: focus, headings: ["avoid", "禁止", "避免", "避雷"] }, expected: p.extractSection(focus, ["avoid", "禁止", "避免", "避雷"]) ?? null },
+          { name: "arc-context", input: { language: "zh", volumeOutline: "有内容", outlineNode: "节点" }, expected: p.buildArcContext("zh", "有内容", "节点") ?? null },
+          { name: "arc-context-placeholder", input: { language: "zh", volumeOutline: "(文件尚未创建)", outlineNode: "节点" }, expected: p.buildArcContext("zh", "(文件尚未创建)", "节点") ?? null },
+          { name: "golden-window-zh", input: { language: "zh", chapterNumber: 4 }, expected: p.isGoldenOpeningChapter("zh", 4) },
+          { name: "golden-window-en", input: { language: "en", chapterNumber: 5 }, expected: p.isGoldenOpeningChapter("en", 5) },
+          { name: "hook-budget-under", input: { activeCount: 9, language: "zh" }, expected: p.renderHookBudget(9, "zh") },
+          { name: "hook-budget-over", input: { activeCount: 11, language: "en" }, expected: p.renderHookBudget(11, "en") },
+          { name: "render-intent-markdown", input: { intent, memo, language: "zh", pendingHooks: "- none", chapterSummaries: "- none", activeHookCount: 2 }, expected: p.renderIntentMarkdown(intent, memo, "zh", "- none", "- none", 2) },
+        ];
+      })(),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -869,5 +998,8 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.compute_recyclable_hooks.length).toBeGreaterThan(0);
     expect(payload.extract_query_terms.length).toBeGreaterThan(0);
     expect(payload.render_summary_snapshot.length).toBeGreaterThan(0);
+    expect(payload.planner_system_prompt.length).toBeGreaterThan(0);
+    expect(payload.planner_build_user_message.length).toBeGreaterThan(0);
+    expect(payload.planner_private_suite.length).toBeGreaterThan(0);
   });
 });

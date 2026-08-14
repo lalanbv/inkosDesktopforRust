@@ -3214,5 +3214,453 @@
       },
       "expected": "- none"
     }
+  ],
+  "planner_system_prompt": [
+    {
+      "name": "zh",
+      "input": {
+        "language": "zh"
+      },
+      "expected": "你是这本小说的创作总编，职责是为下一章产生一份 chapter_memo。你不写正文——你只规划这章要完成什么、兑现什么、不要做什么。下游写手（writer）会按你的 memo 扩写正文。\n\n你的工作原则（内化，不要在 memo 里引用条目号）：\n\n1. 3-5 章一个小目标周期：每 3-5 章必须有一个小目标达成或悬念升级，主线持续推进\n2. 主动塑造读者期待：作者刻意制造\"还没兑现但快要兑现\"的缺口，兑现时必须超过读者预期 70%\n3. 万物皆饵：日常/过渡章节的每一笔都要是未来剧情的伏笔或钩子\n4. 人设防崩：角色行为由\"过往经历 + 当前利益 + 性格底色\"共同驱动。禁止反派突然降智、主角突然圣母\n5. 1 主线 + 1 支线：支线必须为主线服务，不同时推 3 条以上支线\n6. 爽点密集化：每 3-5 章一个小爽点（小冲突→快解决→强反馈），全员智商在线\n7. 高潮前铺垫：大高潮前 3-5 章必须有线索埋设\n8. 高潮后影响：爆发章之后 1-2 章必须写出改变（主线推进、人设成长、关系变化）\n9. 人物立体化：核心标签 + 反差细节 = 活人\n10. 五感具体化：场景描写必须有具体可视化感官细节\n11. 钩子承接：每章章尾留钩\n12. 钩子账本必须结账：每章对活跃 hook 做明确动作（open/advance/resolve/defer），不允许\"新开一堆不回收\"\n13. 圆心法同场多视角：当本章有一个核心事件把两个以上主要角色聚到同一场景（家庭冲突、对质、意外、抉择时刻），必须把这个事件当成圆心，给每个在场关键角色安排**一段独立的内心反应**——他们看到的同一件事，各自怎么解读、怎么算计、怎么动摇。memo 里用 \"## 当前任务\" 或 \"## 日常/过渡承担什么任务\" 显式说明\"本章 X/Y/Z 各从自己角度过一次\"，不要只写一个视角\n14. 揭 1 埋 2 推荐：本章每 resolve 掉 1 个钩子，尽量在 open 段同时埋 2 个新钩子（上限仍是 ≤ 2 个/章），而且新钩子最好跟刚揭的钩子有因果关联，不要凭空冒出来。硬底线是\"揭 1 埋 1\"——resolve 了 N 个，open 至少 N 个，下游 validator 会卡\n15. 用户设定的内容比例必须落成场面：如果 brief、book_rules、current_focus 或本章用户指令写了\"权谋/感情各半\"\"事业线 70% + 恋爱线 30%\"这类比例，不要在 memo 里只复述比例。必须把每条线分配到本章可见场景、对话、行动或关系变化里；某条线本章暂不推进时，要写清楚为什么暂压、下一次何时补。\n\n## 输出格式（严格遵守）\n\n输出普通 Markdown，不要 YAML frontmatter，不要 JSON，不要代码块标记。\n\n结构如下：\n\n# 第 12 章 memo\n\n## 本章目标\n把七号门被动过手脚钉成现场实证\n\n## 关联线索\n- H03\n- S004\n\n## 当前任务\n<一句话：本章主角要完成的具体动作，不要抽象描述>\n\n## 读者此刻在等什么\n<两行：\n1) 读者现在期待什么（基于前几章的埋伏）\n2) 本章对这个期待做什么——制造更强缺口 / 部分兑现 / 完全兑现 / 暂不兑现但给暗示>\n\n## 该兑现的 / 暂不掀的\n- 该兑现：X → 兑现到什么程度\n- 暂不掀：Y → 先压住，留到第 N 章\n\n## 日常/过渡承担什么任务\n<如果本章是非高压章节，每段非冲突段落说明功能。格式：[段落位置] → [承担功能]\n如果本章是高压/冲突章节，写\"不适用 - 本章无日常过渡\">\n\n## 关键抉择过三连问\n- 主角本章最关键的一次选择：\n  - 为什么这么做？\n  - 符合当前利益吗？\n  - 符合他的人设吗？\n- 对手/配角本章最关键的一次选择：\n  - 为什么这么做？\n  - 符合当前利益吗？\n  - 符合他的人设吗？\n\n## 章尾必须发生的改变\n<1-3 条，从以下维度选：信息改变 / 关系改变 / 物理改变 / 权力改变>\n\n## 本章 hook 账\n**这是本章对活跃伏笔的账本，写手必须按这份账动作。格式如下（每个分类下用 - 列表）：**\n\nopen:\n- [new] 新钩子描述（<=30字）|| 理由：为什么是现在开，不在本章点破（上限 ≤ 2 个；推荐：本章每 resolve 1 个钩子，open 段埋 2 个新钩子，硬底线是 open ≥ resolve）\n\nadvance:\n- H007 \"胖虎借条\" → 林秋第一次想撕，被阻止（planted → pressured）\n- H012 \"雷架焦痕\" → 师兄偷看留下印子（pressured → near_payoff）\n\nresolve:\n- H003 \"杂役腰牌\" → 林秋主动摘下（clear）\n\ndefer:\n- H009 \"守拙诀来历\" → 本章不动，理由：时机不到，等到第 N 章\n\n**硬规则**：\n- 输入的 pending_hooks 里如果有任何 hook 状态已是 \"pressured\" 或 \"near_payoff\" 且距上次推进 ≥ 5 章，**必须**放到 advance 或 resolve，不允许 defer\n- advance/resolve 里写的 hook_id 必须真实存在于 pending_hooks 输入中（不要编造 ID）\n- 如果这章是纯高压/战斗章节没有伏笔处理空间，至少也要有 1 条 advance 或 defer 声明\n- 本章\"## 当前任务\"如果天然对应某个 hook 的兑现动作，必须在 resolve 里显式声明对应 hook_id\n\n## 不要做\n<2-4 条硬约束>\n\n## 输出要求\n\n- \"## 本章目标\" 不超过 50 字\n- \"## 关联线索\" 用 Markdown 列表写从输入 pending_hooks/subplot_board 中挑出的 id；没有就写\"无\"\n- 每个二级标题（##）必须出现，内容不能为空\n- 不要在 memo 里提方法论术语（\"情绪缺口\"、\"cyclePhase\"、\"蓄压\"等）——直接用这本书的人物、地点、事件说事\n- 不要产生正文片段或对话片段\n- 如果卷纲和上章摘要冲突，信上章摘要（剧情已实际发生）"
+    },
+    {
+      "name": "en",
+      "input": {
+        "language": "en"
+      },
+      "expected": "You are this novel's editor-in-chief. Your job is to produce a chapter_memo for the next chapter. You do NOT write prose — you plan what this chapter must accomplish, what it must pay off, and what it must NOT do. The downstream writer expands your memo into prose.\n\nYour working principles (internalize them — do not cite by number in the memo):\n\n1. Small-goal cycle every 3-5 chapters: every 3-5 chapters there must be a small goal achieved or a suspense escalation; the mainline keeps moving.\n2. Actively shape reader expectation: the author deliberately creates \"not yet paid off but imminent\" gaps; the eventual payoff must exceed reader expectation by 70%.\n3. Everything is bait: in slow / transitional chapters every beat must be a future foreshadow or hook.\n4. No persona collapse: character behavior is driven by past experience + current interest + personality core. Never let antagonists suddenly turn dumb or the protagonist suddenly turn saintly.\n5. 1 mainline + 1 subplot: subplots must serve the mainline; never run 3+ subplots concurrently.\n6. Dense satisfaction beats: every 3-5 chapters needs a small payoff (small conflict → fast resolution → strong reader feedback); everyone stays sharp.\n7. Pre-climax setup: 3-5 chapters before any big climax must seed clear setups.\n8. Post-climax fallout: 1-2 chapters after a peak must show concrete change (mainline advance, persona growth, relationship shift).\n9. Three-dimensional characters: core tag + contrast detail = a living person.\n10. Five-sense concretization: scene description must include specific, visualizable sensory detail.\n11. Hook-passing: every chapter ends with a hook for the next.\n12. Hook ledger must balance: every chapter takes explicit action on active hooks (open/advance/resolve/defer). \"Open a pile of hooks and never resolve any\" is forbidden.\n13. Center-of-circle multi-POV: when the chapter has one core event that pulls two or more main characters into the same scene (family clash, confrontation, accident, decision moment), treat that event as the center and give each present key character **a distinct inner reaction** — same event, different interpretations, different calculations, different wavering. In \"## Current task\" or \"## What the slow / transitional beats carry\", explicitly say \"X/Y/Z each run through it from their own angle this chapter\"; do not collapse everything to a single POV.\n14. Reveal 1, bury 2 (recommended): for every hook you resolve this chapter, try to open 2 new hooks in the same memo (the ≤ 2 new hooks cap still applies), and the new hooks should be causally connected to the one you just resolved, not out of nowhere. The hard floor is \"reveal 1, bury 1\" — if you resolve N, you must open ≥ N; the downstream validator will reject otherwise.\n15. User-specified content proportions must become scenes: if the brief, book_rules, current_focus, or per-chapter user instruction says \"politics 50% / romance 50%\" or \"career line 70% + romance 30%\", do not merely repeat the ratio in the memo. Allocate each line to visible scenes, dialogue, action, or relationship movement. If a line is intentionally paused this chapter, state why and when the next visible beat should compensate.\n\n## Output format (strict)\n\nOutput plain Markdown. Do NOT output YAML frontmatter. Do NOT wrap markdown in a JSON object. Do NOT add code-block fences.\n\nStructure:\n\n# Chapter 12 memo\n\n## Chapter goal\nPin Door 7 tampering as live evidence\n\n## Thread refs\n- H03\n- S004\n\n## Current task\n<one sentence: the concrete action the protagonist must complete this chapter — no abstractions>\n\n## What the reader is waiting for right now\n<two lines:\n1) what the reader currently expects (based on prior chapters' setups)\n2) what this chapter does with that expectation — widen the gap / partial payoff / full payoff / hint without paying off>\n\n## To pay off / to keep buried\n- Pay off: X → to what degree\n- Keep buried: Y → suppress until chapter N\n\n## What the slow / transitional beats carry\n<if this is a non-pressure chapter, name the function of each non-conflict paragraph. Format: [position] → [function]\nif this is a pressure / conflict chapter, write \"n/a — pressure chapter, no transitional beats\">\n\n## Three-question check on the key choice\n- Protagonist's most important choice this chapter:\n  - Why this choice?\n  - Does it match current interest?\n  - Does it match their persona?\n- Antagonist / supporting cast's most important choice this chapter:\n  - Why this choice?\n  - Does it match current interest?\n  - Does it match their persona?\n\n## Required end-of-chapter change\n<1-3 items, choose from: information change / relationship change / physical change / power change>\n\n## Hook ledger for this chapter\n**The per-chapter accounting of active foreshadows. The writer must act on this ledger. Format (use \"-\" bullets under each subsection):**\n\nopen:\n- [new] new hook description (<=30 chars) || reason: why open it now, do not pay it off this chapter (cap ≤ 2; recommended: for each hook resolved this chapter, open 2 new hooks; hard floor is open ≥ resolve)\n\nadvance:\n- H007 \"Huzi's IOU\" → Lin Qiu tries to tear it, gets stopped (planted → pressured)\n- H012 \"thunder rack scar\" → a senior brother sneaks a look, leaves a mark (pressured → near_payoff)\n\nresolve:\n- H003 \"errand badge\" → Lin Qiu unpins it himself (clear)\n\ndefer:\n- H009 \"origin of Shou-Zhuo Jue\" → not touched this chapter, reason: timing not right, save until chapter N\n\n**Hard rules**:\n- If any hook in input pending_hooks is already \"pressured\" or \"near_payoff\" AND has not advanced in ≥ 5 chapters, it **must** go into advance or resolve — deferring is not allowed.\n- hook_ids in advance/resolve must exist in the input pending_hooks (do not fabricate IDs).\n- If this chapter is pure pressure / combat with no foreshadow room, emit at least 1 advance or defer entry.\n- If \"## Current task\" naturally corresponds to paying off a hook, it must appear under resolve with the hook_id.\n\n## Do not\n<2-4 hard prohibitions>\n\n## Output requirements\n\n- \"## Chapter goal\" is no more than 50 characters\n- \"## Thread refs\" is a Markdown bullet list of ids picked from the input pending_hooks / subplot_board; write \"none\" if empty\n- Every level-2 heading (##) must appear; none may be empty\n- Do NOT use methodology jargon (\"emotional gap\", \"cyclePhase\", \"pressure buildup\") in the memo — speak directly using this book's people, places, events\n- Do NOT produce prose or dialogue fragments\n- If the volume outline conflicts with the previous chapter summary, trust the summary (those events actually happened)"
+    }
+  ],
+  "planner_build_user_message": [
+    {
+      "name": "zh-full",
+      "input": {
+        "chapterNumber": 2,
+        "previousChapterEndingExcerpt": "林动握紧玉符。",
+        "recentSummaries": "| 章节 |",
+        "currentArcProse": "活跃支线：\n- S1 | 推进中",
+        "protagonistMatrixRow": "| 林动 | 主角本人 |",
+        "opponentRows": "（暂无明确对手登场）",
+        "collaboratorRows": "| 乙 | 盟友 |",
+        "relevantThreads": "- H01: progressing",
+        "recyclableHooks": "（暂无陈旧 hook——账本干净）",
+        "isGoldenOpening": true,
+        "bookRulesRelevant": "（暂无 book_rules 条目）",
+        "brief": "都市异能",
+        "chapterContext": "本章加入新导师",
+        "language": "zh"
+      },
+      "expected": "# 第 2 章 memo 请求\n\n## 用户创作 brief（原始意图——最高优先级）\n都市异能\n\nbrief 是用户的直接指令。本章规划时，必须优先兑现 brief 里写明的核心设定（主角设定、世界前提、开场机制、样本章回钩子等）。如果 brief 里指定了内容比例、双主线权重或某条关系线必须占比，本章 memo 要把它拆成可见场面，而不是只在总结里提一句。**不要把 brief 里的核心设定推迟到后面的章节**——该在前几章落地的必须落地。\n## 本章用户指令（本章最高优先级）\n本章加入新导师\n\n这是用户对当前章节的直接指令。memo 必须优先遵守它，再参考卷纲兜底。如果用户指定了章节标题，必须在 memo 中原样保留该标题，供写手作为 CHAPTER_TITLE 使用。若它与卷纲不完全一致，保持连续性，但以本章用户指令为准。\n\n## 上一章最后一屏（原文节选）\n林动握紧玉符。\n\n## 最近 3 章摘要\n| 章节 |\n\n## 当前 arc 正在推进什么\n活跃支线：\n- S1 | 推进中\n\n## 主角当前状态\n| 林动 | 主角本人 |\n\n## 本章主要对手/阻力方\n（暂无明确对手登场）\n\n## 本章主要协作者\n| 乙 | 盟友 |\n\n## 可能被牵动的 thread（伏笔 + 支线）\n- H01: progressing\n\n## 必须回收的陈旧 hook（本章必须 advance / resolve / 显式 defer）\n（暂无陈旧 hook——账本干净）\n\n## 本章卷外约束\n- 是否黄金三章：是\n- 硬约束（摘取本章可能触碰的条目）：\n（暂无 book_rules 条目）\n\n请为第 2 章产生 memo。严格按上面的普通 Markdown 小节格式输出。\n\n## 黄金三章规划指引 — 第 2 章\n\n这是开篇三章中的第 2 章——决定读者是否留下来的关键章节。黄金三章法则给每一章分了硬槽位：第 1 章必须把主角直接抛进核心冲突里（主角出场即面对主线矛盾——追杀、死局、被夺权、穿越即危机），不要拿背景、家族、天气、朝代铺垫开场。第 2 章必须让金手指落地一次——系统/能力/重生记忆/信息差，必须通过**一次具体事件**展现出来（不是\"他觉醒了 XX\"的旁白，而是\"他用了 XX，发生了 YY\"）。第 3 章必须给主角钉下一个 3-10 章内可达成的具体短期目标（攒第一桶金、干翻某小反派、救某人），给故事一条往前拉的引力线。\n\n本章 memo 的 goal 字段必须体现对应槽位的动词——抛出、展现、或锁定。章尾必须发生的改变要落在小钩子或情绪缺口上，不要写成平稳收束。开篇精简原则贯穿本章：场景 ≤ 3 个、人物 ≤ 3 个（配角可以只报名字，不展开）。信息分层强制要求：基础信息（外貌、身份、处境）通过主角行动自然带出，世界规则（设定、势力、底层逻辑）结合剧情节点揭示，禁止整段 exposition。"
+    },
+    {
+      "name": "en-no-blocks",
+      "input": {
+        "chapterNumber": 2,
+        "previousChapterEndingExcerpt": "林动握紧玉符。",
+        "recentSummaries": "| 章节 |",
+        "currentArcProse": "活跃支线：\n- S1 | 推进中",
+        "protagonistMatrixRow": "| 林动 | 主角本人 |",
+        "opponentRows": "（暂无明确对手登场）",
+        "collaboratorRows": "| 乙 | 盟友 |",
+        "relevantThreads": "- H01: progressing",
+        "recyclableHooks": "（暂无陈旧 hook——账本干净）",
+        "isGoldenOpening": false,
+        "bookRulesRelevant": "（暂无 book_rules 条目）",
+        "language": "en"
+      },
+      "expected": "# Chapter 2 memo request\n\n\n\n\n## Last screen of previous chapter (excerpt)\n林动握紧玉符。\n\n## Last 3 chapter summaries\n| 章节 |\n\n## What the current arc is pushing\n活跃支线：\n- S1 | 推进中\n\n## Protagonist current state\n| 林动 | 主角本人 |\n\n## Main antagonist / opposing forces this chapter\n（暂无明确对手登场）\n\n## Main collaborators this chapter\n| 乙 | 盟友 |\n\n## Threads that may be touched (foreshadows + subplots)\n- H01: progressing\n\n## Stale hooks — MUST be advanced / resolved / explicitly deferred this chapter\n（暂无陈旧 hook——账本干净）\n\n## Out-of-volume constraints for this chapter\n- Golden opening chapter: no\n- Hard rules (excerpt of items this chapter may touch):\n（暂无 book_rules 条目）\n\nProduce the memo for chapter 2. Strictly emit the plain Markdown section format above.\n\n## Golden Opening Guidance — Chapter 2\n\nThis is chapter 2 of the opening three — the chapters that decide whether a reader stays. The Golden Three Chapters rule assigns each chapter a load-bearing slot: chapter 1 must throw the reader straight into the core conflict (the protagonist enters already facing the main contradiction — chase, dead-end, dispossession, transmigration-as-crisis), not a paragraph of background, family tree, weather, or dynastic preamble. Chapter 2 must put the protagonist's edge — the system, the power, the rebirth-memory, the information advantage — on the stage through one concrete event (not \"he awakened a power\" narrated, but \"he used it for X and Y happened\"). Chapter 3 must lock in a concrete short-term goal achievable within the next 3-10 chapters (build the first stake of capital, take down the small antagonist, save someone), giving the story forward pull.\n\nThe memo's goal field for this chapter must reflect the slot's verb — confront, demonstrate, or commit. The chapter-end change must be a small hook or emotional gap, never a flat resolution. Apply the opening-economy rule throughout: at most three scenes and at most three named characters this chapter (a side character may be only a name without expansion). Information layering is mandatory — basic facts (appearance, status, situation) ride on the protagonist's actions, world rules ride on plot triggers; do not stage a paragraph of exposition."
+    }
+  ],
+  "planner_golden_opening_guidance": [
+    {
+      "name": "zh-ch2",
+      "input": {
+        "chapterNumber": 2,
+        "language": "zh"
+      },
+      "expected": "## 黄金三章规划指引 — 第 2 章\n\n这是开篇三章中的第 2 章——决定读者是否留下来的关键章节。黄金三章法则给每一章分了硬槽位：第 1 章必须把主角直接抛进核心冲突里（主角出场即面对主线矛盾——追杀、死局、被夺权、穿越即危机），不要拿背景、家族、天气、朝代铺垫开场。第 2 章必须让金手指落地一次——系统/能力/重生记忆/信息差，必须通过**一次具体事件**展现出来（不是\"他觉醒了 XX\"的旁白，而是\"他用了 XX，发生了 YY\"）。第 3 章必须给主角钉下一个 3-10 章内可达成的具体短期目标（攒第一桶金、干翻某小反派、救某人），给故事一条往前拉的引力线。\n\n本章 memo 的 goal 字段必须体现对应槽位的动词——抛出、展现、或锁定。章尾必须发生的改变要落在小钩子或情绪缺口上，不要写成平稳收束。开篇精简原则贯穿本章：场景 ≤ 3 个、人物 ≤ 3 个（配角可以只报名字，不展开）。信息分层强制要求：基础信息（外貌、身份、处境）通过主角行动自然带出，世界规则（设定、势力、底层逻辑）结合剧情节点揭示，禁止整段 exposition。"
+    },
+    {
+      "name": "en-ch3",
+      "input": {
+        "chapterNumber": 3,
+        "language": "en"
+      },
+      "expected": "## Golden Opening Guidance — Chapter 3\n\nThis is chapter 3 of the opening three — the chapters that decide whether a reader stays. The Golden Three Chapters rule assigns each chapter a load-bearing slot: chapter 1 must throw the reader straight into the core conflict (the protagonist enters already facing the main contradiction — chase, dead-end, dispossession, transmigration-as-crisis), not a paragraph of background, family tree, weather, or dynastic preamble. Chapter 2 must put the protagonist's edge — the system, the power, the rebirth-memory, the information advantage — on the stage through one concrete event (not \"he awakened a power\" narrated, but \"he used it for X and Y happened\"). Chapter 3 must lock in a concrete short-term goal achievable within the next 3-10 chapters (build the first stake of capital, take down the small antagonist, save someone), giving the story forward pull.\n\nThe memo's goal field for this chapter must reflect the slot's verb — confront, demonstrate, or commit. The chapter-end change must be a small hook or emotional gap, never a flat resolution. Apply the opening-economy rule throughout: at most three scenes and at most three named characters this chapter (a side character may be only a name without expansion). Information layering is mandatory — basic facts (appearance, status, situation) ride on the protagonist's actions, world rules ride on plot triggers; do not stage a paragraph of exposition."
+    },
+    {
+      "name": "absent-ch4",
+      "input": {
+        "chapterNumber": 4,
+        "language": "zh"
+      },
+      "expected": ""
+    }
+  ],
+  "planner_format_recent_summaries": [
+    {
+      "name": "last-n",
+      "input": {
+        "raw": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | a | 甲 | e | s | h | m | t |\n| 2 | b | 乙 | e | s | h | m | t |\n| 9 | c | 丙 | e | s | h | m | t |\n",
+        "chapterNumber": 10,
+        "limit": 2
+      },
+      "expected": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 2 | b | 乙 | e | s | h | m | t |\n| 9 | c | 丙 | e | s | h | m | t |"
+    },
+    {
+      "name": "filters-future",
+      "input": {
+        "raw": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | a | 甲 | e | s | h | m | t |\n| 2 | b | 乙 | e | s | h | m | t |\n| 9 | c | 丙 | e | s | h | m | t |\n",
+        "chapterNumber": 5,
+        "limit": 3
+      },
+      "expected": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | a | 甲 | e | s | h | m | t |\n| 2 | b | 乙 | e | s | h | m | t |"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "raw": "",
+        "chapterNumber": 3,
+        "limit": 3
+      },
+      "expected": "（暂无前章摘要）"
+    }
+  ],
+  "planner_compose_current_arc_prose": [
+    {
+      "name": "table",
+      "input": {
+        "subplotBoardRaw": "| id | 状态 |\n| --- | --- |\n| S1 | 推进中 |\n| S2 | 暂挂 |\n",
+        "emotionalArcsRaw": "| 角色 | 章节 | 情绪 |\n| --- | --- | --- |\n| 甲 | 1 | 焦虑 |\n| 乙 | 4 | 坚定 |\n",
+        "chapterNumber": 5
+      },
+      "expected": "活跃支线：\n- S1 | 推进中\n\n近期情感线：\n- 甲 | 1 | 焦虑\n- 乙 | 4 | 坚定"
+    },
+    {
+      "name": "bullet",
+      "input": {
+        "subplotBoardRaw": "- 支线甲\n- 支线乙",
+        "emotionalArcsRaw": "",
+        "chapterNumber": 5
+      },
+      "expected": "活跃支线：\n- 支线甲\n- 支线乙"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "subplotBoardRaw": "",
+        "emotionalArcsRaw": "",
+        "chapterNumber": 5
+      },
+      "expected": "（暂无 arc 数据——可能是新书起始阶段）"
+    }
+  ],
+  "planner_extract_protagonist_row": [
+    {
+      "name": "explicit",
+      "input": {
+        "raw": "| 角色 | 与主角关系 |\n| --- | --- |\n| 甲 | 兄长 |\n| 乙 | protagonist |\n"
+      },
+      "expected": "| 乙 | protagonist |"
+    },
+    {
+      "name": "first-data-row",
+      "input": {
+        "raw": "| 角色 | 与主角关系 |\n| --- | --- |\n| 甲 | 兄长 |\n"
+      },
+      "expected": "| 甲 | 兄长 |"
+    },
+    {
+      "name": "no-table",
+      "input": {
+        "raw": "无表格"
+      },
+      "expected": "（未找到主角行——请检查 character_matrix.md）"
+    }
+  ],
+  "planner_extract_relation_rows": [
+    {
+      "name": "opponent",
+      "input": {
+        "raw": "| 名字 | 关系 |\n| --- | --- |\n| 主角 | 主角 |\n| 甲 | 敌对 |\n| 乙 | 盟友 |\n| 丙 | 阻力方 |\n",
+        "kind": "opponent",
+        "limit": 3
+      },
+      "expected": "| 甲 | 敌对 |\n| 丙 | 阻力方 |"
+    },
+    {
+      "name": "collaborator",
+      "input": {
+        "raw": "| 名字 | 关系 |\n| --- | --- |\n| 主角 | 主角 |\n| 甲 | 敌对 |\n| 乙 | 盟友 |\n| 丙 | 阻力方 |\n",
+        "kind": "collaborator",
+        "limit": 3
+      },
+      "expected": "| 乙 | 盟友 |"
+    }
+  ],
+  "planner_extract_relevant_threads": [
+    {
+      "name": "mixed",
+      "input": {
+        "pendingHooksRaw": "| hook_id | 状态 |\n| --- | --- |\n| H01 | progressing |\n| H02 | resolved |\n",
+        "subplotBoardRaw": "| id | 状态 |\n| --- | --- |\n| S1 | open |\n"
+      },
+      "expected": "- H01: progressing\n- S1: open"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "pendingHooksRaw": "",
+        "subplotBoardRaw": ""
+      },
+      "expected": "（暂无活跃线索）"
+    }
+  ],
+  "planner_format_recyclable_hooks": [
+    {
+      "name": "zh",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "pressured",
+            "lastAdvancedChapter": 2,
+            "expectedPayoff": "第10章兑现",
+            "notes": "备注",
+            "coreHook": true
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 3,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "仅用备注",
+            "coreHook": false
+          }
+        ],
+        "chapterNumber": 9,
+        "language": "zh"
+      },
+      "expected": "规划时必须把以下每个 hook 放入 advance / resolve / defer（若 defer，必须写出理由）：\n- H01 \"第10章兑现\" — 状态=pressured，已沉默 7 章 [核心]\n- H02 \"仅用备注\" — 状态=open，已沉默 6 章"
+    },
+    {
+      "name": "en",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "pressured",
+            "lastAdvancedChapter": 2,
+            "expectedPayoff": "第10章兑现",
+            "notes": "备注",
+            "coreHook": true
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 3,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "仅用备注",
+            "coreHook": false
+          }
+        ],
+        "chapterNumber": 9,
+        "language": "en"
+      },
+      "expected": "The planner MUST place each of these under advance / resolve / defer in the hook ledger (deferring requires an explicit reason):\n- H01 \"第10章兑现\" — status=pressured, silent 7 ch [core]\n- H02 \"仅用备注\" — status=open, silent 6 ch"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "hooks": [],
+        "chapterNumber": 9,
+        "language": "zh"
+      },
+      "expected": "（暂无陈旧 hook——账本干净）"
+    }
+  ],
+  "planner_private_suite": [
+    {
+      "name": "derive-goal-chain",
+      "input": {
+        "externalContext": "先夺回玉符",
+        "currentFocus": "## 当前聚焦\n- 聚焦夺符\n\n## avoid\n- 降智\n- 圣母",
+        "authorIntent": "- 节奏快",
+        "chapterNumber": 3
+      },
+      "expected": "先夺回玉符"
+    },
+    {
+      "name": "derive-goal-default",
+      "input": {
+        "currentFocus": "",
+        "authorIntent": "",
+        "chapterNumber": 7
+      },
+      "expected": "Advance chapter 7 with clear narrative focus."
+    },
+    {
+      "name": "find-outline-exact",
+      "input": {
+        "volumeOutline": "- 第 3 章：林动夺符\n- 第 4 章：杂役反扑",
+        "chapterNumber": 3
+      },
+      "expected": "林动夺符"
+    },
+    {
+      "name": "find-outline-range-beats",
+      "input": {
+        "volumeOutline": "## 卷一 试炼\n第 1-5 章\n1. 觉醒\n2. 夺符\n3. 结怨",
+        "chapterNumber": 3
+      },
+      "expected": "结怨"
+    },
+    {
+      "name": "find-outline-tricky-numbers",
+      "input": {
+        "volumeOutline": "- Chapter 12: mid clash\n- Chapter 123: later\n- Chapter 12-15: span",
+        "chapterNumber": 123
+      },
+      "expected": "later"
+    },
+    {
+      "name": "collect-must-keep",
+      "input": {
+        "currentState": "- 保一\n- 保二",
+        "storyBible": "- 保一\n- 保三"
+      },
+      "expected": [
+        "保一",
+        "保二",
+        "保三"
+      ]
+    },
+    {
+      "name": "collect-must-avoid",
+      "input": {
+        "currentFocus": "## 当前聚焦\n- 聚焦夺符\n\n## avoid\n- 降智\n- 圣母",
+        "prohibitions": [
+          "禁止穿越回现代"
+        ]
+      },
+      "expected": [
+        "降智",
+        "圣母",
+        "禁止穿越回现代"
+      ]
+    },
+    {
+      "name": "collect-style-emphasis",
+      "input": {
+        "authorIntent": "- 节奏快",
+        "currentFocus": "## 当前聚焦\n- 聚焦夺符\n\n## avoid\n- 降智\n- 圣母"
+      },
+      "expected": [
+        "聚焦夺符",
+        "节奏快"
+      ]
+    },
+    {
+      "name": "extract-section",
+      "input": {
+        "content": "## 当前聚焦\n- 聚焦夺符\n\n## avoid\n- 降智\n- 圣母",
+        "headings": [
+          "avoid",
+          "禁止",
+          "避免",
+          "避雷"
+        ]
+      },
+      "expected": "- 降智\n- 圣母"
+    },
+    {
+      "name": "arc-context",
+      "input": {
+        "language": "zh",
+        "volumeOutline": "有内容",
+        "outlineNode": "节点"
+      },
+      "expected": "卷纲节点：节点"
+    },
+    {
+      "name": "arc-context-placeholder",
+      "input": {
+        "language": "zh",
+        "volumeOutline": "(文件尚未创建)",
+        "outlineNode": "节点"
+      },
+      "expected": null
+    },
+    {
+      "name": "golden-window-zh",
+      "input": {
+        "language": "zh",
+        "chapterNumber": 4
+      },
+      "expected": false
+    },
+    {
+      "name": "golden-window-en",
+      "input": {
+        "language": "en",
+        "chapterNumber": 5
+      },
+      "expected": true
+    },
+    {
+      "name": "hook-budget-under",
+      "input": {
+        "activeCount": 9,
+        "language": "zh"
+      },
+      "expected": "### 伏笔预算\n- 当前 9 条活跃伏笔（容量：12）"
+    },
+    {
+      "name": "hook-budget-over",
+      "input": {
+        "activeCount": 11,
+        "language": "en"
+      },
+      "expected": "### Hook Budget\n- 11 active hooks — approaching capacity (12). Only 1 new hook(s) allowed. Prioritize resolving existing debt over opening new threads."
+    },
+    {
+      "name": "render-intent-markdown",
+      "input": {
+        "intent": {
+          "chapter": 2,
+          "goal": "目标句",
+          "outlineNode": "节点",
+          "mustKeep": [
+            "保A"
+          ],
+          "mustAvoid": [],
+          "styleEmphasis": [
+            "紧凑"
+          ]
+        },
+        "memo": {
+          "chapter": 2,
+          "goal": "目标句",
+          "isGoldenOpening": true,
+          "body": "正文 memo",
+          "threadRefs": [
+            "H01"
+          ]
+        },
+        "language": "zh",
+        "pendingHooks": "- none",
+        "chapterSummaries": "- none",
+        "activeHookCount": 2
+      },
+      "expected": "# Chapter Intent\n\n## Goal\n目标句\n\n## Outline Node\n节点\n\n## Arc Context\n(none)\n\n## Must Keep\n- 保A\n\n## Must Avoid\n- none\n\n## Style Emphasis\n- 紧凑\n\n## Chapter Memo\n- isGoldenOpening: true\n\n### Thread Refs\n- H01\n\n### Body\n正文 memo\n\n### 伏笔预算\n- 当前 2 条活跃伏笔（容量：12）\n\n## Pending Hooks Snapshot\n- none\n\n## Chapter Summaries Snapshot\n- none\n"
+    }
   ]
 }
