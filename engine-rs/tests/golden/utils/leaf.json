@@ -3777,6 +3777,218 @@
       "expected": false
     }
   ],
+  "reviser_private_suite": [
+    {
+      "name": "parse-tags-full",
+      "input": {
+        "content": "=== FIXED_ISSUES ===\n修正A\n修正B\n\n=== REVISED_CONTENT ===\n新正文内容\n\n=== UPDATED_STATE ===\n新状态\n=== UPDATED_HOOKS ===\n新伏笔池",
+        "numericalSystem": true,
+        "mode": "rewrite",
+        "originalChapter": "旧正文",
+        "autoOutputMode": "allow-full"
+      },
+      "expected": {
+        "revisedContent": "新正文内容",
+        "wordCount": 5,
+        "fixedIssues": [
+          "修正A",
+          "修正B"
+        ],
+        "updatedState": "新状态",
+        "updatedLedger": "(账本未更新)",
+        "updatedHooks": "新伏笔池"
+      }
+    },
+    {
+      "name": "parse-legacy-fallback",
+      "input": {
+        "content": "没有任何标记",
+        "numericalSystem": false,
+        "mode": "polish",
+        "originalChapter": "原章",
+        "autoOutputMode": "allow-full"
+      },
+      "expected": {
+        "revisedContent": "原章",
+        "wordCount": 2,
+        "fixedIssues": [],
+        "updatedState": "(状态卡未更新)",
+        "updatedLedger": "",
+        "updatedHooks": "(伏笔池未更新)"
+      }
+    },
+    {
+      "name": "parse-auto-rewrite-only-rejects-patch",
+      "input": {
+        "content": "=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n新句\n--- END PATCH ---",
+        "numericalSystem": false,
+        "mode": "auto",
+        "originalChapter": "含原句的正文",
+        "autoOutputMode": "rewrite-only"
+      },
+      "expected": {
+        "revisedContent": "含原句的正文",
+        "wordCount": 6,
+        "fixedIssues": [],
+        "updatedState": "(状态卡未更新)",
+        "updatedLedger": "",
+        "updatedHooks": "(伏笔池未更新)"
+      }
+    },
+    {
+      "name": "parse-auto-patch-only-applies",
+      "input": {
+        "content": "=== FIXED_ISSUES ===\n修了原句\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n替换句\n--- END PATCH ---",
+        "numericalSystem": false,
+        "mode": "auto",
+        "originalChapter": "开头。原句。结尾。",
+        "autoOutputMode": "patch-only"
+      },
+      "expected": {
+        "revisedContent": "开头。替换句。结尾。",
+        "wordCount": 10,
+        "fixedIssues": [
+          "修了原句"
+        ],
+        "updatedState": "(状态卡未更新)",
+        "updatedLedger": "",
+        "updatedHooks": "(伏笔池未更新)"
+      }
+    },
+    {
+      "name": "auto-system-prompt-zh-rewrite-only",
+      "input": {
+        "langPrefix": "",
+        "genreProfile": {
+          "name": "都市",
+          "language": "zh",
+          "numericalSystem": true
+        },
+        "protagonistBlock": "\n\n主角人设锁定：林动，坚忍。",
+        "numericalRule": "\n3. 数值规则",
+        "language": "zh",
+        "autoOutputMode": "rewrite-only"
+      },
+      "expected": "你是一位专业的都市网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。\n\n主角人设锁定：林动，坚忍。\n\n分流指令：reviewer 报告的阻塞问题属于结构/语义错（人设崩、主线偏、爽点缺、时间线错、伏笔未收、memo 偏离等）。你必须输出 REVISED_CONTENT——禁止输出 PATCHES，这类问题不能靠补丁修复。如果无法安全重写，在 FIXED_ISSUES 里说明并留空 REVISED_CONTENT。\n\nPATCHES 和 REVISED_CONTENT 分别处理不同类型的问题——按问题类型选择，不是按偏好：\n\nPATCHES——处理局部文字问题（措辞、对话、AI痕迹、小的连续性错误）。\n  每个 PATCH 引用要修改的原文段落（一句、一段或多段皆可），给出替换文本。未涉及的内容保持原样。\n\nREVISED_CONTENT——处理全章级问题（字数压缩、结构重组、节奏重排、重大剧情偏离）。\n  输出修正后的完整正文。当 Critical 问题包含字数或结构性问题时，必须使用 REVISED_CONTENT——PATCHES 无法压缩或重构整章。\n\n如果 Critical 同时包含局部问题和全章问题，使用 REVISED_CONTENT（一次性解决所有问题）。\n\n修稿原则：\n1. 修根因，不做表面润色\n3. 数值规则\n2. 伏笔状态必须与伏笔池同步。如果提供了 Hook Debt 简报，必须保留伏笔兑现段落\n3. 不改变剧情走向和核心冲突\n4. 保持原文的语言风格、节奏和呼吸——不要压缩过渡段、不要删掉减速段\n5. 情绪用动作外化（不写\"他感到愤怒\"，写动作）。价值观通过行为传达\n6. 不同角色说话方式必须不同。禁止\"众人齐声惊呼\"\n7. 坏事叠坏事，每层比上一层过分\n\n小目标周期修稿指引：\n- 如果本章应该是\"后效\"阶段但仍在加压，把最密集的冲突段落改写为展示改变的段落——谁失去了什么、谁的态度变了、新的常态是什么\n- 如果本章应该是\"爆发\"阶段但没有明确兑现，找到最接近回报的场景并放大它——让承诺的释放超过读者预期\n- 日常段落如果不服务主线，改写为\"饵\"：加入一个指向未来的细节、一句暗示、一个角色反应\n\n输出格式：\n\n=== FIXED_ISSUES ===\n(逐条说明修正了什么)\n\n=== PATCHES ===\n(局部补丁——仅用于局部文字问题。有全章级问题时省略此区块)\n--- PATCH 1 ---\nTARGET_TEXT:\n(从原文中精确引用要修改的段落)\nREPLACEMENT_TEXT:\n(替换后的文本)\n--- END PATCH ---\n\n=== REVISED_CONTENT ===\n(修正后的完整正文——用于字数/结构/节奏等全章级问题。仅局部问题时省略此区块)\n\n=== UPDATED_STATE ===\n(更新后的完整状态卡)\n\n=== UPDATED_LEDGER ===\n(更新后的完整资源账本)\n=== UPDATED_HOOKS ===\n(更新后的完整伏笔池)"
+    },
+    {
+      "name": "auto-system-prompt-en-patch-only",
+      "input": {
+        "langPrefix": "【LANGUAGE OVERRIDE】",
+        "genreProfile": {
+          "name": "都市",
+          "language": "zh",
+          "numericalSystem": true
+        },
+        "protagonistBlock": "",
+        "numericalRule": "",
+        "language": "en",
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        },
+        "autoOutputMode": "patch-only"
+      },
+      "expected": "【LANGUAGE OVERRIDE】You are a professional 都市 web-fiction revision editor. Fix the chapter according to the review notes.\n\nROUTING: The reviewer's blocking issues are local (wording, paragraph shape, fatigue word, information boundary, knowledge pollution). You MUST output PATCHES only — do not rewrite the whole chapter. If patches are not possible, leave PATCHES empty.\n\nPATCHES and REVISED_CONTENT serve different problems — choose by problem type, not preference:\n\nPATCHES — for local text issues (wording, dialogue, AI-tell phrases, small continuity errors).\n  Each PATCH quotes the passage to change (a sentence, a paragraph, or multiple paragraphs) and provides a replacement. Untouched text stays exactly as-is.\n\nREVISED_CONTENT — for whole-chapter issues (length compression, structural rewrite, pacing restructure, major plot realignment).\n  Outputs the full revised chapter. When Critical issues include length or structural problems, you must use REVISED_CONTENT — patches cannot compress or restructure a chapter.\n  HARD CONSTRAINT: The revised chapter must stay within 2250-3750 characters (target: 3000, ±25%). This is non-negotiable — do not exceed this range.\n\nIf Critical issues include both local and whole-chapter problems, use REVISED_CONTENT (it addresses everything in one pass).\n\nRevision principles:\n1. Fix root causes — do not apply superficial polish\n2. Hook status must stay in sync with the hooks board. If hook debt briefs are provided, preserve hook payoff scenes\n3. Do not alter the plot direction or core conflicts\n4. Preserve the original language style, rhythm, and pacing — do not compress transitional scenes or remove breathing room\n5. Emotion through action (never \"he felt angry\" — show it). Values through behavior, not slogans\n6. Different characters speak differently. No \"everyone gasped in unison\"\n7. Escalate: bad things stack, each worse than the last\n\nCycle-aware revision:\n- If this chapter should be \"aftermath\" but is still escalating tension, rewrite the densest conflict passage into a change-showing passage — who lost what, whose attitude shifted, what the new normal is\n- If this chapter should be \"climax\" but has no clear payoff, find the closest scene to a reward and amplify it — make the promised release exceed reader expectations\n- Daily passages that don't serve the main line: rewrite as \"bait\" — add a detail pointing to the future, a hint, a character reaction that seeds curiosity\n\nOutput format:\n\n=== FIXED_ISSUES ===\n(List each fix on its own line; if a safe local fix is not possible, explain here)\n\n=== PATCHES ===\n(Output local patches if applicable. Omit this section entirely if using REVISED_CONTENT)\n--- PATCH 1 ---\nTARGET_TEXT:\n(Exact quote from the original that identifies the passage to change)\nREPLACEMENT_TEXT:\n(Replacement text for this passage)\n--- END PATCH ---\n\n=== REVISED_CONTENT ===\n(Full revised chapter content — only when PATCHES cannot solve the problem. Omit this section if using PATCHES)\n\n=== UPDATED_STATE ===\n(Full updated state card)\n\n=== UPDATED_LEDGER ===\n(Full updated resource ledger)\n=== UPDATED_HOOKS ===\n(Full updated hooks board)"
+    },
+    {
+      "name": "legacy-system-prompt-spot-fix",
+      "input": {
+        "langPrefix": "",
+        "genreProfile": {
+          "name": "玄幻",
+          "language": "zh",
+          "numericalSystem": false
+        },
+        "protagonistBlock": "",
+        "numericalRule": "",
+        "lengthGuardrail": "\n8. 护栏",
+        "mode": "spot-fix",
+        "language": "zh"
+      },
+      "expected": "你是一位专业的玄幻网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。\n\n修稿模式：定点修复：只修改审稿意见指出的具体句子或段落，其余所有内容必须原封不动保留。修改范围限定在问题句子及其前后各一句。禁止改动无关段落\n\n修稿原则：\n1. 按模式控制修改幅度\n2. 修根因，不做表面润色\n4. 伏笔状态必须与伏笔池同步\n5. 不改变剧情走向和核心冲突\n6. 保持原文的语言风格和节奏\n7. 修改后同步更新状态卡、伏笔池\n\n8. 护栏\n\n9. spot-fix 只能输出局部补丁，禁止输出整章改写；TARGET_TEXT 必须能在原文中唯一命中\n10. 如果需要大面积改写，说明无法安全 spot-fix，并让 PATCHES 留空\n\n输出格式：\n\n=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条；如果无法安全定点修复，也在这里说明)\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n(必须从原文中精确复制、且能唯一命中的原句或原段)\nREPLACEMENT_TEXT:\n(替换后的局部文本)\n--- END PATCH ---\n\n=== UPDATED_STATE ===\n(更新后的完整状态卡)\n\n=== UPDATED_HOOKS ===\n(更新后的完整伏笔池)"
+    },
+    {
+      "name": "legacy-system-prompt-polish",
+      "input": {
+        "langPrefix": "",
+        "genreProfile": {
+          "name": "玄幻",
+          "language": "zh",
+          "numericalSystem": false
+        },
+        "protagonistBlock": "",
+        "numericalRule": "",
+        "lengthGuardrail": "",
+        "mode": "polish",
+        "language": "zh"
+      },
+      "expected": "你是一位专业的玄幻网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。\n\n修稿模式：润色：只改表达、节奏、段落呼吸，不改事实与剧情结论。禁止：增删段落、改变人名/地名/物品名、增加新情节或新对话、改变因果关系。只允许：替换用词、调整句序、修改标点节奏\n\n修稿原则：\n1. 按模式控制修改幅度\n2. 修根因，不做表面润色\n4. 伏笔状态必须与伏笔池同步\n5. 不改变剧情走向和核心冲突\n6. 保持原文的语言风格和节奏\n7. 修改后同步更新状态卡、伏笔池\n\n\n\n输出格式：\n\n=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条)\n\n=== REVISED_CONTENT ===\n(修正后的完整正文)\n\n=== UPDATED_STATE ===\n(更新后的完整状态卡)\n\n=== UPDATED_HOOKS ===\n(更新后的完整伏笔池)"
+    },
+    {
+      "name": "reduced-control-block",
+      "input": {
+        "issues": [
+          {
+            "severity": "critical",
+            "category": "人设",
+            "description": "主角崩了",
+            "suggestion": "收紧动机"
+          },
+          {
+            "severity": "warning",
+            "category": "节奏",
+            "description": "节奏拖沓",
+            "suggestion": "压缩"
+          },
+          {
+            "severity": "info",
+            "category": "提示",
+            "description": "可改可不改",
+            "suggestion": ""
+          }
+        ],
+        "ruleStack": {
+          "layers": [],
+          "sections": {
+            "hard": [
+              "story_frame"
+            ],
+            "soft": [
+              "author_intent"
+            ],
+            "diagnostic": []
+          },
+          "overrideEdges": [],
+          "activeOverrides": [
+            {
+              "from": "L4",
+              "to": "L3",
+              "target": "chapter:3/mustAvoid",
+              "reason": "禁止降智"
+            }
+          ]
+        },
+        "contextPackage": {
+          "chapter": 3,
+          "selectedContext": [
+            {
+              "source": "story/current_focus.md",
+              "reason": "焦点",
+              "excerpt": "聚焦夺符"
+            }
+          ]
+        },
+        "chapterIntent": "# Chapter Intent\n## Goal\n目标"
+      },
+      "expected": "\n## 本章控制输入（由 Planner/Composer 编译）\n## 目标\n- 目标\n\n### 已选上下文\n- 证据 1\n- 原因: 焦点\n- 细节: 聚焦夺符\n\n### 规则栈\n- 硬护栏：story_frame\n- 软约束：author_intent\n- 诊断规则：(无)\n\n### 当前覆盖\n- L4 -> L3: 禁止降智 (chapter:3/mustAvoid)\n"
+    }
+  ],
   "planner_private_suite": [
     {
       "name": "derive-goal-chain",

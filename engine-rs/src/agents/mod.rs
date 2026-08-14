@@ -32,6 +32,7 @@ pub mod planner;
 pub mod planner_context;
 pub mod planner_prompts;
 pub mod post_write_validator;
+pub mod reviser;
 pub mod rules_reader;
 pub mod sensitive_words;
 pub mod settler_delta_parser;

@@ -94,6 +94,7 @@ struct LeafGolden {
     build_governed_rule_stack: Vec<Case>,
     build_governed_trace: Vec<Case>,
     is_protected_context_source: Vec<Case>,
+    reviser_private_suite: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1790,5 +1791,106 @@ fn is_protected_context_source_matches_ts() {
     for c in &load().is_protected_context_source {
         let got = is_protected_context_source(c.input["source"].as_str().unwrap());
         assert_eq!(got, c.expected.as_bool().unwrap(), "case `{}`", c.name);
+    }
+}
+
+// ---- 36 号：reviser ----
+
+#[test]
+fn reviser_private_suite_matches_ts() {
+    use inkos_engine::agents::reviser::{
+        build_auto_system_prompt, build_legacy_system_prompt, build_reduced_control_block,
+        parse_reviser_output, AutoOutputMode, ReviseMode,
+    };
+    use inkos_engine::models::genre_profile::GenreProfile;
+    use inkos_engine::models::input_governance::{ContextPackage, RuleStack};
+    use inkos_engine::models::length_governance::LengthSpec;
+
+    let auto_mode = |value: &str| match value {
+        "patch-only" => AutoOutputMode::PatchOnly,
+        "rewrite-only" => AutoOutputMode::RewriteOnly,
+        _ => AutoOutputMode::AllowFull,
+    };
+    let mode = |value: &str| match value {
+        "polish" => ReviseMode::Polish,
+        "rewrite" => ReviseMode::Rewrite,
+        "rework" => ReviseMode::Rework,
+        "anti-detect" => ReviseMode::AntiDetect,
+        "spot-fix" => ReviseMode::SpotFix,
+        _ => ReviseMode::Auto,
+    };
+    let lang = |value: &str| {
+        if value == "en" {
+            inkos_engine::utils::language::WritingLanguage::En
+        } else {
+            inkos_engine::utils::language::WritingLanguage::Zh
+        }
+    };
+
+    for c in &load().reviser_private_suite {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            name if name.starts_with("parse-") => {
+                let numerical = input["numericalSystem"].as_bool().unwrap();
+                let out = parse_reviser_output(
+                    input["content"].as_str().unwrap(),
+                    numerical,
+                    mode(input["mode"].as_str().unwrap()),
+                    input["originalChapter"].as_str().unwrap(),
+                    auto_mode(input["autoOutputMode"].as_str().unwrap()),
+                );
+                serde_json::json!({
+                    "revisedContent": out.revised_content,
+                    "wordCount": out.word_count,
+                    "fixedIssues": out.fixed_issues,
+                    "updatedState": out.updated_state,
+                    "updatedLedger": out.updated_ledger,
+                    "updatedHooks": out.updated_hooks,
+                })
+            }
+            name if name.starts_with("auto-system-prompt-") => {
+                let gp: GenreProfile = serde_json::from_value(input["genreProfile"].clone()).unwrap();
+                let length_spec: Option<LengthSpec> =
+                    serde_json::from_value(input["lengthSpec"].clone()).ok().flatten();
+                let out = build_auto_system_prompt(
+                    input["langPrefix"].as_str().unwrap(),
+                    &gp,
+                    input["protagonistBlock"].as_str().unwrap(),
+                    input["numericalRule"].as_str().unwrap(),
+                    lang(input["language"].as_str().unwrap()),
+                    length_spec.as_ref(),
+                    auto_mode(input["autoOutputMode"].as_str().unwrap()),
+                );
+                serde_json::to_value(out).unwrap()
+            }
+            name if name.starts_with("legacy-system-prompt-") => {
+                let gp: GenreProfile = serde_json::from_value(input["genreProfile"].clone()).unwrap();
+                let out = build_legacy_system_prompt(
+                    input["langPrefix"].as_str().unwrap(),
+                    &gp,
+                    input["protagonistBlock"].as_str().unwrap(),
+                    input["numericalRule"].as_str().unwrap(),
+                    input["lengthGuardrail"].as_str().unwrap(),
+                    mode(input["mode"].as_str().unwrap()),
+                );
+                serde_json::to_value(out).unwrap()
+            }
+            "reduced-control-block" => {
+                let package: ContextPackage =
+                    serde_json::from_value(input["contextPackage"].clone()).unwrap();
+                let rule_stack: RuleStack =
+                    serde_json::from_value(input["ruleStack"].clone()).unwrap();
+                let out = build_reduced_control_block(
+                    None,
+                    None,
+                    input["chapterIntent"].as_str(),
+                    &package,
+                    &rule_stack,
+                );
+                serde_json::to_value(out).unwrap()
+            }
+            other => panic!("未知 reviser suite case: {other}"),
+        };
+        assert_eq!(got, c.expected, "case `{}`", c.name);
     }
 }

@@ -55,6 +55,8 @@ import {
   formatRecyclableHooks,
 } from "../agents/planner-context.js";
 import { PlannerAgent } from "../agents/planner.js";
+import { ReviserAgent } from "../agents/reviser.js";
+import type { LengthSpec } from "../models/length-governance.js";
 import {
   buildGovernedRuleStack,
   buildGovernedTrace,
@@ -985,6 +987,35 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "summary-not-protected", input: { source: "story/chapter_summaries.md#3" }, expected: isProtectedContextSource("story/chapter_summaries.md#3") },
         { name: "recent-endings-not-protected", input: { source: "story/chapters#recent_endings" }, expected: isProtectedContextSource("story/chapters#recent_endings") },
       ],
+      // ── 36 号：reviser（类方法经实例括号访问；模块级私有 buildTieredIssueList /
+      //     resolveAutoOutputMode 由 Rust 单测镜像覆盖）──
+      reviser_private_suite: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const reviser = new ReviserAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const r = reviser as any;
+        const gp = { name: "都市", language: "zh", numericalSystem: true } as const;
+        const gpSimple = { name: "玄幻", language: "zh", numericalSystem: false } as const;
+        const lengthSpec = { target: 3000, softMin: 2250, softMax: 3750, hardMin: 1500, hardMax: 4500, countingMode: "zh_chars", normalizeMode: "none" } as unknown as LengthSpec;
+        const issues = [
+          { severity: "critical", category: "人设", description: "主角崩了", suggestion: "收紧动机", repairScope: undefined },
+          { severity: "warning", category: "节奏", description: "节奏拖沓", suggestion: "压缩", repairScope: undefined },
+          { severity: "info", category: "提示", description: "可改可不改", suggestion: "", repairScope: undefined },
+        ] as const;
+        const parseOutput = (content: string, gp2: unknown, mode: string, original: string, auto: string) =>
+          r.parseOutput(content, gp2, mode, original, auto);
+        return [
+          { name: "parse-tags-full", input: { content: "=== FIXED_ISSUES ===\n修正A\n修正B\n\n=== REVISED_CONTENT ===\n新正文内容\n\n=== UPDATED_STATE ===\n新状态\n=== UPDATED_HOOKS ===\n新伏笔池", numericalSystem: true, mode: "rewrite", originalChapter: "旧正文", autoOutputMode: "allow-full" }, expected: parseOutput("=== FIXED_ISSUES ===\n修正A\n修正B\n\n=== REVISED_CONTENT ===\n新正文内容\n\n=== UPDATED_STATE ===\n新状态\n=== UPDATED_HOOKS ===\n新伏笔池", gp, "rewrite", "旧正文", "allow-full") },
+          { name: "parse-legacy-fallback", input: { content: "没有任何标记", numericalSystem: false, mode: "polish", originalChapter: "原章", autoOutputMode: "allow-full" }, expected: parseOutput("没有任何标记", gpSimple, "polish", "原章", "allow-full") },
+          { name: "parse-auto-rewrite-only-rejects-patch", input: { content: "=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n新句\n--- END PATCH ---", numericalSystem: false, mode: "auto", originalChapter: "含原句的正文", autoOutputMode: "rewrite-only" }, expected: parseOutput("=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n新句\n--- END PATCH ---", gpSimple, "auto", "含原句的正文", "rewrite-only") },
+          { name: "parse-auto-patch-only-applies", input: { content: "=== FIXED_ISSUES ===\n修了原句\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n替换句\n--- END PATCH ---", numericalSystem: false, mode: "auto", originalChapter: "开头。原句。结尾。", autoOutputMode: "patch-only" }, expected: parseOutput("=== FIXED_ISSUES ===\n修了原句\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n替换句\n--- END PATCH ---", gpSimple, "auto", "开头。原句。结尾。", "patch-only") },
+          { name: "auto-system-prompt-zh-rewrite-only", input: { langPrefix: "", genreProfile: gp, protagonistBlock: "\n\n主角人设锁定：林动，坚忍。", numericalRule: "\n3. 数值规则", language: "zh", lengthSpec: undefined, autoOutputMode: "rewrite-only" }, expected: r.buildAutoSystemPrompt({ langPrefix: "", gp, protagonistBlock: "\n\n主角人设锁定：林动，坚忍。", numericalRule: "\n3. 数值规则", lengthGuardrail: "", resolvedLanguage: "zh", lengthSpec: undefined, autoOutputMode: "rewrite-only" }) },
+          { name: "auto-system-prompt-en-patch-only", input: { langPrefix: "【LANGUAGE OVERRIDE】", genreProfile: gp, protagonistBlock: "", numericalRule: "", language: "en", lengthSpec: lengthSpec, autoOutputMode: "patch-only" }, expected: r.buildAutoSystemPrompt({ langPrefix: "【LANGUAGE OVERRIDE】", gp, protagonistBlock: "", numericalRule: "", lengthGuardrail: "", resolvedLanguage: "en", lengthSpec, autoOutputMode: "patch-only" }) },
+          { name: "legacy-system-prompt-spot-fix", input: { langPrefix: "", genreProfile: gpSimple, protagonistBlock: "", numericalRule: "", lengthGuardrail: "\n8. 护栏", mode: "spot-fix", language: "zh" }, expected: r.buildLegacySystemPrompt({ langPrefix: "", gp: gpSimple, protagonistBlock: "", numericalRule: "", lengthGuardrail: "\n8. 护栏", mode: "spot-fix", resolvedLanguage: "zh" }) },
+          { name: "legacy-system-prompt-polish", input: { langPrefix: "", genreProfile: gpSimple, protagonistBlock: "", numericalRule: "", lengthGuardrail: "", mode: "polish", language: "zh" }, expected: r.buildLegacySystemPrompt({ langPrefix: "", gp: gpSimple, protagonistBlock: "", numericalRule: "", lengthGuardrail: "", mode: "polish", resolvedLanguage: "zh" }) },
+          { name: "reduced-control-block", input: { issues, ruleStack: { layers: [], sections: { hard: ["story_frame"], soft: ["author_intent"], diagnostic: [] }, overrideEdges: [], activeOverrides: [{ from: "L4", to: "L3", target: "chapter:3/mustAvoid", reason: "禁止降智" }] }, contextPackage: { chapter: 3, selectedContext: [{ source: "story/current_focus.md", reason: "焦点", excerpt: "聚焦夺符" }] }, memo: undefined, intent: undefined, chapterIntent: "# Chapter Intent\n## Goal\n目标" }, expected: r.buildReducedControlBlock(undefined, undefined, "# Chapter Intent\n## Goal\n目标", { chapter: 3, selectedContext: [{ source: "story/current_focus.md", reason: "焦点", excerpt: "聚焦夺符" }] }, { layers: [], sections: { hard: ["story_frame"], soft: ["author_intent"], diagnostic: [] }, overrideEdges: [], activeOverrides: [{ from: "L4", to: "L3", target: "chapter:3/mustAvoid", reason: "禁止降智" }] }) },
+        ];
+      })(),
       planner_private_suite: (() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const planner = new PlannerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
@@ -1049,5 +1080,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_governed_rule_stack.length).toBeGreaterThan(0);
     expect(payload.build_governed_trace.length).toBeGreaterThan(0);
     expect(payload.is_protected_context_source.length).toBeGreaterThan(0);
+    expect(payload.reviser_private_suite.length).toBeGreaterThan(0);
   });
 });
