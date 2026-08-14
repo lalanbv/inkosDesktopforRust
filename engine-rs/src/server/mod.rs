@@ -9,6 +9,7 @@
 //! - 路由集中导出 [`router`]，供 Tauri 命令或独立 bin 复用
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
+pub mod audit_route;
 pub mod sse;
 pub mod task_store;
 pub mod write_next_route;
@@ -134,6 +135,17 @@ pub fn router_with_runtime(state: AppState, hub: std::sync::Arc<sse::BroadcastHu
     router(state)
         .route("/api/v1/events", get(sse::events_handler).with_state(hub))
         .route("/api/v1/books/:id/write-next", post(write_next_route::write_next).with_state(write_next))
+}
+
+/// 完整组合路由（utility + SSE + write-next + audit）。
+pub fn router_full(
+    state: AppState,
+    hub: std::sync::Arc<sse::BroadcastHub>,
+    write_next: write_next_route::WriteNextRuntime,
+    audit: audit_route::AuditRuntime,
+) -> Router {
+    router_with_runtime(state, hub, write_next)
+        .route("/api/v1/books/:id/audit/:chapter", post(audit_route::audit_chapter).with_state(audit))
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

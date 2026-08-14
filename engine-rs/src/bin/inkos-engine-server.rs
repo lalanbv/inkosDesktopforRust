@@ -19,8 +19,7 @@ use std::sync::Arc;
 use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig, RoutedAgent, RoutedSettler};
 use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextAgents, WriteNextConfig, WriteNextCtx};
 use inkos_engine::server::sse::BroadcastHub;
-use inkos_engine::server::task_store::StudioTaskSnapshot;
-use inkos_engine::server::{router_with_runtime, AppState, WriteNextRuntime};
+use inkos_engine::server::{AppState, WriteNextRuntime};
 use inkos_engine::state::manager::StateManager;
 use inkos_engine::state::store::FsStateStore;
 
@@ -117,12 +116,22 @@ fn build_router() -> axum::Router {
                     chapter_number: 0,
                 }));
 
+                let full_auditor =
+                    inkos_engine::llm::agent_router::FullCycleAuditor {
+                        router: llm.clone(),
+                        project_root: project_ref.to_path_buf(),
+                        builtin_genres_dir: builtin.to_path_buf(),
+                        book_dir: project_ref.join("books").join(&book_id),
+                        chapter_number: 0, // write-next 内部按需重建（见下）
+                        genre: String::new(),
+                    };
                 let agents = WriteNextAgents {
                     writer,
                     planner,
                     composer,
                     reviser,
                     auditor,
+                    full_auditor: Some(full_auditor),
                     normalizer,
                     analyzer,
                     state_validator,
@@ -153,11 +162,25 @@ fn build_router() -> axum::Router {
     );
     let runtime = WriteNextRuntime {
         hub: hub.clone(),
-        state,
+        state: state.clone(),
         runner,
-        project_root,
+        project_root: project_root.clone(),
     };
-    router_with_runtime(AppState { version: env("CARGO_PKG_VERSION", "0.0.1") }, hub, runtime)
+    let audit = inkos_engine::server::audit_route::AuditRuntime {
+        hub: hub.clone(),
+        state,
+        router: std::sync::Arc::new(router.clone()),
+        builtin_genres_dir: std::path::PathBuf::from(env(
+            "INKOS_BUILTIN_GENRES_DIR",
+            "assets/genres",
+        )),
+    };
+    inkos_engine::server::router_full(
+        AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },
+        hub,
+        runtime,
+        audit,
+    )
 }
 
 #[tokio::main]
@@ -169,8 +192,3 @@ async fn main() -> Result<(), std::io::Error> {
     axum::serve(listener, app).await
 }
 
-// 引用未直接使用的公共面（文档性 use，防孤儿告警）。
-#[allow(unused)]
-fn _doc_uses() {
-    let _: Option<StudioTaskSnapshot> = None;
-}

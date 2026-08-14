@@ -135,6 +135,7 @@ fn build_agents(base_url: &str) -> WriteNextAgents<'static> {
         composer: leak("composer"),
         reviser: leak("reviser"),
         auditor: leak("auditor"),
+        full_auditor: None,
         normalizer: leak("length-normalizer"),
         analyzer: leak("chapter-analyzer"),
         state_validator: leak("state-validator"),
@@ -361,3 +362,102 @@ async fn e2e_llm_unreachable_pushes_write_error() {
 }
 
 use tower::util::ServiceExt;
+
+// ---- 44 号：审计端点 E2E（mock LLM 驱动完整 audit_chapter 编排） ----
+
+mod audit_e2e {
+    use super::*;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::audit_route::{audit_chapter, AuditRuntime};
+
+    /// mock 审计 LLM：返回维度审计 JSON（audit_chapter 的四策略解析面）。
+    async fn mock_audit_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let content = if system.contains("审") || system.contains("audit") || system.contains("连续") {
+            // 维度审计 JSON（parse_audit_result 的 JSON 策略）。
+            r#"{"passed": true, "overallScore": 88, "summary": "整体连贯，无硬矛盾。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩过渡。"}]}"#.to_string()
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_returns_full_result_and_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        // 审计对象章节（fixture 不自带——write-next E2E 靠管线生成）。
+        std::fs::write(
+            root.join("books").join("b1").join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。他握紧拳头，多年屈辱自今日起一笔一笔讨回来。",
+        )
+        .unwrap();
+
+        // mock LLM 服务。
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock_audit_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+
+        let hub = Arc::new(BroadcastHub::new());
+        let runtime = AuditRuntime {
+            hub: hub.clone(),
+            state: Arc::new(StateManager::new(root.clone())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: format!("http://{addr}"),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+        };
+        let route_app = axum::Router::new()
+            .route("/api/v1/books/:id/audit/:chapter", axum::routing::post(audit_chapter))
+            .with_state(runtime);
+
+        let mut subscriber = hub.subscribe();
+        let response = route_app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/audit/1")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 同步契约：200 + AuditResult JSON。
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        eprintln!("AUDIT-DEBUG: {status} {}", String::from_utf8_lossy(&body));
+        assert_eq!(status, 200);
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["passed"], true, "body: {parsed}");
+        assert_eq!(parsed["overallScore"], 88);
+        assert_eq!(parsed["summary"], "整体连贯，无硬矛盾。");
+        assert_eq!(parsed["issues"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["issues"][0]["severity"], "warning");
+
+        // SSE：start → complete {passed}。
+        let first = subscriber.recv().await.unwrap();
+        assert_eq!(first.event, "audit:start");
+        let second = subscriber.recv().await.unwrap();
+        assert_eq!(second.event, "audit:complete");
+        assert!(second.data.contains("\"passed\":true"));
+        assert!(second.data.contains("\"chapter\":1"));
+    }
+}

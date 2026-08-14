@@ -136,7 +136,7 @@ pub struct ReviewCycleParams<'a> {
 
 fn add_usage(left: &AuditTokenUsage, right: Option<&AuditTokenUsage>) -> AuditTokenUsage {
     match right {
-        None => left.clone(),
+        None => *left,
         Some(right) => AuditTokenUsage {
             prompt_tokens: left.prompt_tokens + right.prompt_tokens,
             completion_tokens: left.completion_tokens + right.completion_tokens,
@@ -181,7 +181,7 @@ fn is_passed(assessment: &Assessment) -> bool {
 pub async fn run_chapter_review_cycle(
     params: ReviewCycleParams<'_>,
 ) -> Result<ChapterReviewCycleResult, ReviewCycleError> {
-    let mut total_usage = params.initial_usage.clone();
+    let mut total_usage = params.initial_usage;
     let mut normalize_applied = false;
     let mut final_content = params.initial_content.to_string();
     let mut final_word_count;

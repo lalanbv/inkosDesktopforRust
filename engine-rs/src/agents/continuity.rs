@@ -37,7 +37,8 @@ use crate::utils::outline_paths::{
 };
 
 /// 审查结果。对齐 TS `AuditResult`。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditResult {
     pub passed: bool,
     pub issues: Vec<AuditIssue>,
@@ -50,7 +51,8 @@ pub struct AuditResult {
 }
 
 /// token 用量。对齐 TS `AuditResult.tokenUsage`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditTokenUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -58,7 +60,8 @@ pub struct AuditTokenUsage {
 }
 
 /// 单条审查问题。对齐 TS `AuditIssue`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditIssue {
     pub severity: AuditSeverity,
     pub category: String,
@@ -84,10 +87,13 @@ pub enum AuditSeverity {
 }
 
 /// 修复范围。对齐 TS `"local" | "structural" | "unknown"`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum RepairScope {
+    #[serde(rename = "local")]
     Local,
+    #[serde(rename = "structural")]
     Structural,
+    #[serde(rename = "unknown")]
     Unknown,
 }
 
@@ -2003,7 +2009,7 @@ mod tests {
             self.calls.lock().unwrap().push((messages, temperature));
             Ok(ChatOutcome {
                 content: self.response.clone(),
-                usage: self.usage.clone(),
+                usage: self.usage,
             })
         }
 

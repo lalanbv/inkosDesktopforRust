@@ -133,8 +133,11 @@ pub struct WriteNextAgents<'a> {
     /// composer 的大纲选段与压缩编译共用一个 chat 端口。
     pub composer: &'a dyn ComposerChat,
     pub reviser: &'a dyn ReviserChat,
-    /// 审核器（continuity audit 的环内端口由 reviser+auditor 适配）。
+    /// 审核器环内端口（测试 mock 或 43 号最小协议）。
     pub auditor: &'a dyn CycleAuditor,
+    /// 完整审计器（Some 时为 auto 环主链——真实 audit_chapter 编排，
+    /// 调用方用 book 上下文构造 FullCycleAuditor；None 回退 auditor）。
+    pub full_auditor: Option<crate::llm::agent_router::FullCycleAuditor>,
     pub normalizer: &'a dyn LengthNormalizerChat,
     pub analyzer: &'a dyn ChapterAnalyzerChat,
     pub state_validator: &'a dyn StateValidatorChat,
@@ -501,6 +504,16 @@ async fn write_next_chapter_locked(
             genre: book.genre.clone(),
         };
 
+        // 44 号：完整审计器主链（真实 audit_chapter 编排；缺省回退最小协议）。
+        let scoped_full = agents
+            .full_auditor
+            .as_ref()
+            .map(|a| a.for_chapter(book_dir.clone(), chapter_number, &book.genre));
+        let cycle_auditor: &dyn CycleAuditor = scoped_full
+            .as_ref()
+            .map(|a| a as &dyn CycleAuditor)
+            .unwrap_or(agents.auditor);
+
         let callbacks = ReviewCycleCallbacks {
             normalize_post_write_surface: Some(Arc::new(move |content| {
                 normalize_post_write_surface(content, Some(pipeline_language))
@@ -550,7 +563,7 @@ async fn write_next_chapter_locked(
                 total_tokens: total_usage.total_tokens,
             },
             reviser: &cycle_reviser,
-            auditor: agents.auditor,
+            auditor: cycle_auditor,
             normalizer: &normalizer,
             callbacks,
             max_review_iterations: Some(config.writing_review_retries),
@@ -1389,6 +1402,7 @@ mod tests {
             composer: &chat,
             reviser: &chat,
             auditor: &chat,
+            full_auditor: None,
             normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
@@ -1497,6 +1511,7 @@ mod tests {
             composer: &chat,
             reviser: &chat,
             auditor: &chat,
+            full_auditor: None,
             normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,

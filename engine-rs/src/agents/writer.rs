@@ -251,7 +251,7 @@ fn log_warn(language: WritingLanguage, zh: &str, en: &str) {
 }
 
 fn usage_or_zero(usage: &Option<AuditTokenUsage>) -> AuditTokenUsage {
-    usage.clone().unwrap_or(AuditTokenUsage {
+    (*usage).unwrap_or(AuditTokenUsage {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0,

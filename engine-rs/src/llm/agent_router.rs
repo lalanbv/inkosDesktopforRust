@@ -27,6 +27,7 @@ use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::llm::streaming_client::{ChatCompletionParams, StreamError, StreamingChatClient};
 use crate::pipeline::chapter_review_cycle::{ChapterReviewCycleControlInput, CycleAuditor};
 use crate::pipeline::chapter_state_recovery::{SettlePort, SettleRequest};
+use crate::state::store::FsStateStore;
 
 /// 默认 LLM 端点配置。
 #[derive(Debug, Clone)]
@@ -181,6 +182,16 @@ impl_simple_chat!(ReviserChat);
 impl_simple_chat!(LengthNormalizerChat);
 impl_simple_chat!(ChapterAnalyzerChat);
 impl_simple_chat!(StateValidatorChat);
+#[async_trait]
+impl crate::agents::continuity::AuditorChat for RoutedAgent {
+    async fn chat(
+        &self,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+    ) -> Result<ChatOutcome, String> {
+        self.router.chat(self.agent, messages, temperature, None).await
+    }
+}
 
 #[async_trait]
 impl crate::agents::composer::ComposerChat for RoutedAgent {
@@ -195,8 +206,10 @@ impl crate::agents::composer::ComposerChat for RoutedAgent {
     }
 }
 
-/// 审计端口：LLM 首行 PASS/FAIL + 可选分数（43 号最小协议；完整
-/// continuity 编排随 audit 域端点补齐——备案）。
+/// 审计端口：LLM 首行 PASS/FAIL + 可选分数（43 号最小协议）。
+///
+/// 44 号起主链改用 [`FullCycleAuditor`]（真实 `audit_chapter` 编排）；
+/// 本实现保留为无 ctx 场景的轻量回退（单测/健康探测）。
 #[async_trait]
 impl CycleAuditor for RoutedAgent {
     async fn audit_chapter(
@@ -282,6 +295,81 @@ impl SettlePort for RoutedSettler {
             .map_err(|e: WriteChapterError| e.to_string())
     }
 }
+
+/// 完整审计端口适配：真实 `audit_chapter`（11 路真相文件 + 维度审计 +
+/// 四策略解析）包装为 CycleAuditor。
+///
+/// book 上下文（book_dir/章节号/genre）在构造时捕获——write-next 环内
+/// 这些是调用级常量；治理控制入参（intent/memo/package/ruleStack）经
+/// 环的 control 逐调用传入。
+pub struct FullCycleAuditor {
+    pub router: AgentRouter,
+    pub project_root: std::path::PathBuf,
+    pub builtin_genres_dir: std::path::PathBuf,
+    pub book_dir: std::path::PathBuf,
+    pub chapter_number: u32,
+    pub genre: String,
+}
+
+impl FullCycleAuditor {
+    /// 按章克隆（write-next 环内以正确 book 上下文重建主链）。
+    pub fn for_chapter(
+        &self,
+        book_dir: std::path::PathBuf,
+        chapter_number: u32,
+        genre: &str,
+    ) -> Self {
+        FullCycleAuditor {
+            router: self.router.clone(),
+            project_root: self.project_root.clone(),
+            builtin_genres_dir: self.builtin_genres_dir.clone(),
+            book_dir,
+            chapter_number,
+            genre: genre.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl CycleAuditor for FullCycleAuditor {
+    async fn audit_chapter(
+        &self,
+        content: &str,
+        control: Option<&ChapterReviewCycleControlInput<'_>>,
+        temperature: Option<f64>,
+    ) -> Result<AuditResult, String> {
+        let prompt_store = FsStateStore;
+        let ctx = crate::agents::continuity::AuditChapterCtx {
+            project_root: &self.project_root,
+            builtin_genres_dir: &self.builtin_genres_dir,
+            prompt_store: &prompt_store,
+        };
+        let chat = RoutedAgent {
+            router: self.router.clone(),
+            agent: "auditor",
+        };
+        let options = crate::agents::continuity::AuditChapterOptions {
+            temperature,
+            chapter_intent: control.map(|c| c.chapter_intent.to_string()),
+            chapter_memo: control.and_then(|c| c.chapter_memo).cloned(),
+            context_package: control.map(|c| c.context_package.clone()),
+            rule_stack: control.map(|c| c.rule_stack.clone()),
+            truth_file_overrides: None,
+        };
+        crate::agents::continuity::audit_chapter(
+            &ctx,
+            &chat,
+            &self.book_dir,
+            content,
+            self.chapter_number,
+            Some(&self.genre),
+            &options,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
