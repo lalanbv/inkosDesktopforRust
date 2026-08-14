@@ -56,6 +56,13 @@ import {
 } from "../agents/planner-context.js";
 import { PlannerAgent } from "../agents/planner.js";
 import { ReviserAgent } from "../agents/reviser.js";
+import { LengthNormalizerAgent } from "../agents/length-normalizer.js";
+import {
+  buildStateDegradedReviewNote,
+  parseStateDegradedReviewNote,
+  resolveStateDegradedBaseStatus,
+} from "../pipeline/chapter-state-recovery.js";
+import type { ChapterMeta } from "../models/chapter.js";
 import type { LengthSpec } from "../models/length-governance.js";
 import {
   buildGovernedRuleStack,
@@ -989,6 +996,51 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
       ],
       // ── 36 号：reviser（类方法经实例括号访问；模块级私有 buildTieredIssueList /
       //     resolveAutoOutputMode 由 Rust 单测镜像覆盖）──
+      // ── 37 号：length-normalizer 私有方法（实例括号访问）+ state-degraded note ──
+      length_normalizer_suite: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const agent = new LengthNormalizerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const n = agent as any;
+        const spec = { target: 3000, softMin: 2250, softMax: 3750, hardMin: 1500, hardMax: 4500, countingMode: "zh_chars", normalizeMode: "none" } as any;
+        const input = { chapterContent: "正文内容。", lengthSpec: spec, chapterIntent: "## Goal\n目标", reducedControlBlock: "控制块" };
+        return [
+          { name: "system-compress", input: { mode: "compress" }, expected: n.buildSystemPrompt("compress") },
+          { name: "system-expand", input: { mode: "expand" }, expected: n.buildSystemPrompt("expand") },
+          { name: "user-full", input: { input, originalCount: 1234, mode: "expand" }, expected: n.buildUserPrompt(input, 1234, "expand") },
+          { name: "user-minimal", input: { input: { chapterContent: "短", lengthSpec: spec }, originalCount: 1, mode: "compress" }, expected: n.buildUserPrompt({ chapterContent: "短", lengthSpec: spec }, 1, "compress") },
+          { name: "sanitize-fence", input: { raw: "下面是压缩后的版本：\n```\n正文甲\n```\n完毕", fallback: "fb" }, expected: n.sanitizeNormalizedContent("下面是压缩后的版本：\n```\n正文甲\n```\n完毕", "fb") },
+          { name: "sanitize-empty", input: { raw: "  \n", fallback: "fb" }, expected: n.sanitizeNormalizedContent("  \n", "fb") },
+          { name: "sanitize-wrapper", input: { raw: "下面是修正后的正文：\n真正的正文内容在这里。", fallback: "fb" }, expected: n.sanitizeNormalizedContent("下面是修正后的正文：\n真正的正文内容在这里。", "fb") },
+          { name: "sanitize-wrapper-guard", input: { raw: "以下是压缩后的完整版本输出\n短", fallback: "fb" }, expected: n.sanitizeNormalizedContent("以下是压缩后的完整版本输出\n短", "fb") },
+          { name: "sanitize-all-wrapper", input: { raw: "我先压缩一下正文", fallback: "fb" }, expected: n.sanitizeNormalizedContent("我先压缩一下正文", "fb") },
+          { name: "truncated-matrix", input: { contents: ["正常收尾。", "code```", "他继续走了很", "话说到一半，", ""] }, expected: ["正常收尾。", "code```", "他继续走了很", "话说到一半，", ""].map((c) => n.looksTruncated(c)) },
+          { name: "warning-hard", input: { finalCount: 1000, lengthSpec: spec }, expected: n.buildWarning(1000, spec) ?? null },
+          { name: "warning-soft", input: { finalCount: 2000, lengthSpec: spec }, expected: n.buildWarning(2000, spec) ?? null },
+          { name: "warning-none", input: { finalCount: 3000, lengthSpec: spec }, expected: n.buildWarning(3000, spec) ?? null },
+          { name: "cross-opposite", input: { originalCount: 5000, candidateCount: 1000, lengthSpec: spec }, expected: n.crossesOppositeHardBound(5000, 1000, spec) },
+          { name: "cross-same-side", input: { originalCount: 5000, candidateCount: 3000, lengthSpec: spec }, expected: n.crossesOppositeHardBound(5000, 3000, spec) },
+        ];
+      })(),
+      state_degraded_note: (() => {
+        const issues = [
+          { severity: "critical", category: "state-validation", description: "状态卡与正文矛盾", suggestion: "", repairScope: undefined },
+          { severity: "warning", category: "state-validation", description: "次要矛盾", suggestion: "", repairScope: undefined },
+        ] as const;
+        const note = buildStateDegradedReviewNote("audit-failed", issues as unknown as Parameters<typeof buildStateDegradedReviewNote>[1]);
+        const meta = { number: 3, title: "t", auditIssues: ["[critical] 主线偏离"], reviewNote: undefined } as unknown as ChapterMeta;
+        const metaWithNote = { ...meta, reviewNote: note } as unknown as ChapterMeta;
+        const metaWarning = { ...meta, auditIssues: ["[warning] 小问题"] } as unknown as ChapterMeta;
+        return [
+          { name: "build", input: { baseStatus: "audit-failed", issues }, expected: note },
+          { name: "parse-roundtrip", input: { note }, expected: parseStateDegradedReviewNote(note) },
+          { name: "parse-bad-kind", input: { note: "{\"kind\":\"other\"}" }, expected: parseStateDegradedReviewNote("{\"kind\":\"other\"}") },
+          { name: "parse-empty", input: { note: undefined }, expected: parseStateDegradedReviewNote(undefined) },
+          { name: "resolve-note", input: { meta: "with-note" }, expected: resolveStateDegradedBaseStatus(metaWithNote) },
+          { name: "resolve-critical", input: { meta: "critical" }, expected: resolveStateDegradedBaseStatus(meta) },
+          { name: "resolve-warning", input: { meta: "warning" }, expected: resolveStateDegradedBaseStatus(metaWarning) },
+        ];
+      })(),
       reviser_private_suite: (() => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const reviser = new ReviserAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
@@ -1081,5 +1133,7 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_governed_trace.length).toBeGreaterThan(0);
     expect(payload.is_protected_context_source.length).toBeGreaterThan(0);
     expect(payload.reviser_private_suite.length).toBeGreaterThan(0);
+    expect(payload.length_normalizer_suite.length).toBeGreaterThan(0);
+    expect(payload.state_degraded_note.length).toBeGreaterThan(0);
   });
 });

@@ -95,6 +95,8 @@ struct LeafGolden {
     build_governed_trace: Vec<Case>,
     is_protected_context_source: Vec<Case>,
     reviser_private_suite: Vec<Case>,
+    length_normalizer_suite: Vec<Case>,
+    state_degraded_note: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1890,6 +1892,176 @@ fn reviser_private_suite_matches_ts() {
                 serde_json::to_value(out).unwrap()
             }
             other => panic!("未知 reviser suite case: {other}"),
+        };
+        assert_eq!(got, c.expected, "case `{}`", c.name);
+    }
+}
+
+// ---- 37 号：length-normalizer + state-degraded note ----
+
+#[test]
+fn length_normalizer_suite_matches_ts() {
+    use inkos_engine::agents::length_normalizer::{
+        build_system_prompt, build_user_prompt, build_warning, crosses_opposite_hard_bound,
+        looks_truncated, sanitize_normalized_content, NormalizeLengthInput,
+    };
+    use inkos_engine::models::length_governance::{
+        LengthCountingMode, LengthNormalizeMode, LengthSpec,
+    };
+
+    let mode = |value: &str| match value {
+        "compress" => LengthNormalizeMode::Compress,
+        "expand" => LengthNormalizeMode::Expand,
+        _ => LengthNormalizeMode::None,
+    };
+    let spec_from = |value: &serde_json::Value| LengthSpec {
+        target: value["target"].as_u64().unwrap() as u32,
+        soft_min: value["softMin"].as_u64().unwrap() as u32,
+        soft_max: value["softMax"].as_u64().unwrap() as u32,
+        hard_min: value["hardMin"].as_u64().unwrap() as u32,
+        hard_max: value["hardMax"].as_u64().unwrap() as u32,
+        counting_mode: LengthCountingMode::ZhChars,
+        normalize_mode: LengthNormalizeMode::None,
+    };
+
+    for c in &load().length_normalizer_suite {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            "system-compress" | "system-expand" => {
+                serde_json::to_value(build_system_prompt(mode(input["mode"].as_str().unwrap())))
+                    .unwrap()
+            }
+            "user-full" | "user-minimal" => {
+                let spec = spec_from(&input["input"]["lengthSpec"]);
+                let params = NormalizeLengthInput {
+                    chapter_content: input["input"]["chapterContent"].as_str().unwrap(),
+                    length_spec: &spec,
+                    chapter_intent: input["input"]["chapterIntent"].as_str(),
+                    reduced_control_block: input["input"]["reducedControlBlock"].as_str(),
+                };
+                let count = input["originalCount"].as_u64().unwrap() as u32;
+                serde_json::to_value(build_user_prompt(
+                    &params,
+                    count,
+                    mode(input["mode"].as_str().unwrap()),
+                ))
+                .unwrap()
+            }
+            name if name.starts_with("sanitize-") => {
+                serde_json::to_value(sanitize_normalized_content(
+                    input["raw"].as_str().unwrap(),
+                    input["fallback"].as_str().unwrap(),
+                ))
+                .unwrap()
+            }
+            "truncated-matrix" => {
+                let contents: Vec<&str> = input["contents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+                    .collect();
+                serde_json::to_value(
+                    contents.iter().map(|c| looks_truncated(c)).collect::<Vec<bool>>(),
+                )
+                .unwrap()
+            }
+            name if name.starts_with("warning-") => {
+                let spec = spec_from(&input["lengthSpec"]);
+                serde_json::to_value(build_warning(
+                    input["finalCount"].as_u64().unwrap() as u32,
+                    &spec,
+                ))
+                .unwrap()
+            }
+            name if name.starts_with("cross-") => {
+                let spec = spec_from(&input["lengthSpec"]);
+                serde_json::to_value(crosses_opposite_hard_bound(
+                    input["originalCount"].as_u64().unwrap() as u32,
+                    input["candidateCount"].as_u64().unwrap() as u32,
+                    &spec,
+                ))
+                .unwrap()
+            }
+            other => panic!("未知 length normalizer case: {other}"),
+        };
+        assert_eq!(got, c.expected, "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn state_degraded_note_matches_ts() {
+    use inkos_engine::agents::continuity::{AuditIssue, AuditSeverity};
+    use inkos_engine::models::chapter::{ChapterMeta, ChapterStatus};
+    use inkos_engine::pipeline::chapter_state_recovery::{
+        build_state_degraded_review_note, parse_state_degraded_review_note,
+        resolve_state_degraded_base_status,
+    };
+
+    let issue_from = |value: &serde_json::Value| AuditIssue {
+        severity: match value["severity"].as_str().unwrap() {
+            "critical" => AuditSeverity::Critical,
+            "warning" => AuditSeverity::Warning,
+            _ => AuditSeverity::Info,
+        },
+        category: value["category"].as_str().unwrap().to_string(),
+        description: value["description"].as_str().unwrap().to_string(),
+        suggestion: value["suggestion"].as_str().unwrap_or("").to_string(),
+        repair_scope: None,
+    };
+
+    let meta_from = |audit_issues: Vec<String>, review_note: Option<String>| ChapterMeta {
+        number: 3,
+        title: "t".to_string(),
+        status: ChapterStatus::StateDegraded,
+        word_count: 0,
+        created_at: String::new(),
+        updated_at: String::new(),
+        audit_issues,
+        length_warnings: vec![],
+        review_note,
+        detection_score: None,
+        detection_provider: None,
+        detected_at: None,
+        length_telemetry: None,
+        token_usage: None,
+    };
+
+    for c in &load().state_degraded_note {
+        let input = &c.input;
+        let got: serde_json::Value = match c.name.as_str() {
+            "build" => {
+                let issues: Vec<AuditIssue> = input["issues"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(&issue_from)
+                    .collect();
+                serde_json::to_value(build_state_degraded_review_note(
+                    input["baseStatus"].as_str().unwrap(),
+                    &issues,
+                ))
+                .unwrap()
+            }
+            name if name.starts_with("parse-") => {
+                serde_json::to_value(parse_state_degraded_review_note(
+                    input["note"].as_str(),
+                ))
+                .unwrap_or(serde_json::Value::Null)
+            }
+            name if name.starts_with("resolve-") => {
+                let meta = match input["meta"].as_str().unwrap() {
+                    "with-note" => {
+                        let note = build_state_degraded_review_note("audit-failed", &[]);
+                        meta_from(vec!["[critical] 主线偏离".to_string()], Some(note))
+                    }
+                    "critical" => meta_from(vec!["[critical] 主线偏离".to_string()], None),
+                    "warning" => meta_from(vec!["[warning] 小问题".to_string()], None),
+                    other => panic!("未知 meta 变体: {other}"),
+                };
+                serde_json::to_value(resolve_state_degraded_base_status(&meta)).unwrap()
+            }
+            other => panic!("未知 note case: {other}"),
         };
         assert_eq!(got, c.expected, "case `{}`", c.name);
     }

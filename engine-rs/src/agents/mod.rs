@@ -27,6 +27,7 @@ pub mod detector;
 pub mod en_prompt_sections;
 pub mod fanfic_dimensions;
 pub mod fanfic_prompt_sections;
+pub mod length_normalizer;
 pub mod observer_prompts;
 pub mod planner;
 pub mod planner_context;

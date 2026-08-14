@@ -3777,6 +3777,275 @@
       "expected": false
     }
   ],
+  "length_normalizer_suite": [
+    {
+      "name": "system-compress",
+      "input": {
+        "mode": "compress"
+      },
+      "expected": "你是一位章节长度修正器。你的任务是对章节正文做一次单次修正，只能执行一次，不得递归重写。\n\n修正目标：\n- compress 章节长度到给定目标区间\n- 保留章节原有事实、关键钩子、角色名和必须保留的标记\n- 不要引入新的支线、未来揭示或额外总结\n- 不要在正文外输出任何解释"
+    },
+    {
+      "name": "system-expand",
+      "input": {
+        "mode": "expand"
+      },
+      "expected": "你是一位章节长度修正器。你的任务是对章节正文做一次单次修正，只能执行一次，不得递归重写。\n\n修正目标：\n- expand 章节长度到给定目标区间\n- 保留章节原有事实、关键钩子、角色名和必须保留的标记\n- 不要引入新的支线、未来揭示或额外总结\n- 不要在正文外输出任何解释"
+    },
+    {
+      "name": "user-full",
+      "input": {
+        "input": {
+          "chapterContent": "正文内容。",
+          "lengthSpec": {
+            "target": 3000,
+            "softMin": 2250,
+            "softMax": 3750,
+            "hardMin": 1500,
+            "hardMax": 4500,
+            "countingMode": "zh_chars",
+            "normalizeMode": "none"
+          },
+          "chapterIntent": "## Goal\n目标",
+          "reducedControlBlock": "控制块"
+        },
+        "originalCount": 1234,
+        "mode": "expand"
+      },
+      "expected": "请对下面正文做一次扩写修正。\n\n## Length Spec\n- Target: 3000\n- Soft Range: 2250-3750\n- Hard Range: 1500-4500\n- Counting Mode: zh_chars\n\n## Current Count\n1234\n\n## Correction Rules\n- 只修正一次，不要递归\n- 保留正文中的关键标记、人物名、地点名和已有事实\n- 不要凭空新增子情节\n- 不要插入解释性总结或分析\n- 输出修正后的完整正文，不要加标签\n\n\n## Chapter Intent\n## Goal\n目标\n\n## Reduced Control Block\n控制块\n\n## Chapter Content\n正文内容。"
+    },
+    {
+      "name": "user-minimal",
+      "input": {
+        "input": {
+          "chapterContent": "短",
+          "lengthSpec": {
+            "target": 3000,
+            "softMin": 2250,
+            "softMax": 3750,
+            "hardMin": 1500,
+            "hardMax": 4500,
+            "countingMode": "zh_chars",
+            "normalizeMode": "none"
+          }
+        },
+        "originalCount": 1,
+        "mode": "compress"
+      },
+      "expected": "请对下面正文做一次压缩修正。\n\n## Length Spec\n- Target: 3000\n- Soft Range: 2250-3750\n- Hard Range: 1500-4500\n- Counting Mode: zh_chars\n\n## Current Count\n1\n\n## Correction Rules\n- 只修正一次，不要递归\n- 保留正文中的关键标记、人物名、地点名和已有事实\n- 不要凭空新增子情节\n- 不要插入解释性总结或分析\n- 输出修正后的完整正文，不要加标签\n\n\n## Chapter Content\n短"
+    },
+    {
+      "name": "sanitize-fence",
+      "input": {
+        "raw": "下面是压缩后的版本：\n```\n正文甲\n```\n完毕",
+        "fallback": "fb"
+      },
+      "expected": "正文甲"
+    },
+    {
+      "name": "sanitize-empty",
+      "input": {
+        "raw": "  \n",
+        "fallback": "fb"
+      },
+      "expected": "fb"
+    },
+    {
+      "name": "sanitize-wrapper",
+      "input": {
+        "raw": "下面是修正后的正文：\n真正的正文内容在这里。",
+        "fallback": "fb"
+      },
+      "expected": "真正的正文内容在这里。"
+    },
+    {
+      "name": "sanitize-wrapper-guard",
+      "input": {
+        "raw": "以下是压缩后的完整版本输出\n短",
+        "fallback": "fb"
+      },
+      "expected": "以下是压缩后的完整版本输出\n短"
+    },
+    {
+      "name": "sanitize-all-wrapper",
+      "input": {
+        "raw": "我先压缩一下正文",
+        "fallback": "fb"
+      },
+      "expected": "fb"
+    },
+    {
+      "name": "truncated-matrix",
+      "input": {
+        "contents": [
+          "正常收尾。",
+          "code```",
+          "他继续走了很",
+          "话说到一半，",
+          ""
+        ]
+      },
+      "expected": [
+        false,
+        false,
+        true,
+        true,
+        false
+      ]
+    },
+    {
+      "name": "warning-hard",
+      "input": {
+        "finalCount": 1000,
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        }
+      },
+      "expected": "Final count 1000 is outside the hard range 1500-4500 after one normalization pass."
+    },
+    {
+      "name": "warning-soft",
+      "input": {
+        "finalCount": 2000,
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        }
+      },
+      "expected": "Final count 2000 is outside the soft range 2250-3750 after one normalization pass."
+    },
+    {
+      "name": "warning-none",
+      "input": {
+        "finalCount": 3000,
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "cross-opposite",
+      "input": {
+        "originalCount": 5000,
+        "candidateCount": 1000,
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        }
+      },
+      "expected": true
+    },
+    {
+      "name": "cross-same-side",
+      "input": {
+        "originalCount": 5000,
+        "candidateCount": 3000,
+        "lengthSpec": {
+          "target": 3000,
+          "softMin": 2250,
+          "softMax": 3750,
+          "hardMin": 1500,
+          "hardMax": 4500,
+          "countingMode": "zh_chars",
+          "normalizeMode": "none"
+        }
+      },
+      "expected": false
+    }
+  ],
+  "state_degraded_note": [
+    {
+      "name": "build",
+      "input": {
+        "baseStatus": "audit-failed",
+        "issues": [
+          {
+            "severity": "critical",
+            "category": "state-validation",
+            "description": "状态卡与正文矛盾",
+            "suggestion": ""
+          },
+          {
+            "severity": "warning",
+            "category": "state-validation",
+            "description": "次要矛盾",
+            "suggestion": ""
+          }
+        ]
+      },
+      "expected": "{\"kind\":\"state-degraded\",\"baseStatus\":\"audit-failed\",\"injectedIssues\":[\"[critical] 状态卡与正文矛盾\",\"[warning] 次要矛盾\"]}"
+    },
+    {
+      "name": "parse-roundtrip",
+      "input": {
+        "note": "{\"kind\":\"state-degraded\",\"baseStatus\":\"audit-failed\",\"injectedIssues\":[\"[critical] 状态卡与正文矛盾\",\"[warning] 次要矛盾\"]}"
+      },
+      "expected": {
+        "kind": "state-degraded",
+        "baseStatus": "audit-failed",
+        "injectedIssues": [
+          "[critical] 状态卡与正文矛盾",
+          "[warning] 次要矛盾"
+        ]
+      }
+    },
+    {
+      "name": "parse-bad-kind",
+      "input": {
+        "note": "{\"kind\":\"other\"}"
+      },
+      "expected": null
+    },
+    {
+      "name": "parse-empty",
+      "input": {},
+      "expected": null
+    },
+    {
+      "name": "resolve-note",
+      "input": {
+        "meta": "with-note"
+      },
+      "expected": "audit-failed"
+    },
+    {
+      "name": "resolve-critical",
+      "input": {
+        "meta": "critical"
+      },
+      "expected": "audit-failed"
+    },
+    {
+      "name": "resolve-warning",
+      "input": {
+        "meta": "warning"
+      },
+      "expected": "ready-for-review"
+    }
+  ],
   "reviser_private_suite": [
     {
       "name": "parse-tags-full",
