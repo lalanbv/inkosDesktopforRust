@@ -38,7 +38,8 @@ import {
   detectDuplicateTitle,
   resolveDuplicateTitle,
 } from "../agents/post-write-validator.js";
-import { renderHookSnapshot } from "../utils/story-markdown.js";
+import { renderHookSnapshot, renderSummarySnapshot } from "../utils/story-markdown.js";
+import { computeRecyclableHooks, extractQueryTerms } from "../utils/memory-retrieval.js";
 import {
   buildGovernedHookWorkingSet,
   buildGovernedCharacterMatrixWorkingSet,
@@ -807,6 +808,38 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "no-change", input: { delta: clean, authority: 7 }, expected: writerPriv.normalizeRuntimeStateDeltaChapter(clean, 7) },
         ];
       })(),
+
+      // ── 33 号：memory-retrieval + renderSummarySnapshot ──
+      // 期望值取投影（hookId 列表 / 词项数组）规避两侧 HookRecord 序列化形状差异。
+      compute_recyclable_hooks: (() => {
+        const h = (id: string, start: number, last: number, status: string, core = false) =>
+          ({ hookId: id, startChapter: start, type: "plot", status, lastAdvancedChapter: last, expectedPayoff: "", notes: "", coreHook: core }) as const;
+        const hooks = [h("H01", 1, 4, "pressured"), h("H02", 2, 2, "near_payoff"), h("H03", 1, 0, "open"), h("H04", 1, 0, "open", true)];
+        return [
+          { name: "threshold-matrix", input: { hooks, chapterNumber: 9 }, expected: computeRecyclableHooks(hooks as unknown as Parameters<typeof computeRecyclableHooks>[0], 9).map((x) => x.hookId) },
+          { name: "terminal-excluded", input: { hooks: [h("H01", 1, 1, "已解决"), h("H02", 1, 1, "paused")], chapterNumber: 30 }, expected: computeRecyclableHooks([h("H01", 1, 1, "已解决"), h("H02", 1, 1, "paused")] as unknown as Parameters<typeof computeRecyclableHooks>[0], 30).map((x) => x.hookId) },
+          { name: "future-excluded", input: { hooks: [h("H01", 40, 0, "open")], chapterNumber: 10 }, expected: computeRecyclableHooks([h("H01", 40, 0, "open")] as unknown as Parameters<typeof computeRecyclableHooks>[0], 10).map((x) => x.hookId) },
+          { name: "ordering-silence-desc", input: { hooks: [h("H03", 1, 1, "open"), h("H04", 2, 2, "open")], chapterNumber: 14 }, expected: computeRecyclableHooks([h("H03", 1, 1, "open"), h("H04", 2, 2, "open")] as unknown as Parameters<typeof computeRecyclableHooks>[0], 14).map((x) => x.hookId) },
+        ];
+      })(),
+      extract_query_terms: [
+        { name: "chinese-focus-suffixes", input: { goal: "本章围绕林动崛起推进", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("本章围绕林动崛起推进", undefined, []) },
+        { name: "english-case-stopwords", input: { goal: "Focus on the Alliance lineage", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("Focus on the Alliance lineage", undefined, []) },
+        { name: "outline-fallback", input: { goal: "继续", outlineNode: "第3章 宗门大比", mustKeep: [] }, expected: extractQueryTerms("继续", "第3章 宗门大比", []) },
+        { name: "must-keep-prefix-word", input: { goal: "", outlineNode: undefined, mustKeep: ["保持 海上孤舟"] }, expected: extractQueryTerms("", undefined, ["保持 海上孤舟"]) },
+        { name: "negative-guidance", input: { goal: "守住城池，不要弃城", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("守住城池，不要弃城", undefined, []) },
+      ],
+      render_summary_snapshot: (() => {
+        const summaries = [
+          { chapter: 1, title: "初入", characters: "林动", events: "祖符觉醒", stateChanges: "无", hookActivity: "H01 open", mood: "平静", chapterType: "开局" },
+          { chapter: 2, title: "含|竖线", characters: "", events: "", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+        ];
+        return [
+          { name: "zh-full", input: { summaries, language: "zh" }, expected: renderSummarySnapshot(summaries as unknown as Parameters<typeof renderSummarySnapshot>[0], "zh") },
+          { name: "en-full", input: { summaries, language: "en" }, expected: renderSummarySnapshot(summaries as unknown as Parameters<typeof renderSummarySnapshot>[0], "en") },
+          { name: "empty", input: { summaries: [], language: "zh" }, expected: renderSummarySnapshot([], "zh") },
+        ];
+      })(),
     };
     writeFileSync(OUT_FILE, JSON.stringify(payload, null, 2) + "\n", "utf8");
     // 断言确有写出（防静默失败）
@@ -833,5 +866,8 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.detect_paragraph_length_drift.length).toBeGreaterThan(0);
     expect(payload.detect_duplicate_title.length).toBeGreaterThan(0);
     expect(payload.resolve_duplicate_title.length).toBeGreaterThan(0);
+    expect(payload.compute_recyclable_hooks.length).toBeGreaterThan(0);
+    expect(payload.extract_query_terms.length).toBeGreaterThan(0);
+    expect(payload.render_summary_snapshot.length).toBeGreaterThan(0);
   });
 });

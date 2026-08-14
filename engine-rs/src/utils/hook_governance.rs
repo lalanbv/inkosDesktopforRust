@@ -258,6 +258,7 @@ mod tests {
             start_chapter: start,
             hook_type: "plot".into(),
             status,
+            status_raw: String::new(),
             last_advanced_chapter: last,
             expected_payoff: String::new(),
             payoff_timing: None,

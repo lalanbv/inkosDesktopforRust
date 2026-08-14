@@ -42,7 +42,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 futures-util = "0.3"
 # 类型同步：Rust→TS 单向生成（见 src/models.rs 的 PoC）
 # 默认 optional（feature 门控），保证骨架零额外依赖即可编译
-ts-rs = { version = "10", optional = true }
+ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 # SQLite：memory-db 移植（node:sqlite → rusqlite）。用 bundled 从源码编译并静态链接，
 # 与 crate 已有「rustls-tls 避系统 OpenSSL」的自包含哲学一致，跨平台一致行为、零系统依赖。
 rusqlite = { version = "0.32", features = ["bundled"] }

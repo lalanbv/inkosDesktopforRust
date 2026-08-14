@@ -2945,5 +2945,274 @@
         "notes": []
       }
     }
+  ],
+  "compute_recyclable_hooks": [
+    {
+      "name": "threshold-matrix",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "pressured",
+            "lastAdvancedChapter": 4,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 2,
+            "type": "plot",
+            "status": "near_payoff",
+            "lastAdvancedChapter": 2,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          },
+          {
+            "hookId": "H03",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          },
+          {
+            "hookId": "H04",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": true
+          }
+        ],
+        "chapterNumber": 9
+      },
+      "expected": [
+        "H04",
+        "H02",
+        "H01"
+      ]
+    },
+    {
+      "name": "terminal-excluded",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "已解决",
+            "lastAdvancedChapter": 1,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "paused",
+            "lastAdvancedChapter": 1,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          }
+        ],
+        "chapterNumber": 30
+      },
+      "expected": []
+    },
+    {
+      "name": "future-excluded",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 40,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 0,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          }
+        ],
+        "chapterNumber": 10
+      },
+      "expected": []
+    },
+    {
+      "name": "ordering-silence-desc",
+      "input": {
+        "hooks": [
+          {
+            "hookId": "H03",
+            "startChapter": 1,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 1,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          },
+          {
+            "hookId": "H04",
+            "startChapter": 2,
+            "type": "plot",
+            "status": "open",
+            "lastAdvancedChapter": 2,
+            "expectedPayoff": "",
+            "notes": "",
+            "coreHook": false
+          }
+        ],
+        "chapterNumber": 14
+      },
+      "expected": [
+        "H03",
+        "H04"
+      ]
+    }
+  ],
+  "extract_query_terms": [
+    {
+      "name": "chinese-focus-suffixes",
+      "input": {
+        "goal": "本章围绕林动崛起推进",
+        "mustKeep": []
+      },
+      "expected": [
+        "推进",
+        "起推进",
+        "崛起推进"
+      ]
+    },
+    {
+      "name": "english-case-stopwords",
+      "input": {
+        "goal": "Focus on the Alliance lineage",
+        "mustKeep": []
+      },
+      "expected": [
+        "Alliance",
+        "lineage"
+      ]
+    },
+    {
+      "name": "outline-fallback",
+      "input": {
+        "goal": "继续",
+        "outlineNode": "第3章 宗门大比",
+        "mustKeep": []
+      },
+      "expected": [
+        "继续",
+        "宗门大比",
+        "大比",
+        "门大比"
+      ]
+    },
+    {
+      "name": "must-keep-prefix-word",
+      "input": {
+        "goal": "",
+        "mustKeep": [
+          "保持 海上孤舟"
+        ]
+      },
+      "expected": [
+        "保持",
+        "海上孤舟",
+        "孤舟",
+        "上孤舟"
+      ]
+    },
+    {
+      "name": "negative-guidance",
+      "input": {
+        "goal": "守住城池，不要弃城",
+        "mustKeep": []
+      },
+      "expected": [
+        "守住城池",
+        "城池",
+        "住城池"
+      ]
+    }
+  ],
+  "render_summary_snapshot": [
+    {
+      "name": "zh-full",
+      "input": {
+        "summaries": [
+          {
+            "chapter": 1,
+            "title": "初入",
+            "characters": "林动",
+            "events": "祖符觉醒",
+            "stateChanges": "无",
+            "hookActivity": "H01 open",
+            "mood": "平静",
+            "chapterType": "开局"
+          },
+          {
+            "chapter": 2,
+            "title": "含|竖线",
+            "characters": "",
+            "events": "",
+            "stateChanges": "",
+            "hookActivity": "",
+            "mood": "",
+            "chapterType": ""
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | 初入 | 林动 | 祖符觉醒 | 无 | H01 open | 平静 | 开局 |\n| 2 | 含\\|竖线 |  |  |  |  |  |  |"
+    },
+    {
+      "name": "en-full",
+      "input": {
+        "summaries": [
+          {
+            "chapter": 1,
+            "title": "初入",
+            "characters": "林动",
+            "events": "祖符觉醒",
+            "stateChanges": "无",
+            "hookActivity": "H01 open",
+            "mood": "平静",
+            "chapterType": "开局"
+          },
+          {
+            "chapter": 2,
+            "title": "含|竖线",
+            "characters": "",
+            "events": "",
+            "stateChanges": "",
+            "hookActivity": "",
+            "mood": "",
+            "chapterType": ""
+          }
+        ],
+        "language": "en"
+      },
+      "expected": "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | 初入 | 林动 | 祖符觉醒 | 无 | H01 open | 平静 | 开局 |\n| 2 | 含\\|竖线 |  |  |  |  |  |  |"
+    },
+    {
+      "name": "empty",
+      "input": {
+        "summaries": [],
+        "language": "zh"
+      },
+      "expected": "- none"
+    }
   ]
 }

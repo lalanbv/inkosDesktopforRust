@@ -271,6 +271,7 @@ fn merge_candidate_into_existing_hook(
         } else {
             HookStatus::Progressing
         },
+        status_raw: String::new(),
         last_advanced_chapter: existing.last_advanced_chapter.max(chapter),
         expected_payoff,
         payoff_timing: Some(payoff_timing),
@@ -296,6 +297,7 @@ fn create_canonical_hook(candidate: &PendingCandidate, chapter: u32, existing_id
         start_chapter: chapter,
         hook_type: candidate.hook_type.trim().to_string(),
         status: HookStatus::Open,
+        status_raw: String::new(),
         last_advanced_chapter: chapter,
         expected_payoff: candidate.expected_payoff.trim().to_string(),
         payoff_timing: Some(payoff_timing),
@@ -572,6 +574,7 @@ mod tests {
             start_chapter: 1,
             hook_type: hook_type.to_string(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: 1,
             expected_payoff: expected.to_string(),
             payoff_timing: None,
@@ -616,6 +619,7 @@ mod tests {
             start_chapter: 3,
             hook_type: "source-risk".to_string(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: 8,
             expected_payoff: "Reveal how much the anonymous source already knew about the route."
                 .to_string(),
@@ -651,6 +655,7 @@ mod tests {
             start_chapter: 1,
             hook_type: "relationship".to_string(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: 1,
             expected_payoff: "Reveal the real mentor debt.".to_string(),
             notes: "The mentor debt is still unresolved.".to_string(),
@@ -760,6 +765,7 @@ mod tests {
             start_chapter: 1,
             hook_type: "mystery".to_string(),
             status: HookStatus::Progressing,
+            status_raw: String::new(),
             last_advanced_chapter: 9,
             expected_payoff: "Reveal the updated secret".to_string(),
             payoff_timing: None,

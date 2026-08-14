@@ -18,6 +18,8 @@ use thiserror::Error;
 
 /// 运行时状态快照（四部分）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 pub struct RuntimeStateSnapshot {
     pub manifest: StateManifest,
     pub current_state: CurrentStateState,
@@ -191,6 +193,7 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
         start_chapter: existing.start_chapter.min(incoming.start_chapter),
         hook_type: prefer_richer_text(&existing.hook_type, &incoming.hook_type),
         status: merge_hook_status(existing.status, incoming.status, progressed),
+        status_raw: String::new(),
         last_advanced_chapter: advanced,
         expected_payoff,
         payoff_timing: Some(resolved_timing),
@@ -377,6 +380,7 @@ mod tests {
             start_chapter: start,
             hook_type: "plot".into(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: last_adv,
             expected_payoff: "soon".into(),
             payoff_timing: None,

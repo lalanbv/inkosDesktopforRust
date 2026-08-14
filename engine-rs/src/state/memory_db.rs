@@ -48,7 +48,8 @@ pub struct NewFact {
 }
 
 /// 章节摘要（对应 `chapter_summaries` 表一行）。字段与 TS `StoredSummary` 一一对应。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoredSummary {
     pub chapter: i64,
     pub title: String,

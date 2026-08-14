@@ -22,6 +22,8 @@ use crate::utils::language::{utf16_len, WritingLanguage};
 
 /// 后写校验违规（对齐 TS `PostWriteViolation`）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 pub struct PostWriteViolation {
     pub rule: String,
     pub severity: ViolationSeverity,
@@ -31,6 +33,8 @@ pub struct PostWriteViolation {
 
 /// 违规严重度（对齐 TS `"error" | "warning"`）。序列化为小写串以与 TS JSON 对齐。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export, rename_all = "lowercase"))]
 #[serde(rename_all = "lowercase")]
 pub enum ViolationSeverity {
     Error,

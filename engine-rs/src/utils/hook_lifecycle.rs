@@ -26,6 +26,39 @@ fn status_progressing_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)^(progressing|advanced|重大推进|持续推进)$").unwrap())
 }
 
+/// hook 的判定用状态文本：优先 `status_raw` 原文，空串回退枚举规范名。
+///
+/// 对齐 TS `StoredHook.status`（string 原文）在回收阈值/终态判定里的语义——
+/// "pressured"/"near_payoff" 等非枚举值只能从原文识别。
+pub fn hook_status_text(hook: &HookRecord) -> &str {
+    if hook.status_raw.is_empty() {
+        hook_status_canonical(hook.status)
+    } else {
+        &hook.status_raw
+    }
+}
+
+/// 枚举 → 规范名（serde 序列化同形）。
+pub fn hook_status_canonical(status: HookStatus) -> &'static str {
+    match status {
+        HookStatus::Open => "open",
+        HookStatus::Progressing => "progressing",
+        HookStatus::Deferred => "deferred",
+        HookStatus::Resolved => "resolved",
+    }
+}
+
+/// 回收节奏枚举 → 规范名（serde 序列化同形）。
+pub fn hook_payoff_timing_canonical(timing: HookPayoffTiming) -> &'static str {
+    match timing {
+        HookPayoffTiming::Immediate => "immediate",
+        HookPayoffTiming::NearTerm => "near-term",
+        HookPayoffTiming::MidArc => "mid-arc",
+        HookPayoffTiming::SlowBurn => "slow-burn",
+        HookPayoffTiming::Endgame => "endgame",
+    }
+}
+
 /// 规范化 hook 状态字符串 → HookStatus。默认 open。
 pub fn normalize_stored_hook_status(status: &str) -> HookStatus {
     let s = status.trim();

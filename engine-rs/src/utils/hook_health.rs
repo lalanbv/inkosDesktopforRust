@@ -275,6 +275,7 @@ mod tests {
             start_chapter: start,
             hook_type: "mystery".into(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: last_adv,
             expected_payoff: "Reveal the hidden truth".into(),
             payoff_timing: timing,

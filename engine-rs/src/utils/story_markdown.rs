@@ -6,8 +6,8 @@
 //!   [`parse_chapter_summaries_markdown`] / [`parse_pending_hooks_markdown`] /
 //!   [`parse_current_state_facts`] 及其辅助函数
 //!
-//! 渲染函数：[`render_hook_snapshot`]（governed-working-set 内联快照）。
-//! `renderSummarySnapshot` 未移植——服务 pipeline 的 ledger 快照写入，留待 pipeline 阶段勘测。
+//! 渲染函数：[`render_hook_snapshot`]（governed-working-set 内联快照）+
+//! [`render_summary_snapshot`]（planner 意图 markdown 的摘要快照）。
 //!
 //! ## 移植纪律
 //! 所有解析逻辑须与 TS **逐字一致**——markdown 表格行/单元格切分、章节号严格解析（防止
@@ -244,6 +244,7 @@ pub fn parse_pending_hooks_markdown(markdown: &str) -> Vec<HookRecord> {
             start_chapter: 0,
             hook_type: "unspecified".to_string(),
             status: HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: 0,
             expected_payoff: String::new(),
             payoff_timing: None,
@@ -296,7 +297,7 @@ pub fn render_hook_snapshot(
             hook.hook_id.clone(),
             hook.start_chapter.to_string(),
             hook.hook_type.clone(),
-            hook_status_str(hook.status).to_string(),
+            crate::utils::hook_lifecycle::hook_status_text(hook).to_string(),
             hook.last_advanced_chapter.to_string(),
             hook.expected_payoff.clone(),
             localize_hook_payoff_timing(timing, language).to_string(),
@@ -324,13 +325,47 @@ fn hook_payoff_timing_str(t: crate::models::runtime_state::HookPayoffTiming) -> 
     }
 }
 
-fn hook_status_str(s: HookStatus) -> &'static str {
-    match s {
-        HookStatus::Open => "open",
-        HookStatus::Progressing => "progressing",
-        HookStatus::Deferred => "deferred",
-        HookStatus::Resolved => "resolved",
+/// 渲染章节摘要快照表（空表 → `- none`）。
+///
+/// 对齐 TS `renderSummarySnapshot`：8 列固定表头（zh/en 双语），单元格
+/// `escapeTableCell`（`|` 转义 + trim），无标题行、无尾随空行。
+pub fn render_summary_snapshot(
+    summaries: &[StoredSummary],
+    language: crate::utils::language::WritingLanguage,
+) -> String {
+    if summaries.is_empty() {
+        return "- none".to_string();
     }
+
+    let en = language == crate::utils::language::WritingLanguage::En;
+    let headers: [&str; 2] = if en {
+        [
+            "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    } else {
+        [
+            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    };
+
+    let mut lines: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    for summary in summaries {
+        let cells = [
+            summary.chapter.to_string(),
+            summary.title.clone(),
+            summary.characters.clone(),
+            summary.events.clone(),
+            summary.state_changes.clone(),
+            summary.hook_activity.clone(),
+            summary.mood.clone(),
+            summary.chapter_type.clone(),
+        ];
+        let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
+        lines.push(format!("| {} |", escaped.join(" | ")));
+    }
+    lines.join("\n")
 }
 
 fn render_depends_on_cell(
@@ -529,13 +564,15 @@ fn parse_pending_hook_row(row: &[String]) -> HookRecord {
     };
 
     let cell = |idx: usize| row.get(idx).cloned().unwrap_or_default();
-    let status = parse_hook_status(cell(3));
+    let status_cell = cell(3);
+    let status = parse_hook_status(status_cell.clone());
 
     let mut record = HookRecord {
         hook_id: normalize_hook_id(row.first().map(|s| s.as_str())),
         start_chapter: parse_strict_chapter_integer(row.get(1).map(|s| s.as_str())),
         hook_type: cell(2),
         status,
+        status_raw: status_cell,
         last_advanced_chapter: parse_strict_chapter_integer(row.get(4).map(|s| s.as_str())),
         expected_payoff: cell(5),
         payoff_timing,

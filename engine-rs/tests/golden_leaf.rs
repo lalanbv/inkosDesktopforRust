@@ -78,6 +78,9 @@ struct LeafGolden {
     writer_build_style_fingerprint: Vec<Case>,
     writer_render_delta_summary_row: Vec<Case>,
     writer_normalize_runtime_state_delta_chapter: Vec<Case>,
+    compute_recyclable_hooks: Vec<Case>,
+    extract_query_terms: Vec<Case>,
+    render_summary_snapshot: Vec<Case>,
 }
 
 const LEAF_JSON: &str = include_str!("golden/utils/leaf.json");
@@ -1431,5 +1434,63 @@ fn writer_normalize_runtime_state_delta_chapter_matches_ts() {
         let got = normalize_runtime_state_delta_chapter(&delta, authority);
         let got_val = serde_json::to_value(&got).expect("序列化");
         assert_eq!(got_val, c.expected, "case `{}`", c.name);
+    }
+}
+
+// ---- 33 号：memory-retrieval + renderSummarySnapshot ----
+
+#[test]
+fn compute_recyclable_hooks_matches_ts() {
+    use inkos_engine::models::runtime_state::HookRecord;
+    use inkos_engine::utils::memory_retrieval::compute_recyclable_hooks;
+    for c in &load().compute_recyclable_hooks {
+        let hooks: Vec<HookRecord> = serde_json::from_value(c.input["hooks"].clone())
+            .unwrap_or_else(|e| panic!("case {}: hooks 反序列化失败: {e}", c.name));
+        let chapter = c.input["chapterNumber"].as_u64().unwrap() as u32;
+        let recycled = compute_recyclable_hooks(&hooks, chapter);
+        let got: Vec<&str> = recycled.iter().map(|h| h.hook_id.as_str()).collect();
+        let expected: Vec<&str> = c
+            .expected
+            .as_array()
+            .unwrap_or_else(|| panic!("case {}: expected 非 array", c.name))
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(got, expected, "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn extract_query_terms_matches_ts() {
+    use inkos_engine::utils::memory_retrieval::extract_query_terms;
+    for c in &load().extract_query_terms {
+        let goal = c.input["goal"].as_str().unwrap_or("");
+        let outline_node = c.input["outlineNode"].as_str();
+        let must_keep: Vec<String> = c
+            .input["mustKeep"]
+            .as_array()
+            .map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let got = extract_query_terms(goal, outline_node, &must_keep);
+        let expected: Vec<String> = c
+            .expected
+            .as_array()
+            .unwrap_or_else(|| panic!("case {}: expected 非 array", c.name))
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(got, expected, "case `{}`", c.name);
+    }
+}
+
+#[test]
+fn render_summary_snapshot_matches_ts() {
+    use inkos_engine::state::memory_db::StoredSummary;
+    use inkos_engine::utils::story_markdown::render_summary_snapshot;
+    for c in &load().render_summary_snapshot {
+        let summaries: Vec<StoredSummary> = serde_json::from_value(c.input["summaries"].clone())
+            .unwrap_or_else(|e| panic!("case {}: summaries 反序列化失败: {e}", c.name));
+        let got = render_summary_snapshot(&summaries, lang_opt(&c.input).expect("language 必填"));
+        assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
     }
 }

@@ -2452,6 +2452,7 @@ mod tests {
             start_chapter: 0,
             hook_type: "main".to_string(),
             status: crate::models::runtime_state::HookStatus::Open,
+            status_raw: String::new(),
             last_advanced_chapter: 0,
             expected_payoff: String::new(),
             payoff_timing: None,
