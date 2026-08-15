@@ -13,6 +13,7 @@ pub mod audit_route;
 pub mod books_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
+pub mod project_config_routes;
 pub mod sse;
 pub mod task_store;
 pub mod write_next_route;
@@ -259,6 +260,53 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         .route("/api/v1/genres/:id/copy", post(genre_routes::copy_genre).with_state(books.clone()))
+        // 54 号：project 配置域（inkos.json 轻量键值读写面）。
+        .route(
+            "/api/v1/project/input-governance-mode",
+            get(project_config_routes::get_input_governance_mode)
+                .put(project_config_routes::put_input_governance_mode)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/detection",
+            get(project_config_routes::get_detection)
+                .put(project_config_routes::put_detection)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/model-overrides",
+            get(project_config_routes::get_model_overrides)
+                .put(project_config_routes::put_model_overrides)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/default-model",
+            get(project_config_routes::get_default_model)
+                .put(project_config_routes::put_default_model)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/research-search",
+            get(project_config_routes::get_research_search)
+                .put(project_config_routes::put_research_search)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/chapter-review-mode",
+            get(project_config_routes::get_chapter_review_mode)
+                .put(project_config_routes::put_chapter_review_mode)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/notify",
+            get(project_config_routes::get_notify)
+                .put(project_config_routes::put_notify)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/language",
+            post(project_config_routes::post_language).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/chapter-review-mode",
             get(books_state_routes::get_review_mode)

@@ -2674,3 +2674,262 @@ mod books53_e2e {
         assert_eq!(parsed["error"]["message"], "Invalid genre ID: \"../evil\"");
     }
 }
+
+mod config54_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::project_config_routes::*;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt54(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture54(root: &std::path::Path) {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(root.join("inkos.json"), r#"{ "name": "demo" }"#).unwrap();
+    }
+
+    fn app54(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/project/input-governance-mode",
+                axum::routing::get(get_input_governance_mode).put(put_input_governance_mode),
+            )
+            .route(
+                "/api/v1/project/detection",
+                axum::routing::get(get_detection).put(put_detection),
+            )
+            .route(
+                "/api/v1/project/model-overrides",
+                axum::routing::get(get_model_overrides).put(put_model_overrides),
+            )
+            .route(
+                "/api/v1/project/default-model",
+                axum::routing::get(get_default_model).put(put_default_model),
+            )
+            .route(
+                "/api/v1/project/research-search",
+                axum::routing::get(get_research_search).put(put_research_search),
+            )
+            .route(
+                "/api/v1/project/chapter-review-mode",
+                axum::routing::get(get_chapter_review_mode).put(put_chapter_review_mode),
+            )
+            .route("/api/v1/project/notify", axum::routing::get(get_notify).put(put_notify))
+            .route("/api/v1/project/language", axum::routing::post(post_language))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    fn read_config(root: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn governance_mode_and_review_mode_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture54(&root);
+
+        // governance：无键 → v2；legacy 落盘；非法 400。
+        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/input-governance-mode", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["mode"], "v2");
+        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/input-governance-mode", Some(r#"{ "mode": "legacy" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed, serde_json::json!({ "ok": true, "mode": "legacy" }));
+        assert_eq!(read_config(&root)["inputGovernanceMode"], "legacy");
+        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/input-governance-mode", Some(r#"{ "mode": "bad" }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "mode must be legacy or v2");
+
+        // review-mode：无键 auto；manual 落盘 writing.reviewMode；非法值归 auto。
+        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/chapter-review-mode", None).await;
+        assert_eq!(parsed["mode"], "auto");
+        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/chapter-review-mode", Some(r#"{ "mode": "manual" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed, serde_json::json!({ "ok": true, "mode": "manual" }));
+        assert_eq!(read_config(&root)["writing"]["reviewMode"], "manual");
+        let (_, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/chapter-review-mode", Some(r#"{ "mode": "garbage" }"#)).await;
+        assert_eq!(parsed["mode"], "auto");
+    }
+
+    #[tokio::test]
+    async fn detection_config_validation_and_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture54(&root);
+
+        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/detection", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["detection"], serde_json::Value::Null);
+
+        // 合法：zod default 填充 7 字段标准化。
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/detection",
+            Some(r#"{ "detection": { "apiUrl": "https://api.gptzero.me", "apiKeyEnv": "GPTZERO_KEY" } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["detection"]["provider"], "custom");
+        assert_eq!(parsed["detection"]["threshold"], 0.5);
+        assert_eq!(parsed["detection"]["enabled"], false);
+        assert_eq!(parsed["detection"]["autoRewrite"], false);
+        assert_eq!(parsed["detection"]["maxRetries"], 3);
+        let saved = read_config(&root)["detection"].clone();
+        assert_eq!(saved["apiKeyEnv"], "GPTZERO_KEY");
+
+        // 非法：threshold 越界 400（错误拼接形态）。
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/detection",
+            Some(r#"{ "detection": { "apiUrl": "https://x.io", "apiKeyEnv": "K", "threshold": 2 } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().is_some_and(|e| e.contains("less than or equal to 1")), "{parsed}");
+
+        // null 删键。
+        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/detection", Some(r#"{ "detection": null }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["detection"], serde_json::Value::Null);
+        assert!(read_config(&root).get("detection").is_none());
+    }
+
+    #[tokio::test]
+    async fn model_overrides_default_model_and_notify() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture54(&root);
+
+        // model-overrides：缺省 {}；写入对象落盘。
+        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/model-overrides", None).await;
+        assert_eq!(parsed["overrides"], serde_json::json!({}));
+        let (status, _) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/model-overrides",
+            Some(r#"{ "overrides": { "planner": { "model": "glm-5" } } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(read_config(&root)["modelOverrides"]["planner"]["model"], "glm-5");
+
+        // default-model：GET null/null；PUT 写入（sync 镜像暂缓——不写 llm.model）。
+        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/default-model", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["service"], serde_json::Value::Null);
+        assert_eq!(parsed["defaultModel"], serde_json::Value::Null);
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/default-model",
+            Some(r#"{ "defaultModel": "glm-5-air", "service": "zhipu" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["defaultModel"], "glm-5-air");
+        assert_eq!(parsed["service"], "zhipu");
+        let llm = read_config(&root)["llm"].clone();
+        assert_eq!(llm["defaultModel"], "glm-5-air");
+        assert_eq!(llm["service"], "zhipu");
+        // GET 回读：defaultModel 命中。
+        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/default-model", None).await;
+        assert_eq!(parsed["defaultModel"], "glm-5-air");
+        // 空 defaultModel → 400。
+        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/default-model", Some(r#"{ "defaultModel": "  " }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "defaultModel is required");
+
+        // notify：缺省 []；写入数组。
+        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/notify", None).await;
+        assert_eq!(parsed["channels"], serde_json::json!([]));
+        let (status, _) = call(app54(rt54(&root)), "PUT", "/api/v1/project/notify", Some(r#"{ "channels": ["bark"] }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(read_config(&root)["notify"], serde_json::json!(["bark"]));
+
+        // language：透传落盘。
+        let (status, parsed) = call(app54(rt54(&root)), "POST", "/api/v1/project/language", Some(r#"{ "language": "en" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed, serde_json::json!({ "ok": true, "language": "en" }));
+        assert_eq!(read_config(&root)["language"], "en");
+    }
+
+    #[tokio::test]
+    async fn research_search_defaults_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture54(&root);
+
+        // GET 无键 → 整体默认。
+        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/research-search", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["researchSearch"], serde_json::json!({ "enabled": false, "provider": "tavily" }));
+
+        // PUT 合法：填充 + 可选字段保留。
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/research-search",
+            Some(r#"{ "researchSearch": { "enabled": true, "provider": "custom", "baseUrl": "https://s.example.com", "apiKeyEnv": "TAVILY_KEY" } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["researchSearch"]["enabled"], true);
+        assert_eq!(parsed["researchSearch"]["provider"], "custom");
+        assert_eq!(parsed["researchSearch"]["baseUrl"], "https://s.example.com");
+        assert_eq!(parsed["researchSearch"]["apiKeyEnv"], "TAVILY_KEY");
+        assert_eq!(read_config(&root)["researchSearch"]["provider"], "custom");
+
+        // PUT 非法 provider → 500（zod 抛 → onError）。
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/research-search",
+            Some(r#"{ "researchSearch": { "provider": "google" } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
+
+        // inkos.json 缺失 → GET 500 onError 形状。
+        std::fs::remove_file(root.join("inkos.json")).unwrap();
+        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/research-search", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
+    }
+}
