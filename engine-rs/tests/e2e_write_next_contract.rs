@@ -2408,3 +2408,269 @@ mod books52_e2e {
         assert_eq!(parsed["totalDetections"], 0);
     }
 }
+
+mod books53_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::{create_status, truth_file, write_truth_file};
+    use inkos_engine::server::genre_routes::{
+        copy_genre, create_genre, delete_genre, genre_detail, list_genres, update_genre,
+    };
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt53(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture53(root: &std::path::Path) {
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("outline")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("story").join("outline").join("story_frame.md"), "# 故事框架").unwrap();
+        std::fs::write(book.join("story").join("outline").join("volume_map.md"), "# 卷册地图").unwrap();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+    }
+
+    fn app53(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/books/:id/truth/*file",
+                axum::routing::get(truth_file).put(write_truth_file),
+            )
+            .route("/api/v1/books/:id/create-status", axum::routing::get(create_status))
+            .route("/api/v1/genres", axum::routing::get(list_genres))
+            .route("/api/v1/genres/create", axum::routing::post(create_genre))
+            .route(
+                "/api/v1/genres/:id",
+                axum::routing::get(genre_detail).put(update_genre).delete(delete_genre),
+            )
+            .route("/api/v1/genres/:id/copy", axum::routing::post(copy_genre))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn truth_write_roundtrip_and_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture53(&root);
+
+        // 白名单 outline 文件写入（父目录已存在场景）+ 读回。
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/outline/volume_map.md",
+            Some(r##"{ "content": "# 新卷册\n\n第一卷布局。" }"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        let (_, parsed) = call(
+            app53(rt53(&root)),
+            "GET",
+            "/api/v1/books/b1/truth/outline/volume_map.md",
+            None,
+        )
+        .await;
+        assert!(parsed["content"].as_str().unwrap().contains("新卷册"));
+
+        // roles 嵌套路径写入（自动建父目录）。
+        let (status, _) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/roles/主要角色/林动.md",
+            Some(r##"{ "content": "# 林动" }"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(root.join("books").join("b1").join("story").join("roles").join("主要角色").join("林动.md").exists());
+
+        // 白名单外 → 400；runtime 诊断 → 400；新布局书 shim → 400。
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/secret/evil.md",
+            Some(r#"{ "content": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Invalid truth file");
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/runtime/chapter-0001.plan.md",
+            Some(r#"{ "content": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Runtime diagnostic files are read-only");
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/story_bible.md",
+            Some(r#"{ "content": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Legacy compat shim; edit outline/story_frame.md instead");
+
+        // 无效 JSON / 缺 content → onError 形状 500。
+        let (status, parsed) = call(app53(rt53(&root)), "PUT", "/api/v1/books/b1/truth/current_focus.md", Some("{oops")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
+        let (status, _) = call(app53(rt53(&root)), "PUT", "/api/v1/books/b1/truth/current_focus.md", Some("{}")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn create_status_ready_and_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture53(&root);
+        let book = root.join("books").join("b1");
+
+        // 五节缺二（book_rules/pending_hooks/roles）→ missing。
+        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/books/b1/create-status", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["status"], "missing");
+
+        // 补齐五节 + 角色卡 → ready。
+        std::fs::write(book.join("story").join("book_rules.md"), "规则").unwrap();
+        std::fs::write(book.join("story").join("pending_hooks.md"), "| 伏笔 |").unwrap();
+        std::fs::create_dir_all(book.join("story").join("roles").join("主要角色")).unwrap();
+        std::fs::write(book.join("story").join("roles").join("主要角色").join("林动.md"), "# 林动").unwrap();
+        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/books/b1/create-status", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["status"], "ready");
+    }
+
+    #[tokio::test]
+    async fn genres_crud_full_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture53(&root);
+
+        // 列表：内置 xianxia，language 附着（frontmatter 无 language → 默认 zh）。
+        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/genres", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let genres = parsed["genres"].as_array().unwrap();
+        assert_eq!(genres.len(), 1);
+        assert_eq!(genres[0]["id"], "xianxia");
+        assert_eq!(genres[0]["source"], "builtin");
+        assert_eq!(genres[0]["language"], "zh");
+
+        // 详情。
+        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/genres/xianxia", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["profile"]["name"], "仙侠");
+        assert!(parsed["body"].as_str().unwrap().contains("正文指导"));
+
+        // 创建：frontmatter 逐字断言。
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "POST",
+            "/api/v1/genres/create",
+            Some(r#"{ "id": "wuxia", "name": "武侠", "chapterTypes": ["成长章"], "numericalSystem": true, "auditDimensions": [1, 6], "body": "侠义指导" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["id"], "wuxia");
+        let saved = std::fs::read_to_string(root.join("genres").join("wuxia.md")).unwrap();
+        assert_eq!(
+            saved,
+            "---\nname: \"武侠\"\nid: \"wuxia\"\nlanguage: \"zh\"\nchapterTypes: [\"成长章\"]\nfatigueWords: []\nnumericalSystem: true\npowerScaling: false\neraResearch: false\npacingRule: \"\"\nsatisfactionTypes: []\nauditDimensions: [1,6]\n---\n\n侠义指导"
+        );
+        // 项目级覆盖同 id：列表 source=project。
+        let (_, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/genres", None).await;
+        let wuxia = parsed["genres"].as_array().unwrap().iter().find(|g| g["id"] == "wuxia").unwrap();
+        assert_eq!(wuxia["source"], "project");
+
+        // 编辑：缺省字段回路径参数。
+        let (status, _) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/genres/wuxia",
+            Some(r#"{ "profile": { "name": "新武侠" }, "body": "改写指导" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let saved = std::fs::read_to_string(root.join("genres").join("wuxia.md")).unwrap();
+        assert!(saved.contains("name: \"新武侠\""));
+        assert!(saved.contains("id: \"wuxia\""));
+        assert!(saved.ends_with("改写指导"));
+
+        // 复制内置 → 项目。
+        let (status, parsed) = call(app53(rt53(&root)), "POST", "/api/v1/genres/xianxia/copy", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["path"], "genres/xianxia.md");
+        assert!(root.join("genres").join("xianxia.md").exists());
+
+        // 删除 → 二次 404。
+        let (status, _) = call(app53(rt53(&root)), "DELETE", "/api/v1/genres/wuxia", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(app53(rt53(&root)), "DELETE", "/api/v1/genres/wuxia", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Genre \"wuxia\" not found in project");
+
+        // 校验分支：缺 name 400；unsafe id ApiError 形状。
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "POST",
+            "/api/v1/genres/create",
+            Some(r#"{ "id": "only-id" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "id and name are required");
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "POST",
+            "/api/v1/genres/create",
+            Some(r#"{ "id": "../evil", "name": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_GENRE_ID");
+        assert_eq!(parsed["error"]["message"], "Invalid genre ID: \"../evil\"");
+    }
+}

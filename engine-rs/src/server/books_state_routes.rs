@@ -780,6 +780,72 @@ pub async fn post_workspace_inspiration(
     }
 }
 
+// ── PUT /api/v1/books/:id/truth/:file（53 号写面） ───────────────
+
+/// 真相文件写：白名单 → legacy shim 只读（新布局）→ runtime 诊断只读 →
+/// mkdir 父目录 + 写入。对齐 server.ts L5915（无效 JSON/缺 content 走
+/// onError → 500 `{"error":{"code":"INTERNAL_ERROR",...}}` 逐字）。
+pub async fn write_truth_file(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, file)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let internal_error_shape = || {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } })),
+        )
+    };
+    let book_dir = runtime.state.book_dir(&book_id);
+    let Some(resolved) = resolve_truth_file_path(&book_dir, &file) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid truth file" })));
+    };
+    // 新布局书的兼容指针 shim 只读（Phase 5 后权威在 outline/）。
+    if LEGACY_SHIM_FILES.contains(&file.as_str()) && is_new_layout_book(&book_dir).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Legacy compat shim; edit outline/story_frame.md instead" })),
+        );
+    }
+    if runtime_diagnostic_re().is_match(&file) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Runtime diagnostic files are read-only" })),
+        );
+    }
+    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        return internal_error_shape();
+    };
+    let Some(content) = parsed.get("content").and_then(Value::as_str) else {
+        return internal_error_shape();
+    };
+    if let Some(parent) = resolved.parent() {
+        if tokio::fs::create_dir_all(parent).await.is_err() {
+            return internal_error_shape();
+        }
+    }
+    match tokio::fs::write(&resolved, content).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(_) => internal_error_shape(),
+    }
+}
+
+// ── GET /api/v1/books/:id/create-status（53 号） ─────────────────
+
+/// 创建状态查询。books/create 主体（architect 长流程）暂缓——内存
+/// bookCreateStatus 无写入方，直接落磁盘判定分支：基础设定齐备 → ready，
+/// 否则 404 missing（对齐 server.ts L3127 的磁盘兜底语义）。
+pub async fn create_status(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.book_dir(&book_id);
+    if crate::utils::outline_paths::is_book_foundation_complete(&book_dir).await {
+        return (StatusCode::OK, Json(json!({ "status": "ready" })));
+    }
+    (StatusCode::NOT_FOUND, Json(json!({ "status": "missing" })))
+}
+
 // ── 检测域（52 号）：detect-all / detect/stats / detect/:chapter ──
 
 /// `AITellIssue` → JSON（severity/category/description/suggestion，对齐 TS 序列化）。

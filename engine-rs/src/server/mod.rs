@@ -12,6 +12,7 @@
 pub mod audit_route;
 pub mod books_routes;
 pub mod books_state_routes;
+pub mod genre_routes;
 pub mod sse;
 pub mod task_store;
 pub mod write_next_route;
@@ -238,8 +239,26 @@ pub fn router_books(
         .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
         .route(
             "/api/v1/books/:id/truth/*file",
-            get(books_state_routes::truth_file).with_state(books.clone()),
+            get(books_state_routes::truth_file)
+                .put(books_state_routes::write_truth_file)
+                .with_state(books.clone()),
         )
+        // 53 号：创建状态（磁盘判定分支）。
+        .route(
+            "/api/v1/books/:id/create-status",
+            get(books_state_routes::create_status).with_state(books.clone()),
+        )
+        // 53 号：genres 域（列表/详情/创建/编辑/删除/内置复制）。
+        .route("/api/v1/genres", get(genre_routes::list_genres).with_state(books.clone()))
+        .route("/api/v1/genres/create", post(genre_routes::create_genre).with_state(books.clone()))
+        .route(
+            "/api/v1/genres/:id",
+            get(genre_routes::genre_detail)
+                .put(genre_routes::update_genre)
+                .delete(genre_routes::delete_genre)
+                .with_state(books.clone()),
+        )
+        .route("/api/v1/genres/:id/copy", post(genre_routes::copy_genre).with_state(books.clone()))
         .route(
             "/api/v1/books/:id/chapter-review-mode",
             get(books_state_routes::get_review_mode)
