@@ -99,6 +99,18 @@ pub async fn generate_foundation(
     external_context: Option<&str>,
     review_feedback: Option<&str>,
 ) -> Result<ArchitectOutput, ArchitectFlowError> {
+    generate_foundation_inner(ctx, chat, book, external_context, review_feedback, None).await
+}
+
+/// 带修订模式（reviseFoundation 消费面）：旧四文 + 用户反馈注入系统提示词尾。
+pub async fn generate_foundation_inner(
+    ctx: &ArchitectCtx<'_>,
+    chat: &dyn ArchitectChat,
+    book: &BookConfig,
+    external_context: Option<&str>,
+    review_feedback: Option<&str>,
+    revise_prompt: Option<&str>,
+) -> Result<ArchitectOutput, ArchitectFlowError> {
     let parsed = read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir)
         .await
         .map_err(|e| ArchitectFlowError::Io(e.to_string()))?;
@@ -147,7 +159,7 @@ pub async fn generate_foundation(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: format!("{lang_prefix}{system_prompt}"), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::System, content: format!("{lang_prefix}{system_prompt}{}", revise_prompt.unwrap_or("")), tool_calls: None, tool_call_id: None },
                 LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
             ],
             0.8,
@@ -155,6 +167,27 @@ pub async fn generate_foundation(
         .await
         .map_err(ArchitectFlowError::Chat)?;
     parse_sections_with_repair(chat, &response.content, language).await
+}
+
+/// `buildRevisePrompt`（architect.ts 逐字）：既有架构稿修订模式。
+pub fn build_revise_prompt(
+    story_bible: &str,
+    volume_outline: &str,
+    book_rules: &str,
+    character_matrix: &str,
+    user_feedback: &str,
+) -> String {
+    fn or_none(text: &str) -> &str {
+        if text.is_empty() { "（无）" } else { text }
+    }
+    format!(
+        "\n\n## 既有架构稿修订模式\n你在把一本已有书的架构稿从条目式升级为当前的段落式架构稿 + 一人一卡角色目录；如果它已经是 Phase 5 结构，则按用户反馈二次重写。\n\n原书信息（这是权威内容，必须完整保留其中的世界观、角色、主线、伏笔和语气）：\n\n【story_bible / story_frame 全文】\n{}\n\n【volume_outline / volume_map 全文】\n{}\n\n【book_rules 全文】\n{}\n\n【character_matrix / roles 全文】\n{}\n\n你的任务：\n1. 把现有内容重新组织成当前 5 段 SECTION：story_frame / volume_map / roles / book_rules / pending_hooks\n2. story_frame 使用段落式世界观与核心冲突，不要退回条目表格\n3. volume_map 使用段落式卷/章级方向，并把节奏原则放进末段\n4. roles 必须按一人一卡输出，主要/次要角色判断沿用原内容，缺失才按主线重要性推断\n5. pending_hooks 必须保留原有未回收伏笔，不要因为重写架构稿而清空\n6. 不要改动已写章节的运行时事实，不要重置 current_state / pending_hooks 之外的运行时日志\n\n用户额外要求：\n{}\n",
+        or_none(story_bible),
+        or_none(volume_outline),
+        or_none(book_rules),
+        or_none(character_matrix),
+        or_none(user_feedback),
+    )
 }
 
 /// 从已有章节反向推导基础设定（temp 0.5）。对齐 TS `generateFoundationFromImport`。
@@ -1466,5 +1499,26 @@ name: 中文tier
             .await
             .unwrap_err();
         assert!(err.contains("legacy-format output"));
+    }
+}
+
+#[cfg(test)]
+mod revise_prompt_tests {
+    use super::build_revise_prompt;
+
+    #[test]
+    fn revise_prompt_embeds_documents_and_feedback() {
+        let prompt = build_revise_prompt("旧圣经", "旧卷纲", "旧规则", "旧人物", "加强群像");
+        assert!(prompt.starts_with("\n\n## 既有架构稿修订模式"));
+        assert!(prompt.contains("【story_bible / story_frame 全文】\n旧圣经"));
+        assert!(prompt.contains("【volume_outline / volume_map 全文】\n旧卷纲"));
+        assert!(prompt.contains("【book_rules 全文】\n旧规则"));
+        assert!(prompt.contains("【character_matrix / roles 全文】\n旧人物"));
+        assert!(prompt.contains("用户额外要求：\n加强群像"));
+        assert!(prompt.contains("5. pending_hooks 必须保留原有未回收伏笔"));
+
+        let empty = build_revise_prompt("", "", "", "", "");
+        assert!(empty.contains("【story_bible / story_frame 全文】\n（无）"));
+        assert!(empty.contains("用户额外要求：\n（无）"));
     }
 }

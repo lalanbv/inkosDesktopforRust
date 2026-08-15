@@ -36,6 +36,7 @@ pub mod fanfic_prompt_sections;
 pub mod length_normalizer;
 pub mod observer_prompts;
 pub mod planner;
+pub mod radar;
 pub mod planner_context;
 pub mod planner_prompts;
 pub mod post_write_validator;

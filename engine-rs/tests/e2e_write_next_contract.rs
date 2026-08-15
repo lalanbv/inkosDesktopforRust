@@ -5936,6 +5936,11 @@ mod agent65_e2e {
         std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
         std::fs::write(
             root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"诊断书","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
             r#"{"id":"b1","title":"t","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":3000,"createdAt":0,"updatedAt":0}"#,
         )
         .unwrap();
@@ -7966,5 +7971,280 @@ mod play71_e2e {
         let (status, parsed) = call(app71(&root), "GET", "/api/v1/play/runs/%2e%2e/r1", None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "INVALID_BOOK_ID");
+    }
+}
+
+mod ops72_e2e {
+    //! 72 号：daemon 生命周期 / logs / doctor / radar / foundation revise 收官面。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::book_create_routes::revise_foundation;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::ops_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt72(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app72_with(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/daemon", axum::routing::get(ops_routes::get_daemon))
+            .route("/api/v1/daemon/start", axum::routing::post(ops_routes::post_daemon_start))
+            .route("/api/v1/daemon/stop", axum::routing::post(ops_routes::post_daemon_stop))
+            .route("/api/v1/logs", axum::routing::get(ops_routes::get_logs))
+            .route("/api/v1/doctor", axum::routing::get(ops_routes::get_doctor))
+            .route("/api/v1/radar/scan", axum::routing::post(ops_routes::post_radar_scan))
+            .route("/api/v1/radar/history", axum::routing::get(ops_routes::get_radar_history))
+            .route("/api/v1/books/:id/foundation/revise", axum::routing::post(revise_foundation))
+            .with_state(runtime)
+    }
+
+    fn app72(root: &std::path::Path, llm: &str) -> axum::Router {
+        app72_with(rt72(root, llm))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 雷达 + 架构 + 审核 mock（按 system 关键词分流；榜单外网抓取由 5s 预算容错）。
+    async fn mock_llm() -> String {
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("网络小说市场分析师") {
+                        serde_json::json!({
+                            "recommendations": [
+                                { "platform": "番茄小说", "genre": "都市脑洞", "concept": "外卖员觉醒系统", "confidence": 0.82 }
+                            ],
+                            "marketSummary": "都市脑洞热度持续。"
+                        })
+                        .to_string()
+                    } else if system.contains("网络小说架构师") || system.contains("总架构师") {
+                        super::books58_e2e::ARCHITECT_OUTPUT.to_string()
+                    } else if system.contains("资深小说编辑") {
+                        super::books58_e2e::REVIEW_PASS.to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn daemon_lifecycle_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let runtime = rt72(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app72_with(runtime);
+
+        // 初始 idle。
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/daemon", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["running"], false);
+
+        // start → {ok,running:true} + daemon:started；无书写循环空转不报错。
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/daemon/start", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["running"], true);
+        assert_eq!(subscriber.recv().await.unwrap().event, "daemon:started");
+
+        let (_status, parsed) = call(app.clone(), "GET", "/api/v1/daemon", None).await;
+        assert_eq!(parsed["running"], true);
+
+        // 重复 start → 400。
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/daemon/start", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"], "Daemon already running");
+
+        // stop → daemon:stopped；重复 stop → 400。
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/daemon/stop", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["running"], false);
+        assert_eq!(subscriber.recv().await.unwrap().event, "daemon:stopped");
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/daemon/stop", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Daemon not running");
+        let (_, parsed) = call(app, "GET", "/api/v1/daemon", None).await;
+        assert_eq!(parsed["running"], false);
+    }
+
+    #[tokio::test]
+    async fn logs_tail_json_and_plain_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("inkos.log"),
+            "{\"level\":\"info\",\"message\":\"first\"}\nplain line 两\n{\"level\":\"warn\",\"message\":\"last\"}\n",
+        )
+        .unwrap();
+        let (status, parsed) = call(app72(&root, "http://127.0.0.1:9"), "GET", "/api/v1/logs", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let entries = parsed["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["message"], "first");
+        assert_eq!(entries[1]["message"], "plain line 两");
+        assert!(entries[1].get("level").is_none(), "裸行仅 message: {entries:?}");
+        assert_eq!(entries[2]["level"], "warn");
+
+        // 缺失文件 → 空表。
+        let empty = tempfile::tempdir().unwrap();
+        let (status, parsed) = call(app72(empty.path(), "http://127.0.0.1:9"), "GET", "/api/v1/logs", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn radar_scan_and_history_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 预置一条历史。
+        std::fs::create_dir_all(root.join("radar")).unwrap();
+        std::fs::write(
+            root.join("radar").join("scan-2026-08-01T00-00-00-000Z.json"),
+            r#"{ "timestamp": "2026-08-01T00:00:00.000Z", "marketSummary": "历史扫描", "recommendations": [] }"#,
+        )
+        .unwrap();
+        let llm = mock_llm().await;
+        let runtime = rt72(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app72_with(runtime);
+
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/radar/scan", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["marketSummary"], "都市脑洞热度持续。");
+        assert_eq!(parsed["recommendations"].as_array().unwrap().len(), 1);
+        assert!(parsed["timestamp"].as_str().is_some_and(|t| t.ends_with('Z')));
+        assert_eq!(subscriber.recv().await.unwrap().event, "radar:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "radar:complete");
+
+        // 历史两条（新扫描 file 名更大 → 降序在前）。
+        let (status, parsed) = call(app, "GET", "/api/v1/radar/history", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "items: {items:?}");
+        assert_eq!(items[0]["marketSummary"], "都市脑洞热度持续。");
+        assert_eq!(items[1]["summaryPreview"], "历史扫描");
+        assert!(items[0]["file"].as_str().unwrap().starts_with("scan-2026-08-1"));
+    }
+
+    #[tokio::test]
+    async fn doctor_checks_file_surface_and_book_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("inkos.json"), "{}").unwrap();
+        std::fs::write(root.join(".env"), "INKOS_LLM_API_KEY=x").unwrap();
+        std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"诊断书","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+
+        // LLM 不可达：3s 预算内判 false（不挂起）。
+        let started = std::time::Instant::now();
+        let (status, parsed) = call(app72(&root, "http://127.0.0.1:9"), "GET", "/api/v1/doctor", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(6), "doctor 应有界: {:?}", started.elapsed());
+        assert_eq!(parsed["inkosJson"], true);
+        assert_eq!(parsed["projectEnv"], true);
+        assert_eq!(parsed["booksDir"], true);
+        assert_eq!(parsed["bookCount"], 1);
+        assert_eq!(parsed["llmConnected"], false, "body: {parsed}");
+    }
+
+    #[tokio::test]
+    async fn foundation_revise_backs_up_and_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        // phase4 legacy 四文件。
+        let story = root.join("books").join("b1").join("story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(story.join("story_bible.md"), "旧圣经").unwrap();
+        std::fs::write(story.join("volume_outline.md"), "旧卷纲").unwrap();
+        std::fs::write(story.join("book_rules.md"), "旧规则").unwrap();
+        std::fs::write(story.join("character_matrix.md"), "旧人物").unwrap();
+        let llm = mock_llm().await;
+        let runtime = rt72(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app72_with(runtime);
+
+        // 缺 feedback → 400 平铺。
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/books/b1/foundation/revise", Some("{}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "feedback is required");
+
+        // 修订成功：备份 + 新布局落盘 + 广播。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/books/b1/foundation/revise",
+            Some(r#"{ "feedback": "加强群像" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert!(story.join("outline").join("story_frame.md").is_file());
+        let backup_dirs: Vec<_> = std::fs::read_dir(&story)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".backup-phase4-"))
+            .collect();
+        assert_eq!(backup_dirs.len(), 1, "应有 phase4 备份目录");
+        let backup = backup_dirs[0].path();
+        assert_eq!(std::fs::read_to_string(backup.join("story_bible.md")).unwrap(), "旧圣经");
+        assert_eq!(subscriber.recv().await.unwrap().event, "foundation:revised");
+
+        // 书缺失 → 500 + foundation:error。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/books/ghost/foundation/revise",
+            Some(r#"{ "feedback": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert!(parsed["error"].is_string());
     }
 }

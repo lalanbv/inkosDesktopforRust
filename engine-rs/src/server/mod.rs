@@ -17,6 +17,7 @@ pub mod book_create_routes;
 pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
+pub mod ops_routes;
 pub mod play_routes;
 pub mod interactive_film_routes;
 pub mod project_config_routes;
@@ -549,7 +550,40 @@ pub fn router_books(
         )
         .route(
             "/api/v1/play/runs/:worldId/:runId/images/:file",
-            get(play_routes::get_play_image).with_state(books),
+            get(play_routes::get_play_image).with_state(books.clone()),
+        )
+        // 72 号：运维面（daemon / logs / doctor / radar）+ 架构稿修订。
+        .route(
+            "/api/v1/daemon",
+            get(ops_routes::get_daemon).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/daemon/start",
+            post(ops_routes::post_daemon_start).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/daemon/stop",
+            post(ops_routes::post_daemon_stop).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/logs",
+            get(ops_routes::get_logs).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/doctor",
+            get(ops_routes::get_doctor).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/radar/scan",
+            post(ops_routes::post_radar_scan).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/radar/history",
+            get(ops_routes::get_radar_history).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/foundation/revise",
+            post(book_create_routes::revise_foundation).with_state(books),
         )
 }
 

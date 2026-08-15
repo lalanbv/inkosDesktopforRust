@@ -712,3 +712,208 @@ pub async fn import_chapters_endpoint(
         }
     }
 }
+
+// ── POST /books/:id/foundation/revise（72 号：reviseFoundation 四文件装配） ──
+
+/// 架构稿修订：备份 → 旧四文读取（phase5 走 outline 新布局，phase4 走 legacy）
+/// → architect 修订提示重写 → 审核（容错）→ Revise 模式落盘。
+pub async fn revise_foundation(
+    axum::extract::State(runtime): axum::extract::State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    body: axum::body::Bytes,
+) -> impl axum::response::IntoResponse {
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    let feedback = payload
+        .get("feedback")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(feedback) = feedback else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "feedback is required" })),
+        );
+    };
+    let state = &runtime.state;
+    let book_dir = state.book_dir(&book_id);
+    let story_dir = book_dir.join("story");
+    let is_phase5 = story_dir.join("outline").join("story_frame.md").is_file();
+
+    // 备份：legacy 四文件 + phase5 的 outline（浅）与 roles（深）。
+    let timestamp = utc_now_iso().replace([':', '.'], "-");
+    let backup_tag = if is_phase5 { "phase5" } else { "phase4" };
+    let backup_dir = story_dir.join(format!(".backup-{backup_tag}-{timestamp}"));
+    let _ = tokio::fs::create_dir_all(&backup_dir).await;
+    for file_name in ["story_bible.md", "volume_outline.md", "book_rules.md", "character_matrix.md"] {
+        if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file_name)).await {
+            let _ = tokio::fs::write(backup_dir.join(file_name), content).await;
+        }
+    }
+    if is_phase5 {
+        copy_dir_shallow(&story_dir.join("outline"), &backup_dir.join("outline")).await;
+        copy_dir_deep(&story_dir.join("roles"), &backup_dir.join("roles")).await;
+    }
+
+    let result = revise_foundation_inner(&runtime, &book_id, feedback, is_phase5).await;
+    match result {
+        Ok(()) => {
+            runtime
+                .hub
+                .broadcast("foundation:revised", &json!({ "bookId": book_id }));
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Err(message) => {
+            runtime.hub.broadcast(
+                "foundation:error",
+                &json!({ "bookId": book_id, "error": message }),
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": message })),
+            )
+        }
+    }
+}
+
+async fn revise_foundation_inner(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    feedback: &str,
+    is_phase5: bool,
+) -> Result<(), String> {
+    use crate::agents::architect::{
+        generate_foundation_inner, write_foundation_files, ArchitectCtx,
+        FoundationWriteMode,
+    };
+    use crate::utils::outline_paths::{read_character_context, read_story_frame, read_volume_map};
+
+    let state = &runtime.state;
+    let book_dir = state.book_dir(book_id);
+    let story_dir = book_dir.join("story");
+    let read_or_empty = |path: std::path::PathBuf| async move {
+        tokio::fs::read_to_string(path).await.unwrap_or_default()
+    };
+
+    // 旧四文：phase5 从新布局读（book_rules 仍为 legacy 文件）；phase4 全 legacy。
+    let (old_story_bible, old_volume_outline, old_character_matrix) = if is_phase5 {
+        let (a, b, c) = tokio::join!(
+            read_story_frame(&book_dir, ""),
+            read_volume_map(&book_dir, ""),
+            read_character_context(&book_dir, "")
+        );
+        (a, b, c)
+    } else {
+        let (a, b, c) = tokio::join!(
+            read_or_empty(story_dir.join("story_bible.md")),
+            read_or_empty(story_dir.join("volume_outline.md")),
+            read_or_empty(story_dir.join("character_matrix.md")),
+        );
+        (a, b, c)
+    };
+    let old_book_rules = read_or_empty(story_dir.join("book_rules.md")).await;
+
+    let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+    let architect_chat: &'static crate::llm::agent_router::RoutedAgent =
+        Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
+            router: (*runtime.router).clone(),
+            agent: "architect",
+        }));
+    let architect_ctx = ArchitectCtx {
+        project_root: state.project_root(),
+        builtin_genres_dir: &runtime.builtin_genres_dir,
+    };
+    let revise_prompt = crate::agents::architect::build_revise_prompt(
+        &old_story_bible,
+        &old_volume_outline,
+        &old_book_rules,
+        &old_character_matrix,
+        feedback,
+    );
+    let foundation = generate_foundation_inner(
+        &architect_ctx,
+        architect_chat,
+        &book,
+        None,
+        None,
+        Some(&revise_prompt),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // 审核环：失败/未通过仅记录（TS accept rewrite 语义——审核不阻断）。
+    {
+        let reviewer_chat: &'static crate::llm::agent_router::RoutedAgent =
+            Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
+                router: (*runtime.router).clone(),
+                agent: "foundation-reviewer",
+            }));
+        let language = if book.language.as_deref() == Some("en") {
+            crate::utils::language::WritingLanguage::En
+        } else {
+            crate::utils::language::WritingLanguage::Zh
+        };
+        let review = crate::agents::foundation_reviewer::review_foundation(
+            reviewer_chat,
+            &crate::agents::foundation_reviewer::ReviewParams {
+                foundation: &foundation,
+                language,
+                mode: crate::agents::foundation_reviewer::FoundationReviewMode::Original,
+                source_canon: None,
+                style_guide: None,
+                target_chapters: Some(book.target_chapters),
+            },
+        )
+        .await;
+        if let Ok(review) = review {
+            if !review.passed {
+                tracing::warn!(
+                    "[reviseFoundation] Foundation review did not pass; accepting rewrite."
+                );
+            }
+        }
+    }
+
+    let _ = tokio::fs::create_dir_all(story_dir.join("outline")).await;
+    let _ = tokio::fs::create_dir_all(story_dir.join("roles").join("主要角色")).await;
+    let _ = tokio::fs::create_dir_all(story_dir.join("roles").join("次要角色")).await;
+    let language = if book.language.as_deref() == Some("en") {
+        crate::utils::language::WritingLanguage::En
+    } else {
+        crate::utils::language::WritingLanguage::Zh
+    };
+    write_foundation_files(&book_dir, &foundation, language, FoundationWriteMode::Revise).await
+}
+
+async fn copy_dir_shallow(src: &std::path::Path, dest: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(src).await else {
+        return;
+    };
+    let _ = tokio::fs::create_dir_all(dest).await;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if let Ok(content) = tokio::fs::read_to_string(src.join(&name)).await {
+            let _ = tokio::fs::write(dest.join(name), content).await;
+        }
+    }
+}
+
+async fn copy_dir_deep(src: &std::path::Path, dest: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(src).await else {
+        return;
+    };
+    let _ = tokio::fs::create_dir_all(dest).await;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let src_path = src.join(&name);
+        let dest_path = dest.join(name);
+        if tokio::fs::metadata(&src_path).await.map(|m| m.is_dir()).unwrap_or(false) {
+            Box::pin(copy_dir_deep(&src_path, &dest_path)).await;
+        } else if let Ok(content) = tokio::fs::read_to_string(&src_path).await {
+            let _ = tokio::fs::write(&dest_path, content).await;
+        }
+    }
+}
