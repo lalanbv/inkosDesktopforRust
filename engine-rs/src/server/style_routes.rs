@@ -224,6 +224,18 @@ async fn generate_style_guide(
     Ok(full_style_guide)
 }
 
+/// 供创建/导入链复用的风格向导入口（58 号）。
+pub async fn generate_style_guide_for_book(
+    state: &StateManager,
+    router: &AgentRouter,
+    builtin_genres_dir: &std::path::Path,
+    book_id: &str,
+    sample: &str,
+    source_name: Option<&str>,
+) -> Result<String, String> {
+    generate_style_guide(state, router, builtin_genres_dir, book_id, sample, source_name).await
+}
+
 // ── POST /api/v1/books/:id/style/import ──────────────────────────
 
 pub async fn style_import(

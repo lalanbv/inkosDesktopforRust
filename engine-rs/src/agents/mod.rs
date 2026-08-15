@@ -23,6 +23,7 @@ pub mod ai_tells;
 pub mod architect;
 pub mod composer;
 pub mod foundation_prompts;
+pub mod foundation_reviewer;
 pub mod consolidator;
 pub mod chapter_analyzer;
 pub mod continuity;

@@ -11,6 +11,7 @@
 
 pub mod audit_route;
 pub mod books_routes;
+pub mod book_create_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
@@ -315,6 +316,12 @@ pub fn router_books(
             post(project_config_routes::post_language).with_state(books.clone()),
         )
         // 55 号：风格与导入域（指纹/文风向导/正典导入/番外正典读）。
+        // 58 号：创建与导入链（staging 原子创建 + 章节导入回放）。
+        .route("/api/v1/books/create", post(book_create_routes::create_book).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id/import/chapters",
+            post(book_create_routes::import_chapters_endpoint).with_state(books.clone()),
+        )
         .route("/api/v1/style/analyze", post(style_routes::style_analyze))
         .route(
             "/api/v1/books/:id/style/import",

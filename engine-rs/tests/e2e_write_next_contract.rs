@@ -3342,3 +3342,324 @@ mod config56_e2e {
         assert_eq!(status, StatusCode::OK);
     }
 }
+
+mod books58_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::book_create_routes::{create_book, import_chapters_endpoint};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::create_status;
+    use inkos_engine::state::manager::StateManager;
+
+    const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
+## 主题与基调
+少年于微末中抬起头。
+
+=== SECTION: volume_map ===
+### 第一卷（1-30章）觉醒
+主角入宗门。
+
+=== SECTION: roles ===
+---ROLE---
+tier: major
+name: 林动
+---CONTENT---
+## 核心标签
+坚韧、藏拙。
+
+=== SECTION: book_rules ===
+## 主角
+- 名字：林动
+
+=== SECTION: pending_hooks ===
+| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H01 | 0 | 身世 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷中段 | true |  | 祖符来历 |
+"#;
+
+    const REVIEW_PASS: &str = "\
+=== DIMENSION: 1 ===
+分数：90
+意见：冲突清晰。
+
+=== DIMENSION: 2 ===
+分数：88
+意见：开篇有力。
+
+=== DIMENSION: 3 ===
+分数：85
+意见：世界观内洽。
+
+=== DIMENSION: 4 ===
+分数：86
+意见：角色区分明显。
+
+=== DIMENSION: 5 ===
+分数：84
+意见：节奏可行。
+
+=== OVERALL ===
+总分：87
+通过：是
+总评：整体扎实。";
+
+    const ANALYZER_OUTPUT: &str = "\
+=== CHAPTER_TITLE ===
+风起
+
+=== CHAPTER_CONTENT ===
+林动睁开双眼。
+
+=== PRE_WRITE_CHECK ===
+
+=== POST_SETTLEMENT ===
+
+=== UPDATED_STATE ===
+| Field | Value |
+| --- | --- |
+| Current Chapter | 1 |
+
+=== UPDATED_LEDGER ===
+
+=== UPDATED_HOOKS ===
+| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== CHAPTER_SUMMARY ===
+| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== UPDATED_SUBPLOTS ===
+
+=== UPDATED_EMOTIONAL_ARCS ===
+
+=== UPDATED_CHARACTER_MATRIX ===
+## 林动
+- **Role**: protagonist
+";
+
+    async fn mock58_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let content = if system.contains("总架构师") || system.contains("网络小说架构师") {
+            ARCHITECT_OUTPUT.to_string()
+        } else if system.contains("资深小说编辑") {
+            REVIEW_PASS.to_string()
+        } else if system.contains("连续性分析") || system.contains("continuity analyst") {
+            ANALYZER_OUTPUT.to_string()
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock58() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock58_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt58(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture58(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("books")).unwrap();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+    }
+
+    fn app58(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/books/create", axum::routing::post(create_book))
+            .route(
+                "/api/v1/books/:id/import/chapters",
+                axum::routing::post(import_chapters_endpoint),
+            )
+            .route("/api/v1/books/:id/create-status", axum::routing::get(create_status))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn wait_for_book(root: &std::path::Path, book_id: &str) {
+        for _ in 0..100 {
+            if root.join("books").join(book_id).join("book.json").exists() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("book creation did not finish in time");
+    }
+
+    #[tokio::test]
+    async fn create_book_staging_rename_and_sse_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture58(&root);
+        let llm = spawn_mock58().await;
+        let runtime = rt58(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let (status, parsed) = call(
+            app58(runtime),
+            "POST",
+            "/api/v1/books/create",
+            Some(r#"{ "title": "斗破苍穹", "genre": "xianxia", "targetChapters": 50, "blurb": "废柴崛起" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["status"], "creating");
+        assert_eq!(parsed["bookId"], "斗破苍穹");
+
+        // SSE：book:creating → book:created。
+        assert_eq!(subscriber.recv().await.unwrap().event, "book:creating");
+        assert_eq!(subscriber.recv().await.unwrap().event, "book:created");
+
+        wait_for_book(&root, "斗破苍穹").await;
+        let book = root.join("books").join("斗破苍穹");
+        // staging 原子落盘面：book.json + Phase 5 地基 + 控制文档 + 快照 0。
+        assert!(book.join("book.json").exists());
+        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+        assert!(book.join("story").join("roles").join("主要角色").join("林动.md").exists());
+        assert!(book.join("story").join("pending_hooks.md").exists());
+        assert!(book.join("story").join("author_intent.md").exists());
+        assert!(book.join("story").join("snapshots").join("0").exists() || book.join("story").join("snapshots").exists());
+        // brief.md：外部指令（blurb 段）落盘。
+        let brief = std::fs::read_to_string(book.join("story").join("brief.md")).unwrap_or_default();
+        assert!(brief.contains("废柴崛起"), "brief: {brief}");
+        // 无残留 staging 目录。
+        for entry in std::fs::read_dir(root.join("books")).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            assert!(!name.starts_with(".tmp-book-create-"), "staging 残留: {name}");
+        }
+        // create-status：地基齐备 → ready（内存分支已清）。
+        let (status, parsed) = call(app58(rt58(&root, &llm)), "GET", "/api/v1/books/斗破苍穹/create-status", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["status"], "ready");
+
+        // 完整书已存在 → 409。
+        let (status, parsed) = call(
+            app58(rt58(&root, &llm)),
+            "POST",
+            "/api/v1/books/create",
+            Some(r#"{ "title": "斗破苍穹", "genre": "xianxia" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(parsed["error"], "Book \"斗破苍穹\" already exists");
+
+        // 空标题 → 400。
+        let (status, parsed) = call(app58(rt58(&root, &llm)), "POST", "/api/v1/books/create", Some(r#"{ "title": "", "genre": "x" }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Could not derive a valid book id from title");
+    }
+
+    #[tokio::test]
+    async fn import_chapters_replays_analyzer_and_builds_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture58(&root);
+        // 预置目标书（Phase 5 地基由导入链重生成覆盖）。
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("runtime")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        // 旧运行时痕迹 → 回放重置。
+        std::fs::write(book.join("story").join("chapter_summaries.md"), "旧摘要").unwrap();
+
+        let llm = spawn_mock58().await;
+        let runtime = rt58(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let text = "# 第一章 风起\n\n林动睁开双眼，灵气涌动。\n\n# 第二章 云涌\n\n坊市喧闹。";
+        let (status, parsed) = call(
+            app58(runtime),
+            "POST",
+            "/api/v1/books/b1/import/chapters",
+            Some(&format!(r#"{{ "text": {text:?} }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["importedCount"], 2);
+        assert_eq!(parsed["nextChapter"], 3);
+        assert!(parsed["totalWords"].as_u64().unwrap() > 0);
+
+        // SSE：import:start（type chapters）→ import:complete。
+        let start = subscriber.recv().await.unwrap();
+        assert_eq!(start.event, "import:start");
+        assert!(start.data.contains("\"type\":\"chapters\""));
+        assert_eq!(subscriber.recv().await.unwrap().event, "import:complete");
+
+        // 章节文件落盘 + 索引 status=imported。
+        assert!(book.join("chapters").join("0001_风起.md").exists());
+        // 文件名 title 来自 analyzer 输出（mock 恒为"风起"——TS 同款：persisted
+        // title 由 CHAPTER_TITLE 提取，非分章标题）。
+        assert!(book.join("chapters").join("0002_风起.md").exists());
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index.as_array().unwrap().len(), 2);
+        assert_eq!(index[0]["status"], "imported");
+        assert_eq!(index[0]["title"], "风起");
+        // 回放重置：旧摘要清除、快照 0 与逐章快照存在。
+        assert!(!book.join("story").join("chapter_summaries.md").exists()
+            || std::fs::read_to_string(book.join("story").join("chapter_summaries.md")).unwrap().contains("风起"));
+        assert!(book.join("story").join("snapshots").join("0").exists());
+        assert!(book.join("story").join("snapshots").join("2").exists());
+        // 地基重生成（fromImport 输出）。
+        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+
+        // text 空 → 400。
+        let (status, parsed) = call(app58(rt58(&root, &llm)), "POST", "/api/v1/books/b1/import/chapters", Some(r#"{ "text": "  " }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "text is required");
+    }
+}
