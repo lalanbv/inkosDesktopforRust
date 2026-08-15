@@ -67,6 +67,129 @@ fn is_valid_url(s: &str) -> bool {
         && !s[idx + 3..].is_empty()
 }
 
+// ── GET/PUT /api/v1/project（56 号：全量配置读写主路径） ──────────
+
+/// GET /project：ProjectConfig 语义提取（name/language + llm 五字段，schema
+/// 默认值填充）+ languageExplicit（raw 中显式设置且非空串）。
+///
+/// 解析/schema 校验失败 → ApiError 500 `PROJECT_CONFIG_INVALID`
+/// （server.ts L4181）。env 层与 services 预设合并暂缓（偏差备案：返回
+/// raw 项目配置而非 env 合并有效值）。
+pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let raw_text = tokio::fs::read_to_string(root.join("inkos.json")).await;
+    let raw: Value = match raw_text {
+        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    let invalid = |detail: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": {
+                    "code": "PROJECT_CONFIG_INVALID",
+                    "message": format!("Failed to load inkos.json: {detail}"),
+                }
+            })),
+        )
+    };
+    let Some(obj) = raw.as_object() else {
+        return invalid("Unexpected token".to_string());
+    };
+    // ProjectConfigSchema 校验（响应所需字段面）。
+    let Some(name) = obj.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else {
+        return invalid("name must contain at least 1 character(s)".to_string());
+    };
+    let language = match obj.get("language") {
+        None => "zh",
+        Some(Value::String(s)) if s == "zh" || s == "en" => s.as_str(),
+        Some(_) => return invalid("Invalid enum value. Expected 'zh' | 'en'".to_string()),
+    };
+    let Some(llm) = obj.get("llm").and_then(Value::as_object) else {
+        return invalid("Invalid input: expected object, received missing".to_string());
+    };
+    let model = llm.get("model").and_then(Value::as_str).filter(|m| !m.is_empty());
+    let Some(model) = model else {
+        return invalid("model must contain at least 1 character(s)".to_string());
+    };
+    let Some(base_url) = llm.get("baseUrl").and_then(Value::as_str).filter(|u| is_valid_url(u)) else {
+        return invalid("Invalid url".to_string());
+    };
+    let provider = llm.get("provider").and_then(Value::as_str);
+    let Some(provider) =
+        provider.filter(|p| matches!(*p, "anthropic" | "openai" | "custom"))
+    else {
+        return invalid(
+            "Invalid enum value. Expected 'anthropic' | 'openai' | 'custom'".to_string(),
+        );
+    };
+    let stream = llm.get("stream").and_then(Value::as_bool).unwrap_or(true);
+    let temperature = llm.get("temperature").and_then(Value::as_f64).unwrap_or(0.7);
+    // TS `"language" in raw && raw.language !== ""`。
+    let language_explicit = obj
+        .get("language")
+        .is_some_and(|v| v != &Value::Null && v.as_str() != Some(""));
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "name": name,
+            "language": language,
+            "languageExplicit": language_explicit,
+            "model": model,
+            "provider": provider,
+            "baseUrl": base_url,
+            "stream": stream,
+            "temperature": temperature,
+        })),
+    )
+}
+
+/// PUT /project：合并更新（server.ts L4324）。temperature/stream 走
+/// `existing.llm.x = v` 直写——llm 缺失且给出任一字段 → TypeError → 500
+/// 平铺（TS 怪癖）；language 仅 zh/en 精确命中；值透传不校验。
+pub async fn put_project(
+    State(runtime): State<BooksRuntime>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let flat_internal = |message: String| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": message })),
+        )
+    };
+    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        return flat_internal("Unexpected token".to_string());
+    };
+    let root = runtime.state.project_root();
+    let Some(mut raw) = load_raw_config(root).await else {
+        return flat_internal("inkos.json read failed".to_string());
+    };
+    let has_temperature = parsed.get("temperature").is_some();
+    let has_stream = parsed.get("stream").is_some();
+    if has_temperature || has_stream {
+        // TS existing.llm.temperature = ...：llm 缺失即解引用失败。
+        let Some(llm) = raw.get_mut("llm").and_then(Value::as_object_mut) else {
+            return flat_internal(
+                "Cannot read properties of undefined (reading 'temperature')".to_string(),
+            );
+        };
+        if has_temperature {
+            llm.insert("temperature".to_string(), parsed["temperature"].clone());
+        }
+        if has_stream {
+            llm.insert("stream".to_string(), parsed["stream"].clone());
+        }
+    }
+    if parsed.get("language") == Some(&json!("zh")) || parsed.get("language") == Some(&json!("en")) {
+        raw.as_object_mut().unwrap().insert("language".to_string(), parsed["language"].clone());
+    }
+    if !save_raw_config(root, &raw).await {
+        return flat_internal("inkos.json write failed".to_string());
+    }
+    ok_json(json!({ "ok": true }))
+}
+
 // ── GET/PUT /api/v1/project/input-governance-mode ────────────────
 
 pub async fn get_input_governance_mode(State(runtime): State<BooksRuntime>) -> impl IntoResponse {

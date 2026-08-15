@@ -263,6 +263,12 @@ pub fn router_books(
         .route("/api/v1/genres/:id/copy", post(genre_routes::copy_genre).with_state(books.clone()))
         // 54 号：project 配置域（inkos.json 轻量键值读写面）。
         .route(
+            "/api/v1/project",
+            get(project_config_routes::get_project)
+                .put(project_config_routes::put_project)
+                .with_state(books.clone()),
+        )
+        .route(
             "/api/v1/project/input-governance-mode",
             get(project_config_routes::get_input_governance_mode)
                 .put(project_config_routes::put_input_governance_mode)

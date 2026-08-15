@@ -3191,3 +3191,154 @@ mod style55_e2e {
         assert_eq!(parsed["content"], "# 番外正典");
     }
 }
+
+mod config56_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::project_config_routes::{get_project, put_project};
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt56(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture56(root: &std::path::Path) {
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "name": "demo", "llm": { "provider": "custom", "baseUrl": "https://api.example.com", "model": "glm-5" } }"#,
+        )
+        .unwrap();
+    }
+
+    fn app56(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/project", axum::routing::get(get_project).put(put_project))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn project_get_defaults_and_put_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture56(&root);
+
+        // GET：schema 默认（language zh / temperature 0.7 / stream true）。
+        let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["name"], "demo");
+        assert_eq!(parsed["language"], "zh");
+        assert_eq!(parsed["languageExplicit"], false);
+        assert_eq!(parsed["model"], "glm-5");
+        assert_eq!(parsed["provider"], "custom");
+        assert_eq!(parsed["baseUrl"], "https://api.example.com");
+        assert_eq!(parsed["temperature"], 0.7);
+        assert_eq!(parsed["stream"], true);
+
+        // PUT 合并（server.test.ts L792 同款场景）→ GET 回读。
+        let (status, parsed) = call(
+            app56(rt56(&root)),
+            "PUT",
+            "/api/v1/project",
+            Some(r#"{ "language": "en", "temperature": 0.2, "stream": true }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["language"], "en");
+        assert_eq!(parsed["languageExplicit"], true);
+        assert_eq!(parsed["temperature"], 0.2);
+        assert_eq!(parsed["stream"], true);
+        // name/model 不受影响。
+        assert_eq!(parsed["name"], "demo");
+        assert_eq!(parsed["model"], "glm-5");
+
+        // 非法 language 不写入（精确 zh/en 命中才生效）。
+        let (status, _) = call(app56(rt56(&root)), "PUT", "/api/v1/project", Some(r#"{ "language": "jp" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(parsed["language"], "en");
+    }
+
+    #[tokio::test]
+    async fn project_get_invalid_config_is_structured_500() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture56(&root);
+
+        // 损坏 JSON → PROJECT_CONFIG_INVALID（message 含 inkos.json）。
+        std::fs::write(root.join("inkos.json"), "{ this is not valid json").unwrap();
+        let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("inkos.json"));
+
+        // schema 校验失败（name 缺失 / llm.model 空串）同样 500。
+        std::fs::write(root.join("inkos.json"), r#"{ "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "m" } }"#).unwrap();
+        let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "name": "d", "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "" } }"#,
+        )
+        .unwrap();
+        let (status, _) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn project_put_without_llm_object_is_flat_500() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(&root).unwrap();
+        // 无 llm 键：temperature 给出 → TS existing.llm 解引用失败 → 平铺 500。
+        std::fs::write(root.join("inkos.json"), r#"{ "name": "demo" }"#).unwrap();
+        let (status, parsed) = call(
+            app56(rt56(&root)),
+            "PUT",
+            "/api/v1/project",
+            Some(r#"{ "temperature": 0.3 }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(parsed["error"].is_string(), "body: {parsed}");
+
+        // 仅 language（无 temperature/stream）→ 不解引用 llm → 200。
+        let (status, _) = call(app56(rt56(&root)), "PUT", "/api/v1/project", Some(r#"{ "language": "en" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+}
