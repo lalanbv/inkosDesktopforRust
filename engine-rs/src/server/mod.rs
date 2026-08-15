@@ -17,6 +17,7 @@ pub mod book_create_routes;
 pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
+pub mod interactive_film_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
 pub mod service_routes;
@@ -463,7 +464,48 @@ pub fn router_books(
             "/api/v1/project/artifacts/*file",
             get(project_files_routes::get_project_artifact)
                 .put(project_files_routes::put_project_artifact)
-                .with_state(books),
+                .with_state(books.clone()),
+        )
+        // 69 号：interactive-films / projects 域（故事图谱 + 三种导出 + tar.gz）。
+        .route(
+            "/api/v1/interactive-films",
+            get(interactive_film_routes::list_interactive_films).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/story-graph/delta",
+            post(interactive_film_routes::post_story_graph_delta).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/story-graph",
+            get(interactive_film_routes::get_story_graph).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/export",
+            get(interactive_film_routes::get_project_export).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/story-graph/validation",
+            get(interactive_film_routes::get_story_graph_validation).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/story-graph/analysis",
+            get(interactive_film_routes::get_story_graph_analysis).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/export/json",
+            get(interactive_film_routes::get_export_json).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/export/ink",
+            get(interactive_film_routes::get_export_ink).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/export/html",
+            get(interactive_film_routes::get_export_html).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/projects/:id/nodes/:nodeId/image",
+            post(interactive_film_routes::post_node_image).with_state(books),
         )
 }
 

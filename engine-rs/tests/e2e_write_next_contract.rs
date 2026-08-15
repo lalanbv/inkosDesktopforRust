@@ -6987,3 +6987,342 @@ mod agent68_e2e {
         assert_eq!(messages[5]["content"], "他还有什么特点？");
     }
 }
+
+mod films69_e2e {
+    //! 69 号：interactive-films / projects 域（图谱列表 / delta rev 链 / 校验 /
+    //! 分析 / 三导出 / tar.gz / 生图不可用面）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::interactive_film_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt69(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app69(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/interactive-films",
+                axum::routing::get(interactive_film_routes::list_interactive_films),
+            )
+            .route(
+                "/api/v1/projects/:id/story-graph/delta",
+                axum::routing::post(interactive_film_routes::post_story_graph_delta),
+            )
+            .route(
+                "/api/v1/projects/:id/story-graph",
+                axum::routing::get(interactive_film_routes::get_story_graph),
+            )
+            .route(
+                "/api/v1/projects/:id/export",
+                axum::routing::get(interactive_film_routes::get_project_export),
+            )
+            .route(
+                "/api/v1/projects/:id/story-graph/validation",
+                axum::routing::get(interactive_film_routes::get_story_graph_validation),
+            )
+            .route(
+                "/api/v1/projects/:id/story-graph/analysis",
+                axum::routing::get(interactive_film_routes::get_story_graph_analysis),
+            )
+            .route(
+                "/api/v1/projects/:id/export/json",
+                axum::routing::get(interactive_film_routes::get_export_json),
+            )
+            .route(
+                "/api/v1/projects/:id/export/ink",
+                axum::routing::get(interactive_film_routes::get_export_ink),
+            )
+            .route(
+                "/api/v1/projects/:id/export/html",
+                axum::routing::get(interactive_film_routes::get_export_html),
+            )
+            .route(
+                "/api/v1/projects/:id/nodes/:nodeId/image",
+                axum::routing::post(interactive_film_routes::post_node_image),
+            )
+            .with_state(rt69(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn call_raw(app: axum::Router, uri: &str) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
+            .collect();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap().to_vec();
+        (status, headers, bytes)
+    }
+
+    /// 最小合法图谱（camelCase——TS 磁盘形态）。
+    fn write_graph(root: &std::path::Path, id: &str, graph: serde_json::Value) {
+        let dir = root.join("interactive-films").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("story-graph.json"),
+            format!("{}\n", serde_json::to_string_pretty(&graph).unwrap()),
+        )
+        .unwrap();
+    }
+
+    fn valid_graph(id: &str, title: &str) -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": 1,
+            "projectId": id,
+            "title": title,
+            "variables": [{ "name": "courage", "type": "counter", "default": 1 }],
+            "nodes": [
+                { "id": "start", "type": "start", "choices": [
+                    { "id": "a", "text": "前进", "targetNodeId": "end1", "effects": [{ "var": "courage", "op": "add", "value": 1 }] }
+                ]},
+                { "id": "end1", "type": "ending" }
+            ],
+            "endings": [{ "id": "e1", "nodeId": "end1", "title": "终章", "type": "good" }]
+        })
+    }
+
+    #[tokio::test]
+    async fn list_delta_and_story_graph_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        write_graph(&root, "bbb", valid_graph("bbb", "B 影游"));
+        write_graph(&root, "aaa", valid_graph("aaa", "A 影游"));
+        // 无效目录：unsafe id + 空 project（无图谱）→ 都不列。
+        std::fs::create_dir_all(root.join("interactive-films").join("../escape")).unwrap();
+        std::fs::create_dir_all(root.join("interactive-films").join("empty")).unwrap();
+
+        let app = app69(&root);
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/interactive-films", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let films = parsed["films"].as_array().unwrap();
+        assert_eq!(films.len(), 2, "films: {films:?}");
+        assert_eq!(films[0]["projectId"], "aaa", "按标题排序: {films:?}");
+        assert_eq!(films[0]["title"], "A 影游");
+
+        // delta：nodes upsert + endings → rev 1 + graph；二次 → rev 2 + 快照。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/projects/bbb/story-graph/delta",
+            Some(r#"{ "delta": { "nodes": { "upsert": [{ "id": "extra", "type": "normal", "choices": [{ "id": "x", "text": "进", "targetNodeId": "end1" }] }] } } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["rev"], 1);
+        assert_eq!(parsed["graph"]["nodes"].as_array().unwrap().len(), 3);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/projects/bbb/story-graph/delta",
+            Some(r#"{ "delta": { "endings": { "remove": ["e1"] } } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["rev"], 2);
+        assert!(parsed["graph"]["endings"].as_array().unwrap().is_empty());
+
+        // pre-rev 快照：0 与 1 存在（2 是活文件不快照）。
+        let snapshots = root.join("interactive-films").join("bbb").join("snapshots");
+        assert!(snapshots.join("0.json").is_file());
+        assert!(snapshots.join("1.json").is_file());
+        assert!(!snapshots.join("2.json").exists());
+
+        // authoring-state rev 落盘。
+        let state: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films").join("bbb").join("authoring-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state["rev"], 2);
+
+        // GET story-graph：原样回显（含 delta 后内容）。
+        let (status, parsed) = call(app, "GET", "/api/v1/projects/bbb/story-graph", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["projectId"], "bbb");
+        assert!(parsed["endings"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delta_invalid_id_and_bad_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let app = app69(&root);
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/projects/.%2Fescape/story-graph/delta",
+            Some(r#"{ "delta": {} }"#),
+        )
+        .await;
+        // 路径参数已 percent 解码为 ./escape → unsafe → INVALID_ID。
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_ID");
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/projects/ok1/story-graph/delta",
+            Some(r#"{ "delta": { "endings": { "upsert": [{ "id": "e9", "nodeId": "ghost", "title": "悬", "type": "bad" }] } } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("references missing node"));
+    }
+
+    #[tokio::test]
+    async fn validation_and_analysis_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let mut broken = valid_graph("bad1", "断链");
+        broken["nodes"][0]["choices"][0]["targetNodeId"] = "ghost".into();
+        write_graph(&root, "bad1", broken);
+
+        let app = app69(&root);
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/projects/bad1/story-graph/validation", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], false);
+        let codes: Vec<&str> = parsed["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap()).collect();
+        assert!(codes.contains(&"BROKEN_LINK"), "codes: {codes:?}");
+        assert!(codes.contains(&"DEAD_END"), "codes: {codes:?}");
+        assert!(codes.contains(&"NO_PATH_TO_ENDING"), "codes: {codes:?}");
+
+        // analysis：report + arcs + distribution 三段。
+        write_graph(&root, "good1", valid_graph("good1", "完好"));
+        let (status, parsed) = call(app, "GET", "/api/v1/projects/good1/story-graph/analysis", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["report"]["ok"], true);
+        assert_eq!(parsed["arcs"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["distribution"]["total"], 1);
+        assert_eq!(parsed["distribution"]["byEnding"]["e1"], 1);
+
+        // 缺失 → 404 NOT_FOUND。
+        let (status, parsed) = call(app69(&root), "GET", "/api/v1/projects/none/story-graph/validation", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn exports_ink_html_json_and_tar_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        write_graph(&root, "film1", valid_graph("film1", "样本影游"));
+        // 可内嵌资产：start 无图 → 补一个带 assetRef 的节点资产（covers 前缀合法）。
+        std::fs::create_dir_all(root.join("covers")).unwrap();
+        std::fs::write(root.join("covers").join("pic.png"), b"\x89PNG-fake").unwrap();
+        let mut graph = valid_graph("film1", "样本影游");
+        graph["nodes"][1]["imageSlot"] = serde_json::json!({ "prompt": "", "assetRef": "covers/pic.png" });
+        write_graph(&root, "film1", graph);
+
+        let app = app69(&root);
+        // ink
+        let (status, headers, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/ink").await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("// 样本影游 — exported from InkOS interactive film"));
+        assert!(text.contains("VAR courage = 1"));
+        assert!(text.contains("-> node_start"));
+        assert!(headers.iter().any(|(k, v)| k == "content-type" && v == "text/plain; charset=utf-8"));
+        assert!(headers.iter().any(|(k, v)| k == "content-disposition" && v.contains("film1.ink")));
+
+        // html（资产 data URI 内嵌）
+        let (status, _, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/html").await;
+        assert_eq!(status, StatusCode::OK);
+        let html = String::from_utf8(body).unwrap();
+        assert!(html.contains("if-player"));
+        assert!(html.contains("data:image/png;base64,"), "资产应内嵌");
+
+        // json（pretty + 尾换行）
+        let (status, _, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/json").await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8(body).unwrap();
+        assert!(text.contains("\"schemaVersion\": 1"));
+        assert!(text.ends_with("}\n"));
+
+        // tar.gz：gunzip + tar 头（ustar magic）
+        let (status, headers, body) = call_raw(app.clone(), "/api/v1/projects/film1/export").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.iter().any(|(k, v)| k == "content-type" && v == "application/gzip"));
+        assert!(headers.iter().any(|(k, v)| k == "content-disposition" && v.contains("film1.tar.gz")));
+        use std::io::Read as _;
+        let mut decoder = flate2::read::GzDecoder::new(&body[..]);
+        let mut tar = Vec::new();
+        decoder.read_to_end(&mut tar).unwrap();
+        assert!(tar.len() > 1024, "tar 应含至少头块+尾块");
+        assert_eq!(&tar[257..262], b"ustar", "ustar magic");
+        let name = String::from_utf8_lossy(&tar[0..100]);
+        let end = name.find('\0').unwrap_or(name.len());
+        assert!(name[..end].starts_with("film1/"), "首条目名: {name:?}");
+
+        // 项目缺失 → 404。
+        let (status, parsed) = call(app, "GET", "/api/v1/projects/none/export", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "NOT_FOUND");
+    }
+
+
+    #[tokio::test]
+    async fn node_image_endpoint_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        write_graph(&root, "film1", valid_graph("film1", "影游"));
+
+        let app = app69(&root);
+        // 节点存在 → 生图链未接线（69 号偏差备案）→ 503。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/projects/film1/nodes/start/image",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "IMAGE_GENERATION_UNAVAILABLE");
+
+        // 节点缺失 → 404 NODE_NOT_FOUND。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/projects/film1/nodes/ghost/image",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "NODE_NOT_FOUND");
+    }
+}

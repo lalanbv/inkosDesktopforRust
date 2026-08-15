@@ -50,6 +50,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 async-trait = "0.1"
 # UUID：chapter-workspace 版本归档的版本 id 生成（v4，与 TS crypto.randomUUID 对齐）。
 uuid = { version = "1", features = ["v4"] }
+flate2 = "1"
+base64 = "0.22"
 # YAML：genre-profile / book-rules 的 frontmatter 解析（TS js-yaml 的对应物）。
 # serde_yaml 0.9 已停止维护但仍是事实标准；解析面仅为受控 frontmatter，风险可控。
 serde_yaml = "0.9"

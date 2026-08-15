@@ -139,7 +139,7 @@ fn normalize_generated_path(
 }
 
 /// `resolveProjectImageFile`：生成图片（前缀 + ext 白名单）。
-fn resolve_project_image_file(
+pub(crate) fn resolve_project_image_file(
     root: &Path,
     raw_path: &str,
 ) -> Result<(PathBuf, &'static str), ApiErrorResponse> {
