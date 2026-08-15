@@ -1061,6 +1061,55 @@ async fn execute_create_book(
     })
 }
 
+/// `createTranslationCreateTool`：createTranslationProjectFromFile 同链（70 号
+/// 域本体）——只摄取分段，翻译执行是独立长任务（run 端点）。
+async fn execute_translation_create(
+    runtime: &BooksRuntime,
+    file_path: &str,
+    source_language: &str,
+    target_language: &str,
+    title: &str,
+    segment_max_chars: Option<usize>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::translation::types::CreateTranslationProjectInput;
+    on_progress(format!("Creating translation project from {file_path}..."));
+    let root = runtime.state.project_root();
+    let input = CreateTranslationProjectInput {
+        file_path,
+        source_language,
+        target_language,
+        title: if title.is_empty() { None } else { Some(title) },
+        segment_max_chars,
+    };
+    let result = crate::translation::project::create_translation_project_from_file(root, &input)
+        .await?;
+    let manifest = &result.manifest;
+    let text = [
+        format!("Translation project \"{}\" created.", manifest.title),
+        format!("ID: {}", manifest.id),
+        format!(
+            "Source: {} {} -> {}",
+            manifest.source.kind.as_str(),
+            manifest.source_language,
+            manifest.target_language
+        ),
+        format!("Chapters: {}", manifest.chapters.len()),
+        format!("Manifest: {}", result.manifest_path),
+    ]
+    .join("\n");
+    Ok(ToolOutcome {
+        is_error: false,
+        text,
+        details: json!({
+            "kind": "translation_project_created",
+            "projectDir": result.project_dir,
+            "manifestPath": result.manifest_path,
+            "manifest": serde_json::to_value(manifest).unwrap_or(Value::Null),
+        }),
+    })
+}
+
 /// `createConnectChoiceTool`：StoryNode 解析 → upsert delta → applyGraphDelta。
 async fn execute_connect_choice(
     runtime: &BooksRuntime,
@@ -1557,6 +1606,59 @@ async fn run_confirmed_production_locked(
     let mut params = Map::new();
     let agent: Option<&str>;
     match request.intent {
+        RequestedIntent::TranslationCreate => {
+            let payload = request.action_payload.and_then(|p| p.get("translationCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let file_path = field("filePath").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(
+                        lang,
+                        "确认创建翻译项目缺少文件路径，请重新生成确认卡。",
+                        "The translation confirmation is missing a file path. Regenerate the confirmation card.",
+                    ),
+                )
+            })?.to_string();
+            let source_language = field("sourceLanguage").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(
+                        lang,
+                        "确认创建翻译项目缺少源语言，请重新生成确认卡。",
+                        "The translation confirmation is missing a source language. Regenerate the confirmation card.",
+                    ),
+                )
+            })?.to_string();
+            let target_language = field("targetLanguage").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(
+                        lang,
+                        "确认创建翻译项目缺少目标语言，请重新生成确认卡。",
+                        "The translation confirmation is missing a target language. Regenerate the confirmation card.",
+                    ),
+                )
+            })?.to_string();
+            params.insert("filePath".into(), json!(file_path));
+            params.insert("sourceLanguage".into(), json!(source_language));
+            params.insert("targetLanguage".into(), json!(target_language));
+            if let Some(title) = field("title") {
+                params.insert("title".into(), json!(title));
+            }
+            if let Some(segment_max_chars) = payload
+                .and_then(|p| p.get("segmentMaxChars"))
+                .and_then(Value::as_u64)
+            {
+                params.insert("segmentMaxChars".into(), json!(segment_max_chars));
+            }
+            agent = None;
+        }
         RequestedIntent::ConnectChoice => {
             let payload = request.action_payload.and_then(|p| p.get("connectChoice"));
             let node_value = payload
@@ -1768,6 +1870,7 @@ async fn run_confirmed_production_locked(
         RequestedIntent::ConnectChoice => "connect_choice",
         RequestedIntent::RemoveNode => "remove_node",
         RequestedIntent::DraftStructure => "draft_structure",
+        RequestedIntent::TranslationCreate => "translation_create",
         _ => "sub_agent",
     };
 
@@ -1859,6 +1962,26 @@ async fn run_confirmed_production_locked(
         }
     };
     let outcome = match request.intent {
+        RequestedIntent::TranslationCreate => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            execute_translation_create(
+                runtime,
+                &field("filePath"),
+                &field("sourceLanguage"),
+                &field("targetLanguage"),
+                &field("title"),
+                args.get("segmentMaxChars").and_then(Value::as_u64).map(|v| v as usize),
+                &mut on_progress,
+            )
+            .await
+        }
         RequestedIntent::ConnectChoice => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();

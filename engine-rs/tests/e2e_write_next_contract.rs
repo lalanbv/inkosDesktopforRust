@@ -8890,3 +8890,194 @@ mod image74_e2e {
         assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少 nodeId"), "body: {parsed}");
     }
 }
+
+mod translation75_e2e {
+    //! 75 号：translation_create 确认意图 + actionPayload strict 校验面。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt75(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app75(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn translation_create_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("novel.txt"), "Chapter 1\n\nThe mountain stood.\n\nMana flowed.").unwrap();
+        let app = app75(rt75(&root));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782993000000-tr01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 确认意图：摄取分段建项（无 LLM）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"翻译这本书","sessionId":"1782993000000-tr01","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"filePath":"novel.txt","sourceLanguage":"en","targetLanguage":"zh","title":"山之书","segmentMaxChars":1200}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // translation_create 不在 suppressManualTextForTool 表 → response 为结果文本。
+        assert!(
+            parsed["response"].as_str().unwrap_or_default().contains("Translation project \"山之书\" created."),
+            "response: {parsed}"
+        );
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "translation_create");
+        assert_eq!(exec["status"], "completed");
+        assert_eq!(exec["label"], "翻译项目");
+        assert_eq!(exec["args"]["title"], "山之书");
+        assert_eq!(exec["args"]["segmentMaxChars"], 1200);
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "translation_project_created");
+        let manifest = &details["manifest"];
+        assert_eq!(manifest["title"], "山之书");
+        assert_eq!(manifest["sourceLanguage"], "en");
+        assert_eq!(manifest["chapters"].as_array().unwrap().len(), 1);
+        assert_eq!(manifest["source"]["kind"], "text");
+        assert!(details["manifestPath"].as_str().unwrap().starts_with("translations/"));
+        assert!(details["projectDir"].as_str().unwrap().starts_with("translations/"));
+        // 结果文本五段。
+        assert!(exec["result"].as_str().unwrap().contains("Translation project \"山之书\" created."));
+        assert!(exec["result"].as_str().unwrap().contains("Chapters: 1"));
+
+        // 缺 filePath → 502 中文文案。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"翻译","sessionId":"1782993000000-tr01","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"sourceLanguage":"en","targetLanguage":"zh"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少文件路径"), "body: {parsed}");
+
+        // 文件不存在 → 502（创建失败面）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"翻译","sessionId":"1782993000000-tr01","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"filePath":"ghost.txt","sourceLanguage":"en","targetLanguage":"zh"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+    }
+
+    #[tokio::test]
+    async fn action_payload_strict_endpoint_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let app = app75(rt75(&root));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782993000001-tr02"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 顶层 unknown 键 → 400 INVALID_ACTION_PAYLOAD。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"你好","sessionId":"1782993000001-tr02","actionPayload":{"bogus":{}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_ACTION_PAYLOAD");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("Unrecognized key: bogus"), "body: {parsed}");
+
+        // 子域 unknown 键（createBook strict）→ 400。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"建书","sessionId":"1782993000001-tr02","actionPayload":{"createBook":{"title":"X","extra":1}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("createBook: Unrecognized key: extra"), "body: {parsed}");
+
+        // 枚举非法（platform）→ 400。
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"建书","sessionId":"1782993000001-tr02","actionPayload":{"createBook":{"platform":"nope"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // shortRun 联动（zh+700 越界）→ 400。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"写短篇","sessionId":"1782993000001-tr02","actionPayload":{"shortRun":{"language":"zh","charsPerChapter":700}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("charsPerChapter"), "body: {parsed}");
+
+        // 非 strict 子域（draftStructure）unknown 键放行 → 走意图分支（无 projectId → 502）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"骨架","sessionId":"1782993000001-tr02","actionSource":"button","requestedIntent":"draft_structure","actionPayload":{"draftStructure":{"instruction":"i","extra":1}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("project id"), "body: {parsed}");
+    }
+}

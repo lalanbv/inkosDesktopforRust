@@ -236,18 +236,21 @@ pub async fn post_agent(
         Ok(intent) => intent,
         Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_REQUESTED_INTENT", message).into_response(),
     };
-    // actionPayload：TS zod strict 全量校验（67 号结构守卫：必须为 object）。
+    // actionPayload：zod strict 全量校验（75 号：顶层+子域 unknown 键拒绝 +
+    // 字段类型/枚举/区间——ActionPayloadSchema 逐字）。
     let action_payload = match payload.get("actionPayload") {
         None | Some(Value::Null) => None,
-        Some(value) if value.is_object() => Some(value),
-        Some(other) => {
-            return api_error(
-                StatusCode::BAD_REQUEST,
-                "INVALID_ACTION_PAYLOAD",
-                format!("Invalid actionPayload: {other}"),
-            )
-            .into_response()
-        }
+        Some(value) => match validate_action_payload_strict(value) {
+            Ok(()) => Some(value),
+            Err(message) => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ACTION_PAYLOAD",
+                    format!("Invalid actionPayload: {message}"),
+                )
+                .into_response()
+            }
+        },
     };
     // requestedSkills / disabledSkills（normalizeSkillIdList：单值/数组 → trim/lower
     // + `^[a-z][a-z0-9-]*$` 校验 + 去重）。
@@ -621,4 +624,248 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
             card
         })
         .collect()
+}
+
+// ── actionPayload strict 校验（ActionPayloadSchema 逐字，75 号） ──
+
+enum PayloadField<'a> {
+    /// z.string().min(1).optional()
+    StrNonEmpty,
+    /// z.number().int().min(min).max(max)
+    IntRange { min: Option<f64>, max: Option<f64> },
+    /// z.enum([...]).optional()
+    Enum(&'a [&'a str]),
+    /// z.boolean().optional()
+    Bool,
+    /// z.array(z.string().min(1)).min(min).max(max)
+    StrArray { min: usize, max: usize },
+    /// z.object(...)（如 connectChoice.node: StoryNodeSchema——结构校验由执行器承担）
+    Object,
+}
+
+const PAYLOAD_TOP_LEVEL_KEYS: &[&str] = &[
+    "createBook", "writeNext", "shortRun", "playStart", "generateCover",
+    "scriptCreate", "storyboardCreate", "interactiveFilmCreate", "translationCreate",
+    "draftStructure", "connectChoice", "removeNode",
+];
+
+type PayloadSchema = (&'static str, bool, Vec<(&'static str, PayloadField<'static>)>);
+
+fn payload_schemas() -> Vec<PayloadSchema> {
+    use PayloadField::*;
+    vec![
+        ("createBook", true, vec![
+            ("title", StrNonEmpty), ("genre", StrNonEmpty),
+            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+            ("language", Enum(&["zh", "en"])),
+            ("targetChapters", IntRange { min: Some(1.0), max: None }),
+            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
+        ]),
+        ("writeNext", true, vec![
+            ("chapterCount", IntRange { min: Some(1.0), max: Some(20.0) }),
+        ]),
+        ("shortRun", true, vec![
+            ("direction", StrNonEmpty), ("reference", StrNonEmpty), ("storyId", StrNonEmpty),
+            ("language", Enum(&["zh", "en"])),
+            ("chapters", IntRange { min: Some(12.0), max: Some(18.0) }),
+            ("charsPerChapter", IntRange { min: Some(600.0), max: Some(1200.0) }),
+            ("cover", Bool),
+        ]),
+        ("playStart", true, vec![
+            ("title", StrNonEmpty), ("premise", StrNonEmpty),
+            ("worldContract", StrNonEmpty), ("visualContract", StrNonEmpty),
+            ("mode", Enum(&["open", "guided"])),
+            ("initialScene", StrNonEmpty),
+            ("suggestedActions", StrArray { min: 1, max: 4 }),
+        ]),
+        ("generateCover", true, vec![
+            ("title", StrNonEmpty), ("intro", StrNonEmpty),
+            ("sellingPoints", StrNonEmpty), ("coverPrompt", StrNonEmpty),
+            ("outputDir", StrNonEmpty),
+        ]),
+        ("scriptCreate", true, vec![
+            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
+            ("targetFormat", Enum(&[
+                "vertical_short_drama", "screenplay", "audio_drama",
+                "interactive_script", "general_script",
+            ])),
+            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
+            ("requirements", StrNonEmpty),
+            ("episodeCount", IntRange { min: Some(1.0), max: None }),
+            ("episodeDuration", StrNonEmpty), ("projectId", StrNonEmpty),
+            ("outDir", StrNonEmpty),
+        ]),
+        ("storyboardCreate", true, vec![
+            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
+            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
+            ("requirements", StrNonEmpty), ("visualStyle", StrNonEmpty),
+            ("aspectRatio", StrNonEmpty), ("granularity", StrNonEmpty),
+            ("maxShots", IntRange { min: Some(1.0), max: None }),
+            ("projectId", StrNonEmpty), ("outDir", StrNonEmpty),
+        ]),
+        ("interactiveFilmCreate", true, vec![
+            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
+            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
+            ("requirements", StrNonEmpty), ("targetAudience", StrNonEmpty),
+            ("episodeCount", IntRange { min: Some(1.0), max: None }),
+            ("episodeDuration", StrNonEmpty), ("budget", StrNonEmpty),
+            ("referenceMode", StrNonEmpty), ("projectId", StrNonEmpty),
+            ("outDir", StrNonEmpty),
+        ]),
+        ("translationCreate", true, vec![
+            ("filePath", StrNonEmpty), ("sourceLanguage", StrNonEmpty),
+            ("targetLanguage", StrNonEmpty), ("title", StrNonEmpty),
+            ("segmentMaxChars", IntRange { min: Some(1.0), max: None }),
+        ]),
+        // 以下三个子域 TS 非 strict（无 .strict()）：只做字段形态校验。
+        ("draftStructure", false, vec![
+            ("projectId", StrNonEmpty), ("instruction", StrNonEmpty),
+        ]),
+        ("connectChoice", false, vec![
+            ("projectId", StrNonEmpty), ("node", Object),
+        ]),
+        ("removeNode", false, vec![
+            ("projectId", StrNonEmpty), ("nodeId", StrNonEmpty),
+        ]),
+    ]
+}
+
+/// 顶层 object + strict（unknown 键拒绝）+ 子域 strict/字段校验；shortRun 的
+/// language+charsPerChapter 联动分段（superRefine）一并校验。
+fn validate_action_payload_strict(value: &Value) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err(format!("expected object, got {value}"));
+    };
+    for key in object.keys() {
+        if !PAYLOAD_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            return Err(format!("Unrecognized key: {key} — ActionPayloadSchema is strict"));
+        }
+    }
+    let schemas = payload_schemas();
+    for (domain, strict, fields) in &schemas {
+        let Some(domain_value) = object.get(*domain) else { continue };
+        let Some(domain_object) = domain_value.as_object() else {
+            return Err(format!("{domain}: expected object"));
+        };
+        if *strict {
+            for key in domain_object.keys() {
+                if !fields.iter().any(|(name, _)| name == key) {
+                    return Err(format!("{domain}: Unrecognized key: {key}"));
+                }
+            }
+        }
+        for (field, spec) in fields {
+            let Some(field_value) = domain_object.get(*field) else { continue };
+            let valid = match spec {
+                PayloadField::StrNonEmpty => field_value.as_str().is_some_and(|text| !text.is_empty()),
+                PayloadField::IntRange { min, max } => field_value.as_f64().is_some_and(|number| {
+                    number.fract() == 0.0
+                        && min.is_none_or(|min| number >= min)
+                        && max.is_none_or(|max| number <= max)
+                }),
+                PayloadField::Enum(values) => field_value
+                    .as_str()
+                    .is_some_and(|text| values.contains(&text)),
+                PayloadField::Bool => field_value.is_boolean(),
+                PayloadField::StrArray { min, max } => field_value
+                    .as_array()
+                    .is_some_and(|items| {
+                        items.len() >= *min
+                            && items.len() <= *max
+                            && items
+                                .iter()
+                                .all(|item| item.as_str().is_some_and(|s| !s.is_empty()))
+                    }),
+                PayloadField::Object => field_value.is_object(),
+            };
+            if !valid {
+                return Err(format!("{domain}.{field}: invalid value {field_value}"));
+            }
+        }
+    }
+    // shortRun superRefine：zh 900-1200 汉字 / en 600-800 英文词。
+    if let Some(short_run) = object.get("shortRun").and_then(Value::as_object) {
+        let language = short_run.get("language").and_then(Value::as_str);
+        let chars = short_run
+            .get("charsPerChapter")
+            .and_then(Value::as_f64)
+            .filter(|v| v.fract() == 0.0);
+        if let (Some(language), Some(chars)) = (language, chars) {
+            let (min, max) = match language {
+                "en" => (600.0, 800.0),
+                _ => (900.0, 1200.0),
+            };
+            if !(chars >= min && chars <= max) {
+                return Err(format!(
+                    "shortRun.charsPerChapter: charsPerChapter={chars} 超出范围（{min}-{max}）"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+
+#[cfg(test)]
+mod payload_strict_tests {
+    use super::validate_action_payload_strict;
+    use serde_json::json;
+
+    #[test]
+    fn top_level_strict_and_domain_strict() {
+        assert!(validate_action_payload_strict(&json!({})).is_ok());
+        // 顶层 unknown 键拒绝。
+        let err = validate_action_payload_strict(&json!({ "bogus": {} })).unwrap_err();
+        assert!(err.contains("Unrecognized key: bogus"), "{err}");
+        // 子域 unknown 键拒绝（createBook strict）。
+        let err = validate_action_payload_strict(&json!({
+            "createBook": { "title": "X", "extra": 1 }
+        }))
+        .unwrap_err();
+        assert!(err.contains("createBook: Unrecognized key: extra"), "{err}");
+        // 非 strict 子域（draftStructure）unknown 键放行。
+        assert!(validate_action_payload_strict(&json!({
+            "draftStructure": { "instruction": "i", "extra": 1 }
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn field_type_and_range_rules() {
+        // platform 枚举。
+        assert!(validate_action_payload_strict(&json!({ "createBook": { "platform": "tomato" } })).is_ok());
+        assert!(validate_action_payload_strict(&json!({ "createBook": { "platform": "nope" } })).is_err());
+        // writeNext chapterCount 1-20。
+        assert!(validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 20 } })).is_ok());
+        assert!(validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 21 } })).is_err());
+        // min(1) 字符串：空串非法（空白串长度≥1 合法——zod min(1) 不 trim）。
+        assert!(validate_action_payload_strict(&json!({ "translationCreate": { "filePath": "" } })).is_err());
+        assert!(validate_action_payload_strict(&json!({ "translationCreate": { "filePath": "  " } })).is_ok());
+        // playStart suggestedActions 数组 1-4 非空串。
+        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": ["a", "b"] } })).is_ok());
+        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": [] } })).is_err());
+        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": ["a", ""] } })).is_err());
+    }
+
+    #[test]
+    fn short_run_language_chars_cross_validation() {
+        // zh 900-1200；en 600-800（superRefine 联动）。
+        assert!(validate_action_payload_strict(&json!({
+            "shortRun": { "language": "zh", "charsPerChapter": 1000 }
+        }))
+        .is_ok());
+        assert!(validate_action_payload_strict(&json!({
+            "shortRun": { "language": "zh", "charsPerChapter": 700 }
+        }))
+        .is_err());
+        assert!(validate_action_payload_strict(&json!({
+            "shortRun": { "language": "en", "charsPerChapter": 700 }
+        }))
+        .is_ok());
+        // 无 language 时维持 600-1200 并集（基础 IntRange）。
+        assert!(validate_action_payload_strict(&json!({
+            "shortRun": { "charsPerChapter": 700 }
+        }))
+        .is_ok());
+    }
 }
