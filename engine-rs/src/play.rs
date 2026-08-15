@@ -515,6 +515,154 @@ pub fn build_play_scene_image_prompt(
     lines.join("\n")
 }
 
+// ── 写入面（73 号：play-store.ts 写方法） ─────────────────────────
+
+/// `ensureRun`：run 目录骨架（state/projections/summaries/checkpoints）。
+pub async fn ensure_run(project_root: &Path, world_id: &str, run_id: &str) -> Result<PathBuf, String> {
+    let dir = run_dir(project_root, world_id, run_id)?;
+    for sub in ["state", "projections", "summaries", "checkpoints"] {
+        tokio::fs::create_dir_all(dir.join(sub))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(dir)
+}
+
+/// `createWorld`：zod 校验形态（id safeSegment + 必填 title/createdAt）。
+pub async fn create_world(
+    project_root: &Path,
+    input: &PlayWorldInput<'_>,
+) -> Result<Value, String> {
+    let id = input.id.trim();
+    if id.is_empty() || !is_safe_segment(id) {
+        return Err(format!("Invalid play world id: {id}"));
+    }
+    if input.title.trim().is_empty() {
+        return Err("Play world title is required".to_string());
+    }
+    let now = crate::utils::utc_time::utc_now_iso();
+    let world = json!({
+        "id": id,
+        "title": input.title.trim(),
+        "premise": input.premise.trim(),
+        "worldContract": input.world_contract.trim(),
+        "visualContract": input.visual_contract.trim(),
+        "mode": input.mode,
+        "language": input.language,
+        "createdAt": now,
+        "updatedAt": now,
+    });
+    let world_dir = world_dir(project_root, id)?;
+    tokio::fs::create_dir_all(&world_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
+    tokio::fs::write(world_dir.join("world.json"), payload)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(world)
+}
+
+pub struct PlayWorldInput<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub premise: &'a str,
+    pub world_contract: &'a str,
+    pub visual_contract: &'a str,
+    pub mode: &'a str,
+    pub language: &'a str,
+}
+
+/// `saveCurrentState`：state/current.json（ensureRun + pretty + 尾换行）。
+pub async fn save_current_state(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    state: &Value,
+) -> Result<(), String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(state).unwrap_or_default());
+    tokio::fs::write(run.join("state").join("current.json"), payload)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn transcript_jsonl_path(run_dir: &Path) -> PathBuf {
+    run_dir.join("transcript.jsonl")
+}
+
+fn events_jsonl_path(run_dir: &Path) -> PathBuf {
+    run_dir.join("events.jsonl")
+}
+
+/// `appendTranscriptTurn`：{role,content,timestamp} 行追加。
+pub async fn append_transcript_turn(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<(), String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    let line = json!({ "role": role, "content": content, "timestamp": crate::interaction::session::utc_now_ms() });
+    append_json_line(&transcript_jsonl_path(&run), &line).await
+}
+
+/// `appendEvent`：事件行追加（形态校验由调用方 reducer 保证）。
+pub async fn append_event(project_root: &Path, world_id: &str, run_id: &str, event: &Value) -> Result<(), String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    append_json_line(&events_jsonl_path(&run), event).await
+}
+
+/// `readEvents`：events.jsonl 宽松读取（与 transcript 同坏行策略）。
+pub async fn read_events(project_root: &Path, world_id: &str, run_id: &str) -> Vec<Value> {
+    let Ok(run) = run_dir(project_root, world_id, run_id) else {
+        return Vec::new();
+    };
+    let Ok(raw) = tokio::fs::read_to_string(events_jsonl_path(&run)).await else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+/// `writeProjection`：run 内相对路径写入（safe_child 防逃逸）。
+pub async fn write_projection(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    let target = safe_run_child_path(&run, relative_path)?;
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    tokio::fs::write(&target, content).await.map_err(|e| e.to_string())
+}
+
+async fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let line = format!("{}\n", serde_json::to_string(value).unwrap_or_default());
+    file.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+    // 见 68 号：tokio File 缓冲需显式 flush 后对同进程读取可见。
+    let _ = file.flush().await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

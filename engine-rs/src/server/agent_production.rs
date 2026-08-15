@@ -1061,6 +1061,137 @@ async fn execute_create_book(
     })
 }
 
+/// `createPlayStartTool` 语义：worldId 即会话 id（1:1 绑定，两个 play 会话互
+/// 不串台）+ runId 固定 "main"；首开（transcript 空）写 scene/状态/助手轮；
+/// seedOpening 失败 fail-open（HUD 增强而非启动前提）。
+#[allow(clippy::too_many_arguments)]
+async fn execute_play_start(
+    runtime: &BooksRuntime,
+    session_id: &str,
+    play_mode: Option<&str>,
+    title: &str,
+    premise: &str,
+    world_contract: &str,
+    visual_contract: &str,
+    mode: &str,
+    initial_scene: &str,
+    suggested_actions: Vec<String>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::play::PlayWorldInput;
+
+    let root = runtime.state.project_root();
+    // safePlayId：trim + 80 上限 + 危险字符拒绝（回退会话 id 本身）。
+    let world_id: String = session_id.trim().chars().take(80).collect();
+    if world_id.is_empty()
+        || world_id == "."
+        || world_id == ".."
+        || world_id.contains('/')
+        || world_id.contains('\\')
+        || world_id.contains('\0')
+    {
+        return Err(format!("Invalid play id: {session_id:?}"));
+    }
+    let run_id = "main";
+
+    on_progress("Starting interactive world...".to_string());
+    let mode = if mode.is_empty() {
+        play_mode.unwrap_or("open")
+    } else {
+        mode
+    };
+    // inferLanguage 简化：默认 zh（内容判定随后续号接 utils）。
+    let world = crate::play::create_world(
+        root,
+        &PlayWorldInput {
+            id: &world_id,
+            title,
+            premise,
+            world_contract,
+            visual_contract,
+            mode,
+            language: "zh",
+        },
+    )
+    .await?;
+    crate::play::ensure_run(root, &world_id, run_id).await?;
+
+    let existing_transcript = crate::play::read_transcript(root, &world_id, run_id).await;
+    let default_scene = if premise.is_empty() {
+        format!("你进入「{title}」。\n场景已经就位，等待你的第一个动作。")
+    } else {
+        format!("你进入「{title}」。\n{premise}")
+    };
+    let scene_text = if initial_scene.trim().is_empty() {
+        default_scene
+    } else {
+        initial_scene.trim().to_string()
+    };
+    if existing_transcript.is_empty() {
+        crate::play::write_projection(root, &world_id, run_id, "projections/scene.md", &format!("{scene_text}\n")).await?;
+        crate::play::save_current_state(
+            root,
+            &world_id,
+            run_id,
+            &json!({
+                "turn": 0,
+                "worldId": world_id,
+                "runId": run_id,
+                "mode": mode,
+                "premise": premise,
+                "worldContract": world_contract,
+                "visualContract": visual_contract,
+            }),
+        )
+        .await?;
+        crate::play::append_transcript_turn(root, &world_id, run_id, "assistant", &scene_text).await?;
+    }
+
+    // 开场图谱播种（fail-open：模型漂移不阻断启动）。
+    let mut graph = None;
+    let mut seed_mutation = None;
+    if existing_transcript.is_empty() {
+        let agents = crate::play_runner::PlayAgents { router: &runtime.router };
+        let runner = crate::play_runner::PlayRunner {
+            project_root: root,
+            world_id: world_id.clone(),
+            run_id: run_id.to_string(),
+        };
+        let result = runner
+            .seed_opening(&agents, &scene_text, &suggested_actions)
+            .await;
+        if let Ok(Some(mutation)) = result {
+            let run_dir = crate::play::run_dir(root, &world_id, run_id)?;
+            graph = Some(crate::play::play_graph_snapshot(&run_dir));
+            seed_mutation = Some(mutation);
+        }
+    }
+
+    let mut details = json!({
+        "kind": "play_world_started",
+        "worldId": world_id,
+        "runId": run_id,
+        "title": world.get("title"),
+        "mode": world.get("mode"),
+        "premise": world.get("premise"),
+        "worldContract": world.get("worldContract"),
+        "visualContract": world.get("visualContract"),
+        "sceneText": scene_text,
+        "suggestedActions": suggested_actions,
+    });
+    if let Some(mutation) = seed_mutation {
+        details["seedMutation"] = mutation;
+    }
+    if let Some(graph) = graph {
+        details["graph"] = graph;
+    }
+    Ok(ToolOutcome {
+        is_error: false,
+        text: scene_text,
+        details,
+    })
+}
+
 fn to_base36(mut value: u64) -> String {
     if value == 0 {
         return "0".to_string();
@@ -1083,6 +1214,7 @@ pub struct ProductionRequest<'a> {
     pub session_id: &'a str,
     pub book_id: Option<&'a str>,
     pub session_kind: SessionKind,
+    pub play_mode: Option<&'a str>,
     pub intent: RequestedIntent,
     pub action_payload: Option<&'a Value>,
     pub language: StudioLang,
@@ -1213,7 +1345,60 @@ async fn run_confirmed_production_locked(
     // ── 执行卡装配（intent → tool/agent/params/stages） ──
     let mut params = Map::new();
     let agent: Option<&str>;
+    // play_start 是独立工具（非 sub_agent），无 stages（TS pipelineStages 无 play）。
+    let play_start = request.intent == RequestedIntent::PlayStart;
     match request.intent {
+        RequestedIntent::PlayStart => {
+            let payload = request.action_payload.and_then(|p| p.get("playStart"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认启动互动世界缺少标题，请重新生成确认卡。",
+                            "The interactive world start confirmation is missing a title. Regenerate the confirmation card.",
+                        ),
+                    )
+                })?
+                .to_string();
+            params.insert("title".into(), json!(title));
+            if let Some(premise) = field("premise") {
+                params.insert("premise".into(), json!(premise));
+            }
+            if let Some(contract) = field("worldContract") {
+                params.insert("worldContract".into(), json!(contract));
+            }
+            if let Some(visual) = field("visualContract") {
+                params.insert("visualContract".into(), json!(visual));
+            }
+            if let Some(mode) = field("mode") {
+                params.insert("mode".into(), json!(mode));
+            }
+            if let Some(scene) = field("initialScene") {
+                params.insert("initialScene".into(), json!(scene));
+            }
+            if let Some(actions) = payload
+                .and_then(|p| p.get("suggestedActions"))
+                .and_then(Value::as_array)
+            {
+                params.insert(
+                    "suggestedActions".into(),
+                    json!(actions
+                        .iter()
+                        .filter_map(|item| item.as_str().map(String::from))
+                        .collect::<Vec<_>>()),
+                );
+            }
+            agent = None;
+        }
         RequestedIntent::CreateBook => {
             // requirePayloadText：缺失文案（最终经统一错误面 → 502）。
             let title = request
@@ -1295,7 +1480,7 @@ async fn run_confirmed_production_locked(
             ));
         }
     }
-    let tool_name = "sub_agent";
+    let tool_name = if play_start { "play_start" } else { "sub_agent" };
 
     let stages: Option<Vec<StudioTaskStage>> = agent.and_then(|agent| {
         pipeline_stages(agent, lang).map(|labels| {
@@ -1385,7 +1570,40 @@ async fn run_confirmed_production_locked(
         }
     };
     let outcome = match request.intent {
+        RequestedIntent::PlayStart => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            execute_play_start(
+                runtime,
+                request.session_id,
+                request.play_mode,
+                &field("title"),
+                &field("premise"),
+                &field("worldContract"),
+                &field("visualContract"),
+                &field("mode"),
+                &field("initialScene"),
+                args.get("suggestedActions")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(String::from))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                &mut on_progress,
+            )
+            .await
+        }
         RequestedIntent::CreateBook => {
+            let mut on_progress = make_on_progress;
             let title = exec
                 .args
                 .as_ref()
@@ -1393,7 +1611,6 @@ async fn run_confirmed_production_locked(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let mut on_progress = make_on_progress;
             execute_create_book(
                 runtime,
                 request.instruction,

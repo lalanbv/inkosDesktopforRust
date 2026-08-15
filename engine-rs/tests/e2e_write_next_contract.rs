@@ -8248,3 +8248,297 @@ mod ops72_e2e {
         assert!(parsed["error"].is_string());
     }
 }
+
+mod play73_e2e {
+    //! 73 号：play_start 确认意图执行器 + 写入面 + runner 回合全链。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt73(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app73(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId",
+                axum::routing::get(inkos_engine::server::play_routes::get_play_run),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// play 三代理 mock：interpreter（look）/ mutator（开场播种/回合推进 JSON）/
+    /// renderer（sceneText + suggestedActions），按 system 关键词分流。
+    async fn mock_play_llm() -> String {
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("动作理解器") {
+                        serde_json::json!({ "actionKind": "look", "intent": "环顾四周", "secondaryActions": [] }).to_string()
+                    } else if system.contains("世界状态草案员") {
+                        if user.contains("只播种这个互动世界开场已经成立的状态") {
+                            serde_json::json!({
+                                "eventId": "evt-0", "turn": 0, "actionKind": "look",
+                                "summary": "开场状态已播种",
+                                "entities": { "upsert": [
+                                    { "id": "actor_player", "type": "actor", "label": "夜行人", "summary": "潜入宅邸的人", "updatedEventId": "evt-0" },
+                                    { "id": "item_lantern", "type": "item", "label": "灯笼", "summary": "手里的灯笼", "updatedEventId": "evt-0" }
+                                ]},
+                                "edges": { "upsert": [
+                                    { "fromId": "actor_player", "type": "持有", "toId": "item_lantern",
+                                      "value": { "role": "holding" }, "validFromEventId": "evt-0", "sourceEventId": "evt-0" }
+                                ]}
+                            }).to_string()
+                        } else {
+                            serde_json::json!({
+                                "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                                "summary": "玩家看清了厅堂",
+                                "timeAdvance": { "elapsed": "片刻", "anchor": "深夜", "rationale": "只是环顾", "synchronized": [] },
+                                "entities": { "upsert": [
+                                    { "id": "location_hall", "type": "location", "label": "厅堂", "summary": "正厅", "updatedEventId": "evt-1" }
+                                ]}
+                            }).to_string()
+                        }
+                    } else if system.contains("场景应答作者") {
+                        serde_json::json!({
+                            "sceneText": "灯笼的光晃了一下，厅堂深处有人影一闪。",
+                            "suggestedActions": ["追上去", "吹灭灯笼"]
+                        }).to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn play_start_confirmed_action_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_play_llm().await;
+        let runtime = rt73(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app73(runtime);
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782991000000-play01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // play_start 确认意图（button）→ 建世界 + 首场景 + 开场播种。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{
+                "instruction": "开一个雪夜古宅的世界",
+                "sessionId": "1782991000000-play01",
+                "actionSource": "button",
+                "requestedIntent": "play_start",
+                "playMode": "guided",
+                "actionPayload": { "playStart": {
+                    "title": "雪夜古宅",
+                    "premise": "大雪封山的旧宅，藏着一段旧案。",
+                    "suggestedActions": ["查看门厅", "上二楼"]
+                }}
+            }"#.replace(char::is_whitespace, " ").as_str()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // play_start 在 suppressManualTextForTool 表 → response 空。
+        assert_eq!(parsed["response"], "");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "play_start");
+        assert_eq!(exec["status"], "completed");
+        assert_eq!(exec["args"]["title"], "雪夜古宅");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "play_world_started");
+        assert_eq!(details["worldId"], "1782991000000-play01");
+        assert_eq!(details["runId"], "main");
+        assert_eq!(details["mode"], "guided");
+        assert_eq!(details["sceneText"], "你进入「雪夜古宅」。\n大雪封山的旧宅，藏着一段旧案。");
+        assert_eq!(details["suggestedActions"].as_array().unwrap().len(), 2);
+        // 开场播种成功 → 图谱带 actor_player + holding 边。
+        let graph = &details["graph"];
+        assert!(graph["entities"]
+            .as_array()
+            .is_some_and(|entities| entities.iter().any(|e| e["id"] == "actor_player")), "graph: {graph}");
+        assert_eq!(parsed["session"]["sessionId"], "1782991000000-play01");
+
+        // 磁盘形态：world.json + transcript + current state + scene 投影 + 图（file 后端）。
+        let world_json = root.join("worlds").join("1782991000000-play01").join("world.json");
+        assert!(world_json.is_file());
+        let run = root.join("worlds").join("1782991000000-play01").join("runs").join("main");
+        assert!(run.join("transcript.jsonl").is_file());
+        assert!(run.join("state").join("current.json").is_file());
+        assert!(run.join("projections").join("scene.md").is_file());
+        assert!(run.join("projections").join("state.md").is_file());
+        assert!(run.join("play-graph.json").is_file());
+        let transcript = std::fs::read_to_string(run.join("transcript.jsonl")).unwrap();
+        assert!(transcript.contains("雪夜古宅"), "{transcript}");
+
+        // 71 号读取面（GET run）读取同一 world：图谱合并 + 场景插图位。
+        let (status, run_view) = call(
+            app,
+            "GET",
+            "/api/v1/play/runs/1782991000000-play01/main",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {run_view}");
+        assert_eq!(run_view["title"], "雪夜古宅");
+        assert!(run_view["graph"]["entities"]
+            .as_array()
+            .is_some_and(|entities| entities.iter().any(|e| e["id"] == "actor_player")));
+
+        let first = subscriber.recv().await.unwrap();
+        assert_eq!(first.event, "agent:start");
+    }
+
+    #[tokio::test]
+    async fn play_start_missing_title_fails_with_502() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_play_llm().await;
+        let app = app73(rt73(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782991000001-play02"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"开世界","sessionId":"1782991000001-play02","actionSource":"button","requestedIntent":"play_start"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap().contains("缺少标题"),
+            "body: {parsed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_step_persists_turn_all_or_nothing() {
+        use inkos_engine::play_runner::{PlayAgents, PlayRunner};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_play_llm().await;
+        let runtime = rt73(&root, &llm);
+
+        // 先建世界（直调写入面，绕过 agent 端点）。
+        inkos_engine::play::create_world(
+            &root,
+            &inkos_engine::play::PlayWorldInput {
+                id: "w-step",
+                title: "厅堂夜探",
+                premise: "深夜宅邸",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        inkos_engine::play::ensure_run(&root, "w-step", "main").await.unwrap();
+        inkos_engine::play::append_transcript_turn(&root, "w-step", "main", "user", "开始").await.unwrap();
+
+        let agents = PlayAgents { router: &runtime.router };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: "w-step".to_string(),
+            run_id: "main".to_string(),
+        };
+        let outcome = runner.step(&agents, &agents, &agents, "我环顾四周").await.unwrap();
+        assert!(outcome.scene_text.contains("厅堂"), "scene: {outcome:?}");
+        assert_eq!(outcome.suggested_actions.len(), 2);
+        assert_eq!(outcome.action["actionKind"], "look");
+
+        // 全部落盘：事件 + state + scene 投影 + transcript 双轮 + 图（file 后端）。
+        let run = root.join("worlds").join("w-step").join("runs").join("main");
+        let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
+        assert!(events.contains("evt-1"), "{events}");
+        assert!(events.contains("看清了厅堂"), "{events}");
+        let current: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("state").join("current.json")).unwrap()).unwrap();
+        assert_eq!(current["turn"], 1);
+        assert_eq!(current["lastEventId"], "evt-1");
+        assert_eq!(current["blocked"], false);
+        let scene = std::fs::read_to_string(run.join("projections").join("scene.md")).unwrap();
+        assert!(scene.contains("厅堂深处"));
+        let transcript = std::fs::read_to_string(run.join("transcript.jsonl")).unwrap();
+        assert!(transcript.contains("我环顾四周"));
+        assert!(transcript.contains("灯笼的光"));
+        let graph: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+        assert!(graph["entities"]
+            .as_object()
+            .is_some_and(|entities| entities.contains_key("location_hall")));
+
+        // 空输入 → Err。
+        assert!(runner.step(&agents, &agents, &agents, "   ").await.is_err());
+    }
+}

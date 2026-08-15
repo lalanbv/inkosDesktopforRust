@@ -11,6 +11,7 @@
 //! - 全部 on Value::Object/Array，无 IO，纯函数 → golden 差分可测
 //! - 字符串 trim + `\s+→_` 替换、UTF-16 slice 截断（对齐 JS .slice(0,n)）
 
+use serde_json::json;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -329,6 +330,50 @@ pub fn normalize_play_mutation(value: &Value) -> Value {
     Value::Object(v)
 }
 
+/// PlayActionIntentSchema 的宽松归一（73 号）：actionKind 非法回退 do；
+/// 目标标签 trim 空 → 移除；自由文本字段强转字符串；secondaryActions 过滤字符串。
+pub fn normalize_action_intent(value: &Value) -> Value {
+    let obj = value.as_object().cloned().unwrap_or_default();
+    let coerced = |item: Option<&Value>| -> String {
+        match item {
+            Some(Value::String(text)) => text.clone(),
+            Some(Value::Number(number)) => number.to_string(),
+            Some(Value::Bool(flag)) => flag.to_string(),
+            _ => String::new(),
+        }
+    };
+    let action_kind = match obj.get("actionKind").and_then(Value::as_str) {
+        Some(kind) if matches!(kind, "look" | "say" | "move" | "do" | "wait") => kind.to_string(),
+        _ => "do".to_string(),
+    };
+    let optional_label = |field: &str| -> Option<Value> {
+        obj.get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| json!(s))
+    };
+    json!({
+        "actionKind": action_kind,
+        "targetEntityLabel": optional_label("targetEntityLabel"),
+        "targetLocationLabel": optional_label("targetLocationLabel"),
+        "intent": coerced(obj.get("intent")),
+        "manner": coerced(obj.get("manner")),
+        "risk": coerced(obj.get("risk")),
+        "ambiguity": coerced(obj.get("ambiguity")),
+        "secondaryActions": obj
+            .get("secondaryActions")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,3 +438,5 @@ mod tests {
         assert!(!is_low_information_edge_id(&Value::String("edge_a_holds_b".into()), &Value::String("holds".into())));
     }
 }
+
+

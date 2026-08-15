@@ -362,6 +362,7 @@ pub async fn post_agent(
             session_id,
             book_id: agent_book_id.as_deref(),
             session_kind,
+            play_mode: play_mode.map(|mode| mode.as_str()),
             intent,
             action_payload,
             language,
