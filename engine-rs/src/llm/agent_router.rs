@@ -176,6 +176,8 @@ macro_rules! impl_simple_chat {
 }
 
 impl_simple_chat!(WriterChat);
+use crate::agents::architect::ArchitectChat;
+impl_simple_chat!(ArchitectChat);
 impl_simple_chat!(PlannerChat);
 impl_simple_chat!(ReviserChat);
 impl_simple_chat!(LengthNormalizerChat);

@@ -20,7 +20,9 @@
 //!   / [`settler_delta_parser`] 输出端配对
 
 pub mod ai_tells;
+pub mod architect;
 pub mod composer;
+pub mod foundation_prompts;
 pub mod consolidator;
 pub mod chapter_analyzer;
 pub mod continuity;
