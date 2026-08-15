@@ -15,6 +15,7 @@ pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
 pub mod sse;
+pub mod style_routes;
 pub mod task_store;
 pub mod write_next_route;
 
@@ -306,6 +307,20 @@ pub fn router_books(
         .route(
             "/api/v1/project/language",
             post(project_config_routes::post_language).with_state(books.clone()),
+        )
+        // 55 号：风格与导入域（指纹/文风向导/正典导入/番外正典读）。
+        .route("/api/v1/style/analyze", post(style_routes::style_analyze))
+        .route(
+            "/api/v1/books/:id/style/import",
+            post(style_routes::style_import).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/import/canon",
+            post(style_routes::import_canon_endpoint).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/fanfic",
+            get(style_routes::fanfic_show).with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/chapter-review-mode",

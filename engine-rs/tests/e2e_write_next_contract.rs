@@ -2933,3 +2933,261 @@ mod config54_e2e {
         assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
     }
 }
+
+mod style55_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::style_routes::{fanfic_show, import_canon_endpoint, style_analyze, style_import};
+    use inkos_engine::state::manager::StateManager;
+
+    async fn mock55_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let content = if system.contains("网络小说架构师") {
+            "# 正传正典\n\n## 世界规则\n斗气大陆。".to_string()
+        } else {
+            "## 叙事声音与语气\n冷峻克制，例句：少年握紧了拳。".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock55() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock55_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt55(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture55(root: &std::path::Path) {
+        for id in ["target", "parent"] {
+            let book = root.join("books").join(id);
+            std::fs::create_dir_all(book.join("chapters")).unwrap();
+            std::fs::create_dir_all(book.join("story")).unwrap();
+            std::fs::write(
+                book.join("book.json"),
+                format!(r#"{{"id":"{id}","title":"书{id}","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}}"#),
+            )
+            .unwrap();
+        }
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        // 父书真相（Phase 5 新布局）+ 一章正文（>500 字触发风格向导）。
+        let parent = root.join("books").join("parent").join("story");
+        std::fs::create_dir_all(parent.join("outline")).unwrap();
+        std::fs::write(parent.join("outline").join("story_frame.md"), "# 世界框架\n斗气大陆。").unwrap();
+        std::fs::write(parent.join("current_state.md"), "状态v1").unwrap();
+        std::fs::write(root.join("books").join("parent").join("chapters").join("0001_启.md"), format!("# 第1章\n\n{}", "少年握紧了拳。".repeat(80))).unwrap();
+    }
+
+    fn app55(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/style/analyze", axum::routing::post(style_analyze))
+            .route("/api/v1/books/:id/style/import", axum::routing::post(style_import))
+            .route("/api/v1/books/:id/import/canon", axum::routing::post(import_canon_endpoint))
+            .route("/api/v1/books/:id/fanfic", axum::routing::get(fanfic_show))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn style_analyze_returns_profile_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+
+        let (status, parsed) = call(
+            app55(rt55(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "林动握紧了拳。他抬起头，灵气涌动。多年屈辱涌上心头。", "sourceName": "斗破" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["sourceName"], "斗破");
+        assert!(parsed["avgSentenceLength"].as_f64().unwrap() > 0.0);
+        assert!(parsed["analyzedAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+        assert!(parsed.get("paragraphLengthRange").is_some());
+
+        // text 空/缺 → 400；缺 sourceName → "unknown"。
+        let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "  " }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "text is required");
+        let (_, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
+        assert_eq!(parsed["sourceName"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn style_import_short_sample_uses_fingerprint_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+        let llm = spawn_mock55().await;
+        let runtime = rt55(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        // 短样本（<500）→ 确定性指南（不调 LLM）。
+        let (status, parsed) = call(
+            app55(runtime),
+            "POST",
+            "/api/v1/books/target/style/import",
+            Some(r#"{ "text": "林动握紧了拳。", "sourceName": "斗破" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        let guide = parsed["result"].as_str().unwrap();
+        assert!(guide.contains("# 文风指南"));
+        assert!(guide.contains("样本文本较短"));
+        // 指纹 + 方法论落盘。
+        let story = root.join("books").join("target").join("story");
+        assert!(story.join("style_profile.json").exists());
+        let saved = std::fs::read_to_string(story.join("style_guide.md")).unwrap();
+        assert!(saved.contains("## 统计风格指纹"));
+        assert_eq!(subscriber.recv().await.unwrap().event, "style:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "style:complete");
+    }
+
+    #[tokio::test]
+    async fn style_import_long_sample_uses_llm_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+        let llm = spawn_mock55().await;
+
+        let long_text = "少年握紧了拳，抬起头来。".repeat(60);
+        let (status, parsed) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/books/target/style/import",
+            Some(&format!(r#"{{ "text": "{long_text}" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let guide = parsed["result"].as_str().unwrap();
+        // LLM 定性输出（mock：叙事声音与语气）+ 方法论拼接。
+        assert!(guide.contains("## 叙事声音与语气"));
+        assert!(guide.contains("冷峻克制"));
+    }
+
+    #[tokio::test]
+    async fn import_canon_generates_parent_canon_and_style_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+        let llm = spawn_mock55().await;
+        let runtime = rt55(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let (status, parsed) = call(
+            app55(runtime),
+            "POST",
+            "/api/v1/books/target/import/canon",
+            Some(r#"{ "fromBookId": "parent" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+
+        // parent_canon.md：LLM 输出 + 确定性 meta 块。
+        let canon = std::fs::read_to_string(
+            root.join("books").join("target").join("story").join("parent_canon.md"),
+        )
+        .unwrap();
+        assert!(canon.contains("# 正传正典"));
+        assert!(canon.contains("斗气大陆"));
+        assert!(canon.contains("meta:"));
+        assert!(canon.contains("parentBookId: \"parent\""));
+        assert!(canon.contains("parentTitle: \"书parent\""));
+        // 父书章节样本 ≥500 → 目标书也生成风格指纹。
+        assert!(root.join("books").join("target").join("story").join("style_guide.md").exists());
+
+        // SSE import:start（type canon）→ import:complete。
+        let start = subscriber.recv().await.unwrap();
+        assert_eq!(start.event, "import:start");
+        assert!(start.data.contains("\"type\":\"canon\""));
+        assert_eq!(subscriber.recv().await.unwrap().event, "import:complete");
+
+        // 父书缺失 → 500 逐字文案（Available 列表）。
+        let (status, parsed) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/books/target/import/canon",
+            Some(r#"{ "fromBookId": "ghost" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let error = parsed["error"].as_str().unwrap();
+        assert!(error.starts_with("Parent book \"ghost\" not found. Available: "), "{error}");
+        assert!(error.contains("parent") && error.contains("target"), "{error}");
+        // 缺 fromBookId → 400。
+        let (status, parsed) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/books/target/import/canon", Some("{}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "fromBookId is required");
+    }
+
+    #[tokio::test]
+    async fn fanfic_show_reads_canon_or_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+
+        let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "GET", "/api/v1/books/target/fanfic", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["bookId"], "target");
+        assert_eq!(parsed["content"], serde_json::Value::Null);
+
+        std::fs::write(
+            root.join("books").join("target").join("story").join("fanfic_canon.md"),
+            "# 番外正典",
+        )
+        .unwrap();
+        let (_, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "GET", "/api/v1/books/target/fanfic", None).await;
+        assert_eq!(parsed["content"], "# 番外正典");
+    }
+}
