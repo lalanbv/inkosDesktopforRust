@@ -16,6 +16,7 @@ pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
+pub mod skill_routes;
 pub mod sse;
 pub mod style_routes;
 pub mod task_store;
@@ -348,6 +349,26 @@ pub fn router_books(
             "/api/v1/books/:id/chapter-review-mode",
             get(books_state_routes::get_review_mode)
                 .put(books_state_routes::put_review_mode)
+                .with_state(books.clone()),
+        )
+        // 60 号：skills / prompt-packs 轻域。
+        .route("/api/v1/skills", get(skill_routes::list_skills).with_state(books.clone()))
+        .route(
+            "/api/v1/skills/import",
+            post(skill_routes::import_skill).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/skills/:skillId",
+            axum::routing::delete(skill_routes::delete_skill).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/prompt-packs",
+            get(skill_routes::list_prompt_packs).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/prompt-packs/:promptId",
+            put(skill_routes::put_prompt_pack)
+                .delete(skill_routes::delete_prompt_pack)
                 .with_state(books),
         )
 }

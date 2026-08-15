@@ -3,14 +3,55 @@
 //! 移植自 `packages/core/src/skills/`：
 //! - [`AgentSkill`] / [`SkillSource`]（types.ts）
 //! - [`SkillRegistry`] trait + [`create_skill_registry`]（registry.ts）
-//!
-//! ## 待移植（需文件 IO）
-//! external-loader.ts（从磁盘加载项目/用户技能目录）。
+//! - [`external_loader`]：SKILL.md 解析 + env/user/project 目录扫描（external-loader.ts）
+//! - [`normalize_skill_id_strict`]：SkillIdSchema 校验（action-envelope.ts）
+
+pub mod external_loader;
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
 use std::collections::{HashMap, HashSet};
+
+/// SkillIdSchema 校验错误（消息为 zod 默认文本）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillIdError {
+    /// `.min(1)` 失败。
+    Empty,
+    /// `.regex(/^[a-z][a-z0-9-]*$/i)` 失败。
+    Pattern,
+    /// 文件系统错误（list_project_skill_ids 读取目录）。
+    Io(String),
+}
+
+impl SkillIdError {
+    pub fn message(&self) -> String {
+        match self {
+            SkillIdError::Empty => "String must contain at least 1 character(s)".to_string(),
+            SkillIdError::Pattern => {
+                "Skill id must use letters, numbers, and hyphens.".to_string()
+            }
+            SkillIdError::Io(message) => message.clone(),
+        }
+    }
+}
+
+/// SkillIdSchema 校验 + 小写化：`z.string().trim().min(1).regex(/^[a-z][a-z0-9-]*$/i)` → toLowerCase。
+pub fn normalize_skill_id_strict(value: &str) -> Result<String, SkillIdError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(SkillIdError::Empty);
+    }
+    let bytes = trimmed.as_bytes();
+    let valid = bytes[0].is_ascii_alphabetic()
+        && bytes
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'-');
+    if !valid {
+        return Err(SkillIdError::Pattern);
+    }
+    Ok(trimmed.to_lowercase())
+}
 
 /// 技能来源。对齐 TS `z.enum(["project","user","external"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

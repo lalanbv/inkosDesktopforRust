@@ -55,6 +55,8 @@ uuid = { version = "1", features = ["v4"] }
 serde_yaml = "0.9"
 # 临时目录：atomic-file-set 的事务目录 + 测试 fixture。
 tempfile = "3"
+# Unicode NFKD：skills external-loader 的 skill id 规范化（TS String.normalize("NFKD") 对应物）。
+unicode-normalization = "0.1"
 async-stream = "0.3.6"
 
 [dev-dependencies]

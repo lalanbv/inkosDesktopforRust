@@ -3975,3 +3975,457 @@ name: 萧炎
         assert_eq!(parsed["error"], "title, referenceText and storyIdea are required");
     }
 }
+
+// ── 60 号：skills / prompt-packs 轻域（server.ts L4209-L4268）─────────
+
+mod skills60_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::skill_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt60(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app60(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/skills", axum::routing::get(skill_routes::list_skills))
+            .route("/api/v1/skills/import", axum::routing::post(skill_routes::import_skill))
+            .route("/api/v1/skills/:skillId", axum::routing::delete(skill_routes::delete_skill))
+            .route("/api/v1/prompt-packs", axum::routing::get(skill_routes::list_prompt_packs))
+            .route(
+                "/api/v1/prompt-packs/:promptId",
+                axum::routing::put(skill_routes::put_prompt_pack)
+                    .delete(skill_routes::delete_prompt_pack),
+            )
+            .with_state(rt60(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 标准 base64 编码（测试 fixture 构造 dataUrl 用）。
+    fn b64(input: &str) -> String {
+        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let bytes = input.as_bytes();
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+            out.push(TABLE[(n >> 18) as usize & 63] as char);
+            out.push(TABLE[(n >> 12) as usize & 63] as char);
+            out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+            out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        }
+        out
+    }
+
+    fn data_url(content: &str) -> String {
+        format!("data:text/markdown;base64,{}", b64(content))
+    }
+
+    const MANIFEST: &str = "---\nname: Combat Tactics\ndescription: 战斗策略技能\n---\n\n# 战斗策略\n\n正文指导。";
+
+    fn import_body(files: &[(&str, &str)]) -> String {
+        let entries: Vec<String> = files
+            .iter()
+            .map(|(path, content)| {
+                serde_json::json!({ "path": path, "dataUrl": data_url(content) }).to_string()
+            })
+            .collect();
+        format!("{{\"files\":[{}]}}", entries.join(","))
+    }
+
+    #[tokio::test]
+    async fn get_prompt_packs_lists_builtin_packs_and_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let (status, parsed) = call(app60(&root), "GET", "/api/v1/prompt-packs", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let packs = parsed["packs"].as_array().unwrap();
+        assert_eq!(packs.len(), 3);
+        assert_eq!(packs[0]["id"], "longform");
+        assert_eq!(packs[0]["title"], "Longform Writing");
+        assert_eq!(packs[0]["source"], "builtin");
+        let prompts = parsed["prompts"].as_array().unwrap();
+        assert_eq!(prompts.len(), 12);
+        let writer = prompts.iter().find(|p| p["id"] == "longform.writer").unwrap();
+        assert_eq!(writer["packId"], "longform");
+        assert_eq!(writer["title"], "Longform Writer");
+        assert_eq!(writer["source"], "builtin");
+        assert_eq!(writer["overridden"], false);
+        // builtin 态 content == defaultContent，且无 path 键（undefined 不序列化）
+        assert_eq!(writer["content"], writer["defaultContent"]);
+        assert!(writer.get("path").is_none());
+    }
+
+    #[tokio::test]
+    async fn put_prompt_pack_overrides_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 大小写路径命中（normalizeStudioPromptId trim+lower）
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/LONGFORM.Writer",
+            Some(r##"{ "content": "# 覆盖后的写作提示\n\n第二段。" }"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["prompt"]["id"], "longform.writer");
+        assert_eq!(parsed["prompt"]["source"], "project");
+        assert_eq!(parsed["prompt"]["overridden"], true);
+        assert_eq!(parsed["prompt"]["path"], "prompt/longform/writer.md");
+        assert!(parsed["prompt"]["content"].as_str().unwrap().contains("覆盖后的写作提示"));
+        // defaultContent 保留 builtin 原文
+        assert_ne!(parsed["prompt"]["content"], parsed["prompt"]["defaultContent"]);
+
+        // 覆盖文件落盘（utf-8 原文）
+        let on_disk = std::fs::read_to_string(root.join("prompt").join("longform").join("writer.md")).unwrap();
+        assert!(on_disk.contains("覆盖后的写作提示"));
+
+        // GET 列表反映覆盖态
+        let (_, parsed) = call(app60(&root), "GET", "/api/v1/prompt-packs", None).await;
+        let writer = parsed["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "longform.writer")
+            .unwrap()
+            .clone();
+        assert_eq!(writer["source"], "project");
+        assert_eq!(writer["overridden"], true);
+
+        // DELETE 清除覆盖 → 回 builtin
+        let (status, parsed) = call(
+            app60(&root),
+            "DELETE",
+            "/api/v1/prompt-packs/longform.writer",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["prompt"]["source"], "builtin");
+        assert_eq!(parsed["prompt"]["overridden"], false);
+        assert!(parsed["prompt"].get("path").is_none());
+        assert!(!root.join("prompt").join("longform").join("writer.md").exists());
+    }
+
+    #[tokio::test]
+    async fn put_prompt_pack_invalid_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 未知 id → 404（消息带原值）
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/unknown.prompt",
+            Some(r#"{"content":"x"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "PROMPT_PACK_PROMPT_NOT_FOUND");
+        assert_eq!(parsed["error"]["message"], "Prompt pack prompt not found: unknown.prompt");
+
+        // 非 JSON body → 400
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/longform.writer",
+            Some("not-json"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROMPT_PACK_PAYLOAD");
+        assert_eq!(parsed["error"]["message"], "Prompt pack payload must be JSON");
+
+        // content 非串 → 400
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/longform.writer",
+            Some(r#"{"content":123}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "content must be a string");
+
+        // JSON 数组（无 content 键）→ 400
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/longform.writer",
+            Some(r#"[1,2]"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "content must be a string");
+
+        // DELETE 未知 id → 404
+        let (status, parsed) = call(
+            app60(&root),
+            "DELETE",
+            "/api/v1/prompt-packs/nope.nope",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "PROMPT_PACK_PROMPT_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn import_skill_roundtrip_lists_and_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // folder 形式：folder 前缀剥离后落盘 .agents/skills/{id}/
+        let body = import_body(&[
+            ("my-pack/SKILL.md", MANIFEST),
+            ("my-pack/reference.md", "参考资料。"),
+        ]);
+        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["skill"]["id"], "combat-tactics");
+        assert_eq!(parsed["skill"]["name"], "Combat Tactics");
+        assert_eq!(parsed["skill"]["source"], "project");
+        assert_eq!(parsed["skill"]["editable"], true);
+        assert_eq!(parsed["skill"]["path"], ".agents/skills/combat-tactics/SKILL.md");
+        assert!(parsed["skill"]["body"].as_str().unwrap().contains("战斗策略"));
+
+        let skill_dir = root.join(".agents").join("skills").join("combat-tactics");
+        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(skill_dir.join("reference.md").exists());
+        assert!(!root.join(".agents").join("skills").join("my-pack").exists());
+
+        // GET /skills：注册表归并（id 排序）+ project 标记
+        let (status, parsed) = call(app60(&root), "GET", "/api/v1/skills", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let skills = parsed["skills"].as_array().unwrap();
+        let combat = skills
+            .iter()
+            .find(|s| s["id"] == "combat-tactics")
+            .unwrap()
+            .clone();
+        assert_eq!(combat["source"], "project");
+        assert_eq!(combat["editable"], true);
+        // 按 id 排序（createSkillRegistry 语义）
+        let ids: Vec<&str> = skills.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        assert_eq!(ids, sorted);
+
+        // 重复导入 → 409 SKILL_EXISTS
+        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(parsed["error"]["code"], "SKILL_EXISTS");
+        assert_eq!(parsed["error"]["message"], "Project skill already exists: combat-tactics");
+
+        // 删除 → ok:true → 目录消失 → 再删 404
+        let (status, parsed) = call(
+            app60(&root),
+            "DELETE",
+            "/api/v1/skills/combat-tactics",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert!(!skill_dir.exists());
+        let (status, parsed) = call(
+            app60(&root),
+            "DELETE",
+            "/api/v1/skills/combat-tactics",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "SKILL_NOT_FOUND");
+        assert_eq!(parsed["error"]["message"], "Project skill not found: combat-tactics");
+
+        // 删除后可再次导入
+        let (status, _) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn import_skill_root_manifest_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 根级 SKILL.md 形式（skillPath = root/SKILL.md → id 回退 root basename，但 name 可用）
+        let body = import_body(&[("SKILL.md", MANIFEST)]);
+        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["skill"]["id"], "combat-tactics");
+        assert!(root.join(".agents").join("skills").join("combat-tactics").join("SKILL.md").exists());
+    }
+
+    #[tokio::test]
+    async fn import_skill_validation_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let post = |body: &str| {
+            let root = root.clone();
+            let body = body.to_string();
+            async move {
+                call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await
+            }
+        };
+
+        // 非 JSON → 400
+        let (status, parsed) = post("not-json").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT");
+        assert_eq!(parsed["error"]["message"], "Skill import payload must be JSON");
+
+        // payload 非对象 → 400
+        let (status, parsed) = post("[1]").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Skill import payload must be an object");
+
+        // files 缺失 / 空数组 → 400
+        let (status, parsed) = post("{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Skill import requires at least one file");
+        let (status, parsed) = post("{\"files\":[]}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Skill import requires at least one file");
+
+        // 不安全路径（遍历）→ 400 INVALID_SKILL_IMPORT_PATH（消息带原值）
+        let body = import_body(&[("../evil.md", "x")]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT_PATH");
+        assert_eq!(parsed["error"]["message"], "Unsafe skill import path: ../evil.md");
+
+        // 绝对路径 → 400
+        let body = import_body(&[("/etc/passwd", "x")]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT_PATH");
+
+        // 重复 path（大小写不敏感键）→ 400
+        let body = import_body(&[("SKILL.md", MANIFEST), ("skill.md", MANIFEST)]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Duplicate skill import path: skill.md");
+
+        // 缺 dataUrl → 400
+        let (status, parsed) = post(r#"{"files":[{"path":"SKILL.md"}]}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Missing dataUrl for SKILL.md");
+
+        // 坏 dataUrl → 400 INVALID_ATTACHMENT_DATA_URL
+        let (status, parsed) = post(r#"{"files":[{"path":"SKILL.md","dataUrl":"http://x/y"}]}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT_DATA_URL");
+
+        // 无 SKILL.md → 400
+        let body = import_body(&[("notes/other.md", MANIFEST)]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Skill import must contain exactly one SKILL.md");
+
+        // 两个 SKILL.md → 400
+        let body = import_body(&[("a/SKILL.md", MANIFEST), ("b/SKILL.md", MANIFEST)]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Skill import must contain exactly one SKILL.md");
+
+        // 越出 manifest folder → 400 INVALID_SKILL_IMPORT_PATH
+        let body = import_body(&[("a/SKILL.md", MANIFEST), ("outside.md", "x")]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT_PATH");
+        assert_eq!(parsed["error"]["message"], "All imported files must be inside the SKILL.md folder");
+
+        // manifest 解析失败 → 400 INVALID_SKILL_MANIFEST
+        let body = import_body(&[("SKILL.md", "no frontmatter")]);
+        let (status, parsed) = post(&body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_MANIFEST");
+        assert_eq!(
+            parsed["error"]["message"],
+            "SKILL.md must start with YAML frontmatter delimiters."
+        );
+
+        // 所有失败分支都不留 staging 残留
+        let skills_dir = root.join(".agents").join("skills");
+        if skills_dir.exists() {
+            let leftovers: Vec<_> = std::fs::read_dir(&skills_dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(".import-"))
+                .collect();
+            assert!(leftovers.is_empty(), "staging 残留: {leftovers:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_skill_rejects_invalid_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 下划线不合规（^[a-zA-Z][a-zA-Z0-9-]*$）→ 400 INVALID_SKILL_ID
+        let (status, parsed) = call(app60(&root), "DELETE", "/api/v1/skills/bad_id", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SKILL_ID");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Invalid skillId: Skill id must use letters, numbers, and hyphens."
+        );
+    }
+
+    #[tokio::test]
+    async fn get_skills_reports_diagnostics_for_broken_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 项目 skills 目录下放一个坏 manifest → 进 diagnostics 而非失败
+        std::fs::create_dir_all(root.join("skills").join("broken")).unwrap();
+        std::fs::write(root.join("skills").join("broken").join("SKILL.md"), "bad").unwrap();
+
+        let (status, parsed) = call(app60(&root), "GET", "/api/v1/skills", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let diagnostics = parsed["diagnostics"].as_array().unwrap();
+        assert!(diagnostics
+            .iter()
+            .any(|d| d["path"].as_str().unwrap().contains(&root.join("skills").join("broken").join("SKILL.md").to_string_lossy().to_string())
+                && d["message"].as_str().unwrap().contains("frontmatter")),
+            "diagnostics: {diagnostics:?}");
+        // 坏 manifest 不进 skills 列表（home 目录可能带本机技能，故不断言总数）
+        let skills = parsed["skills"].as_array().unwrap();
+        assert!(!skills.iter().any(|s| s["id"] == "broken"));
+    }
+}
