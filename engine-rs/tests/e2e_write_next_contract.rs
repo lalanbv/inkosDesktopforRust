@@ -1987,3 +1987,271 @@ mod books50_e2e {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
+
+mod books51_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::{resync, rewrite, BooksRuntime};
+    use inkos_engine::state::manager::StateManager;
+
+    /// mock：修稿「修稿编辑」；pre 审计 1 warning、post（temp 0）3 critical
+    /// （变差——strict 会拒，rewrite 的 Always 门应放行）；settler「结算」；
+    /// validator「校验」PASS。
+    async fn mock51_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let temperature = body["temperature"].as_f64();
+        let content = if system.contains("修稿编辑") {
+            "=== FIXED_ISSUES ===\n重排了冲突顺序\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——多年屈辱，今日起一笔一笔讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
+        } else if system.contains("审") || system.contains("连续") {
+            if temperature == Some(0.0) {
+                r#"{"passed": false, "overallScore": 40, "summary": "重写后仍恶化。", "issues": [{"severity": "critical", "category": "设定", "description": "矛盾甲", "suggestion": "查证。"}, {"severity": "critical", "category": "设定", "description": "矛盾乙", "suggestion": "查证。"}, {"severity": "critical", "category": "节奏", "description": "矛盾丙", "suggestion": "压缩。"}]}"#.to_string()
+            } else {
+                r#"{"passed": false, "overallScore": 70, "summary": "有一处问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "略缓。", "suggestion": "压缩。"}]}"#.to_string()
+            }
+        } else if system.contains("结算") || system.contains("settler") {
+            WRITER_RESPONSE.to_string()
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock51() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock51_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt51(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// fixture_project + 第 1 章正文与索引。
+    fn fixture51(root: &std::path::Path) {
+        fixture_project(root);
+        let book = root.join("books").join("b1");
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        std::fs::write(
+            book.join("chapters").join("index.json"),
+            serde_json::to_string(&vec![serde_json::json!({
+                "number": 1, "title": "风起", "status": "ready-for-review",
+                "wordCount": 16, "auditIssues": [], "lengthWarnings": [],
+                "createdAt": now, "updatedAt": now,
+            })])
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn rewrite_applies_under_always_gate_and_saves_brief() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture51(&root);
+        let book = root.join("books").join("b1");
+        let llm = spawn_mock51().await;
+        let runtime = rt51(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/rewrite/:chapter", axum::routing::post(rewrite))
+            .with_state(runtime);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/books/b1/rewrite/1",
+            Some(r#"{ "brief": "保留事实，重做冲突顺序。" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["status"], "complete");
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["chapter"], 1);
+        // Always 门：post 审计 3 critical（变差）仍 applied（strict 下会拒绝）。
+        assert_eq!(parsed["result"]["applied"], true);
+        assert_eq!(parsed["result"]["status"], "audit-failed");
+        assert_eq!(parsed["result"]["revisionDiagnostics"], serde_json::Value::Null);
+
+        // brief 落盘 user-brief；章节改写。
+        assert_eq!(
+            std::fs::read_to_string(book.join("story").join("runtime").join("chapter-0001.user-brief.md")).unwrap(),
+            "保留事实，重做冲突顺序。\n"
+        );
+        let saved = std::fs::read_to_string(book.join("chapters").join("0001_风起.md")).unwrap();
+        assert!(saved.starts_with("# 第1章 风起"));
+        assert!(saved.contains("一笔一笔讨回"));
+
+        // SSE：rewrite:start → rewrite:complete。
+        assert_eq!(subscriber.recv().await.unwrap().event, "rewrite:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "rewrite:complete");
+
+        // 非法章节号 → 500 NaN 文案 + rewrite:error。
+        let runtime2 = rt51(&root, &llm);
+        let mut subscriber2 = runtime2.hub.subscribe();
+        let (status, parsed) = call(
+            axum::Router::new()
+                .route("/api/v1/books/:id/rewrite/:chapter", axum::routing::post(rewrite))
+                .with_state(runtime2),
+            "POST",
+            "/api/v1/books/b1/rewrite/abc",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Chapter NaN not found in index");
+        assert_eq!(subscriber2.recv().await.unwrap().event, "rewrite:error");
+    }
+
+    #[tokio::test]
+    async fn resync_rebuilds_truth_and_flips_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture51(&root);
+        let book = root.join("books").join("b1");
+        // 人工编辑后的正文（无真相同步）。
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动夺得玉符，踏入坊市。",
+        )
+        .unwrap();
+        let llm = spawn_mock51().await;
+        let runtime = rt51(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+            .with_state(runtime);
+
+        let (status, parsed) = call(app, "POST", "/api/v1/books/b1/resync/1", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // ChapterPipelineResult 的 resync 形状。
+        assert_eq!(parsed["chapterNumber"], 1);
+        assert_eq!(parsed["title"], "风起");
+        assert_eq!(parsed["wordCount"], 16);
+        assert_eq!(parsed["auditResult"]["passed"], true);
+        assert_eq!(parsed["auditResult"]["issues"], serde_json::json!([]));
+        assert_eq!(parsed["auditResult"]["summary"], "chapter truth/state resynced from edited body");
+        assert_eq!(parsed["revised"], false);
+        assert_eq!(parsed["status"], "ready-for-review");
+        // 真相被结算输出更新（WRITER_RESPONSE 的 RUNTIME_STATE_DELTA 驱动）。
+        assert!(book.join("story").join("current_state.md").exists());
+        // 快照落盘。
+        assert!(book.join("story").join("snapshots").join("1").join("current_state.md").exists());
+
+        // 错误分支：NaN / 非最新 / 空索引（逐字文案）。
+        let (status, parsed) = call(
+            axum::Router::new()
+                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .with_state(rt51(&root, &llm)),
+            "POST",
+            "/api/v1/books/b1/resync/abc",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Chapter NaN not found in \"b1\".");
+        let (status, parsed) = call(
+            axum::Router::new()
+                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .with_state(rt51(&root, &llm)),
+            "POST",
+            "/api/v1/books/b1/resync/9",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Chapter 9 not found in \"b1\".");
+    }
+
+    #[tokio::test]
+    async fn resync_rejects_non_latest_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture51(&root);
+        let book = root.join("books").join("b1");
+        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        let index_path = book.join("chapters").join("index.json");
+        let mut index: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        index.push(serde_json::json!({
+            "number": 2, "title": "云涌", "status": "ready-for-review",
+            "wordCount": 4, "auditIssues": [], "lengthWarnings": [],
+            "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z",
+        }));
+        std::fs::write(&index_path, serde_json::to_string(&index).unwrap()).unwrap();
+        let llm = spawn_mock51().await;
+
+        let (status, parsed) = call(
+            axum::Router::new()
+                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .with_state(rt51(&root, &llm)),
+            "POST",
+            "/api/v1/books/b1/resync/1",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            parsed["error"],
+            "Only the latest persisted chapter can be synced safely (latest is 2)."
+        );
+
+        // 空索引 → sync 版文案。
+        std::fs::remove_file(&index_path).unwrap();
+        std::fs::remove_file(book.join("chapters").join("0001_风起.md")).unwrap();
+        std::fs::remove_file(book.join("chapters").join("0002_云涌.md")).unwrap();
+        let (status, parsed) = call(
+            axum::Router::new()
+                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .with_state(rt51(&root, &llm)),
+            "POST",
+            "/api/v1/books/b1/resync/1",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Book \"b1\" has no persisted chapters to sync.");
+    }
+}

@@ -309,7 +309,7 @@ pub async fn revise(
         &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
     );
 
-    match run_revise_chain(&runtime, &book_id, chapter_number, &body).await {
+    match run_revise_chain(&runtime, &book_id, chapter_number, &body, runtime.revision_gate).await {
         Ok(result) => {
             runtime.hub.broadcast(
                 "revise:complete",
@@ -325,6 +325,96 @@ pub async fn revise(
                 &serde_json::json!({ "bookId": book_id, "error": message }),
             );
             (status, Json(serde_json::json!({ "error": message })))
+        }
+    }
+}
+
+// ── POST /api/v1/books/:id/rewrite/:chapter（51 号） ──────────────
+
+/// 定点重写：reviseDraft 的 rework 变体——`revisionGate=always`（修稿结果
+/// 恒采纳，不因变差拒绝），不回滚下游章（下游仅标 needs-revision 提示重审，
+/// 与 revise 链一致）。brief 有键则先落盘 user-brief（server.ts L5994）。
+pub async fn rewrite(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    body: Option<Json<serde_json::Value>>,
+) -> impl IntoResponse {
+    let parsed = body.map(|Json(value)| value).unwrap_or_else(|| serde_json::json!({}));
+    let broadcast_error = |runtime: &BooksRuntime, book_id: &str, message: String| {
+        runtime
+            .hub
+            .broadcast("rewrite:error", &serde_json::json!({ "bookId": book_id, "error": message }));
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": message })),
+        )
+    };
+    // TS parseInt：NaN → 链内 find 无命中；负数/0 → reviseDraft 前置守卫。
+    // rewrite 端点统一 500（server.ts L6019 catch 无 404 分支）。
+    let chapter_number = match chapter.parse::<i64>() {
+        Ok(number) if number >= 1 => number as u32,
+        Ok(_) => {
+            let message = format!("No chapters to revise for \"{book_id}\"");
+            return broadcast_error(&runtime, &book_id, message);
+        }
+        Err(_) => {
+            let message = "Chapter NaN not found in index".to_string();
+            return broadcast_error(&runtime, &book_id, message);
+        }
+    };
+    runtime.hub.broadcast(
+        "rewrite:start",
+        &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
+    );
+
+    // hasOwnProperty("brief") → saveChapterUserBrief(brief ?? "")：
+    // 字符串落盘（trim；空串删文件）、null 同空串、其他类型按 TS TypeError → 500。
+    if let Some(brief) = parsed.get("brief") {
+        let value = match brief {
+            serde_json::Value::String(s) => s.as_str(),
+            serde_json::Value::Null => "",
+            _ => {
+                let message = "brief must be a string".to_string();
+                return broadcast_error(&runtime, &book_id, message);
+            }
+        };
+        let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+        if let Err(error) =
+            crate::state::chapter_workspace::save_chapter_user_brief(&FsStateStore, &book_dir, chapter_number, value)
+                .await
+        {
+            return broadcast_error(&runtime, &book_id, error.to_string());
+        }
+    }
+
+    let chain_body = ReviseBody {
+        mode: Some("rework".to_string()),
+        brief: parsed.get("brief").and_then(serde_json::Value::as_str).map(str::to_string),
+    };
+    match run_revise_chain(&runtime, &book_id, chapter_number, &chain_body, RevisionGate::Always).await {
+        Ok(result) => {
+            runtime.hub.broadcast(
+                "rewrite:complete",
+                &serde_json::json!({
+                    "bookId": book_id,
+                    "chapterNumber": result.chapter_number,
+                    "wordCount": result.word_count,
+                    "status": result.status,
+                }),
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "complete",
+                    "bookId": book_id,
+                    "chapter": chapter_number,
+                    "result": result,
+                })),
+            )
+        }
+        Err(error) => {
+            let message = error.message().to_string();
+            broadcast_error(&runtime, &book_id, message)
         }
     }
 }
@@ -429,11 +519,13 @@ pub struct RevisionDiagnostics {
 
 /// /revise 审核环主链：pre merged-audit → 修稿 → post merged-audit（temp 0 +
 /// 修稿真相覆盖）→ restore → revisionGate 三档门控 → 落盘 + 索引回写。
+/// `gate` 由端点注入（revise 用 runtime 配置；rewrite 强制 Always）。
 async fn run_revise_chain(
     runtime: &BooksRuntime,
     book_id: &str,
     chapter_number: u32,
     body: &ReviseBody,
+    gate: RevisionGate,
 ) -> Result<ReviseChainResult, ReviseChainError> {
     let internal = |e: String| ReviseChainError::Internal(e);
     let book = runtime
@@ -599,8 +691,8 @@ async fn run_revise_chain(
     .map_err(internal)?;
     let effective_post = restore_actionable_audit_if_lost(&pre, &post);
 
-    // 三档门控（strict/lenient/always）。
-    if !runtime.revision_gate.should_apply(&pre, &effective_post) {
+    // 三档门控（strict/lenient/always；rewrite 端点注入 Always）。
+    if !gate.should_apply(&pre, &effective_post) {
         let remaining_issues: Vec<RemainingIssue> = effective_post
             .revision_blocking_issues
             .iter()
@@ -631,7 +723,7 @@ async fn run_revise_chain(
                 effective_post.ai_tell_count,
             ),
             Some(RevisionDiagnostics {
-                standard: runtime.revision_gate.standard(),
+                standard: gate.standard(),
                 before: gate_counts(&pre),
                 after: gate_counts(&effective_post),
                 remaining_issues,
@@ -1195,6 +1287,281 @@ async fn run_repair_state(
         } else {
             "state repaired but chapter still needs review".to_string()
         },
+    })
+}
+
+// ── POST /api/v1/books/:id/resync/:chapter（51 号）───────────────
+
+/// resync 审计结果（TS ChapterPipelineResult.auditResult 的 resync 形状：
+/// issues 恒空，summary 描述工件同步结果）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResyncAuditResult {
+    pub passed: bool,
+    pub issues: Vec<String>,
+    pub summary: String,
+}
+
+/// resync 结果（对齐 TS `ChapterPipelineResult` 的 resync 形状）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResyncResult {
+    pub chapter_number: u32,
+    pub title: String,
+    pub word_count: u32,
+    pub audit_result: ResyncAuditResult,
+    pub revised: bool,
+    pub status: &'static str,
+    pub length_warnings: Vec<String>,
+    pub length_telemetry: Option<crate::models::length_governance::LengthTelemetry>,
+    pub token_usage: Option<crate::models::chapter::TokenUsage>,
+}
+
+pub async fn resync(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    body: Option<Json<ReviseBody>>,
+) -> impl IntoResponse {
+    // TS parseInt NaN → findIndex 无命中 → 500 逐字文案；body（externalContext）
+    // 仅进 governed 输入（暂缓件），此处容忍解析。
+    let _ = body;
+    let chapter_number = match chapter.parse::<i64>() {
+        Ok(number) if number >= 1 => number as u32,
+        _ => {
+            let display = if chapter.parse::<i64>().is_ok() { chapter.clone() } else { "NaN".to_string() };
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Chapter {display} not found in \"{book_id}\".") })),
+            );
+        }
+    };
+    match run_resync_chain(&runtime, &book_id, chapter_number).await {
+        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+        Err(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": message })),
+        ),
+    }
+}
+
+/// 章节工件重建（TS `_resyncChapterArtifactsLocked`）：从已编辑正文重跑
+/// settle → validate →（失败重试）→ 章节与全量真相落盘 → 快照 → 索引回写。
+/// 与 repair-state 的差异：不限 state-degraded（任意状态可同步）、非降级
+/// 章直接置 ready-for-review、落盘走 saveChapter + saveNewTruthFiles 全量面。
+async fn run_resync_chain(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    chapter_number: u32,
+) -> Result<ResyncResult, String> {
+    let book = runtime
+        .state
+        .load_book_config(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let book_dir = runtime.state.book_dir(book_id);
+    let index = runtime
+        .state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if index.is_empty() {
+        return Err(format!("Book \"{book_id}\" has no persisted chapters to sync."));
+    }
+    let Some(target_meta) = index.iter().find(|m| m.number == chapter_number) else {
+        return Err(format!("Chapter {chapter_number} not found in \"{book_id}\"."));
+    };
+    let latest = index.iter().map(|m| m.number).max().unwrap_or(chapter_number);
+    if chapter_number != latest {
+        return Err(format!(
+            "Only the latest persisted chapter can be synced safely (latest is {latest})."
+        ));
+    }
+
+    // 章节正文（去标题行）+ 旧真相。
+    let chapters_dir = book_dir.join("chapters");
+    let padded = format!("{chapter_number:04}");
+    let mut matched: Option<String> = None;
+    if let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&padded) && name.ends_with(".md") {
+                matched = Some(name);
+                break;
+            }
+        }
+    }
+    let file_name = matched.ok_or_else(|| "Chapter not found".to_string())?;
+    let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
+        .await
+        .map_err(|e| e.to_string())?;
+    let content = strip_title_line(&raw);
+
+    let story_dir = book_dir.join("story");
+    let old_state = tokio::fs::read_to_string(story_dir.join("current_state.md"))
+        .await
+        .unwrap_or_default();
+    let old_hooks = tokio::fs::read_to_string(story_dir.join("pending_hooks.md"))
+        .await
+        .unwrap_or_default();
+
+    // 语言：book.language ?? genre.language。
+    let parsed_genre = crate::agents::rules_reader::read_genre_profile(
+        runtime.state.project_root(),
+        &book.genre,
+        &runtime.builtin_genres_dir,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let language = match book.language.as_deref() {
+        Some("en") => crate::utils::language::WritingLanguage::En,
+        Some(_) => crate::utils::language::WritingLanguage::Zh,
+        None if parsed_genre.profile.language == "en" => crate::utils::language::WritingLanguage::En,
+        None => crate::utils::language::WritingLanguage::Zh,
+    };
+
+    // settle → validate → 失败重试链（复用 repair-state 端口装配）。
+    let settler = RepairSettle {
+        router: runtime.router.clone(),
+        project_root: runtime.state.project_root().to_path_buf(),
+        builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+        chapter_number,
+    };
+    let validator = RoutedValidator { router: runtime.router.clone() };
+    let mut synced_output = settler
+        .settle(SettleRequest {
+            book: &book,
+            book_dir: &book_dir,
+            title: &target_meta.title,
+            content: &content,
+            allow_reapply: true,
+            chapter_intent: None,
+            context_package: None,
+            rule_stack: None,
+            validation_feedback: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut validation = validator
+        .validate(crate::pipeline::chapter_state_recovery::ValidateRequest {
+            content: &content,
+            chapter_number,
+            old_state: &old_state,
+            new_state: &synced_output.updated_state,
+            old_hooks: &old_hooks,
+            new_hooks: &synced_output.updated_hooks,
+            language,
+            authority_context: None,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    if !validation.passed {
+        let recovery = retry_settlement_after_validation_failure(SettlementRetryParams {
+            writer: &settler,
+            validator: &validator,
+            book: &book,
+            book_dir: &book_dir,
+            chapter_number,
+            title: &target_meta.title,
+            content: &content,
+            control: None,
+            old_state: &old_state,
+            old_hooks: &old_hooks,
+            original_validation: &validation,
+            language,
+            log_warn: &|zh, en| tracing::warn!(target: "resync", "{zh} / {en}"),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        match recovery {
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered { output, validation: recovered } => {
+                synced_output = *output;
+                validation = recovered;
+            }
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Degraded { issues } => {
+                return Err(issues
+                    .first()
+                    .map(|i| i.description.clone())
+                    .unwrap_or_else(|| format!("Chapter sync still failed for chapter {chapter_number}.")));
+            }
+        }
+    }
+    if !validation.passed {
+        return Err(format!("Chapter sync still failed for chapter {chapter_number}."));
+    }
+
+    // 章节与全量真相落盘（saveChapter + saveNewTruthFiles，对齐 TS 调用序）。
+    let writer_ctx: &'static crate::agents::writer::WriterCtx =
+        Box::leak(Box::new(crate::agents::writer::WriterCtx {
+            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
+            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
+            prompt_store: Box::leak(Box::new(FsStateStore)),
+            state_store: Box::leak(Box::new(FsStateStore)),
+        }));
+    crate::agents::writer::save_chapter(writer_ctx, &book_dir, &synced_output, parsed_genre.profile.numerical_system, language)
+        .await
+        .map_err(|e| e.to_string())?;
+    crate::agents::writer::save_new_truth_files(&book_dir, &synced_output, language)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = runtime.state.snapshot_state(book_id, chapter_number).await;
+
+    // 索引回写：state-degraded → 基础状态 + 剥注入问题；否则直接 ready-for-review。
+    let mut updated_index = index.clone();
+    let final_status: &'static str;
+    if let Some(slot) = updated_index.iter_mut().find(|m| m.number == chapter_number) {
+        if target_meta.status == crate::models::chapter::ChapterStatus::StateDegraded {
+            let base = crate::pipeline::chapter_state_recovery::resolve_state_degraded_base_status(target_meta);
+            let injected: std::collections::HashSet<String> =
+                crate::pipeline::chapter_state_recovery::parse_state_degraded_review_note(
+                    target_meta.review_note.as_deref(),
+                )
+                .map(|note| note.injected_issues.into_iter().collect())
+                .unwrap_or_default();
+            slot.status = if base == "audit-failed" {
+                crate::models::chapter::ChapterStatus::AuditFailed
+            } else {
+                crate::models::chapter::ChapterStatus::ReadyForReview
+            };
+            slot.audit_issues = target_meta
+                .audit_issues
+                .iter()
+                .filter(|issue| !injected.contains(*issue))
+                .cloned()
+                .collect();
+            slot.review_note = None;
+            final_status = if base == "audit-failed" { "audit-failed" } else { "ready-for-review" };
+        } else {
+            slot.status = crate::models::chapter::ChapterStatus::ReadyForReview;
+            final_status = "ready-for-review";
+        }
+        slot.updated_at = crate::utils::utc_time::utc_now_iso();
+    } else {
+        final_status = "ready-for-review";
+    }
+    runtime
+        .state
+        .save_chapter_index(book_id, &updated_index)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(ResyncResult {
+        chapter_number,
+        title: target_meta.title.clone(),
+        word_count: target_meta.word_count,
+        audit_result: ResyncAuditResult {
+            passed: final_status != "audit-failed",
+            issues: Vec::new(),
+            summary: if final_status == "audit-failed" {
+                "chapter truth/state resynced from edited body, but chapter still needs audit fixes".to_string()
+            } else {
+                "chapter truth/state resynced from edited body".to_string()
+            },
+        },
+        revised: false,
+        status: final_status,
+        length_warnings: target_meta.length_warnings.clone(),
+        length_telemetry: target_meta.length_telemetry.clone(),
+        token_usage: target_meta.token_usage.clone(),
     })
 }
 

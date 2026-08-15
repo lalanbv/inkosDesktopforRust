@@ -163,6 +163,8 @@ pub fn router_books(
         .route("/api/v1/books/:id/settle", post(books_routes::settle).with_state(books.clone()))
         .route("/api/v1/books/:id/draft", post(books_routes::draft).with_state(books.clone()))
         .route("/api/v1/books/:id/revise/:chapter", post(books_routes::revise).with_state(books.clone()))
+        .route("/api/v1/books/:id/rewrite/:chapter", post(books_routes::rewrite).with_state(books.clone()))
+        .route("/api/v1/books/:id/resync/:chapter", post(books_routes::resync).with_state(books.clone()))
         .route("/api/v1/books/:id/compose", post(books_routes::compose).with_state(books.clone()))
         .route("/api/v1/books/:id/consolidate", post(books_routes::consolidate_endpoint).with_state(books.clone()))
         .route("/api/v1/books/:id/repair-state/:chapter", post(books_routes::repair_state).with_state(books.clone()))
