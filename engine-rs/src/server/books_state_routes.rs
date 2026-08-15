@@ -1,6 +1,7 @@
 //! books 域状态端点批量挂载（48 号：列表/详情/更新/删除 + 章节读 +
 //! approve/reject + truth 文件 + chapter-review-mode；49 号：编辑事务域——
-//! 章节版本化 + PUT/DELETE 章节替换/删除 + workspace）。
+//! 章节版本化 + PUT/DELETE 章节替换/删除 + workspace；50 号：export-save
+//! 落盘变体 + workspace/inspiration LLM 灵感卡）。
 //!
 //! 契约来源 `packages/studio/src/api/server.ts`：
 //! - `GET /books`（L3016）：`{books: [{...bookConfig, chaptersWritten}]}`
@@ -31,6 +32,10 @@
 //!   回滚链）；错误 400 + SSE chapter:deleted
 //! - `PUT .../chapters/:num`（L3341）：chapter-replace（manual 来源归档）
 //!   → 索引 audit-failed 待复核；错误 500
+//! - `POST /books/:id/export-save`（L5667）：写 `books/{id}.{fmt}`；
+//!   `{ok, path, format, chapters}`；错误 500
+//! - `POST .../workspace/inspiration`（L3206）：LLM 灵感卡（0.9/600，默认
+//!   端点）；`{chapterNumber, card}`；非法参数 400 / 缺章 404
 
 use std::sync::OnceLock;
 
@@ -44,6 +49,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::interaction::edit_controller::execute_chapter_replace;
+use crate::interaction::export_artifact::{build_export_artifact, ExportFormat};
+use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::book::{BookStatus, ChapterReviewModeVal};
 use crate::server::books_routes::BooksRuntime;
 use crate::state::chapter_delete::{delete_latest_chapter, DeleteRequest};
@@ -586,6 +593,187 @@ pub async fn delete_chapter(
         }
         // TS DELETE 错误 → 400（与 PUT 的 500 不同）。
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
+    }
+}
+
+// ── POST /api/v1/books/:id/export-save（50 号） ───────────────────
+
+/// 落盘变体导出：写 `books/{id}.{fmt}`（TS 经交互运行时 export_book intent，
+/// 可观察行为 = writeExportArtifact + details 三字段映射；47 号已移植
+/// `build_export_artifact` 本体）。无效 JSON → 默认 txt/全量（TS `.catch`）。
+pub async fn export_save(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let parsed: Value = serde_json::from_slice(&body)
+        .unwrap_or_else(|_| json!({ "format": "txt", "approvedOnly": false }));
+    // TS `format ?? "txt"`：缺失/null → txt；非字符串垃圾输入按 txt（偏差备案）。
+    let fmt = parsed.get("format").and_then(Value::as_str).unwrap_or("txt").to_string();
+    let approved_only = parsed.get("approvedOnly").and_then(Value::as_bool).unwrap_or(false);
+    let output_path = runtime.state.book_dir(&book_id).join(format!("{book_id}.{fmt}"));
+    match build_export_artifact(
+        &runtime.state,
+        &book_id,
+        ExportFormat::parse(Some(&fmt)),
+        approved_only,
+        Some(&output_path),
+    )
+    .await
+    {
+        Ok(artifact) => {
+            // build_export_artifact 只构建内存负载（GET /export 直接回流）；
+            // export-save 的落盘语义在此完成（对齐 TS writeExportArtifact）。
+            if let Err(error) = tokio::fs::write(&artifact.output_path, &artifact.payload).await {
+                return internal_error(error);
+            }
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "path": artifact.output_path,
+                    "format": fmt,
+                    "chapters": artifact.chapters_exported,
+                })),
+            )
+        }
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error }))),
+    }
+}
+
+// ── POST /api/v1/books/:id/chapters/:num/workspace/inspiration（50 号） ──
+
+/// LLM 灵感卡：非变更性——只产出一张可选的重写方向卡片（temperature 0.9 /
+/// maxTokens 600，走默认端点）。系统与用户提示词逐字对齐 server.ts L3206。
+pub async fn post_workspace_inspiration(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+    let invalid = || {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "A valid chapter number and optional brief string are required" })),
+        )
+    };
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        return invalid();
+    };
+    // TS：brief 存在（含 null）且非 string → 400；缺失 → 可选。
+    if let Some(brief) = parsed.get("brief") {
+        if !brief.is_string() {
+            return invalid();
+        }
+    }
+    let number = number as u32;
+
+    let book_dir = runtime.state.book_dir(&book_id);
+    let chapters_dir = book_dir.join("chapters");
+    let padded = format!("{number:04}");
+    let mut matched: Option<String> = None;
+    if let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&padded) && name.ends_with(".md") {
+                matched = Some(name);
+                break;
+            }
+        }
+    }
+    let Some(file_name) = matched else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
+    };
+    let Ok(chapter_content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
+        return internal_error("chapter read failed");
+    };
+    let book = match runtime.state.load_book_config(&book_id).await {
+        Ok(book) => book,
+        Err(error) => return internal_error(error),
+    };
+    let store = FsStateStore;
+    let book_dir_str = book_dir.to_string_lossy().into_owned();
+    let persisted_brief = read_chapter_user_brief(&store, &book_dir_str, number)
+        .await
+        .unwrap_or_default();
+    let plan = read_chapter_plan_document(&store, &book_dir_str, number)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let is_en = book.language.as_deref() == Some("en");
+    let system = if is_en {
+        [
+            "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
+            "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
+            "Do not rewrite the chapter, modify canon, or claim any file was changed.",
+            "Return only a short, readable Markdown card.",
+        ]
+        .join("\n")
+    } else {
+        [
+            "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
+            "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
+            "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
+            "只返回简短、可读的 Markdown 灵感卡。",
+        ]
+        .join("\n")
+    };
+    let requested_brief = parsed.get("brief").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let brief = if requested_brief.is_empty() { persisted_brief.as_str() } else { requested_brief };
+    let mut user_parts: Vec<String> = Vec::with_capacity(5);
+    user_parts.push(if is_en {
+        format!("Book: {}", book.title)
+    } else {
+        format!("书名：{}", book.title)
+    });
+    user_parts.push(if is_en {
+        format!("Chapter: {number}")
+    } else {
+        format!("章节：第{number}章")
+    });
+    if !brief.is_empty() {
+        user_parts.push(if is_en {
+            format!("Current user brief:\n{brief}")
+        } else {
+            format!("当前用户提示：\n{brief}")
+        });
+    }
+    if !plan.is_empty() {
+        user_parts.push(if is_en {
+            format!("Generated chapter plan:\n{plan}")
+        } else {
+            format!("系统章节计划：\n{plan}")
+        });
+    }
+    user_parts.push(if is_en {
+        format!("Current chapter:\n{chapter_content}")
+    } else {
+        format!("当前章节：\n{chapter_content}")
+    });
+
+    match runtime
+        .router
+        .chat(
+            "inspiration",
+            vec![
+                LLMMessage { role: LLMRole::System, content: system },
+                LLMMessage { role: LLMRole::User, content: user_parts.join("\n\n") },
+            ],
+            0.9,
+            Some(600),
+        )
+        .await
+    {
+        Ok(outcome) => {
+            let card = outcome.content.trim().to_string();
+            if card.is_empty() {
+                return internal_error("The model returned an empty inspiration card");
+            }
+            (StatusCode::OK, Json(json!({ "chapterNumber": number, "card": card })))
+        }
+        Err(error) => internal_error(error),
     }
 }
 

@@ -211,6 +211,15 @@ pub fn router_books(
             "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
             post(books_state_routes::restore_chapter_version).with_state(books.clone()),
         )
+        // 50 号：交互运行时子集（export-save 落盘变体 + LLM 灵感卡）。
+        .route(
+            "/api/v1/books/:id/export-save",
+            post(books_state_routes::export_save).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/workspace/inspiration",
+            post(books_state_routes::post_workspace_inspiration).with_state(books.clone()),
+        )
         .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
         .route(
             "/api/v1/books/:id/truth/*file",

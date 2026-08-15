@@ -1788,3 +1788,202 @@ Deleting a middle chapter would require renumbering later chapters and replaying
         );
     }
 }
+
+mod books50_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::{export_save, post_workspace_inspiration};
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt50(root: &std::path::Path, llm_url: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm_url.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture50(root: &std::path::Path) {
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("runtime")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        std::fs::write(book.join("story").join("runtime").join("chapter-0002.plan.md"), "# plan").unwrap();
+        std::fs::write(book.join("story").join("runtime").join("chapter-0002.user-brief.md"), "保留证人原话。\n").unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32, status: &str| {
+            serde_json::json!({
+                "number": number, "title": format!("第{number}章"), "status": status,
+                "wordCount": 10, "auditIssues": [], "lengthWarnings": [],
+                "createdAt": now, "updatedAt": now,
+            })
+        };
+        std::fs::write(
+            book.join("chapters").join("index.json"),
+            serde_json::to_string(&vec![meta(1, "approved"), meta(2, "ready-for-review")]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn app50(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/books/:id/export-save", axum::routing::post(export_save))
+            .route(
+                "/api/v1/books/:id/chapters/:num/workspace/inspiration",
+                axum::routing::post(post_workspace_inspiration),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn export_save_writes_book_dir_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture50(&root);
+        let book = root.join("books").join("b1");
+
+        // md 全量：两章。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "md", "approvedOnly": false }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "md");
+        assert_eq!(parsed["chapters"], 2);
+        assert!(parsed["path"].as_str().unwrap().ends_with("b1/b1.md"));
+        let md = std::fs::read_to_string(book.join("b1.md")).unwrap();
+        assert!(md.contains("# 第1章 风起"));
+
+        // approvedOnly：仅 1 章 approved。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "txt", "approvedOnly": true }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["chapters"], 1);
+        assert!(std::fs::read_to_string(book.join("b1.txt")).unwrap().contains("林动睁开双眼"));
+
+        // 无效 JSON → 默认 txt/全量（TS .catch 语义）。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some("{oops"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["format"], "txt");
+        assert_eq!(parsed["chapters"], 2);
+    }
+
+    #[tokio::test]
+    async fn export_save_empty_selection_is_500() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture50(&root);
+        // 全部章未 approved → approvedOnly 空 → TS "No chapters to export."。
+        let index_path = root.join("books").join("b1").join("chapters").join("index.json");
+        let raw = std::fs::read_to_string(&index_path).unwrap().replace("approved", "drafting");
+        std::fs::write(&index_path, raw).unwrap();
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "md", "approvedOnly": true }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "No chapters to export.");
+    }
+
+    #[tokio::test]
+    async fn inspiration_calls_llm_and_returns_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture50(&root);
+        let (llm_url, _calls, _llm) = spawn_mock_llm().await;
+        let chapter_path = root.join("books").join("b1").join("chapters").join("0002_云涌.md");
+        let before = std::fs::read_to_string(&chapter_path).unwrap();
+
+        let (status, parsed) = call(
+            app50(rt50(&root, &llm_url)),
+            "POST",
+            "/api/v1/books/b1/chapters/2/workspace/inspiration",
+            Some(r#"{ "brief": "不要增加新角色。" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["chapterNumber"], 2);
+        // mock 未匹配到创作/审稿关键词 → 通用 "PASS" 卡片（非空即合法）。
+        assert!(!parsed["card"].as_str().unwrap().is_empty());
+        // 非变更性：章节文件原样。
+        assert_eq!(std::fs::read_to_string(&chapter_path).unwrap(), before);
+
+        // brief 非 string → 400；缺章 → 404；非法章节号 → 400。
+        let (status, parsed) = call(
+            app50(rt50(&root, &llm_url)),
+            "POST",
+            "/api/v1/books/b1/chapters/2/workspace/inspiration",
+            Some(r#"{ "brief": 123 }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "A valid chapter number and optional brief string are required");
+        let (status, _) = call(
+            app50(rt50(&root, &llm_url)),
+            "POST",
+            "/api/v1/books/b1/chapters/9/workspace/inspiration",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = call(
+            app50(rt50(&root, &llm_url)),
+            "POST",
+            "/api/v1/books/b1/chapters/abc/workspace/inspiration",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+}
