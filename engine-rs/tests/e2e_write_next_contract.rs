@@ -3663,3 +3663,315 @@ name: 林动
         assert_eq!(parsed["error"], "text is required");
     }
 }
+
+mod fanfic59_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::fanfic_routes::{fanfic_init, fanfic_refresh, imitation_init, spinoff_init};
+    use inkos_engine::state::manager::StateManager;
+
+    const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
+## 分岔点
+三年之约后的空白期。
+
+=== SECTION: volume_map ===
+### 第一卷（1-20章）新程
+独立冲突开启。
+
+=== SECTION: roles ===
+---ROLE---
+tier: major
+name: 萧炎
+---CONTENT---
+## 核心标签
+骄傲、重情。
+
+=== SECTION: book_rules ===
+## 同人模式
+- canon
+
+=== SECTION: pending_hooks ===
+| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H01 | 0 | 新谜 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷 | true |  | 空白期之谜 |
+"#;
+
+    const REVIEW_PASS: &str = "\
+=== DIMENSION: 1 ===
+分数：90
+意见：好。
+
+=== DIMENSION: 2 ===
+分数：88
+意见：好。
+
+=== DIMENSION: 3 ===
+分数：85
+意见：好。
+
+=== DIMENSION: 4 ===
+分数：86
+意见：好。
+
+=== DIMENSION: 5 ===
+分数：84
+意见：好。
+
+=== OVERALL ===
+总分：87
+通过：是
+总评：通过。";
+
+    const CANON_IMPORT: &str = "\
+=== SECTION: world_rules ===
+斗气大陆，等级森严。
+
+=== SECTION: character_profiles ===
+| 角色 | 身份 |
+|---|---|
+| 萧炎 | 主角 |
+
+=== SECTION: key_events ===
+| 序号 | 事件 |
+|---|---|
+| 1 | 三年之约 |
+
+=== SECTION: power_system ===
+斗气九段。
+
+=== SECTION: writing_style ===
+热血紧凑。";
+
+    const PARENT_CANON: &str = "# 正传正典\n\n## 世界规则\n斗气大陆。";
+
+    async fn mock59_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let content = if system.contains("同人创作素材分析师") {
+            CANON_IMPORT.to_string()
+        } else if system.contains("同人架构师") || system.contains("总架构师") || system.contains("网络小说架构师") {
+            ARCHITECT_OUTPUT.to_string()
+        } else if system.contains("资深小说编辑") {
+            REVIEW_PASS.to_string()
+        } else if system.contains("网络小说架构师") || system.contains("parent-canon") || system.contains("正传正典参照") {
+            PARENT_CANON.to_string()
+        } else if system.contains("文学风格分析专家") || system.contains("literary style analyst") {
+            "## 叙事声音\n热血紧凑。".to_string()
+        } else {
+            "# 正传正典\n\n## 世界规则\n斗气大陆。".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock59() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock59_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt59(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture59(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join("books").join("parent").join("chapters")).unwrap();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("books").join("parent").join("book.json"),
+            r#"{"id":"parent","title":"斗破正传","platform":"other","genre":"xianxia","status":"active","targetChapters":80,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+    }
+
+    fn app59(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/fanfic/init", axum::routing::post(fanfic_init))
+            .route("/api/v1/books/:id/fanfic/refresh", axum::routing::post(fanfic_refresh))
+            .route("/api/v1/spinoff/init", axum::routing::post(spinoff_init))
+            .route("/api/v1/imitation/init", axum::routing::post(imitation_init))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn wait_for(path: std::path::PathBuf) {
+        for _ in 0..150 {
+            if path.exists() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("path not ready in time: {path:?}");
+    }
+
+    #[tokio::test]
+    async fn fanfic_init_builds_canon_and_foundation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture59(&root);
+        let llm = spawn_mock59().await;
+        let runtime = rt59(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let source_text = "斗气大陆，萧炎三年之约。".repeat(60);
+        let (status, parsed) = call(
+            app59(runtime),
+            "POST",
+            "/api/v1/fanfic/init",
+            Some(&format!(r#"{{ "title": "斗破新程", "genre": "xianxia", "sourceText": "{source_text}", "mode": "canon", "sourceName": "斗破苍穹" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["bookId"], "斗破新程");
+
+        // fanfic_canon.md：五段提取 + meta。
+        let book = root.join("books").join("斗破新程");
+        let canon = std::fs::read_to_string(book.join("story").join("fanfic_canon.md")).unwrap();
+        assert!(canon.contains("# 同人正典（《斗破苍穹》）"));
+        assert!(canon.contains("斗气大陆，等级森严。"));
+        assert!(canon.contains("fanficMode: \"canon\""));
+        // 地基（fanfic 架构师输出）+ 角色卡 + 快照 0 + 空索引。
+        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+        assert!(book.join("story").join("roles").join("主要角色").join("萧炎.md").exists());
+        assert!(book.join("story").join("snapshots").join("0").exists() || book.join("story").join("snapshots").exists());
+        assert!(book.join("chapters").join("index.json").exists());
+        // 风格向导（sourceText ≥500）。
+        assert!(book.join("story").join("style_guide.md").exists());
+
+        assert_eq!(subscriber.recv().await.unwrap().event, "fanfic:start");
+        assert_eq!(subscriber.recv().await.unwrap().event, "fanfic:complete");
+
+        // 缺 sourceText → 400。
+        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/fanfic/init", Some(r#"{ "title": "x" }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "title and sourceText are required");
+
+        // refresh：重导 canon。
+        let (status, parsed) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/books/斗破新程/fanfic/refresh",
+            Some(r#"{ "sourceText": "新的原作素材补充。", "sourceName": "斗破苍穹" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        let (status, _) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/books/斗破新程/fanfic/refresh", Some(r#"{ "sourceText": "  " }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn spinoff_and_imitation_init_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture59(&root);
+        let llm = spawn_mock59().await;
+
+        // spinoff：后台创建（creating 响应 + spinoff:* + book:created）。
+        let runtime = rt59(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let (status, parsed) = call(
+            app59(runtime),
+            "POST",
+            "/api/v1/spinoff/init",
+            Some(r#"{ "title": "药老前传", "parentBookId": "parent", "direction": "药老的早年" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["status"], "creating");
+        assert_eq!(parsed["bookId"], "药老前传");
+
+        let book = root.join("books").join("药老前传");
+        wait_for(book.join("story").join("parent_canon.md")).await;
+        wait_for(book.join("chapters").join("index.json")).await;
+        // 正传正典 + 地基（original 模式 + spinoff 上下文）。
+        let parent_canon = std::fs::read_to_string(book.join("story").join("parent_canon.md")).unwrap();
+        assert!(parent_canon.contains("meta:"));
+        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+        assert_eq!(subscriber.recv().await.unwrap().event, "spinoff:start");
+        // spinoff:complete → book:created 顺序到达。
+        let mut events = Vec::new();
+        for _ in 0..2 {
+            events.push(subscriber.recv().await.unwrap().event);
+        }
+        assert!(events.contains(&"spinoff:complete".to_string()));
+        assert!(events.contains(&"book:created".to_string()));
+
+        // parent 缺失 → 404；缺 parentBookId → 400。
+        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/spinoff/init", Some(r#"{ "title": "x", "parentBookId": "ghost" }"#)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Parent book \"ghost\" not found");
+        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/spinoff/init", Some(r#"{ "title": "x" }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "title and parentBookId are required");
+
+        // imitation：initBook + 强制风格向导。
+        let runtime2 = rt59(&root, &llm);
+        let mut subscriber2 = runtime2.hub.subscribe();
+        let reference = "少年握紧了拳，抬起头来。".repeat(60);
+        let (status, parsed) = call(
+            app59(runtime2),
+            "POST",
+            "/api/v1/imitation/init",
+            Some(&format!(r#"{{ "title": "仿写书", "genre": "xianxia", "referenceText": "{reference}", "storyIdea": "废柴逆袭，一雪前耻" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["bookId"], "仿写书");
+        let imbook = root.join("books").join("仿写书");
+        wait_for(imbook.join("story").join("style_guide.md")).await;
+        wait_for(imbook.join("story").join("outline").join("story_frame.md")).await;
+        // storyIdea 作为外部指令 → brief.md。
+        let brief = std::fs::read_to_string(imbook.join("story").join("brief.md")).unwrap();
+        assert!(brief.contains("废柴逆袭"));
+        assert_eq!(subscriber2.recv().await.unwrap().event, "imitation:start");
+        // 缺 storyIdea → 400。
+        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/imitation/init", Some(r#"{ "title": "y", "referenceText": "z" }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "title, referenceText and storyIdea are required");
+    }
+}

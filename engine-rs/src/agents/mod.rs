@@ -23,6 +23,7 @@ pub mod ai_tells;
 pub mod architect;
 pub mod composer;
 pub mod foundation_prompts;
+pub mod fanfic_canon_importer;
 pub mod foundation_reviewer;
 pub mod consolidator;
 pub mod chapter_analyzer;

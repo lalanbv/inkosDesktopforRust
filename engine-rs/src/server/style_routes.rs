@@ -308,8 +308,8 @@ async fn read_parent_chapter_sample(chapters_dir: &std::path::Path) -> String {
     chunks.join("\n\n---\n\n")
 }
 
-/// 正典导入链（TS `importCanon`）。返回写入的 canon 全文。
-async fn import_canon(
+/// 正典导入链（TS `importCanon`）。返回写入的 canon 全文（59 号 spinoff 复用）。
+pub async fn import_canon(
     state: &StateManager,
     router: &AgentRouter,
     builtin_genres_dir: &std::path::Path,

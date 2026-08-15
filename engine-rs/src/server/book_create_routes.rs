@@ -144,8 +144,37 @@ fn build_studio_book_config(
     }
 }
 
+/// 状态机写入（59 号 fanfic/spinoff/imitation 端点用）。
+pub async fn set_create_status(book_id: &str, status: BookCreateStatus) {
+    create_status_map().lock().await.insert(book_id.to_string(), status);
+}
+
+/// 状态机清除（创建成功）。
+pub async fn set_create_status_removed(book_id: &str) {
+    create_status_map().lock().await.remove(book_id);
+}
+
+/// id 派生（59 号 fanfic 端点复用）。
+pub fn derive_book_id_from_title_pub(title: &str) -> String {
+    derive_book_id_from_title(title)
+}
+
+/// studio 配置构造（59 号 spinoff/imitation 端点复用）。
+#[allow(clippy::too_many_arguments)]
+pub fn build_studio_book_config_pub(
+    title: &str,
+    genre: &str,
+    language: Option<&str>,
+    platform: Option<&str>,
+    target_chapters: Option<u32>,
+    chapter_word_count: Option<u32>,
+    now: &str,
+) -> crate::models::book::BookConfig {
+    build_studio_book_config(title, genre, language, platform, target_chapters, chapter_word_count, now)
+}
+
 /// 对齐 TS `completeBookExists`：book.json + story/story_bible.md 双存在。
-async fn complete_book_exists(book_dir: &Path) -> bool {
+pub async fn complete_book_exists(book_dir: &Path) -> bool {
     tokio::fs::try_exists(book_dir.join("book.json")).await.unwrap_or(false)
         && tokio::fs::try_exists(book_dir.join("story").join("story_bible.md")).await.unwrap_or(false)
 }

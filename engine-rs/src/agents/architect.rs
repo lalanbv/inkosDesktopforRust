@@ -250,6 +250,59 @@ pub async fn generate_foundation_from_import(
     parse_sections_with_repair(chat, &response.content, language).await
 }
 
+/// 同人基础设定生成（temp 0.7）。对齐 TS `generateFanficFoundation`
+/// （提示词逐字；reviewFeedbackBlock 语言用 `book.language ?? "zh"`）。
+pub async fn generate_fanfic_foundation(
+    ctx: &ArchitectCtx<'_>,
+    chat: &dyn ArchitectChat,
+    book: &BookConfig,
+    fanfic_canon: &str,
+    fanfic_mode: crate::models::book::FanficMode,
+    review_feedback: Option<&str>,
+) -> Result<ArchitectOutput, ArchitectFlowError> {
+    let parsed = read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir)
+        .await
+        .map_err(|e| ArchitectFlowError::Io(e.to_string()))?;
+    let genre_body = &parsed.body;
+    let language = if book.language.as_deref().unwrap_or("zh") == "en" {
+        WritingLanguage::En
+    } else {
+        WritingLanguage::Zh
+    };
+    let review_feedback_block = build_review_feedback_block(review_feedback, language);
+
+    let mode = match fanfic_mode {
+        crate::models::book::FanficMode::Canon => "canon",
+        crate::models::book::FanficMode::Au => "au",
+        crate::models::book::FanficMode::Ooc => "ooc",
+        crate::models::book::FanficMode::Cp => "cp",
+    };
+    let mode_instruction = match fanfic_mode {
+        crate::models::book::FanficMode::Canon => "剧情发生在原作空白期或未详述的角度。不可改变原作已确立的事实。",
+        crate::models::book::FanficMode::Au => "标注AU设定与原作的关键分歧点，分歧后的世界线自由发展。保留角色核心性格。",
+        crate::models::book::FanficMode::Ooc => "标注角色性格偏离的起点和驱动事件。偏离必须有逻辑驱动。",
+        crate::models::book::FanficMode::Cp => "以配对角色的关系线为主线规划卷纲。每卷必须有关系推进节点。",
+    };
+    let system_prompt = format!(
+        "你是专业同人架构师。基于原作正典为同人生成散文密度的基础设定。\n\n## 同人模式：{mode}\n{mode_instruction}\n\n## 新时空要求\n必须为这本同人设计原创叙事空间，不是复述原作剧情：\n1. 明确分岔点——story_frame 必须标注本作从原作的哪个节点分岔\n2. 独立核心冲突——volume_map 的核心冲突必须是原创的\n3. 5章内引爆\n4. 场景新鲜度 ≥ 50%\n{review_feedback_block}\n\n## 原作正典\n{fanfic_canon}\n\n## 题材底色\n{genre_body}\n\n## 输出契约\n严格按合并后的 5 段 === SECTION: === 块输出：story_frame / volume_map / roles / book_rules / pending_hooks。**不要输出 rhythm_principles 或 current_state**：节奏原则合并进 volume_map 尾段；角色初始状态写在 roles.当前现状，初始钩子写在 pending_hooks startChapter=0 行；环境/时代锚（仅当同人的原作/本作锚定真实年份时）织进 story_frame.世界观底色，其他情况省略。\n\n- 主要角色必须来自原作正典\n- 可添加原创配角，标注\"原创\"\n- book_rules 用普通 Markdown 规则卡；必须写清同人模式：{mode}\n- 长篇散文规则写进 story_frame.世界观底色，book_rules 只保留主角、题材锁、同人模式、禁止事项等可执行规则\n- 主角弧线只写在 roles/主要角色/<主角>.md，不在 story_frame 重复\n- 所有 outline 必须是散文密度"
+    );
+    let user_message = format!(
+        "请为标题为\"{}\"的{mode}模式同人小说生成基础设定。目标{}章，每章{}字。",
+        book.title, book.target_chapters, book.chapter_word_count
+    );
+    let response = chat
+        .chat(
+            vec![
+                LLMMessage { role: LLMRole::System, content: system_prompt },
+                LLMMessage { role: LLMRole::User, content: user_message },
+            ],
+            0.7,
+        )
+        .await
+        .map_err(ArchitectFlowError::Chat)?;
+    parse_sections_with_repair(chat, &response.content, language).await
+}
+
 /// 导入模式。对齐 TS `importMode: "continuation" | "series"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImportMode {

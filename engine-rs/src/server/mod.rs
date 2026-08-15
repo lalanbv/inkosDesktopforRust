@@ -12,6 +12,7 @@
 pub mod audit_route;
 pub mod books_routes;
 pub mod book_create_routes;
+pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
@@ -322,6 +323,14 @@ pub fn router_books(
             "/api/v1/books/:id/import/chapters",
             post(book_create_routes::import_chapters_endpoint).with_state(books.clone()),
         )
+        // 59 号：同人/番外/仿写创建域。
+        .route("/api/v1/fanfic/init", post(fanfic_routes::fanfic_init).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id/fanfic/refresh",
+            post(fanfic_routes::fanfic_refresh).with_state(books.clone()),
+        )
+        .route("/api/v1/spinoff/init", post(fanfic_routes::spinoff_init).with_state(books.clone()))
+        .route("/api/v1/imitation/init", post(fanfic_routes::imitation_init).with_state(books.clone()))
         .route("/api/v1/style/analyze", post(style_routes::style_analyze))
         .route(
             "/api/v1/books/:id/style/import",

@@ -177,9 +177,11 @@ macro_rules! impl_simple_chat {
 
 impl_simple_chat!(WriterChat);
 use crate::agents::architect::ArchitectChat;
+use crate::agents::fanfic_canon_importer::FanficCanonImporterChat;
 use crate::agents::foundation_reviewer::FoundationReviewerChat;
 impl_simple_chat!(ArchitectChat);
 impl_simple_chat!(FoundationReviewerChat);
+impl_simple_chat!(FanficCanonImporterChat);
 impl_simple_chat!(PlannerChat);
 impl_simple_chat!(ReviserChat);
 impl_simple_chat!(LengthNormalizerChat);
