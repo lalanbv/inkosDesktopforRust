@@ -55,12 +55,16 @@ pub trait LoopChat: Send + Sync {
     async fn chat(&self, messages: &[LLMMessage], tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>), String>;
 }
 
-/// agent 循环：system + user 起始，工具调用逐轮执行回填，直至模型给出
-/// 无工具的最终文本或达到轮次上限。abort 句柄每轮前轮询。
+/// agent 循环：system + 历史回放 + user 起始，工具调用逐轮执行回填，直至
+/// 模型给出无工具的最终文本或达到轮次上限。abort 句柄每轮前轮询。
+/// `initial_history`（68 号）：transcript 回放的 summary/对话/boundary 消息，
+/// 插在 system 与本轮 user 之间（pi-agent initialState.messages 的等价位置）。
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     chat: &dyn LoopChat,
     root: &std::path::Path,
     system_prompt: &str,
+    initial_history: Vec<LLMMessage>,
     instruction: &str,
     tools: Option<&Value>,
     abort: Option<&AbortHandle>,
@@ -78,8 +82,9 @@ pub async fn run_agent_loop(
 
     let mut messages = vec![
         LLMMessage { role: LLMRole::System, content: system_prompt.to_string(), tool_calls: None, tool_call_id: None },
-        LLMMessage { role: LLMRole::User, content: instruction.to_string(), tool_calls: None, tool_call_id: None },
     ];
+    messages.extend(initial_history);
+    messages.push(LLMMessage { role: LLMRole::User, content: instruction.to_string(), tool_calls: None, tool_call_id: None });
     let mut executions: Vec<LoopToolExecution> = Vec::new();
 
     for _round in 0..MAX_ROUNDS {
@@ -194,7 +199,7 @@ mod tests {
             ],
             calls: Mutex::new(vec![]),
         };
-        let outcome = run_agent_loop(&chat, dir.path(), "sys", "读一下", Some(&crate::interaction::project_tools::tools_payload()), None, &NoopEvents)
+        let outcome = run_agent_loop(&chat, dir.path(), "sys", Vec::new(), "读一下", Some(&crate::interaction::project_tools::tools_payload()), None, &NoopEvents)
             .await
             .unwrap();
         assert_eq!(outcome.response_text, "文件内容是 hello agent。");
@@ -209,7 +214,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chat = ScriptedChat { rounds: vec![("x".into(), vec![])], calls: Mutex::new(vec![]) };
         let abort: AbortHandle = Arc::new(Mutex::new(true));
-        let outcome = run_agent_loop(&chat, dir.path(), "sys", "hi", None, Some(&abort), &NoopEvents)
+        let outcome = run_agent_loop(&chat, dir.path(), "sys", Vec::new(), "hi", None, Some(&abort), &NoopEvents)
             .await
             .unwrap();
         assert!(outcome.aborted);
@@ -227,7 +232,7 @@ mod tests {
             ],
             calls: Mutex::new(vec![]),
         };
-        let outcome = run_agent_loop(&chat, dir.path(), "sys", "hi", None, None, &NoopEvents)
+        let outcome = run_agent_loop(&chat, dir.path(), "sys", Vec::new(), "hi", None, None, &NoopEvents)
             .await
             .unwrap();
         assert_eq!(outcome.tool_executions[0].status, "error");

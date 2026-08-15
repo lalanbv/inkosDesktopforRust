@@ -233,6 +233,10 @@ where
         return Vec::new();
     };
     let _ = file.write_all(payload.as_bytes()).await;
+    // tokio::fs::File 的写经内部缓冲：write_all 返回 ≠ 数据已到 OS（drop 时
+    // 才异步刷出）——同进程内紧随的读取会读到旧内容（68 号在 E2E 并发下实测
+    // 捕获：追加"成功"但紧随读取缺行）。显式 flush 把缓冲推到 OS 后返回。
+    let _ = file.flush().await;
     built
 }
 

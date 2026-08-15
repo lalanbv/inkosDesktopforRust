@@ -310,15 +310,45 @@ pub async fn abort_session(
     body: Bytes,
 ) -> impl IntoResponse {
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
-    // scope=chat 只停聊天轮；默认 all（64 号两者均无运行执行体 → aborted=false）
-    let _scope = if payload.get("scope") == Some(&json!("chat")) {
+    // scope=chat 只中止当前聊天轮（agent loop），不动后台生产任务的控制器；
+    // 默认 all 维持旧行为：聊天轮和生产任务一起停（TS L4788 逐字）。
+    let scope = if payload.get("scope") == Some(&json!("chat")) {
         "chat"
     } else {
         "all"
     };
-    let aborted = false;
-    runtime
-        .hub
-        .broadcast("agent:aborted", &json!({ "sessionId": session_id, "aborted": aborted }));
+    let mut task_aborted = false;
+    if scope == "all" {
+        if let Some(handle) =
+            crate::server::agent_production::find_running_task_controller(
+                runtime.state.project_root(),
+                &session_id,
+            )
+            .await
+        {
+            *handle.lock().unwrap() = true;
+            task_aborted = true;
+        }
+    }
+    let chat_aborted = abort_agent_session(&session_id);
+    let aborted = chat_aborted || task_aborted;
+    runtime.hub.broadcast(
+        "agent:aborted",
+        &json!({ "sessionId": session_id, "aborted": aborted }),
+    );
     (StatusCode::OK, Json(json!({ "ok": true, "aborted": aborted })))
+}
+
+/// `abortAgentSession`：置位该会话聊天轮的 loop 轮询句柄（68 号起与 loop
+/// 共享同一 Arc）；返回是否存在活跃条目。
+fn abort_agent_session(session_id: &str) -> bool {
+    let registry = crate::server::agent_route::running_agent_sessions();
+    let guard = registry.lock().unwrap();
+    match guard.get(session_id) {
+        Some(handle) => {
+            *handle.lock().unwrap().abort_flag.lock().unwrap() = true;
+            true
+        }
+        None => false,
+    }
 }

@@ -6630,3 +6630,360 @@ mod agent67_e2e {
         );
     }
 }
+
+mod agent68_e2e {
+    //! 68 号：abort 端点接确认任务注册表（scope 语义 + controller 链）+
+    //! restoreAgentMessages 历史回放（summary + dialogue + boundary 注入）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::interaction::session::SessionKind;
+    use inkos_engine::interaction::session_transcript::{transcript_path, TranscriptEvent};
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_production::{
+        active_confirmed_tasks, reserved_production_sessions,
+    };
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt68(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app68(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId/abort",
+                axum::routing::post(session_routes::abort_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 捕获完整 messages 的聊天 mock。
+    async fn mock_capture_messages() -> (String, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let messages_log = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let log = messages_log.clone();
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let log = log.clone();
+                    async move {
+                        log.lock().unwrap().push(body["messages"].clone());
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "收到。" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), messages_log)
+    }
+
+    const SID_ABORT_ALL: &str = "1782989000000-ab1";
+    const SID_ABORT_CHAT: &str = "1782989000002-ab2";
+    const SID_ABORT_NONE: &str = "1782989000003-ab3";
+    const SID_REPLAY: &str = "1782989000001-replay";
+
+    fn write_transcript(root: &std::path::Path, session_id: &str, events: Vec<TranscriptEvent>) {
+        use std::fmt::Write as _;
+        std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
+        let mut payload = String::new();
+        for event in events {
+            let line = serde_json::to_string(&event).unwrap();
+            writeln!(payload, "{line}").unwrap();
+        }
+        std::fs::write(transcript_path(root, session_id), payload).unwrap();
+    }
+
+    fn msg_event(seq: u64, request_id: &str, role: &str, session_id: &str, message: serde_json::Value) -> TranscriptEvent {
+        TranscriptEvent::Message {
+            version: 1,
+            session_id: session_id.into(),
+            request_id: request_id.into(),
+            uuid: format!("u{seq}"),
+            parent_uuid: None,
+            seq,
+            timestamp: 1782989000000 + seq,
+            role: role.into(),
+            pi_turn_index: None,
+            tool_call_id: None,
+            source_tool_assistant_uuid: None,
+            legacy_display: None,
+            message,
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_all_stops_running_production_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let runtime = rt68(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app68(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_ABORT_ALL}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 插桩：确认任务运行中（reserved + active 注册表，内存优先路径）。
+        let task_flag = Arc::new(Mutex::new(false));
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .insert(SID_ABORT_ALL.to_string(), "direct-write_next-t68".to_string());
+        active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .insert("direct-write_next-t68".to_string(), task_flag.clone());
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            &format!("/api/v1/sessions/{SID_ABORT_ALL}/abort"),
+            Some("{}"),
+        )
+        .await;
+        active_confirmed_tasks().lock().unwrap().remove("direct-write_next-t68");
+        reserved_production_sessions().lock().unwrap().remove(SID_ABORT_ALL);
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["aborted"], true);
+        assert!(*task_flag.lock().unwrap(), "任务 abort 句柄应已置位");
+
+        let event = subscriber.recv().await.unwrap();
+        assert_eq!(event.event, "agent:aborted");
+        assert!(event.data.contains("\"aborted\":true"), "data: {}", event.data);
+    }
+
+    #[tokio::test]
+    async fn abort_scope_chat_spares_task_and_stops_chat_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let app = app68(rt68(&root, "http://127.0.0.1:9"));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_ABORT_CHAT}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 确认任务运行中 + scope=chat → 任务不动。
+        let task_flag = Arc::new(Mutex::new(false));
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .insert(SID_ABORT_CHAT.to_string(), "direct-write_next-t68b".to_string());
+        active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .insert("direct-write_next-t68b".to_string(), task_flag.clone());
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/sessions/{SID_ABORT_CHAT}/abort"),
+            Some(r#"{ "scope": "chat" }"#),
+        )
+        .await;
+        assert_eq!(parsed["aborted"], false, "body: {parsed}");
+        assert!(!*task_flag.lock().unwrap(), "scope=chat 不应置位任务句柄");
+
+        // 聊天轮注册表条目 + scope=chat → aborted=true 且 loop 轮询句柄置位
+        //（68 号连通：注册表与 loop 共享同一 Arc）。
+        let chat_flag = Arc::new(Mutex::new(false));
+        agent_route::running_agent_sessions().lock().unwrap().insert(
+            SID_ABORT_CHAT.to_string(),
+            Arc::new(Mutex::new(agent_route::AgentSessionHandle {
+                abort_flag: chat_flag.clone(),
+            })),
+        );
+        let (_status, parsed) = call(
+            app,
+            "POST",
+            &format!("/api/v1/sessions/{SID_ABORT_CHAT}/abort"),
+            Some(r#"{ "scope": "chat" }"#),
+        )
+        .await;
+        active_confirmed_tasks().lock().unwrap().remove("direct-write_next-t68b");
+        reserved_production_sessions().lock().unwrap().remove(SID_ABORT_CHAT);
+        agent_route::running_agent_sessions().lock().unwrap().remove(SID_ABORT_CHAT);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["aborted"], true, "body: {parsed}");
+        assert!(*chat_flag.lock().unwrap(), "聊天轮 loop 句柄应已置位");
+        assert!(!*task_flag.lock().unwrap(), "任务句柄仍不应置位");
+    }
+
+    #[tokio::test]
+    async fn abort_without_activity_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let app = app68(rt68(&root, "http://127.0.0.1:9"));
+        let (status, parsed) = call(
+            app,
+            "POST",
+            &format!("/api/v1/sessions/{SID_ABORT_NONE}/abort"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["aborted"], false);
+    }
+
+    #[tokio::test]
+    async fn history_replay_injects_summary_dialogue_and_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, messages_log) = mock_capture_messages().await;
+
+        // transcript：工具轮（含 toolCall/toolResult）+ 对话轮。
+        write_transcript(
+            &root,
+            SID_REPLAY,
+            vec![
+                TranscriptEvent::RequestStarted {
+                    version: 1,
+                    session_id: SID_REPLAY.into(),
+                    seq: 1,
+                    timestamp: 1782989000000,
+                    request_id: "r1".into(),
+                    session_kind: Some(SessionKind::Chat),
+                    input: "看看设定文件".into(),
+                },
+                msg_event(2, "r1", "user", SID_REPLAY, serde_json::json!({
+                    "role": "user", "content": "看看设定文件",
+                })),
+                msg_event(3, "r1", "assistant", SID_REPLAY, serde_json::json!({
+                    "role": "assistant",
+                    "content": [{ "type": "toolCall", "id": "tc1", "name": "read", "arguments": { "path": "note.md" } }],
+                })),
+                msg_event(4, "r1", "toolResult", SID_REPLAY, serde_json::json!({
+                    "role": "toolResult",
+                    "toolCallId": "tc1",
+                    "toolName": "read",
+                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                })),
+                TranscriptEvent::RequestCommitted {
+                    version: 1,
+                    session_id: SID_REPLAY.into(),
+                    seq: 5,
+                    timestamp: 1782989000004,
+                    request_id: "r1".into(),
+                },
+                TranscriptEvent::RequestStarted {
+                    version: 1,
+                    session_id: SID_REPLAY.into(),
+                    seq: 6,
+                    timestamp: 1782989000005,
+                    request_id: "r2".into(),
+                    session_kind: Some(SessionKind::Chat),
+                    input: "主角叫什么？".into(),
+                },
+                msg_event(7, "r2", "user", SID_REPLAY, serde_json::json!({
+                    "role": "user", "content": "主角叫什么？",
+                })),
+                msg_event(8, "r2", "assistant", SID_REPLAY, serde_json::json!({
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                })),
+                TranscriptEvent::RequestCommitted {
+                    version: 1,
+                    session_id: SID_REPLAY.into(),
+                    seq: 9,
+                    timestamp: 1782989000008,
+                    request_id: "r2".into(),
+                },
+            ],
+        );
+
+        let app = app68(rt68(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_REPLAY}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"他还有什么特点？","sessionId":"{SID_REPLAY}","actionSource":"free-text"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+
+        // 注入序：system（agent 提示词）→ summary（历史状态摘要）→ 历史
+        // user/assistant 对话 → boundary（已完成的历史上下文）→ 本轮指令。
+        let log = messages_log.lock().unwrap();
+        let messages = log.last().expect("应捕获 LLM messages").as_array().unwrap();
+        let roles: Vec<&str> = messages.iter().map(|m| m["role"].as_str().unwrap_or("")).collect();
+        assert_eq!(roles.len(), 6, "messages: {messages:?}");
+        assert_eq!(roles, ["system", "system", "user", "assistant", "system", "user"]);
+        assert!(
+            messages[1]["content"].as_str().unwrap().starts_with("[历史状态摘要]"),
+            "summary: {messages:?}"
+        );
+        assert!(
+            messages[1]["content"].as_str().unwrap().contains("- read completed — 主角名叫林动。"),
+            "summary: {messages:?}"
+        );
+        assert_eq!(messages[2]["content"], "主角叫什么？");
+        assert_eq!(messages[3]["content"], "主角名叫林动。");
+        assert!(
+            messages[4]["content"].as_str().unwrap().starts_with("[已完成的历史上下文]"),
+            "boundary: {messages:?}"
+        );
+        assert_eq!(messages[5]["content"], "他还有什么特点？");
+    }
+}

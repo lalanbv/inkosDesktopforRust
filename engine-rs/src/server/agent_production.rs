@@ -625,6 +625,31 @@ pub async fn load_reconciled_task_snapshot(
     Some(task)
 }
 
+/// `findRunningTaskController`（TS L2872）：内存优先（预留表 sessionId →
+/// taskId → 句柄——controller 注册与首次快照落盘之间有多个 await 间隙，
+/// 磁盘快照会漏掉刚启动的任务），磁盘快照只作回退。
+pub async fn find_running_task_controller(
+    root: &Path,
+    session_id: &str,
+) -> Option<AbortHandle> {
+    let reserved_task_id = reserved_production_sessions()
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .cloned();
+    if let Some(task_id) = reserved_task_id {
+        if let Some(handle) = active_confirmed_tasks().lock().unwrap().get(&task_id) {
+            return Some(handle.clone());
+        }
+    }
+    let task = load_reconciled_task_snapshot(root, session_id).await?;
+    active_confirmed_tasks()
+        .lock()
+        .unwrap()
+        .get(&task.execution.id)
+        .cloned()
+}
+
 /// `findActiveRunningTask`：对账后 running 且本进程持有句柄 → Some。
 pub async fn find_active_running_task(root: &Path, session_id: &str) -> Option<StudioTaskSnapshot> {
     let task = load_reconciled_task_snapshot(root, session_id).await?;

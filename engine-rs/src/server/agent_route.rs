@@ -29,10 +29,10 @@ use crate::server::agent_production::{
 use crate::server::books_routes::BooksRuntime;
 use crate::server::session_routes::{normalize_api_book_id, normalize_studio_session_kind};
 
-/// 会话聊天轮的运行标记（abort 置位；直通聊天不支持中途截断，标记供
-/// 后续工具面轮询——66 号接入真中止）。
+/// 会话聊天轮的运行标记（abort 端点置位；与 agent loop 轮询的是**同一个**
+/// Arc<Mutex<bool>>——68 号连通，置位即在下一轮检查点截断）。
 pub struct AgentSessionHandle {
-    pub abort_requested: bool,
+    pub abort_flag: crate::interaction::agent_loop::AbortHandle,
 }
 
 /// abort 注册表（sessionId → handle；64 号 abort 端点的消费面）。
@@ -420,12 +420,12 @@ pub async fn post_agent(
     }
 
     // ── agent 循环主路径（66 号：多轮 tool-use + SSE 增量 + abort 截断） ──
-    let handle = Arc::new(Mutex::new(AgentSessionHandle { abort_requested: false }));
+    let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
+    let handle = Arc::new(Mutex::new(AgentSessionHandle { abort_flag: abort_flag.clone() }));
     running_agent_sessions()
         .lock()
         .unwrap()
         .insert(session_id.to_string(), handle.clone());
-    let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
 
     let mut system_prompt = format!(
         "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
@@ -504,6 +504,21 @@ pub async fn post_agent(
         }
     }
 
+    // ── 历史回放（68 号）：summary + 对话 + boundary 插在 system 与本轮指令间 ──
+    let restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+        root,
+        session_id,
+        Some(session_kind.as_str()),
+    )
+    .await;
+    let restored = crate::interaction::session_restore::append_restored_history_boundary(
+        restored,
+        match agent_production::current_project_language(root).await {
+            agent_production::StudioLang::En => "en",
+            agent_production::StudioLang::Zh => "zh",
+        },
+    );
+
     let loop_chat = RouterLoopChat { router: &runtime.router };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     let tools = crate::interaction::project_tools::tools_payload();
@@ -511,6 +526,7 @@ pub async fn post_agent(
         &loop_chat,
         root,
         &system_prompt,
+        restored,
         instruction,
         Some(&tools),
         Some(&abort_flag),
