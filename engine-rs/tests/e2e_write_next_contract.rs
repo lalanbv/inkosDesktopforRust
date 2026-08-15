@@ -1402,3 +1402,389 @@ mod books48_e2e {
         assert_eq!(subscriber.recv().await.unwrap().event, "book:deleted");
     }
 }
+
+mod books49_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::{
+        chapter_workspace, delete_chapter, get_chapter_version, put_chapter, put_workspace_brief,
+        read_chapter, restore_chapter_version,
+    };
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt49(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    const VERSION_ID: &str = "1782864000000_manual_11111111-1111-4111-8111-111111111111";
+
+    /// fixture48 同款 + 快照（snapshots/1）+ 第 2 章 runtime 工件 + 归档版本。
+    fn fixture49(root: &std::path::Path) {
+        let book = root.join("books").join("b1");
+        let story = book.join("story");
+        std::fs::create_dir_all(book.join("chapters").join(".versions").join("0002")).unwrap();
+        std::fs::create_dir_all(story.join("runtime")).unwrap();
+        std::fs::create_dir_all(story.join("snapshots").join("1")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        std::fs::write(story.join("current_state.md"), "状态v2").unwrap();
+        std::fs::write(story.join("pending_hooks.md"), "| 伏笔 | 状态 |").unwrap();
+        std::fs::write(story.join("snapshots").join("1").join("current_state.md"), "状态v1").unwrap();
+        std::fs::write(story.join("snapshots").join("1").join("pending_hooks.md"), "钩子v1").unwrap();
+        std::fs::write(story.join("runtime").join("chapter-0002.plan.md"), "# plan").unwrap();
+        std::fs::write(story.join("runtime").join("chapter-0002.user-brief.md"), "  保留证人的原话。  \n").unwrap();
+        std::fs::write(
+            book.join("chapters").join(".versions").join("0002").join(format!("{VERSION_ID}.md")),
+            "# 第2章 旧稿\n\n旧正文。",
+        )
+        .unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32| {
+            serde_json::json!({
+                "number": number, "title": format!("第{number}章"), "status": "ready-for-review",
+                "wordCount": 10, "auditIssues": [], "lengthWarnings": [],
+                "createdAt": now, "updatedAt": now,
+            })
+        };
+        std::fs::write(
+            book.join("chapters").join("index.json"),
+            serde_json::to_string(&vec![meta(1), meta(2)]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn app49(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/books/:id/chapters/:num",
+                axum::routing::get(read_chapter).put(put_chapter).delete(delete_chapter),
+            )
+            .route("/api/v1/books/:id/chapters/:num/workspace", axum::routing::get(chapter_workspace))
+            .route(
+                "/api/v1/books/:id/chapters/:num/workspace/brief",
+                axum::routing::put(put_workspace_brief),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/versions/:versionId",
+                axum::routing::get(get_chapter_version),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
+                axum::routing::post(restore_chapter_version),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn workspace_exposes_brief_plan_versions_and_can_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+
+        let (status, parsed) =
+            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/2/workspace", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["chapterNumber"], 2);
+        assert_eq!(parsed["brief"], "保留证人的原话。");
+        assert!(parsed["plan"].as_str().unwrap().contains("# plan"));
+        assert_eq!(parsed["canDelete"], true);
+        let versions = parsed["versions"].as_array().unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0]["id"], VERSION_ID);
+        assert_eq!(versions[0]["source"], "manual");
+        assert_eq!(versions[0]["chapterNumber"], 2);
+
+        // 非最新章 canDelete=false；非法章节号 400。
+        let (_, parsed) =
+            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/1/workspace", None).await;
+        assert_eq!(parsed["canDelete"], false);
+        let (status, parsed) =
+            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/abc/workspace", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Invalid chapter number");
+
+        // 版本读：命中 200 / 非法 id 404 / 缺失文件 404。
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "GET",
+            &format!("/api/v1/books/b1/chapters/2/versions/{VERSION_ID}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(parsed["content"].as_str().unwrap().contains("旧正文"));
+        let (status, _) =
+            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/2/versions/bad-id", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = call(
+            app49(rt49(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/2/versions/1782864000000_restore_11111111-1111-4111-8111-111111111111",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn brief_put_persists_trims_and_deletes_on_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let brief_path = root.join("books").join("b1").join("story").join("runtime").join("chapter-0002.user-brief.md");
+
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2/workspace/brief",
+            Some(r#"{ "brief": "  让证人先撒谎。  " }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["brief"], "让证人先撒谎。");
+        assert_eq!(std::fs::read_to_string(&brief_path).unwrap(), "让证人先撒谎。\n");
+
+        // 非 string / 无效 JSON / 非法章节号 → 400。
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2/workspace/brief",
+            Some(r#"{ "brief": 123 }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "A valid chapter number and brief string are required");
+        let (status, _) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2/workspace/brief",
+            Some("{oops"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // 空白 brief → 文件删除。
+        let (status, _) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2/workspace/brief",
+            Some(r#"{ "brief": "   " }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!brief_path.exists());
+    }
+
+    #[tokio::test]
+    async fn put_chapter_replaces_archives_and_marks_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let book = root.join("books").join("b1");
+
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2",
+            Some(r##"{ "content": "# 第2章 新稿\n\n人工修改后的正文。" }"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["chapterNumber"], 2);
+        assert_eq!(parsed["result"]["transactionType"], "chapter-replace");
+        assert_eq!(parsed["result"]["reviewRequired"], true);
+        assert_eq!(
+            parsed["result"]["summary"],
+            "Replaced chapter 2 and marked it for review."
+        );
+        let touched = parsed["result"]["touchedFiles"].as_array().unwrap();
+        assert!(touched.iter().any(|f| f == "chapters/0002_云涌.md"));
+        assert!(touched.iter().any(|f| f == "story/runtime/chapter-0002.plan.md"));
+        assert!(touched.iter().any(|f| f == "chapters/index.json"));
+
+        // 正文覆写 + 尾换行；旧稿归档 _manual_。
+        assert_eq!(
+            std::fs::read_to_string(book.join("chapters").join("0002_云涌.md")).unwrap(),
+            "# 第2章 新稿\n\n人工修改后的正文。\n"
+        );
+        let versions_dir = book.join("chapters").join(".versions").join("0002");
+        let names: Vec<String> = std::fs::read_dir(&versions_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2);
+        let manual = names.iter().find(|n| n.contains("_manual_")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(versions_dir.join(manual)).unwrap(),
+            "# 第2章 云涌\n\n正文二。"
+        );
+        // runtime：plan 清除、user-brief 保留。
+        assert!(!book.join("story").join("runtime").join("chapter-0002.plan.md").exists());
+        assert!(book.join("story").join("runtime").join("chapter-0002.user-brief.md").exists());
+        // 索引：audit-failed + [warning]。
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index[1]["status"], "audit-failed");
+        assert_eq!(
+            index[1]["auditIssues"][0],
+            "[warning] Manual chapter replacement requires review before continuation."
+        );
+
+        // 空正文 → 500 逐字文案；非法章节号 → 500 Chapter NaN not found.
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/2",
+            Some(r#"{ "content": "  " }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Chapter replacement requires fullText.");
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapters/abc",
+            Some(r#"{ "content": "x" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Chapter NaN not found.");
+    }
+
+    #[tokio::test]
+    async fn restore_version_replaces_content_and_broadcasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let book = root.join("books").join("b1");
+        let runtime = rt49(&root);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let (status, parsed) = call(
+            app49(runtime),
+            "POST",
+            &format!("/api/v1/books/b1/chapters/2/versions/{VERSION_ID}/restore"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["versionId"], VERSION_ID);
+        assert_eq!(parsed["result"]["transactionType"], "chapter-replace");
+        assert_eq!(
+            std::fs::read_to_string(book.join("chapters").join("0002_云涌.md")).unwrap(),
+            "# 第2章 旧稿\n\n旧正文。\n"
+        );
+        assert_eq!(subscriber.recv().await.unwrap().event, "chapter:restored");
+
+        // 缺失版本 → 500（restore 走 catch，非 404）。
+        let (status, _) = call(
+            app49(rt49(&root)),
+            "POST",
+            "/api/v1/books/b1/chapters/2/versions/1782864000000_restore_11111111-1111-4111-8111-111111111111/restore",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn delete_latest_trashes_rolls_back_and_broadcasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let book = root.join("books").join("b1");
+        let runtime = rt49(&root);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let (status, parsed) =
+            call(app49(runtime), "DELETE", "/api/v1/books/b1/chapters/2", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["deletedChapter"], 2);
+        assert_eq!(parsed["title"], "第2章");
+        assert_eq!(parsed["rolledBackTo"], 1);
+        assert_eq!(parsed["discarded"], serde_json::json!([2]));
+        assert_eq!(parsed["trashedFiles"], serde_json::json!(["chapters/.trash/0002_云涌.md"]));
+        assert!(book.join("chapters").join(".trash").join("0002_云涌.md").exists());
+        assert!(!book.join("chapters").join("0002_云涌.md").exists());
+        // 快照恢复 + 索引回写 + runtime 工件清除。
+        assert_eq!(
+            std::fs::read_to_string(book.join("story").join("current_state.md")).unwrap(),
+            "状态v1"
+        );
+        assert!(!book.join("story").join("runtime").join("chapter-0002.plan.md").exists());
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index.as_array().unwrap().len(), 1);
+        assert_eq!(index[0]["number"], 1);
+        assert_eq!(subscriber.recv().await.unwrap().event, "chapter:deleted");
+
+        // 此后删第 1 章：rollbackTarget=0 无快照 → 400 且文件不动。
+        let (status, parsed) =
+            call(app49(rt49(&root)), "DELETE", "/api/v1/books/b1/chapters/1", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            parsed["error"],
+            "Cannot delete chapter 1: the state snapshot for chapter 0 is missing \
+(story/snapshots/0/current_state.md). Nothing was changed."
+        );
+        assert!(book.join("chapters").join("0001_风起.md").exists());
+
+        // 非最新章 → 400（重装 fixture 后请求中间章）。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let (status, parsed) =
+            call(app49(rt49(&root)), "DELETE", "/api/v1/books/b1/chapters/1", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            parsed["error"],
+            "Only the latest chapter (2) can be deleted, but chapter 1 was requested. \
+Deleting a middle chapter would require renumbering later chapters and replaying state."
+        );
+    }
+}

@@ -28,7 +28,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -181,7 +181,10 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/chapters/:num",
-            get(books_state_routes::read_chapter).with_state(books.clone()),
+            get(books_state_routes::read_chapter)
+                .put(books_state_routes::put_chapter)
+                .delete(books_state_routes::delete_chapter)
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/chapters/:num/approve",
@@ -190,6 +193,23 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/chapters/:num/reject",
             post(books_state_routes::reject_chapter).with_state(books.clone()),
+        )
+        // 49 号：编辑事务域（workspace / brief / 版本读恢复）。
+        .route(
+            "/api/v1/books/:id/chapters/:num/workspace",
+            get(books_state_routes::chapter_workspace).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/workspace/brief",
+            put(books_state_routes::put_workspace_brief).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/versions/:versionId",
+            get(books_state_routes::get_chapter_version).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
+            post(books_state_routes::restore_chapter_version).with_state(books.clone()),
         )
         .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
         .route(

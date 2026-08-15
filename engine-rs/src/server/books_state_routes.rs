@@ -1,5 +1,6 @@
 //! books 域状态端点批量挂载（48 号：列表/详情/更新/删除 + 章节读 +
-//! approve/reject + truth 文件 + chapter-review-mode）。
+//! approve/reject + truth 文件 + chapter-review-mode；49 号：编辑事务域——
+//! 章节版本化 + PUT/DELETE 章节替换/删除 + workspace）。
 //!
 //! 契约来源 `packages/studio/src/api/server.ts`：
 //! - `GET /books`（L3016）：`{books: [{...bookConfig, chaptersWritten}]}`
@@ -18,9 +19,22 @@
 //! - `GET/PUT /books/:id/chapter-review-mode`（L5817/L5837）：book.json
 //!   writing.reviewMode 读写（raw JSON 保未知字段；inkos.json 缺失按 TS
 //!   怪癖 404）
+//! - `GET .../chapters/:num/workspace`（L3164）：`{chapterNumber, brief,
+//!   plan, versions, canDelete}`（非法章节号 400）
+//! - `PUT .../chapters/:num/workspace/brief`（L3191）：brief 落盘（空串删
+//!   文件）；400 文案逐字
+//! - `GET .../chapters/:num/versions/:versionId`（L3276）：版本正文；任何
+//!   错误 404（含非法 id）
+//! - `POST .../versions/:versionId/restore`（L3291）：版本恢复经
+//!   chapter-replace 事务 + SSE chapter:restored；错误 500
+//! - `DELETE .../chapters/:num`（L3324）：deleteLatestChapter（trash 保留 +
+//!   回滚链）；错误 400 + SSE chapter:deleted
+//! - `PUT .../chapters/:num`（L3341）：chapter-replace（manual 来源归档）
+//!   → 索引 audit-failed 待复核；错误 500
 
 use std::sync::OnceLock;
 
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -29,10 +43,17 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::interaction::edit_controller::execute_chapter_replace;
 use crate::models::book::{BookStatus, ChapterReviewModeVal};
 use crate::server::books_routes::BooksRuntime;
+use crate::state::chapter_delete::{delete_latest_chapter, DeleteRequest};
+use crate::state::chapter_workspace::{
+    list_chapter_versions, read_chapter_plan_document, read_chapter_user_brief,
+    read_chapter_version, save_chapter_user_brief, ChapterVersionSource,
+};
+use crate::state::store::FsStateStore;
 use crate::utils::book_id::is_safe_book_id;
-use crate::utils::utc_time::utc_now_iso;
+use crate::utils::utc_time::{utc_now_iso, utc_now_millis};
 
 // ── GET /api/v1/books ────────────────────────────────────────────
 
@@ -313,6 +334,258 @@ pub async fn reject_chapter(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
         ),
+    }
+}
+
+// ── 编辑事务域（49 号） ──────────────────────────────────────────
+
+/// 对齐 JS `parseInt(raw, 10)`：去前导空白 → 可选符号 → ASCII 数字前缀；
+/// 无数字 → None（NaN 语义）。
+fn ts_parse_int(raw: &str) -> Option<i64> {
+    let mut digits = String::new();
+    for c in raw.trim_start().chars() {
+        let is_sign = digits.is_empty() && (c == '+' || c == '-');
+        if is_sign || c.is_ascii_digit() {
+            digits.push(c);
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() || digits == "+" || digits == "-" {
+        return None;
+    }
+    digits.parse::<i64>().ok()
+}
+
+fn internal_error(message: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": message.to_string() })))
+}
+
+/// 章节 JSON 正文解析：无效 JSON / 缺失或非字符串字段 → None。
+/// （TS 分别抛异常/TypeError → 500；此处统一 500，文案偏差备案。）
+fn json_string_field(bytes: &Bytes, field: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_slice(bytes).ok()?;
+    parsed.get(field).and_then(Value::as_str).map(str::to_string)
+}
+
+// ── GET /api/v1/books/:id/chapters/:num/workspace ────────────────
+
+pub async fn chapter_workspace(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+) -> impl IntoResponse {
+    // TS parseInt + Number.isInteger + num >= 1 → 400。
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid chapter number" })),
+        );
+    };
+    let number = number as u32;
+    let store = FsStateStore;
+    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    let Ok(brief) = read_chapter_user_brief(&store, &book_dir, number).await else {
+        return internal_error("workspace brief read failed");
+    };
+    let Ok(plan) = read_chapter_plan_document(&store, &book_dir, number).await else {
+        return internal_error("workspace plan read failed");
+    };
+    let Ok(versions) = list_chapter_versions(&store, &book_dir, number).await else {
+        return internal_error("workspace versions read failed");
+    };
+    let index = match runtime.state.load_chapter_index(&book_id).await {
+        Ok(index) => index,
+        Err(error) => return internal_error(error),
+    };
+    let latest = index.iter().map(|m| m.number).max().unwrap_or(0);
+    let versions: Vec<Value> = versions
+        .iter()
+        .map(|v| {
+            json!({
+                "id": v.id,
+                "chapterNumber": v.chapter_number,
+                "source": v.source.as_id_segment(),
+                "createdAt": v.created_at,
+                "characterCount": v.character_count,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "chapterNumber": number,
+            "brief": brief,
+            "plan": plan,
+            "versions": versions,
+            "canDelete": number == latest,
+        })),
+    )
+}
+
+// ── PUT /api/v1/books/:id/chapters/:num/workspace/brief ──────────
+
+pub async fn put_workspace_brief(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    // TS c.req.json().catch(() => ({}))：无效 JSON 视同缺 brief → 400。
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "A valid chapter number and brief string are required" })),
+        );
+    };
+    let Some(brief) = parsed.get("brief").and_then(Value::as_str) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "A valid chapter number and brief string are required" })),
+        );
+    };
+    let number = number as u32;
+    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    match save_chapter_user_brief(&FsStateStore, &book_dir, number, brief).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "chapterNumber": number, "brief": brief.trim() })),
+        ),
+        Err(error) => internal_error(error),
+    }
+}
+
+// ── GET /api/v1/books/:id/chapters/:num/versions/:versionId ──────
+
+pub async fn get_chapter_version(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter, version_id)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    // TS 任何错误（非法章节号/非法版本 id/缺文件）→ 404。
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        let display = ts_parse_int(&chapter).map_or("NaN".to_string(), |n| n.to_string());
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Invalid chapter number: {display}") })),
+        );
+    };
+    let number = number as u32;
+    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await {
+        Ok(content) => (
+            StatusCode::OK,
+            Json(json!({
+                "chapterNumber": number,
+                "versionId": version_id,
+                "content": content,
+            })),
+        ),
+        Err(error) => (StatusCode::NOT_FOUND, Json(json!({ "error": error.to_string() }))),
+    }
+}
+
+// ── POST /api/v1/books/:id/chapters/:num/versions/:versionId/restore ──
+
+pub async fn restore_chapter_version(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter, version_id)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    // TS readChapterVersion 的 assert 错误落在外层 catch → 500。
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        let display = ts_parse_int(&chapter).map_or("NaN".to_string(), |n| n.to_string());
+        return internal_error(format!("Invalid chapter number: {display}"));
+    };
+    let number = number as u32;
+    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    let full_text = match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await {
+        Ok(content) => content,
+        Err(error) => return internal_error(error),
+    };
+    match execute_chapter_replace(
+        &runtime.state,
+        &book_id,
+        number,
+        &full_text,
+        ChapterVersionSource::Restore,
+        utc_now_millis(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(result) => {
+            runtime
+                .hub
+                .broadcast("chapter:restored", &json!({ "bookId": book_id, "chapterNumber": number }));
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "chapterNumber": number,
+                    "versionId": version_id,
+                    "result": result,
+                })),
+            )
+        }
+        Err(error) => internal_error(error),
+    }
+}
+
+// ── PUT /api/v1/books/:id/chapters/:num ──────────────────────────
+
+pub async fn put_chapter(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    body: Bytes,
+) -> impl IntoResponse {
+    // TS parseInt 失败/负数 → findChapterPath padStart 后必然无匹配 → 该文案。
+    let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
+        let display = ts_parse_int(&chapter).map_or("NaN".to_string(), |n| n.to_string());
+        return internal_error(format!("Chapter {display} not found."));
+    };
+    let Some(content) = json_string_field(&body, "content") else {
+        return internal_error("content must be a string");
+    };
+    match execute_chapter_replace(
+        &runtime.state,
+        &book_id,
+        number as u32,
+        &content,
+        ChapterVersionSource::Manual,
+        utc_now_millis(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "chapterNumber": number, "result": result })),
+        ),
+        Err(error) => internal_error(error),
+    }
+}
+
+// ── DELETE /api/v1/books/:id/chapters/:num ───────────────────────
+
+pub async fn delete_chapter(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let request = match ts_parse_int(&chapter) {
+        Some(number) => DeleteRequest::Chapter(number),
+        None => DeleteRequest::NaN,
+    };
+    match delete_latest_chapter(&runtime.state, &book_id, request).await {
+        Ok(result) => {
+            runtime.hub.broadcast(
+                "chapter:deleted",
+                &json!({ "bookId": book_id, "chapterNumber": result.deleted_chapter }),
+            );
+            // TS `{ ok: true, ...result }`。
+            let mut body = serde_json::to_value(&result).unwrap_or_else(|_| json!({}));
+            body["ok"] = json!(true);
+            (StatusCode::OK, Json(body))
+        }
+        // TS DELETE 错误 → 400（与 PUT 的 500 不同）。
+        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
     }
 }
 

@@ -8,6 +8,14 @@ pub fn utc_now_iso() -> String {
     unix_to_utc_iso(now.as_secs() as i64, now.subsec_millis())
 }
 
+/// 当前 Unix 毫秒时间戳（13 位，对齐 JS `Date.now()`）。
+pub fn utc_now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Unix 秒 + 毫秒 → UTC ISO 时间戳。
 pub fn unix_to_utc_iso(secs: i64, millis: u32) -> String {
     let (year, month, day, hour, minute, second) = civil_from_unix(secs);

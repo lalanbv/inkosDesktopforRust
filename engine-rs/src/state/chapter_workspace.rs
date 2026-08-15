@@ -25,8 +25,8 @@ pub enum ChapterVersionSource {
 }
 
 impl ChapterVersionSource {
-    /// 序列化为 id 片段（对齐 TS 版本 id 的 source 段）。
-    fn as_id_segment(self) -> &'static str {
+    /// 序列化为 id 片段（对齐 TS 版本 id 的 source 段；供端点序列化）。
+    pub fn as_id_segment(self) -> &'static str {
         match self {
             ChapterVersionSource::Manual => "manual",
             ChapterVersionSource::Agent => "agent",

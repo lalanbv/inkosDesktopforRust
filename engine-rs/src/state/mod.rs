@@ -8,6 +8,7 @@
 //! state-reducer（依赖 hook-governance + hook-lifecycle + validator）/ state-projections /
 //! manager / state-bootstrap（持久化编排）/ runtime-state-store（依赖本模块）。
 
+pub mod chapter_delete;
 pub mod chapter_word_sync;
 pub mod chapter_workspace;
 pub mod manager;
