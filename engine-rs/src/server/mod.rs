@@ -222,6 +222,19 @@ pub fn router_books(
             "/api/v1/books/:id/chapters/:num/workspace/inspiration",
             post(books_state_routes::post_workspace_inspiration).with_state(books.clone()),
         )
+        // 52 号：检测域（全章扫描 / 历史统计 / 单章检测，纯规则无 LLM）。
+        .route(
+            "/api/v1/books/:id/detect-all",
+            post(books_state_routes::detect_all).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/detect/stats",
+            get(books_state_routes::detect_stats).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/detect/:chapter",
+            post(books_state_routes::detect_chapter).with_state(books.clone()),
+        )
         .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
         .route(
             "/api/v1/books/:id/truth/*file",

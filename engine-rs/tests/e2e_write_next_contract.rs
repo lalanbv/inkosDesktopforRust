@@ -2255,3 +2255,156 @@ mod books51_e2e {
         assert_eq!(parsed["error"], "Book \"b1\" has no persisted chapters to sync.");
     }
 }
+
+mod books52_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::{detect_all, detect_chapter, detect_stats};
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt52(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture52(root: &std::path::Path) {
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        // 三段等长文本触发段落等长 AI-tell（47 号同款手法）。
+        let para = "林动睁开双眼，灵气顺着经脉游走，多年屈辱涌上心头。";
+        let uniform = format!("{para}\n\n{para}\n\n{para}");
+        std::fs::write(book.join("chapters").join("0001_风起.md"), format!("# 第1章\n\n{uniform}")).unwrap();
+        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章\n\n正文二。").unwrap();
+        std::fs::write(book.join("chapters").join("0010_远行.md"), "# 第10章\n\n正文十。").unwrap();
+        // 非 .md / 非 4 位前缀 → 排除。
+        std::fs::write(book.join("chapters").join("index.json"), "[]").unwrap();
+        std::fs::write(book.join("chapters").join("notes.md"), "无前缀").unwrap();
+        std::fs::write(book.join("chapters").join("12_bad.md"), "两位前缀").unwrap();
+    }
+
+    fn app52(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/books/:id/detect-all", axum::routing::post(detect_all))
+            .route("/api/v1/books/:id/detect/stats", axum::routing::get(detect_stats))
+            .route("/api/v1/books/:id/detect/:chapter", axum::routing::post(detect_chapter))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder().method(method).uri(uri).body(axum::body::Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn detect_all_scans_chapters_in_sorted_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture52(&root);
+
+        let (status, parsed) = call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect-all").await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["bookId"], "b1");
+        let results = parsed["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3);
+        // 字典序：0001 / 0002 / 0010（chapterNumber parseInt(前 4 位)）。
+        let numbers: Vec<u32> = results.iter().map(|r| r["chapterNumber"].as_u64().unwrap() as u32).collect();
+        assert_eq!(numbers, vec![1, 2, 10]);
+        assert_eq!(results[0]["filename"], "0001_风起.md");
+        // 等长三段 → 段落等长维度触发（issues 非空，severity warning/info）。
+        let issues = results[0]["issues"].as_array().unwrap();
+        assert!(!issues.is_empty(), "body: {parsed}");
+        assert!(issues.iter().all(|i| i["severity"] == "warning" || i["severity"] == "info"));
+        assert!(issues[0]["category"].as_str().is_some_and(|c| !c.is_empty()));
+        // 常规短文本 → 无 issue。
+        assert_eq!(results[1]["issues"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn detect_chapter_single_and_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture52(&root);
+
+        let (status, parsed) = call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect/1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["chapterNumber"], 1);
+        assert!(!parsed["issues"].as_array().unwrap().is_empty());
+
+        let (status, parsed) = call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect/9").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Chapter not found");
+        // NaN → padded "NaN" 无匹配 → 404。
+        let (status, _) = call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect/abc").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn detect_stats_aggregates_history_and_defaults_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture52(&root);
+        let story = root.join("books").join("b1").join("story");
+
+        // 缺失 → 空统计。
+        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["totalDetections"], 0);
+        assert_eq!(parsed["chapterBreakdown"].as_array().unwrap().len(), 0);
+
+        // 两章五条：第 2 章首现 → breakdown 顺序 [2, 1]。
+        std::fs::write(
+            story.join("detection_history.json"),
+            r#"[
+              {"chapterNumber":2,"timestamp":"t1","provider":"gpt","score":0.9,"action":"detect","attempt":0},
+              {"chapterNumber":1,"timestamp":"t2","provider":"gpt","score":0.8,"action":"detect","attempt":0},
+              {"chapterNumber":2,"timestamp":"t3","provider":"gpt","score":0.5,"action":"rewrite","attempt":1},
+              {"chapterNumber":2,"timestamp":"t4","provider":"gpt","score":0.4,"action":"rewrite","attempt":2},
+              {"chapterNumber":1,"timestamp":"t5","provider":"gpt","score":0.75,"action":"rewrite","attempt":1}
+            ]"#,
+        )
+        .unwrap();
+        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["totalDetections"], 2);
+        assert_eq!(parsed["totalRewrites"], 3);
+        assert_eq!(parsed["avgOriginalScore"], 0.85);
+        assert_eq!(parsed["avgFinalScore"], 0.575);
+        assert_eq!(parsed["avgScoreReduction"], 0.275);
+        assert_eq!(parsed["passRate"], 1.0);
+        let breakdown = parsed["chapterBreakdown"].as_array().unwrap();
+        assert_eq!(breakdown.len(), 2);
+        assert_eq!(breakdown[0]["chapterNumber"], 2);
+        assert_eq!(breakdown[0]["originalScore"], 0.9);
+        assert_eq!(breakdown[0]["finalScore"], 0.4);
+        assert_eq!(breakdown[0]["rewriteAttempts"], 2);
+        assert_eq!(breakdown[1]["chapterNumber"], 1);
+
+        // 损坏 JSON → 空统计（TS catch 语义）。
+        std::fs::write(story.join("detection_history.json"), "{oops").unwrap();
+        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["totalDetections"], 0);
+    }
+}

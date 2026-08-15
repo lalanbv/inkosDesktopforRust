@@ -48,6 +48,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::agents::ai_tells::{analyze_ai_tells, AITellIssue, AITellSeverity};
 use crate::interaction::edit_controller::execute_chapter_replace;
 use crate::interaction::export_artifact::{build_export_artifact, ExportFormat};
 use crate::llm::provider::{LLMMessage, LLMRole};
@@ -60,6 +61,8 @@ use crate::state::chapter_workspace::{
 };
 use crate::state::store::FsStateStore;
 use crate::utils::book_id::is_safe_book_id;
+use crate::utils::detection_insights::{analyze_detection_insights, load_detection_history};
+use crate::utils::language::WritingLanguage;
 use crate::utils::utc_time::{utc_now_iso, utc_now_millis};
 
 // ── GET /api/v1/books ────────────────────────────────────────────
@@ -775,6 +778,129 @@ pub async fn post_workspace_inspiration(
         }
         Err(error) => internal_error(error),
     }
+}
+
+// ── 检测域（52 号）：detect-all / detect/stats / detect/:chapter ──
+
+/// `AITellIssue` → JSON（severity/category/description/suggestion，对齐 TS 序列化）。
+fn ai_tell_issues_json(issues: &[AITellIssue]) -> Vec<Value> {
+    issues
+        .iter()
+        .map(|issue| {
+            json!({
+                "severity": match issue.severity {
+                    AITellSeverity::Warning => "warning",
+                    AITellSeverity::Info => "info",
+                },
+                "category": issue.category,
+                "description": issue.description,
+                "suggestion": issue.suggestion,
+            })
+        })
+        .collect()
+}
+
+// ── POST /api/v1/books/:id/detect-all ────────────────────────────
+
+/// 全章 AI 痕迹扫描：`chapters/` 下 4 位数字前缀的 .md 按文件名字典序逐一
+/// `analyzeAITells`（纯规则检测，无 LLM）。server.ts L6045。
+pub async fn detect_all(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
+    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
+        return internal_error("chapters directory read failed");
+    };
+    let mut files: Vec<String> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // TS：f.endsWith(".md") && /^\d{4}/（JS \d = ASCII 数字）。
+        let bytes = name.as_bytes();
+        if name.ends_with(".md") && bytes.len() >= 4 && bytes[..4].iter().all(u8::is_ascii_digit) {
+            files.push(name);
+        }
+    }
+    files.sort();
+
+    let mut results: Vec<Value> = Vec::with_capacity(files.len());
+    for file in files {
+        let number: u32 = file[..4].parse().unwrap_or(0);
+        let content = match tokio::fs::read_to_string(chapters_dir.join(&file)).await {
+            Ok(content) => content,
+            Err(error) => return internal_error(error),
+        };
+        // TS analyzeAITells(content) 缺省 language = "zh"。
+        let result = analyze_ai_tells(&content, WritingLanguage::Zh);
+        results.push(json!({
+            "chapterNumber": number,
+            "filename": file,
+            "issues": ai_tell_issues_json(&result.issues),
+        }));
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "bookId": book_id, "results": results })),
+    )
+}
+
+// ── GET /api/v1/books/:id/detect/stats ───────────────────────────
+
+/// 检测历史聚合：`story/detection_history.json` → 洞察统计（缺失/损坏 → 空统计）。
+pub async fn detect_stats(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.book_dir(&book_id);
+    let history = load_detection_history(&book_dir).await;
+    let stats = analyze_detection_insights(&history);
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&stats).unwrap_or_default()),
+    )
+}
+
+// ── POST /api/v1/books/:id/detect/:chapter ───────────────────────
+
+/// 单章 AI 痕迹检测（server.ts L5892；parseInt NaN → padded "NaN" 无匹配 → 404）。
+pub async fn detect_chapter(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
+    let padded = match chapter.parse::<i64>() {
+        Ok(number) if number >= 0 => format!("{number:04}"),
+        // TS String(-1).padStart(4, "0") = "00-1"；NaN → "NaN"。
+        Ok(negative) => format!("{negative:0>4}"),
+        Err(_) => "NaN".to_string(),
+    };
+    let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
+    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
+        return not_found();
+    };
+    let mut matched: Option<String> = None;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&padded) && name.ends_with(".md") {
+            matched = Some(name);
+            break;
+        }
+    }
+    let Some(file_name) = matched else {
+        return not_found();
+    };
+    let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
+        return not_found();
+    };
+    let number = chapter.parse::<i64>().unwrap_or(0);
+    let result = analyze_ai_tells(&content, WritingLanguage::Zh);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "chapterNumber": number,
+            "issues": ai_tell_issues_json(&result.issues),
+        })),
+    )
 }
 
 // ── truth 文件白名单 ─────────────────────────────────────────────
