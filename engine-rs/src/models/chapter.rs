@@ -7,13 +7,14 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
 
-/// 章节状态机（13 态）。逐字对齐 TS `ChapterStatusSchema`。
+/// 章节状态机（14 态）。逐字对齐 TS `ChapterStatusSchema` 运行时行为。
 /// 注：与 `models::placeholders::ChapterStatus`（PoC 占位 6 态）不同——本类型是真实业务态。
+/// `needs-revision` 为 TS reviseDraft 对下游章的运行时强转写入（union 未声明，47 号补齐）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"card-generated\" | \"drafting\" | \"drafted\" | \"auditing\" | \"audit-passed\" | \"audit-failed\" | \"state-degraded\" | \"revising\" | \"ready-for-review\" | \"approved\" | \"rejected\" | \"published\" | \"imported\"")
+    ts(export, type = "\"card-generated\" | \"drafting\" | \"drafted\" | \"auditing\" | \"audit-passed\" | \"audit-failed\" | \"state-degraded\" | \"revising\" | \"ready-for-review\" | \"approved\" | \"rejected\" | \"published\" | \"imported\" | \"needs-revision\"")
 )]
 pub enum ChapterStatus {
     #[serde(rename = "card-generated")]
@@ -42,6 +43,8 @@ pub enum ChapterStatus {
     Published,
     #[serde(rename = "imported")]
     Imported,
+    #[serde(rename = "needs-revision")]
+    NeedsRevision,
 }
 
 /// token 用量（移植自 TS ChapterMeta 的 tokenUsage 子对象）。

@@ -180,6 +180,9 @@ fn build_router() -> axum::Router {
         state,
         router: std::sync::Arc::new(router.clone()),
         builtin_genres_dir: audit.builtin_genres_dir.clone(),
+        revision_gate: inkos_engine::pipeline::merged_audit::RevisionGate::parse(
+            std::env::var("INKOS_REVISION_GATE").ok().as_deref(),
+        ),
     };
     inkos_engine::server::router_books(
         AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },

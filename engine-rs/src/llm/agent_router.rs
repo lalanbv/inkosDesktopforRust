@@ -27,7 +27,6 @@ use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::llm::streaming_client::{ChatCompletionParams, StreamError, StreamingChatClient};
 use crate::pipeline::chapter_review_cycle::{ChapterReviewCycleControlInput, CycleAuditor};
 use crate::pipeline::chapter_state_recovery::{SettlePort, SettleRequest};
-use crate::state::store::FsStateStore;
 
 /// 默认 LLM 端点配置。
 #[derive(Debug, Clone)]
@@ -338,17 +337,14 @@ impl FullCycleAuditor {
             genre: genre.to_string(),
         }
     }
-}
 
-#[async_trait]
-impl CycleAuditor for FullCycleAuditor {
-    async fn audit_chapter(
+    /// 真实 auditChapter 调用（options 全量透传）。
+    async fn run_audit(
         &self,
         content: &str,
-        control: Option<&ChapterReviewCycleControlInput<'_>>,
-        temperature: Option<f64>,
-    ) -> Result<AuditResult, String> {
-        let prompt_store = FsStateStore;
+        options: crate::agents::continuity::AuditChapterOptions,
+    ) -> Result<crate::agents::continuity::AuditResult, String> {
+        let prompt_store = crate::state::store::FsStateStore;
         let ctx = crate::agents::continuity::AuditChapterCtx {
             project_root: &self.project_root,
             builtin_genres_dir: &self.builtin_genres_dir,
@@ -357,14 +353,6 @@ impl CycleAuditor for FullCycleAuditor {
         let chat = RoutedAgent {
             router: self.router.clone(),
             agent: "auditor",
-        };
-        let options = crate::agents::continuity::AuditChapterOptions {
-            temperature,
-            chapter_intent: control.map(|c| c.chapter_intent.to_string()),
-            chapter_memo: control.and_then(|c| c.chapter_memo).cloned(),
-            context_package: control.map(|c| c.context_package.clone()),
-            rule_stack: control.map(|c| c.rule_stack.clone()),
-            truth_file_overrides: None,
         };
         crate::agents::continuity::audit_chapter(
             &ctx,
@@ -377,6 +365,39 @@ impl CycleAuditor for FullCycleAuditor {
         )
         .await
         .map_err(|e| e.to_string())
+    }
+}
+
+/// 47 号：合并审计端口（options 含 truthFileOverrides——post 修订审计用
+/// 修稿器产出的临时真相覆盖磁盘状态）。
+#[async_trait]
+impl crate::pipeline::merged_audit::LlmAuditPort for FullCycleAuditor {
+    async fn audit(
+        &self,
+        chapter_content: &str,
+        options: &crate::agents::continuity::AuditChapterOptions,
+    ) -> Result<crate::agents::continuity::AuditResult, String> {
+        self.run_audit(chapter_content, options.clone()).await
+    }
+}
+
+#[async_trait]
+impl CycleAuditor for FullCycleAuditor {
+    async fn audit_chapter(
+        &self,
+        content: &str,
+        control: Option<&ChapterReviewCycleControlInput<'_>>,
+        temperature: Option<f64>,
+    ) -> Result<AuditResult, String> {
+        let options = crate::agents::continuity::AuditChapterOptions {
+            temperature,
+            chapter_intent: control.map(|c| c.chapter_intent.to_string()),
+            chapter_memo: control.and_then(|c| c.chapter_memo).cloned(),
+            context_package: control.map(|c| c.context_package.clone()),
+            rule_stack: control.map(|c| c.rule_stack.clone()),
+            truth_file_overrides: None,
+        };
+        self.run_audit(content, options).await
     }
 }
 

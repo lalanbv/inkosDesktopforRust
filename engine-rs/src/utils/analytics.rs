@@ -89,6 +89,28 @@ pub struct AnalyticsTokenUsage {
     pub total_tokens: u64,
 }
 
+impl AnalyticsChapter {
+    /// 章节索引项 → 聚合输入（status 经 serde 串化，tokenUsage u32→u64）。
+    pub fn from_meta(meta: &crate::models::chapter::ChapterMeta) -> Self {
+        let status = serde_json::to_value(meta.status)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let token_usage = meta.token_usage.as_ref().map(|t| AnalyticsTokenUsage {
+            prompt_tokens: t.prompt_tokens as u64,
+            completion_tokens: t.completion_tokens as u64,
+            total_tokens: t.total_tokens as u64,
+        });
+        Self {
+            number: meta.number,
+            status,
+            word_count: meta.word_count as u64,
+            audit_issues: meta.audit_issues.clone(),
+            token_usage,
+        }
+    }
+}
+
 fn issue_category_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"\[(?:critical|warning|info)\]\s*(.+?)[:：]").unwrap())

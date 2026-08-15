@@ -14,6 +14,7 @@
 
 pub mod analytics;
 pub mod atomic_file_set;
+pub mod book_eval;
 pub mod book_id;
 pub mod cadence_policy;
 pub mod chapter_cadence;

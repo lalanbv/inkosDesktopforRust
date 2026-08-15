@@ -24,8 +24,13 @@ use axum::Json;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::agents::continuity::{AuditChapterOptions, TruthFileOverrides};
 use crate::agents::reviser::{revise_chapter, ReviseMode, ReviseOptions};
 use crate::llm::agent_router::{AgentRouter, RoutedAgent};
+use crate::pipeline::merged_audit::{
+    evaluate_merged_audit, restore_actionable_audit_if_lost, MergedAuditEvaluation,
+    RevisionGate,
+};
 use crate::pipeline::persisted_governed_plan::relative_to_book_dir;
 use crate::pipeline::write_next::{
     write_next_chapter, ChapterReviewMode, WriteNextAgents, WriteNextConfig, WriteNextCtx,
@@ -41,6 +46,8 @@ pub struct BooksRuntime {
     pub state: Arc<StateManager>,
     pub router: Arc<AgentRouter>,
     pub builtin_genres_dir: std::path::PathBuf,
+    /// 修订门控（TS config.revisionGate，默认 strict；bin 经 INKOS_REVISION_GATE 注入）。
+    pub revision_gate: RevisionGate,
 }
 
 // ── POST /api/v1/books/:id/plan ─────────────────────────────────
@@ -311,29 +318,86 @@ pub async fn revise(
             (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()))
         }
         Err(error) => {
-            let message = error.to_string();
+            let message = error.message().to_string();
+            let status = if error.is_not_found() { StatusCode::NOT_FOUND } else { StatusCode::INTERNAL_SERVER_ERROR };
             runtime.hub.broadcast(
                 "revise:error",
                 &serde_json::json!({ "bookId": book_id, "error": message }),
             );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": message })),
-            )
+            (status, Json(serde_json::json!({ "error": message })))
         }
     }
 }
 
-// ---- 46 号：/revise 审核环（pre-audit → 修稿 → post-audit → 门控 → 落盘） ----
+// ---- 47 号：/revise 审核环全量（merged audit + revisionGate 三档 + 索引回写） ----
 
 use crate::agents::consolidator::consolidate as run_consolidate;
 use crate::agents::state_validator::validate as validate_state;
 use crate::llm::agent_router::FullCycleAuditor;
-use crate::pipeline::chapter_review_cycle::CycleAuditor as _;
 use crate::pipeline::chapter_state_recovery::{
     retry_settlement_after_validation_failure, SettlePort, SettlementRetryParams, SettleRequest,
     ValidatePort,
 };
+
+/// revise 链错误：NotFound 对齐 Node 404（缺章），Internal 对齐 500。
+enum ReviseChainError {
+    NotFound(String),
+    Internal(String),
+}
+
+impl ReviseChainError {
+    fn is_not_found(&self) -> bool {
+        matches!(self, ReviseChainError::NotFound(_))
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            ReviseChainError::NotFound(m) | ReviseChainError::Internal(m) => m,
+        }
+    }
+}
+
+impl From<String> for ReviseChainError {
+    fn from(message: String) -> Self {
+        ReviseChainError::Internal(message)
+    }
+}
+
+/// 门控计数（revisionDiagnostics.before/after）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateCounts {
+    pub blocking_count: usize,
+    pub critical_count: usize,
+    pub ai_tell_count: usize,
+}
+
+fn gate_counts(eval: &MergedAuditEvaluation) -> GateCounts {
+    GateCounts {
+        blocking_count: eval.blocking_count,
+        critical_count: eval.critical_count,
+        ai_tell_count: eval.ai_tell_count,
+    }
+}
+
+/// 修订拒绝时的剩余问题（前 6 条 warning/critical）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemainingIssue {
+    pub severity: String,
+    pub category: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
+
+fn severity_string(severity: crate::agents::continuity::AuditSeverity) -> String {
+    match severity {
+        crate::agents::continuity::AuditSeverity::Critical => "critical".to_string(),
+        crate::agents::continuity::AuditSeverity::Warning => "warning".to_string(),
+        crate::agents::continuity::AuditSeverity::Info => "info".to_string(),
+    }
+}
 
 /// 修订链结果（对齐 TS ReviseResult 的核心面）。
 #[derive(Debug, Serialize)]
@@ -346,31 +410,49 @@ pub struct ReviseChainResult {
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_diagnostics: Option<RevisionDiagnostics>,
     /// 修订后正文（applied 时存在）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revised_content: Option<String>,
 }
 
-/// /revise 审核环主链：pre-audit → 修稿 → post-audit → 门控 → 落盘。
+/// 门控诊断（TS reviseDraft 拒绝分支的 revisionDiagnostics）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionDiagnostics {
+    pub standard: &'static str,
+    pub before: GateCounts,
+    pub after: GateCounts,
+    pub remaining_issues: Vec<RemainingIssue>,
+}
+
+/// /revise 审核环主链：pre merged-audit → 修稿 → post merged-audit（temp 0 +
+/// 修稿真相覆盖）→ restore → revisionGate 三档门控 → 落盘 + 索引回写。
 async fn run_revise_chain(
     runtime: &BooksRuntime,
     book_id: &str,
     chapter_number: u32,
     body: &ReviseBody,
-) -> Result<ReviseChainResult, String> {
+) -> Result<ReviseChainResult, ReviseChainError> {
+    let internal = |e: String| ReviseChainError::Internal(e);
     let book = runtime
         .state
         .load_book_config(book_id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| internal(e.to_string()))?;
     let book_dir = runtime.state.book_dir(book_id);
+    let language = match book.language.as_deref() {
+        Some("en") => crate::utils::language::WritingLanguage::En,
+        _ => crate::utils::language::WritingLanguage::Zh,
+    };
 
-    // 章节正文。
+    // 章节正文（缺文件 → Node 404 "Chapter not found"）。
     let chapters_dir = book_dir.join("chapters");
     let padded = format!("{chapter_number:04}");
     let mut entries = tokio::fs::read_dir(&chapters_dir)
         .await
-        .map_err(|_| "Chapter not found".to_string())?;
+        .map_err(|_| ReviseChainError::NotFound("Chapter not found".to_string()))?;
     let mut matched: Option<String> = None;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -379,11 +461,25 @@ async fn run_revise_chain(
             break;
         }
     }
-    let file_name = matched.ok_or_else(|| "Chapter not found".to_string())?;
+    let file_name = matched.ok_or_else(|| ReviseChainError::NotFound("Chapter not found".to_string()))?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
         .await
-        .map_err(|_| "Chapter not found".to_string())?;
+        .map_err(|_| ReviseChainError::NotFound("Chapter not found".to_string()))?;
     let content = strip_title_line(&raw);
+
+    // 索引（标题/最新章判定/回写）。
+    let index = runtime
+        .state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+    let chapter_meta = index
+        .iter()
+        .find(|m| m.number == chapter_number)
+        .ok_or_else(|| internal(format!("Chapter {chapter_number} not found in index")))?;
+    let chapter_title = chapter_meta.title.clone();
+    let latest = index.iter().map(|m| m.number).max().unwrap_or(chapter_number);
+    let is_latest = chapter_number == latest;
 
     let mode = match body.mode.as_deref() {
         Some("polish") => ReviseMode::Polish,
@@ -396,7 +492,24 @@ async fn run_revise_chain(
         || mode == ReviseMode::Rewrite
         || mode == ReviseMode::Rework;
 
-    // pre-audit（完整编排）。
+    let counting_mode = crate::utils::length_metrics::resolve_length_counting_mode(language);
+    let unchanged_result = |word_count: u32,
+                            skipped_reason: String,
+                            diagnostics: Option<RevisionDiagnostics>|
+     -> ReviseChainResult {
+        ReviseChainResult {
+            chapter_number,
+            word_count,
+            fixed_issues: Vec::new(),
+            applied: false,
+            status: "unchanged",
+            skipped_reason: Some(skipped_reason),
+            revision_diagnostics: diagnostics,
+            revised_content: None,
+        }
+    };
+
+    // pre merged-audit（四源合并）。
     let auditor = FullCycleAuditor {
         router: (*runtime.router).clone(),
         project_root: runtime.state.project_root().to_path_buf(),
@@ -405,34 +518,27 @@ async fn run_revise_chain(
         chapter_number,
         genre: book.genre.clone(),
     };
-    let pre = auditor.audit_chapter(&content, None, None).await?;
-    let pre_blocking = pre
-        .issues
-        .iter()
-        .filter(|i| i.severity != crate::agents::continuity::AuditSeverity::Info)
-        .count();
+    let pre = evaluate_merged_audit(
+        &auditor,
+        &book_dir,
+        &content,
+        chapter_number,
+        language,
+        &AuditChapterOptions::default(),
+    )
+    .await
+    .map_err(internal)?;
 
-    // 无问题且无显式修订请求 → unchanged（Node 语义）。
-    if pre_blocking == 0 && !explicit_revision {
-        let language = match book.language.as_deref() {
-            Some("en") => crate::utils::language::WritingLanguage::En,
-            _ => crate::utils::language::WritingLanguage::Zh,
-        };
-        return Ok(ReviseChainResult {
-            chapter_number,
-            word_count: crate::utils::length_metrics::count_chapter_length(
-                &content,
-                crate::utils::length_metrics::resolve_length_counting_mode(language),
-            ),
-            fixed_issues: Vec::new(),
-            applied: false,
-            status: "unchanged",
-            skipped_reason: Some("No warning, critical, or AI-tell issues to fix.".to_string()),
-            revised_content: None,
-        });
+    // 无阻塞问题且无显式修订请求 → unchanged（Node 逐字文案）。
+    if pre.blocking_count == 0 && pre.ai_tell_count == 0 && !explicit_revision {
+        return Ok(unchanged_result(
+            crate::utils::length_metrics::count_chapter_length(&content, counting_mode),
+            "No warning, critical, or AI-tell issues to fix.".to_string(),
+            None,
+        ));
     }
 
-    // 修稿（以 pre 审计问题驱动）。
+    // 修稿（以 pre 合并审计问题驱动）。
     let reviser: &'static RoutedAgent =
         Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "reviser" }));
     let reviser_ctx: &'static crate::agents::reviser::ReviserCtx =
@@ -447,7 +553,7 @@ async fn run_revise_chain(
         &book_dir,
         &content,
         chapter_number,
-        &pre.issues,
+        &pre.audit_result.issues,
         mode,
         Some(&book.genre),
         &ReviseOptions {
@@ -460,81 +566,154 @@ async fn run_revise_chain(
         },
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| internal(e.to_string()))?;
     if revise_output.revised_content.is_empty() {
-        return Err("Reviser returned empty content".to_string());
+        return Err(internal("Reviser returned empty content".to_string()));
     }
 
-    // post-audit（temp 0）——修订稿评估。
-    let post = auditor
-        .audit_chapter(&revise_output.revised_content, None, Some(0.0))
-        .await?;
-    let post_blocking = post
-        .issues
-        .iter()
-        .filter(|i| i.severity != crate::agents::continuity::AuditSeverity::Info)
-        .count();
+    // post merged-audit（temp 0 + 修稿器产出的临时真相覆盖）。
+    let placeholder_state = "(状态卡未更新)";
+    let placeholder_ledger = "(账本未更新)";
+    let placeholder_hooks = "(伏笔池未更新)";
+    let post_options = AuditChapterOptions {
+        temperature: Some(0.0),
+        truth_file_overrides: Some(TruthFileOverrides {
+            current_state: (revise_output.updated_state != placeholder_state)
+                .then(|| revise_output.updated_state.clone()),
+            ledger: (revise_output.updated_ledger != placeholder_ledger)
+                .then(|| revise_output.updated_ledger.clone()),
+            hooks: (revise_output.updated_hooks != placeholder_hooks)
+                .then(|| revise_output.updated_hooks.clone()),
+        }),
+        ..Default::default()
+    };
+    let post = evaluate_merged_audit(
+        &auditor,
+        &book_dir,
+        &revise_output.revised_content,
+        chapter_number,
+        language,
+        &post_options,
+    )
+    .await
+    .map_err(internal)?;
+    let effective_post = restore_actionable_audit_if_lost(&pre, &post);
 
-    // strict 门控：不变差 && （blocking 或问题数改善）。
-    let improved = post_blocking < pre_blocking || post.issues.len() < pre.issues.len();
-    let did_not_worsen = post_blocking <= pre_blocking;
-    if !(did_not_worsen && improved) {
-        return Ok(ReviseChainResult {
-            chapter_number,
-            word_count: crate::utils::length_metrics::count_chapter_length(
-                &content,
-                crate::utils::length_metrics::resolve_length_counting_mode(
-                    crate::utils::language::WritingLanguage::Zh,
-                ),
+    // 三档门控（strict/lenient/always）。
+    if !runtime.revision_gate.should_apply(&pre, &effective_post) {
+        let remaining_issues: Vec<RemainingIssue> = effective_post
+            .revision_blocking_issues
+            .iter()
+            .filter(|issue| {
+                matches!(
+                    issue.severity,
+                    crate::agents::continuity::AuditSeverity::Warning
+                        | crate::agents::continuity::AuditSeverity::Critical
+                )
+            })
+            .take(6)
+            .map(|issue| RemainingIssue {
+                severity: severity_string(issue.severity),
+                category: issue.category.clone(),
+                description: issue.description.clone(),
+                suggestion: (!issue.suggestion.is_empty()).then(|| issue.suggestion.clone()),
+            })
+            .collect();
+        return Ok(unchanged_result(
+            crate::utils::length_metrics::count_chapter_length(&content, counting_mode),
+            format!(
+                "Manual revision kept original chapter: before blocking={}, critical={}, aiTell={}; after blocking={}, critical={}, aiTell={}.",
+                pre.blocking_count,
+                pre.critical_count,
+                pre.ai_tell_count,
+                effective_post.blocking_count,
+                effective_post.critical_count,
+                effective_post.ai_tell_count,
             ),
-            fixed_issues: Vec::new(),
-            applied: false,
-            status: "unchanged",
-            skipped_reason: Some(format!(
-                "Manual revision kept original chapter: before blocking={pre_blocking}; after blocking={post_blocking}."
-            )),
-            revised_content: None,
-        });
+            Some(RevisionDiagnostics {
+                standard: runtime.revision_gate.standard(),
+                before: gate_counts(&pre),
+                after: gate_counts(&effective_post),
+                remaining_issues,
+            }),
+        ));
     }
 
-    // 落盘：章节文件（标题保留）+ 最新章真相回写。
-    let title_line = raw.lines().next().unwrap_or("").to_string();
-    let revised_full = format!("{title_line}\n\n{}", revise_output.revised_content);
+    // 落盘：章节文件（标准标题重构，对齐 TS reviseHeading）。
+    let revised_word_count =
+        crate::utils::length_metrics::count_chapter_length(&revise_output.revised_content, counting_mode);
+    let heading = if language == crate::utils::language::WritingLanguage::En {
+        format!("# Chapter {chapter_number}: {chapter_title}")
+    } else {
+        format!("# 第{chapter_number}章 {chapter_title}")
+    };
+    let revised_full = format!("{heading}\n\n{}", revise_output.revised_content);
     tokio::fs::write(chapters_dir.join(&file_name), &revised_full)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| internal(e.to_string()))?;
 
-    // 仅最新章拥有当前真相（Node 语义）。
-    let index = runtime
-        .state
-        .load_chapter_index(book_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    let latest = index.iter().map(|m| m.number).max().unwrap_or(chapter_number);
-    if chapter_number == latest {
+    // 仅最新章拥有当前真相（Node 语义；ledger 回写 47 号补齐）。
+    if is_latest {
         let story_dir = book_dir.join("story");
-        if revise_output.updated_state != "(状态卡未更新)" {
+        if revise_output.updated_state != placeholder_state {
             let _ = tokio::fs::write(story_dir.join("current_state.md"), &revise_output.updated_state).await;
         }
-        if revise_output.updated_hooks != "(伏笔池未更新)" {
+        if revise_output.updated_ledger != placeholder_ledger {
+            let _ = tokio::fs::write(story_dir.join("particle_ledger.md"), &revise_output.updated_ledger).await;
+        }
+        if revise_output.updated_hooks != placeholder_hooks {
             let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &revise_output.updated_hooks).await;
         }
     }
 
-    let language = match book.language.as_deref() {
-        Some("en") => crate::utils::language::WritingLanguage::En,
-        _ => crate::utils::language::WritingLanguage::Zh,
+    // 索引回写：目标章状态/字数/审计问题；下游章 needs-revision + 重审提示。
+    let passed = effective_post.audit_result.passed;
+    let downstream_notice = if language == crate::utils::language::WritingLanguage::En {
+        format!("[warning] Chapter {chapter_number} changed; re-review this downstream chapter for continuity.")
+    } else {
+        format!("[warning] 第{chapter_number}章已重写，请重新检查本章与前文的连续性。")
     };
+    let now = crate::utils::utc_time::utc_now_iso();
+    let mut updated_index = index.clone();
+    for slot in updated_index.iter_mut() {
+        if slot.number == chapter_number {
+            slot.status = if passed {
+                crate::models::chapter::ChapterStatus::ReadyForReview
+            } else {
+                crate::models::chapter::ChapterStatus::AuditFailed
+            };
+            slot.word_count = revised_word_count;
+            slot.updated_at = now.clone();
+            slot.audit_issues = effective_post
+                .audit_result
+                .issues
+                .iter()
+                .map(|issue| format!("[{}] {}", severity_string(issue.severity), issue.description))
+                .collect();
+        } else if slot.number > chapter_number {
+            slot.status = crate::models::chapter::ChapterStatus::NeedsRevision;
+            slot.updated_at = now.clone();
+            slot.audit_issues.retain(|issue| {
+                !issue.contains("re-review this downstream chapter")
+                    && !issue.contains("请重新检查本章与前文")
+            });
+            slot.audit_issues.push(downstream_notice.clone());
+        }
+    }
+    runtime
+        .state
+        .save_chapter_index(book_id, &updated_index)
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+
     Ok(ReviseChainResult {
         chapter_number,
-        word_count: crate::utils::length_metrics::count_chapter_length(
-            &revise_output.revised_content,
-            crate::utils::length_metrics::resolve_length_counting_mode(language),
-        ),
+        word_count: revised_word_count,
         fixed_issues: revise_output.fixed_issues,
         applied: true,
-        status: "revised",
+        status: if passed { "ready-for-review" } else { "audit-failed" },
         skipped_reason: None,
+        revision_diagnostics: None,
         revised_content: Some(revise_output.revised_content),
     })
 }
@@ -1019,6 +1198,105 @@ async fn run_repair_state(
     })
 }
 
+// ── GET /api/v1/books/:id/analytics（47 号）──────────────────────
+
+pub async fn analytics(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    // TS 契约：loadChapterIndex 缺书不抛错（返回 []）→ 200 空统计；
+    // 意外错误才 404（`Book "id" not found`）。
+    match runtime.state.load_chapter_index(&book_id).await {
+        Ok(index) => {
+            let chapters: Vec<crate::utils::analytics::AnalyticsChapter> =
+                index.iter().map(crate::utils::analytics::AnalyticsChapter::from_meta).collect();
+            let data = crate::utils::analytics::compute_analytics(&book_id, &chapters);
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&data).unwrap_or_default()),
+            )
+        }
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Book \"{book_id}\" not found") })),
+        ),
+    }
+}
+
+// ── GET /api/v1/books/:id/eval（47 号）────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+pub struct EvalQuery {
+    #[serde(default)]
+    pub chapters: Option<String>,
+}
+
+pub async fn eval(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<EvalQuery>,
+) -> impl IntoResponse {
+    match crate::utils::book_eval::evaluate_book_quality(&runtime.state, &book_id, query.chapters.as_deref())
+        .await
+    {
+        Ok(report) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&report).unwrap_or_default()),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": error })),
+        ),
+    }
+}
+
+// ── GET /api/v1/books/:id/export（47 号）──────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ExportQuery {
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(rename = "approvedOnly", default)]
+    pub approved_only: Option<String>,
+}
+
+pub async fn export(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ExportQuery>,
+) -> axum::response::Response {
+    let format = crate::interaction::export_artifact::ExportFormat::parse(query.format.as_deref());
+    let approved_only = query.approved_only.as_deref() == Some("true");
+    match crate::interaction::export_artifact::build_export_artifact(
+        &runtime.state,
+        &book_id,
+        format,
+        approved_only,
+        None,
+    )
+    .await
+    {
+        Ok(artifact) => {
+            let mut response = (StatusCode::OK, artifact.payload).into_response();
+            let headers = response.headers_mut();
+            if let Ok(value) = axum::http::HeaderValue::from_str(&artifact.content_type) {
+                headers.insert(axum::http::header::CONTENT_TYPE, value);
+            }
+            if let Ok(value) =
+                axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{}\"", artifact.file_name))
+            {
+                headers.insert(axum::http::header::CONTENT_DISPOSITION, value);
+            }
+            response
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Export failed" })),
+        )
+            .into_response(),
+    }
+}
+
 // ── 共享装配 ─────────────────────────────────────────────────────
 
 fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
@@ -1083,6 +1361,7 @@ mod tests {
                 Default::default(),
             )),
             builtin_genres_dir: root.to_path_buf(),
+            revision_gate: RevisionGate::default(),
         }
     }
 
@@ -1108,6 +1387,9 @@ mod tests {
             .route("/api/v1/books/:id/draft", axum::routing::post(draft))
             .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
             .route("/api/v1/books/:id/repair-state/:chapter", axum::routing::post(repair_state))
+            .route("/api/v1/books/:id/analytics", axum::routing::get(analytics))
+            .route("/api/v1/books/:id/eval", axum::routing::get(eval))
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
             .with_state(runtime)
     }
 
@@ -1181,7 +1463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revise_missing_chapter_returns_500_with_node_message() {
+    async fn revise_missing_chapter_returns_404_with_node_message() {
         let dir = tempfile::tempdir().unwrap();
         fixture(dir.path());
         let runtime = runtime_for(dir.path());
@@ -1189,10 +1471,51 @@ mod tests {
             .oneshot(post("/api/v1/books/b1/revise/9", "{}"))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // Node 契约：缺章 404 {"error": "Chapter not found"}。
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Chapter not found");
+    }
+
+    #[tokio::test]
+    async fn analytics_missing_book_returns_empty_stats_not_404() {
+        // TS 怪癖：loadChapterIndex 缺书返回 [] → 200 空统计（404 分支不可达）。
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/books/ghost/analytics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 8192).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["totalChapters"], 0);
+        assert_eq!(parsed["auditPassRate"], 100);
+    }
+
+    #[tokio::test]
+    async fn export_without_chapters_returns_500_export_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/books/ghost/export?format=txt")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "Export failed");
     }
 
     #[tokio::test]

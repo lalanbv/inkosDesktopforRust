@@ -521,6 +521,7 @@ mod books_e2e {
                 HashMap::new(),
             )),
             builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
         }
     }
 
@@ -597,9 +598,10 @@ mod books_e2e {
         assert_eq!(response.status(), 200);
         let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        // 46 号起为审核环结果（ReviseChainResult 形状）。
+        // 46 号起为审核环结果（ReviseChainResult 形状）；47 号起 status 对齐
+        // TS（post 审计 passed → ready-for-review）。
         assert_eq!(parsed["applied"], true, "body: {parsed}");
-        assert_eq!(parsed["status"], "revised");
+        assert_eq!(parsed["status"], "ready-for-review");
         assert!(parsed["revisedContent"].as_str().unwrap().contains("一笔一笔讨回来"));
         assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
 
@@ -677,6 +679,7 @@ mod books46_e2e {
                 HashMap::new(),
             )),
             builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
         }
     }
 
@@ -829,9 +832,9 @@ mod books46_e2e {
         assert_eq!(response.status(), 200);
         let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        // 审核环：pre 有 warning → 修稿 → applied。
+        // 审核环：pre 有 warning → 修稿 → applied（47 号 status 对齐 TS）。
         assert_eq!(parsed["applied"], true, "body: {parsed}");
-        assert_eq!(parsed["status"], "revised");
+        assert_eq!(parsed["status"], "ready-for-review");
         eprintln!("REV46: {parsed}");
         assert!(parsed["revisedContent"].as_str().unwrap().contains("屈辱自今日起讨回"));
         assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
@@ -844,5 +847,299 @@ mod books46_e2e {
         // SSE。
         assert_eq!(subscriber.recv().await.unwrap().event, "revise:start");
         assert_eq!(subscriber.recv().await.unwrap().event, "revise:complete");
+    }
+}
+
+// ---- 47 号：merged audit 门控 + /analytics /eval /export E2E ----
+
+mod books47_e2e {
+    use super::*;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::{analytics, eval, export, revise, BooksRuntime};
+    use inkos_engine::state::manager::StateManager;
+
+    /// mock：pre 审计 1 warning；post（temp 0）审计 3 critical（变差 → strict 拒绝）。
+    async fn mock47_llm(
+        _state: axum::extract::State<()>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let temperature = body["temperature"].as_f64();
+        let content = if system.contains("修稿编辑") {
+            "=== FIXED_ISSUES ===\n修正了措辞\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——多年屈辱，今日起讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
+        } else if system.contains("审") || system.contains("连续") {
+            if temperature == Some(0.0) {
+                r#"{"passed": false, "overallScore": 40, "summary": "修订后恶化。", "issues": [{"severity": "critical", "category": "设定", "description": "矛盾甲", "suggestion": "查证。"}, {"severity": "critical", "category": "设定", "description": "矛盾乙", "suggestion": "查证。"}, {"severity": "critical", "category": "节奏", "description": "矛盾丙", "suggestion": "压缩。"}]}"#.to_string()
+            } else {
+                r#"{"passed": false, "overallScore": 70, "summary": "有一处问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "略缓。", "suggestion": "压缩。"}]}"#.to_string()
+            }
+        } else {
+            "PASS".to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock47() -> String {
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock47_llm))
+            .with_state(());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn rt47(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// 带 index/章节/伏笔表的完整 fixture。
+    fn fixture47(root: &std::path::Path) {
+        fixture_project(root);
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n他推开门，发现灯还亮着。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章 云涌\n\n她沉默。\n\n然后转身。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("index.json"),
+            r#"[
+                {"number":1,"title":"风起","status":"approved","wordCount":100,"auditIssues":[],"lengthWarnings":[],"createdAt":"","updatedAt":""},
+                {"number":2,"title":"云涌","status":"ready-for-review","wordCount":200,"auditIssues":["[critical] 节奏: 太慢"],"lengthWarnings":[],"createdAt":"","updatedAt":""}
+            ]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("pending_hooks.md"),
+            "| 伏笔 | 状态 |\n| --- | --- |\n| 旧信 | 已回收 |\n| 新谜 | 待定 |\n",
+        )
+        .unwrap();
+    }
+
+    async fn get(app: axum::Router, uri: &str) -> axum::http::Response<axum::body::Body> {
+        use tower::ServiceExt;
+        app.oneshot(
+            axum::http::Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn analytics_endpoint_returns_aggregates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture47(&root);
+        let runtime = rt47(&root, "http://127.0.0.1:9");
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/analytics", axum::routing::get(analytics))
+            .with_state(runtime);
+        let response = get(app, "/api/v1/books/b1/analytics").await;
+        assert_eq!(response.status(), 200);
+        let content_type = response.headers().get("content-type").unwrap().to_str().unwrap().to_string();
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(content_type.starts_with("application/json"));
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["totalChapters"], 2);
+        assert_eq!(parsed["totalWords"], 300);
+        assert_eq!(parsed["avgWordsPerChapter"], 150);
+        // audited=2，passed(approved+ready-for-review)=2 → 100%。
+        assert_eq!(parsed["auditPassRate"], 100);
+        assert_eq!(parsed["statusDistribution"]["approved"], 1);
+        assert_eq!(parsed["statusDistribution"]["ready-for-review"], 1);
+        assert_eq!(parsed["topIssueCategories"][0]["category"], "节奏");
+        assert_eq!(parsed["chaptersWithMostIssues"][0]["chapter"], 2);
+        assert!(parsed.get("tokenStats").is_none());
+    }
+
+    #[tokio::test]
+    async fn eval_endpoint_returns_book_eval_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture47(&root);
+        let runtime = rt47(&root, "http://127.0.0.1:9");
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/eval", axum::routing::get(eval))
+            .with_state(runtime);
+        let response = get(app, "/api/v1/books/b1/eval").await;
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["bookId"], "b1");
+        assert_eq!(parsed["totalChapters"], 2);
+        assert_eq!(parsed["totalWords"], 300);
+        assert_eq!(parsed["auditPassRate"], 100);
+        assert_eq!(parsed["hookResolveRate"], 50);
+        assert_eq!(parsed["chapters"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["chapters"][1]["auditIssueCount"], 1);
+        assert_eq!(parsed["chapters"][1]["status"], "ready-for-review");
+        assert_eq!(parsed["qualityTrend"].as_array().unwrap().len(), 2);
+        assert!(parsed["qualityScore"].as_u64().unwrap() > 0);
+
+        // 区间过滤。
+        let runtime = rt47(&root, "http://127.0.0.1:9");
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/eval", axum::routing::get(eval))
+            .with_state(runtime);
+        let response = get(app, "/api/v1/books/b1/eval?chapters=1").await;
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["totalChapters"], 1);
+        assert_eq!(parsed["totalWords"], 100);
+        // duplicateTitles 按全量 index（两章标题不同 → 0）。
+        assert_eq!(parsed["duplicateTitles"], 0);
+    }
+
+    #[tokio::test]
+    async fn export_txt_md_epub_and_approved_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture47(&root);
+        let runtime = rt47(&root, "http://127.0.0.1:9");
+
+        // txt。
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
+            .with_state(runtime.clone());
+        let response = get(app, "/api/v1/books/b1/export?format=txt").await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"b1.txt\""
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.starts_with("测试书\n\n"));
+        assert!(text.contains("# 第1章 风起"));
+        assert!(text.contains("# 第2章 云涌"));
+
+        // md。
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
+            .with_state(runtime.clone());
+        let response = get(app, "/api/v1/books/b1/export?format=md").await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/markdown; charset=utf-8"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.starts_with("# 测试书\n\n---\n"));
+
+        // epub：zip 魔数 + epub content-type。
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
+            .with_state(runtime.clone());
+        let response = get(app, "/api/v1/books/b1/export?format=epub").await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/epub+zip"
+        );
+        assert_eq!(
+            response.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"b1.epub\""
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        assert_eq!(&body[..4], &[0x50, 0x4B, 0x03, 0x04]);
+
+        // approvedOnly=true：仅 approved 的第 1 章。
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
+            .with_state(runtime);
+        let response = get(app, "/api/v1/books/b1/export?approvedOnly=true").await;
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("# 第1章 风起"));
+        assert!(!text.contains("# 第2章 云涌"));
+    }
+
+    #[tokio::test]
+    async fn revise_gate_refusal_returns_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture47(&root);
+        let llm = spawn_mock47().await;
+        let runtime = rt47(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/revise/1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"mode":"polish"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        // strict 门控：post 3 critical 变差 → 拒绝。
+        assert_eq!(parsed["applied"], false, "body: {parsed}");
+        assert_eq!(parsed["status"], "unchanged");
+        let reason = parsed["skippedReason"].as_str().unwrap();
+        assert!(reason.starts_with("Manual revision kept original chapter: before blocking="), "{reason}");
+        assert!(reason.contains("critical="));
+        assert!(reason.contains("aiTell="));
+        let diagnostics = &parsed["revisionDiagnostics"];
+        assert!(diagnostics["standard"]
+            .as_str()
+            .unwrap()
+            .starts_with("A revision is applied only when blocking, critical, and AI-tell counts"));
+        assert_eq!(diagnostics["before"]["blockingCount"].as_u64().unwrap(), 1);
+        assert_eq!(diagnostics["after"]["blockingCount"].as_u64().unwrap(), 3);
+        assert_eq!(diagnostics["after"]["criticalCount"].as_u64().unwrap(), 3);
+        let remaining = diagnostics["remainingIssues"].as_array().unwrap();
+        assert_eq!(remaining.len(), 3);
+        assert_eq!(remaining[0]["severity"], "critical");
+        assert_eq!(remaining[0]["category"], "设定");
+        assert_eq!(remaining[0]["suggestion"], "查证。");
+
+        // 拒绝时章节文件保持原文。
+        let saved = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("0001_风起.md"))
+            .unwrap();
+        assert!(saved.contains("他推开门，发现灯还亮着。"));
+        assert!(!saved.contains("今日起讨回"));
     }
 }

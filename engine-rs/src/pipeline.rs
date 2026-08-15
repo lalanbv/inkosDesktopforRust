@@ -9,5 +9,6 @@ pub mod chapter_persistence;
 pub mod chapter_review_cycle;
 pub mod chapter_state_recovery;
 pub mod chapter_truth_validation;
+pub mod merged_audit;
 pub mod write_next;
 pub mod persisted_governed_plan;

@@ -7,5 +7,6 @@
 //! runtime（1153 行交互运行时）/ edit-controller / project-tools / session-transcript 等。
 
 pub mod events;
+pub mod export_artifact;
 pub mod intents;
 pub mod modes;
