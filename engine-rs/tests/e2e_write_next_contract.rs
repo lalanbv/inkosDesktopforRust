@@ -7671,3 +7671,300 @@ mod translations70_e2e {
         assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
     }
 }
+
+mod play71_e2e {
+    //! 71 号：play 域四端点（run 聚合 + 插图 sidecar + 生图兜底 + 图片回读）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::play_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt71(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app71(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/play/runs/:worldId/:runId",
+                axum::routing::get(play_routes::get_play_run),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId/image-settings",
+                axum::routing::put(play_routes::put_play_image_settings),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId/generate-image",
+                axum::routing::post(play_routes::post_play_generate_image),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId/images/:file",
+                axum::routing::get(play_routes::get_play_image),
+            )
+            .with_state(rt71(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// world + run fixture：world.json / transcript / current / play-graph.json /
+    /// 插图 manifest + settings + 一张实体图。
+    fn fixture(root: &std::path::Path) {
+        let world_dir = root.join("worlds").join("w1");
+        let run_dir = world_dir.join("runs").join("r1");
+        std::fs::create_dir_all(run_dir.join("images")).unwrap();
+        std::fs::create_dir_all(run_dir.join("state")).unwrap();
+        std::fs::create_dir_all(run_dir.join("projections")).unwrap();
+        std::fs::write(
+            world_dir.join("world.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": "w1", "title": "雪夜世界", "premise": "大雪封山的世界",
+                "worldContract": "", "visualContract": "水墨", "mode": "open",
+                "language": "zh", "createdAt": "t", "updatedAt": "t"
+            })).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("transcript.jsonl"),
+            "{\"role\":\"user\",\"content\":\"进屋\",\"timestamp\":1}\n{\"role\":\"assistant\",\"content\":\"你推门而入。\",\"timestamp\":2}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("state").join("current.json"),
+            serde_json::to_string_pretty(&serde_json::json!({ "turn": 3, "location": "老宅" })).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("projections").join("scene.md"),
+            "雪夜，孤灯摇曳。",
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("play-graph.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "entities": {
+                    "hero": { "id": "hero", "type": "actor", "label": "林动", "summary": "少年" },
+                    "npc": { "id": "npc", "type": "actor", "label": "老者", "summary": "" }
+                },
+                "edges": {}, "stateSlots": {},
+                "events": { "e1": { "id": "e1", "turn": 1, "actionKind": "user_input", "rawInput": "进屋", "createdAt": "t" } }
+            })).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("images").join("manifest.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "hero": { "status": "ready", "file": "hero.png" },
+                "npc": { "status": "failed", "error": "boom" },
+                "scene-turn-3": { "status": "ready", "file": "scene-turn-3.png" },
+                "scene-turn-1": { "status": "ready", "file": "scene-turn-1.png" }
+            })).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(run_dir.join("images").join("hero.png"), b"\x89PNG-hero").unwrap();
+        std::fs::write(run_dir.join("images").join("scene-turn-3.png"), b"\x89PNG-scene").unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_run_merges_graph_transcript_and_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture(&root);
+
+        let (status, parsed) = call(app71(&root), "GET", "/api/v1/play/runs/w1/r1", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["worldId"], "w1");
+        assert_eq!(parsed["runId"], "r1");
+        assert_eq!(parsed["title"], "雪夜世界");
+        assert_eq!(parsed["transcript"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["currentState"]["turn"], 3);
+        assert_eq!(parsed["graph"]["entities"].as_array().unwrap().len(), 2);
+
+        // 实体插图注入：hero ready 有图；npc failed 无图。
+        let entities = parsed["graph"]["entities"].as_array().unwrap();
+        let hero = entities.iter().find(|e| e["id"] == "hero").unwrap();
+        assert_eq!(
+            hero["imageUrl"],
+            "/api/v1/play/runs/w1/r1/images/hero.png",
+            "hero: {hero}"
+        );
+        let npc = entities.iter().find(|e| e["id"] == "npc").unwrap();
+        assert!(npc.get("imageUrl").is_none(), "npc: {npc}");
+
+        // scene-turn-* URL 表 + 当前回合插图（turn=3）。
+        assert_eq!(
+            parsed["sceneImageUrls"]["scene-turn-3"],
+            "/api/v1/play/runs/w1/r1/images/scene-turn-3.png"
+        );
+        assert_eq!(
+            parsed["sceneImageUrl"],
+            "/api/v1/play/runs/w1/r1/images/scene-turn-3.png"
+        );
+        // 默认全关的插图开关。
+        assert_eq!(parsed["imageSettings"]["actors"], false);
+    }
+
+    #[tokio::test]
+    async fn get_run_reads_sqlite_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let run_dir = root.join("worlds").join("w1").join("runs").join("r1");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        {
+            let conn = rusqlite::Connection::open(run_dir.join("play.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT, label TEXT, summary TEXT, status TEXT, created_event TEXT, updated_event TEXT);
+                 CREATE TABLE edges (id TEXT PRIMARY KEY, from_id TEXT, type TEXT, to_id TEXT, value_json TEXT, valid_from_event TEXT, valid_until_event TEXT, source_event_id TEXT, visibility_json TEXT, strength REAL, confidence REAL);
+                 CREATE TABLE state_slots (id TEXT PRIMARY KEY, owner_entity_id TEXT, kind TEXT, label TEXT, value_json TEXT, updated_event TEXT);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, turn INTEGER, action_kind TEXT, raw_input TEXT, outcome_summary TEXT, created_at TEXT);
+                 INSERT INTO entities VALUES ('hero','actor','林动','','','','');",
+            )
+            .unwrap();
+        }
+        let (status, parsed) = call(app71(&root), "GET", "/api/v1/play/runs/w1/r1", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["graph"]["entities"][0]["label"], "林动");
+        assert_eq!(parsed["title"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn image_settings_roundtrip_and_generate_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture(&root);
+
+        // PUT：三开关覆写（缺 inventory → false）。
+        let (status, parsed) = call(
+            app71(&root),
+            "PUT",
+            "/api/v1/play/runs/w1/r1/image-settings",
+            Some(r#"{ "actors": true, "moments": true }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["imageSettings"]["actors"], true);
+        assert_eq!(parsed["imageSettings"]["inventory"], false);
+        let written = std::fs::read_to_string(
+            root.join("worlds").join("w1").join("runs").join("r1").join("images").join("settings.json"),
+        )
+        .unwrap();
+        assert!(written.contains("\"actors\": true"), "{written}");
+
+        // generate-image：缺 entityId → 400 平铺。
+        let (status, parsed) = call(
+            app71(&root),
+            "POST",
+            "/api/v1/play/runs/w1/r1/generate-image",
+            Some(r#"{ "target": "entity" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "entityId is required for an entity image");
+
+        // 实体不存在 → 404。
+        let (status, parsed) = call(
+            app71(&root),
+            "POST",
+            "/api/v1/play/runs/w1/r1/generate-image",
+            Some(r#"{ "target": "entity", "entityId": "ghost" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "body: {parsed}");
+        assert_eq!(parsed["error"], "entity not found: ghost");
+
+        // 实体存在但生图链未接线 → needsCoverConfig 兜底（TS 未配置分支同形）。
+        let (status, parsed) = call(
+            app71(&root),
+            "POST",
+            "/api/v1/play/runs/w1/r1/generate-image",
+            Some(r#"{ "target": "entity", "entityId": "hero" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["needsCoverConfig"], true);
+
+        // scene 无文本且无投影 → 400。
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty_root = empty_dir.path().to_path_buf();
+        std::fs::create_dir_all(empty_root.join("worlds").join("w1").join("runs").join("r1")).unwrap();
+        let (status, parsed) = call(
+            app71(&empty_root),
+            "POST",
+            "/api/v1/play/runs/w1/r1/generate-image",
+            Some(r#"{ "target": "scene" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "no current scene to illustrate");
+    }
+
+    #[tokio::test]
+    async fn image_file_serving_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture(&root);
+
+        let app = app71(&root);
+        // png 回读 + content-type。
+        let (status, headers, body) = {
+            use tower::ServiceExt;
+            let request = axum::http::Request::builder()
+                .uri("/api/v1/play/runs/w1/r1/images/hero.png")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec();
+            (status, content_type, bytes)
+        };
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.as_deref(), Some("image/png"));
+        assert_eq!(body, b"\x89PNG-hero");
+
+        // 路径穿越 / 缺失。
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/play/runs/w1/r1/images/%2e%2e%2fhero.png", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"], "Invalid image file");
+        let (status, _) = call(app, "GET", "/api/v1/play/runs/w1/r1/images/ghost.png", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // 非法 worldId 段（斜杠）→ 400 INVALID_BOOK_ID（normalizeApiBookId 同码）。
+        let (status, parsed) = call(app71(&root), "GET", "/api/v1/play/runs/%2e%2e/r1", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_BOOK_ID");
+    }
+}

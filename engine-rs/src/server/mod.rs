@@ -17,6 +17,7 @@ pub mod book_create_routes;
 pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
+pub mod play_routes;
 pub mod interactive_film_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
@@ -531,7 +532,24 @@ pub fn router_books(
         )
         .route(
             "/api/v1/translations/:id/export",
-            post(translation_routes::export_translation).with_state(books),
+            post(translation_routes::export_translation).with_state(books.clone()),
+        )
+        // 71 号：play 域（互动世界游玩面）。
+        .route(
+            "/api/v1/play/runs/:worldId/:runId",
+            get(play_routes::get_play_run).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/play/runs/:worldId/:runId/image-settings",
+            put(play_routes::put_play_image_settings).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/play/runs/:worldId/:runId/generate-image",
+            post(play_routes::post_play_generate_image).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/play/runs/:worldId/:runId/images/:file",
+            get(play_routes::get_play_image).with_state(books),
         )
 }
 
