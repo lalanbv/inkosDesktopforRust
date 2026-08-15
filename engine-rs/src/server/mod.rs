@@ -17,6 +17,7 @@ pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
+pub mod service_routes;
 pub mod skill_routes;
 pub mod sse;
 pub mod style_routes;
@@ -370,6 +371,56 @@ pub fn router_books(
             "/api/v1/prompt-packs/:promptId",
             put(skill_routes::put_prompt_pack)
                 .delete(skill_routes::delete_prompt_pack)
+                .with_state(books.clone()),
+        )
+        // 63 号：services / cover 域。
+        .route("/api/v1/services", get(service_routes::list_services).with_state(books.clone()))
+        .route(
+            "/api/v1/services/config",
+            get(service_routes::get_services_config)
+                .put(service_routes::put_services_config)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/config/import-env",
+            post(service_routes::import_env_config).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/models",
+            get(service_routes::list_services_models).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/models/custom",
+            get(service_routes::list_custom_services_models).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/:service/models",
+            get(service_routes::list_service_models).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/:service/secret",
+            get(service_routes::get_service_secret)
+                .put(service_routes::put_service_secret)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/:service/test",
+            post(service_routes::test_service).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/services/:service",
+            axum::routing::delete(service_routes::delete_service).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/cover/config",
+            get(service_routes::get_cover_config)
+                .put(service_routes::put_cover_config)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/cover/secret/:service",
+            get(service_routes::get_cover_secret)
+                .put(service_routes::put_cover_secret)
                 .with_state(books.clone()),
         )
         // 61 号：project 文件浏览面（通配多段路径）。

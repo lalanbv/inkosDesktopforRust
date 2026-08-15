@@ -3306,18 +3306,22 @@ mod config56_e2e {
         assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
         assert!(parsed["error"]["message"].as_str().unwrap().contains("inkos.json"));
 
-        // schema 校验失败（name 缺失 / llm.model 空串）同样 500。
+        // schema 校验失败（name 缺失）同样 500。
         std::fs::write(root.join("inkos.json"), r#"{ "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "m" } }"#).unwrap();
         let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
+        // model 空串：63 号 env/services 合并层（fillNoopLLMDefaults）对齐 TS
+        // 真实语义——resolveEffectiveLLMConfig 填 noop-model 后 schema 通过 → 200
+        //（56 号时按 raw 直校验固化的 500 断言随之废弃）。
         std::fs::write(
             root.join("inkos.json"),
             r#"{ "name": "d", "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "" } }"#,
         )
         .unwrap();
-        let (status, _) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["model"], "noop-model");
     }
 
     #[tokio::test]
@@ -4738,5 +4742,613 @@ mod projectfiles61_e2e {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["contentType"], "text/markdown; charset=utf-8");
+    }
+}
+
+// ── 63 号：services / cover 域（server.ts L3705-L4177 / L3854-L3953）────
+
+mod services63_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::service_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt63(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app63(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/services", axum::routing::get(service_routes::list_services))
+            .route(
+                "/api/v1/services/config",
+                axum::routing::get(service_routes::get_services_config)
+                    .put(service_routes::put_services_config),
+            )
+            .route(
+                "/api/v1/services/config/import-env",
+                axum::routing::post(service_routes::import_env_config),
+            )
+            .route("/api/v1/services/models", axum::routing::get(service_routes::list_services_models))
+            .route(
+                "/api/v1/services/models/custom",
+                axum::routing::get(service_routes::list_custom_services_models),
+            )
+            .route(
+                "/api/v1/services/:service/models",
+                axum::routing::get(service_routes::list_service_models),
+            )
+            .route(
+                "/api/v1/services/:service/secret",
+                axum::routing::get(service_routes::get_service_secret)
+                    .put(service_routes::put_service_secret),
+            )
+            .route(
+                "/api/v1/services/:service/test",
+                axum::routing::post(service_routes::test_service),
+            )
+            .route(
+                "/api/v1/services/:service",
+                axum::routing::delete(service_routes::delete_service),
+            )
+            .route(
+                "/api/v1/cover/config",
+                axum::routing::get(service_routes::get_cover_config)
+                    .put(service_routes::put_cover_config),
+            )
+            .route(
+                "/api/v1/cover/secret/:service",
+                axum::routing::get(service_routes::get_cover_secret)
+                    .put(service_routes::put_cover_secret),
+            )
+            .with_state(rt63(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock OpenAI 兼容 /models 上游（custom 服务 probe 用）。
+    async fn spawn_models_upstream() -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({
+                    "data": [
+                        { "id": "mock-chat-model" },
+                        { "id": "mock-embedding-model" },
+                    ]
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn list_services_bank_connected_and_priority() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let services = parsed["services"].as_array().unwrap();
+        // bank 38 项（custom 排除）；测试机 home 技能不影响本端点，但进程 env 无关
+        assert_eq!(services.len(), 38, "39 bank - custom");
+        // 优先级排序：kkaiapi 置首
+        assert_eq!(services[0]["service"], "kkaiapi");
+        assert_eq!(services[1]["service"], "openrouter");
+        // 未配置未存 key → 全部未连接
+        assert!(services.iter().all(|s| s["connected"] == false));
+        // ollama 本地端点免 key
+        let ollama = services.iter().find(|s| s["service"] == "ollama").unwrap();
+        assert_eq!(ollama["apiKeyOptional"], true);
+
+        // 写 key → connected
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{ "services": { "deepseek": { "apiKey": "sk-x" } } }"#,
+        )
+        .unwrap();
+        let (_, parsed) = call(app63(&root), "GET", "/api/v1/services", None).await;
+        let deepseek = parsed["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["service"] == "deepseek")
+            .unwrap()
+            .clone();
+        assert_eq!(deepseek["connected"], true);
+    }
+
+    #[tokio::test]
+    async fn services_config_read_and_env_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "llm": { "service": "deepseek", "defaultModel": "deepseek-v4-flash", "services": [{ "service": "deepseek" }] } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".env"),
+            "INKOS_LLM_PROVIDER=anthropic\nINKOS_LLM_API_KEY=sk-env\n",
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/config", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["service"], "deepseek");
+        assert_eq!(parsed["defaultModel"], "deepseek-v4-flash");
+        assert_eq!(parsed["configSource"], "studio");
+        // config 无 configSource 字段 → normalize 回 "env"（TS 同款）
+        assert_eq!(parsed["storedConfigSource"], "env");
+        assert_eq!(parsed["services"].as_array().unwrap().len(), 1);
+        // env 摘要：project 层检测到（provider + key）
+        let env = &parsed["envConfig"];
+        assert_eq!(env["project"]["detected"], true);
+        assert_eq!(env["project"]["provider"], "anthropic");
+        assert_eq!(env["project"]["hasApiKey"], true);
+        assert_eq!(env["effectiveSource"], "project");
+        assert_eq!(env["runtimeUsesEnv"], false);
+    }
+
+    #[tokio::test]
+    async fn import_env_writes_config_secrets_and_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join(".env"),
+            "INKOS_LLM_SERVICE=deepseek\nINKOS_LLM_MODEL=deepseek-v4-pro\nINKOS_LLM_API_KEY=sk-env-123\n",
+        )
+        .unwrap();
+
+        let (status, parsed) = call(
+            app63(&root),
+            "POST",
+            "/api/v1/services/config/import-env",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["source"], "project");
+        assert_eq!(parsed["service"], "deepseek");
+        assert_eq!(parsed["defaultModel"], "deepseek-v4-pro");
+
+        // config 落盘：services + service + configSource=studio + 顶层镜像（63 号补齐）
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+        let llm = &saved["llm"];
+        assert_eq!(llm["service"], "deepseek");
+        assert_eq!(llm["configSource"], "studio");
+        assert_eq!(llm["provider"], "openai", "syncTopLevelLlmMirror");
+        assert_eq!(llm["baseUrl"], "https://api.deepseek.com");
+        assert_eq!(llm["model"], "deepseek-v4-pro");
+
+        // secrets 落盘
+        let secrets: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".inkos").join("secrets.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(secrets["services"]["deepseek"]["apiKey"], "sk-env-123");
+
+        // 无 env → 400 平铺 error
+        let dir2 = tempfile::tempdir().unwrap();
+        let (status, parsed) = call(
+            app63(dir2.path()),
+            "POST",
+            "/api/v1/services/config/import-env",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().unwrap().contains("INKOS_LLM_API_KEY"));
+    }
+
+    #[tokio::test]
+    async fn put_services_config_merge_env_reject_and_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("inkos.json"), r#"{ "llm": {} }"#).unwrap();
+
+        // merge services + service + defaultModel → 镜像
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/config",
+            Some(r#"{"services":[{"service":"deepseek","temperature":1.2}],"service":"deepseek","defaultModel":"deepseek-v4-flash"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+        assert_eq!(saved["llm"]["service"], "deepseek");
+        assert_eq!(saved["llm"]["baseUrl"], "https://api.deepseek.com");
+        assert_eq!(saved["llm"]["provider"], "openai");
+        assert_eq!(saved["llm"]["model"], "deepseek-v4-flash");
+        assert_eq!(saved["llm"]["temperature"], 1.2);
+
+        // configSource=env → 400 平铺（且不落盘）
+        let before = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/config",
+            Some(r#"{"configSource":"env"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().unwrap().contains("env"));
+        let after = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        assert_eq!(before, after, "拒绝分支不落盘");
+    }
+
+    #[tokio::test]
+    async fn delete_service_removes_entry_and_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "llm": { "service": "deepseek", "defaultModel": "m", "services": [{ "service": "deepseek" }, { "service": "moonshot" }] } }"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{ "services": { "deepseek": { "apiKey": "sk" } } }"#,
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app63(&root), "DELETE", "/api/v1/services/deepseek", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["service"], "deepseek");
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+        let llm = &saved["llm"];
+        // 选中服务被删 → service + defaultModel 联动清除；moonshot 保留
+        assert_eq!(llm["services"].as_array().unwrap().len(), 1);
+        assert!(llm.get("service").is_none() || llm["service"].is_null());
+        assert!(llm.get("defaultModel").is_none());
+        let secrets: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".inkos").join("secrets.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(secrets["services"].get("deepseek").is_none());
+    }
+
+    #[tokio::test]
+    async fn service_secret_roundtrip_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // PUT 合法 key
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/deepseek/secret",
+            Some(r#"{"apiKey":"sk-abc-123"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+
+        // GET 回读
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/deepseek/secret", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["apiKey"], "sk-abc-123");
+
+        // 含空白/非 ASCII → 400 {ok:false, error}
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/deepseek/secret",
+            Some(r#"{"apiKey":"bad key"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["ok"], false);
+        assert!(parsed["error"].is_string());
+
+        // 空 key → 删除
+        let (status, _) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/deepseek/secret",
+            Some(r#"{"apiKey":"  "}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, parsed) = call(app63(&root), "GET", "/api/v1/services/deepseek/secret", None).await;
+        assert_eq!(parsed["apiKey"], "");
+    }
+
+    #[tokio::test]
+    async fn services_models_bank_groups_filtered_by_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{ "services": { "deepseek": { "apiKey": "sk" } } }"#,
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/models", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let groups = parsed["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "仅已存 key 的服务");
+        assert_eq!(groups[0]["service"], "deepseek");
+        let models = groups[0]["models"].as_array().unwrap();
+        assert!(!models.is_empty());
+        // 卡字段：maxOutput + contextWindow
+        assert!(models[0].get("maxOutput").is_some());
+        assert!(models[0].get("contextWindow").is_some());
+    }
+
+    #[tokio::test]
+    async fn custom_service_models_probe_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (upstream, _guard) = spawn_models_upstream().await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(r#"{{ "llm": {{ "services": [{{ "service": "custom", "name": "Mock", "baseUrl": "{upstream}/v1" }}] }} }}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{ "services": { "custom:Mock": { "apiKey": "sk" } } }"#,
+        )
+        .unwrap();
+
+        // GET /services/models/custom：probe mock 上游 → 文本模型过滤掉 embedding
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/models/custom", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let groups = parsed["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["service"], "custom:Mock");
+        let models = groups[0]["models"].as_array().unwrap();
+        assert_eq!(models.len(), 1, "embedding 模型被过滤");
+        assert_eq!(models[0]["id"], "mock-chat-model");
+
+        // GET /services/custom:Mock/models：query 参数里 custom id 走 live probe
+        let (status, parsed) = call(
+            app63(&root),
+            "GET",
+            "/api/v1/services/custom%3AMock/models?apiKey=sk&refresh=1",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let models = parsed["models"].as_array().unwrap();
+        assert!(models.iter().any(|m| m["id"] == "mock-chat-model"));
+    }
+
+    #[tokio::test]
+    async fn test_service_probe_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (upstream, _guard) = spawn_models_upstream().await;
+
+        // 未知服务（无预设 baseUrl）→ 400
+        let (status, parsed) = call(
+            app63(&root),
+            "POST",
+            "/api/v1/services/unknown-svc/test",
+            Some(r#"{"apiKey":"k"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["ok"], false);
+        assert!(parsed["error"].as_str().unwrap().contains("unknown-svc"));
+
+        // 公网服务无 key → 400
+        let (status, parsed) = call(
+            app63(&root),
+            "POST",
+            "/api/v1/services/deepseek/test",
+            Some(r#"{}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().unwrap().contains("API Key"));
+
+        // inline baseUrl 指向 mock → probe 成功（B12 形状）
+        let (status, parsed) = call(
+            app63(&root),
+            "POST",
+            "/api/v1/services/custom/test",
+            Some(&format!(r#"{{"apiKey":"sk","baseUrl":"{upstream}/v1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["selectedModel"], "mock-chat-model");
+        assert_eq!(parsed["detected"]["modelsSource"], "api");
+        assert_eq!(parsed["detected"]["baseUrl"], format!("{upstream}/v1"));
+        assert_eq!(parsed["probe"]["ok"], true);
+        assert_eq!(parsed["chat"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn cover_config_and_secret_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 初始：3 providers、未配置
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/cover/config", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["providers"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["configured"], false);
+        assert!(parsed["service"].is_null());
+
+        // PUT 非法服务 → 400
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/cover/config",
+            Some(r#"{"service":"bad-service"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Unsupported cover service");
+
+        // PUT kkaiapi + 非法 model（回 default）+ 非法 baseUrl → 400
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/cover/config",
+            Some(r#"{"service":"kkaiapi","model":"not-in-list","baseUrl":"https://x.com/a?q=1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().unwrap().contains("Base URL"));
+
+        // PUT 合法
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/cover/config",
+            Some(r#"{"service":"kkaiapi"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["service"], "kkaiapi");
+        assert_eq!(parsed["model"], "gpt-image-2", "非法 model 回 default");
+
+        // secret roundtrip（cover: 前缀键）
+        let (status, _) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/cover/secret/kkaiapi",
+            Some(r#"{"apiKey":"sk-cover"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, parsed) = call(app63(&root), "GET", "/api/v1/cover/secret/kkaiapi", None).await;
+        assert_eq!(parsed["apiKey"], "sk-cover");
+
+        // configured 变 true（cover service + key）
+        let (_, parsed) = call(app63(&root), "GET", "/api/v1/cover/config", None).await;
+        assert_eq!(parsed["configured"], true);
+        assert_eq!(parsed["service"], "kkaiapi");
+
+        // 非法 cover key → 400
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/cover/secret/kkaiapi",
+            Some(r#"{"apiKey":"bad key"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(parsed["error"].as_str().unwrap().contains("Authorization"));
+    }
+
+    #[tokio::test]
+    async fn get_project_returns_effective_llm_after_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // raw llm 顶层字段空/缺——有效值来自 services + secrets 合并（63 号补齐 56 号偏差）
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{
+  "name": "p1",
+  "language": "zh",
+  "llm": {
+    "service": "custom:Mock",
+    "defaultModel": "mock-chat-model",
+    "services": [{ "service": "custom", "name": "Mock", "baseUrl": "https://mock.example/v1" }]
+  }
+}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{ "services": { "custom:Mock": { "apiKey": "sk" } } }"#,
+        )
+        .unwrap();
+
+        let app = app63(&root).route(
+            "/api/v1/project",
+            axum::routing::get(inkos_engine::server::project_config_routes::get_project)
+                .with_state(rt63(&root)),
+        );
+        let (status, parsed) = call(app, "GET", "/api/v1/project", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // raw 顶层 model/baseUrl 缺失 → 合并层从选中服务补齐（而非 schema 校验失败）
+        assert_eq!(parsed["model"], "mock-chat-model");
+        assert_eq!(parsed["baseUrl"], "https://mock.example/v1");
+        assert_eq!(parsed["provider"], "custom");
+    }
+
+    #[tokio::test]
+    async fn put_default_model_mirrors_top_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("inkos.json"), r#"{ "name": "p", "llm": { "service": "deepseek" } }"#).unwrap();
+
+        let app = app63(&root).route(
+            "/api/v1/project/default-model",
+            axum::routing::put(inkos_engine::server::project_config_routes::put_default_model)
+                .with_state(rt63(&root)),
+        );
+        let (status, parsed) = call(
+            app,
+            "PUT",
+            "/api/v1/project/default-model",
+            Some(r#"{"defaultModel":"deepseek-v4-pro"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+        let llm = &saved["llm"];
+        assert_eq!(llm["defaultModel"], "deepseek-v4-pro");
+        // 63 号补齐：顶层镜像
+        assert_eq!(llm["model"], "deepseek-v4-pro");
+        assert_eq!(llm["baseUrl"], "https://api.deepseek.com");
+        assert_eq!(llm["provider"], "openai");
     }
 }

@@ -46,13 +46,13 @@ fn ok_json(payload: Value) -> ApiError {
 }
 
 /// 读 inkos.json（raw JSON，保未知字段）。失败 → onError 500 语义。
-async fn load_raw_config(root: &std::path::Path) -> Option<Value> {
+pub(crate) async fn load_raw_config(root: &std::path::Path) -> Option<Value> {
     let raw = tokio::fs::read_to_string(root.join("inkos.json")).await.ok()?;
     serde_json::from_str(&raw).ok()
 }
 
 /// 写 inkos.json（2 空格缩进无尾换行，对齐 `JSON.stringify(raw, null, 2)`）。
-async fn save_raw_config(root: &std::path::Path, raw: &Value) -> bool {
+pub(crate) async fn save_raw_config(root: &std::path::Path, raw: &Value) -> bool {
     let serialized = serde_json::to_string_pretty(raw).unwrap_or_default();
     tokio::fs::write(root.join("inkos.json"), serialized).await.is_ok()
 }
@@ -108,14 +108,21 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
     let Some(llm) = obj.get("llm").and_then(Value::as_object) else {
         return invalid("Invalid input: expected object, received missing".to_string());
     };
-    let model = llm.get("model").and_then(Value::as_str).filter(|m| !m.is_empty());
-    let Some(model) = model else {
+    // 63 号补齐（56 号偏差备案）：resolveEffectiveLLMConfig 的 studio-project
+    // 主路径——services 选择 + 镜像 + secrets key + noop 默认填充后取有效值。
+    let effective = crate::server::service_routes::resolve_effective_llm_studio(
+        runtime.state.project_root(),
+        llm,
+    )
+    .await;
+    let get_str = |key: &str| effective.get(key).and_then(Value::as_str);
+    let Some(model) = get_str("model").filter(|m| !m.is_empty()) else {
         return invalid("model must contain at least 1 character(s)".to_string());
     };
-    let Some(base_url) = llm.get("baseUrl").and_then(Value::as_str).filter(|u| is_valid_url(u)) else {
+    let Some(base_url) = get_str("baseUrl").filter(|u| is_valid_url(u)) else {
         return invalid("Invalid url".to_string());
     };
-    let provider = llm.get("provider").and_then(Value::as_str);
+    let provider = get_str("provider");
     let Some(provider) =
         provider.filter(|p| matches!(*p, "anthropic" | "openai" | "custom"))
     else {
@@ -123,8 +130,8 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
             "Invalid enum value. Expected 'anthropic' | 'openai' | 'custom'".to_string(),
         );
     };
-    let stream = llm.get("stream").and_then(Value::as_bool).unwrap_or(true);
-    let temperature = llm.get("temperature").and_then(Value::as_f64).unwrap_or(0.7);
+    let stream = effective.get("stream").and_then(Value::as_bool).unwrap_or(true);
+    let temperature = effective.get("temperature").and_then(Value::as_f64).unwrap_or(0.7);
     // TS `"language" in raw && raw.language !== ""`。
     let language_explicit = obj
         .get("language")
@@ -470,6 +477,9 @@ pub async fn put_default_model(
                 llm.insert("service".to_string(), json!(s));
                 s.to_string()
             });
+        // 63 号补齐：syncTopLevelLlmMirror（54 号偏差备案——顶层
+        // llm.model/baseUrl/provider 镜像随选中服务与 defaultModel 更新）。
+        crate::server::service_routes::sync_top_level_llm_mirror(llm);
     }
     let service_value = service
         .clone()

@@ -114,6 +114,74 @@ pub fn service_to_pi_provider(service: &str) -> Option<&'static str> {
     }))
 }
 
+/// bank + legacy 合并后的服务预设（owned 小结构；对齐 TS `resolveServicePreset`
+/// 的合并语义：provider bank 优先，legacy 表补充，均无 → None）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedServicePreset {
+    pub provider_family: ProviderFamily,
+    pub api: String,
+    pub base_url: String,
+    pub label: String,
+    pub known_models: Vec<&'static str>,
+    pub models_base_url: Option<String>,
+}
+
+/// `resolveServicePreset`：endpoint bank 与 legacy SERVICE_PRESETS 合并查询。
+pub fn resolve_service_preset(service: &str) -> Option<ResolvedServicePreset> {
+    let provider = crate::llm::providers_bank::get_endpoint(service);
+    let legacy = service_preset(service);
+    if provider.is_none() && legacy.is_none() {
+        return None;
+    }
+    let provider_family = legacy
+        .map(|p| p.provider_family)
+        .unwrap_or_else(|| match provider.map(|p| p.api) {
+            Some(crate::llm::providers::ApiProtocol::AnthropicMessages) => ProviderFamily::Anthropic,
+            _ => ProviderFamily::Openai,
+        });
+    let api = provider
+        .map(|p| api_protocol_str(p.api))
+        .or_else(|| legacy.map(|p| p.api))
+        .unwrap_or("openai-completions")
+        .to_string();
+    let base_url = provider
+        .map(|p| p.base_url.clone())
+        .or_else(|| legacy.map(|p| p.base_url.to_string()))
+        .unwrap_or_default()
+        .to_string();
+    let label = provider
+        .map(|p| p.label.clone())
+        .or_else(|| legacy.map(|p| p.label.to_string()))
+        .unwrap_or_else(|| service.to_string());
+    let known_models = legacy.map(|p| p.known_models.to_vec()).unwrap_or_default();
+    let models_base_url = provider
+        .and_then(|p| p.models_base_url.clone())
+        .or_else(|| legacy.and_then(|p| p.models_base_url).map(|s| s.to_string()));
+    Some(ResolvedServicePreset {
+        provider_family,
+        api,
+        base_url,
+        label,
+        known_models,
+        models_base_url,
+    })
+}
+
+fn api_protocol_str(api: crate::llm::providers::ApiProtocol) -> &'static str {
+    use crate::llm::providers::ApiProtocol;
+    match api {
+        ApiProtocol::OpenaiCompletions => "openai-completions",
+        ApiProtocol::OpenaiResponses => "openai-responses",
+        ApiProtocol::AnthropicMessages => "anthropic-messages",
+        ApiProtocol::GoogleGenerativeAi => "google-generative-ai",
+    }
+}
+
+/// `resolveServiceProviderFamily`：合并预设的 provider 家族。
+pub fn resolve_service_provider_family(service: &str) -> Option<ProviderFamily> {
+    resolve_service_preset(service).map(|p| p.provider_family)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +234,35 @@ mod tests {
         assert_eq!(service_to_pi_provider("bailian"), Some("anthropic"));
         assert_eq!(service_to_pi_provider("google"), Some("google"));
         assert_eq!(service_to_pi_provider("custom"), None);
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    #[test]
+    fn merges_bank_and_legacy() {
+        // deepseek 两侧都有：bank baseUrl 优先（同值）
+        let ds = resolve_service_preset("deepseek").unwrap();
+        assert_eq!(ds.base_url, "https://api.deepseek.com");
+        assert_eq!(ds.provider_family, ProviderFamily::Openai);
+        assert_eq!(ds.api, "openai-completions");
+        // bank-only（legacy 无）：siliconcloud 是 bank id（legacy 是 siliconflow）
+        let sc = resolve_service_preset("siliconcloud").unwrap();
+        assert!(!sc.base_url.is_empty());
+        // legacy-only（bank 无）：ppio
+        let ppio = resolve_service_preset("ppio").unwrap();
+        assert_eq!(ppio.base_url, "https://api.ppinfra.com/v3/openai");
+        // 均无
+        assert!(resolve_service_preset("nope").is_none());
+    }
+
+    #[test]
+    fn bank_api_wins_for_family() {
+        // bailian legacy=anthropic；bank api 也是 anthropic-messages
+        assert_eq!(resolve_service_provider_family("bailian"), Some(ProviderFamily::Anthropic));
+        assert_eq!(resolve_service_provider_family("zhipu"), Some(ProviderFamily::Openai));
+        assert!(resolve_service_provider_family("nope").is_none());
     }
 }
