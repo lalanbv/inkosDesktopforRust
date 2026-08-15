@@ -52,7 +52,7 @@ fn deleted_session_ids() -> &'static Mutex<HashSet<String>> {
 }
 
 /// `normalizeApiBookId`：undefined/null → None；非串 400；空/不安全 400。
-fn normalize_api_book_id(value: Option<&Value>, field: &str) -> Result<Option<String>, ApiErrorResponse> {
+pub(crate) fn normalize_api_book_id(value: Option<&Value>, field: &str) -> Result<Option<String>, ApiErrorResponse> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -85,7 +85,7 @@ fn normalize_api_book_id(value: Option<&Value>, field: &str) -> Result<Option<St
 }
 
 /// `normalizeStudioSessionKind`：空回退 fallback；非法 400 INVALID_SESSION_KIND。
-fn normalize_studio_session_kind(
+pub(crate) fn normalize_studio_session_kind(
     value: Option<&Value>,
     fallback: SessionKind,
 ) -> Result<SessionKind, ApiErrorResponse> {

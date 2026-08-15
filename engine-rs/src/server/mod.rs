@@ -9,6 +9,7 @@
 //! - 路由集中导出 [`router`]，供 Tauri 命令或独立 bin 复用
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
+pub mod agent_route;
 pub mod audit_route;
 pub mod books_routes;
 pub mod book_create_routes;
@@ -424,7 +425,9 @@ pub fn router_books(
                 .put(service_routes::put_cover_secret)
                 .with_state(books.clone()),
         )
-        // 64 号：sessions / interaction 会话域（POST /agent 随 65 号交互运行时）。
+        // 65 号：交互 agent 端点（直通聊天主路径；工具面随 66 号）。
+        .route("/api/v1/agent", post(agent_route::post_agent).with_state(books.clone()))
+        // 64 号：sessions / interaction 会话域。
         .route(
             "/api/v1/interaction/session",
             get(session_routes::get_interaction_session).with_state(books.clone()),

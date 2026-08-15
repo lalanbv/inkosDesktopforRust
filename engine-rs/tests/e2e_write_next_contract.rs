@@ -5749,3 +5749,257 @@ mod sessions64_e2e {
         assert!(root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl")).exists());
     }
 }
+
+// ── 65 号：POST /api/v1/agent 直通聊天主路径（server.ts L4805）─────────
+
+mod agent65_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt65(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app65(root: &std::path::Path, llm: &str) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId",
+                axum::routing::get(session_routes::get_session),
+            )
+            .with_state(rt65(root, llm))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn mock_llm() -> (String, tokio::task::JoinHandle<()>) {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|| async {
+                // 首个 chunk 起始（system 关键词不匹配分发器，直接固定回复）
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "好的，我来帮你分析这个修仙故事的节奏问题。" } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    const SESSION_ID: &str = "1782960000000-agent01";
+
+    async fn create_session(root: &std::path::Path) {
+        let _ = call(
+            app65(root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SESSION_ID}"}}"#)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn validation_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let app = app65(&root, "http://127.0.0.1:9");
+
+        // 无 instruction → 平铺 400
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/agent", Some(r#"{"sessionId":"s"}"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "No instruction provided");
+
+        // 无 sessionId → ApiError 400 SESSION_ID_REQUIRED
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/agent", Some(r#"{"instruction":"你好"}"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "SESSION_ID_REQUIRED");
+
+        // 会话不存在 → 404 SESSION_NOT_FOUND
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"你好","sessionId":"nope-1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "SESSION_NOT_FOUND");
+        assert_eq!(parsed["error"]["message"], "Session not found: nope-1");
+
+        // 非 JSON body → 平铺 400（instruction 缺省）
+        let (status, _) = call(app.clone(), "POST", "/api/v1/agent", Some("not-json")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn chat_roundtrip_persists_transcript_and_broadcasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _guard) = mock_llm().await;
+        create_session(&root).await;
+
+        let app = app65(&root, &llm);
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我看下第二章节奏","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert!(parsed["response"].as_str().unwrap().contains("修仙故事"));
+        assert_eq!(parsed["session"]["sessionId"], SESSION_ID);
+        assert_eq!(parsed["session"]["sessionKind"], "chat");
+
+        // transcript 持久化：user + assistant 消息可从会话详情 derive
+        let (status, parsed) = call(
+            app,
+            "GET",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let messages = parsed["session"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "user + assistant");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "帮我看下第二章节奏");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(messages[1]["content"].as_str().unwrap().contains("修仙故事"));
+        // 无标题会话 → 首条 user 消息成为标题
+        let title = parsed["session"]["title"].as_str().unwrap();
+        assert!(title.contains("帮我看下"));
+    }
+
+    #[tokio::test]
+    async fn book_binding_mismatch_and_missing_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 已绑定书 b1 的会话
+        let _ = call(
+            app65(&root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SESSION_ID}","bookId":"b1"}}"#)),
+        )
+        .await;
+        std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"t","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":3000,"createdAt":0,"updatedAt":0}"#,
+        )
+        .unwrap();
+
+        // 请求 activeBookId 与绑定不一致 → 409 SESSION_BOOK_MISMATCH
+        let (status, parsed) = call(
+            app65(&root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"hi","sessionId":"{SESSION_ID}","activeBookId":"b2"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "SESSION_BOOK_MISMATCH");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("b1"));
+
+        // 匹配书但书文件缺失 → 404 BOOK_NOT_FOUND
+        let _ = call(
+            app65(&root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782960000001-bkmiss","bookId":"ghost"}"#),
+        )
+        .await;
+        let (status, parsed) = call(
+            app65(&root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"hi","sessionId":"1782960000001-bkmiss","activeBookId":"ghost"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "BOOK_NOT_FOUND");
+
+        // 绑定书一致 → 直通聊天成功（kind book）
+        let (llm, _guard) = mock_llm().await;
+        let (status, parsed) = call(
+            app65(&root, &llm),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"第二章节奏如何","sessionId":"{SESSION_ID}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["session"]["sessionKind"], "book");
+        assert_eq!(parsed["session"]["activeBookId"], "b1");
+    }
+
+    #[tokio::test]
+    async fn llm_failure_is_agent_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        create_session(&root).await;
+        // LLM 不可达 → agent:error 形态 500
+        let (status, parsed) = call(
+            app65(&root, "http://127.0.0.1:9"),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"hi","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_SESSION_FAILED");
+        assert!(parsed["response"].is_string());
+    }
+}
