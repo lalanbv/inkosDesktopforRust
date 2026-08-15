@@ -16,6 +16,7 @@ pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
 pub mod project_config_routes;
+pub mod project_files_routes;
 pub mod skill_routes;
 pub mod sse;
 pub mod style_routes;
@@ -369,6 +370,17 @@ pub fn router_books(
             "/api/v1/prompt-packs/:promptId",
             put(skill_routes::put_prompt_pack)
                 .delete(skill_routes::delete_prompt_pack)
+                .with_state(books.clone()),
+        )
+        // 61 号：project 文件浏览面（通配多段路径）。
+        .route(
+            "/api/v1/project/files/*file",
+            get(project_files_routes::get_project_file).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/project/artifacts/*file",
+            get(project_files_routes::get_project_artifact)
+                .put(project_files_routes::put_project_artifact)
                 .with_state(books),
         )
 }

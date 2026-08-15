@@ -4429,3 +4429,314 @@ mod skills60_e2e {
         assert!(!skills.iter().any(|s| s["id"] == "broken"));
     }
 }
+
+// ── 61 号：project 文件浏览面（server.ts L4270-L4320）──────────────
+
+mod projectfiles61_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::project_files_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt61(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app61(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/project/files/*file",
+                axum::routing::get(project_files_routes::get_project_file),
+            )
+            .route(
+                "/api/v1/project/artifacts/*file",
+                axum::routing::get(project_files_routes::get_project_artifact)
+                    .put(project_files_routes::put_project_artifact),
+            )
+            .with_state(rt61(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, Option<Vec<u8>>, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec();
+        let parsed = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, Some(bytes), parsed)
+    }
+
+    /// PNG 魔数开头的最小 fixture。
+    const PNG_BYTES: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+
+    #[tokio::test]
+    async fn get_project_file_serves_image_with_no_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("shorts").join("ep1")).unwrap();
+        std::fs::write(root.join("shorts").join("ep1").join("cover.png"), PNG_BYTES).unwrap();
+
+        let (status, bytes, _) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/files/shorts/ep1/cover.png",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(bytes.as_deref(), Some(PNG_BYTES));
+
+        // percent-encoded 段（decodeURIComponent 语义）
+        std::fs::write(root.join("shorts").join("sp ace.png"), PNG_BYTES).unwrap();
+        let (status, bytes, _) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/files/shorts/sp%20ace.png",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "percent 解码后命中");
+        assert_eq!(bytes.as_deref(), Some(PNG_BYTES));
+
+        // 头部多余 / 剥离
+        let (status, _, _) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/files//shorts/ep1/cover.png",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_project_file_validation_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let get = |uri: &str| {
+            let root = root.clone();
+            let uri = uri.to_string();
+            async move { call(app61(&root), "GET", &uri, None).await }
+        };
+
+        // 越权前缀（books/ 不在白名单）
+        let (status, _, parsed) = get("/api/v1/project/files/books/b1/cover.png").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_FILE_PATH");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Only generated shorts/, covers/, interactive-films/ images can be previewed"
+        );
+
+        // .. 穿越（含反斜杠形态）
+        let (status, _, parsed) = get("/api/v1/project/files/shorts/..%2F..%2Fetc%2Fx.png").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Invalid project file path");
+        let (status, _, parsed) = get("/api/v1/project/files/shorts/..\\..\\x.png").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "Invalid project file path");
+
+        // 非图片扩展 → 415
+        let (status, _, parsed) = get("/api/v1/project/files/shorts/a.txt").await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(parsed["error"]["code"], "UNSUPPORTED_PROJECT_FILE_TYPE");
+
+        // 非法 percent 序列（decodeURIComponent throw）→ 400
+        let (status, _, parsed) = get("/api/v1/project/files/shorts/%zz.png").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_FILE_PATH");
+
+        // 文件缺失 → 404
+        let (status, _, _) = get("/api/v1/project/files/covers/missing.png").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn artifacts_get_put_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("dramas")).unwrap();
+        std::fs::write(root.join("dramas").join("ep1.md"), "# 第一幕\n\n正文。").unwrap();
+
+        // GET md：path/content/contentType/size（UTF-8 字节数）
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/dramas/ep1.md",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["path"], "dramas/ep1.md");
+        assert_eq!(parsed["contentType"], "text/markdown; charset=utf-8");
+        assert_eq!(parsed["content"], "# 第一幕\n\n正文。");
+        assert_eq!(parsed["size"], "# 第一幕\n\n正文。".len());
+
+        // PUT 深层新文件（mkdir -p 父目录）+ 覆写
+        let (status, _, parsed) = call(
+            app61(&root),
+            "PUT",
+            "/api/v1/project/artifacts/storyboards/scenes/s1.json",
+            Some(r#"{"content":"{ \"shot\": 1 }"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["path"], "storyboards/scenes/s1.json");
+        assert_eq!(parsed["contentType"], "application/json; charset=utf-8");
+        assert_eq!(parsed["size"], "{ \"shot\": 1 }".len());
+        assert_eq!(
+            std::fs::read_to_string(root.join("storyboards").join("scenes").join("s1.json")).unwrap(),
+            "{ \"shot\": 1 }"
+        );
+
+        // GET 回读（json 类型）
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/storyboards/scenes/s1.json",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["content"], "{ \"shot\": 1 }");
+
+        // 缺失 → 404
+        let (status, _, _) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/dramas/nope.md",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn artifacts_validation_branches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // 越权前缀 → 400 INVALID_PROJECT_ARTIFACT_PATH
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/story/pending_hooks.md",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_ARTIFACT_PATH");
+        assert_eq!(parsed["error"]["message"], "Only generated writing artifacts can be opened");
+
+        // 非文本扩展 → 415
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/shorts/a.png",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(parsed["error"]["code"], "UNSUPPORTED_PROJECT_ARTIFACT_TYPE");
+
+        // .. 穿越 → 400（消息为 artifact 版）
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/shorts/..%2Fx.md",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_ARTIFACT_PATH");
+        assert_eq!(parsed["error"]["message"], "Invalid project artifact path");
+
+        // PUT content 非串 → 400 INVALID_PROJECT_ARTIFACT_BODY
+        let (status, _, parsed) = call(
+            app61(&root),
+            "PUT",
+            "/api/v1/project/artifacts/shorts/a.md",
+            Some(r#"{"content":5}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_ARTIFACT_BODY");
+        assert_eq!(parsed["error"]["message"], "content must be a string");
+
+        // PUT 非 JSON body（json catch → null → content undefined）→ 400
+        let (status, _, parsed) = call(
+            app61(&root),
+            "PUT",
+            "/api/v1/project/artifacts/shorts/a.md",
+            Some("not-json"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "content must be a string");
+
+        // PUT JSON 数组（无 content 键）→ 400
+        let (status, _, parsed) = call(
+            app61(&root),
+            "PUT",
+            "/api/v1/project/artifacts/shorts/a.md",
+            Some("[1]"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["message"], "content must be a string");
+
+        // 校验失败不落盘
+        assert!(!root.join("shorts").exists());
+    }
+
+    #[tokio::test]
+    async fn artifacts_txt_and_markdown_ext() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("covers")).unwrap();
+        std::fs::write(root.join("covers").join("note.txt"), "plain").unwrap();
+        std::fs::write(root.join("covers").join("brief.markdown"), "md").unwrap();
+
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/covers/note.txt",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["contentType"], "text/plain; charset=utf-8");
+
+        let (status, _, parsed) = call(
+            app61(&root),
+            "GET",
+            "/api/v1/project/artifacts/covers/brief.markdown",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["contentType"], "text/markdown; charset=utf-8");
+    }
+}

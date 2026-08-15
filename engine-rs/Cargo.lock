@@ -587,6 +587,7 @@ dependencies = [
  "async-trait",
  "axum",
  "futures-util",
+ "percent-encoding",
  "regex",
  "reqwest",
  "rusqlite",
