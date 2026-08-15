@@ -164,6 +164,7 @@ pub async fn consolidate(
                     LLMMessage {
                         role: LLMRole::System,
                         content: "You are a narrative summarizer. Compress chapter-by-chapter summaries into a single coherent paragraph (max 500 words) that captures the key events, character developments, and plot progression of this volume. Preserve specific names, locations, and plot points. Write in the same language as the input.".to_string(),
+                        tool_calls: None, tool_call_id: None,
                     },
                     LLMMessage {
                         role: LLMRole::User,
@@ -171,6 +172,7 @@ pub async fn consolidate(
                             "Volume: {} (Chapters {}-{})\n\nChapter summaries:\n{}\n{}",
                             vol.name, vol.start_ch, vol.end_ch, header, vol_summary_rows
                         ),
+                        tool_calls: None, tool_call_id: None,
                     },
                 ],
                 0.3,

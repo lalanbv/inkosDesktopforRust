@@ -14,12 +14,13 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Map, Value};
 
+use crate::interaction::agent_loop::{run_agent_loop, LoopChat, LoopEvents, LoopToolExecution};
 use crate::interaction::book_session_store::{
     create_and_persist_book_session, load_book_session,
 };
 use crate::interaction::session::{utc_now_ms, SessionKind};
 use crate::interaction::session_transcript::{append_transcript_events, TranscriptEvent};
-use crate::llm::provider::{LLMMessage, LLMRole};
+use crate::llm::provider::LLMMessage;
 use crate::server::books_routes::BooksRuntime;
 use crate::server::session_routes::{
     normalize_api_book_id, normalize_studio_session_kind,
@@ -233,40 +234,103 @@ pub async fn post_agent(
         }),
     );
 
-    // ── 直通聊天主路径（无工具问答；工具面随 66 号） ──────────────
+    // ── agent 循环主路径（66 号：多轮 tool-use + SSE 增量 + abort 截断） ──
     let handle = Arc::new(Mutex::new(AgentSessionHandle { abort_requested: false }));
     running_agent_sessions()
         .lock()
         .unwrap()
         .insert(session_id.to_string(), handle.clone());
+    let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
 
     let system_prompt = format!(
-        "你是 InkOS Studio 的创作助手。用与用户提问一致的语言简洁、具体地回答。{}",
+        "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
         agent_book_id
             .as_ref()
             .map(|book_id| format!("当前活动书籍：{book_id}。回答时结合该书的创作上下文。"))
             .unwrap_or_default(),
     );
-    let messages = vec![
-        LLMMessage {
-            role: LLMRole::System,
-            content: system_prompt,
-        },
-        LLMMessage {
-            role: LLMRole::User,
-            content: instruction.to_string(),
-        },
-    ];
-    let chat_result = runtime.router.chat("studio-agent", messages, 0.7, None).await;
+
+    struct RouterLoopChat<'a> {
+        router: &'a crate::llm::agent_router::AgentRouter,
+    }
+
+    #[async_trait::async_trait]
+    impl LoopChat for RouterLoopChat<'_> {
+        async fn chat(
+            &self,
+            messages: &[LLMMessage],
+            tools: Option<&Value>,
+        ) -> Result<(String, Vec<(String, String, String)>), String> {
+            let endpoint = self.router.resolve("studio-agent");
+            let client = self.router.client_for_public(&endpoint).await;
+            let completion = client
+                .stream_chat(&crate::llm::streaming_client::ChatCompletionParams {
+                    model: &endpoint.model,
+                    messages,
+                    temperature: 0.7,
+                    max_tokens: endpoint.max_tokens,
+                    stream: true,
+                    extra: None,
+                    tools,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            let tool_calls = completion
+                .tool_calls
+                .into_iter()
+                .map(|tc| (tc.id, tc.name, tc.arguments))
+                .collect();
+            Ok((completion.content, tool_calls))
+        }
+    }
+
+    struct SseBridge<'a> {
+        hub: &'a crate::server::sse::BroadcastHub,
+        session_id: String,
+    }
+
+    impl LoopEvents for SseBridge<'_> {
+        fn on_delta(&self, text: &str) {
+            self.hub.broadcast("draft:delta", &json!({ "sessionId": self.session_id, "text": text }));
+        }
+        fn on_tool_start(&self, id: &str, tool: &str, args: &Value) {
+            self.hub.broadcast("tool:start", &json!({
+                "sessionId": self.session_id, "id": id, "tool": tool, "args": args,
+                "stages": [],
+            }));
+        }
+        fn on_tool_end(&self, id: &str, tool: &str, result_text: &str, is_error: bool) {
+            self.hub.broadcast("tool:end", &json!({
+                "sessionId": self.session_id, "id": id, "tool": tool,
+                "result": { "content": result_text }, "isError": is_error,
+            }));
+        }
+    }
+
+    let loop_chat = RouterLoopChat { router: &runtime.router };
+    let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
+    let tools = crate::interaction::project_tools::tools_payload();
+    let loop_result = run_agent_loop(
+        &loop_chat,
+        root,
+        &system_prompt,
+        instruction,
+        Some(&tools),
+        Some(&abort_flag),
+        &bridge,
+    )
+    .await;
 
     running_agent_sessions().lock().unwrap().remove(session_id);
 
+    let chat_result = loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions));
+
     match chat_result {
-        Ok(outcome) => {
-            let response_text = if outcome.content.trim().is_empty() {
+        Ok((raw_text, tool_executions)) => {
+            let response_text = if raw_text.is_empty() {
                 "（无回复内容）".to_string()
             } else {
-                outcome.content.trim().to_string()
+                raw_text
             };
             append_chat_turn(root, session_id, instruction, &response_text, session_kind).await;
             runtime.hub.broadcast(
@@ -288,6 +352,7 @@ pub async fn post_agent(
                 StatusCode::OK,
                 Json(json!({
                     "response": response_text,
+                    "details": { "toolExecutions": tool_execution_cards(&tool_executions) },
                     "session": Value::Object(session_obj),
                 })),
             )
@@ -314,4 +379,32 @@ pub async fn post_agent(
                 .into_response()
         }
     }
+}
+
+/// 工具执行卡 → 响应形态。
+fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
+    executions
+        .iter()
+        .map(|execution| {
+            let mut card = json!({
+                "id": execution.id,
+                "tool": execution.tool,
+                "label": execution.tool,
+                "status": execution.status,
+                "args": execution.args,
+                "startedAt": execution.started_at,
+            });
+            let obj = card.as_object_mut().unwrap();
+            if let Some(completed_at) = execution.completed_at {
+                obj.insert("completedAt".into(), json!(completed_at));
+            }
+            if let Some(result) = &execution.result {
+                obj.insert("result".into(), json!(result));
+            }
+            if let Some(error) = &execution.error {
+                obj.insert("error".into(), json!(error));
+            }
+            card
+        })
+        .collect()
 }

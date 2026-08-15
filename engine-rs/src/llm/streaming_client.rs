@@ -27,6 +27,8 @@ pub struct ChatCompletionParams<'a> {
     pub max_tokens: u32,
     pub stream: bool,
     pub extra: Option<&'a HashMap<String, serde_json::Value>>,
+    /// OpenAI tools 数组（raw JSON schema 透传；None = 不带工具）。
+    pub tools: Option<&'a serde_json::Value>,
 }
 
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
@@ -41,12 +43,26 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
                 LLMRole::System => "system",
                 LLMRole::User => "user",
                 LLMRole::Assistant => "assistant",
+                LLMRole::Tool => "tool",
             };
-            serde_json::json!({ "role": role, "content": m.content })
+            {
+                let mut obj = serde_json::Map::new();
+                obj.insert("role".into(), serde_json::json!(role));
+                obj.insert("content".into(), serde_json::json!(m.content));
+                if let Some(tool_calls) = &m.tool_calls {
+                    obj.insert("tool_calls".into(), tool_calls.clone());
+                }
+                if let Some(tool_call_id) = &m.tool_call_id {
+                    obj.insert("tool_call_id".into(), serde_json::json!(tool_call_id));
+                    // OpenAI 协议要求 tool 角色消息带工具名
+                    let _ = tool_call_id;
+                }
+                serde_json::Value::Object(obj)
+            }
         })
         .collect();
 
-    let reserved: &[&str] = &["max_tokens", "temperature", "model", "messages", "stream"];
+    let reserved: &[&str] = &["max_tokens", "temperature", "model", "messages", "stream", "tools"];
     let mut body = serde_json::json!({
         "model": params.model,
         "messages": messages,
@@ -54,6 +70,11 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
         "max_tokens": params.max_tokens,
         "stream": params.stream,
     });
+    if let Some(tools) = params.tools {
+        body.as_object_mut()
+            .expect("body 是对象")
+            .insert("tools".to_string(), tools.clone());
+    }
     if let Some(extra) = params.extra {
         let obj = body.as_object_mut().expect("body 是对象");
         for (k, v) in extra {
@@ -81,6 +102,50 @@ pub struct StreamedCompletion {
     pub completion_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub done: bool,
+    /// 聚合后的工具调用（按 index 合并 name/arguments 片段）。
+    pub tool_calls: Vec<StreamedToolCall>,
+}
+
+/// 聚合后的单条工具调用。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StreamedToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// 聚合 tool_calls 增量（pure）：按 index 合并 id/name/arguments 片段。
+type ToolCallDeltas = Vec<(u32, Option<String>, Option<String>, Option<String>)>;
+
+pub fn aggregate_tool_calls(deltas: &ToolCallDeltas) -> Vec<StreamedToolCall> {
+    let mut order: Vec<u32> = Vec::new();
+    let mut by_index: std::collections::HashMap<u32, (String, String, String)> =
+        std::collections::HashMap::new();
+    for (index, id, name, arguments) in deltas {
+        let entry = by_index.entry(*index).or_insert_with(|| {
+            order.push(*index);
+            (String::new(), String::new(), String::new())
+        });
+        if let Some(id) = id {
+            if !id.is_empty() {
+                entry.0 = id.clone();
+            }
+        }
+        if let Some(name) = name {
+            entry.1.push_str(name);
+        }
+        if let Some(arguments) = arguments {
+            entry.2.push_str(arguments);
+        }
+    }
+    order.sort();
+    order
+        .into_iter()
+        .filter_map(|index| {
+            let (id, name, arguments) = by_index.remove(&index)?;
+            (!id.is_empty() && !name.is_empty()).then_some(StreamedToolCall { id, name, arguments })
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -141,6 +206,7 @@ impl StreamingChatClient {
         let mut completion_tokens = None;
         let mut total_tokens = None;
         let mut done = false;
+        let mut tool_call_deltas: ToolCallDeltas = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -154,7 +220,9 @@ impl StreamingChatClient {
                         total_tokens = t;
                     }
                     SseEvent::Done => done = true,
-                    SseEvent::ToolCallDelta { .. } => {} // 工具调用增量暂不累积
+                    SseEvent::ToolCallDelta { index, id, name, arguments } => {
+                        tool_call_deltas.push((index, id, name, arguments));
+                    }
                 }
             }
         }
@@ -170,7 +238,8 @@ impl StreamingChatClient {
                 _ => {}
             }
         }
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done })
+        let tool_calls = aggregate_tool_calls(&tool_call_deltas);
+        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done, tool_calls })
     }
 }
 
@@ -182,10 +251,10 @@ mod tests {
     #[test]
     fn build_request_shape() {
         let msgs = vec![
-            LLMMessage { role: LLMRole::System, content: "你是助手".into() },
-            LLMMessage { role: LLMRole::User, content: "你好".into() },
+            LLMMessage { role: LLMRole::System, content: "你是助手".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage { role: LLMRole::User, content: "你好".into(), tool_calls: None, tool_call_id: None },
         ];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, extra: None };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, extra: None, tools: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["temperature"], 0.7);
@@ -201,8 +270,8 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("model".into(), serde_json::json!("EVIL")); // 保留字段，应被忽略
         extra.insert("top_p".into(), serde_json::json!(0.9)); // 非保留，应保留
-        let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into() }];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, extra: Some(&extra) };
+        let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }];
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, extra: Some(&extra), tools: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o"); // 未被覆盖
         assert_eq!(body["top_p"], 0.9); // 保留

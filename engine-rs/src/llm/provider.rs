@@ -50,15 +50,22 @@ pub struct LLMUsage {
 pub struct LLMMessage {
     pub role: LLMRole,
     pub content: String,
+    /// assistant 轮的 tool_calls 数组（OpenAI 形态，raw JSON 透传）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    /// tool 轮的工具调用 id。
+    #[serde(rename = "tool_call_id", default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"system\" | \"user\" | \"assistant\""))]
+#[cfg_attr(feature = "export-bindings", ts(export, type = "\"system\" | \"user\" | \"assistant\" | \"tool\""))]
 pub enum LLMRole {
     #[serde(rename = "system")] System,
     #[serde(rename = "user")] User,
     #[serde(rename = "assistant")] Assistant,
+    #[serde(rename = "tool")] Tool,
 }
 
 /// 流式进度（已用时/总字符/中文字符/状态）。

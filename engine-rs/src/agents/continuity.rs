@@ -1276,10 +1276,12 @@ pub async fn audit_chapter(
         LLMMessage {
             role: LLMRole::System,
             content: system_prompt,
+            tool_calls: None, tool_call_id: None,
         },
         LLMMessage {
             role: LLMRole::User,
             content: user_prompt,
+            tool_calls: None, tool_call_id: None,
         },
     ];
     let temperature = options.temperature.unwrap_or(0.3);

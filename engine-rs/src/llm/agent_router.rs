@@ -102,6 +102,10 @@ impl AgentRouter {
         }
     }
 
+    pub async fn client_for_public(&self, endpoint: &ResolvedEndpoint) -> Arc<StreamingChatClient> {
+        self.client_for(endpoint).await
+    }
+
     async fn client_for(&self, endpoint: &ResolvedEndpoint) -> Arc<StreamingChatClient> {
         // 缓存键：baseUrl|apiKey 尾 4 位（避免全键入内存日志面的同时区分端点）。
         let key = format!(
@@ -140,6 +144,7 @@ impl AgentRouter {
                 max_tokens: max_tokens.unwrap_or(endpoint.max_tokens),
                 stream: true,
                 extra: None,
+                tools: None,
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;
@@ -237,10 +242,12 @@ impl CycleAuditor for RoutedAgent {
             LLMMessage {
                 role: LLMRole::System,
                 content: "你是小说连续性审稿官。审查章节正文：无硬矛盾输出 PASS，有硬矛盾输出 FAIL 并逐行列出问题（[分类] 描述）。最后一行输出 0-100 整体分。" .to_string(),
+                tool_calls: None, tool_call_id: None,
             },
             LLMMessage {
                 role: LLMRole::User,
                 content: format!("## 待审正文\n{content}"),
+                tool_calls: None, tool_call_id: None,
             },
         ];
         let outcome = self.router.chat(self.agent, messages, 0.2, None).await?;
@@ -452,7 +459,7 @@ mod tests {
         let agent = RoutedAgent { router, agent: "writer" };
         let error = crate::agents::writer::WriterChat::chat(
             &agent,
-            vec![LLMMessage { role: LLMRole::User, content: "x".into() }],
+            vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }],
             0.7,
         )
         .await

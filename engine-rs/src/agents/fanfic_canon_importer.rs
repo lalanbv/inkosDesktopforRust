@@ -60,10 +60,11 @@ pub async fn import_from_text(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt },
+                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
                 LLMMessage {
                     role: LLMRole::User,
                     content: format!("以下是原作《{source_name}》的素材：\n\n{}", source.text),
+                    tool_calls: None, tool_call_id: None,
                 },
             ],
             0.3,
@@ -171,10 +172,12 @@ async fn prepare_source_text(
                             "如果片段没有某类信息，直接省略该类。保留片段编号，方便后续追溯。",
                         ]
                         .join("\n"),
+                        tool_calls: None, tool_call_id: None,
                     },
                     LLMMessage {
                         role: LLMRole::User,
                         content: format!("原作：《{source_name}》\n片段：{}/{}\n\n{chunk}", index + 1, total),
+                        tool_calls: None, tool_call_id: None,
                     },
                 ],
                 0.2,

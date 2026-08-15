@@ -187,8 +187,8 @@ async fn generate_style_guide(
             .chat(
                 "style-guide",
                 vec![
-                    LLMMessage { role: LLMRole::System, content: style_system_prompt(language).to_string() },
-                    LLMMessage { role: LLMRole::User, content: user_prompt },
+                    LLMMessage { role: LLMRole::System, content: style_system_prompt(language).to_string(), tool_calls: None, tool_call_id: None },
+                    LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
                 ],
                 0.3,
                 None,
@@ -370,8 +370,8 @@ pub async fn import_canon(
         .chat(
             "parent-canon",
             vec![
-                LLMMessage { role: LLMRole::System, content: system.to_string() },
-                LLMMessage { role: LLMRole::User, content: user },
+                LLMMessage { role: LLMRole::System, content: system.to_string(), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
             ],
             0.3,
             None,

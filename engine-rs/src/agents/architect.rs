@@ -147,8 +147,8 @@ pub async fn generate_foundation(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: format!("{lang_prefix}{system_prompt}") },
-                LLMMessage { role: LLMRole::User, content: user_message },
+                LLMMessage { role: LLMRole::System, content: format!("{lang_prefix}{system_prompt}"), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
             ],
             0.8,
         )
@@ -240,8 +240,8 @@ pub async fn generate_foundation_from_import(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt },
-                LLMMessage { role: LLMRole::User, content: user_message },
+                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
             ],
             0.5,
         )
@@ -293,8 +293,8 @@ pub async fn generate_fanfic_foundation(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt },
-                LLMMessage { role: LLMRole::User, content: user_message },
+                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
             ],
             0.7,
         )
@@ -396,8 +396,8 @@ async fn repair_missing_sections(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system },
-                LLMMessage { role: LLMRole::User, content: user },
+                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
             ],
             0.2,
         )

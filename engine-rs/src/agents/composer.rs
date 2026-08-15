@@ -532,8 +532,8 @@ impl OutlineSectionSelector for LlmOutlineSelector<'_> {
             .chat
             .chat(
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system },
-                    LLMMessage { role: LLMRole::User, content: user },
+                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
                 ],
                 ComposerChatOptions { temperature: 0.1, max_tokens: Some(1024) },
             )
@@ -567,8 +567,8 @@ impl CompressibleContextCompiler for LlmContextCompiler<'_> {
             .chat
             .chat(
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system },
-                    LLMMessage { role: LLMRole::User, content: user },
+                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
                 ],
                 ComposerChatOptions { temperature: 0.2, max_tokens: Some(max_tokens) },
             )

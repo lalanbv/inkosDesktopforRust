@@ -1238,10 +1238,12 @@ async fn settle(
                 LLMMessage {
                     role: LLMRole::System,
                     content: observer_system,
+                    tool_calls: None, tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: observer_user,
+                    tool_calls: None, tool_call_id: None,
                 },
             ],
             0.5,
@@ -1308,10 +1310,12 @@ async fn settle(
                 LLMMessage {
                     role: LLMRole::System,
                     content: settler_system,
+                    tool_calls: None, tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: settler_user,
+                    tool_calls: None, tool_call_id: None,
                 },
             ],
             0.3,
@@ -1709,10 +1713,12 @@ pub async fn write_chapter(
                 LLMMessage {
                     role: LLMRole::System,
                     content: creative_system_prompt,
+                    tool_calls: None, tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: creative_user_prompt,
+                    tool_calls: None, tool_call_id: None,
                 },
             ],
             creative_temperature,

@@ -761,8 +761,8 @@ pub async fn post_workspace_inspiration(
         .chat(
             "inspiration",
             vec![
-                LLMMessage { role: LLMRole::System, content: system },
-                LLMMessage { role: LLMRole::User, content: user_parts.join("\n\n") },
+                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user_parts.join("\n\n"), tool_calls: None, tool_call_id: None },
             ],
             0.9,
             Some(600),

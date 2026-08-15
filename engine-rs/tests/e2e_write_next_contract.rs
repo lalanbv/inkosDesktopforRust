@@ -6003,3 +6003,187 @@ mod agent65_e2e {
         assert!(parsed["response"].is_string());
     }
 }
+
+// ── 66 号：POST /agent 工具循环（tool-calls 多轮 + SSE + 工具执行）────
+
+mod agent66_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt66(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app66(root: &std::path::Path, llm: &str) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId",
+                axum::routing::get(session_routes::get_session),
+            )
+            .with_state(rt66(root, llm))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 两轮 mock：首轮 tool_calls(read)，次轮最终文本。断言请求里带 tools。
+    async fn mock_tool_llm() -> (String, tokio::task::JoinHandle<()>) {
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let calls_for_server = calls.clone();
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let calls = calls_for_server.clone();
+                    async move {
+                        let has_tools = body.get("tools").is_some();
+                        let msg_count = body["messages"].as_array().map(|m| m.len()).unwrap_or(0);
+                        calls.lock().unwrap().push(format!("{has_tools}:{msg_count}"));
+                        let chunk = if msg_count <= 2 {
+                            // 首轮：发起 read 工具调用
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_read_1", "function": { "name": "read", "arguments": "{\"path\":\"note.md\"}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "笔记里写着：这是主角设定草稿。" } }] })
+                        };
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    const SESSION_ID: &str = "1782970000000-tool01";
+
+    #[tokio::test]
+    async fn tool_loop_roundtrip_with_execution_cards() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("note.md"), "这是主角设定草稿。").unwrap();
+        let (llm, _guard) = mock_tool_llm().await;
+        let _ = call(
+            app66(&root, &llm),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SESSION_ID}"}}"#)),
+        )
+        .await;
+
+        let app = app66(&root, &llm);
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"看看 note.md 写了什么","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "笔记里写着：这是主角设定草稿。");
+
+        // 工具执行卡
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "read");
+        assert_eq!(execs[0]["status"], "completed");
+        assert!(execs[0]["result"].as_str().unwrap().contains("主角设定草稿"));
+
+        // transcript：会话详情可见 assistant 轮文本（工具轮并入 assistant 卡）
+        let (status, parsed) = call(app, "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let messages = parsed["session"]["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "user");
+        let assistant = &messages[1];
+        assert_eq!(assistant["role"], "assistant");
+        assert!(assistant["content"].as_str().unwrap().contains("主角设定草稿"));
+    }
+
+    #[tokio::test]
+    async fn direct_chat_still_works_without_tool_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 65 号 mock（无 tool_calls，单轮文本）复用
+        let app_chat = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|| async {
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "直接回答。" } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_chat).await.unwrap(); });
+        let llm = format!("http://{addr}");
+
+        let _ = call(
+            app66(&root, &llm),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SESSION_ID}"}}"#)),
+        )
+        .await;
+        let (status, parsed) = call(
+            app66(&root, &llm),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"你好","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "直接回答。");
+        assert_eq!(parsed["details"]["toolExecutions"].as_array().unwrap().len(), 0);
+    }
+}

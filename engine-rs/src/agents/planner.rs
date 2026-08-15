@@ -311,10 +311,12 @@ pub async fn plan_chapter_memo(
                     LLMMessage {
                         role: LLMRole::System,
                         content: system_prompt.to_string(),
+                        tool_calls: None, tool_call_id: None,
                     },
                     LLMMessage {
                         role: LLMRole::User,
                         content: current_user_message.clone(),
+                        tool_calls: None, tool_call_id: None,
                     },
                 ],
                 0.7,
