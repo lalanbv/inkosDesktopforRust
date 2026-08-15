@@ -37,6 +37,7 @@ pub mod length_normalizer;
 pub mod observer_prompts;
 pub mod planner;
 pub mod radar;
+pub mod script_storyboard;
 pub mod planner_context;
 pub mod planner_prompts;
 pub mod post_write_validator;

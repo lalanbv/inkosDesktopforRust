@@ -9081,3 +9081,313 @@ mod translation75_e2e {
         assert!(parsed["error"]["message"].as_str().unwrap().contains("project id"), "body: {parsed}");
     }
 }
+
+mod script76_e2e {
+    //! 76 号：script_create / storyboard_create / generate_cover 三确认全链。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt76(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app76(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// LLM（剧本/分镜双代理）+ 生图（images b64）双 mock。
+    async fn mocks() -> (String, String) {
+        let script_body = "# 山雨 剧本\n\n## 剧本正文\n\n# 第一集 夜雨\n\n场景：旧宅门口\n\n字幕：第九集完".to_string();
+        let storyboard_body = "# 山雨 分镜\n\n## 分镜表\n\n| 镜号 | 画面 |\n| --- | --- |\n| 01 | 雨夜街口 |\n\n## 图像提示词\n\nPrompt: 雨夜街口，水墨远景\nPrompt: 灯下人影，半身近景".to_string();
+        let llm_app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let script_body = script_body.clone();
+                let storyboard_body = storyboard_body.clone();
+                async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("剧本创作工具") {
+                        script_body
+                    } else if system.contains("分镜创作工具") {
+                        storyboard_body
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let llm_addr = llm_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(llm_listener, llm_app).await.unwrap(); });
+
+        use base64::Engine as _;
+        let png_b64 = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG-cover");
+        let image_payload = format!(r#"{{"data":[{{"b64_json":"{png_b64}"}}]}}"#);
+        let image_app = axum::Router::new().route(
+            "/images/generations",
+            axum::routing::post(move || async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    image_payload,
+                )
+            }),
+        );
+        let image_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let image_addr = image_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(image_listener, image_app).await.unwrap(); });
+
+        (format!("http://{llm_addr}"), format!("http://{image_addr}"))
+    }
+
+    #[tokio::test]
+    async fn script_create_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _image) = mocks().await;
+        let app = app76(rt76(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000000-sc01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"改编成竖屏短剧","sessionId":"1782994000000-sc01","actionSource":"button","requestedIntent":"script_create","actionPayload":{"scriptCreate":{"title":"山雨","targetFormat":"vertical_short_drama","episodeCount":8}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "script_create");
+        assert_eq!(exec["label"], "剧本创作");
+        assert_eq!(exec["status"], "completed");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "script_project_created");
+        assert_eq!(details["projectId"], "山雨");
+        assert_eq!(details["baseDir"], "dramas/山雨");
+        assert_eq!(details["specPath"], "dramas/山雨/script-spec.md");
+        assert_eq!(details["scriptPath"], "dramas/山雨/script.md");
+
+        // 落盘：spec + script（集尾标签归一"字幕：第九集完"→第一集）+ status。
+        let script = std::fs::read_to_string(root.join("dramas/山雨/script.md")).unwrap();
+        assert!(script.contains("字幕：第一集完"), "{script}");
+        let spec = std::fs::read_to_string(root.join("dramas/山雨/script-spec.md")).unwrap();
+        assert!(spec.contains("# 山雨 剧本创作规格"), "{spec}");
+        assert!(spec.contains("- 交付类型：竖屏短剧"), "{spec}");
+        let status_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("dramas/山雨/status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status_json["kind"], "script");
+        assert_eq!(status_json["status"], "completed");
+
+        // 缺 title → 502 中文。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"写剧本","sessionId":"1782994000000-sc01","actionSource":"button","requestedIntent":"script_create"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少标题"), "body: {parsed}");
+    }
+
+    #[tokio::test]
+    async fn storyboard_create_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _image) = mocks().await;
+        let app = app76(rt76(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000001-sb01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"拆分镜","sessionId":"1782994000001-sb01","actionSource":"button","requestedIntent":"storyboard_create","actionPayload":{"storyboardCreate":{"title":"山雨","visualStyle":"水墨","maxShots":12}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "storyboard_create");
+        assert_eq!(exec["label"], "分镜创作");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "storyboard_project_created");
+        assert_eq!(details["baseDir"], "storyboards/山雨");
+        assert_eq!(details["assetsManifestPath"], "storyboards/山雨/assets.json");
+
+        // image-prompts 提取（Prompt: 行编号化）。
+        let prompts = std::fs::read_to_string(root.join("storyboards/山雨/image-prompts.md")).unwrap();
+        assert!(prompts.contains("1. 雨夜街口，水墨远景"), "{prompts}");
+        assert!(prompts.contains("2. 灯下人影，半身近景"), "{prompts}");
+        // assets manifest：两 shot + prompt_ready + 三目录。
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("storyboards/山雨/assets.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["kind"], "storyboard_assets");
+        assert_eq!(manifest["assets"].as_array().unwrap().len(), 2);
+        assert_eq!(manifest["assets"][0]["shotId"], "shot-001");
+        assert_eq!(manifest["assets"][0]["status"], "prompt_ready");
+        assert!(root.join("storyboards/山雨/assets/source").is_dir());
+        assert!(root.join("storyboards/山雨/assets/generated").is_dir());
+        assert!(root.join("storyboards/山雨/assets/selected").is_dir());
+
+        // 缺 title → 502。
+        let (status, _) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"分镜","sessionId":"1782994000001-sb01","actionSource":"button","requestedIntent":"storyboard_create"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn generate_cover_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (_llm, image) = mocks().await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(r#"{{"llm":{{"cover":{{"service":"kkaiapi","baseUrl":"{image}"}}}}}}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"cover:kkaiapi":{"apiKey":"sk-test"}}}"#,
+        )
+        .unwrap();
+
+        let app = app76(rt76(&root, "http://127.0.0.1:9"));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000002-cv01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"生成封面","sessionId":"1782994000002-cv01","actionSource":"button","requestedIntent":"generate_cover","actionPayload":{"generateCover":{"title":"山雨","intro":"一个雨夜的复仇故事","sellingPoints":"节奏快；反转强"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "generate_cover");
+        assert_eq!(exec["label"], "生成封面");
+        assert_eq!(exec["status"], "completed");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "cover_generated");
+        assert_eq!(details["outputDir"], "covers/山雨");
+        assert_eq!(details["coverPromptPath"], "covers/山雨/cover-prompt.md");
+        assert_eq!(details["coverImagePath"], "covers/山雨/cover.png");
+        // 响应文本三行。
+        assert!(parsed["response"].as_str().unwrap().contains("Cover generated for \"山雨\"."), "body: {parsed}");
+
+        // 落盘：prompt（generic zh）+ png。
+        let prompt = std::fs::read_to_string(root.join("covers/山雨/cover-prompt.md")).unwrap();
+        assert!(prompt.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"), "{prompt}");
+        assert!(prompt.contains("卖点：节奏快；反转强"), "{prompt}");
+        assert_eq!(
+            std::fs::read(root.join("covers/山雨/cover.png")).unwrap(),
+            b"\x89PNG-cover"
+        );
+
+        // 缺 title → 502；未配置 cover → 502 needsCoverConfig 经统一错误面。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"封面","sessionId":"1782994000002-cv01","actionSource":"button","requestedIntent":"generate_cover"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少标题"), "body: {parsed}");
+
+        let bare = tempfile::tempdir().unwrap();
+        let bare_root = bare.path().to_path_buf();
+        let app_bare = app76(rt76(&bare_root, "http://127.0.0.1:9"));
+        let _ = call(
+            app_bare.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000003-cv02"}"#),
+        )
+        .await;
+        let (status, parsed) = call(
+            app_bare,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"封面","sessionId":"1782994000003-cv02","actionSource":"button","requestedIntent":"generate_cover","actionPayload":{"generateCover":{"title":"无配置书"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap().contains("cover endpoint is required"),
+            "body: {parsed}"
+        );
+    }
+}

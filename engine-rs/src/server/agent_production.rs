@@ -1061,6 +1061,172 @@ async fn execute_create_book(
     })
 }
 
+/// `createScriptCreationTool`：runScriptCreation 同链（76 号 runner）。
+#[allow(clippy::too_many_arguments)]
+async fn execute_script_create(
+    runtime: &BooksRuntime,
+    title: &str,
+    instruction: &str,
+    source_kind: &str,
+    target_format: &str,
+    source_text: &str,
+    source_path: &str,
+    requirements: &str,
+    episode_count: Option<u32>,
+    episode_duration: &str,
+    project_id: &str,
+    out_dir: &str,
+    mut on_progress: impl FnMut(String) + Send,
+) -> Result<ToolOutcome, String> {
+    use crate::pipeline::script_storyboard_runner::{run_script_creation, ScriptCreationRunOptions};
+    let root = runtime.state.project_root();
+    fn optional(value: &str) -> Option<&str> {
+        if value.is_empty() { None } else { Some(value) }
+    }
+    let result = run_script_creation(ScriptCreationRunOptions {
+        project_root: root,
+        router: &runtime.router,
+        title,
+        instruction,
+        source_kind: optional(source_kind),
+        target_format: optional(target_format),
+        source_text: optional(source_text),
+        source_path: optional(source_path),
+        requirements: optional(requirements),
+        episode_count,
+        episode_duration: optional(episode_duration),
+        language: None,
+        project_id: optional(project_id),
+        out_dir: optional(out_dir),
+        on_progress: &mut on_progress,
+    })
+    .await?;
+    let text = format!(
+        "Script project \"{title}\" created.\nID: {}\nSpec: {}\nScript: {}",
+        result.project_id, result.spec_path, result.script_path
+    );
+    on_progress(format!("Script drafted: {}", result.script_path));
+    Ok(ToolOutcome {
+        is_error: false,
+        text,
+        details: json!({
+            "kind": "script_project_created",
+            "projectId": result.project_id,
+            "baseDir": result.base_dir,
+            "specPath": result.spec_path,
+            "scriptPath": result.script_path,
+        }),
+    })
+}
+
+/// `createStoryboardCreationTool`：runStoryboardCreation 同链。
+#[allow(clippy::too_many_arguments)]
+async fn execute_storyboard_create(
+    runtime: &BooksRuntime,
+    title: &str,
+    instruction: &str,
+    source_kind: &str,
+    source_text: &str,
+    source_path: &str,
+    requirements: &str,
+    visual_style: &str,
+    aspect_ratio: &str,
+    granularity: &str,
+    max_shots: Option<u32>,
+    project_id: &str,
+    out_dir: &str,
+    mut on_progress: impl FnMut(String) + Send,
+) -> Result<ToolOutcome, String> {
+    use crate::pipeline::script_storyboard_runner::{
+        run_storyboard_creation, StoryboardCreationRunOptions,
+    };
+    let root = runtime.state.project_root();
+    fn optional(value: &str) -> Option<&str> {
+        if value.is_empty() { None } else { Some(value) }
+    }
+    let result = run_storyboard_creation(StoryboardCreationRunOptions {
+        project_root: root,
+        router: &runtime.router,
+        title,
+        instruction,
+        source_kind: optional(source_kind),
+        source_text: optional(source_text),
+        source_path: optional(source_path),
+        requirements: optional(requirements),
+        visual_style: optional(visual_style),
+        aspect_ratio: optional(aspect_ratio),
+        granularity: optional(granularity),
+        max_shots,
+        language: None,
+        project_id: optional(project_id),
+        out_dir: optional(out_dir),
+        on_progress: &mut on_progress,
+    })
+    .await?;
+    let text = format!(
+        "Storyboard project \"{title}\" created.\nID: {}\nStoryboard: {}\nImage prompts: {}\nAssets manifest: {}",
+        result.project_id, result.storyboard_path, result.image_prompts_path, result.assets_manifest_path
+    );
+    Ok(ToolOutcome {
+        is_error: false,
+        text,
+        details: json!({
+            "kind": "storyboard_project_created",
+            "projectId": result.project_id,
+            "baseDir": result.base_dir,
+            "specPath": result.spec_path,
+            "storyboardPath": result.storyboard_path,
+            "imagePromptsPath": result.image_prompts_path,
+            "assetsManifestPath": result.assets_manifest_path,
+            "assetsDir": result.assets_dir,
+        }),
+    })
+}
+
+/// `createGenerateCoverTool`：generateShortFictionCover 同链（74 号 cover 基础
+/// 设施 + 76 号 generic/short 双模式提示词）。
+#[allow(clippy::too_many_arguments)]
+async fn execute_generate_cover(
+    runtime: &BooksRuntime,
+    title: &str,
+    intro: &str,
+    selling_points: &[String],
+    cover_prompt: &str,
+    output_dir: &str,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::llm::cover::generate_short_fiction_cover;
+    on_progress("Generating cover image...".to_string());
+    let root = runtime.state.project_root();
+    fn optional(value: &str) -> Option<&str> {
+        if value.is_empty() { None } else { Some(value) }
+    }
+    let result = generate_short_fiction_cover(
+        root,
+        title,
+        optional(intro),
+        selling_points,
+        optional(cover_prompt),
+        optional(output_dir),
+    )
+    .await?;
+    let text = format!(
+        "Cover generated for \"{}\".\nCover prompt: {}\nCover image: {}",
+        result.title, result.cover_prompt_path, result.cover_image_path
+    );
+    Ok(ToolOutcome {
+        is_error: false,
+        text,
+        details: json!({
+            "kind": "cover_generated",
+            "title": result.title,
+            "outputDir": result.output_dir,
+            "coverPromptPath": result.cover_prompt_path,
+            "coverImagePath": result.cover_image_path,
+        }),
+    })
+}
+
 /// `createTranslationCreateTool`：createTranslationProjectFromFile 同链（70 号
 /// 域本体）——只摄取分段，翻译执行是独立长任务（run 端点）。
 async fn execute_translation_create(
@@ -1606,6 +1772,83 @@ async fn run_confirmed_production_locked(
     let mut params = Map::new();
     let agent: Option<&str>;
     match request.intent {
+        RequestedIntent::ScriptCreate => {
+            let payload = request.action_payload.and_then(|p| p.get("scriptCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认创建剧本缺少标题，请重新生成确认卡。", "The script creation confirmation is missing a title. Regenerate the confirmation card."),
+                )
+            })?.to_string();
+            params.insert("title".into(), json!(title));
+            params.insert("instruction".into(), json!(request.instruction));
+            for name in ["sourceKind", "targetFormat", "sourceText", "sourcePath", "requirements", "episodeDuration", "projectId", "outDir"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            if let Some(count) = payload.and_then(|p| p.get("episodeCount")).and_then(Value::as_u64) {
+                params.insert("episodeCount".into(), json!(count));
+            }
+            agent = None;
+        }
+        RequestedIntent::StoryboardCreate => {
+            let payload = request.action_payload.and_then(|p| p.get("storyboardCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认创建分镜缺少标题，请重新生成确认卡。", "The storyboard creation confirmation is missing a title. Regenerate the confirmation card."),
+                )
+            })?.to_string();
+            params.insert("title".into(), json!(title));
+            params.insert("instruction".into(), json!(request.instruction));
+            for name in ["sourceKind", "sourceText", "sourcePath", "requirements", "visualStyle", "aspectRatio", "granularity", "projectId", "outDir"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            if let Some(shots) = payload.and_then(|p| p.get("maxShots")).and_then(Value::as_u64) {
+                params.insert("maxShots".into(), json!(shots));
+            }
+            agent = None;
+        }
+        RequestedIntent::GenerateCover => {
+            let payload = request.action_payload.and_then(|p| p.get("generateCover"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认生成封面缺少标题，请重新生成确认卡。", "The cover generation confirmation is missing a title. Regenerate the confirmation card."),
+                )
+            })?.to_string();
+            params.insert("title".into(), json!(title));
+            for name in ["intro", "sellingPoints", "coverPrompt", "outputDir"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            agent = None;
+        }
         RequestedIntent::TranslationCreate => {
             let payload = request.action_payload.and_then(|p| p.get("translationCreate"));
             let field = |name: &str| {
@@ -1871,6 +2114,9 @@ async fn run_confirmed_production_locked(
         RequestedIntent::RemoveNode => "remove_node",
         RequestedIntent::DraftStructure => "draft_structure",
         RequestedIntent::TranslationCreate => "translation_create",
+        RequestedIntent::ScriptCreate => "script_create",
+        RequestedIntent::StoryboardCreate => "storyboard_create",
+        RequestedIntent::GenerateCover => "generate_cover",
         _ => "sub_agent",
     };
 
@@ -1962,6 +2208,80 @@ async fn run_confirmed_production_locked(
         }
     };
     let outcome = match request.intent {
+        RequestedIntent::ScriptCreate => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            execute_script_create(
+                runtime,
+                &field("title"),
+                request.instruction,
+                &field("sourceKind"),
+                &field("targetFormat"),
+                &field("sourceText"),
+                &field("sourcePath"),
+                &field("requirements"),
+                args.get("episodeCount").and_then(Value::as_u64).map(|v| v as u32),
+                &field("episodeDuration"),
+                &field("projectId"),
+                &field("outDir"),
+                &mut on_progress,
+            )
+            .await
+        }
+        RequestedIntent::StoryboardCreate => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            execute_storyboard_create(
+                runtime,
+                &field("title"),
+                request.instruction,
+                &field("sourceKind"),
+                &field("sourceText"),
+                &field("sourcePath"),
+                &field("requirements"),
+                &field("visualStyle"),
+                &field("aspectRatio"),
+                &field("granularity"),
+                args.get("maxShots").and_then(Value::as_u64).map(|v| v as u32),
+                &field("projectId"),
+                &field("outDir"),
+                &mut on_progress,
+            )
+            .await
+        }
+        RequestedIntent::GenerateCover => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            let selling_points = crate::llm::cover::normalize_selling_points(Some(&field("sellingPoints")));
+            execute_generate_cover(
+                runtime,
+                &field("title"),
+                &field("intro"),
+                &selling_points,
+                &field("coverPrompt"),
+                &field("outputDir"),
+                &mut on_progress,
+            )
+            .await
+        }
         RequestedIntent::TranslationCreate => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();

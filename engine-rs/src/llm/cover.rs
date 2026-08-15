@@ -508,6 +508,207 @@ async fn download_generated_cover_image(url: &str, api_key: &str) -> Result<Gene
     })
 }
 
+// ── 封面提示词与生成链（generateShortFictionCover 消费面，76 号） ──
+
+pub struct CoverSalesPackage<'a> {
+    pub title: &'a str,
+    pub intro: &'a str,
+    pub selling_points: &'a [String],
+    pub cover_prompt: &'a str,
+}
+
+/// `normalizeSellingPoints`：字符串按 `;；\n` 拆分数组；数组逐项 trim。
+pub fn normalize_selling_points(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split([';', '；', '\n'])
+        .map(str::trim)
+        .filter(|point| !point.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// `buildCoverImagePrompt`（generic=提示词文件 / short=生成图片——TS 两处模式
+/// 分别调用，76 号逐字）。
+pub fn build_cover_image_prompt(
+    package: &CoverSalesPackage<'_>,
+    mode: &str,
+    language: Option<&str>,
+) -> String {
+    let is_en = language == Some("en");
+    let base: Vec<String> = {
+        let mut lines = Vec::new();
+        if is_en {
+            lines.push(format!("Title: {}", package.title));
+            if !package.intro.trim().is_empty() {
+                lines.push(format!("Synopsis: {}", package.intro.trim()));
+            }
+            if !package.selling_points.is_empty() {
+                lines.push(format!("Selling points: {}", package.selling_points.join("; ")));
+            }
+            if !package.cover_prompt.trim().is_empty() {
+                lines.push(format!("User visual notes: {}", package.cover_prompt.trim()));
+            }
+        } else {
+            lines.push(format!("标题：{}", package.title));
+            if !package.intro.trim().is_empty() {
+                lines.push(format!("简介：{}", package.intro.trim()));
+            }
+            if !package.selling_points.is_empty() {
+                lines.push(format!("卖点：{}", package.selling_points.join("；")));
+            }
+            if !package.cover_prompt.trim().is_empty() {
+                lines.push(format!("用户视觉要求：{}", package.cover_prompt.trim()));
+            }
+        }
+        lines
+    };
+    if mode == "generic" {
+        let header = if is_en {
+            "Generate a cover image from the title, synopsis, selling points, and visual notes the user provided."
+        } else {
+            "按用户给出的标题、简介、卖点和视觉要求生成封面图。"
+        };
+        let mut lines = vec![header.to_string()];
+        lines.extend(base);
+        return lines.join("\n");
+    }
+    // short 模式（生成图片用）。
+    let (title_label, notes_label) = if is_en {
+        ("Main title: ", "Packaging notes: ")
+    } else {
+        ("主标题：", "包装提示：")
+    };
+    let mut mapped: Vec<String> = base
+        .into_iter()
+        .map(|line| {
+            if is_en {
+                line.replacen("Title: ", title_label, 1)
+                    .replacen("User visual notes: ", notes_label, 1)
+            } else {
+                line.replacen("标题：", title_label, 1)
+                    .replacen("用户视觉要求：", notes_label, 1)
+            }
+        })
+        .collect();
+    let mut lines = Vec::new();
+    if is_en {
+        lines.push("Generate a mobile portrait book cover for an English short story, 3:4 vertical.".to_string());
+        lines.append(&mut mapped);
+        lines.push(String::new());
+        lines.push("Cover direction: a platform short-fiction book cover, not a movie poster. The title lettering is the primary visual — reserve a large two-to-four-line type zone; character in close-up or half-body with a charged expression (cold smirk, shock, breakdown, menace, or payback); props few but large, telegraphing the conflict at a glance.".to_string());
+        lines.push("High-contrast, high-saturation colors that read as a phone-list thumbnail. Avoid realistic corporate photography, landscape video thumbnails, magazine editorial looks, delicate thin lettering, and long runs of text.".to_string());
+        lines.push("If the model's text rendering is unreliable, prioritize a clear title whitespace/type-block/layout zone instead of covering the canvas with garbled lettering.".to_string());
+    } else {
+        lines.push("为中文短篇小说生成手机端竖版书封，3:4竖图。".to_string());
+        lines.append(&mut mapped);
+        lines.push(String::new());
+        lines.push("封面方向：平台短篇书封，不是电影海报。标题字要成为主视觉，预留两到四行大字排版区；人物近景或半身，表情有冷笑、震惊、崩溃、压迫或反杀感；道具少而大，一眼能看出冲突。".to_string());
+        lines.push("颜色高对比、高饱和，适合手机列表缩略图。避免写实会议摄影、横版视频缩略图、杂志大片、小清新细字和长段文字。".to_string());
+        lines.push("如果模型文字不稳定，优先生成明确标题留白/字块/排版空间，不要把大量乱码文字铺满画面。".to_string());
+    }
+    lines.join("\n")
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverGenerationOutcome {
+    pub title: String,
+    pub output_dir: String,
+    pub cover_prompt_path: String,
+    pub cover_image_path: String,
+}
+
+/// `generateShortFictionCover`：标题必填 → cover-prompt.md（generic 提示词）→
+/// 生成图片（short 提示词，默认 1024x1360）→ cover.png/jpg。
+pub async fn generate_short_fiction_cover(
+    root: &Path,
+    title: &str,
+    intro: Option<&str>,
+    selling_points: &[String],
+    cover_prompt: Option<&str>,
+    output_dir: Option<&str>,
+) -> Result<CoverGenerationOutcome, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("title is required for cover generation.".to_string());
+    }
+    let segment: String = {
+        // runner.ts 的 safeSegment（与 script runner 同款）。
+        let cleaned: String = title
+            .trim()
+            .chars()
+            .flat_map(char::to_lowercase)
+            .map(|c| {
+                if matches!(c, '\\' | '/' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_whitespace() {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect();
+        let trimmed = cleaned.trim_matches('-').to_string();
+        let mut out = String::new();
+        let mut units = 0usize;
+        for ch in trimmed.chars() {
+            let ch_units = ch.len_utf16();
+            if units + ch_units > 80 {
+                break;
+            }
+            out.push(ch);
+            units += ch_units;
+        }
+        if out.is_empty() || out == "." || out == ".." {
+            format!("short-{}", crate::interaction::session::utc_now_ms())
+        } else {
+            out
+        }
+    };
+    let output_dir = output_dir
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| dir.trim_matches('/').to_string())
+        .unwrap_or_else(|| format!("covers/{segment}"));
+    let package = CoverSalesPackage {
+        title,
+        intro: intro.unwrap_or_default(),
+        selling_points,
+        cover_prompt: cover_prompt.unwrap_or_default(),
+    };
+    let prompt_path = format!("{output_dir}/cover-prompt.md");
+    let generic_prompt = build_cover_image_prompt(&package, "generic", None);
+    let full_prompt_path = root.join(&prompt_path);
+    if let Some(parent) = full_prompt_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    let mut payload = generic_prompt;
+    if !payload.ends_with('\n') {
+        payload.push('\n');
+    }
+    tokio::fs::write(&full_prompt_path, payload).await.map_err(|e| e.to_string())?;
+
+    let request = resolve_cover_generation_request(root).await?;
+    let size = std::env::var("INKOS_COVER_SIZE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "1024x1360".to_string());
+    let short_prompt = build_cover_image_prompt(&package, "short", None);
+    let image = generate_image_from_prompt(&request, &short_prompt, &size).await?;
+    let image_name = if image.extension == "jpg" { "cover.jpg" } else { "cover.png" };
+    let image_rel = format!("{output_dir}/{image_name}");
+    let full_image_path = root.join(&image_rel);
+    if let Some(parent) = full_image_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    tokio::fs::write(&full_image_path, &image.bytes).await.map_err(|e| e.to_string())?;
+    Ok(CoverGenerationOutcome {
+        title: title.to_string(),
+        output_dir,
+        cover_prompt_path: prompt_path,
+        cover_image_path: image_rel,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,5 +948,37 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
         format!("http://{addr}")
+    }
+}
+
+#[cfg(test)]
+mod cover_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn selling_points_normalization() {
+        assert_eq!(normalize_selling_points(Some("a；b\nc; d")), vec!["a", "b", "c", "d"]);
+        assert!(normalize_selling_points(None).is_empty());
+        assert!(normalize_selling_points(Some("  ")).is_empty());
+    }
+
+    #[test]
+    fn cover_prompt_generic_and_short_modes() {
+        let package = CoverSalesPackage {
+            title: "山雨",
+            intro: "简介文本",
+            selling_points: &["卖点一".to_string(), "卖点二".to_string()],
+            cover_prompt: "水墨",
+        };
+        let generic = build_cover_image_prompt(&package, "generic", None);
+        assert!(generic.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"), "{generic}");
+        assert!(generic.contains("标题：山雨"), "{generic}");
+        assert!(generic.contains("卖点：卖点一；卖点二"), "{generic}");
+
+        let short = build_cover_image_prompt(&package, "short", None);
+        assert!(short.starts_with("为中文短篇小说生成手机端竖版书封，3:4竖图。"), "{short}");
+        assert!(short.contains("主标题：山雨"), "{short}");
+        assert!(short.contains("包装提示：水墨"), "{short}");
+        assert!(short.contains("封面方向：平台短篇书封"), "{short}");
     }
 }

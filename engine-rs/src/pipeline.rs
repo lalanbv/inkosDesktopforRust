@@ -12,3 +12,5 @@ pub mod chapter_truth_validation;
 pub mod merged_audit;
 pub mod write_next;
 pub mod persisted_governed_plan;
+
+pub mod script_storyboard_runner;
