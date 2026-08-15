@@ -109,6 +109,37 @@ pub async fn rename_book_session(
     load_book_session(project_root, session_id).await
 }
 
+/// `migrateBookSession`（67 号建书迁移）：未绑定会话 → 绑定新书并升级为 book
+/// 会话。已绑定（bookId 非 null）→ Err（上层按 TS 语义静默忽略）。
+pub async fn migrate_book_session(
+    project_root: &Path,
+    session_id: &str,
+    new_book_id: &str,
+) -> Result<Option<BookSession>, String> {
+    let Some(session) = load_book_session(project_root, session_id).await else {
+        return Ok(None);
+    };
+    if session.book_id.is_some() {
+        return Err(format!(
+            "Session {session_id} already migrated to book {}",
+            session.book_id.unwrap_or_default()
+        ));
+    }
+    append_session_metadata_updated_event(
+        project_root,
+        session_id,
+        SessionMetadataUpdate {
+            book_id: Some(Some(new_book_id.to_string())),
+            session_kind: Some(SessionKind::Book),
+            play_mode: None,
+            title: None,
+            updated_at: utc_now_ms(),
+        },
+    )
+    .await;
+    Ok(load_book_session(project_root, session_id).await)
+}
+
 /// `deleteBookSession`：transcript + legacy 双删（不存在静默）。
 pub async fn delete_book_session(project_root: &Path, session_id: &str) {
     let _ = tokio::fs::remove_file(transcript_path(project_root, session_id)).await;

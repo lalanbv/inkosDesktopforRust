@@ -1666,7 +1666,7 @@ pub async fn export(
 
 // ── 共享装配 ─────────────────────────────────────────────────────
 
-fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
+pub(crate) fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
     let leak = |agent: &'static str| -> &'static RoutedAgent {
         Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent }))
     };
@@ -1695,7 +1695,7 @@ fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
     }
 }
 
-fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
+pub(crate) fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
     let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
     WriteNextCtx {
         project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),

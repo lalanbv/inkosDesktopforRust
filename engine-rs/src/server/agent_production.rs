@@ -1,0 +1,1777 @@
+//! 确认式生产任务分支（server.ts L5075-L5254 + executeConfirmedProductionAction
+//! L1587-L1869）——POST /agent 的任务执行路径。
+//!
+//! 67 号交付面：write_next / create_book 两个意图执行器 + 任务分支骨架
+//! （单任务闸门 + task 快照 + user 消息先写 + 建书迁移 + 广播 + finally 释放）。
+//! 其余 9 个确认意图（short_run / generate_cover / script_create / storyboard_create /
+//! interactive_film_create / translation_create / play_start / draft_structure /
+//! connect_choice / remove_node）随对应业务域迁移后接线，当前落
+//! `Unsupported confirmed action` 错误路径（偏差备案见 67 号记录）。
+//!
+//! ## 关键语义（逐字对齐 TS）
+//! - **单任务闸门**：`reservedProductionSessions` 在任何 await 之前**同步预留**
+//!   （sessionId → taskId），并发的第二确认请求直接 409；任务终态后释放。
+//! - **快照对账**：running 快照 + 本进程注册表无该任务 id → 视为旧进程遗留，
+//!   改写 error 终态落盘（否则前端恢复出永远运行中的任务卡）。
+//! - **user 消息先写**：任务运行期间刷新页面时用户气泡可从 transcript 恢复；
+//!   完成/失败只追加助手工具消息（instruction 不写第二遍）。
+//! - **错误统一面**：执行器内一切失败（含 payload 缺失）由分支 catch 统一经
+//!   `formatAgentActionFailure`：busy → 409 BOOK_BUSY，其余 → 502
+//!   AGENT_ACTION_FAILED（TS 行为：ApiError 在 catch 里被转写，原 code 不透出）。
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use axum::http::StatusCode;
+use serde_json::{json, Map, Value};
+
+use crate::interaction::agent_loop::AbortHandle;
+use crate::interaction::session::{utc_now_ms, SessionKind};
+use crate::interaction::session_transcript::{append_transcript_events, TranscriptEvent};
+use crate::server::books_routes::BooksRuntime;
+use crate::server::task_store::{
+    load_studio_task_snapshot, save_studio_task_snapshot, StudioTaskExecution,
+    StudioTaskExecutionStatus, StudioTaskSnapshot, StudioTaskStage, StudioTaskStageStatus,
+};
+
+// ── 枚举（zod 枚举逐值对齐） ─────────────────────────────────────
+
+/// `ActionSourceSchema`（四值）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionSource {
+    FreeText,
+    Button,
+    Slash,
+    QuickAction,
+}
+
+impl ActionSource {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "free-text" => Some(Self::FreeText),
+            "button" => Some(Self::Button),
+            "slash" => Some(Self::Slash),
+            "quick-action" => Some(Self::QuickAction),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FreeText => "free-text",
+            Self::Button => "button",
+            Self::Slash => "slash",
+            Self::QuickAction => "quick-action",
+        }
+    }
+}
+
+/// `normalizeStudioActionSource`：空 → free-text；非法 → 400 INVALID_ACTION_SOURCE。
+pub fn normalize_action_source(value: Option<&Value>) -> Result<ActionSource, String> {
+    let Some(text) = value.and_then(Value::as_str) else {
+        return Ok(ActionSource::FreeText);
+    };
+    if text.is_empty() {
+        return Ok(ActionSource::FreeText);
+    }
+    ActionSource::parse(text).ok_or_else(|| format!("Invalid actionSource: {text}"))
+}
+
+/// `RequestedIntentSchema`（18 值）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestedIntent {
+    CreateBook,
+    WriteNext,
+    ShortRun,
+    PlayStart,
+    PlayStep,
+    GenerateCover,
+    EditArtifact,
+    FanficInit,
+    ContinuationImport,
+    SpinoffCreate,
+    StyleImitation,
+    ScriptCreate,
+    StoryboardCreate,
+    InteractiveFilmCreate,
+    TranslationCreate,
+    DraftStructure,
+    ConnectChoice,
+    RemoveNode,
+}
+
+impl RequestedIntent {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "create_book" => Self::CreateBook,
+            "write_next" => Self::WriteNext,
+            "short_run" => Self::ShortRun,
+            "play_start" => Self::PlayStart,
+            "play_step" => Self::PlayStep,
+            "generate_cover" => Self::GenerateCover,
+            "edit_artifact" => Self::EditArtifact,
+            "fanfic_init" => Self::FanficInit,
+            "continuation_import" => Self::ContinuationImport,
+            "spinoff_create" => Self::SpinoffCreate,
+            "style_imitation" => Self::StyleImitation,
+            "script_create" => Self::ScriptCreate,
+            "storyboard_create" => Self::StoryboardCreate,
+            "interactive_film_create" => Self::InteractiveFilmCreate,
+            "translation_create" => Self::TranslationCreate,
+            "draft_structure" => Self::DraftStructure,
+            "connect_choice" => Self::ConnectChoice,
+            "remove_node" => Self::RemoveNode,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CreateBook => "create_book",
+            Self::WriteNext => "write_next",
+            Self::ShortRun => "short_run",
+            Self::PlayStart => "play_start",
+            Self::PlayStep => "play_step",
+            Self::GenerateCover => "generate_cover",
+            Self::EditArtifact => "edit_artifact",
+            Self::FanficInit => "fanfic_init",
+            Self::ContinuationImport => "continuation_import",
+            Self::SpinoffCreate => "spinoff_create",
+            Self::StyleImitation => "style_imitation",
+            Self::ScriptCreate => "script_create",
+            Self::StoryboardCreate => "storyboard_create",
+            Self::InteractiveFilmCreate => "interactive_film_create",
+            Self::TranslationCreate => "translation_create",
+            Self::DraftStructure => "draft_structure",
+            Self::ConnectChoice => "connect_choice",
+            Self::RemoveNode => "remove_node",
+        }
+    }
+}
+
+/// `normalizeStudioRequestedIntent`：空 → None；非法 → 400 INVALID_REQUESTED_INTENT。
+pub fn normalize_requested_intent(value: Option<&Value>) -> Result<Option<RequestedIntent>, String> {
+    let Some(text) = value.and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if text.is_empty() {
+        return Ok(None);
+    }
+    RequestedIntent::parse(text)
+        .map(Some)
+        .ok_or_else(|| format!("Invalid requestedIntent: {text}"))
+}
+
+// ── 写章启发式（action-envelope.ts 逐字移植） ────────────────────
+
+fn write_next_instruction_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)^(continue|继续|继续写|写下一章|write next|下一章|再来一章)$")
+            .unwrap()
+    })
+}
+
+/// `isWriteNextInstruction`（无 allowSlashWrite 调用形态）。
+pub fn is_write_next_instruction(instruction: &str) -> bool {
+    write_next_instruction_re().is_match(instruction.trim())
+}
+
+fn explicit_write_chapter_zh_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"^(?:请|帮我|麻烦|现在|直接|开始|继续|接着|再)?\s*(?:写|续写|创作|生成)(?:出|一下)?\s*(?:第?\s*一\s*章|第?\s*1\s*章|下一章|一章|正文|章节)(?:\s|[，。,.！!？?；;：:]|$)",
+        )
+        .unwrap()
+    })
+}
+
+fn explicit_write_chapter_en_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)^(?:please\s+)?(?:write|continue|draft|generate)\s+(?:(?:the\s+)?next\s+chapter|chapter(?:\s+(?:1|one))?)\b",
+        )
+        .unwrap()
+    })
+}
+
+/// `isExplicitWriteChapterCommand`。
+pub fn is_explicit_write_chapter_command(instruction: &str) -> bool {
+    let trimmed = instruction.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if explicit_write_chapter_zh_re().is_match(trimmed) {
+        return true;
+    }
+    explicit_write_chapter_en_re().is_match(trimmed)
+}
+
+/// `isWriteNextProductionRequest`：有书 + 书籍会话，且（显式 write_next intent /
+/// free-text 明确写章命令 / 其它来源的写作指令启发式）。
+pub fn is_write_next_production_request(
+    instruction: &str,
+    agent_book_id: Option<&str>,
+    session_kind: SessionKind,
+    action_source: ActionSource,
+    requested_intent: Option<RequestedIntent>,
+) -> bool {
+    if agent_book_id.is_none() || session_kind != SessionKind::Book {
+        return false;
+    }
+    if requested_intent == Some(RequestedIntent::WriteNext) {
+        return true;
+    }
+    if action_source == ActionSource::FreeText {
+        return is_explicit_write_chapter_command(instruction);
+    }
+    is_write_next_instruction(instruction)
+}
+
+/// `isConfirmedProductionAction`：button/slash 来源的 11 个确认 intent。
+pub fn is_confirmed_production_action(action_source: ActionSource, intent: RequestedIntent) -> bool {
+    if !matches!(action_source, ActionSource::Button | ActionSource::Slash) {
+        return false;
+    }
+    matches!(
+        intent,
+        RequestedIntent::CreateBook
+            | RequestedIntent::ShortRun
+            | RequestedIntent::ScriptCreate
+            | RequestedIntent::StoryboardCreate
+            | RequestedIntent::InteractiveFilmCreate
+            | RequestedIntent::TranslationCreate
+            | RequestedIntent::PlayStart
+            | RequestedIntent::GenerateCover
+            | RequestedIntent::DraftStructure
+            | RequestedIntent::ConnectChoice
+            | RequestedIntent::RemoveNode
+    )
+}
+
+/// 归一确认意图：写章三来源 → write_next；button/slash 确认 intent → 原值；
+/// 其余 → None（走聊天分支）。
+pub fn resolve_confirmed_intent(
+    instruction: &str,
+    agent_book_id: Option<&str>,
+    session_kind: SessionKind,
+    action_source: ActionSource,
+    requested_intent: Option<RequestedIntent>,
+) -> Option<RequestedIntent> {
+    if is_write_next_production_request(
+        instruction,
+        agent_book_id,
+        session_kind,
+        action_source,
+        requested_intent,
+    ) {
+        return Some(RequestedIntent::WriteNext);
+    }
+    match requested_intent {
+        Some(intent) if is_confirmed_production_action(action_source, intent) => Some(intent),
+        _ => None,
+    }
+}
+
+// ── 标签与阶段表（双语） ─────────────────────────────────────────
+
+const AGENT_LABELS: &[(&str, &str, &str)] = &[
+    ("architect", "建书", "Book setup"),
+    ("writer", "写作", "Writing"),
+    ("auditor", "审计", "Audit"),
+    ("reviser", "修订", "Revision"),
+    ("exporter", "导出", "Export"),
+];
+
+const TOOL_LABELS: &[(&str, &str, &str)] = &[
+    ("read", "读取文件", "Read file"),
+    ("edit", "编辑文件", "Edit file"),
+    ("grep", "搜索", "Search"),
+    ("ls", "列目录", "List directory"),
+    ("propose_action", "确认动作", "Confirm action"),
+    ("short_fiction_run", "短篇生产", "Short fiction"),
+    ("script_create", "剧本创作", "Script creation"),
+    ("storyboard_create", "分镜创作", "Storyboard creation"),
+    ("interactive_film_create", "互动影游", "Interactive film"),
+    ("translation_create", "翻译项目", "Translation"),
+    ("generate_cover", "生成封面", "Cover generation"),
+    ("play_edit", "编辑互动世界", "Edit interactive world"),
+    ("play_start", "启动互动世界", "Start interactive world"),
+    ("play_revise", "重做互动回合", "Redo interactive turn"),
+    ("play_step", "推进互动世界", "Advance interactive world"),
+    ("create_narrative_forecast", "剧情多线推演", "Narrative forecast"),
+    ("get_narrative_forecast", "核验剧情推演", "Recheck forecast"),
+    ("select_narrative_branch", "采用候选分支", "Select candidate branch"),
+];
+
+/// 项目语言（TS `currentProjectLanguage`：raw config `language`，默认 zh）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StudioLang {
+    Zh,
+    En,
+}
+
+pub async fn current_project_language(root: &Path) -> StudioLang {
+    let raw = crate::server::project_config_routes::load_raw_config(root).await;
+    match raw
+        .as_ref()
+        .and_then(|config| config.get("language"))
+        .and_then(Value::as_str)
+    {
+        Some("en") => StudioLang::En,
+        _ => StudioLang::Zh,
+    }
+}
+
+fn pick(lang: StudioLang, zh: &str, en: &str) -> String {
+    match lang {
+        StudioLang::Zh => zh.to_string(),
+        StudioLang::En => en.to_string(),
+    }
+}
+
+/// `pipelineStages`（PIPELINE_STAGES 表）。
+fn pipeline_stages(agent: &str, lang: StudioLang) -> Option<Vec<String>> {
+    let stages: &[(&str, &str)] = match agent {
+        "writer" => &[
+            ("准备章节输入", "Prepare chapter input"),
+            ("撰写章节草稿", "Write chapter draft"),
+            ("落盘最终章节", "Save final chapter"),
+            ("生成最终真相文件", "Generate final truth files"),
+            ("校验真相文件变更", "Validate truth file changes"),
+            ("同步记忆索引", "Sync memory index"),
+            ("更新章节索引与快照", "Update chapter index and snapshot"),
+        ],
+        "architect" => &[
+            ("生成基础设定", "Generate foundation"),
+            ("保存书籍配置", "Save book config"),
+            ("写入基础设定文件", "Write foundation files"),
+            ("初始化控制文档", "Initialize control documents"),
+            ("创建初始快照", "Create initial snapshot"),
+        ],
+        "reviser" => &[
+            ("加载修订上下文", "Load revision context"),
+            ("修订章节", "Revise chapter"),
+            ("落盘修订结果", "Save revision result"),
+            ("更新索引与快照", "Update index and snapshot"),
+        ],
+        "auditor" => &[("审计章节", "Audit chapter")],
+        _ => return None,
+    };
+    Some(stages.iter().map(|(zh, en)| pick(lang, zh, en)).collect())
+}
+
+/// `resolveToolLabel`。
+fn resolve_tool_label(tool: &str, agent: Option<&str>, lang: StudioLang) -> String {
+    if tool == "sub_agent" {
+        if let Some(agent) = agent {
+            if let Some((_, zh, en)) = AGENT_LABELS.iter().find(|(name, _, _)| *name == agent) {
+                return pick(lang, zh, en);
+            }
+            return agent.to_string();
+        }
+    }
+    if let Some((_, zh, en)) = TOOL_LABELS.iter().find(|(name, _, _)| *name == tool) {
+        return pick(lang, zh, en);
+    }
+    tool.to_string()
+}
+
+/// `formatTaskElapsed`。
+fn format_task_elapsed(ms: u64, lang: StudioLang) -> String {
+    let total_seconds = ms / 1000;
+    let (minutes, seconds) = (total_seconds / 60, total_seconds % 60);
+    if minutes == 0 {
+        return pick(lang, &format!("{seconds} 秒"), &format!("{seconds}s"));
+    }
+    pick(
+        lang,
+        &format!("{minutes} 分 {seconds} 秒"),
+        &format!("{minutes}m {seconds}s"),
+    )
+}
+
+/// `buildRunningTaskContextBlock`：运行中任务状态注入聊天 agent 系统提示词。
+pub fn build_running_task_context_block(task: &StudioTaskSnapshot, lang: StudioLang) -> String {
+    let exec = &task.execution;
+    let elapsed = format_task_elapsed(
+        (utc_now_ms() as f64 - exec.started_at).max(0.0) as u64,
+        lang,
+    );
+    let status = if exec.status == StudioTaskExecutionStatus::Processing {
+        pick(lang, "处理中", "processing")
+    } else {
+        pick(lang, "运行中", "running")
+    };
+    let logs_tail: Vec<String> = exec
+        .logs
+        .as_deref()
+        .map(|logs| logs.iter().rev().take(3).rev().cloned().collect())
+        .unwrap_or_default();
+    let logs_block = if !logs_tail.is_empty() {
+        format!(
+            "\n{}\n{}",
+            pick(lang, "- 最近日志：", "- Recent logs:"),
+            logs_tail
+                .iter()
+                .map(|line| format!("  - {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    } else {
+        String::new()
+    };
+    let lines = [
+        pick(lang, "## 后台任务状态", "## Background task status"),
+        pick(
+            lang,
+            "本会话有一个正在后台运行的生产任务：",
+            "A production task is currently running in the background of this session:",
+        ),
+        format!(
+            "- {}：{}（{}）",
+            pick(lang, "任务", "Task"),
+            exec.label,
+            exec.tool
+        ),
+        format!("- {}：{status}", pick(lang, "状态", "Status")),
+        format!(
+            "- {}：{elapsed}{logs_block}",
+            pick(lang, "已运行", "Elapsed")
+        ),
+        pick(
+            lang,
+            "该任务在后台独立运行，本轮对话不会打断它。用户询问任务进展时，基于以上信息如实回答。不要再次发起同类生产任务，也不要声称没有任务在运行。生产类工具已临时不可用，任务结束后恢复。",
+            "The task runs independently in the background; this chat turn does not interrupt it. When the user asks about its progress, answer truthfully from the information above. Do not start another production task of the same kind, and do not claim that no task is running. Production tools are temporarily unavailable and will be restored when the task finishes.",
+        ),
+    ];
+    lines.join("\n")
+}
+
+// ── 任务执行卡（CollectedToolExec） ──────────────────────────────
+
+/// TS `CollectedToolExec`（status 仅 running/completed/error 三态）。
+#[derive(Debug, Clone)]
+pub struct CollectedToolExec {
+    pub id: String,
+    pub tool: String,
+    pub agent: Option<String>,
+    pub label: String,
+    pub status: &'static str,
+    pub args: Option<Map<String, Value>>,
+    pub result: Option<String>,
+    pub details: Option<Value>,
+    pub error: Option<String>,
+    pub stages: Option<Vec<StudioTaskStage>>,
+    pub logs: Option<Vec<String>>,
+    pub started_at: f64,
+    pub completed_at: Option<f64>,
+}
+
+impl CollectedToolExec {
+    /// `manualToolAssistantMessage` 的 legacyDisplay / 响应 details 共用形态。
+    pub fn to_json(&self) -> Value {
+        let mut obj = json!({
+            "id": self.id,
+            "tool": self.tool,
+            "label": self.label,
+            "status": self.status,
+            "startedAt": self.started_at,
+        });
+        let map = obj.as_object_mut().unwrap();
+        if let Some(agent) = &self.agent {
+            map.insert("agent".into(), json!(agent));
+        }
+        if let Some(args) = &self.args {
+            map.insert("args".into(), Value::Object(args.clone()));
+        }
+        if let Some(result) = &self.result {
+            map.insert("result".into(), json!(result));
+        }
+        if let Some(details) = &self.details {
+            map.insert("details".into(), details.clone());
+        }
+        if let Some(error) = &self.error {
+            map.insert("error".into(), json!(error));
+        }
+        if let Some(stages) = &self.stages {
+            map.insert(
+                "stages".into(),
+                Value::Array(
+                    stages
+                        .iter()
+                        .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(logs) = &self.logs {
+            map.insert("logs".into(), json!(logs));
+        }
+        if let Some(completed_at) = self.completed_at {
+            map.insert("completedAt".into(), json!(completed_at));
+        }
+        obj
+    }
+
+    fn to_execution(&self) -> StudioTaskExecution {
+        StudioTaskExecution {
+            id: self.id.clone(),
+            tool: self.tool.clone(),
+            agent: self.agent.clone(),
+            label: self.label.clone(),
+            status: match self.status {
+                "completed" => StudioTaskExecutionStatus::Completed,
+                "error" => StudioTaskExecutionStatus::Error,
+                "processing" => StudioTaskExecutionStatus::Processing,
+                _ => StudioTaskExecutionStatus::Running,
+            },
+            args: self.args.clone(),
+            result: self.result.clone(),
+            details: self.details.clone(),
+            error: self.error.clone(),
+            stages: self.stages.clone(),
+            logs: self.logs.clone(),
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+        }
+    }
+}
+
+/// `suppressManualTextForTool`：这些工具的结果自绘在前端，助手气泡留空。
+fn suppress_manual_text_for_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "play_start"
+            | "play_step"
+            | "play_revise"
+            | "script_create"
+            | "storyboard_create"
+            | "interactive_film_create"
+    )
+}
+
+// ── 失败分类（classifyAgentFailure / formatAgentActionFailure） ──
+
+fn agent_failure_busy_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)BookWriteLockError|locked by an active InkOS write|BOOK_BUSY")
+            .unwrap()
+    })
+}
+
+/// `formatAgentActionFailure`：busy → 409 BOOK_BUSY；其余一律 502
+/// AGENT_ACTION_FAILED（消息原文，internal 类的改写文案不用于 action 面）。
+pub fn format_agent_action_failure(message: &str) -> (StatusCode, &'static str, String) {
+    if agent_failure_busy_re().is_match(message.trim()) {
+        return (
+            StatusCode::CONFLICT,
+            "BOOK_BUSY",
+            message.to_string(),
+        );
+    }
+    (
+        StatusCode::BAD_GATEWAY,
+        "AGENT_ACTION_FAILED",
+        message.to_string(),
+    )
+}
+
+// ── 注册表（进程级内存；TS server 闭包内 Map 的等价物） ──────────
+
+/// 确认任务的单任务名额（sessionId → taskId）。**必须在任何 await 之前同步
+/// 预留**，并发的第二个确认请求直接 409（check-then-act 竞态防护）。
+pub fn reserved_production_sessions() -> &'static Mutex<HashMap<String, String>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 运行中确认任务的 abort 句柄（taskId → flag）。
+pub fn active_confirmed_tasks() -> &'static Mutex<HashMap<String, AbortHandle>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, AbortHandle>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `loadReconciledTaskSnapshot`：running 快照且本进程注册表无该任务 → 改写
+/// error 终态落盘（旧进程遗留对账）。
+pub async fn load_reconciled_task_snapshot(
+    root: &Path,
+    session_id: &str,
+) -> Option<StudioTaskSnapshot> {
+    let mut task = load_studio_task_snapshot(root, session_id).await?;
+    let running = matches!(
+        task.execution.status,
+        StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
+    );
+    let locally_running = active_confirmed_tasks()
+        .lock()
+        .unwrap()
+        .contains_key(&task.execution.id);
+    if !running || locally_running {
+        return Some(task);
+    }
+    let completed_at = utc_now_ms() as f64;
+    task.updated_at = completed_at;
+    task.execution.status = StudioTaskExecutionStatus::Error;
+    task.execution.error = Some(
+        "任务已中断：Studio 服务在任务运行期间重启，任务未能继续。请重新发起。".to_string(),
+    );
+    task.execution.completed_at = Some(completed_at);
+    let _ = save_studio_task_snapshot(root, &task).await;
+    Some(task)
+}
+
+/// `findActiveRunningTask`：对账后 running 且本进程持有句柄 → Some。
+pub async fn find_active_running_task(root: &Path, session_id: &str) -> Option<StudioTaskSnapshot> {
+    let task = load_reconciled_task_snapshot(root, session_id).await?;
+    let running = matches!(
+        task.execution.status,
+        StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
+    );
+    if running
+        && active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .contains_key(&task.execution.id)
+    {
+        Some(task)
+    } else {
+        None
+    }
+}
+
+// ── payload 辅助 ────────────────────────────────────────────────
+
+/// `deriveBookIdFromTitle`（58 号 book_create_routes 已有等价实现，复用）。
+pub use crate::server::book_create_routes::derive_book_id_from_title_pub as derive_book_id_from_title;
+
+// ── transcript 追加（生产任务轮） ────────────────────────────────
+
+/// 任务开始前 user 消息先写（request_started → user → request_committed）。
+async fn append_production_user_turn(
+    root: &Path,
+    session_id: &str,
+    instruction: &str,
+    session_kind: SessionKind,
+) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = utc_now_ms();
+    append_transcript_events(root, session_id, |_events, next_seq| {
+        vec![
+            TranscriptEvent::RequestStarted {
+                version: 1,
+                session_id: session_id.to_string(),
+                seq: next_seq,
+                timestamp: now,
+                request_id: request_id.clone(),
+                session_kind: Some(session_kind),
+                input: instruction.to_string(),
+            },
+            TranscriptEvent::Message {
+                version: 1,
+                session_id: session_id.to_string(),
+                request_id: request_id.clone(),
+                uuid: uuid::Uuid::new_v4().to_string(),
+                parent_uuid: None,
+                seq: next_seq + 1,
+                timestamp: now,
+                role: "user".into(),
+                pi_turn_index: None,
+                tool_call_id: None,
+                source_tool_assistant_uuid: None,
+                legacy_display: None,
+                message: json!({ "role": "user", "content": instruction, "timestamp": now }),
+            },
+            TranscriptEvent::RequestCommitted {
+                version: 1,
+                session_id: session_id.to_string(),
+                seq: next_seq + 2,
+                timestamp: now,
+                request_id,
+            },
+        ]
+    })
+    .await;
+}
+
+/// 任务收尾的助手工具消息（manualToolAssistantMessage：零 usage + toolUse +
+/// legacyDisplay 工具卡）。已删除会话静默跳过（appendSessionMessagesUnlessDeleted）。
+async fn append_production_assistant_message(
+    root: &Path,
+    session_id: &str,
+    response_text: &str,
+    exec: &CollectedToolExec,
+    provider: &str,
+    model: &str,
+    session_kind: SessionKind,
+) {
+    if crate::server::session_routes::deleted_session_ids()
+        .lock()
+        .unwrap()
+        .contains(session_id)
+    {
+        return;
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = utc_now_ms();
+    let visible_text = if suppress_manual_text_for_tool(&exec.tool) {
+        String::new()
+    } else {
+        response_text.to_string()
+    };
+    append_transcript_events(root, session_id, |_events, next_seq| {
+        vec![
+            TranscriptEvent::RequestStarted {
+                version: 1,
+                session_id: session_id.to_string(),
+                seq: next_seq,
+                timestamp: now,
+                request_id: request_id.clone(),
+                session_kind: Some(session_kind),
+                input: String::new(),
+            },
+            TranscriptEvent::Message {
+                version: 1,
+                session_id: session_id.to_string(),
+                request_id: request_id.clone(),
+                uuid: uuid::Uuid::new_v4().to_string(),
+                parent_uuid: None,
+                seq: next_seq + 1,
+                timestamp: now,
+                role: "assistant".into(),
+                pi_turn_index: None,
+                tool_call_id: None,
+                source_tool_assistant_uuid: None,
+                legacy_display: Some(crate::interaction::session_transcript::LegacyDisplay {
+                    thinking: None,
+                    tool_executions: vec![exec.to_json()],
+                }),
+                message: json!({
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": visible_text }],
+                    "api": "anthropic-messages",
+                    "provider": provider,
+                    "model": model,
+                    "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+                               "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
+                    "stopReason": "toolUse",
+                    "timestamp": now,
+                }),
+            },
+            TranscriptEvent::RequestCommitted {
+                version: 1,
+                session_id: session_id.to_string(),
+                seq: next_seq + 2,
+                timestamp: now,
+                request_id,
+            },
+        ]
+    })
+    .await;
+}
+
+// ── 执行器 ──────────────────────────────────────────────────────
+
+/// 工具结果载荷（content 文本 + isError + details）。
+struct ToolOutcome {
+    is_error: bool,
+    text: String,
+    details: Value,
+}
+
+/// write_next 执行器（createWriteNextChapterTool）：单章 / 多章连写。
+/// 多章每轮之间轮询 abort；单章写作中途不可截断（TS 是 pipeline 内部检查点，
+/// Rust 写作链尚无内建中止信号，偏差备案见 67 号记录）。
+async fn execute_write_next(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    chapter_count: u32,
+    lang: StudioLang,
+    abort: &AbortHandle,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::pipeline::write_next::{write_next_chapter, ChapterPipelineResult, WriteNextConfig};
+
+    if !(1..=20).contains(&chapter_count) {
+        return Err(format!(
+            "chapterCount must be an integer between 1 and 20; received {chapter_count}."
+        ));
+    }
+
+    let agents = crate::server::books_routes::build_write_next_agents(runtime);
+    let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+
+    if chapter_count > 1 {
+        on_progress(pick(
+            lang,
+            &format!("正在为 {book_id} 连续写 {chapter_count} 章…"),
+            &format!("Writing {chapter_count} consecutive chapters for {book_id}..."),
+        ));
+        let mut results: Vec<ChapterPipelineResult> = Vec::new();
+        for _ in 0..chapter_count {
+            if *abort.lock().unwrap() {
+                return Err(pick(
+                    lang,
+                    "操作已中止：用户请求停止该任务。",
+                    "Operation aborted: the user requested to stop this task.",
+                ));
+            }
+            let result = write_next_chapter(
+                &runtime.state,
+                &agents,
+                &ctx,
+                &WriteNextConfig::default(),
+                book_id,
+                None,
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            on_progress(pick(
+                lang,
+                &format!(
+                    "第 {}/{} 章已落盘：第 {} 章《{}》。",
+                    results.len() + 1,
+                    chapter_count,
+                    result.chapter_number,
+                    result.title
+                ),
+                &format!(
+                    "{}/{} persisted: chapter {} \"{}\".",
+                    results.len() + 1,
+                    chapter_count,
+                    result.chapter_number,
+                    result.title
+                ),
+            ));
+            let keep_going = result.status == "ready-for-review";
+            results.push(result);
+            if !keep_going {
+                break;
+            }
+        }
+        let last = results.last();
+        let stopped_status = last
+            .filter(|r| r.status != "ready-for-review")
+            .map(|r| r.status);
+        let response_text = match (stopped_status, last) {
+            (Some(stopped), Some(last)) => pick(
+                lang,
+                &format!(
+                    "已完成 {}/{} 章；第 {} 章状态为 {}，批量写作已停止，请复核后再继续。",
+                    results.len(),
+                    chapter_count,
+                    last.chapter_number,
+                    stopped
+                ),
+                &format!(
+                    "Completed {}/{} chapters. Chapter {} ended with {}, so the batch stopped for review.",
+                    results.len(),
+                    chapter_count,
+                    last.chapter_number,
+                    stopped
+                ),
+            ),
+            _ => pick(
+                lang,
+                &format!(
+                    "已连续完成 {} 章（第 {} 章至第 {} 章）。",
+                    results.len(),
+                    results.first().map(|r| r.chapter_number).unwrap_or(0),
+                    last.map(|r| r.chapter_number).unwrap_or(0)
+                ),
+                &format!(
+                    "Completed {} consecutive chapters (chapters {}-{}).",
+                    results.len(),
+                    results.first().map(|r| r.chapter_number).unwrap_or(0),
+                    last.map(|r| r.chapter_number).unwrap_or(0)
+                ),
+            ),
+        };
+        let mut details = json!({
+            "kind": "chapters_written",
+            "bookId": book_id,
+            "requestedCount": chapter_count,
+            "completedCount": results.len(),
+            "chapters": results
+                .iter()
+                .map(|r| {
+                    json!({
+                        "chapterNumber": r.chapter_number,
+                        "title": r.title,
+                        "wordCount": r.word_count,
+                        "status": r.status,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        if let Some(stopped) = stopped_status {
+            details["stoppedStatus"] = json!(stopped);
+        }
+        Ok(ToolOutcome {
+            is_error: stopped_status.is_some(),
+            text: response_text,
+            details,
+        })
+    } else {
+        on_progress(pick(
+            lang,
+            &format!("正在为 {book_id} 写下一章…"),
+            &format!("Writing the next chapter for {book_id}..."),
+        ));
+            let write_result = write_next_chapter(
+            &runtime.state,
+            &agents,
+            &ctx,
+            &WriteNextConfig::default(),
+            book_id,
+            None,
+            None,
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+            let write_needs_review = write_result.status != "ready-for-review";
+        let title_part = if write_result.title.is_empty() {
+            String::new()
+        } else {
+            format!("《{}》", write_result.title)
+        };
+        let response_text = if write_needs_review {
+            pick(
+                lang,
+                &format!(
+                    "已为 {book_id} 写出第 {} 章{title_part}，字数 {}，但审稿未通过，状态 {}，需要复核后再继续。",
+                    write_result.chapter_number, write_result.word_count, write_result.status
+                ),
+                &format!(
+                    "Wrote chapter {} for {book_id}: {} words, but the review did not pass (status: {}). Manual review is required before continuing.",
+                    write_result.chapter_number, write_result.word_count, write_result.status
+                ),
+            )
+        } else {
+            pick(
+                lang,
+                &format!(
+                    "已为 {book_id} 完成第 {} 章{title_part}，字数 {}，状态 {}。",
+                    write_result.chapter_number, write_result.word_count, write_result.status
+                ),
+                &format!(
+                    "Completed chapter {} for {book_id}: {} words, status {}.",
+                    write_result.chapter_number, write_result.word_count, write_result.status
+                ),
+            )
+        };
+        Ok(ToolOutcome {
+            is_error: write_needs_review,
+            text: response_text,
+            details: json!({
+                "kind": "chapter_written",
+                "bookId": book_id,
+                "chapterNumber": write_result.chapter_number,
+                "title": write_result.title,
+                "wordCount": write_result.word_count,
+                "status": write_result.status,
+            }),
+        })
+    }
+}
+
+/// create_book 执行器（createSubAgentTool 的 architect 建书分支）：
+/// buildStudioBookConfig 派生 + init_book 同步执行。
+async fn execute_create_book(
+    runtime: &BooksRuntime,
+    instruction: &str,
+    title: &str,
+    action_payload: Option<&Value>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    let payload = action_payload.and_then(|p| p.get("createBook"));
+    let field = |name: &str| {
+        payload
+            .and_then(|p| p.get(name))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let genre = field("genre").unwrap_or("general");
+    let platform = field("platform");
+    let language = field("language");
+    let target_chapters = payload
+        .and_then(|p| p.get("targetChapters"))
+        .and_then(Value::as_f64)
+        .map(|v| v as u32);
+    let chapter_word_count = payload
+        .and_then(|p| p.get("chapterWordCount"))
+        .and_then(Value::as_f64)
+        .map(|v| v as u32);
+
+    // id 派生：确认卡 title 优先；派生失败回退 book-{毫秒 base36}（TS 语义）。
+    let now = crate::utils::utc_time::utc_now_iso();
+    let mut book = crate::server::book_create_routes::build_studio_book_config_pub(
+        title, genre, language, platform, target_chapters, chapter_word_count, &now,
+    );
+    if book.id.is_empty() {
+        book.id = format!("book-{}", to_base36(utc_now_ms()));
+    }
+
+    on_progress(format!("Starting architect for book \"{}\"...", book.id));
+    crate::server::book_create_routes::init_book(runtime, &book, Some(instruction), None, None)
+        .await?;
+    on_progress(format!(
+        "Architect finished — book \"{}\" foundation created.",
+        book.id
+    ));
+    Ok(ToolOutcome {
+        is_error: false,
+        text: format!(
+            "Book \"{title}\" ({}) initialised successfully. Foundation files are ready.",
+            book.id
+        ),
+        details: json!({ "kind": "book_created", "bookId": book.id, "title": title }),
+    })
+}
+
+fn to_base36(mut value: u64) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    while value > 0 {
+        out.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap()
+}
+
+// ── 主流程 ──────────────────────────────────────────────────────
+
+/// 生产分支参数包（post_agent 装配后传入）。
+pub struct ProductionRequest<'a> {
+    pub instruction: &'a str,
+    pub session_id: &'a str,
+    pub book_id: Option<&'a str>,
+    pub session_kind: SessionKind,
+    pub intent: RequestedIntent,
+    pub action_payload: Option<&'a Value>,
+    pub language: StudioLang,
+    pub source_request_id: Option<&'a str>,
+    /// manualToolAssistantMessage 的 provider/model 字段（请求级 service/model
+    /// 回退项目配置；67 号取项目 LLM 配置标签）。
+    pub provider_label: String,
+    pub model_label: String,
+}
+
+/// 分支成功结果（200 响应材料）。
+pub struct ProductionOutcome {
+    pub response_text: String,
+    pub exec: CollectedToolExec,
+    /// 建书迁移后的活动书（无迁移 = 请求时 book_id）。
+    pub active_book_id: Option<String>,
+}
+
+/// 分支失败（agent:error 广播与 502/409 响应材料；exec 供 agent:error 附带）。
+pub struct ProductionError {
+    pub status: StatusCode,
+    pub code: String,
+    pub message: String,
+    pub exec: Option<CollectedToolExec>,
+}
+
+/// 确认式生产任务分支主链：预留 → 快照检查 → 建书预备广播 → user 先写 →
+/// 执行（快照 + tool:start/end）→ 建书迁移 → 收尾助手消息。任务终态后必然
+/// 释放预留与 abort 注册（对应 TS finally）。
+pub async fn run_confirmed_production(
+    runtime: &BooksRuntime,
+    request: ProductionRequest<'_>,
+) -> Result<ProductionOutcome, ProductionError> {
+    let task_id = format!(
+        "direct-{}-{}",
+        request.intent.as_str(),
+        uuid::Uuid::new_v4()
+    );
+
+    // ── 单任务闸门：任何 await 之前同步预留 ──
+    {
+        let mut reserved = reserved_production_sessions().lock().unwrap();
+        if reserved.contains_key(request.session_id) {
+            return Err(busy_error(request.language));
+        }
+        reserved.insert(request.session_id.to_string(), task_id.clone());
+    }
+    let reserved_session_id = request.session_id.to_string();
+
+    let abort: AbortHandle = Arc::new(Mutex::new(false));
+    active_confirmed_tasks()
+        .lock()
+        .unwrap()
+        .insert(task_id.clone(), abort.clone());
+
+    let result = run_confirmed_production_locked(runtime, &request, &task_id, &abort).await;
+
+    active_confirmed_tasks().lock().unwrap().remove(&task_id);
+    reserved_production_sessions()
+        .lock()
+        .unwrap()
+        .remove(&reserved_session_id);
+    result
+}
+
+fn busy_error(lang: StudioLang) -> ProductionError {
+    let message = pick(
+        lang,
+        "当前会话已有一个生产任务在运行，请等它完成，或先用停止按钮结束它，再发起新任务。",
+        "A production task is already running in this session. Wait for it to finish, or stop it first, then start a new task.",
+    );
+    ProductionError {
+        status: StatusCode::CONFLICT,
+        code: "PRODUCTION_TASK_ALREADY_RUNNING".to_string(),
+        message,
+        exec: None,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_confirmed_production_locked(
+    runtime: &BooksRuntime,
+    request: &ProductionRequest<'_>,
+    task_id: &str,
+    abort: &AbortHandle,
+) -> Result<ProductionOutcome, ProductionError> {
+    let root = runtime.state.project_root();
+    let lang = request.language;
+    let session_id = request.session_id;
+
+    // 预留成功后再走快照检查（防旧进程遗留的运行中快照被覆盖）。
+    if find_active_running_task(root, session_id).await.is_some() {
+        return Err(busy_error(lang));
+    }
+
+    // 建书预备：book:creating 广播 + create-status 内存态（与 /books/create 共享）。
+    let mut pending_book_id: Option<String> = None;
+    if request.intent == RequestedIntent::CreateBook {
+        let title = request
+            .action_payload
+            .and_then(|p| p.get("createBook"))
+            .and_then(|p| p.get("title"))
+            .and_then(Value::as_str);
+        if let Some(title) = title {
+            let derived = derive_book_id_from_title(title);
+            if !derived.is_empty() {
+                pending_book_id = Some(derived);
+            }
+        }
+    }
+    if let Some(derived) = &pending_book_id {
+        crate::server::book_create_routes::set_create_status(
+            derived,
+            crate::server::book_create_routes::BookCreateStatus {
+                status: "creating".to_string(),
+                error: None,
+            },
+        )
+        .await;
+        runtime
+            .hub
+            .broadcast("book:creating", &json!({ "bookId": derived, "sessionId": session_id }));
+    }
+
+    // 任务开始前先把用户指令写进 transcript（刷新恢复用户气泡）。
+    append_production_user_turn(root, session_id, request.instruction, request.session_kind).await;
+
+    // ── 执行卡装配（intent → tool/agent/params/stages） ──
+    let mut params = Map::new();
+    let agent: Option<&str>;
+    match request.intent {
+        RequestedIntent::CreateBook => {
+            // requirePayloadText：缺失文案（最终经统一错误面 → 502）。
+            let title = request
+                .action_payload
+                .and_then(|p| p.get("createBook"))
+                .and_then(|p| p.get("title"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| {
+                    production_exec_error(lang, pick(
+                        lang,
+                        "确认建书缺少书名，请重新生成确认卡。",
+                        "The book creation confirmation is missing a title. Regenerate the confirmation card.",
+                    ))
+                })?;
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("createBook"));
+            let optional_str = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+            };
+            params.insert("agent".into(), json!("architect"));
+            params.insert("instruction".into(), json!(request.instruction));
+            params.insert("title".into(), json!(title));
+            if let Some(genre) = optional_str("genre") {
+                params.insert("genre".into(), json!(genre));
+            }
+            if let Some(platform) = optional_str("platform") {
+                params.insert("platform".into(), json!(platform));
+            }
+            if let Some(language) = optional_str("language") {
+                params.insert("language".into(), json!(language));
+            }
+            let optional_num = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.fract() == 0.0 && *v >= 1.0)
+            };
+            if let Some(target_chapters) = optional_num("targetChapters") {
+                params.insert("targetChapters".into(), json!(target_chapters as u64));
+            }
+            if let Some(chapter_word_count) = optional_num("chapterWordCount") {
+                params.insert("chapterWordCount".into(), json!(chapter_word_count as u64));
+            }
+            agent = Some("architect");
+        }
+        RequestedIntent::WriteNext => {
+            let book_id = request.book_id.ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(
+                        lang,
+                        "写下一章需要先打开一本书。",
+                        "Writing the next chapter requires an active book.",
+                    ),
+                )
+            })?;
+            let chapter_count = request
+                .action_payload
+                .and_then(|p| p.get("writeNext"))
+                .and_then(|p| p.get("chapterCount"))
+                .and_then(Value::as_f64)
+                .map(|v| v as u32)
+                .unwrap_or(1);
+            params.insert("agent".into(), json!("writer"));
+            params.insert("bookId".into(), json!(book_id));
+            agent = Some("writer");
+            let _ = chapter_count; // 消费面在执行器
+        }
+        other => {
+            return Err(production_exec_error(
+                lang,
+                format!("Unsupported confirmed action: {}", other.as_str()),
+            ));
+        }
+    }
+    let tool_name = "sub_agent";
+
+    let stages: Option<Vec<StudioTaskStage>> = agent.and_then(|agent| {
+        pipeline_stages(agent, lang).map(|labels| {
+            labels
+                .into_iter()
+                .map(|label| StudioTaskStage {
+                    label,
+                    status: StudioTaskStageStatus::Pending,
+                })
+                .collect()
+        })
+    });
+    let mut exec = CollectedToolExec {
+        id: task_id.to_string(),
+        tool: tool_name.to_string(),
+        agent: agent.map(String::from),
+        label: resolve_tool_label(tool_name, agent, lang),
+        status: "running",
+        args: Some(params),
+        result: None,
+        details: None,
+        error: None,
+        stages,
+        logs: None,
+        started_at: utc_now_ms() as f64,
+        completed_at: None,
+    };
+
+    persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
+        .await;
+
+    // background: true 标明后台生产任务的工具启动（前端把聊天轮重分类为任务轮）。
+    {
+        let mut payload = json!({
+            "sessionId": session_id,
+            "id": exec.id,
+            "tool": exec.tool,
+            "args": exec.args,
+            "background": true,
+        });
+        if let Some(stages) = &exec.stages {
+            payload["stages"] =
+                json!(stages.iter().map(|s| s.label.clone()).collect::<Vec<_>>());
+        }
+        if let Some(source_request_id) = request.source_request_id {
+            payload["sourceRequestId"] = json!(source_request_id);
+        }
+        runtime.hub.broadcast("tool:start", &payload);
+    }
+
+    // ── 执行（进度回调 → logs 快照；progress 不改 status，对齐 TS onUpdate） ──
+    // 进度持久化经 spawn 保持回调同步；句柄入 sink 队列，终态持久化前 drain
+    // 等待——否则滞后的进度快照（running）会覆盖终态快照（completed/error）。
+    /// 进度面共享 sink：logs 累积 + spawn 的进度持久化句柄队列（终态前 drain）。
+    type ProgressSink = (Vec<String>, Vec<tokio::task::JoinHandle<()>>);
+    let sink: Arc<Mutex<ProgressSink>> = Arc::new(Mutex::new((Vec::new(), Vec::new())));
+    let make_on_progress = {
+        let sink = sink.clone();
+        let base = exec.clone();
+        let root_log = root.to_path_buf();
+        let session_log = session_id.to_string();
+        let intent = request.intent;
+        let source_id = request.source_request_id.map(String::from);
+        move |message: String| {
+            let handle = {
+                let mut sink = sink.lock().unwrap();
+                sink.0.push(message);
+                let mut entry = base.clone();
+                let mut logs = sink.0.clone();
+                logs.truncate(80);
+                entry.logs = Some(logs);
+                let root_log = root_log.clone();
+                let session_log = session_log.clone();
+                let source_id = source_id.clone();
+                tokio::spawn(async move {
+                    persist_confirmed_task(
+                        &root_log,
+                        &session_log,
+                        intent,
+                        &entry,
+                        source_id.as_deref(),
+                    )
+                    .await;
+                })
+            };
+            sink.lock().unwrap().1.push(handle);
+        }
+    };
+    let outcome = match request.intent {
+        RequestedIntent::CreateBook => {
+            let title = exec
+                .args
+                .as_ref()
+                .and_then(|args| args.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut on_progress = make_on_progress;
+            execute_create_book(
+                runtime,
+                request.instruction,
+                &title,
+                request.action_payload,
+                &mut on_progress,
+            )
+            .await
+        }
+        RequestedIntent::WriteNext => {
+            let book_id = exec
+                .args
+                .as_ref()
+                .and_then(|args| args.get("bookId"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let chapter_count = request
+                .action_payload
+                .and_then(|p| p.get("writeNext"))
+                .and_then(|p| p.get("chapterCount"))
+                .and_then(Value::as_f64)
+                .map(|v| v as u32)
+                .unwrap_or(1);
+            let mut on_progress = make_on_progress;
+            execute_write_next(runtime, &book_id, chapter_count, lang, abort, &mut on_progress)
+                .await
+        }
+        _ => unreachable!("执行器装配已过滤未支持 intent"),
+    };
+
+    // 终态持久化前 drain 进度写入（保证快照终态不被滞后的进度快照覆盖）。
+    {
+        let handles: Vec<_> = sink.lock().unwrap().1.drain(..).collect();
+        for handle in handles {
+            let _ = handle.await;
+        }
+        let mut logs = sink.lock().unwrap().0.clone();
+        logs.truncate(80);
+        if !logs.is_empty() {
+            exec.logs = Some(logs);
+        }
+    }
+
+    match outcome {
+        Ok(tool_outcome) => {
+            exec.status = if tool_outcome.is_error {
+                "error"
+            } else {
+                "completed"
+            };
+            exec.completed_at = Some(utc_now_ms() as f64);
+            exec.result = Some(tool_outcome.text.clone());
+            exec.details = Some(tool_outcome.details.clone());
+            if let Some(stages) = &mut exec.stages {
+                for stage in stages {
+                    stage.status = StudioTaskStageStatus::Completed;
+                }
+            }
+            persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
+                .await;
+            runtime.hub.broadcast(
+                "tool:end",
+                &json!({
+                    "sessionId": session_id,
+                    "id": exec.id,
+                    "tool": exec.tool,
+                    "result": { "content": [{ "type": "text", "text": tool_outcome.text }], "details": tool_outcome.details },
+                    "details": tool_outcome.details,
+                    "isError": tool_outcome.is_error,
+                }),
+            );
+
+            // ── 建书迁移：architect 完成 → 绑定会话 + book:created ──
+            let mut active_book_id = request.book_id.map(String::from);
+            if exec.tool == "sub_agent"
+                && exec.agent.as_deref() == Some("architect")
+                && exec.status == "completed"
+            {
+                let resolved = exec
+                    .details
+                    .as_ref()
+                    .and_then(|d| d.get("bookId"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
+                if let Some(book_id) = resolved {
+                    // 迁移失败（已绑定）静默跳过（TS catch SessionAlreadyMigratedError）。
+                    let migrated =
+                        crate::interaction::book_session_store::migrate_book_session(
+                            root, session_id, &book_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    let _ = migrated;
+                    active_book_id = Some(book_id.clone());
+                    let book_summary = runtime
+                        .state
+                        .load_book_config(&book_id)
+                        .await
+                        .ok()
+                        .map(|config| json!({ "id": config.id, "title": config.title }));
+                    crate::server::book_create_routes::set_create_status_removed(&book_id).await;
+                    runtime.hub.broadcast(
+                        "book:created",
+                        &json!({ "bookId": book_id, "sessionId": session_id, "book": book_summary }),
+                    );
+                }
+            }
+
+            let response_text = exec
+                .result
+                .clone()
+                .unwrap_or_else(|| pick(lang, "已完成。", "Done."));
+            append_production_assistant_message(
+                root,
+                session_id,
+                &response_text,
+                &exec,
+                &request.provider_label,
+                &request.model_label,
+                request.session_kind,
+            )
+            .await;
+            Ok(ProductionOutcome {
+                response_text: if suppress_manual_text_for_tool(&exec.tool) {
+                    String::new()
+                } else {
+                    response_text
+                },
+                exec,
+                active_book_id,
+            })
+        }
+        Err(message) => {
+            exec.status = "error";
+            exec.completed_at = Some(utc_now_ms() as f64);
+            exec.error = Some(message.clone());
+            persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
+                .await;
+            runtime.hub.broadcast(
+                "tool:end",
+                &json!({
+                    "sessionId": session_id,
+                    "id": exec.id,
+                    "tool": exec.tool,
+                    "result": { "content": [{ "type": "text", "text": message }] },
+                    "isError": true,
+                }),
+            );
+            // 建书失败：book:error 广播 + create-status error 态。
+            if let Some(pending) = &pending_book_id {
+                crate::server::book_create_routes::set_create_status(
+                    pending,
+                    crate::server::book_create_routes::BookCreateStatus {
+                        status: "error".to_string(),
+                        error: Some(message.clone()),
+                    },
+                )
+                .await;
+                runtime.hub.broadcast(
+                    "book:error",
+                    &json!({ "bookId": pending, "sessionId": session_id, "error": message }),
+                );
+            }
+            // 失败同样只补助手工具消息（指令已在任务开始时写入）。
+            append_production_assistant_message(
+                root,
+                session_id,
+                &message,
+                &exec,
+                &request.provider_label,
+                &request.model_label,
+                request.session_kind,
+            )
+            .await;
+            let (status, code, message) = format_agent_action_failure(&message);
+            Err(ProductionError {
+                status,
+                code: code.to_string(),
+                message,
+                exec: Some(exec),
+            })
+        }
+    }
+}
+
+/// 执行阶段错误（payload 缺失 / 未支持 intent）：与执行失败同错误面。
+fn production_exec_error(_lang: StudioLang, message: String) -> ProductionError {
+    let (status, code, message) = format_agent_action_failure(&message);
+    ProductionError {
+        status,
+        code: code.to_string(),
+        message,
+        exec: None,
+    }
+}
+
+/// `persistConfirmedTask`：快照落盘（已删除会话守卫）。
+async fn persist_confirmed_task(
+    root: &Path,
+    session_id: &str,
+    intent: RequestedIntent,
+    exec: &CollectedToolExec,
+    source_request_id: Option<&str>,
+) {
+    if crate::server::session_routes::deleted_session_ids()
+        .lock()
+        .unwrap()
+        .contains(session_id)
+    {
+        return;
+    }
+    let snapshot = StudioTaskSnapshot {
+        version: 1,
+        session_id: session_id.to_string(),
+        source_request_id: source_request_id.map(String::from),
+        requested_intent: intent.as_str().to_string(),
+        updated_at: utc_now_ms() as f64,
+        execution: exec.to_execution(),
+    };
+    let _ = save_studio_task_snapshot(root, &snapshot).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_chapter_heuristics_match_ts_regexes() {
+        // isExplicitWriteChapterCommand（zh 正反例逐字）。
+        for hit in ["写下一章", "帮我写第一章！", "请写第一章", "续写一章，突出冲突。", "接着写正文", "直接写章节"] {
+            assert!(is_explicit_write_chapter_command(hit), "应命中：{hit}");
+        }
+        // TS 前缀组仅单个可选词：双前缀（请帮我）不命中——逐字固化。
+        for miss in ["写个大纲", "帮我看看第一章", "请帮我写第一章！", "现在开始写正文", "你好", "write a summary"] {
+            assert!(!is_explicit_write_chapter_command(miss), "不应命中：{miss}");
+        }
+        // en 分支（词边界 + 可选 the）。
+        assert!(is_explicit_write_chapter_command("write the next chapter"));
+        assert!(is_explicit_write_chapter_command("Please continue chapter one"));
+        assert!(!is_explicit_write_chapter_command("writing chapters"));
+
+        // isWriteNextInstruction（全词匹配；不含 /write）。
+        for hit in ["继续", "继续写", "写下一章", "continue", "WRITE NEXT", "再来一章"] {
+            assert!(is_write_next_instruction(hit), "应命中：{hit}");
+        }
+        for miss in ["/write", "继续写两章", "  ", "continue!"] {
+            assert!(!is_write_next_instruction(miss), "不应命中：{miss}");
+        }
+    }
+
+    #[test]
+    fn resolve_confirmed_intent_normalizes_write_next_sources() {
+        // 三来源归一：显式 intent / free-text 明确命令 / 其它来源写作指令。
+        assert_eq!(
+            resolve_confirmed_intent(
+                "写下一章",
+                Some("b1"),
+                SessionKind::Book,
+                ActionSource::FreeText,
+                None,
+            ),
+            Some(RequestedIntent::WriteNext)
+        );
+        assert_eq!(
+            resolve_confirmed_intent(
+                "继续",
+                Some("b1"),
+                SessionKind::Book,
+                ActionSource::QuickAction,
+                None,
+            ),
+            Some(RequestedIntent::WriteNext)
+        );
+        assert_eq!(
+            resolve_confirmed_intent(
+                "随便聊聊",
+                Some("b1"),
+                SessionKind::Book,
+                ActionSource::FreeText,
+                None,
+            ),
+            None
+        );
+        // 无书 / 非书籍会话 → 聊天分支。
+        assert_eq!(
+            resolve_confirmed_intent(
+                "写下一章",
+                None,
+                SessionKind::Book,
+                ActionSource::FreeText,
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_confirmed_intent(
+                "写下一章",
+                None,
+                SessionKind::Chat,
+                ActionSource::FreeText,
+                None,
+            ),
+            None
+        );
+        // button/slash 确认 intent 透传。
+        assert_eq!(
+            resolve_confirmed_intent(
+                "建书",
+                None,
+                SessionKind::Chat,
+                ActionSource::Button,
+                Some(RequestedIntent::CreateBook),
+            ),
+            Some(RequestedIntent::CreateBook)
+        );
+        // write_next 显式 intent 在无书时不走任务分支（BOOK_ID_REQUIRED 由
+        // 执行器错误面承担——TS isWriteNextProductionRequest 先挡）。
+        assert_eq!(
+            resolve_confirmed_intent(
+                "写",
+                None,
+                SessionKind::Book,
+                ActionSource::Button,
+                Some(RequestedIntent::WriteNext),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_action_failure_classification() {
+        let (status, code, _) =
+            format_agent_action_failure("BookWriteLockError: locked by an active InkOS write");
+        assert_eq!((status, code), (StatusCode::CONFLICT, "BOOK_BUSY"));
+
+        let (status, code, message) = format_agent_action_failure("确认建书缺少书名，请重新生成确认卡。");
+        assert_eq!((status, code), (StatusCode::BAD_GATEWAY, "AGENT_ACTION_FAILED"));
+        assert_eq!(message, "确认建书缺少书名，请重新生成确认卡。");
+    }
+
+    #[test]
+    fn enum_parsing_rejects_unknown_values() {
+        assert_eq!(ActionSource::parse("quick-action"), Some(ActionSource::QuickAction));
+        assert_eq!(ActionSource::parse("free text"), None);
+        assert_eq!(RequestedIntent::parse("create_book"), Some(RequestedIntent::CreateBook));
+        assert_eq!(RequestedIntent::parse("create-book"), None);
+        assert!(normalize_action_source(Some(&json!("button"))).is_ok());
+        assert!(normalize_action_source(Some(&json!("weird"))).is_err());
+        assert!(normalize_requested_intent(Some(&json!(""))).unwrap().is_none());
+        assert!(normalize_requested_intent(Some(&json!("nope"))).is_err());
+    }
+
+    #[test]
+    fn tool_label_and_stage_tables_align_ts() {
+        assert_eq!(resolve_tool_label("sub_agent", Some("writer"), StudioLang::Zh), "写作");
+        assert_eq!(resolve_tool_label("sub_agent", Some("architect"), StudioLang::Zh), "建书");
+        assert_eq!(resolve_tool_label("read", None, StudioLang::Zh), "读取文件");
+        assert_eq!(resolve_tool_label("sub_agent", Some("unknown-agent"), StudioLang::Zh), "unknown-agent");
+        assert_eq!(pipeline_stages("writer", StudioLang::Zh).unwrap().len(), 7);
+        assert_eq!(pipeline_stages("architect", StudioLang::Zh).unwrap().len(), 5);
+        assert_eq!(pipeline_stages("exporter", StudioLang::Zh), None);
+    }
+
+    #[test]
+    fn running_task_context_block_renders_zh() {
+        let task = StudioTaskSnapshot {
+            version: 1,
+            session_id: "s".into(),
+            source_request_id: None,
+            requested_intent: "write_next".into(),
+            updated_at: 1000.0,
+            execution: StudioTaskExecution {
+                id: "t".into(),
+                tool: "sub_agent".into(),
+                agent: Some("writer".into()),
+                label: "写作".into(),
+                status: StudioTaskExecutionStatus::Running,
+                args: None,
+                result: None,
+                details: None,
+                error: None,
+                stages: None,
+                logs: Some(vec!["正在为 b1 写下一章…".into()]),
+                started_at: 500.0,
+                completed_at: None,
+            },
+        };
+        let block = build_running_task_context_block(&task, StudioLang::Zh);
+        assert!(block.contains("## 后台任务状态"));
+        assert!(block.contains("- 任务：写作（sub_agent）"));
+        assert!(block.contains("- 状态：运行中"));
+        assert!(block.contains("正在为 b1 写下一章…"));
+    }
+
+    #[test]
+    fn base36_matches_js_date_tostring() {
+        assert_eq!(to_base36(0), "0");
+        assert_eq!(to_base36(35), "z");
+        assert_eq!(to_base36(36), "10");
+        assert_eq!(to_base36(1782988000000), "mr3d0pog");
+    }
+}

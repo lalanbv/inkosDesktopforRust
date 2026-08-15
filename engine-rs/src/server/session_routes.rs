@@ -10,7 +10,6 @@
 //! `{"error":{"code","message"}}`。
 
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use axum::body::Bytes;
@@ -27,10 +26,7 @@ use crate::interaction::book_session_store::{
 };
 use crate::interaction::session::{is_safe_book_id, PlayMode, SessionKind};
 use crate::server::books_routes::BooksRuntime;
-use crate::server::task_store::{
-    delete_studio_task_snapshot, load_studio_task_snapshot, save_studio_task_snapshot,
-    StudioTaskExecutionStatus, StudioTaskSnapshot,
-};
+use crate::server::task_store::delete_studio_task_snapshot;
 
 type ApiErrorResponse = (StatusCode, Json<Value>);
 
@@ -46,7 +42,7 @@ fn not_found() -> (StatusCode, Json<Value>) {
 }
 
 /// 已删除会话标记集（DELETE 先标记；POST 重建同 id 时复活）。
-fn deleted_session_ids() -> &'static Mutex<HashSet<String>> {
+pub(crate) fn deleted_session_ids() -> &'static Mutex<HashSet<String>> {
     static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     SET.get_or_init(|| Mutex::new(HashSet::new()))
 }
@@ -112,27 +108,9 @@ fn normalize_studio_play_mode(value: Option<&Value>) -> Option<PlayMode> {
         .and_then(PlayMode::parse)
 }
 
-/// `loadReconciledTaskSnapshot`：running 快照且本进程无运行确认 → 改写终态
-/// （64 号：进程内无 agent 执行体注册，running 快照一律视为旧进程遗留）。
-async fn load_reconciled_task_snapshot(root: &Path, session_id: &str) -> Option<StudioTaskSnapshot> {
-    let mut task = load_studio_task_snapshot(root, session_id).await?;
-    let running = matches!(
-        task.execution.status,
-        StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
-    );
-    if !running {
-        return Some(task);
-    }
-    let completed_at = crate::interaction::session::utc_now_ms() as f64;
-    task.updated_at = completed_at;
-    task.execution.status = StudioTaskExecutionStatus::Error;
-    task.execution.error = Some(
-        "任务已中断：Studio 服务在任务运行期间重启，任务未能继续。请重新发起。".to_string(),
-    );
-    task.execution.completed_at = Some(completed_at);
-    let _ = save_studio_task_snapshot(root, &task).await;
-    Some(task)
-}
+/// `loadReconciledTaskSnapshot`：67 号起由 agent_production 统一实现（running
+/// 快照 + 本进程无运行确认 → 改写终态；确认任务注册表见该文件）。
+use crate::server::agent_production::load_reconciled_task_snapshot;
 
 // ── GET /api/v1/interaction/session ────────────────────────────
 

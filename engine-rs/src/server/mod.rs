@@ -9,6 +9,7 @@
 //! - 路由集中导出 [`router`]，供 Tauri 命令或独立 bin 复用
 //! - 测试用 `tower::ServiceExt::oneshot` 不绑端口
 
+pub mod agent_production;
 pub mod agent_route;
 pub mod audit_route;
 pub mod books_routes;

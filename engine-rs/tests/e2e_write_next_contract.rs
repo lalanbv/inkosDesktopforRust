@@ -1651,7 +1651,12 @@ mod books49_e2e {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names.len(), 2);
-        let manual = names.iter().find(|n| n.contains("_manual_")).unwrap();
+        // 预置归档（VERSION_ID）与新归档都含 _manual_：按排除预置精确定位
+        // （read_dir 顺序在 APFS 上不稳定，裸 find 偶发拿错文件）。
+        let manual = names
+            .iter()
+            .find(|n| n.contains("_manual_") && n.as_str() != format!("{VERSION_ID}.md"))
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(versions_dir.join(manual)).unwrap(),
             "# 第2章 云涌\n\n正文二。"
@@ -3356,7 +3361,7 @@ mod books58_e2e {
     use inkos_engine::server::books_state_routes::create_status;
     use inkos_engine::state::manager::StateManager;
 
-    const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
+    pub(crate) const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
 ## 主题与基调
 少年于微末中抬起头。
 
@@ -3382,7 +3387,7 @@ name: 林动
 | H01 | 0 | 身世 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷中段 | true |  | 祖符来历 |
 "#;
 
-    const REVIEW_PASS: &str = "\
+    pub(crate) const REVIEW_PASS: &str = "\
 === DIMENSION: 1 ===
 分数：90
 意见：冲突清晰。
@@ -3463,7 +3468,7 @@ name: 林动
         ))
     }
 
-    async fn spawn_mock58() -> String {
+    pub(crate) async fn spawn_mock58() -> String {
         let app = axum::Router::new()
             .route("/chat/completions", axum::routing::post(mock58_llm))
             .with_state(());
@@ -6185,5 +6190,443 @@ mod agent66_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["response"], "直接回答。");
         assert_eq!(parsed["details"]["toolExecutions"].as_array().unwrap().len(), 0);
+    }
+}
+
+mod agent67_e2e {
+    //! 67 号：确认式生产任务分支（write_next / create_book 执行器 + 单任务
+    //! 闸门 + task 快照 + 建书迁移 + 聊天分支背景任务上下文）。
+    use super::books58_e2e::spawn_mock58;
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::interaction::session_transcript::transcript_path;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_production::{
+        active_confirmed_tasks, reserved_production_sessions,
+    };
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::server::task_store::studio_task_snapshot_path;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt67(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app67(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId",
+                axum::routing::get(session_routes::get_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 捕获 system prompt 的聊天 mock（背景任务上下文注入断言用）。
+    async fn mock_capture_system() -> (String, Arc<Mutex<Vec<String>>>) {
+        let systems = Arc::new(Mutex::new(Vec::<String>::new()));
+        let systems_for_server = systems.clone();
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let systems = systems_for_server.clone();
+                    async move {
+                        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                        systems.lock().unwrap().push(system);
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "直接回答。" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), systems)
+    }
+
+    const SID_WRITE: &str = "1782988000000-prod01";
+    const SID_GATE: &str = "1782988000001-gate";
+    const SID_BOOK: &str = "1782988000002-book";
+    const SID_UNSUP: &str = "1782988000003-uns";
+    const SID_CTX: &str = "1782988000004-ctx";
+
+    #[tokio::test]
+    async fn write_next_production_success_persists_snapshot_and_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, _calls, _guard) = spawn_mock_llm().await;
+
+        let runtime = rt67(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let app = app67(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_WRITE}","bookId":"b1","sessionKind":"book"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // free-text 明确写章命令 → 确认式任务分支（归一 write_next）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写下一章","sessionId":"{SID_WRITE}","actionSource":"free-text","clientRequestId":"req-67"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert!(
+            parsed["response"].as_str().unwrap_or("").starts_with("已为 b1 完成第"),
+            "response: {parsed}"
+        );
+
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "sub_agent");
+        assert_eq!(exec["agent"], "writer");
+        assert_eq!(exec["label"], "写作");
+        assert_eq!(exec["status"], "completed");
+        assert_eq!(exec["args"]["bookId"], "b1");
+        assert_eq!(exec["args"]["agent"], "writer");
+        assert_eq!(exec["details"]["kind"], "chapter_written");
+        assert_eq!(exec["details"]["bookId"], "b1");
+        let stages = exec["stages"].as_array().unwrap();
+        assert_eq!(stages.len(), 7);
+        assert!(stages.iter().all(|s| s["status"] == "completed"));
+        assert!(
+            exec["logs"].as_array().unwrap().iter().any(|log| log.as_str().unwrap().contains("正在为 b1 写下一章")),
+            "logs: {exec}"
+        );
+        assert_eq!(parsed["session"]["activeBookId"], "b1");
+        assert_eq!(parsed["session"]["sessionKind"], "book");
+
+        // 任务快照落盘（sourceRequestId 透传）。
+        let snapshot_raw = std::fs::read_to_string(studio_task_snapshot_path(&root, SID_WRITE)).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot_raw).unwrap();
+        assert_eq!(snapshot["requestedIntent"], "write_next");
+        assert_eq!(snapshot["sourceRequestId"], "req-67");
+        assert_eq!(snapshot["execution"]["status"], "completed");
+        assert_eq!(snapshot["execution"]["tool"], "sub_agent");
+        assert_eq!(snapshot["execution"]["agent"], "writer");
+        assert_eq!(snapshot["execution"]["label"], "写作");
+
+        // transcript：user 先写 + 收尾助手工具消息（toolUse + legacyDisplay）。
+        let transcript = std::fs::read_to_string(transcript_path(&root, SID_WRITE)).unwrap();
+        assert!(transcript.contains("\"content\":\"写下一章\""), "transcript: {transcript}");
+        assert!(transcript.contains("\"stopReason\":\"toolUse\""), "transcript: {transcript}");
+        assert!(transcript.contains("\"toolExecutions\""), "transcript: {transcript}");
+
+        // SSE 顺序：agent:start → tool:start(background) → tool:end → agent:complete。
+        assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
+        let tool_start = subscriber.recv().await.unwrap();
+        assert_eq!(tool_start.event, "tool:start");
+        assert!(tool_start.data.contains("\"background\":true"), "data: {}", tool_start.data);
+        let tool_end = subscriber.recv().await.unwrap();
+        assert_eq!(tool_end.event, "tool:end");
+        assert!(tool_end.data.contains("\"isError\":false"), "data: {}", tool_end.data);
+        assert_eq!(subscriber.recv().await.unwrap().event, "agent:complete");
+    }
+
+    #[tokio::test]
+    async fn reserved_session_gate_returns_409() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, _calls, _guard) = spawn_mock_llm().await;
+        let app = app67(rt67(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_GATE}","bookId":"b1","sessionKind":"book"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 预留表已有本会话（模拟并发第一确认请求）→ 第二请求 409。
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .insert(SID_GATE.to_string(), "direct-write_next-x".to_string());
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写下一章","sessionId":"{SID_GATE}","requestedIntent":"write_next"}}"#
+            )),
+        )
+        .await;
+        reserved_production_sessions().lock().unwrap().remove(SID_GATE);
+        assert_eq!(status, StatusCode::CONFLICT, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "PRODUCTION_TASK_ALREADY_RUNNING");
+        assert!(
+            parsed["response"].as_str().unwrap_or("").contains("已有一个生产任务在运行"),
+            "body: {parsed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_book_migrates_session_and_broadcasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = spawn_mock58().await;
+
+        let runtime = rt67(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+
+        let app = app67(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_BOOK}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"创建一本青云修仙小说","sessionId":"{SID_BOOK}","actionSource":"button","requestedIntent":"create_book","actionPayload":{{"createBook":{{"title":"青云仙路","genre":"xianxia"}}}}}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(
+            parsed["response"],
+            "Book \"青云仙路\" (青云仙路) initialised successfully. Foundation files are ready."
+        );
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "sub_agent");
+        assert_eq!(exec["agent"], "architect");
+        assert_eq!(exec["label"], "建书");
+        assert_eq!(exec["details"]["kind"], "book_created");
+        assert_eq!(exec["details"]["bookId"], "青云仙路");
+        assert_eq!(exec["args"]["title"], "青云仙路");
+        assert_eq!(exec["args"]["genre"], "xianxia");
+        assert_eq!(parsed["session"]["activeBookId"], "青云仙路");
+
+        // 书落盘（staging 原子 rename 完成性）。
+        let book_dir = root.join("books").join("青云仙路");
+        assert!(book_dir.join("book.json").is_file());
+        assert!(book_dir.join("story").join("story_bible.md").is_file());
+
+        // 会话迁移：GET /sessions/:id → bookId 绑定新书。
+        let (status, session_payload) = call(
+            app,
+            "GET",
+            &format!("/api/v1/sessions/{SID_BOOK}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {session_payload}");
+        assert_eq!(session_payload["session"]["bookId"], "青云仙路");
+
+        // 快照 + SSE（book:creating 在 book:created 前，tool 卡全程广播）。
+        let snapshot: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(studio_task_snapshot_path(&root, SID_BOOK)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot["requestedIntent"], "create_book");
+        assert_eq!(snapshot["execution"]["status"], "completed");
+        assert_eq!(snapshot["execution"]["agent"], "architect");
+
+        let mut saw_creating = false;
+        let mut saw_created = false;
+        let mut events = Vec::new();
+        for _ in 0..6 {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscriber.recv())
+                .await
+                .expect("SSE 事件应到达")
+                .unwrap();
+            if event.event == "book:creating" {
+                saw_creating = true;
+                assert!(event.data.contains("青云仙路"));
+            }
+            if event.event == "book:created" {
+                saw_created = true;
+                assert!(event.data.contains("\"sessionId\""));
+            }
+            events.push(event.event);
+        }
+        assert!(saw_creating, "events: {events:?}");
+        assert!(saw_created, "events: {events:?}");
+        assert_eq!(
+            events.iter().position(|e| e == "book:creating").unwrap(),
+            1,
+            "book:creating 应紧随 agent:start（先于 tool:start）: {events:?}"
+        );
+        assert!(
+            events.iter().position(|e| e == "book:creating").unwrap()
+                < events.iter().position(|e| e == "tool:start").unwrap(),
+            "book:creating 应在 tool:start 前: {events:?}"
+        );
+        assert!(
+            events.iter().position(|e| e == "book:created").unwrap()
+                > events.iter().position(|e| e == "tool:end").unwrap(),
+            "book:created 应在 tool:end 后: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_intent_and_missing_title_fail_with_502() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = spawn_mock58().await;
+        let app = app67(rt67(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_UNSUP}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 未支持意图（short_run 域未迁移）→ 502 AGENT_ACTION_FAILED。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写个短篇","sessionId":"{SID_UNSUP}","actionSource":"button","requestedIntent":"short_run"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        assert_eq!(parsed["error"]["message"], "Unsupported confirmed action: short_run");
+
+        // create_book 缺 title → 502 + 中文缺字段文案（TS：ApiError 被分支 catch 转写）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"创建一本小说","sessionId":"{SID_UNSUP}","actionSource":"button","requestedIntent":"create_book","actionPayload":{{"createBook":{{}}}}}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap().contains("确认建书缺少书名"),
+            "body: {parsed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_turn_injects_running_task_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, systems) = mock_capture_system().await;
+
+        // 构造运行中任务：快照 running + 注册表持有同 id（本进程确认）。
+        let task_id = "direct-write_next-running01";
+        let snapshot = serde_json::json!({
+            "version": 1,
+            "sessionId": SID_CTX,
+            "requestedIntent": "write_next",
+            "updatedAt": 1782988000000_f64,
+            "execution": {
+                "id": task_id,
+                "tool": "sub_agent",
+                "agent": "writer",
+                "label": "写作",
+                "status": "running",
+                "startedAt": 1782988000000_f64,
+            },
+        });
+        std::fs::create_dir_all(root.join(".inkos").join("tasks")).unwrap();
+        std::fs::write(
+            studio_task_snapshot_path(&root, SID_CTX),
+            format!("{snapshot}\n"),
+        )
+        .unwrap();
+        active_confirmed_tasks().lock().unwrap().insert(
+            task_id.to_string(),
+            Arc::new(Mutex::new(false)),
+        );
+
+        let app = app67(rt67(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID_CTX}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 非写章命令（chat 会话）→ 聊天分支 + system 注入背景任务状态块。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"你好","sessionId":"{SID_CTX}","actionSource":"free-text"}}"#
+            )),
+        )
+        .await;
+        active_confirmed_tasks().lock().unwrap().remove(task_id);
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let systems = systems.lock().unwrap();
+        assert!(
+            systems.iter().any(|system| system.contains("## 后台任务状态")
+                && system.contains("正在后台运行的生产任务")
+                && system.contains("写作")),
+            "captured systems: {systems:?}"
+        );
     }
 }

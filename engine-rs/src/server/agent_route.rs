@@ -1,9 +1,10 @@
 //! POST /api/v1/agent（server.ts L4805）——交互 agent 端点。
 //!
-//! 65 号交付面：完整校验链 + 会话装配（404/409/kind 更新/书存在性/语言解析）+
-//! **直通聊天主路径**（无工具问答：LLM 单轮 → transcript 持久化 → 事件广播）。
-//! 工具调用面（runAgentSession 的 20+ 工具 + 确认式生产任务分支 + SSE 流式
-//! 增量 + abort 控制器）随 66 号交互运行时专项移植（偏差备案见 65 号记录）。
+//! 65 号：完整校验链 + 会话装配（404/409/kind 更新/书存在性）。
+//! 66 号：agent 循环主路径（多轮 tool-use + SSE 增量 + abort 截断）。
+//! 67 号：参数面补齐（actionSource/requestedIntent/actionPayload/sourceRequestId/
+//! requestedSkills）+ **确认式生产任务分支**（write_next / create_book 意图执行器，
+//! 见 [`crate::server::agent_production`]）+ 聊天分支背景任务上下文注入。
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -21,10 +22,12 @@ use crate::interaction::book_session_store::{
 use crate::interaction::session::{utc_now_ms, SessionKind};
 use crate::interaction::session_transcript::{append_transcript_events, TranscriptEvent};
 use crate::llm::provider::LLMMessage;
-use crate::server::books_routes::BooksRuntime;
-use crate::server::session_routes::{
-    normalize_api_book_id, normalize_studio_session_kind,
+use crate::server::agent_production::{
+    self, normalize_action_source, normalize_requested_intent, resolve_confirmed_intent,
+    ProductionRequest,
 };
+use crate::server::books_routes::BooksRuntime;
+use crate::server::session_routes::{normalize_api_book_id, normalize_studio_session_kind};
 
 /// 会话聊天轮的运行标记（abort 置位；直通聊天不支持中途截断，标记供
 /// 后续工具面轮询——66 号接入真中止）。
@@ -44,6 +47,75 @@ fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> (Sta
         status,
         Json(json!({ "error": { "code": code, "message": message.into() } })),
     )
+}
+
+/// `normalizeSkillIdList`：单值/数组 → trim + lower + `^[a-z][a-z0-9-]*$` +
+/// 去重保序；非字符串/非法格式 → Err。
+fn normalize_skill_id_list(value: Option<&Value>) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items: Vec<&Value> = match value {
+        Value::Array(items) => items.iter().collect(),
+        single => vec![single],
+    };
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err("Skill id must use letters, numbers, and hyphens.".to_string());
+        };
+        let trimmed = text.trim().to_lowercase();
+        if trimmed.is_empty() {
+            return Err("Skill id must use letters, numbers, and hyphens.".to_string());
+        }
+        let valid = trimmed.starts_with(|c: char| c.is_ascii_lowercase())
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid {
+            return Err(format!(
+                "Skill id must use letters, numbers, and hyphens.: {text}"
+            ));
+        }
+        if !out.contains(&trimmed) {
+            out.push(trimmed);
+        }
+    }
+    Ok(out)
+}
+
+/// manualToolAssistantMessage 的 provider/model 标签：请求级 service/model
+/// 回退项目 LLM 配置（configuredEntry 面随 service 域深化接线，67 号取原始值）。
+async fn production_provider_model_labels(
+    root: &std::path::Path,
+    payload: &Value,
+) -> (String, String) {
+    let config = crate::server::project_config_routes::load_raw_config(root).await;
+    let llm = config.as_ref().and_then(|c| c.get("llm"));
+    let provider = payload
+        .get("service")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| {
+            llm.and_then(|llm| {
+                llm.get("service")
+                    .or_else(|| llm.get("provider"))
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            })
+        })
+        .unwrap_or_else(|| "inkos".to_string());
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| {
+            llm.and_then(|llm| llm.get("model").and_then(Value::as_str).map(String::from))
+        })
+        .unwrap_or_else(|| "studio-agent".to_string());
+    (provider, model)
 }
 
 /// appendManualSessionMessages 等价：request_started → user → assistant →
@@ -155,6 +227,46 @@ pub async fn post_agent(
             .into_response();
     };
 
+    // ── 参数归一（normalizeStudio* 包装；非法 → 400 INVALID_*） ──
+    let action_source = match normalize_action_source(payload.get("actionSource")) {
+        Ok(source) => source,
+        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_ACTION_SOURCE", message).into_response(),
+    };
+    let requested_intent = match normalize_requested_intent(payload.get("requestedIntent")) {
+        Ok(intent) => intent,
+        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_REQUESTED_INTENT", message).into_response(),
+    };
+    // actionPayload：TS zod strict 全量校验（67 号结构守卫：必须为 object）。
+    let action_payload = match payload.get("actionPayload") {
+        None | Some(Value::Null) => None,
+        Some(value) if value.is_object() => Some(value),
+        Some(other) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ACTION_PAYLOAD",
+                format!("Invalid actionPayload: {other}"),
+            )
+            .into_response()
+        }
+    };
+    // requestedSkills / disabledSkills（normalizeSkillIdList：单值/数组 → trim/lower
+    // + `^[a-z][a-z0-9-]*$` 校验 + 去重）。
+    let requested_skills = match normalize_skill_id_list(payload.get("requestedSkills")) {
+        Ok(skills) => skills,
+        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response(),
+    };
+    let _disabled_skills = match normalize_skill_id_list(payload.get("disabledSkills")) {
+        Ok(skills) => skills,
+        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response(),
+    };
+    // sourceRequestId：clientRequestId trim + 128 码元截断。
+    let source_request_id: Option<String> = payload
+        .get("clientRequestId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(128).collect());
+
     // ── 会话装配（404 / 409 / kind 更新 / 书存在性） ──────────────
     let Some(book_session) = load_book_session(root, session_id).await else {
         return api_error(
@@ -227,12 +339,85 @@ pub async fn post_agent(
             "instruction": instruction,
             "activeBookId": agent_book_id,
             "sessionId": session_id,
-            "actionSource": "free-text",
-            "requestedIntent": Value::Null,
-            "requestedSkills": [],
+            "actionSource": action_source.as_str(),
+            "requestedIntent": requested_intent.map(|intent| Value::from(intent.as_str())).unwrap_or(Value::Null),
+            "requestedSkills": requested_skills,
             "attachments": 0,
         }),
     );
+
+    // ── 确认式生产任务分支（67 号：write_next / create_book） ──────
+    let confirmed_intent = resolve_confirmed_intent(
+        instruction,
+        agent_book_id.as_deref(),
+        session_kind,
+        action_source,
+        requested_intent,
+    );
+    if let Some(intent) = confirmed_intent {
+        let language = agent_production::current_project_language(root).await;
+        let (provider_label, model_label) = production_provider_model_labels(root, &payload).await;
+        let request = ProductionRequest {
+            instruction,
+            session_id,
+            book_id: agent_book_id.as_deref(),
+            session_kind,
+            intent,
+            action_payload,
+            language,
+            source_request_id: source_request_id.as_deref(),
+            provider_label,
+            model_label,
+        };
+        return match agent_production::run_confirmed_production(&runtime, request).await {
+            Ok(outcome) => {
+                runtime.hub.broadcast(
+                    "agent:complete",
+                    &json!({
+                        "instruction": instruction,
+                        "activeBookId": outcome.active_book_id,
+                        "sessionId": session_id,
+                        "sessionKind": session_kind.as_str(),
+                    }),
+                );
+                let mut session_obj = Map::new();
+                session_obj.insert("sessionId".into(), json!(session_id));
+                session_obj.insert("sessionKind".into(), json!(session_kind.as_str()));
+                if let Some(book_id) = &outcome.active_book_id {
+                    session_obj.insert("activeBookId".into(), json!(book_id));
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "response": outcome.response_text,
+                        "details": { "toolExecutions": [outcome.exec.to_json()] },
+                        "session": Value::Object(session_obj),
+                    })),
+                )
+                    .into_response()
+            }
+            Err(error) => {
+                runtime.hub.broadcast(
+                    "agent:error",
+                    &json!({
+                        "instruction": instruction,
+                        "activeBookId": agent_book_id,
+                        "sessionId": session_id,
+                        "sessionKind": session_kind.as_str(),
+                        "error": error.message,
+                    }),
+                );
+                (
+                    error.status,
+                    Json(json!({
+                        "error": { "code": error.code, "message": error.message },
+                        "response": error.message,
+                    })),
+                )
+                    .into_response()
+            }
+        };
+    }
 
     // ── agent 循环主路径（66 号：多轮 tool-use + SSE 增量 + abort 截断） ──
     let handle = Arc::new(Mutex::new(AgentSessionHandle { abort_requested: false }));
@@ -242,13 +427,25 @@ pub async fn post_agent(
         .insert(session_id.to_string(), handle.clone());
     let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
 
-    let system_prompt = format!(
+    let mut system_prompt = format!(
         "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
         agent_book_id
             .as_ref()
             .map(|book_id| format!("当前活动书籍：{book_id}。回答时结合该书的创作上下文。"))
             .unwrap_or_default(),
     );
+    // 后台生产任务与聊天并行时注入任务状态（suppressProductionTools 的硬剔除
+    // 面——read/ls/grep 聊天工具集本就不含生产工具，天然满足）。
+    if let Some(background_task) =
+        agent_production::find_active_running_task(root, session_id).await
+    {
+        let language = agent_production::current_project_language(root).await;
+        system_prompt.push('\n');
+        system_prompt.push_str(&agent_production::build_running_task_context_block(
+            &background_task,
+            language,
+        ));
+    }
 
     struct RouterLoopChat<'a> {
         router: &'a crate::llm::agent_router::AgentRouter,
