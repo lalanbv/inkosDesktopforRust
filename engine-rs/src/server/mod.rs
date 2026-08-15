@@ -18,6 +18,7 @@ pub mod genre_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
 pub mod service_routes;
+pub mod session_routes;
 pub mod skill_routes;
 pub mod sse;
 pub mod style_routes;
@@ -421,6 +422,32 @@ pub fn router_books(
             "/api/v1/cover/secret/:service",
             get(service_routes::get_cover_secret)
                 .put(service_routes::put_cover_secret)
+                .with_state(books.clone()),
+        )
+        // 64 号：sessions / interaction 会话域（POST /agent 随 65 号交互运行时）。
+        .route(
+            "/api/v1/interaction/session",
+            get(session_routes::get_interaction_session).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/sessions",
+            get(session_routes::list_sessions)
+                .post(session_routes::create_session)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/sessions/:sessionId/play-mode",
+            put(session_routes::put_session_play_mode).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/sessions/:sessionId/abort",
+            post(session_routes::abort_session).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/sessions/:sessionId",
+            get(session_routes::get_session)
+                .put(session_routes::rename_session)
+                .delete(session_routes::delete_session)
                 .with_state(books.clone()),
         )
         // 61 号：project 文件浏览面（通配多段路径）。

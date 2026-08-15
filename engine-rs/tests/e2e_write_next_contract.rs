@@ -5352,3 +5352,400 @@ mod services63_e2e {
         assert_eq!(llm["provider"], "openai");
     }
 }
+
+// ── 64 号：sessions / interaction 会话域（server.ts L4536 / L4703-L4803）──
+
+mod sessions64_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt64(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app64(root: &std::path::Path) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/interaction/session",
+                axum::routing::get(session_routes::get_interaction_session),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::get(session_routes::list_sessions)
+                    .post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId/play-mode",
+                axum::routing::put(session_routes::put_session_play_mode),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId/abort",
+                axum::routing::post(session_routes::abort_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId",
+                axum::routing::get(session_routes::get_session)
+                    .put(session_routes::rename_session)
+                    .delete(session_routes::delete_session),
+            )
+            .with_state(rt64(root))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    const SESSION_ID: &str = "1782900000000-abc123";
+
+    /// transcript fixture：session_created + 一轮 committed user/assistant 消息。
+    fn transcript_fixture(root: &std::path::Path, book_id: Option<&str>, session_kind: Option<&str>) {
+        std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
+        let created = serde_json::json!({
+            "type": "session_created", "version": 1, "sessionId": SESSION_ID, "seq": 1,
+            "timestamp": 1000, "bookId": book_id, "sessionKind": session_kind, "title": null,
+            "createdAt": 1000, "updatedAt": 1000,
+        });
+        let started = serde_json::json!({
+            "type": "request_started", "version": 1, "sessionId": SESSION_ID, "seq": 2,
+            "timestamp": 1100, "requestId": "req-1", "input": "",
+        });
+        let user = serde_json::json!({
+            "type": "message", "version": 1, "sessionId": SESSION_ID, "seq": 3,
+            "timestamp": 1100, "requestId": "req-1", "uuid": "u1", "parentUuid": null,
+            "role": "user", "message": { "role": "user", "content": "帮我构思一个修仙故事：主角是青阳镇走出的一位坚韧少年，背负血仇踏入修行路", "timestamp": 1100 },
+        });
+        let assistant = serde_json::json!({
+            "type": "message", "version": 1, "sessionId": SESSION_ID, "seq": 4,
+            "timestamp": 1200, "requestId": "req-1", "uuid": "u2", "parentUuid": "u1",
+            "role": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{ "type": "text", "text": "主角可以是一个废柴少年，偶得上古传承。" }],
+                "timestamp": 1200,
+            },
+        });
+        let committed = serde_json::json!({
+            "type": "request_committed", "version": 1, "sessionId": SESSION_ID, "seq": 5,
+            "timestamp": 1200, "requestId": "req-1",
+        });
+        std::fs::write(
+            root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl")),
+            [created, started, user, assistant, committed]
+                .iter()
+                .map(|e| serde_json::to_string(e).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n",
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn interaction_session_resolves_active_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 唯一书目录 → activeBookId 自动解析
+        std::fs::create_dir_all(root.join("books").join("my-book")).unwrap();
+
+        let (status, parsed) = call(app64(&root), "GET", "/api/v1/interaction/session", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["activeBookId"], "my-book");
+        assert_eq!(parsed["session"]["activeBookId"], "my-book", "session.activeBookId 以解析值覆盖");
+        assert_eq!(parsed["session"]["automationMode"], "semi", "zod default 填充");
+        assert_eq!(parsed["session"]["messages"], serde_json::json!([]));
+
+        // 多书且无 activeBookId → undefined
+        std::fs::create_dir_all(root.join("books").join("other-book")).unwrap();
+        let (_, parsed) = call(app64(&root), "GET", "/api/v1/interaction/session", None).await;
+        assert!(parsed["activeBookId"].is_null());
+    }
+
+    #[tokio::test]
+    async fn session_crud_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        transcript_fixture(&root, Some("my-book"), Some("book"));
+
+        // GET 详情：消息重建 + 首条 user 消息标题（≤20 字 + …）
+        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let session = &parsed["session"];
+        assert_eq!(session["sessionId"], SESSION_ID);
+        assert_eq!(session["bookId"], "my-book");
+        assert_eq!(session["sessionKind"], "book");
+        assert_eq!(session["draftRounds"], serde_json::json!([]), "zod default");
+        let title = session["title"].as_str().unwrap();
+        assert!(title.ends_with('…'), "超 20 字标题截断：{title}");
+        assert!(title.chars().count() <= 21, "20 码元 + 省略号：{title}");
+        let messages = session["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert!(messages[1]["content"].as_str().unwrap().contains("废柴少年"));
+
+        // 缺失 → 404 平铺
+        let (status, parsed) = call(app64(&root), "GET", "/api/v1/sessions/nope-1", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Session not found");
+
+        // PUT 改名
+        let (status, parsed) = call(
+            app64(&root),
+            "PUT",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            Some(r#"{"title":"我的会话"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["session"]["title"], "我的会话");
+        // 改名落盘（metadata 事件）
+        let (_, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(parsed["session"]["title"], "我的会话");
+
+        // PUT 空 title → 400 ApiError
+        let (status, parsed) = call(
+            app64(&root),
+            "PUT",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            Some(r#"{"title":"  "}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SESSION_TITLE");
+
+        // PUT 改名不存在 → 404
+        let (status, _) = call(app64(&root), "PUT", "/api/v1/sessions/nope-1", Some(r#"{"title":"x"}"#)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn session_list_and_create() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        transcript_fixture(&root, Some("my-book"), Some("book"));
+
+        // 列表（TS `session.bookId !== bookId` 严格过滤：无过滤 = 只列未绑定书的会话）
+        let (status, parsed) = call(app64(&root), "GET", "/api/v1/sessions", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["sessions"].as_array().unwrap().len(), 0, "已绑定书的会话不在 null 过滤内");
+        let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions?bookId=my-book", None).await;
+        let sessions = parsed["sessions"].as_array().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["sessionId"], SESSION_ID);
+        assert_eq!(sessions[0]["bookId"], "my-book");
+        assert_eq!(sessions[0]["messageCount"], 2);
+        let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions?bookId=other", None).await;
+        assert_eq!(parsed["sessions"].as_array().unwrap().len(), 0);
+        // 创建未绑定 chat 会话后，无过滤列表可见
+        let _ = call(app64(&root), "POST", "/api/v1/sessions", Some(r#"{"sessionId":"1782950000000-chat01"}"#)).await;
+        let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions", None).await;
+        let ids: Vec<&str> = parsed["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap()).collect();
+        assert!(ids.contains(&"1782950000000-chat01"), "{ids:?}");
+        assert!(!ids.contains(&SESSION_ID), "绑定书的会话不出现");
+
+        // POST 创建：无 bookId → chat kind；safeSessionId 命中
+        let (status, parsed) = call(
+            app64(&root),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782950000000-xyz789"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["session"]["sessionId"], "1782950000000-xyz789");
+        assert_eq!(parsed["session"]["sessionKind"], "chat", "无 bookId 回退 chat");
+        assert!(parsed["session"]["bookId"].is_null());
+        assert!(parsed["session"]["title"].is_null());
+
+        // 幂等：同 id 再建（kind 变更走 metadata 更新）
+        let (_, parsed) = call(
+            app64(&root),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782950000000-xyz789","sessionKind":"edit"}"#),
+        )
+        .await;
+        assert_eq!(parsed["session"]["sessionKind"], "edit");
+
+        // 非法 sessionKind → 400
+        let (status, parsed) = call(
+            app64(&root),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionKind":"bad"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_SESSION_KIND");
+
+        // 不安全 sessionId（注入形态）→ 忽略后生成新 id
+        let (_, parsed) = call(
+            app64(&root),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"../../etc/passwd"}"#),
+        )
+        .await;
+        let generated = parsed["session"]["sessionId"].as_str().unwrap();
+        assert_ne!(generated, "../../etc/passwd");
+        assert!(!generated.contains('/'));
+    }
+
+    #[tokio::test]
+    async fn play_mode_update_and_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture64_create(&root).await;
+
+        // play-mode：非法值 → 400 INVALID_PLAY_MODE
+        let (status, parsed) = call(
+            app64(&root),
+            "PUT",
+            &format!("/api/v1/sessions/{SESSION_ID}/play-mode"),
+            Some(r#"{"playMode":"bad"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_PLAY_MODE");
+
+        // 合法更新（open）
+        let (status, parsed) = call(
+            app64(&root),
+            "PUT",
+            &format!("/api/v1/sessions/{SESSION_ID}/play-mode"),
+            Some(r#"{"playMode":"open"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["session"]["playMode"], "open");
+        // 不存在的会话 → 404
+        let (status, _) = call(
+            app64(&root),
+            "PUT",
+            "/api/v1/sessions/nope-1/play-mode",
+            Some(r#"{"playMode":"open"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // abort：无运行执行体 → aborted=false + agent:aborted 广播
+        let (status, parsed) = call(
+            app64(&root),
+            "POST",
+            &format!("/api/v1/sessions/{SESSION_ID}/abort"),
+            Some(r#"{"scope":"all"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["aborted"], false);
+    }
+
+    async fn fixture64_create(root: &std::path::Path) {
+        let app = app64(root);
+        let _ = call(
+            app,
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SESSION_ID}"}}"#)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn session_delete_removes_files_and_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture64_create(&root).await;
+        let transcript = root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl"));
+        assert!(transcript.exists());
+        // 任务快照落盘（对账改写终态的前提件）
+        std::fs::create_dir_all(root.join(".inkos").join("tasks")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json")),
+            r#"{"version":1,"sessionId":"SESSION","requestedIntent":"write_next","execution":{"id":"e1","tool":"write_next","label":"x","status":"completed","startedAt":1,"completedAt":2},"updatedAt":1}"#.replace("SESSION", SESSION_ID),
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app64(&root), "DELETE", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert!(!transcript.exists());
+        assert!(!root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json")).exists());
+    }
+
+    #[tokio::test]
+    async fn running_task_snapshot_is_reconciled_to_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture64_create(&root).await;
+        std::fs::create_dir_all(root.join(".inkos").join("tasks")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json")),
+            format!(r#"{{"version":1,"sessionId":"{SESSION_ID}","requestedIntent":"write_next","execution":{{"id":"e1","tool":"write_next","label":"写作","status":"running","startedAt":1}},"updatedAt":1}}"#),
+        )
+        .unwrap();
+
+        // GET 详情：running 快照 + 本进程无运行确认 → 对账改写为 error 终态并落盘
+        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["task"]["execution"]["status"], "error");
+        assert!(parsed["task"]["execution"]["error"].as_str().unwrap().contains("任务已中断"));
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["execution"]["status"], "error", "对账结果已持久化");
+    }
+
+    #[tokio::test]
+    async fn legacy_json_session_migrates_to_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
+        // 旧版单文件形态
+        std::fs::write(
+            root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.json")),
+            format!(r#"{{"sessionId":"{SESSION_ID}","bookId":"b1","title":"旧会话","messages":[{{"role":"user","content":"你好","timestamp":1000}},{{"role":"assistant","content":"在的","timestamp":1100}}],"createdAt":1000,"updatedAt":1100}}"#),
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["session"]["title"], "旧会话");
+        let messages = parsed["session"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["content"], "你好");
+        // 迁移后 transcript 落盘
+        assert!(root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl")).exists());
+    }
+}

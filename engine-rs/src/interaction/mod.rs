@@ -8,8 +8,12 @@
 //! runtime（1153 行交互运行时）/ edit-controller 其余 kind /
 //! project-tools / session-transcript 等。
 
+pub mod book_session_store;
 pub mod edit_controller;
 pub mod events;
 pub mod export_artifact;
 pub mod intents;
 pub mod modes;
+pub mod session;
+pub mod session_restore;
+pub mod session_transcript;
