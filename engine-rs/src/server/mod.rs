@@ -11,6 +11,7 @@
 
 pub mod audit_route;
 pub mod books_routes;
+pub mod books_state_routes;
 pub mod sse;
 pub mod task_store;
 pub mod write_next_route;
@@ -167,7 +168,40 @@ pub fn router_books(
         .route("/api/v1/books/:id/repair-state/:chapter", post(books_routes::repair_state).with_state(books.clone()))
         .route("/api/v1/books/:id/analytics", get(books_routes::analytics).with_state(books.clone()))
         .route("/api/v1/books/:id/eval", get(books_routes::eval).with_state(books.clone()))
-        .route("/api/v1/books/:id/export", get(books_routes::export).with_state(books))
+        .route("/api/v1/books/:id/export", get(books_routes::export).with_state(books.clone()))
+        // 48 号：状态端点组（列表/详情/更新/删除 + 章节读 + approve/reject +
+        // truth 文件 + chapter-review-mode）。
+        .route("/api/v1/books", get(books_state_routes::list_books).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id",
+            get(books_state_routes::book_detail)
+                .put(books_state_routes::update_book)
+                .delete(books_state_routes::delete_book)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num",
+            get(books_state_routes::read_chapter).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/approve",
+            post(books_state_routes::approve_chapter).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/reject",
+            post(books_state_routes::reject_chapter).with_state(books.clone()),
+        )
+        .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id/truth/*file",
+            get(books_state_routes::truth_file).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapter-review-mode",
+            get(books_state_routes::get_review_mode)
+                .put(books_state_routes::put_review_mode)
+                .with_state(books),
+        )
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

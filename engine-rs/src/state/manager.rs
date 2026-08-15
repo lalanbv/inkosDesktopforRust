@@ -329,6 +329,149 @@ impl StateManager {
         self.snapshot_state_at(&self.book_dir(book_id), chapter_number).await
     }
 
+    /// 列出 books/ 下含 book.json 的目录名（48 号；对齐 TS listBooks，目录序）。
+    pub async fn list_books(&self) -> Vec<String> {
+        let mut book_ids = Vec::new();
+        let Ok(mut entries) = tokio::fs::read_dir(self.books_dir()).await else {
+            return book_ids;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if tokio::fs::try_exists(entry.path().join("book.json")).await.unwrap_or(false) {
+                book_ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        book_ids
+    }
+
+    /// 从快照恢复真相文件（48 号；对齐 TS restoreState）。
+    /// 必需文件（current_state/pending_hooks）任一缺失 → false；
+    /// 可选文件快照缺失时删除目标（回退到快照时刻的状态）。
+    pub async fn restore_state(&self, book_id: &str, chapter_number: u32) -> bool {
+        let story_dir = self.book_dir(book_id).join("story");
+        let snapshot_dir = story_dir.join("snapshots").join(chapter_number.to_string());
+        const REQUIRED: [&str; 2] = ["current_state.md", "pending_hooks.md"];
+        const OPTIONAL: [&str; 5] = [
+            "particle_ledger.md",
+            "chapter_summaries.md",
+            "subplot_board.md",
+            "emotional_arcs.md",
+            "character_matrix.md",
+        ];
+        for file in REQUIRED {
+            let Ok(content) = tokio::fs::read_to_string(snapshot_dir.join(file)).await else {
+                return false;
+            };
+            if tokio::fs::write(story_dir.join(file), content).await.is_err() {
+                return false;
+            }
+        }
+        for file in OPTIONAL {
+            let target = story_dir.join(file);
+            match tokio::fs::read_to_string(snapshot_dir.join(file)).await {
+                Ok(content) => {
+                    let _ = tokio::fs::write(&target, content).await;
+                }
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&target).await;
+                }
+            }
+        }
+        // 结构化 state/：快照有内容则恢复，否则整目录删除。
+        let state_dir = self.state_dir(book_id);
+        let snapshot_state_dir = snapshot_dir.join("state");
+        let mut restored_structured = false;
+        if let Ok(mut entries) = tokio::fs::read_dir(&snapshot_state_dir).await {
+            let mut files: Vec<std::path::PathBuf> = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                files.push(entry.path());
+            }
+            if !files.is_empty() {
+                restored_structured = true;
+                let _ = tokio::fs::create_dir_all(&state_dir).await;
+                for path in files {
+                    if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                        let _ = tokio::fs::write(state_dir.join(path.file_name().unwrap_or_default()), content).await;
+                    }
+                }
+            }
+        }
+        if !restored_structured {
+            let _ = tokio::fs::remove_dir_all(&state_dir).await;
+        }
+        true
+    }
+
+    /// 回滚到指定章快照：删除其后所有章节产物（md/快照/runtime/drafts/
+    /// sqlite 加速索引），索引收敛到 kept。返回被废弃的章号列表
+    /// （48 号；对齐 TS rollbackToChapter）。
+    pub async fn rollback_to_chapter(
+        &self,
+        book_id: &str,
+        target_chapter: u32,
+    ) -> Result<Vec<u32>, String> {
+        if !self.restore_state(book_id, target_chapter).await {
+            return Err(format!(
+                "Cannot restore snapshot for chapter {target_chapter} in \"{book_id}\""
+            ));
+        }
+        let book_dir = self.book_dir(book_id);
+        let chapters_dir = book_dir.join("chapters");
+        let index = self
+            .load_chapter_index(book_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let kept: Vec<ChapterMeta> = index.iter().filter(|m| m.number <= target_chapter).cloned().collect();
+        let discarded: Vec<u32> = index.iter().filter(|m| m.number > target_chapter).map(|m| m.number).collect();
+
+        // 章节正文与草稿（`NN_title.md` 前缀数字 > target）。
+        for dir in [chapters_dir, book_dir.join("story").join("drafts")] {
+            if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let Some(num) = leading_number(&name) else { continue };
+                    if num > target_chapter {
+                        let _ = tokio::fs::remove_file(entry.path()).await;
+                    }
+                }
+            }
+        }
+        // 快照目录（目录名数字 > target）。
+        let snapshots_dir = book_dir.join("story").join("snapshots");
+        if let Ok(mut entries) = tokio::fs::read_dir(&snapshots_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Ok(num) = name.parse::<u32>() {
+                    if num > target_chapter {
+                        let _ = tokio::fs::remove_dir_all(entry.path()).await;
+                    }
+                }
+            }
+        }
+        // runtime 工件（`chapter-NN.` 前缀 > target）。
+        let runtime_dir = book_dir.join("story").join("runtime");
+        if let Ok(mut entries) = tokio::fs::read_dir(&runtime_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(num) = name.strip_prefix("chapter-").and_then(|rest| {
+                    rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok()
+                }) else { continue };
+                if num > target_chapter {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
+        // sqlite 加速索引（防废弃章回流检索）。
+        for db_file in ["memory.db", "memory.db-shm", "memory.db-wal"] {
+            let _ = tokio::fs::remove_file(book_dir.join("story").join(db_file)).await;
+        }
+
+        self.save_chapter_index(book_id, &kept)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(discarded)
+    }
+
     pub async fn snapshot_state_at(&self, book_dir: &Path, chapter_number: u32) -> Result<(), StateManagerError> {
         let story_dir = book_dir.join("story");
         let snapshot_dir = story_dir.join("snapshots").join(chapter_number.to_string());
@@ -407,6 +550,15 @@ async fn write_if_missing(path: &Path, content: &str) -> Result<(), StateManager
 fn chapter_file_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"^(\d+)_.*\.md$").unwrap())
+}
+
+/// `^(\d+)_.*\.md$` 前缀数字（rollback 的章节/草稿文件匹配，复用
+/// chapter_file_re 同一模式）。
+fn leading_number(name: &str) -> Option<u32> {
+    chapter_file_re()
+        .captures(name)
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse().ok())
 }
 
 fn rebuild_file_re() -> &'static Regex {

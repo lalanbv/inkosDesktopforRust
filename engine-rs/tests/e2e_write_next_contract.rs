@@ -1143,3 +1143,262 @@ mod books47_e2e {
         assert!(!saved.contains("今日起讨回"));
     }
 }
+
+// ---- 48 号：books 状态端点 E2E（列表/章节/approve/reject/truth/review-mode） ----
+
+mod books48_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::books_state_routes::{
+        approve_chapter, book_detail, delete_book, get_review_mode, list_books, put_review_mode,
+        read_chapter, reject_chapter, truth_file, truth_list,
+    };
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt48(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn fixture48(root: &std::path::Path) {
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("outline")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("roles").join("主要角色")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("runtime")).unwrap();
+        std::fs::write(root.join("inkos.json"), r#"{ "writing": { "reviewMode": "auto" } }"#).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        std::fs::write(book.join("story").join("current_state.md"), "状态v1").unwrap();
+        std::fs::write(book.join("story").join("pending_hooks.md"), "| 伏笔 | 状态 |").unwrap();
+        std::fs::write(book.join("story").join("outline").join("volume_map.md"), "# 卷册地图").unwrap();
+        std::fs::write(book.join("story").join("roles").join("主要角色").join("林动.md"), "# 林动").unwrap();
+        std::fs::write(
+            book.join("story").join("runtime").join("chapter-0001.plan.md"),
+            "# plan",
+        )
+        .unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32, status: &str| {
+            serde_json::json!({
+                "number": number, "title": format!("第{number}章"), "status": status,
+                "wordCount": 10, "auditIssues": [], "lengthWarnings": [],
+                "createdAt": now, "updatedAt": now,
+            })
+        };
+        std::fs::write(
+            book.join("chapters").join("index.json"),
+            serde_json::to_string(&vec![meta(1, "ready-for-review"), meta(2, "ready-for-review")]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn app48(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/books", axum::routing::get(list_books))
+            .route("/api/v1/books/:id", axum::routing::get(book_detail).delete(delete_book))
+            .route("/api/v1/books/:id/chapters/:num", axum::routing::get(read_chapter))
+            .route("/api/v1/books/:id/chapters/:num/approve", axum::routing::post(approve_chapter))
+            .route("/api/v1/books/:id/chapters/:num/reject", axum::routing::post(reject_chapter))
+            .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
+            .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
+            .route(
+                "/api/v1/books/:id/chapter-review-mode",
+                axum::routing::get(get_review_mode).put(put_review_mode),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn books_list_and_detail_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["book"]["id"], "b1");
+        assert_eq!(parsed["chapters"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["nextChapter"], 3);
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["books"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["books"][0]["chaptersWritten"], 2);
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/ghost", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Book \"ghost\" not found");
+    }
+
+    #[tokio::test]
+    async fn chapter_read_and_approve() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/2", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["filename"], "0002_云涌.md");
+        assert!(parsed["content"].as_str().unwrap().contains("正文二"));
+        let (status, _) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/9", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/2/approve", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["status"], "approved");
+        let index = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("index.json")).unwrap();
+        assert!(index.contains("\"approved\""));
+    }
+
+    #[tokio::test]
+    async fn reject_rolls_back_discarding_later_chapters() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let state = StateManager::new(&root);
+        state.snapshot_state("b1", 1).await.unwrap();
+        // 状态前进到 v2 → reject 第 2 章应回滚到快照。
+        std::fs::write(root.join("books").join("b1").join("story").join("current_state.md"), "状态v2").unwrap();
+
+        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/2/reject", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["rolledBackTo"], 1);
+        assert_eq!(parsed["discarded"], serde_json::json!([2]));
+        assert!(!root.join("books").join("b1").join("chapters").join("0002_云涌.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("books").join("b1").join("story").join("current_state.md")).unwrap(),
+            "状态v1"
+        );
+        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/9/reject", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"], "Chapter 9 not found");
+    }
+
+    #[tokio::test]
+    async fn truth_list_and_nested_wildcard_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<&str> = parsed["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"current_state.md"));
+        assert!(names.contains(&"outline/volume_map.md"));
+        assert!(names.contains(&"roles/主要角色/林动.md"));
+        // runtime 诊断文件列出且标 readonly。
+        let runtime_entry = parsed["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "runtime/chapter-0001.plan.md")
+            .expect("runtime 诊断文件应列出");
+        assert_eq!(runtime_entry["readonly"], true);
+        assert_eq!(runtime_entry["readonlyReason"], "runtime-diagnostic");
+
+        // 嵌套 wildcard：roles 与 runtime 均可达。
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/truth/roles/%E4%B8%BB%E8%A6%81%E8%A7%92%E8%89%B2/%E6%9E%97%E5%8A%A8.md",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["content"], "# 林动");
+        let (status, parsed) =
+            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth/runtime/chapter-0001.plan.md", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["readonly"], true);
+        // 白名单外 → 400。
+        let (status, parsed) =
+            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth/secret/evil.md", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Invalid truth file");
+    }
+
+    #[tokio::test]
+    async fn review_mode_roundtrip_and_invalid_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        // project=auto，book 未设 → mode auto。
+        let (status, parsed) =
+            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapter-review-mode", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["mode"], "auto");
+        assert!(parsed["bookMode"].is_null());
+
+        // manual → bookMode 覆盖 project。
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "PUT",
+            "/api/v1/books/b1/chapter-review-mode",
+            Some(r#"{"mode":"manual"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["mode"], "manual");
+        assert_eq!(parsed["bookMode"], "manual");
+
+        // 不安全 id → 400。
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/.%2E%2Fescape/chapter-review-mode",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+    }
+
+    #[tokio::test]
+    async fn delete_book_removes_directory_and_broadcasts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let runtime = rt48(&root);
+        let mut subscriber = runtime.hub.subscribe();
+        let (status, parsed) = call(app48(runtime), "DELETE", "/api/v1/books/b1", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["ok"], true);
+        assert!(!root.join("books").join("b1").exists());
+        assert_eq!(subscriber.recv().await.unwrap().event, "book:deleted");
+    }
+}
