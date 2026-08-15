@@ -7326,3 +7326,348 @@ mod films69_e2e {
         assert_eq!(parsed["error"]["code"], "NODE_NOT_FOUND");
     }
 }
+
+mod translations70_e2e {
+    //! 70 号：translations 域六端点（upload → create → detail → run → export 全链）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::translation_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt70(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app70(root: &std::path::Path, llm: &str) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/translations",
+                axum::routing::get(translation_routes::list_translations),
+            )
+            .route(
+                "/api/v1/translations/upload",
+                axum::routing::post(translation_routes::upload_translation),
+            )
+            .route(
+                "/api/v1/translations/create",
+                axum::routing::post(translation_routes::create_translation),
+            )
+            .route(
+                "/api/v1/translations/:id",
+                axum::routing::get(translation_routes::get_translation_detail),
+            )
+            .route(
+                "/api/v1/translations/:id/run",
+                axum::routing::post(translation_routes::run_translation),
+            )
+            .route(
+                "/api/v1/translations/:id/export",
+                axum::routing::post(translation_routes::export_translation),
+            )
+            .with_state(rt70(root, llm))
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 翻译 LLM mock：按 system 关键词分流（Translation Agent → 逐段回译 JSON；
+    /// Review Agent → passed）。
+    async fn mock_translation_llm() -> String {
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("Translation Agent") {
+                        // 从请求 JSON 抽 segments，逐段回译。
+                        let parsed: serde_json::Value = serde_json::from_str(&user).unwrap_or_default();
+                        let segments: Vec<serde_json::Value> = parsed["segments"]
+                            .as_array()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .map(|segment| {
+                                        serde_json::json!({
+                                            "index": segment["index"],
+                                            "target": format!("[译]{}", segment["source"].as_str().unwrap_or("")),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        serde_json::json!({
+                            "segments": segments,
+                            "glossary": [{ "source": "Mana", "target": "魔力" }],
+                        })
+                        .to_string()
+                    } else if system.contains("Translation Review Agent") {
+                        serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] }).to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    /// 上传并创建一个翻译项目，返回 projectId。
+    async fn seed_project(root: &std::path::Path, app: &axum::Router) -> String {
+        let novel = "Chapter 1\n\nThe mountain stood tall.\n\nMana flowed.\n";
+        use base64::Engine as _;
+        let data_url = format!(
+            "data:text/plain;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(novel)
+        );
+        let (status, upload) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/upload",
+            Some(&serde_json::json!({ "filename": "novel.txt", "dataUrl": data_url }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {upload}");
+        let stored_path = upload["storedPath"].as_str().unwrap().to_string();
+        assert!(stored_path.starts_with(".inkos/uploads/translation/"), "{stored_path}");
+        assert!(stored_path.ends_with("-novel.txt"), "{stored_path}");
+        assert!(root.join(&stored_path).is_file());
+        assert_eq!(upload["mimeType"], "text/plain");
+
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(&serde_json::json!({
+                "filePath": stored_path,
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+                "title": "山河之书"
+            }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        assert_eq!(created["title"], "山河之书");
+        created["projectId"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn upload_create_detail_run_export_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_translation_llm().await;
+        let app = app70(&root, &llm);
+        let project_id = seed_project(&root, &app).await;
+
+        // detail：manifest + 空报告 + 章节段（target 空）。
+        let (status, detail) = call(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/translations/{project_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {detail}");
+        assert_eq!(detail["manifest"]["title"], "山河之书");
+        assert_eq!(detail["manifest"]["chapters"].as_array().unwrap().len(), 1);
+        assert_eq!(detail["manifest"]["chapters"][0]["status"], "pending");
+        assert_eq!(detail["chapters"][0]["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(detail["chapters"][0]["segments"][0]["target"], "");
+        assert_eq!(detail["report"], "# Translation Review\n\nPending.\n");
+
+        // run：翻译 + 评审全链。
+        let (status, run) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        assert_eq!(run["translatedSegments"], 2);
+        assert_eq!(run["reviewedChapters"], 1);
+        assert_eq!(run["reportPath"], format!("translations/{project_id}/review-report.md"));
+
+        // detail：状态推进 + 段回填 + 报告更新 + 术语表。
+        let (status, detail) = call(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/translations/{project_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail["manifest"]["chapters"][0]["status"], "reviewed");
+        assert_eq!(detail["chapters"][0]["segments"][0]["target"], "[译]The mountain stood tall.");
+        assert!(detail["report"].as_str().unwrap().contains("- passed: yes"));
+        let glossary_raw = std::fs::read_to_string(
+            root.join("translations").join(&project_id).join("glossary.json"),
+        )
+        .unwrap();
+        assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
+
+        // export：md + epub（zip 读回）。
+        let (status, exported) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/export"),
+            Some(r#"{ "format": "md" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {exported}");
+        assert_eq!(exported["format"], "md");
+        assert_eq!(exported["chaptersExported"], 1);
+        let md_path = exported["outputPath"].as_str().unwrap();
+        let md = std::fs::read_to_string(root.join(md_path)).unwrap();
+        assert!(md.contains("# 山河之书"), "{md}");
+        assert!(md.contains("[译]Mana flowed."), "{md}");
+
+        let (status, exported) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/export"),
+            Some(r#"{ "format": "epub" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let epub_path = exported["outputPath"].as_str().unwrap();
+        assert!(epub_path.ends_with(".epub"));
+        let epub_bytes = std::fs::read(root.join(epub_path)).unwrap();
+        let mut reader = zip::ZipArchive::new(std::io::Cursor::new(&epub_bytes[..])).unwrap();
+        assert_eq!(
+            reader.by_name("mimetype").unwrap().compression(),
+            zip::CompressionMethod::Stored
+        );
+        let mut opf = String::new();
+        {
+            let mut archive = reader.clone();
+            let mut file = archive.by_name("OEBPS/content.opf").unwrap();
+            std::io::Read::read_to_string(&mut file, &mut opf).unwrap();
+        }
+        assert!(opf.contains("山河之书"), "{opf}");
+
+        // 列表：摘要形态。
+        let (status, listed) = call(app, "GET", "/api/v1/translations", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let translations = listed["translations"].as_array().unwrap();
+        assert_eq!(translations.len(), 1);
+        assert_eq!(translations[0]["projectId"], project_id);
+        assert_eq!(translations[0]["title"], "山河之书");
+        assert_eq!(translations[0]["chapters"], 1);
+    }
+
+    #[tokio::test]
+    async fn validation_and_error_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_translation_llm().await;
+        let app = app70(&root, &llm);
+
+        // upload 缺 dataUrl → 400。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/upload",
+            Some(r#"{ "filename": "x.txt" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_TRANSLATION_UPLOAD");
+
+        // create 缺 filePath / 缺语言 → 400。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(r#"{ "sourceLanguage": "en" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "MISSING_FILE_PATH");
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(r#"{ "filePath": "a.txt", "sourceLanguage": " " }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "MISSING_LANGUAGES");
+
+        // detail：非法 id / 缺失项目。
+        // percent 编码的单段 id（../etc）命中 :id 路由 → INVALID_ID；多段
+        // ../.. 不匹配单段路由 → 404（TS Hono 同行为）。
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/translations/%2e%2e%2fetc", None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_ID");
+        let (status, parsed) = call(app.clone(), "GET", "/api/v1/translations/ghost", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(parsed["error"]["code"], "NOT_FOUND");
+
+        // export 非法 format → 400（TS 会按 txt 兜底，Rust 显式拒绝——偏差备案）。
+        let project_id = seed_project(&root, &app).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/export"),
+            Some(r#"{ "format": "pdf" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_FORMAT");
+    }
+
+    #[tokio::test]
+    async fn run_upstream_failure_maps_502() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // LLM 端口不可达 → chat 错误 → 上游分类 502。
+        let app = app70(&root, "http://127.0.0.1:9");
+        let project_id = seed_project(&root, &app).await;
+        let (status, parsed) = call(
+            app,
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
+    }
+}

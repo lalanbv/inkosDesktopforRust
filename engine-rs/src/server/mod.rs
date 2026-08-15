@@ -23,6 +23,7 @@ pub mod project_files_routes;
 pub mod service_routes;
 pub mod session_routes;
 pub mod skill_routes;
+pub mod translation_routes;
 pub mod sse;
 pub mod style_routes;
 pub mod task_store;
@@ -505,7 +506,32 @@ pub fn router_books(
         )
         .route(
             "/api/v1/projects/:id/nodes/:nodeId/image",
-            post(interactive_film_routes::post_node_image).with_state(books),
+            post(interactive_film_routes::post_node_image).with_state(books.clone()),
+        )
+        // 70 号：translations 域（翻译工作流六端点）。
+        .route(
+            "/api/v1/translations",
+            get(translation_routes::list_translations).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/translations/upload",
+            post(translation_routes::upload_translation).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/translations/create",
+            post(translation_routes::create_translation).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/translations/:id",
+            get(translation_routes::get_translation_detail).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/translations/:id/run",
+            post(translation_routes::run_translation).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/translations/:id/export",
+            post(translation_routes::export_translation).with_state(books),
         )
 }
 
