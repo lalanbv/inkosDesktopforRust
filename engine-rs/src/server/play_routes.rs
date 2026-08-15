@@ -289,16 +289,51 @@ pub async fn post_play_generate_image(
         (entity_id.to_string(), prompt)
     };
 
-    // 生图执行链（cover 基础设施）未移植：与 TS "cover API 未配置" catch 分支
-    // 同形兜底（{error, needsCoverConfig:true} → 前端提示先配置；偏差备案）。
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({
-            "error": "Image generation is not available in this engine build yet. Configure the cover API on the Node side or wait for the image pipeline port.",
-            "needsCoverConfig": true,
-        })),
-    )
-        .into_response()
+    // 生图（74 号接通 cover 基础设施）：失败记录 {status:"failed"}——生成失败
+    // 不抛（UI 可重试）；cover 未配置才 400 needsCoverConfig。
+    match crate::llm::cover::resolve_cover_generation_request(root).await {
+        Ok(request) => {
+            let size = payload
+                .get("size")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("1024x1024");
+            match crate::llm::cover::generate_image_from_prompt(&request, &_prompt, size).await {
+                Ok(image) => {
+                    let file = play::play_image_file_name(&_key, image.extension);
+                    let dir = run_dir.join("images");
+                    if let Err(message) = tokio::fs::create_dir_all(&dir).await {
+                        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
+                    }
+                    if let Err(message) = tokio::fs::write(dir.join(&file), &image.bytes).await {
+                        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
+                    }
+                    let entry = json!({ "status": "ready", "file": file });
+                    let _ = play::set_play_image_entry(&run_dir, &_key, &entry).await;
+                    let url = image_url_for(&world_id, &run_id, entry.get("file").and_then(Value::as_str).unwrap_or_default());
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "key": _key, "ok": true, "status": "ready", "file": entry["file"], "url": url })),
+                    )
+                        .into_response()
+                }
+                Err(message) => {
+                    let entry = json!({ "status": "failed", "error": message });
+                    let _ = play::set_play_image_entry(&run_dir, &_key, &entry).await;
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "key": _key, "ok": false, "status": "failed", "error": entry["error"] })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": message, "needsCoverConfig": true })),
+        )
+            .into_response(),
+    }
 }
 
 // ── GET /play/runs/:worldId/:runId/images/:file ─────────────────

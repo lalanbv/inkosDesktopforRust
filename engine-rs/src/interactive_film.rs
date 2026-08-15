@@ -277,6 +277,27 @@ impl StoryGraph {
     }
 }
 
+/// NodeType / CharacterRole 的 serde 串（作者上下文摘要用）。
+pub fn node_type_str(node_type: NodeType) -> &'static str {
+    match node_type {
+        NodeType::Start => "start",
+        NodeType::Normal => "normal",
+        NodeType::Branch => "branch",
+        NodeType::Merge => "merge",
+        NodeType::Ending => "ending",
+        NodeType::Explore => "explore",
+    }
+}
+
+pub fn character_role_str(role: CharacterRole) -> &'static str {
+    match role {
+        CharacterRole::Protagonist => "protagonist",
+        CharacterRole::Antagonist => "antagonist",
+        CharacterRole::Support => "support",
+        CharacterRole::Other => "other",
+    }
+}
+
 pub fn empty_graph(project_id: &str) -> StoryGraph {
     StoryGraph {
         schema_version: 1,

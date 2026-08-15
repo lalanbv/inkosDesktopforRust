@@ -1061,6 +1061,217 @@ async fn execute_create_book(
     })
 }
 
+/// `createConnectChoiceTool`：StoryNode 解析 → upsert delta → applyGraphDelta。
+async fn execute_connect_choice(
+    runtime: &BooksRuntime,
+    project_id: &str,
+    node_value: &Value,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::interactive_film as film;
+    on_progress(format!("Connecting choices on {project_id}..."));
+    let root = runtime.state.project_root();
+    // StoryNodeSchema.parse 等价：serde 严格化（非法字段/缺 id 400 抛错 → Err）。
+    let node: film::StoryNode = serde_json::from_value(node_value.clone())
+        .map_err(|e| format!("invalid connect-choice node: {e}"))?;
+    let delta = film::StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: Some(film::UpsertRemove {
+            upsert: vec![node.clone()],
+            remove: Vec::new(),
+        }),
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    };
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    Ok(ToolOutcome {
+        is_error: false,
+        text: format!("Choices updated on node {} (rev {rev}).", node.id),
+        details: json!({ "kind": "graph_updated", "rev": rev }),
+    })
+}
+
+/// `createRemoveNodeTool`：nodeId → remove delta → applyGraphDelta。
+async fn execute_remove_node(
+    runtime: &BooksRuntime,
+    project_id: &str,
+    node_id: &str,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::interactive_film as film;
+    on_progress(format!("Removing node {node_id}..."));
+    let root = runtime.state.project_root();
+    let delta = film::StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: Some(film::UpsertRemove {
+            upsert: Vec::new(),
+            remove: vec![node_id.to_string()],
+        }),
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    };
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    Ok(ToolOutcome {
+        is_error: false,
+        text: format!("Node {node_id} removed (rev {rev})."),
+        details: json!({ "kind": "graph_updated", "rev": rev }),
+    })
+}
+
+/// `createDraftStructureTool`：图上下文 → 编剧提示词（zh 逐字）→ LLM →
+/// {nodes:[...]} 解析 → upsert delta（phase structure）。
+async fn execute_draft_structure(
+    runtime: &BooksRuntime,
+    project_id: &str,
+    instruction: &str,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::interactive_film as film;
+    on_progress(format!("Drafting structure for {project_id}..."));
+    let root = runtime.state.project_root();
+    let context = match film::load_story_graph(root, project_id).await {
+        Ok(Some(graph)) => summarize_story_graph_for_authoring(&graph),
+        _ => "(empty graph)".to_string(),
+    };
+    let system_prompt = "你是互动影游编剧。根据上下文与指令，生成分支骨架 JSON：{ \"nodes\": [StoryNode...] }。恰好 1 个 type=start，至少 2 个 branch，至少 2 个差异化 ending 节点；每条路径都能到某个 ending；只输出 JSON。";
+    let user_prompt = format!("{context}\n\n骨架指令：{instruction}");
+    let outcome = runtime
+        .router
+        .chat(
+            "film-authoring",
+            vec![
+                crate::llm::provider::LLMMessage {
+                    role: crate::llm::provider::LLMRole::System,
+                    content: system_prompt.to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                crate::llm::provider::LLMMessage {
+                    role: crate::llm::provider::LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            0.7,
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    // extractJson：fence 剥离 + 首 { 到末 }。
+    let parsed = extract_json_object(&outcome.content)
+        .ok_or_else(|| "draft_structure: LLM returned no JSON".to_string())?;
+    let raw_nodes = parsed.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+    if raw_nodes.is_empty() {
+        return Err("draft_structure: LLM returned no nodes".to_string());
+    }
+    let mut nodes = Vec::new();
+    for raw in raw_nodes {
+        nodes.push(
+            serde_json::from_value::<film::StoryNode>(raw)
+                .map_err(|e| format!("draft_structure: invalid node: {e}"))?,
+        );
+    }
+    let node_count = nodes.len();
+    let delta = film::StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: Some(film::UpsertRemove {
+            upsert: nodes,
+            remove: Vec::new(),
+        }),
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    };
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    Ok(ToolOutcome {
+        is_error: false,
+        text: format!("Structure drafted: {node_count} nodes (rev {rev})."),
+        details: json!({ "kind": "graph_updated", "rev": rev }),
+    })
+}
+
+/// fence 剥离 + 首 `{` 到末 `}` 子串提取（extractJson 等价）。
+fn extract_json_object(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Some(value);
+    }
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    if end > start {
+        serde_json::from_str(&trimmed[start..=end]).ok()
+    } else {
+        None
+    }
+}
+
+/// `buildFilmAuthoringContext`（zh）：图谱摘要 + 角色档案。
+fn summarize_story_graph_for_authoring(graph: &crate::interactive_film::StoryGraph) -> String {
+    use crate::interactive_film as film;
+    let mut lines = vec![format!(
+        "# 互动影游：{}",
+        if graph.title.is_empty() { &graph.project_id } else { &graph.title }
+    )];
+    if let Some(anchor) = &graph.world_anchor {
+        lines.push(format!(
+            "核心：{} / 主题：{} / 题材：{} / 规则：{} / 时长：{}分",
+            anchor.story_core, anchor.theme, anchor.genre, anchor.world_rules, anchor.duration_minutes as i64
+        ));
+    }
+    if !graph.variables.is_empty() {
+        let names: Vec<&str> = graph.variables.iter().map(|v| v.name.as_str()).collect();
+        lines.push(format!("变量：{}", names.join(", ")));
+    }
+    lines.push("节点：".to_string());
+    for node in &graph.nodes {
+        let edges: Vec<String> = node
+            .choices
+            .iter()
+            .map(|choice| format!("{}→{}", choice.text, choice.target_node_id))
+            .collect();
+        lines.push(format!(
+            "- {}[{}] {}{}",
+            node.id,
+            film::node_type_str(node.node_type),
+            node.title,
+            if edges.is_empty() { String::new() } else { format!(" -> {}", edges.join(", ")) }
+        ));
+    }
+    let mut blocks = vec![lines.join("\n")];
+    if !graph.characters.is_empty() {
+        let mut char_lines = vec!["角色档案：".to_string()];
+        for character in &graph.characters {
+            let voice = character
+                .voice_profile
+                .as_ref()
+                .map(|profile| {
+                    [profile.speaking_rhythm.clone(), profile.vocabulary.clone()]
+                        .iter()
+                        .filter(|part| !part.is_empty())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                })
+                .filter(|voice| !voice.is_empty());
+            char_lines.push(format!(
+                "- {}（{}）动机：{}{}",
+                character.name,
+                film::character_role_str(character.role),
+                character.motivation,
+                voice.map(|voice| format!(" 口吻：{voice}")).unwrap_or_default()
+            ));
+        }
+        blocks.push(char_lines.join("\n"));
+    }
+    blocks.join("\n\n")
+}
+
 /// `createPlayStartTool` 语义：worldId 即会话 id（1:1 绑定，两个 play 会话互
 /// 不串台）+ runId 固定 "main"；首开（transcript 空）写 scene/状态/助手轮；
 /// seedOpening 失败 fail-open（HUD 增强而非启动前提）。
@@ -1345,9 +1556,81 @@ async fn run_confirmed_production_locked(
     // ── 执行卡装配（intent → tool/agent/params/stages） ──
     let mut params = Map::new();
     let agent: Option<&str>;
-    // play_start 是独立工具（非 sub_agent），无 stages（TS pipelineStages 无 play）。
-    let play_start = request.intent == RequestedIntent::PlayStart;
     match request.intent {
+        RequestedIntent::ConnectChoice => {
+            let payload = request.action_payload.and_then(|p| p.get("connectChoice"));
+            let node_value = payload
+                .and_then(|p| p.get("node"))
+                .cloned()
+                .filter(|node| node.is_object())
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认连接选择缺少节点数据，请重新生成确认卡。",
+                            "The connect-choice confirmation is missing node data. Regenerate the confirmation card.",
+                        ),
+                    )
+                })?;
+            // projectId 兜底链：payload.projectId ?? bookId。
+            let project_id = payload
+                .and_then(|p| p.get("projectId"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| request.book_id.map(String::from))
+                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+            params.insert("node".into(), node_value);
+            params.insert("projectId".into(), json!(project_id));
+            agent = None;
+        }
+        RequestedIntent::RemoveNode => {
+            let payload = request.action_payload.and_then(|p| p.get("removeNode"));
+            let node_id = payload
+                .and_then(|p| p.get("nodeId"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认删除节点缺少 nodeId，请重新生成确认卡。",
+                            "The remove-node confirmation is missing a nodeId. Regenerate the confirmation card.",
+                        ),
+                    )
+                })?
+                .to_string();
+            let project_id = payload
+                .and_then(|p| p.get("projectId"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| request.book_id.map(String::from))
+                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+            params.insert("nodeId".into(), json!(node_id));
+            params.insert("projectId".into(), json!(project_id));
+            agent = None;
+        }
+        RequestedIntent::DraftStructure => {
+            let payload = request.action_payload.and_then(|p| p.get("draftStructure"));
+            let project_id = payload
+                .and_then(|p| p.get("projectId"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| request.book_id.map(String::from))
+                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+            let instruction = payload
+                .and_then(|p| p.get("instruction"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(request.instruction)
+                .to_string();
+            params.insert("projectId".into(), json!(project_id));
+            params.insert("instruction".into(), json!(instruction));
+            agent = None;
+        }
         RequestedIntent::PlayStart => {
             let payload = request.action_payload.and_then(|p| p.get("playStart"));
             let field = |name: &str| {
@@ -1480,7 +1763,13 @@ async fn run_confirmed_production_locked(
             ));
         }
     }
-    let tool_name = if play_start { "play_start" } else { "sub_agent" };
+    let tool_name = match request.intent {
+        RequestedIntent::PlayStart => "play_start",
+        RequestedIntent::ConnectChoice => "connect_choice",
+        RequestedIntent::RemoveNode => "remove_node",
+        RequestedIntent::DraftStructure => "draft_structure",
+        _ => "sub_agent",
+    };
 
     let stages: Option<Vec<StudioTaskStage>> = agent.and_then(|agent| {
         pipeline_stages(agent, lang).map(|labels| {
@@ -1570,6 +1859,27 @@ async fn run_confirmed_production_locked(
         }
     };
     let outcome = match request.intent {
+        RequestedIntent::ConnectChoice => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let node_value = args.get("node").cloned().unwrap_or(Value::Null);
+            execute_connect_choice(runtime, &project_id, &node_value, &mut on_progress).await
+        }
+        RequestedIntent::RemoveNode => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let node_id = args.get("nodeId").and_then(Value::as_str).unwrap_or_default().to_string();
+            execute_remove_node(runtime, &project_id, &node_id, &mut on_progress).await
+        }
+        RequestedIntent::DraftStructure => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let instruction = args.get("instruction").and_then(Value::as_str).unwrap_or_default().to_string();
+            execute_draft_structure(runtime, &project_id, &instruction, &mut on_progress).await
+        }
         RequestedIntent::PlayStart => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();

@@ -7308,7 +7308,9 @@ mod films69_e2e {
         write_graph(&root, "film1", valid_graph("film1", "影游"));
 
         let app = app69(&root);
-        // 节点存在 → 生图链未接线（69 号偏差备案）→ 503。
+        // 节点存在但无 prompt/sceneDesc 且无 cover 配置 → TS generateNodeImage
+        // throw 消息逐字（端点 500）；74 号起生图链已接通，此 fixture 无
+        // prompt 源先命中该分支。
         let (status, parsed) = call(
             app.clone(),
             "POST",
@@ -7316,8 +7318,14 @@ mod films69_e2e {
             Some("{}"),
         )
         .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "IMAGE_GENERATION_UNAVAILABLE");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("has no imageSlot.prompt or sceneDesc"),
+            "body: {parsed}"
+        );
 
         // 节点缺失 → 404 NODE_NOT_FOUND。
         let (status, parsed) = call(
@@ -8540,5 +8548,345 @@ mod play73_e2e {
 
         // 空输入 → Err。
         assert!(runner.step(&agents, &agents, &agents, "   ").await.is_err());
+    }
+}
+
+mod image74_e2e {
+    //! 74 号：生图链解锁（node-image + play generate-image）+ 三执行器接线。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::interactive_film_routes;
+    use inkos_engine::server::play_routes;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt74(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app74(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/projects/:id/nodes/:nodeId/image",
+                axum::routing::post(interactive_film_routes::post_node_image),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId/generate-image",
+                axum::routing::post(play_routes::post_play_generate_image),
+            )
+            .route(
+                "/api/v1/play/runs/:worldId/:runId",
+                axum::routing::get(play_routes::get_play_run),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 生图 mock（images API，b64_png）+ LLM mock（draft_structure 编剧）双端口。
+    async fn mock_image_and_llm() -> (String, String) {
+        use base64::Engine as _;
+        let png_b64 = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG-fake-image");
+        let image_payload = format!(r#"{{"data":[{{"b64_json":"{png_b64}"}}]}}"#);
+        let image_payload_for_server = image_payload.clone();
+        let image_app = axum::Router::new().route(
+            "/images/generations",
+            axum::routing::post(move || async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    image_payload_for_server,
+                )
+            }),
+        );
+        let image_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let image_addr = image_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(image_listener, image_app).await.unwrap(); });
+
+        let llm_app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                let content = if system.contains("互动影游编剧") {
+                    r#"{"nodes":[
+                        {"id":"start","type":"start","title":"开场","choices":[{"id":"c1","text":"走左","targetNodeId":"end_good"}]},
+                        {"id":"end_good","type":"ending","title":"善终"}
+                    ]}"#.to_string()
+                } else {
+                    "PASS".to_string()
+                };
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let llm_addr = llm_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(llm_listener, llm_app).await.unwrap(); });
+
+        (format!("http://{image_addr}"), format!("http://{llm_addr}"))
+    }
+
+    #[tokio::test]
+    async fn node_image_generates_and_attaches_via_delta() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (image_base, _llm) = mock_image_and_llm().await;
+        // cover 配置：env base URL（避免污染进程 env，走 inkos.json）。
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(r#"{{"llm":{{"cover":{{"service":"kkaiapi","baseUrl":"{image_base}"}}}}}}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"cover:kkaiapi":{"apiKey":"sk-test"}}}"#,
+        )
+        .unwrap();
+
+        // 项目图谱（含 sceneDesc 作生图 prompt 源）。
+        let graph = serde_json::json!({
+            "schemaVersion": 1, "projectId": "film1", "title": "影游",
+            "nodes": [
+                { "id": "start", "type": "start", "sceneDesc": "雪夜宅邸门口", "choices": [] }
+            ],
+            "endings": []
+        });
+        let dir_film = root.join("interactive-films").join("film1");
+        std::fs::create_dir_all(&dir_film).unwrap();
+        std::fs::write(dir_film.join("story-graph.json"), graph.to_string()).unwrap();
+
+        let app = app74(rt74(&root, "http://127.0.0.1:9"));
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/projects/film1/nodes/start/image",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["assetRef"], "interactive-films/film1/assets/nodes/start.png");
+        assert_eq!(parsed["rev"], 1);
+        // 图片落盘 + delta 回写（imageSlot 注入 + authoring rev）。
+        assert_eq!(
+            std::fs::read(root.join("interactive-films/film1/assets/nodes/start.png")).unwrap(),
+            b"\x89PNG-fake-image"
+        );
+        let updated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir_film.join("story-graph.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(updated["nodes"][0]["imageSlot"]["assetRef"], "interactive-films/film1/assets/nodes/start.png");
+        assert_eq!(updated["nodes"][0]["imageSlot"]["prompt"], "雪夜宅邸门口");
+
+        // 未配置 cover → 400 needsCoverConfig。
+        let bare = tempfile::tempdir().unwrap();
+        let bare_root = bare.path().to_path_buf();
+        let dir_bare = bare_root.join("interactive-films").join("film2");
+        std::fs::create_dir_all(&dir_bare).unwrap();
+        std::fs::write(dir_bare.join("story-graph.json"), graph.to_string()).unwrap();
+        let (status, parsed) = call(
+            app74(rt74(&bare_root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/projects/film2/nodes/start/image",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["needsCoverConfig"], true);
+    }
+
+    #[tokio::test]
+    async fn play_generate_image_writes_manifest_and_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (image_base, _llm) = mock_image_and_llm().await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(r#"{{"llm":{{"cover":{{"service":"kkaiapi","baseUrl":"{image_base}"}}}}}}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"cover:kkaiapi":{"apiKey":"sk-test"}}}"#,
+        )
+        .unwrap();
+
+        // play world + run（实体 actor_hero + scene 投影）。
+        let run = root.join("worlds").join("w1").join("runs").join("main");
+        std::fs::create_dir_all(run.join("projections")).unwrap();
+        std::fs::create_dir_all(run.join("images")).unwrap();
+        std::fs::write(
+            root.join("worlds").join("w1").join("world.json"),
+            r#"{"id":"w1","title":"雪夜","premise":"","worldContract":"","visualContract":"水墨","mode":"open","language":"zh","createdAt":"t","updatedAt":"t"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            run.join("play-graph.json"),
+            r#"{"entities":{"actor_hero":{"id":"actor_hero","type":"actor","label":"林动","summary":"少年"}},"edges":{},"stateSlots":{},"events":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(run.join("projections").join("scene.md"), "雪夜孤灯，风声掠过檐角。").unwrap();
+
+        let app = app74(rt74(&root, "http://127.0.0.1:9"));
+        // scene 生图（投影文本兜底）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/play/runs/w1/main/generate-image",
+            Some(r#"{ "target": "scene" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["key"], "scene-turn-0");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["status"], "ready");
+        assert_eq!(parsed["file"], "scene-turn-0.png");
+        assert_eq!(parsed["url"], "/api/v1/play/runs/w1/main/images/scene-turn-0.png");
+        assert_eq!(
+            std::fs::read(run.join("images").join("scene-turn-0.png")).unwrap(),
+            b"\x89PNG-fake-image"
+        );
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run.join("images").join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["scene-turn-0"]["status"], "ready");
+
+        // entity 生图。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/play/runs/w1/main/generate-image",
+            Some(r#"{ "target": "entity", "entityId": "actor_hero" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["key"], "actor_hero");
+        assert_eq!(parsed["file"], "actor_hero.png");
+
+        // GET run：实体 ready 注入 imageUrl（71 号读取面合并）。
+        let (status, run_view) = call(app, "GET", "/api/v1/play/runs/w1/main", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let hero = run_view["graph"]["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "actor_hero")
+            .cloned()
+            .unwrap();
+        assert_eq!(hero["imageUrl"], "/api/v1/play/runs/w1/main/images/actor_hero.png");
+    }
+
+    #[tokio::test]
+    async fn film_executor_intents_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (_image, llm) = mock_image_and_llm().await;
+        let app = app74(rt74(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782992000000-film01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // draft_structure：LLM 骨架 → 图谱建立（rev 1）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"生成双结局骨架","sessionId":"1782992000000-film01","actionSource":"button","requestedIntent":"draft_structure","actionPayload":{"draftStructure":{"projectId":"film-d"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "draft_structure");
+        assert_eq!(exec["status"], "completed");
+        assert_eq!(exec["details"]["kind"], "graph_updated");
+        assert_eq!(exec["details"]["rev"], 1);
+        assert_eq!(exec["result"], "Structure drafted: 2 nodes (rev 1).");
+        let graph_raw = std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json")).unwrap();
+        assert!(graph_raw.contains("\"start\""), "{graph_raw}");
+
+        // connect_choice：完整节点 upsert（改选项）→ rev 2。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"连线","sessionId":"1782992000000-film01","actionSource":"button","requestedIntent":"connect_choice","actionPayload":{"connectChoice":{"projectId":"film-d","node":{"id":"start","type":"start","title":"开场","choices":[{"id":"c2","text":"走右","targetNodeId":"end_good"}]}}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "connect_choice");
+        assert_eq!(exec["details"]["rev"], 2);
+
+        // remove_node：nodeId 删除 → rev 3 + 节点消失。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"删节点","sessionId":"1782992000000-film01","actionSource":"button","requestedIntent":"remove_node","actionPayload":{"removeNode":{"projectId":"film-d","nodeId":"end_good"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "remove_node");
+        assert_eq!(exec["details"]["rev"], 3);
+        let after: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(after["nodes"].as_array().unwrap().iter().all(|n| n["id"] != "end_good"));
+
+        // 缺 nodeId → 502 + 中文文案。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"删","sessionId":"1782992000000-film01","actionSource":"button","requestedIntent":"remove_node","actionPayload":{"removeNode":{}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少 nodeId"), "body: {parsed}");
     }
 }

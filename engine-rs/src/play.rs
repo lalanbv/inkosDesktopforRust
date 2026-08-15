@@ -370,6 +370,29 @@ pub async fn read_play_image_manifest(run_dir: &Path) -> BTreeMap<String, Value>
     }
 }
 
+/// `setPlayImageEntry`：单条目并入 manifest 落盘（返回新 manifest）。
+pub async fn set_play_image_entry(
+    run_dir: &Path,
+    key: &str,
+    entry: &Value,
+) -> Result<(), String> {
+    let manifest = read_play_image_manifest(run_dir).await;
+    let mut object = serde_json::Map::new();
+    for (existing_key, value) in manifest.iter() {
+        object.insert(existing_key.clone(), value.clone());
+    }
+    object.insert(key.to_string(), entry.clone());
+    let dir = run_dir.join("images");
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default()
+    );
+    tokio::fs::write(dir.join("manifest.json"), payload)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// `readPlayImageSettings`：三开关（默认全关；坏文件回退默认）。
 pub async fn read_play_image_settings(run_dir: &Path) -> Value {
     let read = tokio::fs::read_to_string(run_dir.join("images").join("settings.json")).await;

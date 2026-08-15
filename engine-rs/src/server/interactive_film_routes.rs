@@ -633,7 +633,7 @@ pub struct NodeImageBody {
 pub async fn post_node_image(
     State(runtime): State<BooksRuntime>,
     AxumPath((id, node_id)): AxumPath<(String, String)>,
-    _body: Option<Json<NodeImageBody>>,
+    body: Option<Json<NodeImageBody>>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&id) {
         return invalid_id(&id);
@@ -656,11 +656,79 @@ pub async fn post_node_image(
             format!("node {node_id} not found"),
         );
     }
-    // 生图执行链（short-fiction runner 的 cover 生成基础设施）未移植——
-    // 69 号偏差备案：返回 503 明确错误（前端仍走 Node 侧或随后续号接线）。
-    api_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "IMAGE_GENERATION_UNAVAILABLE",
-        "Node image generation is not available in this engine build yet.",
-    )
+    // 生图（74 号接通 cover 基础设施）：prompt 取 imageSlot.prompt 或
+    // sceneDesc；落盘 run/images 相对路径后经 setImageRef delta 写回图谱。
+    let node = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .cloned()
+        .expect("上方已验证存在");
+    let prompt = node
+        .image_slot
+        .as_ref()
+        .map(|slot| slot.prompt.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| node.scene_desc.trim().to_string());
+    if prompt.is_empty() {
+        // TS generateNodeImage 直接 throw（端点 onError → 500）；消息逐字。
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            format!("node {node_id} has no imageSlot.prompt or sceneDesc to generate an image from"),
+        );
+    }
+    let root = runtime.state.project_root();
+    let request = match crate::llm::cover::resolve_cover_generation_request(root).await {
+        Ok(request) => request,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": message, "needsCoverConfig": true })),
+            )
+                .into_response()
+        }
+    };
+    let size: String = body
+        .as_ref()
+        .and_then(|body| body.size.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "1024x1536".to_string());
+    let image = match crate::llm::cover::generate_image_from_prompt(&request, &prompt, &size).await
+    {
+        Ok(image) => image,
+        Err(message) => {
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "IMAGE_GENERATION_FAILED", message)
+        }
+    };
+    let asset_ref = film::node_image_rel_path(&id, &node_id, image.extension);
+    let abs = root.join(&asset_ref);
+    if let Some(parent) = abs.parent() {
+        if let Err(message) = tokio::fs::create_dir_all(parent).await {
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
+        }
+    }
+    if let Err(message) = tokio::fs::write(&abs, &image.bytes).await {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
+    }
+    // buildSetImageRefDelta：upsert 节点 + imageSlot {prompt, assetRef}。
+    let mut node_with_image = node.clone();
+    node_with_image.image_slot = Some(film::ImageSlot {
+        prompt: prompt.clone(),
+        asset_ref: Some(asset_ref.clone()),
+    });
+    let delta = match serde_json::from_value::<film::StoryGraphDelta>(json!({
+        "nodes": { "upsert": [serde_json::to_value(&node_with_image).unwrap_or(Value::Null)] }
+    })) {
+        Ok(delta) => delta,
+        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", e.to_string()),
+    };
+    match apply_graph_delta(root, &id, &delta).await {
+        Ok((_, rev)) => (
+            StatusCode::OK,
+            Json(json!({ "assetRef": asset_ref, "rev": rev })),
+        )
+            .into_response(),
+        Err(message) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message),
+    }
 }

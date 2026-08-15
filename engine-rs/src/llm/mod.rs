@@ -11,6 +11,7 @@
 
 pub mod lookup;
 pub mod agent_router;
+pub mod cover;
 pub mod provider;
 pub mod providers;
 pub mod providers_bank;
