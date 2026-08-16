@@ -545,6 +545,12 @@ pub async fn post_agent(
         if !play_world_exists {
             entries.push(crate::interaction::propose_action_tool::propose_action_schema());
         }
+        if session_kind != SessionKind::Play {
+            entries.push(crate::interaction::research_tool::research_tool_schema());
+        }
+        if session_kind == SessionKind::Chat {
+            entries.push(crate::interaction::import_chapters_tool::import_chapters_schema());
+        }
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
@@ -563,10 +569,19 @@ pub async fn post_agent(
         same_session: session_kind != SessionKind::Chat,
         requested_skills: &requested_skills,
     });
+    // research：非 play 会话注册（TS chat/short/script/storyboard/film/
+    // book-create/edit 分支均带，play 两分支均无）；import：仅 chat 分支。
+    let research_enabled = session_kind != SessionKind::Play;
+    let import_deps = (session_kind == SessionKind::Chat).then_some(ImportDeps {
+        runtime: &runtime,
+        active_book_id: agent_book_id.as_deref(),
+    });
     let tool_executor = ChatToolRouter {
         root,
         play_deps,
         propose_deps,
+        research_enabled,
+        import_deps,
     };
     let loop_result = run_agent_loop(
         &loop_chat,
@@ -668,20 +683,45 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
         .collect()
 }
 
-/// 聊天回环组合执行器（84 号）：propose_action → play 工具 → 项目文件
-/// 工具（含 material 双件）。
+/// import_chapters 依赖（85 号）：runtime + 活动书。
+struct ImportDeps<'a> {
+    runtime: &'a BooksRuntime,
+    active_book_id: Option<&'a str>,
+}
+
+/// 聊天回环组合执行器（84/85 号）：propose_action → research/import →
+/// play 工具 → 项目文件工具（含 material 双件）。
 struct ChatToolRouter<'a> {
     root: &'a std::path::Path,
     play_deps: Option<crate::interaction::play_tools::PlayToolDeps<'a>>,
     propose_deps: Option<crate::interaction::propose_action_tool::ProposeDeps<'a>>,
+    research_enabled: bool,
+    import_deps: Option<ImportDeps<'a>>,
 }
 
 #[async_trait::async_trait]
 impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
+    #[allow(clippy::too_many_lines)]
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
         if name == "propose_action" {
             if let Some(deps) = &self.propose_deps {
                 return crate::interaction::propose_action_tool::tool_propose_action(deps, args).await;
+            }
+        }
+        if name == "research_web" && self.research_enabled {
+            let config = crate::interaction::research_tool::read_research_search_config(self.root).await;
+            let transport = crate::interaction::research_tool::TavilyTransport::from_config(&config);
+            return crate::interaction::research_tool::tool_research_web(self.root, &transport, args).await;
+        }
+        if name == "import_chapters" {
+            if let Some(deps) = &self.import_deps {
+                return crate::interaction::import_chapters_tool::tool_import_chapters(
+                    deps.runtime,
+                    self.root,
+                    deps.active_book_id,
+                    args,
+                )
+                .await;
             }
         }
         if let Some(deps) = &self.play_deps {

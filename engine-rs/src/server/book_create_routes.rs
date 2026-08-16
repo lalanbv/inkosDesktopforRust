@@ -497,14 +497,12 @@ async fn reset_import_replay_truth_files(book_dir: &Path, language: WritingLangu
 }
 
 /// 章节导入全链。对齐 `importChapters`（Step1 地基 + Step2 逐章回放）。
-async fn import_chapters_chain(
+pub(crate) async fn import_chapters_chain(
     runtime: &BooksRuntime,
     book_id: &str,
-    text: &str,
-    split_regex: Option<&str>,
+    chapters: &[crate::utils::chapter_splitter::SplitChapter],
 ) -> Result<Value, String> {
     let state = &runtime.state;
-    let chapters = split_chapters(text, split_regex);
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
     let book_dir = state.book_dir(book_id);
     let parsed_genre = crate::agents::rules_reader::read_genre_profile(
@@ -524,7 +522,7 @@ async fn import_chapters_chain(
     let counting_mode = resolve_length_counting_mode(language);
 
     // Step 1：地基生成 + 重置回放真相 + 空索引 + 快照 0。
-    let foundation_source = build_import_foundation_source(&chapters);
+    let foundation_source = build_import_foundation_source(chapters);
     let architect_chat: &'static RoutedAgent =
         Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "architect" }));
     let architect_ctx = ArchitectCtx {
@@ -696,7 +694,8 @@ pub async fn import_chapters_endpoint(
     runtime
         .hub
         .broadcast("import:start", &json!({ "bookId": book_id, "type": "chapters" }));
-    match import_chapters_chain(&runtime, &book_id, text, split_regex).await {
+    let chapters = split_chapters(text, split_regex);
+    match import_chapters_chain(&runtime, &book_id, &chapters).await {
         Ok(result) => {
             runtime.hub.broadcast(
                 "import:complete",

@@ -63,3 +63,4 @@ pub use length_metrics::{
     resolve_length_counting_mode,
 };
 pub use path::to_posix_path;
+pub mod web_search;

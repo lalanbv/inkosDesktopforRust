@@ -11459,3 +11459,481 @@ mod propose84_e2e {
         );
     }
 }
+
+mod research85_e2e {
+    //! 85 号：research_web 聊天工具——mock Tavily 搜索源 + HTML 抓取源驱动
+    //! 确定性研究链，报告落 .inkos/research/。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt85(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app85(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn chat_research_web_saves_report_from_mock_tavily() {
+        // 同一 mock server：/search（Tavily）+ /docs/a、/docs/b（HTML 抓取源）
+        // + /chat/completions（studio-agent 聊天分流）。
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let search_hits: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let source_base = format!("http://{addr}");
+        let tools_in = tool_names.clone();
+        let search_hits_in = search_hits.clone();
+        let search_base = source_base.clone();
+        let app = axum::Router::new()
+            .route(
+                "/search",
+                axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| {
+                    let search_hits_in = search_hits_in.clone();
+                    let search_base = search_base.clone();
+                    async move {
+                        assert_eq!(
+                            headers.get("authorization").and_then(|v| v.to_str().ok()),
+                            Some("Bearer k"),
+                            "Tavily Bearer 凭据"
+                        );
+                        search_hits_in
+                            .lock()
+                            .unwrap()
+                            .push(body["query"].as_str().unwrap_or("").to_string());
+                        axum::Json(serde_json::json!({
+                            "results": [
+                                { "title": "冷库账页史料", "url": format!("{search_base}/docs/a"), "content": "1990 年代县冷库采用三联账制度。" },
+                                { "title": "冷库赔偿流程", "url": format!("{search_base}/docs/b"), "content": "赔偿需主任签字。" }
+                            ]
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/docs/:page",
+                axum::routing::get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        "<html><head><title>冷库史料</title></head><body><p>冷库夜班每两小时抄表一次。账页分三联存根。这是第三句。第四句超限。</p></body></html>",
+                    )
+                }),
+            )
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let tools_in = tools_in.clone();
+                    async move {
+                        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                        if let Some(tools) = body["tools"].as_array() {
+                            let names = tools
+                                .iter()
+                                .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                                .collect::<Vec<_>>();
+                            *tools_in.lock().unwrap() = names;
+                        }
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        let payload = if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（研究资料已归档。）" } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_res_1", "function": { "name": "research_web", "arguments": "{\"topic\":\"1990 年代县冷库会计流程\",\"purpose\":\"era\",\"depth\":\"quick\"}" } },
+                            ] } }] })
+                        };
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    }
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let base = source_base;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // researchSearch 配置指向 mock Tavily（enabled + baseUrl）。
+        std::fs::write(
+            root.join("inkos.json"),
+            serde_json::json!({ "researchSearch": { "enabled": true, "apiKey": "k", "baseUrl": format!("{base}/search") } }).to_string(),
+        )
+        .unwrap();
+
+        let session_id = "1783005000001-r85a";
+        let app = app85(rt85(&root, &base));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我查证 1990 年代县冷库会计流程","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（研究资料已归档。）");
+
+        // 注册面：research_web 与 material/propose 同现。
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"research_web".to_string()), "{names:?}");
+        assert!(names.contains(&"propose_action".to_string()), "{names:?}");
+
+        // 执行卡：completed + 三行文本（2 源 medium + 无失败）。
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "research_web");
+        assert_eq!(execs[0]["status"], "completed");
+        let text = execs[0]["result"].as_str().unwrap();
+        let lines: Vec<&str> = text.split('\n').collect();
+        assert!(lines[0].starts_with("Research report saved: "), "{text}");
+        assert_eq!(lines[1], "Sources: 2; confidence: medium.");
+        assert_eq!(lines[2], "Partial failures: none.");
+        // quick：单查询（purpose hint 拼接）。
+        let hits = search_hits.lock().unwrap().clone();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].contains("冷库会计流程"), "{hits:?}");
+        assert!(hits[0].contains("年代 背景 制度 物价 生活"), "{hits:?}");
+
+        // 报告落盘：标题/来源节/摘录前三句。
+        let research_dir = root.join(".inkos").join("research");
+        let entries: Vec<_> = std::fs::read_dir(&research_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let markdown = std::fs::read_to_string(entries[0].as_ref().unwrap().path()).unwrap();
+        assert!(markdown.starts_with("# Research: 1990 年代县冷库会计流程\n\n- Purpose: era\n- Depth: quick\n- Confidence: medium"), "{markdown}");
+        assert!(markdown.contains("### [S1] 冷库账页史料"), "{markdown}");
+        assert!(markdown.contains("冷库夜班每两小时抄表一次。账页分三联存根。这是第三句。"), "{markdown}");
+        assert!(!markdown.contains("第四句超限"), "摘录只取前三句：{markdown}");
+        assert!(markdown.contains("## Query log\n- 1990 年代县冷库会计流程 年代 背景 制度 物价 生活"), "{markdown}");
+    }
+}
+
+mod import85_e2e {
+    //! 85 号：import_chapters 聊天工具——聊天驱动全链导入（architect/analyzer
+    //! mock）+ 既有章节守卫 + 无 bookId 守卫。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
+## 分岔点
+开篇之前。
+
+=== SECTION: volume_map ===
+### 第一卷（1-20章）新程
+独立冲突开启。
+
+=== SECTION: roles ===
+---ROLE---
+tier: major
+name: 林动
+---CONTENT---
+## 核心标签
+坚忍。
+
+=== SECTION: book_rules ===
+## 导入模式
+- continuation
+
+=== SECTION: pending_hooks ===
+| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H01 | 0 | 新谜 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷 | true |  | 开篇之谜 |
+"#;
+
+    const ANALYZER_OUTPUT: &str = "\
+=== CHAPTER_TITLE ===
+风起
+
+=== CHAPTER_CONTENT ===
+林动睁开双眼。
+
+=== PRE_WRITE_CHECK ===
+
+=== POST_SETTLEMENT ===
+
+=== UPDATED_STATE ===
+| Field | Value |
+| --- | --- |
+| Current Chapter | 1 |
+
+=== UPDATED_LEDGER ===
+
+=== UPDATED_HOOKS ===
+| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== CHAPTER_SUMMARY ===
+| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== UPDATED_SUBPLOTS ===
+
+=== UPDATED_EMOTIONAL_ARCS ===
+
+=== UPDATED_CHARACTER_MATRIX ===
+## 林动
+- **Role**: protagonist
+";
+
+    fn rt85b(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app85b(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn mock_import_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                let payload = if system.contains("总架构师") || system.contains("网络小说架构师") {
+                    sse_tool_chunk_free(ARCHITECT_OUTPUT)
+                } else if system.contains("连续性分析") || system.contains("continuity analyst") {
+                    sse_tool_chunk_free(ANALYZER_OUTPUT)
+                } else {
+                    // studio-agent：按指令分流（导入/二次导入守卫/无书）。
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    if has_tool_result {
+                        let text = if last_user.contains("二次") {
+                            "（需要 resumeFrom 才能追加。）"
+                        } else if last_user.contains("没有书号") {
+                            "（需要 bookId。）"
+                        } else {
+                            "（章节已导入，可以续写。）"
+                        };
+                        serde_json::json!({ "choices": [{ "delta": { "content": text } }] })
+                    } else if last_user.contains("二次") {
+                        tool_call("call_imp_2", "import_chapters", r#"{"bookId":"b85","sourcePath":"novel.txt"}"#)
+                    } else if last_user.contains("没有书号") {
+                        tool_call("call_imp_3", "import_chapters", r#"{"sourcePath":"novel.txt"}"#)
+                    } else {
+                        tool_call("call_imp_1", "import_chapters", r#"{"bookId":"b85","sourcePath":"novel.txt"}"#)
+                    }
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn sse_tool_chunk_free(content: &str) -> serde_json::Value {
+        serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+    }
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> serde_json::Value {
+        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+            { "index": 0, "id": id, "function": { "name": name, "arguments": arguments } },
+        ] } }] })
+    }
+
+    #[tokio::test]
+    async fn chat_imports_chapters_full_chain_and_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // genre + 目标书 + 章节源。
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b85");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b85","title":"导入书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("novel.txt"),
+            "# 第一章 风起\n\n林动睁开双眼，灵气涌动。\n\n# 第二章 云涌\n\n坊市喧闹。",
+        )
+        .unwrap();
+
+        let llm = mock_import_llm().await;
+        let session_id = "1783005000002-i85b";
+        let app = app85b(rt85b(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ① 全链导入。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"把 novel.txt 导入成书","sessionId":"{session_id}","activeBookId":"b85"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（章节已导入，可以续写。）");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "import_chapters");
+        assert_eq!(execs[0]["status"], "completed");
+        let text = execs[0]["result"].as_str().unwrap();
+        assert!(text.starts_with("Imported 2 chapter(s) into book \"b85\".\nTotal imported length: "), "{text}");
+        assert!(text.contains("Next chapter to write: 3."), "{text}");
+        assert!(text.contains("Foundation and truth files were reverse-engineered"), "{text}");
+        // 落盘（复用 59 号链断言面）。
+        assert!(book.join("chapters").join("0001_风起.md").exists());
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index.as_array().unwrap().len(), 2);
+        assert_eq!(index[0]["status"], "imported");
+
+        // ② 既有章节 + 无 resumeFrom → 守卫错误。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"二次导入同一本","sessionId":"{session_id}","activeBookId":"b85"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["status"], "error");
+        assert!(
+            execs[0]["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("Book \"b85\" already has 2 chapter(s). Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first."),
+            "body: {parsed}"
+        );
+
+        // ③ chat 会话无 active book 且未给 bookId → 守卫错误。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"没有书号也想导入","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["status"], "error");
+        assert_eq!(
+            execs[0]["error"],
+            "import_chapters requires bookId when there is no active book."
+        );
+    }
+}
