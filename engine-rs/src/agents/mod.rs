@@ -47,6 +47,7 @@ pub mod sensitive_words;
 pub mod settler_delta_parser;
 pub mod settler_parser;
 pub mod settler_prompts;
+pub mod short_fiction;
 pub mod state_validator;
 pub mod style_analyzer;
 pub mod writer_parser;

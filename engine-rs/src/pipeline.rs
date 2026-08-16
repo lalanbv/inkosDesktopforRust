@@ -14,3 +14,4 @@ pub mod write_next;
 pub mod persisted_governed_plan;
 
 pub mod script_storyboard_runner;
+pub mod short_fiction_runner;

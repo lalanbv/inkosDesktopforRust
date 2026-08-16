@@ -6523,7 +6523,7 @@ mod agent67_e2e {
     }
 
     #[tokio::test]
-    async fn unsupported_intent_and_missing_title_fail_with_502() {
+    async fn short_run_invalid_draft_and_missing_title_fail_with_502() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
@@ -6538,7 +6538,8 @@ mod agent67_e2e {
         .await;
         assert_eq!(status, StatusCode::OK);
 
-        // 未支持意图（short_run 域未迁移）→ 502 AGENT_ACTION_FAILED。
+        // short_run 已接线（78 号）：mock LLM 无有效章块 → 整稿校验失败 →
+        // 502 统一错误面（空章列表文案）。
         let (status, parsed) = call(
             app.clone(),
             "POST",
@@ -6550,7 +6551,10 @@ mod agent67_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
-        assert_eq!(parsed["error"]["message"], "Unsupported confirmed action: short_run");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap().contains("Short-hit draft is incomplete"),
+            "body: {parsed}"
+        );
 
         // create_book 缺 title → 502 + 中文缺字段文案（TS：ApiError 被分支 catch 转写）。
         let (status, parsed) = call(
@@ -9619,5 +9623,339 @@ mod film77_e2e {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(joined.contains("Story graph JSON generation failed; writing a minimal playable graph."), "logs: {joined}");
+    }
+}
+
+mod short78_e2e {
+    //! 78 号：short_run 确认全链（可恢复三段生产 + 补章循环 + 修订降级 + 最终语言断言）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt78(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app78(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    // ── mock 输出体 ──────────────────────────────────────────────
+
+    fn outline_body() -> String {
+        "=== SHORT_FICTION_PLAN_TITLE ===\n《夜雨追凶》\n\n=== SHORT_FICTION_PLAN ===\n十二幕追凶方案：雨夜开局，双线收束，末章收网。".to_string()
+    }
+
+    fn full_draft_body(chapters: usize) -> String {
+        let mut out = String::from(
+            "=== SHORT_FICTION_TITLE ===\n夜雨追凶\n\n=== SHORT_FICTION_OPENING_HOOK ===\n雨夜，凶案发生，追查开始。\n\n",
+        );
+        for n in 1..=chapters {
+            out.push_str(&format!(
+                "=== CHAPTER {n} TITLE ===\n夜行{n}\n=== CHAPTER {n} CONTENT ===\n第{n}章正文：雨夜追查推进，线索浮出水面，压力升级。\n\n"
+            ));
+        }
+        out
+    }
+
+    fn chapter12_body() -> String {
+        "=== CHAPTER 12 TITLE ===\n收网\n=== CHAPTER 12 CONTENT ===\n第12章正文：真相收网，雨停天明。\n".to_string()
+    }
+
+    fn package_body() -> String {
+        "=== SHORT_FICTION_PACKAGE_TITLE ===\n夜雨追凶\n=== SHORT_FICTION_INTRO ===\n雨夜凶案，双线追凶，末章收网。\n=== SHORT_FICTION_SELLING_POINTS ===\n- 节奏快\n- 反转强\n=== SHORT_FICTION_COVER_PROMPT ===\n雨夜街口，灯下人影，3:4 竖图\n".to_string()
+    }
+
+    /// 分流：系统提示词关键词定位代理；writer 三形态按用户提示词区分。
+    /// `revise_chapters` 控制修订稿完整度（12=完整采用 / 1=触发降级）。
+    fn short_llm_dispatch(system: &str, user: &str, revise_chapters: usize) -> String {
+        if system.contains("短篇小说总编") {
+            outline_body()
+        } else if system.contains("短篇审纲编辑") {
+            "审纲意见：中段可再收紧，双线交汇点后移。".to_string()
+        } else if system.contains("BatchWriter") {
+            if user.contains("只补写缺失章节") {
+                chapter12_body()
+            } else if user.contains("根据审稿意见") {
+                full_draft_body(revise_chapters)
+            } else {
+                full_draft_body(11)
+            }
+        } else if system.contains("成稿审稿编辑") {
+            "审稿意见：结尾稍赶，可在第 11 章埋一笔伏笔。".to_string()
+        } else if system.contains("包装编辑") {
+            package_body()
+        } else {
+            "PASS".to_string()
+        }
+    }
+
+    async fn llm_mock_short(revise_chapters: usize) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_in = calls.clone();
+        let llm_app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let calls_in = calls_in.clone();
+                async move {
+                    calls_in.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let user = body["messages"]
+                        .as_array()
+                        .map(|messages| {
+                            messages
+                                .iter()
+                                .filter_map(|m| m["content"].as_str().map(str::to_string))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    let content = short_llm_dispatch(&system, &user, revise_chapters);
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, llm_app).await.unwrap(); });
+        (format!("http://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn short_run_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _calls) = llm_mock_short(12).await;
+        let app = app78(rt78(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000009-sf01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"写一个短篇","sessionId":"1782994000009-sf01","actionSource":"button","requestedIntent":"short_run","actionPayload":{"shortRun":{"direction":"雨夜追凶，双线收束","storyId":"night-rain","chapters":12,"charsPerChapter":900,"cover":false}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "short_fiction_run");
+        assert_eq!(exec["label"], "短篇生产");
+        assert_eq!(exec["status"], "completed", "body: {parsed}");
+        // 不在 suppress 名单 → response 为结果文本。
+        let response_text = parsed["response"].as_str().unwrap_or_default();
+        assert!(response_text.starts_with("Short fiction \"night-rain\" completed."), "response: {response_text}");
+        assert!(response_text.contains("Final: shorts/night-rain/final/full.md"), "response: {response_text}");
+        assert!(response_text.contains("Sales package: shorts/night-rain/final/sales-package.md"), "response: {response_text}");
+        assert!(response_text.contains("Cover prompt: shorts/night-rain/final/cover-prompt.md"), "response: {response_text}");
+        assert!(response_text.contains("Cover image: not generated."), "response: {response_text}");
+        assert!(response_text.contains("Cover image reason: disabled"), "response: {response_text}");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "short_fiction_created");
+        assert_eq!(details["storyId"], "night-rain");
+        assert_eq!(details["outlinePath"], "shorts/night-rain/outline/v002.md");
+        assert_eq!(details["outlineReviewPath"], "shorts/night-rain/reviews/outline-v001.md");
+        assert_eq!(details["draftReviewPath"], "shorts/night-rain/reviews/draft-v001.md");
+        assert_eq!(details["finalMarkdownPath"], "shorts/night-rain/final/full.md");
+        assert_eq!(details["finalJsonPath"], "shorts/night-rain/final/short-story.json");
+        assert_eq!(details["salesPackagePath"], "shorts/night-rain/final/sales-package.md");
+        assert_eq!(details["coverPromptPath"], "shorts/night-rain/final/cover-prompt.md");
+        assert_eq!(details["coverError"], "disabled");
+        assert!(details.get("coverImagePath").is_none(), "details: {details}");
+
+        // 三段 outline 落盘。
+        let v1 = std::fs::read_to_string(root.join("shorts/night-rain/outline/v001.md")).unwrap();
+        assert!(v1.contains("SHORT_FICTION_PLAN"), "{v1}");
+        let v2 = std::fs::read_to_string(root.join("shorts/night-rain/outline/v002.md")).unwrap();
+        assert!(v2.contains("十二幕追凶方案"), "{v2}");
+        let outline_review = std::fs::read_to_string(root.join("shorts/night-rain/reviews/outline-v001.md")).unwrap();
+        assert!(outline_review.contains("审纲意见"), "{outline_review}");
+        // 首写缺 12 章 → v001-partial + 补章循环。
+        assert!(root.join("shorts/night-rain/drafts/v001-partial/full.md").is_file());
+        let draft_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("shorts/night-rain/drafts/v001/draft.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(draft_json["chapters"].as_array().unwrap().len(), 12);
+        assert_eq!(draft_json["chapters"][11]["title"], "收网");
+        let chapter_file = std::fs::read_to_string(root.join("shorts/night-rain/drafts/v001/chapters/0012.md")).unwrap();
+        assert!(chapter_file.starts_with("# 第12章 收网"), "{chapter_file}");
+        let draft_review = std::fs::read_to_string(root.join("shorts/night-rain/reviews/draft-v001.md")).unwrap();
+        assert!(draft_review.contains("审稿意见"), "{draft_review}");
+        // 修订完整 → v002 采用。
+        assert!(root.join("shorts/night-rain/drafts/v002/full.md").is_file());
+        assert!(!root.join("shorts/night-rain/reviews/draft-v002-warning.md").exists());
+
+        // final：标题命名副本 + 12 章（修订稿）+ short-story.json camelCase。
+        let full = std::fs::read_to_string(root.join("shorts/night-rain/final/full.md")).unwrap();
+        assert!(full.starts_with("# 夜雨追凶"), "{full}");
+        assert!(full.contains("## 开篇钩子"), "{full}");
+        assert!(full.contains("## 第12章 夜行12"), "{full}");
+        assert!(root.join("shorts/night-rain/final/夜雨追凶.md").is_file());
+        let story_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("shorts/night-rain/final/short-story.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(story_json["storyTitle"], "夜雨追凶");
+        assert_eq!(story_json["chapters"].as_array().unwrap().len(), 12);
+        assert!(story_json["chapters"][0].get("charCount").is_some(), "{story_json}");
+        assert!(root.join("shorts/night-rain/final/chapters/0001.md").is_file());
+        // 包装三件套。
+        let sales = std::fs::read_to_string(root.join("shorts/night-rain/final/sales-package.md")).unwrap();
+        assert!(sales.starts_with("# 夜雨追凶\n\n## 简介\n\n雨夜凶案，双线追凶，末章收网。\n\n## 卖点\n\n- 节奏快\n- 反转强\n\n## 封面提示词"), "{sales}");
+        let cover_prompt = std::fs::read_to_string(root.join("shorts/night-rain/final/cover-prompt.md")).unwrap();
+        assert!(cover_prompt.contains("3:4 竖图"), "{cover_prompt}");
+        let package_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("shorts/night-rain/final/sales-package.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(package_json["sellingPoints"].as_array().unwrap().len(), 2);
+        // 无修订警告 + cover=false → 不写 complete 状态（TS 仅 warning 时写 status）。
+        assert!(!root.join("shorts/night-rain/status.json").exists());
+    }
+
+    #[tokio::test]
+    async fn short_run_revision_degrades_and_final_language_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 修订稿只回 1 章 → validate 失败 → 降级保留 v1 + warning 文件 + complete 状态。
+        let (llm, _calls) = llm_mock_short(1).await;
+        let app = app78(rt78(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000010-sf02"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"写一个短篇","sessionId":"1782994000010-sf02","actionSource":"button","requestedIntent":"short_run","actionPayload":{"shortRun":{"direction":"雨夜追凶","chapters":12,"charsPerChapter":900,"cover":false}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["status"], "completed", "body: {parsed}");
+        // v1（补章后完整 12 章）为最终稿；v2 未采用。
+        assert!(!root.join("shorts/夜雨追凶/drafts/v002/full.md").exists());
+        let warning = std::fs::read_to_string(root.join("shorts/夜雨追凶/reviews/draft-v002-warning.md")).unwrap();
+        assert!(warning.starts_with("# 第二轮改稿未采用"), "{warning}");
+        assert!(warning.contains("Short-hit draft is incomplete"), "{warning}");
+        let full = std::fs::read_to_string(root.join("shorts/夜雨追凶/final/full.md")).unwrap();
+        assert!(full.contains("## 第12章 收网"), "{full}");
+        // complete 状态带 revision skipped 警告。
+        let status_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("shorts/夜雨追凶/status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status_json["status"], "complete");
+        assert!(status_json["warning"].as_str().unwrap().starts_with("revision skipped:"), "{status_json}");
+        assert!(status_json.get("updatedAt").is_some());
+
+        // 最终语言断言：zh 会话（payload 无 language）+ charsPerChapter 700 过
+        // 确认卡并集校验（600-1200）→ 执行层 zh 范围（900-1200）拦截 → 502 双语。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"写一个短篇","sessionId":"1782994000010-sf02","actionSource":"button","requestedIntent":"short_run","actionPayload":{"shortRun":{"direction":"再来一个","charsPerChapter":700}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        let message = parsed["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("charsPerChapter=700 超出中文短篇的合法范围（每章 900-1200 个汉字）"), "message: {message}");
+        assert!(message.contains("is outside the valid range for Chinese shorts (900-1200 characters per chapter)"), "message: {message}");
+    }
+
+    #[tokio::test]
+    async fn short_run_resume_already_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 已完成的稳定 storyId → 直接按原样返回（零 LLM 调用）。
+        std::fs::create_dir_all(root.join("shorts/existing/final")).unwrap();
+        std::fs::write(root.join("shorts/existing/final/full.md"), "# 旧稿\n\n已完成的短篇。\n").unwrap();
+        let (llm, calls) = llm_mock_short(12).await;
+        let app = app78(rt78(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000011-sf03"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"雨夜追凶","sessionId":"1782994000011-sf03","actionSource":"button","requestedIntent":"short_run","actionPayload":{"shortRun":{"storyId":"existing","cover":false}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["status"], "completed", "body: {parsed}");
+        // direction 兜底 instruction（args 面）。
+        assert_eq!(exec["args"]["direction"], "雨夜追凶");
+        let details = &exec["details"];
+        assert_eq!(details["storyId"], "existing");
+        assert_eq!(details["coverError"], "already-complete");
+        assert_eq!(details["finalMarkdownPath"], "shorts/existing/final/full.md");
+        let text = parsed["response"].as_str().unwrap_or_default();
+        assert!(text.starts_with("Short fiction \"existing\" completed."), "text: {text}");
+        // 零 LLM 调用 + 不触发任何生产落盘。
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!root.join("shorts/existing/outline").exists());
     }
 }

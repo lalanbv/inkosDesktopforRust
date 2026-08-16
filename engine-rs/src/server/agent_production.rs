@@ -1061,6 +1061,106 @@ async fn execute_create_book(
     })
 }
 
+/// `createShortFictionRunTool`（78 号）：runShortFictionProduction 同链。
+/// 结果文本逐字（含封面未生成的三行降级说明）；details = kind + result 全字段。
+#[allow(clippy::too_many_arguments)]
+async fn execute_short_run(
+    runtime: &BooksRuntime,
+    direction: &str,
+    reference: Option<&str>,
+    story_id: Option<&str>,
+    chapter_count: Option<u32>,
+    chars_per_chapter: Option<u32>,
+    language: crate::utils::language::WritingLanguage,
+    cover: bool,
+    mut on_progress: impl FnMut(String) + Send,
+) -> Result<ToolOutcome, String> {
+    use crate::agents::short_fiction::ShortFictionReference;
+    use crate::pipeline::short_fiction_runner::{run_short_fiction_production, ShortFictionRunOptions};
+    let root = runtime.state.project_root();
+    let reference_struct = reference.map(|text| ShortFictionReference { text: text.to_string() });
+    let result = run_short_fiction_production(ShortFictionRunOptions {
+        project_root: root,
+        router: &runtime.router,
+        direction,
+        reference: reference_struct.as_ref(),
+        story_id,
+        out_dir: None,
+        chapter_count,
+        chars_per_chapter,
+        language,
+        cover,
+        on_progress: &mut on_progress,
+    })
+    .await?;
+    let cover_lines = match &result.cover_image_path {
+        Some(path) => format!("Cover image: {path}"),
+        None => [
+            "Cover image: not generated.".to_string(),
+            format!(
+                "Cover image reason: {}",
+                summarize_cover_generation_error(result.cover_error.as_deref())
+            ),
+            "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.".to_string(),
+        ]
+        .join("\n"),
+    };
+    let text = format!(
+        "Short fiction \"{}\" completed.\nFinal: {}\nSales package: {}\nCover prompt: {}\n{cover_lines}",
+        result.story_id,
+        result.final_markdown_path,
+        result.sales_package_path,
+        result.cover_prompt_path
+    );
+    let mut details = serde_json::to_value(&result).unwrap_or(Value::Null);
+    if let Some(map) = details.as_object_mut() {
+        map.insert("kind".to_string(), json!("short_fiction_created"));
+    }
+    Ok(ToolOutcome { is_error: false, text, details })
+}
+
+/// `assertShortRunCharsPerChapter`：最终语言（payload ?? 会话）下的范围断言——
+/// 确认卡层只能做 600-1200 并集校验，越界组合在这里以双语错误拦截。
+fn assert_short_run_chars_per_chapter(
+    value: Option<u32>,
+    language: crate::utils::language::WritingLanguage,
+) -> Result<(), String> {
+    use crate::utils::language::WritingLanguage;
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let (min, max) = match language {
+        WritingLanguage::En => (600, 800),
+        WritingLanguage::Zh => (900, 1200),
+    };
+    if (min..=max).contains(&value) {
+        return Ok(());
+    }
+    Err(match language {
+        WritingLanguage::En => format!(
+            "charsPerChapter={value} 超出英文短篇的合法范围（每章 {min}-{max} 个英文单词）。charsPerChapter={value} is outside the valid range for English shorts ({min}-{max} words per chapter)."
+        ),
+        WritingLanguage::Zh => format!(
+            "charsPerChapter={value} 超出中文短篇的合法范围（每章 {min}-{max} 个汉字）。charsPerChapter={value} is outside the valid range for Chinese shorts ({min}-{max} characters per chapter)."
+        ),
+    })
+}
+
+/// `summarizeCoverGenerationError`：503/502/api-key 关键词分支 + 300 截断。
+fn summarize_cover_generation_error(error: Option<&str>) -> String {
+    let text = error.unwrap_or("not generated").trim();
+    if text.contains("HTTP 503") {
+        return "cover provider returned HTTP 503; retry later or switch the Studio cover provider/model.".to_string();
+    }
+    if text.contains("HTTP 502") {
+        return "cover provider returned HTTP 502; retry later or switch the Studio cover provider/model.".to_string();
+    }
+    if text.to_lowercase().contains("api key") {
+        return "cover API key is missing; configure it in Studio service settings.".to_string();
+    }
+    text.chars().take(300).collect()
+}
+
 /// `createScriptCreationTool`：runScriptCreation 同链（76 号 runner）。
 #[allow(clippy::too_many_arguments)]
 async fn execute_script_create(
@@ -1850,6 +1950,51 @@ async fn run_confirmed_production_locked(
     let mut params = Map::new();
     let agent: Option<&str>;
     match request.intent {
+        RequestedIntent::ShortRun => {
+            let payload = request.action_payload.and_then(|p| p.get("shortRun"));
+            // direction 兜底链：payload.direction ?? instruction.trim()（都空 → 502）。
+            let direction = payload
+                .and_then(|p| p.get("direction"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .or_else(|| {
+                    let trimmed = request.instruction.trim();
+                    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+                })
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(lang, "确认短篇缺少方向，请重新生成确认卡。", "The short fiction confirmation is missing a direction. Regenerate the confirmation card."),
+                    )
+                })?;
+            params.insert("direction".into(), json!(direction));
+            for name in ["reference", "storyId"] {
+                if let Some(value) = payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            for name in ["chapters", "charsPerChapter"] {
+                if let Some(value) = payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_u64)
+                    .filter(|v| *v > 0)
+                {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            // cover：显式 false 也展开（TS `cover !== undefined` 判定）。
+            if let Some(cover) = payload.and_then(|p| p.get("cover")).and_then(Value::as_bool) {
+                params.insert("cover".into(), json!(cover));
+            }
+            agent = None;
+        }
         RequestedIntent::ScriptCreate => {
             let payload = request.action_payload.and_then(|p| p.get("scriptCreate"));
             let field = |name: &str| {
@@ -2223,6 +2368,7 @@ async fn run_confirmed_production_locked(
         RequestedIntent::StoryboardCreate => "storyboard_create",
         RequestedIntent::InteractiveFilmCreate => "interactive_film_create",
         RequestedIntent::GenerateCover => "generate_cover",
+        RequestedIntent::ShortRun => "short_fiction_run",
         _ => "sub_agent",
     };
 
@@ -2314,6 +2460,61 @@ async fn run_confirmed_production_locked(
         }
     };
     let outcome = match request.intent {
+        RequestedIntent::ShortRun => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let field = |name: &str| {
+                args.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            // 最终语言：payload.shortRun.language ?? 会话语言（TS tool 语义）。
+            let language = match request
+                .action_payload
+                .and_then(|p| p.get("shortRun"))
+                .and_then(|p| p.get("language"))
+                .and_then(Value::as_str)
+            {
+                Some("en") => crate::utils::language::WritingLanguage::En,
+                Some(_) => crate::utils::language::WritingLanguage::Zh,
+                None => match lang {
+                    StudioLang::En => crate::utils::language::WritingLanguage::En,
+                    StudioLang::Zh => crate::utils::language::WritingLanguage::Zh,
+                },
+            };
+            let chars_per_chapter = args
+                .get("charsPerChapter")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32);
+            // 越界组合（如 zh 会话 + en 卡面 1100）在任务开跑前拦截（双语错误）。
+            // 以 Err 值走统一错误面（快照 error 态 + tool:end + 502——TS throw 同链）。
+            if let Err(message) = assert_short_run_chars_per_chapter(chars_per_chapter, language) {
+                Err(message)
+            } else {
+                let optional = |name: &str| {
+                    let value = field(name);
+                    if value.is_empty() { None } else { Some(value) }
+                };
+                // cover 缺省 = true（TS `options.cover === false` 才禁用）。
+                let cover = args
+                    .get("cover")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                execute_short_run(
+                    runtime,
+                    &field("direction"),
+                    optional("reference").as_deref(),
+                    optional("storyId").as_deref(),
+                    args.get("chapters").and_then(Value::as_u64).map(|v| v as u32),
+                    chars_per_chapter,
+                    language,
+                    cover,
+                    &mut on_progress,
+                )
+                .await
+            }
+        }
         RequestedIntent::ScriptCreate => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();
