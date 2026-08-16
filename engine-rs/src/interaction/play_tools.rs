@@ -59,7 +59,7 @@ pub async fn session_world_exists(project_root: &Path, session_id: &str) -> bool
     }
 }
 
-/// play 工具分发：play_step / play_revise；其余 → None（回落文件工具）。
+/// play 工具分发：play_step / play_revise / play_edit；其余 → None（回落文件工具）。
 pub async fn execute_play_tool(
     deps: &PlayToolDeps<'_>,
     name: &str,
@@ -68,6 +68,7 @@ pub async fn execute_play_tool(
     match name {
         "play_step" => Some(tool_play_step(deps, args).await),
         "play_revise" => Some(tool_play_revise(deps, args).await),
+        "play_edit" => Some(tool_play_edit(deps, args).await),
         _ => None,
     }
 }
@@ -87,6 +88,15 @@ fn no_world_result(language: &str, redo: bool) -> ToolResult {
         "还没有可重做的互动世界。先用 play_start 开一局。"
     } else {
         "还没有可推进的互动世界。先用 play_start 开一局。"
+    };
+    text_result(text, None)
+}
+
+fn no_world_edit_result(language: &str) -> ToolResult {
+    let text = if language == "en" {
+        "There is no interactive world to edit yet. Start one with play_start first."
+    } else {
+        "还没有可编辑的互动世界。先用 play_start 开一局。"
     };
     text_result(text, None)
 }
@@ -301,9 +311,420 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
     )
 }
 
-/// play 工具 schema（OpenAI function 形态，PlayStepParams/PlayReviseParams 逐字）。
+/// `mergeContract`（TS 逐字）：整文替换优先 → from/to 全量替换（缺失跳过）→
+/// 末尾追加（已含跳过；空文直取 add；否则 `trim\n- add`）。
+fn merge_contract(
+    existing: &str,
+    replacement: Option<&str>,
+    replacements: Option<&Value>,
+    addition: Option<&str>,
+) -> String {
+    if let Some(next) = replacement.map(str::trim).filter(|value| !value.is_empty()) {
+        return next.to_string();
+    }
+    let mut current = existing.to_string();
+    for patch in replacements.and_then(Value::as_array).into_iter().flatten() {
+        let from = patch.get("from").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+        let to = patch.get("to").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+        if from.is_empty() || to.is_empty() || !current.contains(from) {
+            continue;
+        }
+        current = current.replace(from, to);
+    }
+    let Some(add) = addition.map(str::trim).filter(|value| !value.is_empty()) else {
+        return current;
+    };
+    if current.contains(add) {
+        return current;
+    }
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        return add.to_string();
+    }
+    format!("{trimmed}\n- {add}")
+}
+
+/// `playEditEntityId`：label 小写 → 非 [a-z0-9 汉字] 连续段折叠单 `_` →
+/// 首尾 `_` 剥离 → 48 码元截断 → `{type}_{ascii}`；空 → `{type}_{ms 36 进制}`。
+fn play_edit_entity_id(entity_type: &str, label: &str) -> String {
+    let lowered = label.trim().to_lowercase();
+    let mut collapsed = String::new();
+    let mut in_run = false;
+    for ch in lowered.chars() {
+        let allowed = ch.is_ascii_lowercase()
+            || ch.is_ascii_digit()
+            || ('\u{4e00}'..='\u{9fff}').contains(&ch);
+        if allowed {
+            collapsed.push(ch);
+            in_run = false;
+        } else if !in_run {
+            collapsed.push('_');
+            in_run = true;
+        }
+    }
+    let trimmed = collapsed.trim_matches('_');
+    let mut ascii = String::new();
+    let mut units = 0usize;
+    for ch in trimmed.chars() {
+        let ch_units = ch.len_utf16();
+        if units + ch_units > 48 {
+            break;
+        }
+        units += ch_units;
+        ascii.push(ch);
+    }
+    if ascii.is_empty() {
+        let ms = crate::interaction::session::utc_now_ms();
+        format!("{entity_type}_{}", to_radix36(ms))
+    } else {
+        format!("{entity_type}_{ascii}")
+    }
+}
+
+fn to_radix36(mut value: u64) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut out = Vec::new();
+    while value > 0 {
+        out.push(DIGITS[(value % 36) as usize] as char);
+        value /= 36;
+    }
+    out.into_iter().rev().collect()
+}
+
+/// `resolvePlayEditEntityId`：显式 id 优先；label 精确匹配
+/// snapshot.entities 的 label 或 id（首个命中）。
+fn resolve_play_edit_entity_id(
+    db: &crate::play_graph::PlayGraphDb,
+    update: &Value,
+) -> Option<String> {
+    if let Some(id) = update
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(id.to_string());
+    }
+    let label = update
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    db.snapshot()
+        .get("entities")
+        .and_then(Value::as_array)
+        .and_then(|entities| {
+            entities
+                .iter()
+                .find(|entity| {
+                    entity.get("label").and_then(Value::as_str) == Some(label)
+                        || entity.get("id").and_then(Value::as_str) == Some(label)
+                })
+                .and_then(|entity| entity.get("id").and_then(Value::as_str))
+                .map(String::from)
+        })
+}
+
+/// `upsertPlayEditEntity`：七字段规范实体（manual-edit 事件位）；既无 id
+/// 可解析也无非空 label → 跳过（false）。summary/status 保留显式空串
+/// （JS ?? 语义：清空 vs 未提供），label 走真值语义。
+fn upsert_play_edit_entity(
+    db: &mut crate::play_graph::PlayGraphDb,
+    update: &Value,
+) -> Result<bool, String> {
+    let summary = update.get("summary").and_then(Value::as_str).map(str::trim);
+    let status = update.get("status").and_then(Value::as_str).map(str::trim);
+    let label = update.get("label").and_then(Value::as_str).map(str::trim);
+    let entity_id = resolve_play_edit_entity_id(db, update);
+    if entity_id.is_none() && label.is_none_or(|value| value.is_empty()) {
+        return Ok(false);
+    }
+    let existing = entity_id.as_deref().and_then(|id| db.get_entity(id));
+    let existing_field = |field: &str| -> Option<String> {
+        existing
+            .as_ref()
+            .and_then(|entity| entity.get(field))
+            .and_then(Value::as_str)
+            .map(String::from)
+    };
+    let id = entity_id.clone().unwrap_or_else(|| {
+        let type_for_id = update.get("type").and_then(Value::as_str).unwrap_or("actor");
+        play_edit_entity_id(type_for_id, label.unwrap_or_default())
+    });
+    let entity_type = update
+        .get("type")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .or_else(|| existing_field("type"))
+        .unwrap_or_else(|| "actor".to_string());
+    let label_value = label
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+        .or_else(|| existing_field("label"))
+        .unwrap_or_else(|| id.clone());
+    let summary_value = summary.map(String::from).or_else(|| existing_field("summary")).unwrap_or_default();
+    let status_value = status.map(String::from).or_else(|| existing_field("status")).unwrap_or_default();
+    db.upsert_entity(&json!({
+        "id": id,
+        "type": entity_type,
+        "label": label_value,
+        "summary": summary_value,
+        "status": status_value,
+        "createdEventId": existing_field("createdEventId").map(Value::String).unwrap_or(json!("manual-edit")),
+        "updatedEventId": "manual-edit",
+    }))?;
+    Ok(true)
+}
+
+/// `play_edit`：持久编辑世界卡（契约/视觉/premise/player persona/实体卡），
+/// 不推进时间、不生成新场景。
+async fn tool_play_edit(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
+    let Ok(world_id) = safe_play_id(Some(deps.session_id), deps.session_id) else {
+        return error_result(format!("Invalid play id: {:?}", deps.session_id));
+    };
+    let run_id = "main";
+    let Some(world) = crate::play::load_world(deps.project_root, &world_id).await else {
+        return no_world_edit_result(deps.language);
+    };
+    let is_zh = world
+        .get("language")
+        .and_then(Value::as_str)
+        .unwrap_or("zh")
+        != "en";
+    let world_contract = world.get("worldContract").and_then(Value::as_str).unwrap_or_default();
+    let visual_contract = world.get("visualContract").and_then(Value::as_str).unwrap_or_default();
+
+    let mut patch = serde_json::Map::new();
+    let next_world_contract = merge_contract(
+        world_contract,
+        args.get("worldContract").and_then(Value::as_str),
+        args.get("worldContractReplacements"),
+        args.get("worldContractAppend").and_then(Value::as_str),
+    );
+    let next_visual_contract = merge_contract(
+        visual_contract,
+        args.get("visualContract").and_then(Value::as_str),
+        args.get("visualContractReplacements"),
+        args.get("visualContractAppend").and_then(Value::as_str),
+    );
+    if next_world_contract != world_contract {
+        patch.insert("worldContract".into(), json!(next_world_contract));
+    }
+    if next_visual_contract != visual_contract {
+        patch.insert("visualContract".into(), json!(next_visual_contract));
+    }
+    let premise = args
+        .get("premise")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(premise) = &premise {
+        if world.get("premise").and_then(Value::as_str) != Some(premise) {
+            patch.insert("premise".into(), json!(premise));
+        }
+    }
+    let updated_world = if patch.is_empty() {
+        world.clone()
+    } else {
+        match crate::play::update_world(deps.project_root, &world_id, &Value::Object(patch.clone())).await {
+            Ok(world) => world,
+            Err(message) => return error_result(message),
+        }
+    };
+
+    let edit = (async {
+        crate::play::ensure_run(deps.project_root, &world_id, run_id).await?;
+        let run_dir = crate::play::run_dir(deps.project_root, &world_id, run_id)?;
+        let mut db = crate::play_graph::open_play_graph_db(&run_dir)?;
+        let mut updated_entities = 0usize;
+        let player_persona = args
+            .get("playerPersona")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(persona) = player_persona {
+            let existing_player = db.get_entity("actor_player");
+            let label = existing_player
+                .as_ref()
+                .and_then(|entity| entity.get("label"))
+                .and_then(Value::as_str)
+                .map(String::from)
+                .unwrap_or_else(|| if is_zh { "玩家" } else { "Player" }.to_string());
+            if upsert_play_edit_entity(
+                &mut db,
+                &json!({
+                    "id": "actor_player",
+                    "type": "actor",
+                    "label": label,
+                    "summary": persona,
+                    "status": if is_zh { "已更新" } else { "Updated" },
+                }),
+            )? {
+                updated_entities += 1;
+            }
+        }
+        for update in args
+            .get("entityUpdates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if upsert_play_edit_entity(&mut db, update)? {
+                updated_entities += 1;
+            }
+        }
+        db.flush()?;
+        let graph = db.snapshot();
+        let current_state = crate::play::load_current_state(deps.project_root, &world_id, run_id)
+            .await
+            .filter(|state| state.is_object())
+            .unwrap_or_else(|| json!({}));
+        let mut next_state = current_state.as_object().cloned().unwrap_or_default();
+        next_state.insert(
+            "worldContract".into(),
+            updated_world.get("worldContract").cloned().unwrap_or_default(),
+        );
+        next_state.insert(
+            "visualContract".into(),
+            updated_world.get("visualContract").cloned().unwrap_or_default(),
+        );
+        next_state.insert(
+            "premise".into(),
+            updated_world.get("premise").cloned().unwrap_or_default(),
+        );
+        next_state.insert(
+            "graphEditedAt".into(),
+            json!(crate::utils::utc_time::utc_now_iso()),
+        );
+        crate::play::save_current_state(
+            deps.project_root,
+            &world_id,
+            run_id,
+            &Value::Object(next_state),
+        )
+        .await?;
+        Ok::<(usize, Value), String>((updated_entities, graph))
+    })
+    .await;
+    let (updated_entities, graph) = match edit {
+        Ok(outcome) => outcome,
+        Err(message) => return error_result(message),
+    };
+
+    let note = args
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let text = note.unwrap_or(if is_zh {
+        "互动世界设定已更新。"
+    } else {
+        "Interactive world settings updated."
+    });
+    text_result(
+        text,
+        Some(json!({
+            "kind": "play_world_updated",
+            "worldId": world_id,
+            "runId": run_id,
+            "world": updated_world,
+            "updatedWorldContract": next_world_contract != world_contract,
+            "updatedVisualContract": next_visual_contract != visual_contract,
+            "updatedPremise": patch.contains_key("premise"),
+            "updatedEntities": updated_entities,
+            "graph": graph,
+        })),
+    )
+}
+/// play 工具 schema（OpenAI function 形态，PlayStepParams/PlayReviseParams/
+/// PlayEditParams 逐字）。
 pub fn play_tool_schemas() -> Vec<Value> {
     vec![
+        json!({
+            "type": "function",
+            "function": {
+                "name": "play_edit",
+                "description": "Persistently edit the active InkOS Play world card, visual contract, player persona, or entity/role cards without advancing time or narrating a turn. Use when the user says to change world rules, visual rules, character goals/persona/status, or long-lived play contracts.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "worldContract": {
+                            "type": "string",
+                            "description": "Full updated world contract after applying the user's requested rule change. Use when the user edits world rules, time semantics, item semantics, role autonomy, taboos, or costs.",
+                        },
+                        "worldContractReplacements": {
+                            "type": "array",
+                            "description": "Exact replacements for existing world-contract wording. Use when the user says to change/replace X into Y; do not append the new rule while leaving the old wording in place.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "from": { "type": "string", "description": "Exact old wording to replace in the existing contract." },
+                                    "to": { "type": "string", "description": "New wording that should replace the old wording." },
+                                },
+                                "required": ["from", "to"],
+                            },
+                        },
+                        "worldContractAppend": {
+                            "type": "string",
+                            "description": "A narrow new world-contract addition. Do not use this for replacements such as 'change X to Y'; use worldContractReplacements or full worldContract instead.",
+                        },
+                        "visualContract": {
+                            "type": "string",
+                            "description": "Full updated visual contract after applying the user's requested image/visual-rule change.",
+                        },
+                        "visualContractReplacements": {
+                            "type": "array",
+                            "description": "Exact replacements for existing visual-contract wording. Use when the user says to change/replace one visual rule into another.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "from": { "type": "string", "description": "Exact old wording to replace in the existing contract." },
+                                    "to": { "type": "string", "description": "New wording that should replace the old wording." },
+                                },
+                                "required": ["from", "to"],
+                            },
+                        },
+                        "visualContractAppend": {
+                            "type": "string",
+                            "description": "A narrow new visual-contract addition. Do not use this for replacements such as 'change X to Y'; use worldContractReplacements or full visualContract instead.",
+                        },
+                        "premise": {
+                            "type": "string",
+                            "description": "Updated world premise only when the user explicitly changes premise/backstory. Do not rewrite premise for ordinary turns.",
+                        },
+                        "playerPersona": {
+                            "type": "string",
+                            "description": "Updated player persona/identity/goals. This updates the reserved actor_player entity.",
+                        },
+                        "entityUpdates": {
+                            "type": "array",
+                            "description": "Character, object, place, or rule-card updates requested by the user. Use for role goals, status, motives, taboos, or known facts.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "description": "Existing entity id to update. Use actor_player for the player persona." },
+                                    "label": { "type": "string", "description": "Existing entity label to update when id is unknown." },
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["actor", "location", "item", "evidence", "clue", "claim", "proof_chain", "organization", "rule", "scene", "event"],
+                                        "description": "Entity type when creating a missing entity. Usually actor for character/persona edits.",
+                                    },
+                                    "summary": { "type": "string", "description": "Replacement or enriched entity summary, including goals/motives/persona when relevant." },
+                                    "status": { "type": "string", "description": "Natural-language current status. Do not invent numeric meters unless the user asked for them." },
+                                },
+                            },
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Short human-readable note summarizing what changed.",
+                        },
+                    },
+                },
+            },
+        }),
         json!({
             "type": "function",
             "function": {
@@ -577,13 +998,22 @@ mod tests {
     #[test]
     fn schemas_and_prompt_shape() {
         let schemas = play_tool_schemas();
-        assert_eq!(schemas.len(), 2);
-        assert_eq!(schemas[0]["function"]["name"], "play_step");
+        assert_eq!(schemas.len(), 3);
+        assert_eq!(schemas[0]["function"]["name"], "play_edit");
         assert_eq!(
-            schemas[0]["function"]["parameters"]["required"][0], "input"
+            schemas[0]["function"]["parameters"]["properties"]["entityUpdates"]["items"]
+                ["properties"]["type"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
+            11
         );
-        assert_eq!(schemas[1]["function"]["name"], "play_revise");
-        let actions = schemas[1]["function"]["parameters"]["properties"]["action"]["enum"]
+        assert_eq!(schemas[1]["function"]["name"], "play_step");
+        assert_eq!(
+            schemas[1]["function"]["parameters"]["required"][0], "input"
+        );
+        assert_eq!(schemas[2]["function"]["name"], "play_revise");
+        let actions = schemas[2]["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
             .unwrap();
         assert_eq!(actions.len(), 3);
@@ -591,5 +1021,263 @@ mod tests {
         assert!(zh.contains("【铁律】") && zh.contains("play_step") && zh.contains("play_edit"));
         let en = play_chat_system_prompt(true);
         assert!(en.contains("[HARD RULE]") && en.contains("play_revise"));
+    }
+
+    #[test]
+    fn merge_contract_branches() {
+        // 整文替换优先。
+        assert_eq!(
+            merge_contract("旧规则", Some("  新规则  "), None, Some("追加")),
+            "新规则"
+        );
+        // 替换全量 + 缺失/空跳过。
+        let replacements = json!([
+            { "from": "普通差错", "to": "轻微差错" },
+            { "from": "不存在的段落", "to": "X" },
+            { "from": "", "to": "Y" },
+        ]);
+        assert_eq!(
+            merge_contract("风险：普通差错 / 复核", None, Some(&replacements), None),
+            "风险：轻微差错 / 复核"
+        );
+        // 追加：非空拼接 + 已含跳过 + 空文直取。
+        assert_eq!(
+            merge_contract("已有规则", None, None, Some("新条款")),
+            "已有规则\n- 新条款"
+        );
+        assert_eq!(merge_contract("已有规则", None, None, Some("已有规则")), "已有规则");
+        assert_eq!(merge_contract("", None, None, Some("首条")), "首条");
+    }
+
+    #[test]
+    fn play_edit_entity_id_collapse_and_fallback() {
+        assert_eq!(play_edit_entity_id("actor", " 室友 林青！ "), "actor_室友_林青");
+        assert_eq!(play_edit_entity_id("rule", "No.1 taboo"), "rule_no_1_taboo");
+        // 纯符号 → 时间戳 36 进制回退。
+        let fallback = play_edit_entity_id("actor", "！！");
+        assert!(fallback.starts_with("actor_"), "{fallback}");
+        assert!(fallback["actor_".len()..].chars().all(|c| c.is_ascii_alphanumeric()));
+        // 48 码元截断。
+        let long = "字".repeat(60);
+        let id = play_edit_entity_id("item", &long);
+        assert_eq!(id.trim_start_matches("item_").chars().count(), 48);
+    }
+
+    async fn seed_edit_world(root: &std::path::Path, world_id: &str) {
+        crate::play::create_world(
+            root,
+            &crate::play::PlayWorldInput {
+                id: world_id,
+                title: "雨夜合租屋",
+                premise: "我刚搬进合租屋。",
+                world_contract: "时间按动作语义推进。",
+                visual_contract: "雨夜冷光，不使用游戏 UI。",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        crate::play::ensure_run(root, world_id, "main").await.unwrap();
+        crate::play::save_current_state(
+            root,
+            world_id,
+            "main",
+            &json!({ "scene": "餐桌上有一只旧瓷杯。" }),
+        )
+        .await
+        .unwrap();
+        let run_dir = crate::play::run_dir(root, world_id, "main").unwrap();
+        let mut db = crate::play_graph::open_play_graph_db(&run_dir).unwrap();
+        for entity in [
+            json!({ "id": "actor_player", "type": "actor", "label": "新租客", "summary": "刚搬进合租屋。", "status": "观察" }),
+            json!({ "id": "actor_linqing", "type": "actor", "label": "室友林青", "summary": "旧目标", "status": "观望" }),
+        ] {
+            db.upsert_entity(&entity).unwrap();
+        }
+        db.flush().unwrap();
+    }
+
+    #[tokio::test]
+    async fn play_edit_full_flow_persists_world_persona_and_entities() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_edit_world(&root, "play-edit-session").await;
+        let router = dummy_router();
+        let deps = PlayToolDeps {
+            project_root: &root,
+            session_id: "play-edit-session",
+            router: &router,
+            language: "zh",
+        };
+        let result = execute_play_tool(
+            &deps,
+            "play_edit",
+            &json!({
+                "worldContractAppend": "室友会自主行动，玩家等待时她也会推进自己的目标。",
+                "visualContract": "物件情绪重量通过摆放距离、磨损、光线和人物反应体现。",
+                "playerPersona": "我是刚搬进来的租客，想查清停电夜。",
+                "entityUpdates": [{
+                    "label": "室友林青",
+                    "type": "actor",
+                    "summary": "隐瞒停电夜真相，目标是试探玩家是否可信。",
+                    "status": "戒备",
+                }],
+                "note": "合租屋规则已更新。",
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "合租屋规则已更新。");
+        let details = result.details.unwrap();
+        assert_eq!(details["kind"], "play_world_updated");
+        assert_eq!(details["worldId"], "play-edit-session");
+        assert_eq!(details["runId"], "main");
+        assert_eq!(details["updatedWorldContract"], true);
+        assert_eq!(details["updatedVisualContract"], true);
+        assert_eq!(details["updatedPremise"], false);
+        assert_eq!(details["updatedEntities"], 2);
+
+        let world = crate::play::load_world(&root, "play-edit-session").await.unwrap();
+        assert!(
+            world["worldContract"].as_str().unwrap().contains("室友会自主行动"),
+            "{}",
+            world["worldContract"]
+        );
+        assert!(world["visualContract"].as_str().unwrap().contains("物件情绪重量"));
+        assert!(world["updatedAt"].as_str().is_some_and(|v| !v.is_empty()));
+
+        let state = crate::play::load_current_state(&root, "play-edit-session", "main")
+            .await
+            .unwrap();
+        assert_eq!(state["scene"], "餐桌上有一只旧瓷杯。");
+        assert!(
+            state["worldContract"].as_str().unwrap().contains("室友会自主行动"),
+            "{state}"
+        );
+        assert!(state["graphEditedAt"].as_str().is_some_and(|v| !v.is_empty()));
+
+        let graph = details["graph"].clone();
+        let player = graph["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "actor_player")
+            .unwrap();
+        assert_eq!(player["label"], "新租客");
+        assert_eq!(player["summary"], "我是刚搬进来的租客，想查清停电夜。");
+        assert_eq!(player["status"], "已更新");
+        assert_eq!(player["updatedEventId"], "manual-edit");
+        let linqing = graph["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "actor_linqing")
+            .unwrap();
+        assert_eq!(linqing["status"], "戒备");
+        assert_eq!(linqing["summary"], "隐瞒停电夜真相，目标是试探玩家是否可信。");
+    }
+
+    #[tokio::test]
+    async fn play_edit_replaces_wording_instead_of_appending() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        crate::play::create_world(
+            &root,
+            &crate::play::PlayWorldInput {
+                id: "play-contract-replace",
+                title: "午夜药房",
+                premise: "实习药剂师值夜班。",
+                world_contract: "风险重量：普通差错 / 需要复核 / 可能追责 / 不能公开。时间按动作自然流动。",
+                visual_contract: "监控冷光。",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        crate::play::ensure_run(&root, "play-contract-replace", "main")
+            .await
+            .unwrap();
+        crate::play::save_current_state(
+            &root,
+            "play-contract-replace",
+            "main",
+            &json!({ "turn": 0, "worldContract": "风险重量：普通差错 / 需要复核 / 可能追责 / 不能公开。时间按动作自然流动。" }),
+        )
+        .await
+        .unwrap();
+        let router = dummy_router();
+        let deps = PlayToolDeps {
+            project_root: &root,
+            session_id: "play-contract-replace",
+            router: &router,
+            language: "zh",
+        };
+        let result = execute_play_tool(
+            &deps,
+            "play_edit",
+            &json!({
+                "worldContractReplacements": [{
+                    "from": "普通差错 / 需要复核 / 可能追责 / 不能公开",
+                    "to": "普通差错 / 需要复核 / 涉及追责 / 需要主任签字",
+                }],
+                "note": "风险重量已替换。",
+            }),
+        )
+        .await
+        .unwrap();
+        let details = result.details.unwrap();
+        assert_eq!(details["updatedWorldContract"], true);
+        assert_eq!(details["updatedVisualContract"], false);
+        assert_eq!(details["updatedEntities"], 0);
+        let contract = details["world"]["worldContract"].as_str().unwrap();
+        assert!(contract.contains("涉及追责 / 需要主任签字"), "{contract}");
+        assert!(!contract.contains("可能追责 / 不能公开"), "{contract}");
+        let world = crate::play::load_world(&root, "play-contract-replace").await.unwrap();
+        assert!(world["worldContract"].as_str().unwrap().contains("涉及追责"));
+        let state = crate::play::load_current_state(&root, "play-contract-replace", "main")
+            .await
+            .unwrap();
+        assert_eq!(state["turn"], 0);
+        assert!(
+            state["worldContract"].as_str().unwrap().contains("涉及追责 / 需要主任签字"),
+            "{state}"
+        );
+    }
+
+    #[tokio::test]
+    async fn play_edit_without_world_returns_graceful_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let router = dummy_router();
+        let deps = PlayToolDeps {
+            project_root: dir.path(),
+            session_id: "1783000000003-t4",
+            router: &router,
+            language: "zh",
+        };
+        let result = execute_play_tool(&deps, "play_edit", &json!({})).await.unwrap();
+        assert_eq!(result.text, "还没有可编辑的互动世界。先用 play_start 开一局。");
+        assert!(!result.is_error);
+        // 空参数 + 已有世界 → 默认文案 + 零更新。
+        crate::play::create_world(
+            dir.path(),
+            &crate::play::PlayWorldInput {
+                id: "1783000000003-t4",
+                title: "空",
+                premise: "p",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        let result = execute_play_tool(&deps, "play_edit", &json!({})).await.unwrap();
+        assert_eq!(result.text, "互动世界设定已更新。");
+        let details = result.details.unwrap();
+        assert_eq!(details["updatedEntities"], 0);
+        assert_eq!(details["updatedWorldContract"], false);
     }
 }

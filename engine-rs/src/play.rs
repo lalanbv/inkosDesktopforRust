@@ -596,6 +596,36 @@ pub struct PlayWorldInput<'a> {
     pub language: &'a str,
 }
 
+/// `updateWorld`：patch 键合并（worldContract/visualContract/premise/mode）+
+/// updatedAt 重写；世界缺失 → Err（TS PlayStore.updateWorld 逐字）。
+pub async fn update_world(
+    project_root: &Path,
+    world_id: &str,
+    patch: &Value,
+) -> Result<Value, String> {
+    let Some(mut world) = load_world(project_root, world_id).await else {
+        return Err(format!("Play world not found: {world_id}"));
+    };
+    let Some(obj) = world.as_object_mut() else {
+        return Err(format!("Play world not found: {world_id}"));
+    };
+    for key in ["worldContract", "visualContract", "premise", "mode"] {
+        if let Some(value) = patch.get(key) {
+            obj.insert(key.to_string(), value.clone());
+        }
+    }
+    obj.insert(
+        "updatedAt".into(),
+        json!(crate::utils::utc_time::utc_now_iso()),
+    );
+    let world_dir = world_dir(project_root, world_id)?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
+    tokio::fs::write(world_dir.join("world.json"), payload)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(world)
+}
+
 /// `saveCurrentState`：state/current.json（ensureRun + pretty + 尾换行）。
 pub async fn save_current_state(
     project_root: &Path,

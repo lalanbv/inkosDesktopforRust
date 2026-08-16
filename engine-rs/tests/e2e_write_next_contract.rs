@@ -10514,3 +10514,206 @@ mod play80_e2e {
         );
     }
 }
+
+mod play81_e2e {
+    //! 81 号：play_edit 聊天工具——改世界契约/persona/实体卡不推进回合，
+    //! world.json + currentState 写回（chat 循环内分发，零 LLM 域调用）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use serde_json::Value;
+
+    fn rt81(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app81(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：studio-agent 聊天面（play 提示词）——按指令发 play_edit 工具调用，
+    /// tool 结果回填后收束终文；捕获 tools 名单。
+    async fn mock_play81_llm() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
+                    assert!(system.contains("InkOS Play 助手"), "play 系统提示词：{system}");
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    let (content, is_tool_call) = if has_tool_result {
+                        ("（世界规则已更新。）".to_string(), false)
+                    } else {
+                        (r#"{"worldContractReplacements":[{"from":"可能追责 / 不能公开","to":"涉及追责 / 需要主任签字"}],"playerPersona":"我是查清停电夜的租客。","note":"风险重量已替换。"}"#.to_string(), true)
+                    };
+                    let payload = if is_tool_call {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_edit_1", "function": { "name": "play_edit", "arguments": content } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    #[tokio::test]
+    async fn play_edit_chat_tool_persists_contracts_without_advancing_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, tool_names) = mock_play81_llm().await;
+        let session_id = "1783002000001-p81a";
+        let runtime = rt81(&root, &llm);
+        let app = app81(runtime);
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        inkos_engine::play::create_world(
+            &root,
+            &inkos_engine::play::PlayWorldInput {
+                id: session_id,
+                title: "午夜药房",
+                premise: "实习药剂师值夜班。",
+                world_contract: "风险重量：普通差错 / 需要复核 / 可能追责 / 不能公开。",
+                visual_contract: "监控冷光。",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        inkos_engine::play::ensure_run(&root, session_id, "main").await.unwrap();
+        inkos_engine::play::save_current_state(
+            &root,
+            session_id,
+            "main",
+            &serde_json::json!({ "turn": 2, "lastEventId": "evt-2" }),
+        )
+        .await
+        .unwrap();
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"把规则里的可能追责改成涉及追责并需要主任签字","sessionId":"{session_id}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（世界规则已更新。）");
+
+        // 注册面：play_edit 在 tools 里。
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"play_edit".to_string()), "{names:?}");
+        assert!(names.contains(&"play_step".to_string()), "{names:?}");
+
+        // 执行卡：completed，result = note 文本。
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "play_edit");
+        assert_eq!(execs[0]["status"], "completed");
+        assert_eq!(execs[0]["result"], "风险重量已替换。");
+
+        // world.json：替换生效 + updatedAt 重写。
+        let world = inkos_engine::play::load_world(&root, session_id).await.unwrap();
+        let contract = world["worldContract"].as_str().unwrap();
+        assert!(contract.contains("涉及追责 / 需要主任签字"), "{contract}");
+        assert!(!contract.contains("可能追责 / 不能公开"), "{contract}");
+
+        // currentState：合并写回（turn 保留 + graphEditedAt + 新契约）。
+        let state = inkos_engine::play::load_current_state(&root, session_id, "main")
+            .await
+            .unwrap();
+        assert_eq!(state["turn"], 2);
+        assert_eq!(state["lastEventId"], "evt-2");
+        assert!(
+            state["worldContract"].as_str().unwrap().contains("涉及追责"),
+            "{state}"
+        );
+        assert!(state["graphEditedAt"].as_str().is_some_and(|v| !v.is_empty()));
+
+        // persona → actor_player 实体（manual-edit 事件位）。
+        let run_dir = root.join("worlds").join(session_id).join("runs").join("main");
+        let graph: Value =
+            serde_json::from_str(&std::fs::read_to_string(run_dir.join("play-graph.json")).unwrap()).unwrap();
+        let player = graph["entities"]
+            .as_object()
+            .unwrap()
+            .get("actor_player")
+            .cloned()
+            .unwrap_or(Value::Null);
+        assert_eq!(player["summary"], "我是查清停电夜的租客。", "graph: {graph}");
+        assert_eq!(player["updatedEventId"], "manual-edit");
+        // 不推进回合：无事件新增。
+        assert!(!run_dir.join("events.jsonl").exists());
+    }
+}
