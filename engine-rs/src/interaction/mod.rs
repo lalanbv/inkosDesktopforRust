@@ -21,6 +21,7 @@ pub mod play_tools;
 pub mod project_tools;
 pub mod propose_action_tool;
 pub mod research_tool;
+pub mod sub_agent_tool;
 pub mod session;
 pub mod session_restore;
 pub mod session_transcript;

@@ -75,7 +75,7 @@ pub async fn audit_chapter(
 }
 
 #[derive(Debug, thiserror::Error)]
-enum AuditFlowError {
+pub(crate) enum AuditFlowError {
     #[error("book.json load failed: {0}")]
     Book(String),
     #[error("Chapter not found")]
@@ -84,7 +84,7 @@ enum AuditFlowError {
     Audit(String),
 }
 
-async fn run_audit_flow(
+pub(crate) async fn run_audit_flow(
     runtime: &AuditRuntime,
     book_id: &str,
     chapter_number: u32,

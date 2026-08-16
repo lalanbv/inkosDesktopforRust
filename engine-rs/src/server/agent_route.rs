@@ -551,6 +551,9 @@ pub async fn post_agent(
         if session_kind == SessionKind::Chat {
             entries.push(crate::interaction::import_chapters_tool::import_chapters_schema());
         }
+        if agent_book_id.is_some() {
+            entries.push(crate::interaction::sub_agent_tool::sub_agent_schema());
+        }
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
@@ -576,12 +579,21 @@ pub async fn post_agent(
         runtime: &runtime,
         active_book_id: agent_book_id.as_deref(),
     });
+    // sub_agent：书会话（agent-session edit/book 分支；architect 建书走确认面）。
+    let sub_agent_deps = agent_book_id.as_deref().map(|_| {
+        crate::interaction::sub_agent_tool::SubAgentDeps {
+            runtime: &runtime,
+            active_book_id: agent_book_id.as_deref(),
+            language: surface_language,
+        }
+    });
     let tool_executor = ChatToolRouter {
         root,
         play_deps,
         propose_deps,
         research_enabled,
         import_deps,
+        sub_agent_deps,
     };
     let loop_result = run_agent_loop(
         &loop_chat,
@@ -700,6 +712,7 @@ struct ChatToolRouter<'a> {
     propose_deps: Option<crate::interaction::propose_action_tool::ProposeDeps<'a>>,
     research_enabled: bool,
     import_deps: Option<ImportDeps<'a>>,
+    sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
 }
 
 #[async_trait::async_trait]
@@ -725,6 +738,11 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
                     args,
                 )
                 .await;
+            }
+        }
+        if name == "sub_agent" {
+            if let Some(deps) = &self.sub_agent_deps {
+                return crate::interaction::sub_agent_tool::tool_sub_agent(deps, args).await;
             }
         }
         if let Some(deps) = &self.play_deps {

@@ -12167,3 +12167,257 @@ mod details86_e2e {
             .is_some_and(|entities| entities.iter().any(|e| e["id"] == "location_hall")), "graph: {}", details["graph"]);
     }
 }
+
+mod sub87_e2e {
+    //! 87 号：sub_agent 聊天工具——writer 单章全链（复用 write-next mock 分流）
+    //! + auditor + exporter 落盘 + 书会话注册面。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use serde_json::Value;
+
+    fn rt87(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app87(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：域链分流（planner/writer/auditor/settler——同全局 mock_llm_chat）
+    /// + studio-agent 聊天按指令发 sub_agent 工具调用；捕获 tools 名单。
+    async fn mock_sub87_llm() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let domain_content: Option<String> = if system.contains("创作总编") {
+                        Some(PLANNER_RESPONSE.to_string())
+                    } else if system.contains("作家") || system.contains("写手") {
+                        Some(WRITER_RESPONSE.to_string())
+                    } else if system.contains("审稿") {
+                        Some("PASS\n95".to_string())
+                    } else {
+                        None
+                    };
+                    let payload = if let Some(content) = domain_content {
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                        return axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ));
+                    } else if !system.contains("创作助手") && !system.contains("Play 助手") {
+                        // settler / 压缩 / 分析 / 校验等次要调用给最小合法输出。
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                        return axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ));
+                    } else {
+                        // studio-agent 聊天：按指令关键词发 sub_agent 工具调用。
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（已交给子代理完成。）" } }] })
+                        } else if last_user.contains("推进一章") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_w1", "function": { "name": "sub_agent", "arguments": "{\"agent\":\"writer\",\"instruction\":\"把故事往前推进一章\"}" } },
+                            ] } }] })
+                        } else if last_user.contains("审一章") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_a1", "function": { "name": "sub_agent", "arguments": "{\"agent\":\"auditor\",\"instruction\":\"审计最新章\",\"chapterNumber\":1}" } },
+                            ] } }] })
+                        } else if last_user.contains("导出") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_e1", "function": { "name": "sub_agent", "arguments": "{\"agent\":\"exporter\",\"instruction\":\"导出 txt\"}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                        }
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    #[tokio::test]
+    async fn book_session_sub_agent_writer_auditor_exporter() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, tool_names) = mock_sub87_llm().await;
+        let session_id = "1783007000001-s87a";
+        let runtime = rt87(&root, &llm);
+        let app = app87(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ① writer 单章全链。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"推进一章","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（已交给子代理完成。）");
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"sub_agent".to_string()), "书会话注册：{names:?}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        let card = &execs[0];
+        assert_eq!(card["tool"], "sub_agent");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        assert!(card["result"].as_str().unwrap().starts_with("Chapter written for \"b1\". Word count: "), "body: {parsed}");
+        assert_eq!(card["details"]["kind"], "chapter_written");
+        assert_eq!(card["details"]["bookId"], "b1");
+        assert_eq!(card["details"]["chapterNumber"], 1);
+        assert_eq!(card["details"]["status"], "ready-for-review");
+        // 章节落盘。
+        assert!(root.join("books/b1/chapters/0001_风起.md").exists());
+
+        // ② auditor：审计第 1 章（审稿 mock PASS）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"审一章","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "sub_agent");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let audit_text = card["result"].as_str().unwrap();
+        assert!(audit_text.starts_with("Audit chapter 1: "), "{audit_text}");
+        assert!(audit_text.contains("issue(s)."), "{audit_text}");
+
+        // ③ exporter：txt 导出落盘。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"导出全文","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "sub_agent");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let export_text = card["result"].as_str().unwrap();
+        assert!(export_text.starts_with("Exported \"b1\": "), "{export_text}");
+        let output_path = export_text.split(" → ").nth(1).unwrap().to_string();
+        assert!(std::path::Path::new(&output_path).is_file(), "导出落盘：{output_path}");
+        let _ = Value::Null;
+    }
+
+    #[tokio::test]
+    async fn chat_session_without_book_does_not_register_sub_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, tool_names) = mock_sub87_llm().await;
+        let session_id = "1783007000002-s87b";
+        let app = app87(rt87(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"推进一章","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let names = tool_names.lock().unwrap().clone();
+        assert!(!names.contains(&"sub_agent".to_string()), "无书 chat 不注册：{names:?}");
+        assert!(names.contains(&"propose_action".to_string()), "{names:?}");
+    }
+}

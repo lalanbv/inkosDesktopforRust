@@ -1,0 +1,406 @@
+//! sub_agent 聊天工具（87 号）——书会话五代理委托。
+//!
+//! 移植自 `packages/core/src/agent/agent-tools.ts` 的 `createSubAgentTool`：
+//! architect（建书，复用 67 号确认执行器——文本/details 已逐字）/
+//! writer（单章 + 多章连写，复用 write_next 链）/
+//! auditor（复用 audit 链）/
+//! exporter（复用 export 工件链 + 落盘）。
+//! reviser 与 architect.revise 暂缓（87 号备案，revise 面独立轮次）。
+
+use serde_json::{json, Value};
+
+use crate::interaction::import_chapters_tool::resolve_tool_book_id;
+use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::server::books_routes::BooksRuntime;
+
+pub const SUB_AGENTS: &[&str] = &["architect", "writer", "auditor", "reviser", "exporter"];
+
+/// 工具依赖：runtime + 活动书 + 会话语言（双语守卫文案）。
+pub struct SubAgentDeps<'a> {
+    pub runtime: &'a BooksRuntime,
+    pub active_book_id: Option<&'a str>,
+    pub language: &'a str,
+}
+
+fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
+    ToolResult { text: text.into(), details, is_error: false }
+}
+
+fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+/// `sub_agent` 执行器。
+pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
+    let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
+    if !SUB_AGENTS.contains(&agent) {
+        return error_result(format!(
+            "Invalid sub_agent.agent: {agent}（expected one of {}）",
+            SUB_AGENTS.join(" | ")
+        ));
+    }
+    let instruction = field_str(args, "instruction").unwrap_or_default();
+    if instruction.is_empty() {
+        return error_result("sub_agent requires an instruction argument".to_string());
+    }
+    // 无活动书：只有 architect 可用。
+    if deps.active_book_id.is_none() && agent != "architect" {
+        return text_result(
+            "No active book. Only the architect agent can create a book from this session.",
+            None,
+        );
+    }
+    // 有活动书：architect 建书分支拒绝（revise 暂缓一并拦截）。
+    if deps.active_book_id.is_some() && agent == "architect" {
+        let is_en = deps.language == "en";
+        let message = if is_en {
+            "This session already has a book, so no new book is needed. To create a new book, go back to the home page first."
+        } else {
+            "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。"
+        };
+        return text_result(message, None);
+    }
+    match agent {
+        "architect" => architect_create(deps, args, instruction).await,
+        "writer" => writer(deps, args).await,
+        "auditor" => auditor(deps, args).await,
+        "exporter" => exporter(deps, args, instruction).await,
+        // reviser：revise/rewrite 链（49/54 号形态）与 TS reviseDraft 参数面
+        // 差异大，独立轮次接入。
+        _ => error_result(
+            "sub_agent reviser is not supported by the Rust engine yet; use the book revise surface instead."
+                .to_string(),
+        ),
+    }
+}
+
+/// architect：建书（复用 67 号确认执行器，文本/details 已逐字）。
+async fn architect_create(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
+    if args.get("revise").and_then(Value::as_bool) == Some(true) {
+        return error_result(
+            "sub_agent architect.revise is not supported by the Rust engine yet; use the book foundation revise surface instead."
+                .to_string(),
+        );
+    }
+    let Some(title) = field_str(args, "title") else {
+        return text_result("Error: title is required for the architect agent.", None);
+    };
+    match crate::server::agent_production::execute_create_book(
+        deps.runtime,
+        instruction,
+        title,
+        None,
+        &mut |_| {},
+    )
+    .await
+    {
+        Ok(outcome) => text_result(outcome.text, Some(outcome.details)),
+        Err(message) => error_result(message),
+    }
+}
+
+/// writer：单章 / 多章连写（复用 write_next 链 + Manual 审核模式装配）。
+async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
+    let book_id = match resolve_tool_book_id("writer", field_str(args, "bookId"), deps.active_book_id) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    let chapter_count = args
+        .get("chapterCount")
+        .and_then(Value::as_f64)
+        .filter(|v| v.fract() == 0.0 && (1.0..=20.0).contains(v))
+        .map(|v| v as u32)
+        .unwrap_or(1);
+    let word_count = args
+        .get("chapterWordCount")
+        .and_then(Value::as_f64)
+        .filter(|v| v.fract() == 0.0 && *v > 0.0)
+        .map(|v| v as u32);
+    let runtime = deps.runtime;
+    let agents = crate::server::books_routes::build_write_next_agents(runtime);
+    let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    // 默认 Auto 审核模式（TS writeNextChapter 语义：审后 ready-for-review）。
+    let config = crate::pipeline::write_next::WriteNextConfig::default();
+    let mut chapters: Vec<Value> = Vec::new();
+    let mut stopped_status: Option<&'static str> = None;
+    let mut last_chapter_number = 0u32;
+    for _ in 0..chapter_count {
+        match crate::pipeline::write_next::write_next_chapter(
+            &runtime.state,
+            &agents,
+            &ctx,
+            &config,
+            &book_id,
+            word_count,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(result) => {
+                last_chapter_number = result.chapter_number;
+                chapters.push(json!({
+                    "chapterNumber": result.chapter_number,
+                    "title": result.title,
+                    "wordCount": result.word_count,
+                    "status": result.status,
+                }));
+                if result.status != "ready-for-review" {
+                    stopped_status = Some(result.status);
+                    break;
+                }
+            }
+            Err(error) => return error_result(error.to_string()),
+        }
+    }
+    if chapter_count > 1 {
+        let completed = chapters.len();
+        let text = if let Some(status) = stopped_status {
+            format!(
+                "Writer completed {completed} of {chapter_count} requested chapters for \"{book_id}\" and stopped because chapter {last_chapter_number} ended with status \"{status}\"."
+            )
+        } else {
+            format!("Writer completed {completed} consecutive chapters for \"{book_id}\".")
+        };
+        let mut details = json!({
+            "kind": "chapters_written",
+            "bookId": book_id,
+            "requestedCount": chapter_count,
+            "completedCount": completed,
+            "chapters": chapters,
+        });
+        if let Some(status) = stopped_status {
+            details
+                .as_object_mut()
+                .unwrap()
+                .insert("stoppedStatus".into(), json!(status));
+        }
+        return text_result(text, Some(details));
+    }
+    // 单章：status 非 ready-for-review 且非 active → 需复查提示。
+    let last = chapters.first().cloned().unwrap_or(Value::Null);
+    let status = last.get("status").and_then(Value::as_str).unwrap_or_default();
+    let word_count_value = last.get("wordCount").cloned().unwrap_or(json!("unknown"));
+    let message = if !status.is_empty() && status != "ready-for-review" && status != "active" {
+        format!(
+            "Chapter output for \"{book_id}\" ended with status \"{status}\" and needs review before it is treated as complete. Word count: {word_count_value}."
+        )
+    } else {
+        format!("Chapter written for \"{book_id}\". Word count: {word_count_value}.")
+    };
+    text_result(
+        message,
+        Some(json!({
+            "kind": "chapter_written",
+            "bookId": book_id,
+            "chapterNumber": last.get("chapterNumber"),
+            "title": last.get("title"),
+            "wordCount": word_count_value,
+            "status": status,
+        })),
+    )
+}
+
+/// auditor：审一章（缺省最新章）。
+async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
+    let book_id = match resolve_tool_book_id("auditor", field_str(args, "bookId"), deps.active_book_id) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    let chapter_number = match args
+        .get("chapterNumber")
+        .and_then(Value::as_f64)
+        .filter(|v| v.fract() == 0.0 && *v > 0.0)
+    {
+        Some(value) => value as u32,
+        None => match deps.runtime.state.get_next_chapter_number(&book_id).await {
+            Ok(next) if next > 1 => next - 1,
+            _ => return error_result(format!("No chapters found in book \"{book_id}\".")),
+        },
+    };
+    let audit_runtime = crate::server::audit_route::AuditRuntime {
+        hub: deps.runtime.hub.clone(),
+        state: deps.runtime.state.clone(),
+        router: deps.runtime.router.clone(),
+        builtin_genres_dir: deps.runtime.builtin_genres_dir.clone(),
+    };
+    match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None).await {
+        Ok(audit) => {
+            let issue_lines: Vec<String> = audit
+                .issues
+                .iter()
+                .map(|issue| {
+                    format!("[{:?}] {}", issue.severity, issue.description)
+                })
+                .collect();
+            let passed = if audit.passed { "PASSED" } else { "FAILED" };
+            let mut text = format!(
+                "Audit chapter {chapter_number}: {passed}, {} issue(s).",
+                audit.issues.len()
+            );
+            if !issue_lines.is_empty() {
+                text.push('\n');
+                text.push_str(&issue_lines.join("\n"));
+            }
+            text_result(text, None)
+        }
+        Err(error) => error_result(error.to_string()),
+    }
+}
+
+/// exporter：导出工件（format/approvedOnly 可从 instruction 推断）+ 落盘。
+async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
+    let book_id = match resolve_tool_book_id("exporter", field_str(args, "bookId"), deps.active_book_id) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    let format_arg = field_str(args, "format");
+    let inferred_format = match format_arg {
+        Some(format) => format.to_string(),
+        None => {
+            let lower = instruction.to_lowercase();
+            if lower.contains("epub") {
+                "epub".to_string()
+            } else if lower.contains("markdown") || instruction.contains(" md ") || instruction.contains("MD") {
+                "md".to_string()
+            } else {
+                "txt".to_string()
+            }
+        }
+    };
+    let approved_only = match args.get("approvedOnly").and_then(Value::as_bool) {
+        Some(value) => value,
+        None => instruction.contains("approved")
+            || instruction.contains("已通过")
+            || instruction.contains("通过章节"),
+    };
+    let format = crate::interaction::export_artifact::ExportFormat::parse(Some(&inferred_format));
+    match crate::interaction::export_artifact::build_export_artifact(
+        &deps.runtime.state,
+        &book_id,
+        format,
+        approved_only,
+        None,
+    )
+    .await
+    {
+        Ok(artifact) => {
+            // writeExportArtifact：落盘到工件输出路径。
+            if let Some(parent) = std::path::Path::new(&artifact.output_path).parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            if let Err(e) = tokio::fs::write(&artifact.output_path, &artifact.payload).await {
+                return error_result(format!("Export failed: {e}"));
+            }
+            text_result(
+                format!(
+                    "Exported \"{book_id}\": {} chapters, {} words → {}",
+                    artifact.chapters_exported, artifact.total_words, artifact.output_path
+                ),
+                None,
+            )
+        }
+        Err(_) => error_result("Export failed".to_string()),
+    }
+}
+
+/// `sub_agent` schema（SubAgentParams 逐字）。
+pub fn sub_agent_schema() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "sub_agent",
+            "description": "Delegate a heavy operation to a specialised sub-agent. Use agent='architect' to initialise a new book, 'writer' to write the next chapter, 'auditor' to audit quality, 'reviser' to revise a chapter, 'exporter' to export.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": { "type": "string", "enum": SUB_AGENTS },
+                    "instruction": { "type": "string", "description": "Natural language instruction for the sub-agent. For reviser, this is passed as the one-off revision brief." },
+                    "bookId": { "type": "string", "description": "Optional book ID. In active-book sessions, omit it to use the current active book; if provided, it must match the current active book. For architect creation, this optionally sets the new book ID." },
+                    "chapterNumber": { "type": "number", "description": "auditor/reviser: target chapter number. Omit to use the latest chapter." },
+                    "chapterCount": { "type": "integer", "minimum": 1, "maximum": 20, "description": "writer only: number of consecutive new chapters to write in this operation. Default: 1. InkOS writes them sequentially under one book lock." },
+                    "title": { "type": "string", "description": "architect only: explicit book title. Required when creating a book." },
+                    "genre": { "type": "string", "description": "architect only: genre (xuanhuan, urban, mystery, romance, scifi, fantasy, wuxia, general, etc.)" },
+                    "platform": { "type": "string", "enum": ["tomato", "qidian", "feilu", "other"], "description": "architect only: target platform. Default: other" },
+                    "language": { "type": "string", "enum": ["zh", "en"], "description": "architect only: writing language. Default: zh" },
+                    "targetChapters": { "type": "number", "description": "architect only: total chapter count. Default: 200" },
+                    "chapterWordCount": { "type": "number", "description": "architect/writer: per-chapter length in the book's native unit (zh characters / en words). Default: 3000 zh, 2000 en" },
+                    "revise": { "type": "boolean", "description": "architect only: true 表示在当前 active book 上重新生成架构稿，而不是新建书籍。no-book creation sessions cannot revise an existing book." },
+                    "feedback": { "type": "string", "description": "architect only: revise 模式下的调整要求。举例：把架构稿从条目式升级成段落式架构稿、某个角色设定需要重新设计、主线冲突表达太弱需要加强等。如果是架构稿评审未通过要求重写的场景，把评审意见的 overallFeedback 原样传入即可" },
+                    "mode": { "type": "string", "enum": ["spot-fix", "polish", "rewrite", "rework", "anti-detect"], "description": "reviser only: revision mode. Default: spot-fix" },
+                    "format": { "type": "string", "enum": ["txt", "md", "epub"], "description": "exporter only: export format. Default: txt" },
+                    "approvedOnly": { "type": "boolean", "description": "exporter only: export only approved chapters. Default: false" },
+                },
+                "required": ["agent", "instruction"],
+            },
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn schema_shape() {
+        let schema = sub_agent_schema();
+        assert_eq!(schema["function"]["name"], "sub_agent");
+        assert_eq!(schema["function"]["parameters"]["required"], json!(["agent", "instruction"]));
+        assert_eq!(
+            schema["function"]["parameters"]["properties"]["agent"]["enum"].as_array().unwrap().len(),
+            5
+        );
+    }
+
+    #[test]
+    fn sub_agent_enum_and_instruction_validation() {
+        let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+        let root = std::env::temp_dir().join("sub87-nonexistent");
+        let hub = Arc::new(crate::server::sse::BroadcastHub::new());
+        let state = Arc::new(crate::state::manager::StateManager::new(root.clone()));
+        let router = Arc::new(crate::llm::agent_router::AgentRouter::new(
+            crate::llm::agent_router::LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9".into(),
+                api_key: "k".into(),
+                model: "m".into(),
+                max_tokens: 16,
+                extra_headers: std::collections::HashMap::new(),
+            },
+            std::collections::HashMap::new(),
+        ));
+        let books = crate::server::books_routes::BooksRuntime {
+            hub,
+            state,
+            router,
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        };
+        let deps = SubAgentDeps { runtime: &books, active_book_id: None, language: "zh" };
+        // 非法 agent / 缺 instruction。
+        let bad = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "bogus", "instruction": "x" })));
+        assert!(bad.is_error && bad.text.contains("Invalid sub_agent.agent"));
+        let missing = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "writer" })));
+        assert!(missing.is_error && missing.text.contains("requires an instruction"));
+        // 无书守卫（writer/auditor/exporter）。
+        let no_book = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "writer", "instruction": "写一章" })));
+        assert_eq!(
+            no_book.text,
+            "No active book. Only the architect agent can create a book from this session."
+        );
+        assert!(!no_book.is_error);
+        // 有书时 architect 拒绝（双语）。
+        let with_book = SubAgentDeps { runtime: &books, active_book_id: Some("b1"), language: "zh" };
+        let rejected = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "architect", "instruction": "建书" })));
+        assert_eq!(rejected.text, "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。");
+        // reviser 暂缓拦截。
+        let reviser = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "reviser", "instruction": "改一章" })));
+        assert!(reviser.is_error && reviser.text.contains("reviser is not supported"));
+        // architect 缺 title。
+        let no_title = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "architect", "instruction": "建书" })));
+        assert_eq!(no_title.text, "Error: title is required for the architect agent.");
+    }
+}

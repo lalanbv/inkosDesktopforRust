@@ -802,10 +802,10 @@ async fn append_production_assistant_message(
 // ── 执行器 ──────────────────────────────────────────────────────
 
 /// 工具结果载荷（content 文本 + isError + details）。
-struct ToolOutcome {
-    is_error: bool,
-    text: String,
-    details: Value,
+pub(crate) struct ToolOutcome {
+    pub(crate) is_error: bool,
+    pub(crate) text: String,
+    pub(crate) details: Value,
 }
 
 /// write_next 执行器（createWriteNextChapterTool）：单章 / 多章连写。
@@ -1009,7 +1009,7 @@ async fn execute_write_next(
 
 /// create_book 执行器（createSubAgentTool 的 architect 建书分支）：
 /// buildStudioBookConfig 派生 + init_book 同步执行。
-async fn execute_create_book(
+pub(crate) async fn execute_create_book(
     runtime: &BooksRuntime,
     instruction: &str,
     title: &str,
