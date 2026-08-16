@@ -537,11 +537,14 @@ pub async fn post_agent(
 
     let loop_chat = RouterLoopChat { router: &runtime.router };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
-    // 工具面：文件工具 + material 双工具（全部会话）+ （play 会话且有世界时）
-    // play 三工具。
+    // 工具面：文件工具 + material 双工具（全部会话）+ propose_action
+    // （play 有世界时除外）+ （play 会话且有世界时）play 三工具。
     let mut tools = crate::interaction::project_tools::tools_payload();
     if let Some(entries) = tools.as_array_mut() {
         entries.extend(crate::interaction::material_tools::material_tool_schemas());
+        if !play_world_exists {
+            entries.push(crate::interaction::propose_action_tool::propose_action_schema());
+        }
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
@@ -552,9 +555,18 @@ pub async fn post_agent(
         router: &runtime.router,
         language: surface_language,
     });
-    let tool_executor = crate::interaction::play_tools::PlayChatToolExecutor {
+    // propose_action：除"play 会话且有世界"外全部注册（TS 注册矩阵；
+    // sameSession = sessionKind !== "chat"）。
+    let propose_registered = !play_world_exists;
+    let propose_deps = propose_registered.then(|| crate::interaction::propose_action_tool::ProposeDeps {
+        language: surface_language,
+        same_session: session_kind != SessionKind::Chat,
+        requested_skills: &requested_skills,
+    });
+    let tool_executor = ChatToolRouter {
         root,
-        deps: play_deps,
+        play_deps,
+        propose_deps,
     };
     let loop_result = run_agent_loop(
         &loop_chat,
@@ -654,6 +666,31 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
             card
         })
         .collect()
+}
+
+/// 聊天回环组合执行器（84 号）：propose_action → play 工具 → 项目文件
+/// 工具（含 material 双件）。
+struct ChatToolRouter<'a> {
+    root: &'a std::path::Path,
+    play_deps: Option<crate::interaction::play_tools::PlayToolDeps<'a>>,
+    propose_deps: Option<crate::interaction::propose_action_tool::ProposeDeps<'a>>,
+}
+
+#[async_trait::async_trait]
+impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
+    async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
+        if name == "propose_action" {
+            if let Some(deps) = &self.propose_deps {
+                return crate::interaction::propose_action_tool::tool_propose_action(deps, args).await;
+            }
+        }
+        if let Some(deps) = &self.play_deps {
+            if let Some(result) = crate::interaction::play_tools::execute_play_tool(deps, name, args).await {
+                return result;
+            }
+        }
+        crate::interaction::project_tools::execute_tool(self.root, name, args).await
+    }
 }
 
 // ── actionPayload strict 校验（ActionPayloadSchema 逐字，75 号） ──
@@ -762,7 +799,7 @@ fn payload_schemas() -> Vec<PayloadSchema> {
 
 /// 顶层 object + strict（unknown 键拒绝）+ 子域 strict/字段校验；shortRun 的
 /// language+charsPerChapter 联动分段（superRefine）一并校验。
-fn validate_action_payload_strict(value: &Value) -> Result<(), String> {
+pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String> {
     let Some(object) = value.as_object() else {
         return Err(format!("expected object, got {value}"));
     };

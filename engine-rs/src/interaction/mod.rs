@@ -18,6 +18,7 @@ pub mod intents;
 pub mod modes;
 pub mod play_tools;
 pub mod project_tools;
+pub mod propose_action_tool;
 pub mod session;
 pub mod session_restore;
 pub mod session_transcript;

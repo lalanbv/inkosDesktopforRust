@@ -12,7 +12,6 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::interaction::agent_loop::LoopToolExecutor;
 use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::llm::agent_router::AgentRouter;
 use crate::play_runner::{PlayAgents, PlayRunner};
@@ -840,23 +839,7 @@ pub fn play_chat_system_prompt(is_en: bool) -> String {
         .to_string()
 }
 
-/// 聊天回环的工具执行器：play 工具优先（启用时），回落项目文件工具。
-pub struct PlayChatToolExecutor<'a> {
-    pub root: &'a Path,
-    pub deps: Option<PlayToolDeps<'a>>,
-}
 
-#[async_trait::async_trait]
-impl LoopToolExecutor for PlayChatToolExecutor<'_> {
-    async fn execute(&self, name: &str, args: &Value) -> ToolResult {
-        if let Some(deps) = &self.deps {
-            if let Some(result) = execute_play_tool(deps, name, args).await {
-                return result;
-            }
-        }
-        crate::interaction::project_tools::execute_tool(self.root, name, args).await
-    }
-}
 
 #[cfg(test)]
 mod tests {

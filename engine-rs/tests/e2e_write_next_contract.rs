@@ -11218,3 +11218,244 @@ mod material83_e2e {
         assert_eq!(manifest["source"], format!("http://{source_addr}/docs/page.html"));
     }
 }
+
+mod propose84_e2e {
+    //! 84 号：propose_action 确认卡聊天工具——卡片生成（结构化 actionPayload
+    //! 填充）+ 必填断言错误面 + play 有世界时的注册剔除。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt84(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app84(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：按 system 与指令关键词分流 propose_action 工具调用；tool 结果
+    /// 回填后收束终文；捕获 tools 名单。
+    async fn mock_propose_llm() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    let payload = if has_tool_result {
+                        let text = if last_user.contains("开一个") {
+                            "（该会话不提供确认卡。）"
+                        } else if last_user.contains("缺标题") {
+                            "（补全标题后可重新确认。）"
+                        } else {
+                            "（确认卡已生成，等待用户确认。）"
+                        };
+                        serde_json::json!({ "choices": [{ "delta": { "content": text } }] })
+                    } else if system.contains("InkOS Play 助手") || last_user.contains("开一个") {
+                        // play 有世界的会话：模型越权调用 → Unknown tool 错误面。
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_prop_1", "function": { "name": "propose_action", "arguments": "{\"action\":\"short_run\",\"instruction\":\"写个短篇\"}" } },
+                        ] } }] })
+                    } else if last_user.contains("缺标题") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_prop_2", "function": { "name": "propose_action", "arguments": "{\"action\":\"create_book\",\"instruction\":\"写一本悬疑小说\",\"createBook\":{\"genre\":\"悬疑\"}}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_prop_3", "function": { "name": "propose_action", "arguments": "{\"action\":\"create_book\",\"instruction\":\"写一本《雪夜谜案》悬疑小说，主角是刑警林昭，番茄平台连载。\",\"createBook\":{\"title\":\"雪夜谜案\",\"genre\":\"悬疑\",\"platform\":\"tomato\",\"targetChapters\":200}}" } },
+                        ] } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    #[tokio::test]
+    async fn propose_action_confirmation_card_from_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, tool_names) = mock_propose_llm().await;
+        let session_id = "1783004000001-p84a";
+        let app = app84(rt84(&root, &llm));
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我建书：雪夜谜案悬疑长篇","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（确认卡已生成，等待用户确认。）");
+
+        // 注册面：propose_action + material + 文件工具同现。
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"propose_action".to_string()), "{names:?}");
+        assert!(names.contains(&"ingest_material".to_string()), "{names:?}");
+
+        // 卡片：completed + 四行文本（回退标题/摘要 + Instruction）。
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "propose_action");
+        assert_eq!(execs[0]["status"], "completed");
+        let text = execs[0]["result"].as_str().unwrap();
+        assert_eq!(
+            text,
+            "创建长篇书籍\n确认后会切换到对应入口并执行这条需求。\n\nInstruction: 写一本《雪夜谜案》悬疑小说，主角是刑警林昭，番茄平台连载。"
+        );
+    }
+
+    #[tokio::test]
+    async fn propose_action_missing_title_error_and_play_world_exclusion() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, tool_names) = mock_propose_llm().await;
+        let chat_session = "1783004000002-p84b";
+        let play_session = "1783004000003-p84c";
+        let app = app84(rt84(&root, &llm));
+
+        for session in [chat_session, play_session] {
+            let (status, _) = call(
+                app.clone(),
+                "POST",
+                "/api/v1/sessions",
+                Some(&format!(r#"{{"sessionId":"{session}"}}"#)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        // play 会话绑定世界（propose_action 应被剔除）。
+        inkos_engine::play::create_world(
+            &root,
+            &inkos_engine::play::PlayWorldInput {
+                id: play_session,
+                title: "厅堂夜探",
+                premise: "深夜宅邸",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+
+        // chat 会话：create_book 缺 createBook.title → 固定错误文案卡。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"缺标题的建书请求","sessionId":"{chat_session}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["status"], "error");
+        assert_eq!(
+            execs[0]["error"],
+            "propose_action is missing /createBook/title; retry with that field in the structured payload, not only in summary or instruction."
+        );
+
+        // play 有世界：tools 不含 propose_action；模型越权调用 → Unknown tool。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"开一个短篇确认","sessionId":"{play_session}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（该会话不提供确认卡。）");
+        let names = tool_names.lock().unwrap().clone();
+        assert!(!names.contains(&"propose_action".to_string()), "play 有世界不注册：{names:?}");
+        assert!(names.contains(&"play_edit".to_string()), "{names:?}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["tool"], "propose_action");
+        assert_eq!(execs[0]["status"], "error");
+        assert!(
+            execs[0]["error"].as_str().unwrap().contains("Unknown tool: propose_action"),
+            "body: {parsed}"
+        );
+    }
+}
