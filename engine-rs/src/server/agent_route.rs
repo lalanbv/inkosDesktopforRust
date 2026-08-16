@@ -678,6 +678,9 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
             if let Some(error) = &execution.error {
                 obj.insert("error".into(), json!(error));
             }
+            if let Some(details) = &execution.details {
+                obj.insert("details".into(), details.clone());
+            }
             card
         })
         .collect()

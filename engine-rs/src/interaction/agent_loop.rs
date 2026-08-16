@@ -28,7 +28,8 @@ impl LoopEvents for NoopEvents {}
 /// abort 句柄（65 号注册表的条目）。
 pub type AbortHandle = Arc<Mutex<bool>>;
 
-/// 单次工具执行卡。
+/// 单次工具执行卡（对齐 TS CollectedToolExec：结构化 details 原样携带，
+/// 未提供时序列化省略键）。
 #[derive(Debug, Clone)]
 pub struct LoopToolExecution {
     pub id: String,
@@ -37,6 +38,7 @@ pub struct LoopToolExecution {
     pub status: &'static str,
     pub result: Option<String>,
     pub error: Option<String>,
+    pub details: Option<Value>,
     pub started_at: u64,
     pub completed_at: Option<u64>,
 }
@@ -149,6 +151,7 @@ pub async fn run_agent_loop(
                 status: if is_error { "error" } else { "completed" },
                 result: (!is_error).then(|| result.text.chars().take(2000).collect::<String>()),
                 error: is_error.then(|| result.text.chars().take(500).collect::<String>()),
+                details: (!is_error).then(|| result.details.clone()).flatten(),
                 started_at: started,
                 completed_at: Some(completed),
             });

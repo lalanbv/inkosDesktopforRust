@@ -11937,3 +11937,233 @@ name: 林动
         );
     }
 }
+
+mod details86_e2e {
+    //! 86 号：聊天面卡 details 外露——LoopToolExecution.details 透传到
+    //! details.toolExecutions[i].details（propose 确认卡 / play 回合卡）。
+    use super::*;
+    use axum::http::StatusCode;
+    use serde_json::json;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt86(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app86(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：studio-agent 聊天按指令关键词发 propose_action / play_step；
+    /// play 四代理服务 play_step 域调用。
+    async fn mock_details_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                // 域代理 → 文本 chunk；studio-agent 聊天 → 直接 payload。
+                let agent_content: Option<String> = if system.contains("动作理解器") {
+                    Some(serde_json::json!({ "actionKind": "look", "intent": "环顾四周", "secondaryActions": [] }).to_string())
+                } else if system.contains("世界状态草案员") {
+                    Some(serde_json::json!({
+                        "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                        "summary": "玩家看清了厅堂",
+                        "entities": { "upsert": [
+                            { "id": "actor_player", "type": "actor", "label": "夜行人", "summary": "潜入者", "updatedEventId": "evt-0" },
+                            { "id": "location_hall", "type": "location", "label": "厅堂", "summary": "正厅", "updatedEventId": "evt-1" }
+                        ]}
+                    }).to_string())
+                } else if system.contains("场景应答作者") {
+                    Some(serde_json::json!({
+                        "sceneText": "灯笼的光晃了一下，厅堂深处有人影一闪。",
+                        "suggestedActions": ["追上去", "吹灭灯笼"]
+                    }).to_string())
+                } else if system.contains("把互动小说正文和世界图谱对齐") {
+                    Some(serde_json::json!({
+                        "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                        "summary": "", "entities": { "upsert": [] }, "notes": []
+                    }).to_string())
+                } else {
+                    None
+                };
+                let payload = if let Some(content) = agent_content {
+                    serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+                } else {
+                    // studio-agent 聊天：按指令分流。
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    if has_tool_result {
+                        let text = if last_user.contains("建书") {
+                            "（确认卡已生成。）"
+                        } else {
+                            "（回合已推进。）"
+                        };
+                        serde_json::json!({ "choices": [{ "delta": { "content": text } }] })
+                    } else if last_user.contains("建书") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_d1", "function": { "name": "propose_action", "arguments": "{\"action\":\"create_book\",\"instruction\":\"写一本《雪夜谜案》。\",\"createBook\":{\"title\":\"雪夜谜案\",\"genre\":\"悬疑\",\"platform\":\"tomato\"}}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_d2", "function": { "name": "play_step", "arguments": "{\"input\":\"我环顾四周\"}" } },
+                        ] } }] })
+                    }
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn propose_card_details_surface_structured_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_details_llm().await;
+        let session_id = "1783006000001-d86a";
+        let app = app86(rt86(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我建书雪夜谜案","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "propose_action");
+        // 结构化 details 外露：确认卡消费面。
+        let details = &card["details"];
+        assert_eq!(details["kind"], "proposed_action");
+        assert_eq!(details["action"], "create_book");
+        assert_eq!(details["targetSessionKind"], "book-create");
+        assert_eq!(details["sameSession"], false);
+        assert_eq!(details["instruction"], "写一本《雪夜谜案》。");
+        assert_eq!(
+            details["actionPayload"]["createBook"],
+            json!({ "title": "雪夜谜案", "genre": "悬疑", "platform": "tomato" })
+        );
+    }
+
+    #[tokio::test]
+    async fn play_step_card_details_surface_graph_and_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_details_llm().await;
+        let session_id = "1783006000002-d86b";
+        let runtime = rt86(&root, &llm);
+        let app = app86(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // 世界绑定会话（含开场播种实体）。
+        inkos_engine::play::create_world(
+            &root,
+            &inkos_engine::play::PlayWorldInput {
+                id: session_id,
+                title: "厅堂夜探",
+                premise: "深夜宅邸",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"我环顾四周","sessionId":"{session_id}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（回合已推进。）");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "play_step");
+        assert_eq!(card["status"], "completed");
+        let details = &card["details"];
+        assert_eq!(details["kind"], "play_turn_advanced");
+        assert_eq!(details["worldId"], session_id);
+        assert_eq!(details["runId"], "main");
+        assert_eq!(details["title"], "厅堂夜探");
+        assert_eq!(details["sceneText"], "灯笼的光晃了一下，厅堂深处有人影一闪。");
+        assert_eq!(details["suggestedActions"], json!(["追上去", "吹灭灯笼"]));
+        assert_eq!(details["currentState"]["turn"], 1);
+        assert!(details["graph"]["entities"]
+            .as_array()
+            .is_some_and(|entities| entities.iter().any(|e| e["id"] == "location_hall")), "graph: {}", details["graph"]);
+    }
+}
