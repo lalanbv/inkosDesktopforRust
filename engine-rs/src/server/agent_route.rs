@@ -537,10 +537,12 @@ pub async fn post_agent(
 
     let loop_chat = RouterLoopChat { router: &runtime.router };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
-    // 工具面：文件工具 + （play 会话且有世界时）play_step / play_revise。
+    // 工具面：文件工具 + material 双工具（全部会话）+ （play 会话且有世界时）
+    // play 三工具。
     let mut tools = crate::interaction::project_tools::tools_payload();
-    if play_world_exists {
-        if let Some(entries) = tools.as_array_mut() {
+    if let Some(entries) = tools.as_array_mut() {
+        entries.extend(crate::interaction::material_tools::material_tool_schemas());
+        if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
     }

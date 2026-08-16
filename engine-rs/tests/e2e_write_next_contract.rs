@@ -10945,3 +10945,276 @@ mod play82_e2e {
         assert!(events.contains("evt-1"), "{events}");
     }
 }
+
+mod material83_e2e {
+    //! 83 号：material 聊天工具面——ingest(file) → retrieve 全链 + URL 抓取
+    //! 归档（真实 reqwest + mock HTTP 源）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt83(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app83(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock LLM：按 tool 结果数分流——0 → ingest_material(file)；1 →
+    /// retrieve_material；≥2 → 终文。捕获 tools 名单。
+    async fn mock_material_llm() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let tool_results = messages.iter().filter(|m| m["role"] == "tool").count();
+                    let payload = if tool_results == 0 {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_ing_1", "function": { "name": "ingest_material", "arguments": "{\"sourceKind\":\"file\",\"filePath\":\"材料.md\",\"title\":\"冷库账页\"}" } },
+                        ] } }] })
+                    } else if tool_results == 1 {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_ret_1", "function": { "name": "retrieve_material", "arguments": "{\"query\":\"冷库赔偿款\"}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "（材料已归档并召回关键片段。）" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    #[tokio::test]
+    async fn chat_ingests_file_then_retrieves_snippet() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("材料.md"),
+            "第 0607 号账页记载：冷库赔偿款已分三期拨付，经手人签字齐全。",
+        )
+        .unwrap();
+        let (llm, tool_names) = mock_material_llm().await;
+        let session_id = "1783003000001-m83a";
+        let app = app83(rt83(&root, &llm));
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我归档这份材料再查冷库赔偿款","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（材料已归档并召回关键片段。）");
+
+        // 注册面：material 双工具对所有会话可见。
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"ingest_material".to_string()), "{names:?}");
+        assert!(names.contains(&"retrieve_material".to_string()), "{names:?}");
+        assert!(names.contains(&"read".to_string()), "{names:?}");
+
+        // 两张执行卡：ingest → completed + 归档文本；retrieve → completed + 片段。
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 2);
+        assert_eq!(execs[0]["tool"], "ingest_material");
+        assert_eq!(execs[0]["status"], "completed");
+        let ingest_text = execs[0]["result"].as_str().unwrap();
+        assert!(ingest_text.starts_with("Material ingested: .inkos/materials/"), "{ingest_text}");
+        assert!(ingest_text.contains("Kind: text"), "{ingest_text}");
+        assert_eq!(execs[1]["tool"], "retrieve_material");
+        assert_eq!(execs[1]["status"], "completed");
+        let retrieve_text = execs[1]["result"].as_str().unwrap();
+        assert!(retrieve_text.contains("Retrieved 1 material snippet."), "{retrieve_text}");
+        assert!(retrieve_text.contains("## 1. 冷库账页"), "{retrieve_text}");
+        assert!(retrieve_text.contains("0607"), "{retrieve_text}");
+
+        // 磁盘：.inkos/materials 卡 + manifest（camelCase）。
+        let materials_dir = root.join(".inkos").join("materials");
+        let mut json_count = 0;
+        let mut markdown_count = 0;
+        let mut manifest = serde_json::Value::Null;
+        for entry in std::fs::read_dir(&materials_dir).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().to_string();
+            if name.ends_with(".json") {
+                json_count += 1;
+                manifest = serde_json::from_str(&std::fs::read_to_string(materials_dir.join(&name)).unwrap()).unwrap();
+            } else if name.ends_with(".md") {
+                markdown_count += 1;
+            }
+        }
+        assert_eq!((json_count, markdown_count), (1, 1));
+        assert_eq!(manifest["title"], "冷库账页");
+        assert_eq!(manifest["kind"], "text");
+        assert!(manifest["markdownPath"].as_str().unwrap().starts_with(".inkos/materials/"));
+    }
+
+    #[tokio::test]
+    async fn chat_ingests_url_as_webpage() {
+        // mock HTTP 源：HTML + title + content-type。
+        let source_app = axum::Router::new().route(
+            "/docs/page.html",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    "<html><head><title>冷库事故调查</title></head><body><p>事故报告正文：赔偿款去向说明。</p></body></html>",
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, source_app).await.unwrap(); });
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let url = format!("http://{source_addr}/docs/page.html");
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                let url = url.clone();
+                async move {
+                    let _ = tools_in;
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let has_tool = messages.iter().any(|m| m["role"] == "tool");
+                    let arguments = format!(
+                        "{{\"sourceKind\":\"url\",\"url\":\"{url}\",\"purpose\":\"research\"}}"
+                    );
+                    let payload = if has_tool {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "（网页已归档。）" } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_url_1", "function": { "name": "ingest_material", "arguments": arguments } },
+                        ] } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let llm_addr = llm_listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(llm_listener, app).await.unwrap(); });
+        let llm = format!("http://{llm_addr}");
+
+        let session_id = "1783003000002-m83b";
+        let app = app83(rt83(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"把这个网页归档进材料库","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（网页已归档。）");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "ingest_material");
+        let text = execs[0]["result"].as_str().unwrap();
+        assert!(text.contains("Kind: webpage"), "{text}");
+        assert!(text.contains("事故报告正文"), "{text}");
+
+        let materials_dir = root.join(".inkos").join("materials");
+        let entries: Vec<_> = std::fs::read_dir(&materials_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+            .collect();
+        assert_eq!(entries.len(), 1);
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(entries[0].path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["title"], "冷库事故调查");
+        assert_eq!(manifest["kind"], "webpage");
+        assert_eq!(manifest["purpose"], "research");
+        assert_eq!(manifest["source"], format!("http://{source_addr}/docs/page.html"));
+    }
+}

@@ -10,6 +10,7 @@
 
 pub mod agent_loop;
 pub mod book_session_store;
+pub mod material_tools;
 pub mod edit_controller;
 pub mod events;
 pub mod export_artifact;

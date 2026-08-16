@@ -237,6 +237,9 @@ pub async fn execute_tool(root: &Path, name: &str, args: &Value) -> ToolResult {
         "read" => tool_read(root, args).await,
         "ls" => tool_ls(root, args).await,
         "grep" => tool_grep(root, args).await,
+        // material 双工具（83 号）：全部聊天会话注册（TS agent-session 各分支）。
+        "ingest_material" => crate::interaction::material_tools::tool_ingest_material(root, args).await,
+        "retrieve_material" => crate::interaction::material_tools::tool_retrieve_material(root, args).await,
         other => error_result(format!("Unknown tool: {other}")),
     }
 }
