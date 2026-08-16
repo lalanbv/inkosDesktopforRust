@@ -643,6 +643,46 @@ mod tests {
     }
 
     #[test]
+    fn story_graph_from_llm_text_parsing() {
+        // fence + 前后噪声 → 子串提取 + projectId 强制注入。
+        let fenced = "前置噪声\n```json\n{\"schemaVersion\":1,\"projectId\":\"旧id\",\"title\":\"迷雾\",\"nodes\":[{\"id\":\"start\",\"type\":\"start\"}],\"endings\":[]}\n```\n后置噪声";
+        let graph = build_story_graph_from_llm_text(fenced, "mist-01").unwrap();
+        assert_eq!(graph.project_id, "mist-01");
+        assert_eq!(graph.title, "迷雾");
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].id, "start");
+        // 空 nodes → Err。
+        let empty = build_story_graph_from_llm_text("{\"schemaVersion\":1,\"nodes\":[]}", "p");
+        assert!(empty.is_err());
+        // 无 JSON 对象 → 双语错误。
+        let bad = build_story_graph_from_llm_text("no json here", "p").unwrap_err();
+        assert!(bad.contains("LLM 未返回可解析的 JSON 对象"), "{bad}");
+    }
+
+    #[test]
+    fn interactive_film_spec_and_prompts_shape() {
+        let input = InteractiveFilmCreationInput {
+            title: "迷雾宅邸".into(),
+            episode_count: Some(5),
+            target_audience: Some("青年玩家".into()),
+            budget: Some("低预算".into()),
+            requirements: Some("悬疑多结局".into()),
+            ..Default::default()
+        };
+        let spec = render_interactive_film_spec(&input);
+        assert!(spec.starts_with("# 迷雾宅邸 互动影游创作规格"), "{spec}");
+        assert!(spec.contains("- 剧情段落/集数：5"), "{spec}");
+        assert!(spec.contains("- 目标受众：青年玩家"), "{spec}");
+        assert!(spec.contains("- 预算约束：低预算"), "{spec}");
+        assert!(spec.contains("## 互动影游边界"), "{spec}");
+        // 五节用户提示词含全部小节标题。
+        let user = interactive_creation_user_prompt(&input);
+        for heading in ["## 剧情树", "## 变量与旗标表", "## 多结局路径", "## 互动剧本", "## 分镜与图像提示词"] {
+            assert!(user.contains(heading), "user prompt 缺 {heading}");
+        }
+    }
+
+    #[test]
     fn spec_rendering_zh_shapes() {
         let script_input = ScriptCreationInput {
             title: "山雨".into(),
@@ -668,4 +708,263 @@ mod tests {
         // 无 source → 摘要占位。
         assert!(spec.contains("未提供完整源素材。"), "{spec}");
     }
+}
+
+// ── interactive-film 创作面（77 号） ──────────────────────────────
+
+#[derive(Debug, Clone, Default)]
+pub struct InteractiveFilmCreationInput {
+    pub title: String,
+    pub source_kind: Option<String>,
+    pub source_text: Option<String>,
+    pub requirements: Option<String>,
+    pub target_audience: Option<String>,
+    pub episode_count: Option<u32>,
+    pub episode_duration: Option<String>,
+    pub budget: Option<String>,
+    pub reference_mode: Option<String>,
+    pub language: Option<String>,
+}
+
+pub fn render_interactive_film_spec(input: &InteractiveFilmCreationInput) -> String {
+    let language = input.language.as_deref();
+    if is_en(language) {
+        [
+            format!("# {} Interactive Film Creation Spec", input.title).as_str(),
+            "",
+            "## Goal",
+            "- Deliverable: interactive film / interactive narrative game / film-game script",
+            &input.episode_count.map(|c| format!("- Story segments/episodes: {c}")).unwrap_or_else(|| "- Story segments/episodes: unspecified; judge from the source material and user requirements".to_string()),
+            &input.episode_duration.as_deref().map(|d| format!("- Per-segment/episode duration: {d}")).unwrap_or_else(|| "- Per-segment/episode duration: unspecified".to_string()),
+            &input.budget.as_deref().map(|b| format!("- Budget constraint: {b}")).unwrap_or_else(|| "- Budget constraint: unspecified".to_string()),
+            &input.target_audience.as_deref().map(|a| format!("- Target audience: {a}")).unwrap_or_else(|| "- Target audience: unspecified".to_string()),
+            &input.reference_mode.as_deref().map(|r| format!("- Reference mode: {r}")).unwrap_or_else(|| "- Reference mode: unspecified by the user; do not impose a fixed game template".to_string()),
+            &input.source_kind.as_deref().map(|k| format!("- Source material: {k}")).unwrap_or_else(|| "- Source material: user input / conversation brief".to_string()),
+            "",
+            "## User Requirements",
+            input.requirements.as_deref().map(str::trim).filter(|r| !r.is_empty())
+                .unwrap_or("Not separately specified; follow the instruction the user confirmed."),
+            "",
+            "## Interactive Film Boundaries",
+            "- This is a creative deliverable, not a hard-numbers RPG engine design; variables, flags, relationships, and ending conditions must serve story branching.",
+            "- It must include branching storylines, key player choices, how variables/flags change later plot, and the conditions for reaching each of the multiple endings.",
+            "- Describe the variable system in natural language: states, relationships, secret/public status, evidence, items, identities, affinity/trust, and the like; never force fixed numeric stats or equipment tiers.",
+            "- The deliverable must fit interactive film/drama production: a clear story tree, shootable nodes, playable dialogue, drawable storyboards, and image prompts usable for asset generation.",
+            "- Never decide subject matter, budget, art style, or commercial punch-up intensity on the user's behalf; mark anything unspecified as adjustable.",
+            "",
+            "## Source Material Summary",
+            &summarize_source_for_spec(input.source_text.as_deref(), language),
+        ]
+        .join("\n")
+    } else {
+        [
+            format!("# {} 互动影游创作规格", input.title).as_str(),
+            "",
+            "## 目标",
+            "- 交付类型：互动影游 / 互动叙事类游戏 / 影游剧本",
+            &input.episode_count.map(|c| format!("- 剧情段落/集数：{c}")).unwrap_or_else(|| "- 剧情段落/集数：未指定，按素材和用户要求判断".to_string()),
+            &input.episode_duration.as_deref().map(|d| format!("- 单段/单集时长：{d}")).unwrap_or_else(|| "- 单段/单集时长：未指定".to_string()),
+            &input.budget.as_deref().map(|b| format!("- 预算约束：{b}")).unwrap_or_else(|| "- 预算约束：未指定".to_string()),
+            &input.target_audience.as_deref().map(|a| format!("- 目标受众：{a}")).unwrap_or_else(|| "- 目标受众：未指定".to_string()),
+            &input.reference_mode.as_deref().map(|r| format!("- 参考模式：{r}")).unwrap_or_else(|| "- 参考模式：用户未指定，不擅自套固定游戏模板".to_string()),
+            &input.source_kind.as_deref().map(|k| format!("- 原素材：{k}")).unwrap_or_else(|| "- 原素材：用户输入/对话需求".to_string()),
+            "",
+            "## 用户要求",
+            input.requirements.as_deref().map(str::trim).filter(|r| !r.is_empty())
+                .unwrap_or("未单独指定；以用户确认时的 instruction 为准。"),
+            "",
+            "## 互动影游边界",
+            "- 这是创作交付稿，不是硬数值 RPG 引擎设计；变量、旗标、关系和结局条件必须服务剧情分支。",
+            "- 必须包含多分支剧情、玩家关键选择、变量/旗标如何改变后续剧情，以及多结局达成条件。",
+            "- 变量系统用自然语言说明即可：状态、关系、隐瞒/公开、证据、物品、身份、好感/信任等；不要强行套固定数值或装备等级。",
+            "- 交付要适配影游/互动剧制作：剧情树清晰、节点可拍、对白可演、分镜可画、图片提示词可用于资产生成。",
+            "- 不替用户擅自决定题材、预算、画风和商业强化强度；未指定处写为可调整。",
+            "",
+            "## 源素材摘要",
+            &summarize_source_for_spec(input.source_text.as_deref(), language),
+        ]
+        .join("\n")
+    }
+}
+
+fn interactive_film_system_prompt(language: Option<&str>) -> String {
+    const SHAPE: &str = r#"{"schemaVersion":1,"projectId":"","title":"","variables":[{"name":"","type":"flag|counter|relationship|item","default":0,"desc":""}],"nodes":[{"id":"","title":"","type":"start|normal|branch|ending","sceneDesc":"","dialogue":[{"speaker":"","text":"","emotion":""}],"choices":[{"id":"","text":"","targetNodeId":"","condition":{"var":"","op":">=","value":0},"effects":[{"var":"","op":"add","value":1}]}]}],"endings":[{"id":"","nodeId":"","title":"","type":"good|bad|neutral|secret","description":""}]}"#;
+    if is_en(language) {
+        format!(
+            "You are an interactive film scriptwriter. From the user's story premise, generate a small but complete playable branching graph.\nOutput strictly JSON, with this structure:\n{SHAPE}\nRequirements: exactly 1 node with type=start; at least 2 branch nodes; at least 2 clearly differentiated endings; every path must reach some ending; condition/effects may be omitted; output nothing besides the JSON."
+        )
+    } else {
+        format!(
+            "你是互动影游编剧。根据用户的故事前提，生成一个小而完整的可玩分支图。\n严格只输出 JSON，结构如下：\n{SHAPE}\n要求：恰好 1 个 type=start 节点；至少 2 个 branch 节点；至少 2 个差异化 ending；每条路径都能到达某个 ending；condition/effects 可省略；不要输出 JSON 以外的任何文字。"
+        )
+    }
+}
+
+fn interactive_creation_system_prompt(language: Option<&str>) -> String {
+    if is_en(language) {
+        [
+            "You are an interactive-film creation tool: you turn a concept, novel, script, or user brief into an interactive-film deliverable that production can build from.",
+            "An interactive film is not an ordinary script: it must have a story tree, key player choices, variables/flags, relationship/evidence/item states, and the conditions for reaching each of the multiple endings.",
+            "The variable system exists only to drive plot progression and branch unlocking; no default RPG stats, combat formulas, or equipment tiers. Write such rules only when the user explicitly asks for them.",
+            "Output must be Markdown with the specified sections. No model self-narration, process notes, or \"Here is\" preamble.",
+            "Every storyboard image prompt must be its own standalone `Prompt: ...` line so downstream asset management can pick it up; include only the visual constraints the user has confirmed.",
+        ]
+        .join("\n")
+    } else {
+        [
+            "你是互动影游创作工具，负责把创意、小说、剧本或用户需求整理成可制作的互动影游交付稿。",
+            "互动影游不是普通剧本：必须有剧情树、关键选择、变量/旗标、关系/证据/物品状态、多结局达成条件。",
+            "变量系统只服务剧情推进和分支解锁，不要默认 RPG 数值、战斗公式或装备等级；只有用户明确要求时才写对应规则。",
+            "输出必须是 Markdown，包含指定小节。不要写模型自述、流程说明或\u{201c}以下是\u{201d}。",
+            "分镜图提示词必须写成单独的 `Prompt: ...` 行，便于后续资产管理；只写用户确认过的视觉限制。",
+        ]
+        .join("\n")
+    }
+}
+
+fn interactive_creation_user_prompt(input: &InteractiveFilmCreationInput) -> String {
+    let language = input.language.as_deref();
+    if is_en(language) {
+        [
+            "## Interactive Film Spec".to_string(),
+            render_interactive_film_spec(input),
+            String::new(),
+            "## Full Source Material".to_string(),
+            input.source_text.as_deref().map(str::trim).filter(|t| !t.is_empty())
+                .unwrap_or("The user did not provide full source material; write an extensible interactive-film deliverable strictly from the creation spec and user requirements.")
+                .to_string(),
+            String::new(),
+            "## Output Format".to_string(),
+            format!("# {} Interactive Film Package", input.title),
+            String::new(),
+            "## Story Tree".to_string(),
+            "Lay out main-line nodes, branch nodes, key choices, and merge/no-return relationships as Markdown. The multi-ending structure must be visible at a glance.".to_string(),
+            String::new(),
+            "## Variables and Flags".to_string(),
+            "List each variable/flag: name, meaning, trigger, scope of impact, and related nodes. Variables may be relationships, states, evidence, items, identities, secret/public status, ending gates, and so on.".to_string(),
+            String::new(),
+            "## Ending Paths".to_string(),
+            "For every ending: its unlock conditions, the key choice chain, the required variables/flags, plus any failure or hidden-ending conditions.".to_string(),
+            String::new(),
+            "## Interactive Script".to_string(),
+            "Write a playable script per node: scene, characters, action, dialogue, player choices, variable changes, and branch destinations. Never write summaries only.".to_string(),
+            String::new(),
+            "## Storyboard and Image Prompts".to_string(),
+            "List the key shots. Each shot includes visual, characters/objects, action, shot size, and suggested duration. After each shot, add exactly one standalone `Prompt: ...` line.".to_string(),
+        ]
+        .join("\n")
+    } else {
+        [
+            "## 互动影游规格".to_string(),
+            render_interactive_film_spec(input),
+            String::new(),
+            "## 完整源素材".to_string(),
+            input.source_text.as_deref().map(str::trim).filter(|t| !t.is_empty())
+                .unwrap_or("用户没有提供完整源素材；请严格根据创作规格和用户要求写一个可继续扩展的互动影游交付稿。")
+                .to_string(),
+            String::new(),
+            "## 输出格式".to_string(),
+            format!("# {} 互动影游方案", input.title),
+            String::new(),
+            "## 剧情树".to_string(),
+            "用 Markdown 列出主线节点、分支节点、关键选择、回流/不可回流关系。必须能看出多结局结构。".to_string(),
+            String::new(),
+            "## 变量与旗标表".to_string(),
+            "列出变量/旗标名、含义、触发方式、影响范围、对应节点。变量可以是关系、状态、证据、物品、身份、公开/隐瞒、结局门槛等。".to_string(),
+            String::new(),
+            "## 多结局路径".to_string(),
+            "列出每个结局的达成条件、关键选择链、必需变量/旗标，以及失败或隐藏结局条件。".to_string(),
+            String::new(),
+            "## 互动剧本".to_string(),
+            "按节点写可演剧本：场景、人物、动作、对白、玩家选择、变量变化和分支去向。不要只写摘要。".to_string(),
+            String::new(),
+            "## 分镜与图像提示词".to_string(),
+            "列出关键镜头。每个镜头包含画面、人物/物件、动作、景别、时长建议。每个镜头后必须单独写一行 `Prompt: ...`。".to_string(),
+        ]
+        .join("\n")
+    }
+}
+
+fn estimate_interactive_film_max_tokens(input: &InteractiveFilmCreationInput) -> u32 {
+    let episodes = input.episode_count.unwrap_or(6);
+    (episodes as u64 * 3000).clamp(16_000, 36_000) as u32
+}
+
+/// `InteractiveFilmCreationAgent.writeInteractiveFilm`（temp 0.5）。
+pub async fn write_interactive_film(
+    router: &crate::llm::agent_router::AgentRouter,
+    input: &InteractiveFilmCreationInput,
+) -> Result<String, String> {
+    let language = input.language.as_deref();
+    let outcome = router
+        .chat(
+            "interactive-film-creation-writer",
+            vec![
+                LLMMessage { role: LLMRole::System, content: interactive_creation_system_prompt(language), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: interactive_creation_user_prompt(input), tool_calls: None, tool_call_id: None },
+            ],
+            0.5,
+            Some(estimate_interactive_film_max_tokens(input)),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(outcome.content.trim().to_string())
+}
+
+/// `generateStoryGraph`（temp 0.5 / 8000）——剧情树+旗标+剧本+提示词打包前提。
+pub async fn generate_story_graph_from_premise(
+    router: &crate::llm::agent_router::AgentRouter,
+    project_id: &str,
+    title: &str,
+    premise: &str,
+    language: Option<&str>,
+) -> Result<crate::interactive_film::StoryGraph, String> {
+    let user_prompt = if is_en(language) {
+        format!("Title: {title}\nPremise: {premise}")
+    } else {
+        format!("标题：{title}\n前提：{premise}")
+    };
+    let outcome = router
+        .chat(
+            "interactive-film-graph-writer",
+            vec![
+                LLMMessage { role: LLMRole::System, content: interactive_film_system_prompt(language), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+            ],
+            0.5,
+            Some(8000),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    build_story_graph_from_llm_text(&outcome.content, project_id)
+}
+
+/// `buildStoryGraphFromLLMText`：fence/子串提取 + schema 解析 + projectId 注入。
+pub fn build_story_graph_from_llm_text(
+    text: &str,
+    project_id: &str,
+) -> Result<crate::interactive_film::StoryGraph, String> {
+    let trimmed = text.trim();
+    let fenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|body| body.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let start = fenced.find('{');
+    let end = fenced.rfind('}');
+    let Some((start, end)) = start.zip(end).filter(|(s, e)| e > s) else {
+        return Err("LLM did not return a parseable JSON object / LLM 未返回可解析的 JSON 对象".to_string());
+    };
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&fenced[start..=end]).map_err(|e| e.to_string())?;
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert("projectId".to_string(), serde_json::json!(project_id));
+    }
+    let graph: crate::interactive_film::StoryGraph =
+        serde_json::from_value(parsed).map_err(|e| e.to_string())?;
+    if graph.nodes.is_empty() {
+        return Err("Invalid story graph: nodes array must not be empty".to_string());
+    }
+    Ok(graph)
 }

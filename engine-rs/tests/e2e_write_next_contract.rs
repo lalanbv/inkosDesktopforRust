@@ -9391,3 +9391,233 @@ mod script76_e2e {
         );
     }
 }
+
+mod film77_e2e {
+    //! 77 号：interactive_film_create 确认全链（五节交付稿 + story graph + fallback）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt77(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app77(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// LLM mock：按系统提示词关键词分流五节创作代理（"互动影游创作工具"）与
+    /// story graph 编剧（"互动影游编剧"）。graph_body 传 None → 返回非 JSON（触发 fallback）。
+    async fn llm_mock(graph_body: Option<String>) -> String {
+        let package_body = "# 迷雾宅邸 互动影游方案\n\n## 剧情树\n\n主线三幕，末段双结局。\n\n## 变量与旗标表\n\n| 变量 | 含义 |\n| --- | --- |\n| trust | 信任度 |\n\n## 多结局路径\n\n结局 A：完成主线。\n\n## 互动剧本\n\n# 第一集 夜宅\n\n场景：旧宅门口\n\n字幕：第九集完\n\n## 分镜与图像提示词\n\n| 镜号 | 画面 |\n| --- | --- |\n| 01 | 雨夜街口 |\n\nPrompt: 雨夜街口，水墨远景\nPrompt: 灯下人影，半身近景".to_string();
+        let llm_app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let package_body = package_body.clone();
+                let graph_body = graph_body.clone();
+                async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("互动影游创作工具") {
+                        package_body
+                    } else if system.contains("互动影游编剧") {
+                        graph_body.unwrap_or_else(|| "NOT JSON".to_string())
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, llm_app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn llm_graph() -> String {
+        r#"```json
+{"schemaVersion":1,"projectId":"旧id","title":"迷雾宅邸","variables":[{"name":"trust","type":"counter","default":0,"desc":""}],"nodes":[{"id":"start","title":"开场","type":"start","sceneDesc":"夜宅","choices":[{"id":"c1","text":"进入","targetNodeId":"end-good","effects":[]}]},{"id":"end-good","title":"好结局","type":"ending","sceneDesc":"","choices":[],"act":"end"}],"endings":[{"id":"e1","nodeId":"end-good","title":"好结局","type":"good","description":""}]}
+```"#
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn interactive_film_create_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = llm_mock(Some(llm_graph())).await;
+        let app = app77(rt77(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000007-if01"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"做成互动影游","sessionId":"1782994000007-if01","actionSource":"button","requestedIntent":"interactive_film_create","actionPayload":{"interactiveFilmCreate":{"title":"迷雾宅邸","episodeCount":5,"targetAudience":"青年玩家","referenceMode":"底片风"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "interactive_film_create");
+        assert_eq!(exec["label"], "互动影游");
+        assert_eq!(exec["status"], "completed");
+        // suppressManualTextForTool 名单内 → 助手气泡留空。
+        assert_eq!(parsed["response"].as_str().unwrap_or("NULL"), "", "body: {parsed}");
+        let details = &exec["details"];
+        assert_eq!(details["kind"], "interactive_film_created");
+        assert_eq!(details["projectId"], "迷雾宅邸");
+        assert_eq!(details["baseDir"], "interactive-films/迷雾宅邸");
+        assert_eq!(details["storyGraphPath"], "interactive-films/迷雾宅邸/story-graph.json");
+        assert_eq!(details["specPath"], "interactive-films/迷雾宅邸/interactive-spec.md");
+        assert_eq!(details["storyTreePath"], "interactive-films/迷雾宅邸/story-tree.md");
+        assert_eq!(details["flagsPath"], "interactive-films/迷雾宅邸/flags.md");
+        assert_eq!(details["scriptPath"], "interactive-films/迷雾宅邸/script.md");
+        assert_eq!(details["assetsManifestPath"], "interactive-films/迷雾宅邸/assets.json");
+        let text = exec["result"].as_str().unwrap_or_default();
+        assert!(text.starts_with("Interactive film \"迷雾宅邸\" completed."), "text: {text}");
+        assert!(text.contains("Story graph: interactive-films/迷雾宅邸/story-graph.json"), "text: {text}");
+
+        // 五节落盘：spec（含目标受众/参考模式）+ 树/旗标/剧本（集尾标签归一）。
+        let spec = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/interactive-spec.md")).unwrap();
+        assert!(spec.starts_with("# 迷雾宅邸 互动影游创作规格"), "{spec}");
+        assert!(spec.contains("- 目标受众：青年玩家"), "{spec}");
+        assert!(spec.contains("- 参考模式：底片风"), "{spec}");
+        let tree = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-tree.md")).unwrap();
+        assert!(tree.contains("主线三幕"), "{tree}");
+        assert!(!tree.contains("剧情树"), "小节提取后不含自身标题：{tree}");
+        let flags = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/flags.md")).unwrap();
+        assert!(flags.contains("trust"), "{flags}");
+        let script = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/script.md")).unwrap();
+        assert!(script.contains("字幕：第一集完"), "{script}");
+        // image-prompts 编号化 + assets manifest（LLM graph 走通）。
+        let prompts = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/image-prompts.md")).unwrap();
+        assert!(prompts.contains("1. 雨夜街口，水墨远景"), "{prompts}");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/assets.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["assets"].as_array().unwrap().len(), 2);
+        assert!(root.join("interactive-films/迷雾宅邸/assets/selected").is_dir());
+        // story-graph.json：LLM 输出 + projectId 注入。
+        let graph: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-graph.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(graph["projectId"], "迷雾宅邸");
+        assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(graph["endings"][0]["type"], "good");
+        let status_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(status_json["kind"], "interactive_film");
+
+        // 缺 title → 502 中文。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"互动影游","sessionId":"1782994000007-if01","actionSource":"button","requestedIntent":"interactive_film_create"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("确认创建互动影游缺少标题"), "body: {parsed}");
+    }
+
+    #[tokio::test]
+    async fn interactive_film_create_graph_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // graph 编剧返回非 JSON → 最小可玩图回退。
+        let llm = llm_mock(None).await;
+        let app = app77(rt77(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782994000008-if02"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"做成互动影游","sessionId":"1782994000008-if02","actionSource":"button","requestedIntent":"interactive_film_create","actionPayload":{"interactiveFilmCreate":{"title":"雾中灯","episodeCount":3,"requirements":"轻悬疑"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["status"], "completed", "body: {parsed}");
+        // fallback 图：start + act-1..3 + 双结局，story_progress counter。
+        let graph: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("interactive-films/雾中灯/story-graph.json")).unwrap(),
+        )
+        .unwrap();
+        let nodes = graph["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 6, "graph: {graph}");
+        assert_eq!(nodes[3]["id"], "act-3");
+        assert_eq!(nodes[3]["type"], "branch");
+        assert_eq!(nodes[3]["choices"].as_array().unwrap().len(), 2);
+        assert_eq!(graph["variables"][0]["name"], "story_progress");
+        // storyCore = merge 后 requirements（instruction + 补充要求）。
+        assert!(graph["worldAnchor"]["storyCore"].as_str().unwrap().contains("轻悬疑"), "graph: {graph}");
+        // 进度日志含 fallback 说明。
+        let logs = exec["logs"].as_array().cloned().unwrap_or_default();
+        let joined = logs
+            .iter()
+            .filter_map(|l| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("Story graph JSON generation failed; writing a minimal playable graph."), "logs: {joined}");
+    }
+}
