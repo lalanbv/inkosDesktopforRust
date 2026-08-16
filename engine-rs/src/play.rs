@@ -686,6 +686,163 @@ async fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// ── 快照 / 检查点 / 变体（play-store.ts L255-343，79 号） ────────
+
+/// `PlayRunSnapshot`：一回完整可恢复态（磁盘 camelCase 形态）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayRunSnapshot {
+    pub id: String,
+    pub turn: i64,
+    pub created_at: String,
+    pub events_raw: String,
+    pub transcript_raw: String,
+    pub current_state_raw: String,
+    pub scene_projection: String,
+    pub state_projection: String,
+    pub graph: Value,
+}
+
+async fn read_optional_run_file(run: &Path, relative: &str) -> String {
+    match safe_run_child_path(run, relative) {
+        Ok(path) => tokio::fs::read_to_string(&path).await.unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
+/// `captureRunSnapshot`：读齐 run 五路原文 + 注入图快照。
+pub async fn capture_run_snapshot(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    id: &str,
+    turn: i64,
+    graph: Value,
+) -> Result<PlayRunSnapshot, String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    Ok(PlayRunSnapshot {
+        id: id.to_string(),
+        turn,
+        created_at: crate::utils::utc_time::utc_now_iso(),
+        events_raw: read_optional_run_file(&run, "events.jsonl").await,
+        transcript_raw: read_optional_run_file(&run, "transcript.jsonl").await,
+        current_state_raw: read_optional_run_file(&run, "state/current.json").await,
+        scene_projection: read_optional_run_file(&run, "projections/scene.md").await,
+        state_projection: read_optional_run_file(&run, "projections/state.md").await,
+        graph,
+    })
+}
+
+async fn write_snapshot_json(run: &Path, relative: &str, snapshot: &PlayRunSnapshot) -> Result<(), String> {
+    let target = safe_run_child_path(run, relative)?;
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+    }
+    let payload = format!("{}\n", serde_json::to_string_pretty(snapshot).unwrap_or_default());
+    tokio::fs::write(&target, payload).await.map_err(|e| e.to_string())
+}
+
+/// `saveCheckpoint`：checkpoints/{id}.json（id 段校验，不安全 → 报错）。
+pub async fn save_checkpoint(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    snapshot: &PlayRunSnapshot,
+) -> Result<(), String> {
+    if !is_safe_segment(&snapshot.id) {
+        return Err(format!("Unsafe play path segment: {}", snapshot.id));
+    }
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    write_snapshot_json(&run, &format!("checkpoints/{}.json", snapshot.id), snapshot).await
+}
+
+/// `loadCheckpoint`：读快照（缺失/损坏 → None）。
+pub async fn load_checkpoint(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    checkpoint_id: &str,
+) -> Option<PlayRunSnapshot> {
+    if !is_safe_segment(checkpoint_id) {
+        return None;
+    }
+    let run = run_dir(project_root, world_id, run_id).ok()?;
+    let raw = tokio::fs::read_to_string(run.join("checkpoints").join(format!("{checkpoint_id}.json")))
+        .await
+        .ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// `saveVariant`：variants/turn-{turn}/v-{uuid}.json（id 改写为变体 id）。
+pub async fn save_variant(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    turn: i64,
+    snapshot: &PlayRunSnapshot,
+) -> Result<String, String> {
+    let variant_id = format!("v-{}", uuid::Uuid::new_v4());
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    let mut record = snapshot.clone();
+    record.id = variant_id.clone();
+    write_snapshot_json(&run, &format!("variants/turn-{turn}/{variant_id}.json"), &record).await?;
+    Ok(variant_id)
+}
+
+/// `loadVariant`：读变体快照。
+pub async fn load_variant(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    turn: i64,
+    variant_id: &str,
+) -> Option<PlayRunSnapshot> {
+    if !is_safe_segment(variant_id) {
+        return None;
+    }
+    let run = run_dir(project_root, world_id, run_id).ok()?;
+    let raw = tokio::fs::read_to_string(
+        run.join("variants")
+            .join(format!("turn-{turn}"))
+            .join(format!("{variant_id}.json")),
+    )
+    .await
+    .ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// `restoreRunSnapshot`：图后端整体替换 + 五路原文写回。
+pub async fn restore_run_snapshot(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    snapshot: &PlayRunSnapshot,
+) -> Result<(), String> {
+    ensure_run(project_root, world_id, run_id).await?;
+    let run = run_dir(project_root, world_id, run_id)?;
+    let mut db = crate::play_graph::open_play_graph_db(&run)?;
+    db.replace_with_snapshot(&snapshot.graph)?;
+    db.flush()?;
+    tokio::fs::write(events_jsonl_path(&run), &snapshot.events_raw)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::fs::write(transcript_jsonl_path(&run), &snapshot.transcript_raw)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::fs::write(
+        safe_run_child_path(&run, "state/current.json")?,
+        &snapshot.current_state_raw,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    write_projection(project_root, world_id, run_id, "projections/scene.md", &snapshot.scene_projection).await?;
+    write_projection(project_root, world_id, run_id, "projections/state.md", &snapshot.state_projection).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

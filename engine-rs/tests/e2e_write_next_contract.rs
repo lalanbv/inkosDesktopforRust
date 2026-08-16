@@ -8524,7 +8524,10 @@ mod play73_e2e {
             world_id: "w-step".to_string(),
             run_id: "main".to_string(),
         };
-        let outcome = runner.step(&agents, &agents, &agents, "我环顾四周").await.unwrap();
+        let outcome = runner
+            .step(&agents, &agents, &agents, None, "我环顾四周", None)
+            .await
+            .unwrap();
         assert!(outcome.scene_text.contains("厅堂"), "scene: {outcome:?}");
         assert_eq!(outcome.suggested_actions.len(), 2);
         assert_eq!(outcome.action["actionKind"], "look");
@@ -8551,7 +8554,10 @@ mod play73_e2e {
             .is_some_and(|entities| entities.contains_key("location_hall")));
 
         // 空输入 → Err。
-        assert!(runner.step(&agents, &agents, &agents, "   ").await.is_err());
+        assert!(runner
+            .step(&agents, &agents, &agents, None, "   ", None)
+            .await
+            .is_err());
     }
 }
 
@@ -9957,5 +9963,216 @@ mod short78_e2e {
         // 零 LLM 调用 + 不触发任何生产落盘。
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!root.join("shorts/existing/outline").exists());
+    }
+}
+
+mod play79_e2e {
+    //! 79 号：sceneReconciler 对账 + regenerate 变体/checkpoint 面（真实 PlayAgents +
+    //! mock LLM 分流——reconciler 补充入图、重写约束注入、变体对、恢复第一版）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::state::manager::StateManager;
+    use serde_json::Value;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn rt79(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// mock：五路分流（interpreter/seed-mutator/turn-mutator/renderer/reconciler）；
+    /// renderer 计数出场景 A/B，重写约束注入以原子标志捕获。
+    async fn mock_play79_llm() -> (String, Arc<AtomicUsize>, Arc<AtomicBool>) {
+        let render_calls = Arc::new(AtomicUsize::new(0));
+        let saw_replay_constraint = Arc::new(AtomicBool::new(false));
+        let render_in = render_calls.clone();
+        let flag_in = saw_replay_constraint.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let render_in = render_in.clone();
+                let flag_in = flag_in.clone();
+                async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("动作理解器") {
+                        serde_json::json!({ "actionKind": "look", "intent": "环顾四周", "secondaryActions": [] }).to_string()
+                    } else if system.contains("世界状态草案员") {
+                        if user.contains("只播种这个互动世界开场已经成立的状态") {
+                            serde_json::json!({
+                                "eventId": "evt-0", "turn": 0, "actionKind": "look",
+                                "summary": "开场状态已播种",
+                                "entities": { "upsert": [
+                                    { "id": "actor_player", "type": "actor", "label": "夜行人", "summary": "潜入者", "updatedEventId": "evt-0" },
+                                    { "id": "item_lantern", "type": "item", "label": "灯笼", "summary": "照明", "updatedEventId": "evt-0" }
+                                ]},
+                                "edges": { "upsert": [
+                                    { "fromId": "actor_player", "type": "持有", "toId": "item_lantern",
+                                      "value": { "role": "holding" }, "validFromEventId": "evt-0", "sourceEventId": "evt-0" }
+                                ]}
+                            }).to_string()
+                        } else {
+                            serde_json::json!({
+                                "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                                "summary": "玩家看清了厅堂",
+                                "timeAdvance": { "elapsed": "片刻", "anchor": "深夜", "rationale": "环顾", "synchronized": [] },
+                                "entities": { "upsert": [
+                                    { "id": "location_hall", "type": "location", "label": "厅堂", "summary": "正厅", "updatedEventId": "evt-1" }
+                                ]}
+                            }).to_string()
+                        }
+                    } else if system.contains("场景应答作者") {
+                        if user.contains("重写约束") {
+                            flag_in.store(true, Ordering::SeqCst);
+                        }
+                        let n = render_in.fetch_add(1, Ordering::SeqCst);
+                        let scene = if n == 0 {
+                            serde_json::json!({ "sceneText": "场景甲：灯笼的光晃了一下。", "suggestedActions": [] })
+                        } else {
+                            serde_json::json!({ "sceneText": "场景乙：重写后的厅堂静得反常。", "suggestedActions": [] })
+                        };
+                        scene.to_string()
+                    } else if system.contains("把互动小说正文和世界图谱对齐") {
+                        serde_json::json!({
+                            "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                            "summary": "正文补充：纽扣落地",
+                            "entities": { "upsert": [
+                                { "id": "clue_button", "type": "clue", "label": "铜纽扣", "summary": "灯下闪光", "updatedEventId": "evt-1" }
+                            ]},
+                            "edges": { "upsert": [
+                                { "fromId": "actor_player", "type": "持有", "toId": "clue_button",
+                                  "value": { "role": "holding", "physical": true }, "validFromEventId": "evt-1", "sourceEventId": "evt-1" }
+                            ]},
+                            "notes": ["对账补充"]
+                        }).to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), render_calls, saw_replay_constraint)
+    }
+
+    #[tokio::test]
+    async fn reconcile_merge_and_regenerate_variant_chain() {
+        use inkos_engine::play_runner::{PlayAgents, PlayRunner};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _render_calls, saw_replay_constraint) = mock_play79_llm().await;
+        let runtime = rt79(&root, &llm);
+
+        inkos_engine::play::create_world(
+            &root,
+            &inkos_engine::play::PlayWorldInput {
+                id: "w79e2e",
+                title: "厅堂夜探",
+                premise: "深夜宅邸",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+
+        let agents = PlayAgents { router: &runtime.router };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: "w79e2e".to_string(),
+            run_id: "main".to_string(),
+        };
+
+        // seed → step（带 reconciler）。
+        runner.seed_opening(&agents, "雨夜开场。", &[]).await.unwrap();
+        let step1 = runner
+            .step(&agents, &agents, &agents, Some(&agents), "我环顾四周", None)
+            .await
+            .unwrap();
+        assert_eq!(step1.scene_text, "场景甲：灯笼的光晃了一下。");
+        // reconcile 补充：summary 合成 + clue_button 入图 + holding 边。
+        let summary = step1.mutation.get("summary").and_then(Value::as_str).unwrap();
+        assert!(summary.contains("玩家看清了厅堂"), "{summary}");
+        assert!(summary.contains("正文补充：纽扣落地"), "{summary}");
+        let run = root.join("worlds/w79e2e/runs/main");
+        let graph: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+        let entity_ids: Vec<&str> = graph["entities"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert!(entity_ids.contains(&"clue_button"), "reconcile 实体入图：{entity_ids:?}");
+        assert!(graph["edges"].as_object().unwrap().values().any(|edge| {
+            edge.get("toId").and_then(Value::as_str) == Some("clue_button")
+                && edge.pointer("/value/role").and_then(Value::as_str) == Some("holding")
+        }), "graph: {graph}");
+        // checkpoint 前置 + state 投影含补充实体。
+        assert!(run.join("checkpoints/before-turn-1.json").is_file());
+        let state_md = std::fs::read_to_string(run.join("projections/state.md")).unwrap();
+        assert!(state_md.contains("clue_button"), "{state_md}");
+
+        // regenerate：重放原输入 → 场景乙 + 重写约束注入 + 变体对 + 事件不涨。
+        let replay = runner
+            .regenerate_last_turn(&agents, &agents, &agents, Some(&agents), None)
+            .await
+            .unwrap();
+        assert_eq!(replay.scene_text, "场景乙：重写后的厅堂静得反常。");
+        assert_eq!(replay.replayed_input, "我环顾四周");
+        assert!(saw_replay_constraint.load(Ordering::SeqCst), "重写约束应注入 renderer");
+        let previous_variant = replay.previous_variant_id.clone().unwrap();
+        assert_ne!(previous_variant, replay.variant_id.clone().unwrap());
+        let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
+        assert_eq!(events.lines().filter(|l| !l.trim().is_empty()).count(), 1, "{events}");
+        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants/turn-1")).unwrap().collect();
+        assert_eq!(variant_files.len(), 2, "变体对：{variant_files:?}");
+
+        // 恢复第一版：场景甲回放。
+        let restored = runner.restore_variant(1, &previous_variant).await.unwrap();
+        assert_eq!(restored.scene_text, "场景甲：灯笼的光晃了一下。");
+        let scene_md = std::fs::read_to_string(run.join("projections/scene.md")).unwrap();
+        assert!(scene_md.contains("场景甲"), "{scene_md}");
+
+        // 无回合可重做 / 变体缺失的错误面。
+        let fresh = PlayRunner {
+            project_root: &root,
+            world_id: "w79e2e".to_string(),
+            run_id: "empty".to_string(),
+        };
+        let error = fresh
+            .regenerate_last_turn(&agents, &agents, &agents, Some(&agents), None)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "No Play turn to regenerate.");
+        let missing = runner.restore_variant(5, "v-none").await.unwrap_err();
+        assert!(missing.contains("Play variant not found: turn 5 / v-none"), "{missing}");
+        let _ = StatusCode::OK;
     }
 }

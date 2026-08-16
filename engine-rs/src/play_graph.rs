@@ -380,6 +380,46 @@ impl PlayGraphDb {
         }
         Ok(())
     }
+
+    /// `replaceWithSnapshot`：清空四表后按快照重灌（事务内；79 号——变体/检查点
+    /// 恢复的图后端入口）。
+    pub fn replace_with_snapshot(&mut self, snapshot: &Value) -> Result<(), String> {
+        let array = |name: &str| {
+            snapshot
+                .get(name)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let entities = array("entities");
+        let edges = array("edges");
+        let slots = array("stateSlots");
+        let events = array("events");
+        self.with_transaction(|db| {
+            match &mut db.backend {
+                Backend::File { data, .. } => *data = FileData::default(),
+                Backend::Sqlite { conn } => {
+                    conn.execute_batch(
+                        "DELETE FROM entities; DELETE FROM edges; DELETE FROM state_slots; DELETE FROM events;",
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            for entity in &entities {
+                db.upsert_entity(entity)?;
+            }
+            for edge in &edges {
+                db.upsert_edge(edge)?;
+            }
+            for slot in &slots {
+                db.upsert_state_slot(slot)?;
+            }
+            for event in &events {
+                db.record_event(event)?;
+            }
+            Ok(())
+        })
+    }
 }
 
 fn persist_file(path: &Path, data: &FileData) -> Result<(), String> {
@@ -1088,5 +1128,42 @@ mod tests {
         let snapshot = db.snapshot();
         assert!(snapshot["entities"].as_array().unwrap().is_empty(), "blocked 不落图");
         assert_eq!(snapshot["events"][0]["outcomeSummary"], "门锁着");
+    }
+
+    /// 79 号：replace_with_snapshot 双后端（file + sqlite）清空重灌往返。
+    #[test]
+    fn replace_with_snapshot_round_trip_both_backends() {
+        let entity = |id: &str, label: &str| json!({ "id": id, "type": "item", "label": label });
+        for backend in ["file", "sqlite"] {
+            let dir = tempfile::tempdir().unwrap();
+            let run = dir.path().join("run");
+            std::fs::create_dir_all(&run).unwrap();
+            if backend == "sqlite" {
+                // 触碰 play.db → open 走 sqlite 分支（schema 由 open 自动建立）。
+                drop(rusqlite::Connection::open(run.join("play.db")).unwrap());
+            }
+            let mut db = open_play_graph_db(&run).unwrap();
+            db.upsert_entity(&entity("e1", "A")).unwrap();
+            db.record_event(&json!({ "id": "evt-1", "turn": 1, "actionKind": "do", "rawInput": "x", "outcomeSummary": "s", "createdAt": "t" })).unwrap();
+            db.flush().unwrap();
+            let snapshot = db.snapshot();
+            assert_eq!(snapshot["entities"].as_array().unwrap().len(), 1);
+
+            // 追加后整体替换回旧快照 → 只剩 e1。
+            db.upsert_entity(&entity("e2", "B")).unwrap();
+            db.flush().unwrap();
+            assert_eq!(db.snapshot()["entities"].as_array().unwrap().len(), 2);
+            db.replace_with_snapshot(&snapshot).unwrap();
+            db.flush().unwrap();
+            let restored = db.snapshot();
+            let entities = restored["entities"].as_array().unwrap();
+            assert_eq!(entities.len(), 1, "{backend}: {restored}");
+            assert_eq!(entities[0]["id"], "e1");
+            assert_eq!(restored["events"].as_array().unwrap().len(), 1);
+
+            // 重新打开（落盘持久性）仍是替换后状态。
+            let reopened = open_play_graph_db(&run).unwrap();
+            assert_eq!(reopened.snapshot()["entities"].as_array().unwrap().len(), 1, "{backend}");
+        }
     }
 }
