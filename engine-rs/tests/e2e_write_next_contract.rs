@@ -10717,3 +10717,231 @@ mod play81_e2e {
         assert!(!run_dir.join("events.jsonl").exists());
     }
 }
+
+mod play82_e2e {
+    //! 82 号：play en 提示词全链——en 世界的 interpreter/mutator/renderer/
+    //! reconciler 四代理走 en 系统提示词与 en 标签；renderer 空输出 → en
+    //! 兜底文案。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::state::manager::StateManager;
+    use serde_json::Value;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn rt82(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// mock：四代理 en 分流 + 首个 system/user 文本捕获；renderer 空输出模式
+    /// （fail-open 兜底测试）。
+    async fn mock_play82_llm(renderer_empty: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let render_calls = Arc::new(AtomicUsize::new(0));
+        let captured_in = captured.clone();
+        let render_in = render_calls.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured_in = captured_in.clone();
+                let render_in = render_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    let user = messages.get(1).and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    if system.contains("action interpreter") {
+                        captured_in.lock().unwrap().push(format!("INTERPRETER_SYS:{system}"));
+                        captured_in.lock().unwrap().push(format!("INTERPRETER_USER:{user}"));
+                    } else if system.contains("world-state drafter") {
+                        captured_in.lock().unwrap().push(format!("MUTATOR_SYS:{system}"));
+                        captured_in.lock().unwrap().push(format!("MUTATOR_USER:{user}"));
+                    } else if system.contains("scene-response author") {
+                        captured_in.lock().unwrap().push(format!("RENDERER_SYS:{system}"));
+                        captured_in.lock().unwrap().push(format!("RENDERER_USER:{user}"));
+                    } else if system.contains("You reconcile") {
+                        captured_in.lock().unwrap().push(format!("RECONCILER_SYS:{system}"));
+                    }
+                    let content = if system.contains("action interpreter") {
+                        serde_json::json!({ "actionKind": "look", "intent": "survey the hall", "secondaryActions": [] }).to_string()
+                    } else if system.contains("world-state drafter") {
+                        if user.contains("Seed only the state") {
+                            serde_json::json!({
+                                "eventId": "evt-0", "turn": 0, "actionKind": "look",
+                                "summary": "Opening state seeded",
+                                "entities": { "upsert": [
+                                    { "id": "actor_player", "type": "actor", "label": "The Tenant", "summary": "New tenant", "updatedEventId": "evt-0" },
+                                    { "id": "item_ledger", "type": "item", "label": "Ledger", "summary": "On the counter", "updatedEventId": "evt-0" }
+                                ]},
+                                "edges": { "upsert": [
+                                    { "fromId": "actor_player", "type": "holds", "toId": "item_ledger",
+                                      "value": { "role": "holding" }, "validFromEventId": "evt-0", "sourceEventId": "evt-0" }
+                                ]}
+                            }).to_string()
+                        } else {
+                            serde_json::json!({
+                                "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                                "summary": "The tenant surveys the hall",
+                                "timeAdvance": { "elapsed": "a few breaths", "anchor": "still night", "rationale": "a glance", "synchronized": [] },
+                                "entities": { "upsert": [
+                                    { "id": "location_hall", "type": "location", "label": "Hall", "summary": "The main hall", "updatedEventId": "evt-1" }
+                                ]}
+                            }).to_string()
+                        }
+                    } else if system.contains("scene-response author") {
+                        let _n = render_in.fetch_add(1, Ordering::SeqCst);
+                        if renderer_empty {
+                            String::new()
+                        } else {
+                            serde_json::json!({
+                                "sceneText": "The lantern gutters; the hall holds its breath.",
+                                "suggestedActions": []
+                            }).to_string()
+                        }
+                    } else if system.contains("You reconcile") {
+                        serde_json::json!({
+                            "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                            "summary": "Prose supplement: a button lies on the floor",
+                            "entities": { "upsert": [
+                                { "id": "clue_button", "type": "clue", "label": "Brass button", "summary": "catches the light", "updatedEventId": "evt-1" }
+                            ]},
+                            "notes": ["reconciled"]
+                        }).to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), captured)
+    }
+
+    async fn seed_en_world(root: &std::path::Path, world_id: &str) {
+        inkos_engine::play::create_world(
+            root,
+            &inkos_engine::play::PlayWorldInput {
+                id: world_id,
+                title: "Manor on a Snowy Night",
+                premise: "A snowbound manor hides an old case.",
+                world_contract: "Time flows by action semantics.",
+                visual_contract: "Cold lantern light, no game UI.",
+                mode: "open",
+                language: "en",
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn en_world_full_chain_uses_english_agent_prompts() {
+        use inkos_engine::play_runner::{PlayAgents, PlayRunner};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, captured) = mock_play82_llm(false).await;
+        let runtime = rt82(&root, &llm);
+        seed_en_world(&root, "w82en").await;
+
+        let agents = PlayAgents { router: &runtime.router };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: "w82en".to_string(),
+            run_id: "main".to_string(),
+        };
+        runner.seed_opening(&agents, "The hall is dim.", &[]).await.unwrap();
+        let step = runner
+            .step(&agents, &agents, &agents, Some(&agents), "I look around", None)
+            .await
+            .unwrap();
+        assert_eq!(step.scene_text, "The lantern gutters; the hall holds its breath.");
+
+        // 四代理 en 系统提示词 + en user 标签逐项断言。
+        let logs = captured.lock().unwrap().clone();
+        let get = |prefix: &str| logs.iter().find(|l| l.starts_with(prefix)).cloned().unwrap_or_default();
+        let interpreter_sys = get("INTERPRETER_SYS:");
+        assert!(interpreter_sys.contains("You are an interactive-fiction action interpreter."), "{interpreter_sys}");
+        let interpreter_user = get("INTERPRETER_USER:");
+        assert!(interpreter_user.contains("Current scene:"), "{interpreter_user}");
+        assert!(interpreter_user.contains("Player input:"), "{interpreter_user}");
+        let mutator_sys = get("MUTATOR_SYS:");
+        assert!(mutator_sys.contains("You are an interactive-fiction world-state drafter."), "{mutator_sys}");
+        let mutator_user = get("MUTATOR_USER:");
+        assert!(mutator_user.contains("Player's words:"), "{mutator_user}");
+        assert!(mutator_user.contains("Action interpretation:"), "{mutator_user}");
+        // 开场播种（首次 mutator 调用）走 en 播种指令；step 调用走 en 标签。
+        assert!(logs.iter().any(|l| l.starts_with("MUTATOR_USER:") && l.contains("Seed only the state")), "{logs:?}");
+        let renderer_sys = get("RENDERER_SYS:");
+        assert!(renderer_sys.contains("You are an interactive-fiction scene-response author."), "{renderer_sys}");
+        let renderer_user = get("RENDERER_USER:");
+        assert!(renderer_user.contains("World setting (always obey):"), "{renderer_user}");
+        assert!(renderer_user.contains("Player's words:"), "{renderer_user}");
+        assert!(renderer_user.contains("Applied changes this turn:"), "{renderer_user}");
+        assert!(renderer_user.contains("Current state summary:"), "{renderer_user}");
+        let reconciler_sys = get("RECONCILER_SYS:");
+        assert!(reconciler_sys.contains("You reconcile an interactive-fiction scene"), "{reconciler_sys}");
+
+        // 落盘：事件 + 场景 + 图（reconcile 补充入图）。
+        let run = root.join("worlds/w82en/runs/main");
+        let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
+        assert!(events.contains("evt-1") && events.contains("surveys the hall"), "{events}");
+        let scene = std::fs::read_to_string(run.join("projections/scene.md")).unwrap();
+        assert!(scene.contains("lantern gutters"), "{scene}");
+        let graph: Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+        assert!(graph["entities"].as_object().unwrap().contains_key("clue_button"), "graph: {graph}");
+        let _ = StatusCode::OK;
+    }
+
+    #[tokio::test]
+    async fn renderer_en_empty_output_falls_back_to_english_placeholder() {
+        use inkos_engine::play_runner::{PlayAgents, PlayRunner};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _captured) = mock_play82_llm(true).await;
+        let runtime = rt82(&root, &llm);
+        seed_en_world(&root, "w82fb").await;
+
+        let agents = PlayAgents { router: &runtime.router };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: "w82fb".to_string(),
+            run_id: "main".to_string(),
+        };
+        runner.seed_opening(&agents, "The hall is dim.", &[]).await.unwrap();
+        let step = runner
+            .step(&agents, &agents, &agents, Some(&agents), "I look around", None)
+            .await
+            .unwrap();
+        // renderer 三轮空输出 → en 兜底文案（不抛错，回合仍提交）。
+        assert_eq!(step.scene_text, "(The moment holds, unresolved.)");
+        let events = std::fs::read_to_string(
+            root.join("worlds/w82fb/runs/main/events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("evt-1"), "{events}");
+    }
+}

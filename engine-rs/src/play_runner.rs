@@ -11,8 +11,8 @@
 //! replayContext 约束"重写非新回合/时间不倒退"）→ 新态再存变体；restoreVariant
 //! 按变体 id 整体恢复。
 //!
-//! 暂缓（偏差备案见 73 号记录）：interpreter/mutator/renderer 三代理的 en 提示词
-//! （reconciler 与 replayContext 79 号已双语）；play_step / play_revise 聊天工具面。
+//! 82 号：三代理 + context 标签 + 开场播种全量双语（en 分支对齐
+//! play-agents.ts / play-runner.ts 的 en 文案；zh 维持 73 号形态）。
 
 use std::path::Path;
 
@@ -26,12 +26,12 @@ use crate::play_graph::{apply_play_mutation, open_play_graph_db, seed_play_graph
 
 #[async_trait::async_trait]
 pub trait PlayActionInterpreter: Send + Sync {
-    async fn interpret(&self, input: &str, scene_brief: &str) -> Value;
+    async fn interpret(&self, input: &str, scene_brief: &str, language: &str) -> Value;
 }
 
 #[async_trait::async_trait]
 pub trait PlayWorldMutator: Send + Sync {
-    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str) -> Value;
+    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str, language: &str) -> Value;
 }
 
 #[async_trait::async_trait]
@@ -46,6 +46,7 @@ pub trait PlaySceneRenderer: Send + Sync {
         mode: &str,
         world_premise: &str,
         replay_context: Option<&str>,
+        language: &str,
     ) -> RenderedScene;
 }
 
@@ -140,14 +141,14 @@ async fn chat_with_retry(
 
 #[async_trait::async_trait]
 impl PlayActionInterpreter for PlayAgents<'_> {
-    async fn interpret(&self, input: &str, scene_brief: &str) -> Value {
+    async fn interpret(&self, input: &str, scene_brief: &str, language: &str) -> Value {
         // fail-open：瞬时错误/不可解析 → 通用动作（玩家原话作 do）。
         let raw = chat_with_retry(
             self.router,
             "play-action-interpreter",
             vec![
-                LLMMessage { role: LLMRole::System, content: action_interpreter_system_prompt(), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: action_interpreter_user_prompt(input, scene_brief), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::System, content: action_interpreter_system_prompt(language), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: action_interpreter_user_prompt(input, scene_brief, language), tool_calls: None, tool_call_id: None },
             ],
             0.15,
             1024,
@@ -162,13 +163,13 @@ impl PlayActionInterpreter for PlayAgents<'_> {
 
 #[async_trait::async_trait]
 impl PlayWorldMutator for PlayAgents<'_> {
-    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str) -> Value {
+    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str, language: &str) -> Value {
         let raw = chat_with_retry(
             self.router,
             "play-world-mutator",
             vec![
-                LLMMessage { role: LLMRole::System, content: world_mutator_system_prompt(), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: world_mutator_user_prompt(turn, input, action, context), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::System, content: world_mutator_system_prompt(language), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: world_mutator_user_prompt(turn, input, action, context, language), tool_calls: None, tool_call_id: None },
             ],
             0.25,
             4096,
@@ -213,9 +214,10 @@ impl PlaySceneRenderer for PlayAgents<'_> {
         mode: &str,
         world_premise: &str,
         replay_context: Option<&str>,
+        language: &str,
     ) -> RenderedScene {
-        let system = scene_renderer_system_prompt(mode);
-        let user = scene_renderer_user_prompt(input, action, mutation_summary, state_brief, world_premise, replay_context);
+        let system = scene_renderer_system_prompt(mode, language);
+        let user = scene_renderer_user_prompt(input, action, mutation_summary, state_brief, world_premise, replay_context, language);
         let mut messages = vec![
             LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
             LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
@@ -259,7 +261,11 @@ impl PlaySceneRenderer for PlayAgents<'_> {
             messages.push(LLMMessage { role: LLMRole::Assistant, content, tool_calls: None, tool_call_id: None });
             messages.push(LLMMessage {
                 role: LLMRole::User,
-                content: "上面不是严格 JSON。只输出一个 JSON 对象 {\"sceneText\": \"...\", \"suggestedActions\": [\"...\"]}，不要任何其他文字。".to_string(),
+                content: if language == "en" {
+                    "That was not strict JSON. Output ONLY one JSON object {\"sceneText\": \"...\", \"suggestedActions\": [\"...\"]} and nothing else.".to_string()
+                } else {
+                    "上面不是严格 JSON。只输出一个 JSON 对象 {\"sceneText\": \"...\", \"suggestedActions\": [\"...\"]}，不要任何其他文字。".to_string()
+                },
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -273,7 +279,11 @@ impl PlaySceneRenderer for PlayAgents<'_> {
             .to_string();
         RenderedScene {
             scene_text: if prose.is_empty() {
-                "（这一拍悬着，没有落定。）".to_string()
+                if language == "en" {
+                    "(The moment holds, unresolved.)".to_string()
+                } else {
+                    "（这一拍悬着，没有落定。）".to_string()
+                }
             } else {
                 prose
             },
@@ -457,7 +467,17 @@ fn scene_reconciler_user_prompt(
 
 // ── 提示词（zh 逐字；reconciler 与 replayContext 双语，79 号） ──
 
-fn action_interpreter_system_prompt() -> String {
+fn action_interpreter_system_prompt(language: &str) -> String {
+    if language == "en" {
+        return [
+            "You are an interactive-fiction action interpreter.",
+            "Your job is to normalize one line of the player's natural language into one of five action kinds: look / say / move / do / wait.",
+            "Do not add drama for the player, do not advance the plot, do not write scene prose.",
+            "look = observe/examine/recall a clue; say = speak/probe/confront; move = move to a location; do = perform an action/use an item/investigate; wait = wait/stall/watch.",
+            "Output strict JSON, no explanation.",
+        ]
+        .join("\n");
+    }
     [
         "你是互动小说动作理解器。",
         "你的任务是把玩家一句自然语言，归一成五类动作之一：look / say / move / do / wait。",
@@ -468,7 +488,19 @@ fn action_interpreter_system_prompt() -> String {
     .join("\n")
 }
 
-fn action_interpreter_user_prompt(input: &str, scene_brief: &str) -> String {
+fn action_interpreter_user_prompt(input: &str, scene_brief: &str, language: &str) -> String {
+    if language == "en" {
+        return [
+            "Current scene:",
+            scene_brief,
+            "",
+            "Player input:",
+            input,
+            "",
+            "Output fields: actionKind, targetEntityLabel?, targetLocationLabel?, intent, manner, risk, ambiguity, secondaryActions.",
+        ]
+        .join("\n");
+    }
     [
         "当前场景：",
         scene_brief,
@@ -481,7 +513,35 @@ fn action_interpreter_user_prompt(input: &str, scene_brief: &str) -> String {
     .join("\n")
 }
 
-fn world_mutator_system_prompt() -> String {
+fn world_mutator_system_prompt(language: &str) -> String {
+    if language == "en" {
+        return [
+            "You are an interactive-fiction world-state drafter.",
+            "Based only on the player's action and the current context, propose this turn's possible state changes as a draft.",
+            "Do not write final prose; do not commit to the store on the reducer's behalf; do not let key states jump to completion out of nowhere.",
+            "One player input advances one adjacent beat. If the player gives a chain of actions, apply only the literal chain up to the nearest new pressure point; do not skip through off-screen aftermath, rewards, or resolution beyond what the input directly attempts.",
+            "Do not leap over the process. If the player runs toward, reaches for, uses, opens, or confronts something, account for the movement, resistance, interruption, or immediate pressure inside this same beat instead of jumping straight to an after-the-fact state.",
+            "This engine is genre-neutral: romance, adventure, wuxia, mystery, slice-of-life all use the same structure. Entity types: actor/location/item/evidence/clue/claim/proof_chain/organization/rule/scene/event — use as needed.",
+            "Give every new or important entity a one-line summary (who/what it is and why it matters), not just a status word — the player expands this summary in the side panel.",
+            "Tangible things the player discovers or holds (a clue, a document, a weapon, a token, key evidence) MUST be their own entity (item/evidence/clue), never folded into a person's status — only then can they enter the player's holdings and be tracked. Observed phenomena, knowledge, impressions, or environmental signs are NOT holdings.",
+            "Use entity.status to record state progress for any genre, with status words suited to this world's genre, advancing step by step without skipping (e.g. relationship: stranger -> curious -> attracted -> lover; injury: healthy -> bleeding -> critical; clue: found -> collected -> confirmed).",
+            "The player entity id is fixed: always use id actor_player for the player character. Never rename this id; only replace its label, summary, and status with this world's player identity.",
+            "Whenever a meaningful relationship forms or shifts between entities (ally / rival / kin / suspicion / debt / master-servant …), record it in edges.upsert as {\"fromId\":\"<entity>\",\"type\":\"<relation>\",\"toId\":\"<entity>\",\"value\":{\"role\":\"relation\"}} — this is the ONLY source for the relationship panel, so over-record rather than skip; add a fresh edge when a relationship changes.",
+            "When the player physically holds/carries/keeps/takes a tangible thing, record an edge from actor_player to that entity and set value.role=\"holding\". If the held target is evidence/clue/claim/proof_chain rather than an item, also set value.physical=true. If the player only observes or learns something, use value.role=\"observed\" or a normal relation, never holding.",
+            "The current context may include an entity roster. Reuse those exact ids in entities, edges, evidence, and stateSlots. If you only know a name, use the exact roster label; never invent a new id for the same person/thing (or the panel shows duplicates).",
+            "State tracking is optional and governed by the user's world contract. If the world contract rejects stats, numeric panels, levels, RPG framing, or quantified meters, do NOT output stateSlots; express progress as natural-language entity.status / summary / evidence transitions instead.",
+            "When stateSlots are appropriate, prefer natural-language values unless the user explicitly asked for quantitative tracking or the fiction contains a concrete count/clock/deadline. Do not create numbers just because the schema supports them.",
+            "Early on (the first few turns), seed only the state the premise already establishes: a concrete deadline may become a timer slot if the world permits quantified tracking; the central mystery/objective -> its first clue/evidence entity; already-named key characters -> actor entities with a one-line summary. Don't leave the opening world nearly empty.",
+            "Restraint: only create entities and meters the story actually makes real — never invent gratuitous stats or items just to fill the panel.",
+            "Only use evidence.transitions for the evidence lifecycle when this world is genuinely an investigation/mystery; otherwise leave it empty.",
+            "If the player's action is invalid or information is insufficient, set blocked=true and write blockedReason.",
+            "Time is a synchronization axis, not a fixed tick. For every non-opening turn, set timeAdvance with: elapsed = the natural-language duration spent by this action; anchor = the world time/phase after the action if the world has a clock, season, phase, day/night, retreat period, deadline, or other temporal anchor; rationale = why this duration is right; synchronized = what relevant NPCs/places/pressures changed during the same elapsed time. A glance may pass seconds, a trip half a day, cultivation three years — obey the user's world contract; never invent a universal turn length.",
+            "Output strict JSON matching PlayMutation: eventId, turn, actionKind, summary, timeAdvance, entities, edges, stateSlots, evidence, blocked, blockedReason, notes.",
+            "The following is only a JSON-shape example. Do not reuse its labels, names, or story facts in the actual world; the reserved player id actor_player is the only example id you must keep for the player entity:",
+            r#"{"eventId":"evt-1","turn":1,"actionKind":"look","summary":"The player-character finds a sample clue and a sample key.","timeAdvance":{"elapsed":"a few breaths","anchor":"still in the same rain-soaked minute","rationale":"The player only examined the immediate scene.","synchronized":["The counterpart notices the pause but does not act openly yet."]},"entities":{"upsert":[{"id":"actor_player","type":"actor","label":"player-character","summary":"Reserved player entity id; replace label, summary, and status with the current world's player identity.","status":"alert","updatedEventId":"evt-1"},{"id":"actor_counterpart","type":"actor","label":"counterpart","summary":"Placeholder for a relevant person in the current world; replace with the real roster id/label.","status":"guarded","updatedEventId":"evt-1"},{"id":"evidence_sample_clue","type":"evidence","label":"sample clue","summary":"A tangible clue discovered this turn; replace with a real object from the scene.","status":"seen","updatedEventId":"evt-1"},{"id":"item_sample_key","type":"item","label":"sample key","summary":"A tangible item collected this turn; replace with a real object from the scene.","status":"collected","updatedEventId":"evt-1"}]},"edges":{"upsert":[{"fromId":"actor_player","type":"suspicious_of","toId":"actor_counterpart","value":{"role":"relation"}},{"fromId":"actor_player","type":"holds","toId":"item_sample_key","value":{"role":"holding"}},{"fromId":"actor_player","type":"holds","toId":"evidence_sample_clue","value":{"role":"holding","physical":true}}]},"stateSlots":{"upsert":[{"id":"slot_sample_timer","kind":"timer","label":"sample timer","value":3,"updatedEventId":"evt-1"}]}}"#,
+        ]
+        .join("\n");
+    }
     [
         "你是互动小说世界状态草案员。",
         "你只根据玩家动作和当前上下文，提出本回合可能发生的状态变化草案。",
@@ -508,7 +568,23 @@ fn world_mutator_system_prompt() -> String {
     .join("\n")
 }
 
-fn world_mutator_user_prompt(turn: i64, input: &str, action: &Value, context: &str) -> String {
+fn world_mutator_user_prompt(turn: i64, input: &str, action: &Value, context: &str, language: &str) -> String {
+    if language == "en" {
+        return [
+            format!("turn: {turn}"),
+            "Player's words:".to_string(),
+            input.to_string(),
+            String::new(),
+            "Action interpretation:".to_string(),
+            serde_json::to_string_pretty(action).unwrap_or_default(),
+            String::new(),
+            "Current context:".to_string(),
+            context.to_string(),
+            String::new(),
+            format!("Requirement: use eventId evt-{turn}; every new or referenced entity id must be stable, readable, and short."),
+        ]
+        .join("\n");
+    }
     [
         format!("turn: {turn}"),
         "玩家原话：".to_string(),
@@ -525,7 +601,34 @@ fn world_mutator_user_prompt(turn: i64, input: &str, action: &Value, context: &s
     .join("\n")
 }
 
-fn scene_renderer_system_prompt(mode: &str) -> String {
+fn scene_renderer_system_prompt(mode: &str, language: &str) -> String {
+    if language == "en" {
+        let base = [
+            "You are an interactive-fiction scene-response author.",
+            "Write the response only from the already-applied state; do not overturn the reducer's results.",
+            "Concrete new objects, clues, evidence, locations, organizations, or named people can only appear if they are already present in Applied changes or Current state summary. If the prose needs a new concrete thing, it must have been created by the mutator first; otherwise describe mood, pressure, or an unnamed detail instead.",
+            "It should read like a playable novel — action, senses, pressure, breathing room — never a system log and never a menu-narration that herds the player into picking something.",
+            "Bridge from the player's action first. Even though the state is already applied, do not start as if everything is already over; write the follow-through, contact, resistance, interruption, and immediate consequence so the action connects to the new state.",
+            "Do not jump straight to the after-action result, and do not write epilogue-style summaries, morals, or closing-theme lines. End on an immediate sensory pressure, changed position, exposed detail, or nearby consequence.",
+            "Stay strictly inside the world the premise established — era, place, tech level, genre tone must stay consistent. Never introduce elements that don't belong: a modern-city story must not grow night-watchmen / oil lamps; a historical/wuxia story must not sprout phones / cars / computers. Every detail lands inside the given world.",
+            "The player is not always 'acting'. When they merely observe, linger, feel, idle-chat, or do nothing, give an immersive beat — one living detail, a smell, a bystander's small movement, a thought crossing their mind. NEVER say 'there's nothing more to see' / 'you already looked' / 'stop stalling', and never nag them to hurry up and act. Let the beat breathe.",
+            "The world is not inert. Time moves, the deadline closes in, side characters act on their own, something stirs in the distance, off-screen events happen. Even on a turn where the player did nothing, nudge the world forward a little — so the pull to move forward comes from the STORY (the trail goes cold / the deadline nears / someone moved first), not from the narration pestering them to choose.",
+            "If Current state summary includes a Time section, treat elapsed and anchor as canonical. Render the scene after exactly that elapsed interval, at that resulting world time/phase, and include the synchronized pressure/character movement naturally in prose. Do not invent another clock reading, another elapsed amount, or a fixed tick label.",
+            "Respect negative player intent as fact. If the player's words say they did NOT touch, open, take, leave, attack, or speak, do not narrate them doing it by implication; write the restraint itself and the world's response to that restraint.",
+            "Do not end with herding questions like 'What do you do?' / 'Which way?'. And do NOT route the same pressure through a companion who keeps listing options ('go to A, or B?') — a sidekick is not an options dispenser. Most beats should NOT end on a pending question at all: land on an image, a sound, a smell, or a hanging tension, and stop. Only when the player is genuinely at a fork that demands a decision may a question surface — sparingly.",
+            "sceneText is PURE narrative prose. Never put a choice list in the body — no 'Options:' / 'What do you do?' followed by A/B/C, no '- ' bulleted options — no matter how urgent or fork-like the moment is (a tense escape is NOT an excuse for a menu). Weave the available routes into the scene itself (the bamboo by the wall, the half-open skylight, the alley toward the river) and let the player decide by free input. Any springboard goes ONLY in the suggestedActions field, kept sparse — never a menu in the prose.",
+            "Example (applies even at a life-or-death beat) — [WRONG, never write this] 'The zombie lunges, the axe is stuck. React now:\\n- yank the axe and swing\\n- squeeze sideways through\\n- roll back'; [RIGHT] 'Its claws are already spread, the sour reek of rot in your nose. Your axe is wedged in the twenty-centimeter gap of the door, and it won't come free. Its weight bears down—'. Take the danger to its peak, then stop, and hand the 'what now' entirely to the player's free input — never list options for them.",
+        ];
+        let actions_rule = if mode == "guided" {
+            "suggestedActions: give 0-3 as optional springboards ('you could…'), ONLY at a genuine decision point — not every turn. They are hints, not the only way forward; the player can type freely or just stay put at any time."
+        } else {
+            "suggestedActions: 0-3 short hints, optional, never restricting the player's input; omit them when there is no real decision point."
+        };
+        let mut lines: Vec<String> = base.iter().map(|line| line.to_string()).collect();
+        lines.push(actions_rule.to_string());
+        lines.push("Output strict JSON: sceneText, suggestedActions.".to_string());
+        return lines.join("\n");
+    }
     let mut lines: Vec<String> = [
         "你是互动小说场景应答作者。",
         "只依据已经应用的状态写回应；不要推翻 reducer 的结果。",
@@ -557,7 +660,37 @@ fn scene_renderer_user_prompt(
     state_brief: &str,
     world_premise: &str,
     replay_context: Option<&str>,
+    language: &str,
 ) -> String {
+    // 重写约束（regenerate 重放时注入——双语标签逐字）。
+    let replay_block = |lines: &mut Vec<String>, label: &str| {
+        if let Some(context) = replay_context.filter(|context| !context.trim().is_empty()) {
+            lines.push(String::new());
+            lines.push(label.to_string());
+            lines.push(context.trim().to_string());
+        }
+    };
+    if language == "en" {
+        let mut lines = Vec::new();
+        if !world_premise.trim().is_empty() {
+            lines.push("World setting (always obey):".to_string());
+            lines.push(world_premise.trim().to_string());
+            lines.push(String::new());
+        }
+        lines.push("Player's words:".to_string());
+        lines.push(input.to_string());
+        lines.push(String::new());
+        lines.push("Action:".to_string());
+        lines.push(serde_json::to_string_pretty(action).unwrap_or_default());
+        lines.push(String::new());
+        lines.push("Applied changes this turn:".to_string());
+        lines.push(mutation_summary.to_string());
+        lines.push(String::new());
+        lines.push("Current state summary:".to_string());
+        lines.push(state_brief.to_string());
+        replay_block(&mut lines, "Replay constraints:");
+        return lines.join("\n");
+    }
     let mut lines = Vec::new();
     if !world_premise.is_empty() {
         lines.push(world_premise.to_string());
@@ -569,12 +702,7 @@ fn scene_renderer_user_prompt(
     lines.push(String::new());
     lines.push("当前状态摘要：".to_string());
     lines.push(state_brief.to_string());
-    // 重写约束（regenerate 重放时注入——TS "重写约束：" 节逐字）。
-    if let Some(context) = replay_context.filter(|context| !context.trim().is_empty()) {
-        lines.push(String::new());
-        lines.push("重写约束：".to_string());
-        lines.push(context.trim().to_string());
-    }
+    replay_block(&mut lines, "重写约束：");
     lines.join("\n")
 }
 
@@ -635,18 +763,28 @@ impl PlayRunner<'_> {
             return Ok(None);
         }
         let world = crate::play::load_world(self.project_root, &self.world_id).await;
+        let language = world
+            .as_ref()
+            .and_then(|w| w.get("language"))
+            .and_then(Value::as_str)
+            .unwrap_or("zh")
+            .to_string();
         let action = json!({
             "actionKind": "look",
-            "intent": "播种第一幕已成立的开场状态。",
+            "intent": if language == "en" {
+                "Seed the opening state for the first playable scene."
+            } else {
+                "播种第一幕已成立的开场状态。"
+            },
             "manner": "",
             "risk": "",
             "ambiguity": "",
             "secondaryActions": [],
         });
-        let world_context = render_world_context(world.as_ref());
-        let context = self.build_context_brief(scene_text, &world).await;
-        let opening_input = build_opening_seed_input(scene_text, suggested_actions, &world_context);
-        let mut mutation = mutator.propose_mutation(0, &opening_input, &action, &context).await;
+        let world_context = render_world_context(world.as_ref(), &language);
+        let context = self.build_context_brief(scene_text, &world, &language).await;
+        let opening_input = build_opening_seed_input(scene_text, suggested_actions, &world_context, &language);
+        let mut mutation = mutator.propose_mutation(0, &opening_input, &action, &context, &language).await;
         if let Some(obj) = mutation.as_object_mut() {
             obj.insert("eventId".into(), json!("evt-0"));
             obj.insert("turn".into(), json!(0));
@@ -715,11 +853,11 @@ impl PlayRunner<'_> {
         } else {
             scene_brief.clone()
         };
-        let action = interpreter.interpret(raw_input, &scene_brief_or_default).await;
-        let world_context = render_world_context(world.as_ref());
-        let context = self.build_context_brief(&scene_brief, &world).await;
+        let action = interpreter.interpret(raw_input, &scene_brief_or_default, &language).await;
+        let world_context = render_world_context(world.as_ref(), &language);
+        let context = self.build_context_brief(&scene_brief, &world, &language).await;
         let mutation = mutator
-            .propose_mutation(turn, raw_input, &action, &context)
+            .propose_mutation(turn, raw_input, &action, &context, &language)
             .await;
         let state_brief = render_state_brief(&action, &mutation);
 
@@ -732,7 +870,7 @@ impl PlayRunner<'_> {
             .unwrap_or_default()
             .to_string();
         let render = renderer
-            .render(raw_input, &action, &mutation_summary, &state_brief, &mode, &world_context, replay_context)
+            .render(raw_input, &action, &mutation_summary, &state_brief, &mode, &world_context, replay_context, &language)
             .await;
 
         // reconcile：非 blocked 回合做正文↔图谱对账；空补充不动原 mutation。
@@ -963,7 +1101,8 @@ impl PlayRunner<'_> {
         })
     }
 
-    async fn build_context_brief(&self, scene_brief: &str, world: &Option<Value>) -> String {
+    async fn build_context_brief(&self, scene_brief: &str, world: &Option<Value>, language: &str) -> String {
+        let is_en = language == "en";
         let state_brief = crate::play::read_projection(
             self.project_root,
             &self.world_id,
@@ -972,7 +1111,7 @@ impl PlayRunner<'_> {
         )
         .await
         .unwrap_or_default();
-        let world_context = render_world_context(world.as_ref());
+        let world_context = render_world_context(world.as_ref(), language);
         let run_dir = crate::play::run_dir(self.project_root, &self.world_id, &self.run_id);
         let roster = run_dir
             .ok()
@@ -983,7 +1122,10 @@ impl PlayRunner<'_> {
                 .and_then(Value::as_array)
                 .map(|a| a.as_slice())
                 .unwrap_or_default(),
+            language,
         );
+        let scene_label = if is_en { "Current scene:" } else { "当前场景：" };
+        let state_label = if is_en { "Current state:" } else { "当前状态：" };
         let mut blocks: Vec<String> = Vec::new();
         if !world_context.is_empty() {
             blocks.push(world_context);
@@ -992,13 +1134,17 @@ impl PlayRunner<'_> {
             blocks.push(entity_roster);
         }
         if !scene_brief.trim().is_empty() {
-            blocks.push(format!("当前场景：\n{scene_brief}"));
+            blocks.push(format!("{scene_label}\n{scene_brief}"));
         }
         if !state_brief.trim().is_empty() {
-            blocks.push(format!("当前状态：\n{state_brief}"));
+            blocks.push(format!("{state_label}\n{state_brief}"));
         }
         if blocks.is_empty() {
-            "暂无持久化状态。".to_string()
+            if is_en {
+                "No persisted state yet.".to_string()
+            } else {
+                "暂无持久化状态。".to_string()
+            }
         } else {
             blocks.join("\n\n")
         }
@@ -1185,10 +1331,11 @@ pub fn build_replay_context(original_input: &str, replacement_input: Option<&str
     }
 }
 
-fn render_world_context(world: Option<&Value>) -> String {
+fn render_world_context(world: Option<&Value>, language: &str) -> String {
     let Some(world) = world else {
         return String::new();
     };
+    let is_en = language == "en";
     let field = |name: &str| {
         world
             .get(name)
@@ -1199,18 +1346,53 @@ fn render_world_context(world: Option<&Value>) -> String {
     };
     let mut blocks = Vec::new();
     if let Some(premise) = field("premise") {
-        blocks.push(format!("世界设定:\n{premise}"));
+        let label = if is_en { "World setting" } else { "世界设定" };
+        blocks.push(format!("{label}:\n{premise}"));
     }
     if let Some(contract) = field("worldContract") {
-        blocks.push(format!("世界契约（高优先级，先于题材惯例）:\n{contract}"));
+        let label = if is_en {
+            "World contract (high priority; obey before genre defaults)"
+        } else {
+            "世界契约（高优先级，先于题材惯例）"
+        };
+        blocks.push(format!("{label}:\n{contract}"));
     }
     if let Some(visual) = field("visualContract") {
-        blocks.push(format!("视觉契约（保持场景和配图一致）:\n{visual}"));
+        let label = if is_en {
+            "Visual contract (for scene and image consistency)"
+        } else {
+            "视觉契约（保持场景和配图一致）"
+        };
+        blocks.push(format!("{label}:\n{visual}"));
     }
     blocks.join("\n\n")
 }
 
-fn build_opening_seed_input(scene_text: &str, suggested_actions: &[String], premise: &str) -> String {
+fn build_opening_seed_input(
+    scene_text: &str,
+    suggested_actions: &[String],
+    premise: &str,
+    language: &str,
+) -> String {
+    if language == "en" {
+        let mut blocks = vec![
+            "Seed only the state that already exists at the opening of this playable world.".to_string(),
+            "Do not advance time, do not solve the mystery, and do not narrate a new turn.".to_string(),
+            "If the premise or opening scene says the player already holds, carries, keeps, wears, or starts with a tangible object, that object is already established: create its entity and add an actor_player holding edge. Do not hide held objects inside the player summary.".to_string(),
+        ];
+        if !premise.is_empty() {
+            blocks.push(format!("Premise:\n{premise}"));
+        }
+        blocks.push(format!("Opening scene:\n{scene_text}"));
+        if !suggested_actions.is_empty() {
+            let lines: Vec<String> = suggested_actions
+                .iter()
+                .map(|action| format!("- {action}"))
+                .collect();
+            blocks.push(format!("Suggested player actions:\n{}", lines.join("\n")));
+        }
+        return blocks.join("\n\n");
+    }
     let mut blocks = vec![
         "只播种这个互动世界开场已经成立的状态。".to_string(),
         "不要推进时间，不要解谜，不要写新的回合剧情。".to_string(),
@@ -1230,11 +1412,17 @@ fn build_opening_seed_input(scene_text: &str, suggested_actions: &[String], prem
     blocks.join("\n\n")
 }
 
-fn render_entity_roster(entities: &[Value]) -> String {
+fn render_entity_roster(entities: &[Value], language: &str) -> String {
     if entities.is_empty() {
         return String::new();
     }
-    let mut lines = vec!["当前实体名册（复用这些 id；不要把同一个人/物换新 id 重建）：".to_string()];
+    let is_en = language == "en";
+    let header = if is_en {
+        "Current entity roster (reuse these ids; do not recreate the same person/thing):"
+    } else {
+        "当前实体名册（复用这些 id；不要把同一个人/物换新 id 重建）："
+    };
+    let mut lines = vec![header.to_string()];
     for entity in entities.iter().take(40) {
         let id = entity.get("id").and_then(Value::as_str).unwrap_or_default();
         let entity_type = entity.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -1244,9 +1432,9 @@ fn render_entity_roster(entities: &[Value]) -> String {
         let mut detail = summary.to_string();
         if !status.is_empty() {
             if !detail.is_empty() {
-                detail.push('；');
+                detail.push_str(if is_en { "; " } else { "；" });
             }
-            detail.push_str(&format!("状态: {status}"));
+            detail.push_str(&format!("{}: {status}", if is_en { "status" } else { "状态" }));
         }
         let compact: String = detail.split_whitespace().collect::<Vec<_>>().join(" ");
         let clamped = if compact.chars().count() > 120 {
@@ -1468,6 +1656,106 @@ mod tests {
     }
 
     #[test]
+    fn en_agent_prompts_and_labels() {
+        // interpreter：en system 逐字 + user 标签。
+        let interpreter_system = action_interpreter_system_prompt("en");
+        assert!(
+            interpreter_system.starts_with("You are an interactive-fiction action interpreter."),
+            "{interpreter_system}"
+        );
+        assert!(interpreter_system.contains("Output strict JSON, no explanation."));
+        let interpreter_user =
+            action_interpreter_user_prompt("I look around", "A rainy hall.", "en");
+        assert!(interpreter_user.contains("Current scene:\nA rainy hall."), "{interpreter_user}");
+        assert!(interpreter_user.contains("Player input:\nI look around"), "{interpreter_user}");
+        assert!(interpreter_user.contains("Output fields: actionKind,"), "{interpreter_user}");
+
+        // mutator：en system 关键行 + JSON 范例（保留 actor_player）。
+        let mutator_system = world_mutator_system_prompt("en");
+        assert!(mutator_system.starts_with("You are an interactive-fiction world-state drafter."));
+        assert!(mutator_system.contains("Time is a synchronization axis, not a fixed tick."));
+        assert!(mutator_system.contains("sample clue"), "范例 JSON 应在内");
+        assert!(mutator_system.contains("reserved player id actor_player") || mutator_system.contains("actor_player"));
+        let mutator_user = world_mutator_user_prompt(
+            2,
+            "I search the desk",
+            &json!({ "actionKind": "do", "intent": "search" }),
+            "context here",
+            "en",
+        );
+        assert!(mutator_user.contains("Player's words:\nI search the desk"), "{mutator_user}");
+        assert!(mutator_user.contains("Action interpretation:"), "{mutator_user}");
+        assert!(mutator_user.contains("Current context:\ncontext here"), "{mutator_user}");
+        assert!(mutator_user.contains("Requirement: use eventId evt-2;"), "{mutator_user}");
+
+        // renderer：en system 关键行（含生死例句）+ user 标签 + Replay constraints。
+        let renderer_system = scene_renderer_system_prompt("open", "en");
+        assert!(renderer_system.starts_with("You are an interactive-fiction scene-response author."));
+        assert!(renderer_system.contains("The zombie lunges"), "生死例句应在内");
+        assert!(renderer_system.contains("Output strict JSON: sceneText, suggestedActions."));
+        let guided = scene_renderer_system_prompt("guided", "en");
+        assert!(guided.contains("ONLY at a genuine decision point"), "{guided}");
+        let renderer_user = scene_renderer_user_prompt(
+            "I open the door",
+            &json!({ "actionKind": "do" }),
+            "A key is found.",
+            "# Play State",
+            "A rainy night house.",
+            Some("This is a regeneration of the previous turn."),
+            "en",
+        );
+        assert!(renderer_user.contains("World setting (always obey):\nA rainy night house."), "{renderer_user}");
+        assert!(renderer_user.contains("Player's words:\nI open the door"), "{renderer_user}");
+        assert!(renderer_user.contains("Applied changes this turn:\nA key is found."), "{renderer_user}");
+        assert!(renderer_user.contains("Current state summary:"), "{renderer_user}");
+        assert!(
+            renderer_user.contains("Replay constraints:\nThis is a regeneration"),
+            "{renderer_user}"
+        );
+
+        // zh 分支维持 73 号形态（不受 en 分支影响）。
+        assert!(action_interpreter_system_prompt("zh").contains("动作理解器"));
+        assert!(scene_renderer_user_prompt("输入", &json!({}), "摘要", "状态", "前提", Some("约束"), "zh").contains("重写约束："));
+    }
+
+    #[test]
+    fn en_context_labels_and_seed_input() {
+        // 世界上下文：en 标签。
+        let world = json!({
+            "premise": "A manor on a snowy night.",
+            "worldContract": "Time flows by action.",
+            "visualContract": "Cold lantern light.",
+        });
+        let en_context = render_world_context(Some(&world), "en");
+        assert!(en_context.contains("World setting:\nA manor on a snowy night."), "{en_context}");
+        assert!(en_context.contains("World contract (high priority; obey before genre defaults):"), "{en_context}");
+        assert!(en_context.contains("Visual contract (for scene and image consistency):"), "{en_context}");
+
+        // 实体名册：en 头部 + status 标签 + "; " 分隔。
+        let roster = render_entity_roster(
+            &[json!({ "id": "actor_player", "type": "actor", "label": "Tenant", "summary": "New tenant", "status": "watchful" })],
+            "en",
+        );
+        assert!(roster.contains("Current entity roster (reuse these ids;"), "{roster}");
+        assert!(roster.contains("status: watchful"), "{roster}");
+        assert!(roster.contains("New tenant; status: watchful"), "{roster}");
+
+        // 开场播种：en 分支逐字。
+        let seed_input = build_opening_seed_input(
+            "The hall is dim.",
+            &["Check the ledger".to_string()],
+            "World setting:\nA manor.",
+            "en",
+        );
+        assert!(seed_input.starts_with("Seed only the state that already exists"), "{seed_input}");
+        assert!(seed_input.contains("Opening scene:\nThe hall is dim."), "{seed_input}");
+        assert!(seed_input.contains("Suggested player actions:\n- Check the ledger"), "{seed_input}");
+        // zh 分支不变。
+        let zh_seed = build_opening_seed_input("厅堂昏暗。", &[], "", "zh");
+        assert!(zh_seed.contains("只播种这个互动世界开场已经成立的状态。"));
+    }
+
+    #[test]
     fn replay_context_zh_en_shapes() {
         let zh = build_replay_context("打开抽屉", None, "zh");
         assert!(zh.starts_with("这是在重写上一回合，不是推进新的下一回合。"), "{zh}");
@@ -1487,9 +1775,9 @@ mod tests {
     #[test]
     fn renderer_prompt_injects_replay_constraints() {
         let action = json!({ "actionKind": "do", "intent": "x" });
-        let without = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", None);
+        let without = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", None, "zh");
         assert!(!without.contains("重写约束"), "{without}");
-        let with = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", Some("重写上一回合"));
+        let with = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", Some("重写上一回合"), "zh");
         assert!(with.contains("重写约束：\n重写上一回合"), "{with}");
     }
 
@@ -1513,14 +1801,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl PlayActionInterpreter for FakeAgents {
-        async fn interpret(&self, input: &str, _scene_brief: &str) -> Value {
+        async fn interpret(&self, input: &str, _scene_brief: &str, _language: &str) -> Value {
             json!({ "actionKind": "do", "intent": input, "manner": "", "risk": "", "ambiguity": "", "secondaryActions": [] })
         }
     }
 
     #[async_trait::async_trait]
     impl PlayWorldMutator for FakeAgents {
-        async fn propose_mutation(&self, turn: i64, input: &str, _action: &Value, _context: &str) -> Value {
+        async fn propose_mutation(&self, turn: i64, input: &str, _action: &Value, _context: &str, _language: &str) -> Value {
             let n = self.mutator_calls.fetch_add(1, Ordering::SeqCst);
             json!({
                 "eventId": format!("evt-{turn}"), "turn": turn, "actionKind": "do",
@@ -1548,6 +1836,7 @@ mod tests {
             _mode: &str,
             _world_premise: &str,
             _replay_context: Option<&str>,
+            _language: &str,
         ) -> RenderedScene {
             let n = self.render_calls.fetch_add(1, Ordering::SeqCst) + 1;
             RenderedScene { scene_text: format!("场景 v{n}：紧张推进。"), suggested_actions: vec![] }
