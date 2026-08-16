@@ -431,13 +431,25 @@ pub async fn post_agent(
         .unwrap()
         .insert(session_id.to_string(), handle.clone());
 
-    let mut system_prompt = format!(
-        "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
-        agent_book_id
-            .as_ref()
-            .map(|book_id| format!("当前活动书籍：{book_id}。回答时结合该书的创作上下文。"))
-            .unwrap_or_default(),
-    );
+    // ── play 会话聊天面（80 号）：世界存在 → play 工具 + play 系统提示词 ──
+    let surface_language = match agent_production::current_project_language(root).await {
+        agent_production::StudioLang::En => "en",
+        agent_production::StudioLang::Zh => "zh",
+    };
+    let play_world_exists = session_kind == SessionKind::Play
+        && crate::interaction::play_tools::session_world_exists(root, session_id).await;
+
+    let mut system_prompt = if play_world_exists {
+        crate::interaction::play_tools::play_chat_system_prompt(surface_language == "en")
+    } else {
+        format!(
+            "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
+            agent_book_id
+                .as_ref()
+                .map(|book_id| format!("当前活动书籍：{book_id}。回答时结合该书的创作上下文。"))
+                .unwrap_or_default(),
+        )
+    };
     // 后台生产任务与聊天并行时注入任务状态（suppressProductionTools 的硬剔除
     // 面——read/ls/grep 聊天工具集本就不含生产工具，天然满足）。
     if let Some(background_task) =
@@ -525,10 +537,26 @@ pub async fn post_agent(
 
     let loop_chat = RouterLoopChat { router: &runtime.router };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
-    let tools = crate::interaction::project_tools::tools_payload();
+    // 工具面：文件工具 + （play 会话且有世界时）play_step / play_revise。
+    let mut tools = crate::interaction::project_tools::tools_payload();
+    if play_world_exists {
+        if let Some(entries) = tools.as_array_mut() {
+            entries.extend(crate::interaction::play_tools::play_tool_schemas());
+        }
+    }
+    let play_deps = play_world_exists.then(|| crate::interaction::play_tools::PlayToolDeps {
+        project_root: root,
+        session_id,
+        router: &runtime.router,
+        language: surface_language,
+    });
+    let tool_executor = crate::interaction::play_tools::PlayChatToolExecutor {
+        root,
+        deps: play_deps,
+    };
     let loop_result = run_agent_loop(
         &loop_chat,
-        root,
+        &tool_executor,
         &system_prompt,
         restored,
         instruction,

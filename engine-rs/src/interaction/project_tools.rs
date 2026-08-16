@@ -12,6 +12,9 @@ use serde_json::{json, Value};
 pub struct ToolResult {
     pub text: String,
     pub details: Option<Value>,
+    /// 显式错误标记（80 号：play 工具的透传错误靠它进入 error 执行卡；
+    /// 文件工具沿用文本启发式兼容）。
+    pub is_error: bool,
 }
 
 /// 项目根内路径解析（拒绝逃逸）。
@@ -54,8 +57,8 @@ pub async fn tool_read(root: &Path, args: &Value) -> ToolResult {
         _ => {}
     }
     match tokio::fs::read_to_string(&resolved).await {
-        Ok(content) => ToolResult { text: content, details: None },
-        Err(e) => error_result(&format!("read failed: {e}")),
+        Ok(content) => ToolResult { text: content, details: None, is_error: false },
+        Err(e) => error_result(format!("read failed: {e}")),
     }
 }
 
@@ -66,7 +69,7 @@ pub async fn tool_ls(root: &Path, args: &Value) -> ToolResult {
         return error_result("path escapes project root");
     };
     let Ok(mut entries) = tokio::fs::read_dir(&resolved).await else {
-        return error_result(&format!("ls failed: not a directory: {path}"));
+        return error_result(format!("ls failed: not a directory: {path}"));
     };
     let mut names: Vec<String> = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -81,6 +84,7 @@ pub async fn tool_ls(root: &Path, args: &Value) -> ToolResult {
     ToolResult {
         text: names.join("\n"),
         details: Some(json!({ "count": names.len() })),
+        is_error: false,
     }
 }
 
@@ -119,11 +123,12 @@ pub async fn tool_grep(root: &Path, args: &Value) -> ToolResult {
     ToolResult {
         text: hits.join("\n"),
         details: Some(json!({ "matches": hits.len() })),
+        is_error: false,
     }
 }
 
-fn error_result(message: &str) -> ToolResult {
-    ToolResult { text: message.to_string(), details: None }
+pub(crate) fn error_result(message: impl Into<String>) -> ToolResult {
+    ToolResult { text: message.into(), details: None, is_error: true }
 }
 
 /// 先收集文本文件路径（同步 walk，深度 3），再逐文件搜行。
@@ -214,13 +219,25 @@ pub fn tools_payload() -> Value {
         .collect::<Vec<_>>())
 }
 
+/// 文件工具的回环执行器（agent_loop 的 LoopToolExecutor 适配）。
+pub struct ProjectToolExecutor<'a> {
+    pub root: &'a Path,
+}
+
+#[async_trait::async_trait]
+impl crate::interaction::agent_loop::LoopToolExecutor for ProjectToolExecutor<'_> {
+    async fn execute(&self, name: &str, args: &Value) -> ToolResult {
+        execute_tool(self.root, name, args).await
+    }
+}
+
 /// 分发执行；未知工具 → 错误文本。
 pub async fn execute_tool(root: &Path, name: &str, args: &Value) -> ToolResult {
     match name {
         "read" => tool_read(root, args).await,
         "ls" => tool_ls(root, args).await,
         "grep" => tool_grep(root, args).await,
-        other => error_result(&format!("Unknown tool: {other}")),
+        other => error_result(format!("Unknown tool: {other}")),
     }
 }
 

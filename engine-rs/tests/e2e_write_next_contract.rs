@@ -10176,3 +10176,341 @@ mod play79_e2e {
         let _ = StatusCode::OK;
     }
 }
+
+mod play80_e2e {
+    //! 80 号：play_step / play_revise 聊天工具面——chat 循环内分发 +
+    //! play 会话工具面注册 + play 系统提示词（mock 捕获）+ 落盘推进/重做。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use serde_json::Value;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn rt80(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    max_tokens: 8192,
+                    model: "m".into(),
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app80(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：play 五代理（同 79 号）+ studio-agent 聊天面（play 系统提示词 →
+    /// 按指令关键词发 play_step / play_revise 工具调用，收到 tool 结果后收束
+    /// 成终文）。捕获 tools 名单与 system 文本供注册面断言。
+    async fn mock_play80_llm() -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<String>>, Arc<AtomicUsize>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let systems: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let render_calls = Arc::new(AtomicUsize::new(0));
+        let tools_in = tool_names.clone();
+        let systems_in = systems.clone();
+        let render_in = render_calls.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                let systems_in = systems_in.clone();
+                let render_in = render_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    let content = if system.contains("动作理解器") {
+                        serde_json::json!({ "actionKind": "look", "intent": "环顾四周", "secondaryActions": [] }).to_string()
+                    } else if system.contains("世界状态草案员") {
+                        let user = messages.get(1).and_then(|m| m["content"].as_str()).unwrap_or("");
+                        if user.contains("只播种这个互动世界开场已经成立的状态") {
+                            serde_json::json!({
+                                "eventId": "evt-0", "turn": 0, "actionKind": "look",
+                                "summary": "开场状态已播种",
+                                "entities": { "upsert": [
+                                    { "id": "actor_player", "type": "actor", "label": "夜行人", "summary": "潜入者", "updatedEventId": "evt-0" },
+                                    { "id": "item_lantern", "type": "item", "label": "灯笼", "summary": "照明", "updatedEventId": "evt-0" }
+                                ]},
+                                "edges": { "upsert": [
+                                    { "fromId": "actor_player", "type": "持有", "toId": "item_lantern",
+                                      "value": { "role": "holding" }, "validFromEventId": "evt-0", "sourceEventId": "evt-0" }
+                                ]}
+                            }).to_string()
+                        } else {
+                            serde_json::json!({
+                                "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                                "summary": "玩家看清了厅堂",
+                                "timeAdvance": { "elapsed": "片刻", "anchor": "深夜", "rationale": "环顾", "synchronized": [] },
+                                "entities": { "upsert": [
+                                    { "id": "location_hall", "type": "location", "label": "厅堂", "summary": "正厅", "updatedEventId": "evt-1" }
+                                ]}
+                            }).to_string()
+                        }
+                    } else if system.contains("场景应答作者") {
+                        let n = render_in.fetch_add(1, Ordering::SeqCst);
+                        let scene = if n == 0 {
+                            serde_json::json!({ "sceneText": "场景甲：灯笼的光晃了一下。", "suggestedActions": [] })
+                        } else {
+                            serde_json::json!({ "sceneText": "场景乙：重写后的厅堂静得反常。", "suggestedActions": [] })
+                        };
+                        scene.to_string()
+                    } else if system.contains("把互动小说正文和世界图谱对齐") {
+                        serde_json::json!({
+                            "eventId": "evt-1", "turn": 1, "actionKind": "look",
+                            "summary": "正文补充：纽扣落地",
+                            "entities": { "upsert": [
+                                { "id": "clue_button", "type": "clue", "label": "铜纽扣", "summary": "灯下闪光", "updatedEventId": "evt-1" }
+                            ]},
+                            "notes": ["对账补充"]
+                        }).to_string()
+                    } else {
+                        // studio-agent 聊天面：捕获 tools/system；按指令关键词分流
+                        // 工具调用，tool 结果回填后收束终文。
+                        *systems_in.lock().unwrap() = system.clone();
+                        if let Some(tools) = body["tools"].as_array() {
+                            let names = tools
+                                .iter()
+                                .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                                .collect::<Vec<_>>();
+                            *tools_in.lock().unwrap() = names;
+                        }
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            if last_user.contains("重来") {
+                                "（上一回合已重做。）".to_string()
+                            } else if last_user.contains("恢复") {
+                                "（恢复未完成。）".to_string()
+                            } else {
+                                "（这一步推进完成。）".to_string()
+                            }
+                        } else {
+                            let (name, arguments) = if last_user.contains("重来") {
+                                ("play_revise", r#"{"action":"regenerate_last"}"#.to_string())
+                            } else if last_user.contains("恢复") {
+                                ("play_revise", r#"{"action":"restore_variant","turn":1,"variantId":"v-none"}"#.to_string())
+                            } else {
+                                ("play_step", r#"{"input":"我环顾四周"}"#.to_string())
+                            };
+                            let call = serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_play_1", "function": { "name": name, "arguments": arguments } },
+                            ] } }] });
+                            let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                            return axum::response::IntoResponse::into_response((
+                                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                                format!("data: {call}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                            ));
+                        }
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names, systems, render_calls)
+    }
+
+    async fn seed_world(root: &std::path::Path, world_id: &str) {
+        inkos_engine::play::create_world(
+            root,
+            &inkos_engine::play::PlayWorldInput {
+                id: world_id,
+                title: "厅堂夜探",
+                premise: "深夜宅邸",
+                world_contract: "",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn play_step_chat_tool_advances_session_world() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, tool_names, systems, _render_calls) = mock_play80_llm().await;
+        let session_id = "1783001000001-p80a";
+        let runtime = rt80(&root, &llm);
+        let app = app80(runtime);
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        seed_world(&root, session_id).await;
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"我环顾四周","sessionId":"{session_id}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（这一步推进完成。）");
+
+        // 工具执行卡：play_step 完成，结果文本 = 场景正文（场景甲）。
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "play_step");
+        assert_eq!(execs[0]["status"], "completed");
+        assert!(execs[0]["result"].as_str().unwrap().contains("场景甲"), "body: {parsed}");
+
+        // 注册面：tools 含 play_step/play_revise/read；系统提示词是 play 面（铁律）。
+        let names = tool_names.lock().unwrap().clone();
+        assert!(names.contains(&"play_step".to_string()), "{names:?}");
+        assert!(names.contains(&"play_revise".to_string()), "{names:?}");
+        assert!(names.contains(&"read".to_string()), "{names:?}");
+        let system = systems.lock().unwrap().clone();
+        assert!(system.contains("【铁律】") && system.contains("play_step"), "{system}");
+
+        // 落盘：事件 + state + 场景投影 + 图（会话绑定的世界）。
+        let run = root.join("worlds").join(session_id).join("runs").join("main");
+        let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
+        assert!(events.contains("evt-1") && events.contains("看清了厅堂"), "{events}");
+        let current: Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("state").join("current.json")).unwrap()).unwrap();
+        assert_eq!(current["turn"], 1);
+        let scene = std::fs::read_to_string(run.join("projections").join("scene.md")).unwrap();
+        assert!(scene.contains("场景甲"), "{scene}");
+        let graph: Value =
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+        assert!(graph["entities"]
+            .as_object()
+            .is_some_and(|entities| entities.contains_key("location_hall")), "graph: {graph}");
+    }
+
+    #[tokio::test]
+    async fn play_revise_chat_tool_regenerates_and_restore_error_surfaces() {
+        use inkos_engine::play_runner::{PlayAgents, PlayRunner};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _tool_names, _systems, _render_calls) = mock_play80_llm().await;
+        let session_id = "1783001000002-p80b";
+        let runtime = rt80(&root, &llm);
+        let shared_router = runtime.router.clone();
+        let app = app80(runtime);
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        seed_world(&root, session_id).await;
+
+        // 直调 runner 先走一回合（场景甲），聊天面负责重做。
+        let agents = PlayAgents { router: &shared_router };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: session_id.to_string(),
+            run_id: "main".to_string(),
+        };
+        runner.seed_opening(&agents, "雨夜开场。", &[]).await.unwrap();
+        let step1 = runner
+            .step(&agents, &agents, &agents, Some(&agents), "我环顾四周", None)
+            .await
+            .unwrap();
+        assert_eq!(step1.scene_text, "场景甲：灯笼的光晃了一下。");
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"重来上一回合","sessionId":"{session_id}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（上一回合已重做。）");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "play_revise");
+        assert_eq!(execs[0]["status"], "completed");
+        assert!(execs[0]["result"].as_str().unwrap().contains("场景乙"), "body: {parsed}");
+
+        // 重做落盘：变体对 + 事件不涨。
+        let run = root.join("worlds").join(session_id).join("runs").join("main");
+        let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
+        assert_eq!(events.lines().filter(|l| !l.trim().is_empty()).count(), 1, "{events}");
+        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants").join("turn-1")).unwrap().collect();
+        assert_eq!(variant_files.len(), 2, "变体对：{variant_files:?}");
+
+        // 恢复不存在变体：错误透传为 error 执行卡（TS restore 分支无 catch）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"恢复第一版","sessionId":"{session_id}","sessionKind":"play"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["tool"], "play_revise");
+        assert_eq!(execs[0]["status"], "error");
+        assert!(
+            execs[0]["error"].as_str().unwrap().contains("Play variant not found: turn 1 / v-none"),
+            "body: {parsed}"
+        );
+    }
+}

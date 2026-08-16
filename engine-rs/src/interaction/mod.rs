@@ -15,6 +15,7 @@ pub mod events;
 pub mod export_artifact;
 pub mod intents;
 pub mod modes;
+pub mod play_tools;
 pub mod project_tools;
 pub mod session;
 pub mod session_restore;
