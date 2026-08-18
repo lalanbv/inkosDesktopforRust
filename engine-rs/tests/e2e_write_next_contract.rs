@@ -9436,7 +9436,7 @@ mod script76_e2e {
 
     /// LLM（剧本/分镜双代理）+ 生图（images b64）双 mock。
     async fn mocks() -> (String, String) {
-        let script_body = "# 山雨 剧本\n\n## 剧本正文\n\n# 第一集 夜雨\n\n场景：旧宅门口\n\n字幕：第九集完".to_string();
+        let script_body = "# 山雨 剧本\n\n## 人物\n\n- 阿岩：更夫\n\n## 剧本正文\n\n### 第一集 夜雨\n\n场景：旧宅门口\n\n字幕：第九集完".to_string();
         let storyboard_body = "# 山雨 分镜\n\n## 分镜表\n\n| 镜号 | 画面 |\n| --- | --- |\n| 01 | 雨夜街口 |\n\n## 图像提示词\n\nPrompt: 雨夜街口，水墨远景\nPrompt: 灯下人影，半身近景".to_string();
         let llm_app = axum::Router::new().route(
             "/chat/completions",
@@ -9529,7 +9529,9 @@ mod script76_e2e {
         )
         .unwrap();
         assert_eq!(status_json["kind"], "script");
-        assert_eq!(status_json["status"], "completed");
+        assert_eq!(status_json["status"], "complete", "ProductionRunSnapshot 形态（141 号）");
+        assert_eq!(status_json["stage"], "commit");
+        assert_eq!(status_json["artifacts"].as_array().unwrap().len(), 2);
 
         // 缺 title → 502 中文。
         let (status, parsed) = call(
@@ -9860,7 +9862,7 @@ mod film77_e2e {
             &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/status.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(status_json["kind"], "interactive_film");
+        assert_eq!(status_json["kind"], "interactive-film", "ProductionRunSnapshot 形态（141 号）");
 
         // 缺 title → 502 中文。
         let (status, parsed) = call(
@@ -17394,5 +17396,139 @@ mod sub139_e2e {
             !writer_system.contains("inkos-story-review"),
             "writer 绑定 longWriting——不含审校技能"
         );
+    }
+}
+
+// ── 141 号：script-storyboard 同事务化（交付校验 + 产物快照同事务） ──
+
+mod sub141_e2e {
+    use super::*;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::pipeline::script_storyboard_runner::{run_script_creation, ScriptCreationRunOptions};
+
+    fn router_for(llm: &str) -> AgentRouter {
+        AgentRouter::new(
+            LlmEndpointConfig {
+                base_url: llm.to_string(),
+                api_key: "k".into(),
+                model: "m".into(),
+                max_tokens: 4096,
+                extra_headers: HashMap::new(),
+            },
+            HashMap::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn script_creation_commits_artifacts_with_snapshot_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        let deliverable = "## 人物\n\n- 阿仁：调查员\n\n## 剧本正文\n\n第一场：雨夜巷口，阿仁推开木门。\n\n第二场：灯下对峙，真相一角。\n";
+        let llm = spawn_script_mock(deliverable).await;
+        let router = router_for(&llm);
+        let mut progress = |_msg: String| {};
+        let result = run_script_creation(ScriptCreationRunOptions {
+            project_root: &root,
+            router: &router,
+            title: "夜巡",
+            instruction: "写一个两场短剧",
+            source_kind: None,
+            target_format: None,
+            source_text: None,
+            source_path: None,
+            requirements: None,
+            episode_count: None,
+            episode_duration: None,
+            language: Some("zh"),
+            project_id: Some("night-patrol"),
+            out_dir: None,
+            on_progress: &mut progress,
+        })
+        .await
+        .expect("合法交付应成功提交");
+
+        let base = root.join("dramas").join("night-patrol");
+        assert!(base.join("script-spec.md").exists(), "spec 落盘");
+        assert!(base.join("script.md").exists(), "script 落盘");
+        assert_eq!(result.script_path.replace('\\', "/"), "dramas/night-patrol/script.md");
+        let status: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(base.join("status.json")).unwrap()).unwrap();
+        assert_eq!(status["version"], 1, "快照形态（旧 completedAt 形态已废弃）");
+        assert_eq!(status["kind"], "script");
+        assert_eq!(status["id"], "night-patrol");
+        assert_eq!(status["status"], "complete");
+        assert_eq!(status["stage"], "commit");
+        let artifacts: Vec<&str> = status["artifacts"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(artifacts.len(), 2, "{artifacts:?}");
+        assert!(artifacts[0].ends_with("script-spec.md"));
+        assert!(artifacts[1].ends_with("script.md"));
+        assert!(status.get("completedAt").is_none(), "旧键不复存在");
+        assert!(status.get("title").is_none());
+    }
+
+    #[tokio::test]
+    async fn script_creation_rejects_invalid_deliverable_with_zero_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        // 缺人物节 → 交付校验拒（零提交：spec/script/status 均不落盘）。
+        let broken = "## 剧本正文\n\n只有正文没有人物表。\n";
+        let llm = spawn_script_mock(broken).await;
+        let router = router_for(&llm);
+        let mut progress = |_msg: String| {};
+        let err = run_script_creation(ScriptCreationRunOptions {
+            project_root: &root,
+            router: &router,
+            title: "坏交付",
+            instruction: "写短剧",
+            source_kind: None,
+            target_format: None,
+            source_text: None,
+            source_path: None,
+            requirements: None,
+            episode_count: None,
+            episode_duration: None,
+            language: Some("zh"),
+            project_id: Some("broken"),
+            out_dir: None,
+            on_progress: &mut progress,
+        })
+        .await
+        .expect_err("缺人物节应拒交");
+        assert!(
+            err.contains("剧本生产没有返回且仅返回一份"),
+            "TS 错误文案逐字：{err}"
+        );
+        let base = root.join("dramas").join("broken");
+        assert!(!base.join("script-spec.md").exists(), "零提交：spec 未落盘");
+        assert!(!base.join("script.md").exists(), "零提交：script 未落盘");
+        assert!(!base.join("status.json").exists(), "零提交：status 未落盘");
+    }
+
+    async fn spawn_script_mock(script_body: &str) -> String {
+        let body = script_body.to_string();
+        fn sse(content: &str) -> String {
+            let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+            format!("data: {chunk}\n\ndata: [DONE]\n\n")
+        }
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
+                let body = body.clone();
+                async move {
+                    let system = payload["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("剧本创作工具") { body.clone() } else { "PASS".to_string() };
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        sse(&content),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
     }
 }

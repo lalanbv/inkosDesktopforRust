@@ -13,7 +13,7 @@ use crate::agents::script_storyboard as agents;
 use crate::agents::script_storyboard::{
     InteractiveFilmCreationInput, ScriptCreationInput, StoryboardCreationInput,
 };
-use crate::interactive_film::{save_story_graph, StoryGraph};
+use crate::interactive_film::StoryGraph;
 use crate::llm::agent_router::AgentRouter;
 
 pub struct ScriptCreationRunOptions<'a> {
@@ -228,6 +228,63 @@ async fn resolve_source_text(
     ))
 }
 
+
+/// TS `textArtifact`（141 号）：内容保证尾换行的产物条目。
+fn text_artifact(relative_path: String, content: &str) -> crate::utils::atomic_file_set::AtomicFileWrite {
+    use crate::utils::atomic_file_set::{AtomicFileWrite, FileContent};
+    let content = if content.ends_with('\n') { content.to_string() } else { format!("{content}\n") };
+    AtomicFileWrite { relative_path, content: FileContent::Text(content) }
+}
+
+/// TS `assertNonEmptyArtifacts`：任一产物空 → 拒交。
+fn assert_non_empty_artifacts(
+    artifacts: &[crate::utils::atomic_file_set::AtomicFileWrite],
+) -> Result<(), String> {
+    for artifact in artifacts {
+        let empty = match &artifact.content {
+            crate::utils::atomic_file_set::FileContent::Text(text) => text.trim().is_empty(),
+            crate::utils::atomic_file_set::FileContent::Bytes(bytes) => bytes.is_empty(),
+        };
+        if empty {
+            return Err(format!("Production artifact is empty: {}", artifact.relative_path));
+        }
+    }
+    Ok(())
+}
+
+/// 三面共用的 commit 尾（141 号：产物 + 完成快照同事务；快照形态对齐 TS
+/// 各 commitProductionArtifacts 块——kind 分面、status complete、stage commit）。
+async fn commit_production_complete(
+    project_root: &std::path::Path,
+    artifacts: Vec<crate::utils::atomic_file_set::AtomicFileWrite>,
+    run_path: String,
+    kind: crate::production::ProductionKind,
+    project_id: &str,
+) -> Result<(), String> {
+    let artifact_paths: Vec<String> = artifacts.iter().map(|a| a.relative_path.clone()).collect();
+    crate::production::commit_production_artifacts(
+        project_root,
+        artifacts,
+        &run_path,
+        &crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
+            kind,
+            id: project_id.to_string(),
+            status: crate::production::ProductionRunStatus::Complete,
+            stage: "commit".to_string(),
+            artifacts: artifact_paths,
+            observations: Vec::new(),
+            model: None,
+            skill_ids: None,
+            resume_cursor: None,
+            error: None,
+        }),
+        Vec::new(),
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 async fn write_project_text(project_root: &Path, relative_path: &str, content: &str) -> Result<(), String> {
     let full = safe_child_path(project_root, relative_path)?;
     if let Some(parent) = full.parent() {
@@ -317,21 +374,22 @@ pub async fn run_script_creation(options: ScriptCreationRunOptions<'_>) -> Resul
 
     (options.on_progress)("Writing script creation spec...".to_string());
     let spec = agents::render_script_spec(&input);
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "script-spec.md"]), &spec).await?;
 
     (options.on_progress)("Writing script draft...".to_string());
     let script = agents::normalize_script_episode_end_labels(&agents::write_script(options.router, &input).await?);
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "script.md"]), &script).await?;
-    let status = json!({
-        "status": "completed",
-        "kind": "script",
-        "title": options.title,
-        "completedAt": crate::utils::utc_time::utc_now_iso(),
-    });
-    write_project_text(
+    // 141 号：交付校验（恰好一份人物节 + 非空剧本正文节）先行——拒则零提交。
+    agents::assert_script_deliverable(&script, options.language)?;
+    let artifacts = vec![
+        text_artifact(rel_path(&[&base_dir, "script-spec.md"]), &spec),
+        text_artifact(rel_path(&[&base_dir, "script.md"]), &script),
+    ];
+    assert_non_empty_artifacts(&artifacts)?;
+    commit_production_complete(
         options.project_root,
-        &rel_path(&[&base_dir, "status.json"]),
-        &serde_json::to_string_pretty(&status).unwrap_or_default(),
+        artifacts,
+        rel_path(&[&base_dir, "status.json"]),
+        crate::production::ProductionKind::Script,
+        &project_id,
     )
     .await?;
 
@@ -361,13 +419,10 @@ pub async fn run_storyboard_creation(options: StoryboardCreationRunOptions<'_>) 
 
     (options.on_progress)("Writing storyboard creation spec...".to_string());
     let spec = agents::render_storyboard_spec(&input);
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "storyboard-spec.md"]), &spec).await?;
 
     (options.on_progress)("Writing storyboard and image prompts...".to_string());
     let storyboard = agents::write_storyboard(options.router, &input).await?;
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "storyboard.md"]), &storyboard).await?;
     let image_prompts = agents::extract_storyboard_image_prompts(&storyboard);
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "image-prompts.md"]), &image_prompts).await?;
     for sub in ["source", "generated", "selected"] {
         ensure_project_dir(options.project_root, &rel_path(&[&base_dir, "assets", sub])).await?;
     }
@@ -380,22 +435,22 @@ pub async fn run_storyboard_creation(options: StoryboardCreationRunOptions<'_>) 
         &image_prompts,
         &crate::utils::utc_time::utc_now_iso(),
     );
-    write_project_text(
+    let artifacts = vec![
+        text_artifact(rel_path(&[&base_dir, "storyboard-spec.md"]), &spec),
+        text_artifact(rel_path(&[&base_dir, "storyboard.md"]), &storyboard),
+        text_artifact(rel_path(&[&base_dir, "image-prompts.md"]), &image_prompts),
+        text_artifact(
+            rel_path(&[&base_dir, "assets.json"]),
+            &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        ),
+    ];
+    assert_non_empty_artifacts(&artifacts)?;
+    commit_production_complete(
         options.project_root,
-        &rel_path(&[&base_dir, "assets.json"]),
-        &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-    )
-    .await?;
-    let status = json!({
-        "status": "completed",
-        "kind": "storyboard",
-        "title": options.title,
-        "completedAt": crate::utils::utc_time::utc_now_iso(),
-    });
-    write_project_text(
-        options.project_root,
-        &rel_path(&[&base_dir, "status.json"]),
-        &serde_json::to_string_pretty(&status).unwrap_or_default(),
+        artifacts,
+        rel_path(&[&base_dir, "status.json"]),
+        crate::production::ProductionKind::Storyboard,
+        &project_id,
     )
     .await?;
 
@@ -435,7 +490,6 @@ pub async fn run_interactive_film_creation(
 
     (options.on_progress)("Writing interactive-film creation spec...".to_string());
     let spec = agents::render_interactive_film_spec(&input);
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "interactive-spec.md"]), &spec).await?;
 
     (options.on_progress)("Writing story tree, flags, script, storyboard, and image prompts...".to_string());
     let package_markdown = agents::write_interactive_film(options.router, &input).await?;
@@ -459,16 +513,6 @@ pub async fn run_interactive_film_creation(
     let image_prompts = agents::extract_storyboard_image_prompts(&storyboard);
     let story_graph_path = rel_path(&["interactive-films", &project_id, "story-graph.json"]);
 
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "story-tree.md"]), &story_tree).await?;
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "flags.md"]), &flags).await?;
-    write_project_text(
-        options.project_root,
-        &rel_path(&[&base_dir, "script.md"]),
-        &agents::normalize_script_episode_end_labels(&script),
-    )
-    .await?;
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "storyboard.md"]), &storyboard).await?;
-    write_project_text(options.project_root, &rel_path(&[&base_dir, "image-prompts.md"]), &image_prompts).await?;
     for sub in ["source", "generated", "selected"] {
         ensure_project_dir(options.project_root, &rel_path(&[&base_dir, "assets", sub])).await?;
     }
@@ -501,18 +545,36 @@ pub async fn run_interactive_film_creation(
         options.on_progress,
     )
     .await;
-    save_story_graph(options.project_root, &project_id, &graph).await?;
+    graph.validate_schema_version().map_err(|e| e.to_string())?;
 
-    let status = json!({
-        "status": "completed",
-        "kind": "interactive_film",
-        "title": options.title,
-        "completedAt": crate::utils::utc_time::utc_now_iso(),
-    });
-    write_project_text(
+    // 141 号：TS 已把 graph JSON 并入同事务（story-graph.json 为产物之一，
+    // saveStoryGraph 独立写移除）；schema 校验保留在提交前。
+    let artifacts = vec![
+        text_artifact(rel_path(&[&base_dir, "interactive-spec.md"]), &spec),
+        text_artifact(rel_path(&[&base_dir, "story-tree.md"]), &story_tree),
+        text_artifact(rel_path(&[&base_dir, "flags.md"]), &flags),
+        text_artifact(
+            rel_path(&[&base_dir, "script.md"]),
+            &agents::normalize_script_episode_end_labels(&script),
+        ),
+        text_artifact(rel_path(&[&base_dir, "storyboard.md"]), &storyboard),
+        text_artifact(rel_path(&[&base_dir, "image-prompts.md"]), &image_prompts),
+        text_artifact(
+            rel_path(&[&base_dir, "assets.json"]),
+            &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        ),
+        text_artifact(
+            story_graph_path.clone(),
+            &serde_json::to_string_pretty(&graph).unwrap_or_default(),
+        ),
+    ];
+    assert_non_empty_artifacts(&artifacts)?;
+    commit_production_complete(
         options.project_root,
-        &rel_path(&[&base_dir, "status.json"]),
-        &serde_json::to_string_pretty(&status).unwrap_or_default(),
+        artifacts,
+        rel_path(&[&base_dir, "status.json"]),
+        crate::production::ProductionKind::InteractiveFilm,
+        &project_id,
     )
     .await?;
 

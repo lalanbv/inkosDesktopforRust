@@ -419,6 +419,42 @@ fn heading_matches(text: &str, heading: &str) -> bool {
 }
 
 /// `extractMarkdownSection`：首个匹配标题的正文块（同级或更高级标题终止）。
+/// TS `countMarkdownSections`：标题（# 级 1-6）匹配标题族的节数。
+pub fn count_markdown_sections(raw: &str, headings: &[&str]) -> usize {
+    let heading_re = regex::Regex::new(r"^(#{1,6})\s*(.+?)\s*$").unwrap();
+    let normalized: Vec<String> = headings.iter().map(|h| normalize_heading_text(h)).collect();
+    raw.split('\n')
+        .map(|line| line.trim_end_matches('\r'))
+        .filter_map(|line| {
+            let caps = heading_re.captures(line)?;
+            let text = normalize_heading_text(caps.get(2).map(|m| m.as_str()).unwrap_or_default());
+            Some((text, normalized.clone()))
+        })
+        .filter(|(text, normalized)| normalized.iter().any(|heading| heading_matches(text, heading)))
+        .count()
+}
+
+/// TS `assertScriptDeliverable`（141 号）：恰好一份人物节 + 一份非空剧本
+/// 正文节，否则拒交（零提交）。
+pub fn assert_script_deliverable(script: &str, language: Option<&str>) -> Result<(), String> {
+    let en = language == Some("en");
+    let character_headings: Vec<&str> = if en { vec!["Characters"] } else { vec!["人物", "Characters"] };
+    let script_headings: Vec<&str> = if en { vec!["Script"] } else { vec!["剧本正文", "Script"] };
+    let body = extract_markdown_section(script, &script_headings);
+    let character_count = count_markdown_sections(script, &character_headings);
+    let script_count = count_markdown_sections(script, &script_headings);
+    let valid = body.as_deref().is_some_and(|body| !body.trim().is_empty())
+        && character_count == 1
+        && script_count == 1;
+    if valid {
+        Ok(())
+    } else if en {
+        Err("Script production did not return exactly one `## Characters` and one non-empty `## Script` deliverable. No artifacts were committed.".to_string())
+    } else {
+        Err("剧本生产没有返回且仅返回一份 `## 人物` 和一份非空 `## 剧本正文` 交付段，未提交任何产物。".to_string())
+    }
+}
+
 pub fn extract_markdown_section(raw: &str, headings: &[&str]) -> Option<String> {
     let heading_re = regex::Regex::new(r"^(#{1,6})\s*(.+?)\s*$").ok()?;
     let level_re = regex::Regex::new(r"^(#{1,6})\s+").ok()?;
