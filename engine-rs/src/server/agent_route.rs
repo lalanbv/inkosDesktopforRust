@@ -569,11 +569,18 @@ pub async fn post_agent(
                 "stages": [],
             }));
         }
-        fn on_tool_end(&self, id: &str, tool: &str, result_text: &str, is_error: bool) {
-            self.hub.broadcast("tool:end", &json!({
+        fn on_tool_end(&self, id: &str, tool: &str, result_text: &str, details: Option<&Value>, is_error: bool) {
+            // 114 号（86 号备案闭合）：TS 聊天面 tool:end——result.content 为
+            // `[{type:"text",text}]` 数组 + 顶层 details（None 时键缺省，TS 同）。
+            let mut payload = json!({
                 "sessionId": self.session_id, "id": id, "tool": tool,
-                "result": { "content": result_text }, "isError": is_error,
-            }));
+                "result": { "content": [{ "type": "text", "text": result_text }] },
+                "isError": is_error,
+            });
+            if let Some(details) = details {
+                payload["details"] = details.clone();
+            }
+            self.hub.broadcast("tool:end", &payload);
         }
     }
 

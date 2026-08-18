@@ -816,12 +816,114 @@ pub async fn bootstrap_structured_state_from_markdown(
     })
 }
 
+/// `rewriteStructuredStateFromMarkdown`（TS 逐字）：**无条件**以 markdown 真相面
+/// 重写四件套（load-or-bootstrap 变体在既有 json 合法时保留——导入回放需要
+/// 强制回写使 state/*.json 与 markdown 同步；114 号接入导入链）。
+pub async fn rewrite_structured_state_from_markdown(
+    store: &dyn StateStore,
+    book_dir: &str,
+    fallback_chapter: Option<u32>,
+) -> crate::Result<BootstrapStructuredStateResult> {
+    let story_dir = join_path(book_dir, "story");
+    let state_dir = join_path(&story_dir, "state");
+    let manifest_path = join_path(&state_dir, "manifest.json");
+    let current_state_path = join_path(&state_dir, "current_state.json");
+    let hooks_path = join_path(&state_dir, "hooks.json");
+    let summaries_path = join_path(&state_dir, "chapter_summaries.json");
+
+    store.mkdir_p(&state_dir).await?;
+
+    let mut warnings: Vec<String> = Vec::new();
+    let existing_manifest: Option<StateManifest> =
+        load_json_if_valid(store, &manifest_path, &mut warnings, "manifest.json").await?;
+    let language_str: String = match &existing_manifest {
+        Some(m) if m.language == "zh" || m.language == "en" => m.language.clone(),
+        _ => match resolve_runtime_language(store, book_dir).await? {
+            crate::utils::language::WritingLanguage::Zh => "zh".to_string(),
+            crate::utils::language::WritingLanguage::En => "en".to_string(),
+        },
+    };
+
+    let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
+    let markdown_state =
+        load_markdown_bootstrap_state(store, book_dir, &story_dir, markdown_fallback, &mut warnings).await?;
+
+    let migration_warnings = {
+        let existing = existing_manifest
+            .as_ref()
+            .map(|m| m.migration_warnings.clone())
+            .unwrap_or_default();
+        unique_strings(&[existing, warnings.clone()].concat())
+    };
+    let manifest = StateManifest {
+        schema_version: 2,
+        language: language_str,
+        last_applied_chapter: markdown_state.durable_story_progress,
+        projection_version: existing_manifest
+            .as_ref()
+            .map(|m| m.projection_version)
+            .unwrap_or(1),
+        migration_warnings,
+    };
+
+    // 四件全部强制重写（markdown 为源）。
+    let manifest_json = serde_json::to_string_pretty(&manifest)?;
+    store.write_string(&manifest_path, &manifest_json).await?;
+    let current_json = serde_json::to_string_pretty(&markdown_state.current_state)?;
+    store.write_string(&current_state_path, &current_json).await?;
+    let hooks_json = serde_json::to_string_pretty(&markdown_state.hooks_state)?;
+    store.write_string(&hooks_path, &hooks_json).await?;
+    let summaries_json = serde_json::to_string_pretty(&markdown_state.summaries_state)?;
+    store.write_string(&summaries_path, &summaries_json).await?;
+
+    Ok(BootstrapStructuredStateResult {
+        created_files: Vec::new(),
+        warnings: manifest.migration_warnings.clone(),
+        manifest,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::runtime_state::{ChapterSummaryRow, StateManifest};
     use crate::state::store::InMemoryStateStore;
     use crate::utils::language::WritingLanguage;
+
+    #[tokio::test]
+    async fn rewrite_overwrites_four_state_files_from_markdown() {
+        let store = crate::state::store::FsStateStore;
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path();
+        let story = book_dir.join("story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#).unwrap();
+        // 既有 json（应被强制覆盖为 markdown 派生值）。
+        std::fs::create_dir_all(story.join("state")).unwrap();
+        std::fs::write(
+            story.join("state").join("manifest.json"),
+            r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":9,"projectionVersion":7,"migrationWarnings":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            story.join("current_state.md"),
+            "| Field | Value |\n| --- | --- |\n| 当前章节 | 2 |\n| 当前位置 | 坊市 |",
+        )
+        .unwrap();
+        std::fs::create_dir_all(book_dir.join("chapters")).unwrap();
+        std::fs::write(book_dir.join("chapters").join("0001_风起.md"), "x").unwrap();
+        std::fs::write(book_dir.join("chapters").join("0002_云涌.md"), "x").unwrap();
+        std::fs::write(book_dir.join("chapters").join("index.json"), r#"[{"number":1},{"number":2}]"#).unwrap();
+
+        let book_dir_str = book_dir.display().to_string();
+        let result = rewrite_structured_state_from_markdown(&store, &book_dir_str, Some(0))
+            .await
+            .unwrap();
+        // 既有 manifest 语言保留（en）、进度被 markdown/工件覆盖（2）、projection 保留。
+        assert_eq!(result.manifest.language, "en");
+        assert_eq!(result.manifest.last_applied_chapter, 2);
+        assert_eq!(result.manifest.projection_version, 7);
+    }
 
     #[test]
     fn resolve_contiguous_chapter_prefix_counts_from_one() {

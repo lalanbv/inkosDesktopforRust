@@ -18,7 +18,7 @@ pub trait LoopEvents: Send + Sync {
     /// 工具开始（tool:start）。
     fn on_tool_start(&self, _id: &str, _tool: &str, _args: &Value) {}
     /// 工具结束（tool:end）。
-    fn on_tool_end(&self, _id: &str, _tool: &str, _result_text: &str, _is_error: bool) {}
+    fn on_tool_end(&self, _id: &str, _tool: &str, _result_text: &str, _details: Option<&Value>, _is_error: bool) {}
 }
 
 /// 无操作回调。
@@ -143,7 +143,7 @@ pub async fn run_agent_loop(
                     && result.text.contains("escapes"))
                 || result.text.contains("failed:")
                 || result.text.starts_with("Unknown tool");
-            events.on_tool_end(id, name, &result.text, is_error);
+            events.on_tool_end(id, name, &result.text, (!is_error).then_some(result.details.as_ref()).flatten(), is_error);
             executions.push(LoopToolExecution {
                 id: id.clone(),
                 tool: name.clone(),

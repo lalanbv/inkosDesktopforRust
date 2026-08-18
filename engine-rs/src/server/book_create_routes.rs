@@ -773,6 +773,15 @@ pub(crate) async fn import_chapters_chain_with_resume(
         crate::agents::writer::save_new_truth_files(&book_dir, &persisted, language)
             .await
             .map_err(|e| e.to_string())?;
+        // 114 号：TS syncLegacyStructuredStateFromMarkdown——analyzer 输出无 runtime
+        // delta 时以 markdown 真相面强制回写 state/*.json 四件套（磁盘格式对齐）。
+        crate::state::state_bootstrap::rewrite_structured_state_from_markdown(
+            &crate::state::store::FsStateStore,
+            &book_dir.display().to_string(),
+            Some(chapter_number),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         // 索引：同号替换（resume），否则追加；status "imported"。
         let existing = state.load_chapter_index(book_id).await.map_err(|e| e.to_string())?;

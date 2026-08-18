@@ -16408,3 +16408,267 @@ mod sub112_e2e {
         assert_eq!(execs[0]["status"], "completed", "body: {parsed}");
     }
 }
+
+mod sub114_e2e {
+    //! 114 号：① 导入回放回写 state/*.json 四件套（TS
+    //! syncLegacyStructuredStateFromMarkdown——磁盘格式对齐）；② 聊天面
+    //! tool:end 结构化（result.content 数组 + 顶层 details——86 号备案闭合）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// 导入回放 mock（复用 sub112 形态：创作总编/连续性分析/创作助手）。
+    async fn mock_replay() -> String {
+        const ANALYZER_MIN: &str = "=== CHAPTER_TITLE ===\n续章\n\n=== CHAPTER_CONTENT ===\n夜色渐深。\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n\n=== UPDATED_STATE ===\n| Field | Value |\n| --- | --- |\n| 当前章节 | 2 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n\n=== CHAPTER_SUMMARY ===\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 2 | 续章 | 林动 | 夜探 | 无 | 无 | 紧张 | 推进章 |\n\n=== UPDATED_SUBPLOTS ===\n\n=== UPDATED_EMOTIONAL_ARCS ===\n\n=== UPDATED_CHARACTER_MATRIX ===\n## 林动\n- **Role**: protagonist\n";
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
+                let payload = if system.contains("连续性分析") {
+                    serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_MIN } }] })
+                } else if system.contains("创作助手") {
+                    serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                        { "index": 0, "id": "call_c114", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b114\",\"sourcePath\":\"novel114.txt\",\"resumeFrom\":2}" } },
+                    ] } }] })
+                } else if system.contains("创作总编") {
+                    serde_json::json!({ "choices": [{ "delta": { "content": PLANNER_RESPONSE } }] })
+                } else {
+                    serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn import_replay_rewrites_structured_state_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b114");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b114","title":"结构态书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动。").unwrap();
+        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基\n\n旧。").unwrap();
+        std::fs::write(
+            root.join("novel114.txt"),
+            "# 第一章 风起\n\n林动。\n\n# 第二章 续章\n\n夜色渐深。",
+        )
+        .unwrap();
+
+        let llm = mock_replay().await;
+        let session = "1783099000010-s114";
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}","bookId":"b114"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"续放导入 novel114.txt","sessionId":"{session}","activeBookId":"b114"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["status"], "completed", "body: {parsed}");
+
+        // 四件套（TS 导入路径磁盘格式）。
+        let state = book.join("story").join("state");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(state.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["language"], "zh");
+        assert_eq!(manifest["lastAppliedChapter"], 2, "回放后进度 2：{manifest}");
+        let current: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(state.join("current_state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(current["chapter"], 2, "{current}");
+        let summaries: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(state.join("chapter_summaries.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            summaries["rows"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["chapter"] == 2)),
+            "{summaries}"
+        );
+        let hooks: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(state.join("hooks.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(hooks["hooks"].is_array(), "{hooks}");
+    }
+
+    /// material 工具聊天 mock：首轮发 ingest_material 工具调用。
+    async fn mock_material_chat() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let count = body["messages"].as_array().map(Vec::len).unwrap_or(0);
+                let payload = if count <= 2 {
+                    serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                        { "index": 0, "id": "call_m114", "function": { "name": "ingest_material", "arguments": "{\"sourceKind\":\"file\",\"filePath\":\"设定.md\",\"filename\":\"设定.md\"}" } },
+                    ] } }] })
+                } else {
+                    serde_json::json!({ "choices": [{ "delta": { "content": "已归档。" } }] })
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn chat_tool_end_sse_carries_content_array_and_details() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("设定.md"), "主角设定草稿。").unwrap();
+        let llm = mock_material_chat().await;
+        let runtime = rt(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(runtime);
+        let session = "1783099000011-e114";
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"归档设定材料","sessionId":"{session}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+
+        // SSE tool:end：result.content 为 [{type:"text",text}] + 顶层 details。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscriber.recv())
+                .await
+                .expect("等待事件超时")
+                .unwrap();
+            if event.event == "tool:end" {
+                let payload: serde_json::Value = serde_json::from_str(&event.data).unwrap();
+                assert_eq!(payload["tool"], "ingest_material", "{payload}");
+                assert!(
+                    payload["result"]["content"][0]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Material ingested: ")),
+                    "{payload}"
+                );
+                assert_eq!(payload["result"]["content"][0]["type"], "text");
+                assert_eq!(payload["details"]["kind"], "material_ingested", "{payload}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "未收到 tool:end：{}",
+                event.event
+            );
+        }
+    }
+}
