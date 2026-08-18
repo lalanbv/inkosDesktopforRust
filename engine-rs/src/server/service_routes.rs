@@ -810,15 +810,228 @@ pub async fn test_service(
         }
     }
 
-    let message = match language {
-        "en" => "Could not determine a model automatically. Fill in an available model first, or provide a service endpoint that supports /models.",
-        _ => "无法自动确定模型，请先填写可用模型或提供支持 /models 的服务端点。",
+    // ── 深链（96 号）：模型候选 × 协议计划 → 最小 chat 探测。 ──
+    // 候选 = preferred + discovered 前 2（TS test 路径 useCustomFallbacks=false
+    // 且 includeGenericFallbacks=false）。
+    let mut candidates: Vec<String> = Vec::new();
+    let mut push_candidate = |value: Option<&str>| {
+        if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            if !candidates.iter().any(|c| c == value) {
+                candidates.push(value.to_string());
+            }
+        }
     };
+    let preferred_model = payload.get("model").and_then(Value::as_str);
+    push_candidate(preferred_model);
+    for model in probed.iter().take(2) {
+        push_candidate(Some(&model.id));
+    }
+    if candidates.is_empty() {
+        let message = match language {
+            "en" => "Could not determine a model automatically. Fill in an available model first, or provide a service endpoint that supports /models.",
+            _ => "无法自动确定模型，请先填写可用模型或提供支持 /models 的服务端点。",
+        };
+        let probe = json!({ "ok": false, "models": 0, "error": connection_failed });
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": message, "probe": probe, "chat": null })),
+        );
+    }
+
+    // 计划：preferred 带流式 → 先流式后非流式；否则单非流式（responses 协议
+    // 传输未移植，一律以 chat completions 探测——见 96 号偏差备案）。
+    let mut plans: Vec<bool> = Vec::new();
+    if preferred_stream {
+        plans.push(true);
+        plans.push(false);
+    } else {
+        plans.push(false);
+    }
+
+    let label = endpoint
+        .map(|ep| ep.label.clone())
+        .or_else(|| preset.as_ref().map(|p| p.label.clone()));
+    let mut last_error = String::new();
+    for model in &candidates {
+        for stream in &plans {
+            match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream).await {
+                Ok(()) => {
+                    let probe = json!({ "ok": true, "models": discovered.len() });
+                    return (
+                        StatusCode::OK,
+                        Json(json!({
+                            "ok": true,
+                            "modelCount": discovered.len(),
+                            "models": discovered,
+                            "selectedModel": model,
+                            "detected": {
+                                "apiFormat": preferred_api_format,
+                                "stream": stream,
+                                "baseUrl": resolved_base_url,
+                                "modelsSource": "api",
+                            },
+                            "probe": probe,
+                            "chat": null,
+                        })),
+                    );
+                }
+                Err(error) => {
+                    last_error = format_service_probe_error(&FormatProbeErrorArgs {
+                        service: base_service,
+                        label: label.as_deref(),
+                        base_url: &resolved_base_url,
+                        model,
+                        api_format: preferred_api_format,
+                        stream: Some(*stream),
+                        error: &error,
+                        language,
+                    });
+                }
+            }
+        }
+    }
     let probe = json!({ "ok": false, "models": 0, "error": connection_failed });
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({ "ok": false, "error": message, "probe": probe, "chat": null })),
+        Json(json!({ "ok": false, "error": last_error, "probe": probe, "chat": null })),
     )
+}
+
+/// 深链最小 chat 探测（TS `chatCompletion` "Reply with OK only."，maxTokens
+/// 16，无重试，SERVICE_CHAT_PROBE_TIMEOUT_MS=8s）。
+async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool) -> Result<(), String> {
+    use crate::llm::streaming_client::{ChatCompletionParams, StreamingChatClient};
+    let client = StreamingChatClient::new(base_url.to_string(), api_key.to_string(), HashMap::new());
+    let message = crate::llm::provider::LLMMessage {
+        role: crate::llm::provider::LLMRole::User,
+        content: "Reply with OK only.".to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    };
+    let params = ChatCompletionParams {
+        model,
+        messages: std::slice::from_ref(&message),
+        temperature: 0.7,
+        max_tokens: 16,
+        stream,
+        extra: None,
+        tools: None,
+        images: None,
+    };
+    let attempt = client.stream_chat(&params);
+    match tokio::time::timeout(std::time::Duration::from_millis(8_000), attempt).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("service connection test timed out".to_string()),
+    }
+}
+
+/// `formatServiceProbeError` 入参。
+struct FormatProbeErrorArgs<'a> {
+    service: &'a str,
+    label: Option<&'a str>,
+    base_url: &'a str,
+    model: &'a str,
+    api_format: &'a str,
+    stream: Option<bool>,
+    error: &'a str,
+    language: &'a str,
+}
+
+/// `formatServiceProbeError`（96 号逐字）：google 四步清单 / moonshot·kimi
+/// kimi-k2.x 提示 / 通用四项 + 上下文块（服务商/测试模型/协议/Base URL）+
+/// 上游详情前缀（剥 baseUrl 尾注）。
+fn format_service_probe_error(args: &FormatProbeErrorArgs<'_>) -> String {
+    let en = args.language == "en";
+    let pick = |zh: &str, en_text: &str| if en { en_text.to_string() } else { zh.to_string() };
+    static BASEURL_TAIL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let tail_re = BASEURL_TAIL_RE
+        .get_or_init(|| regex::Regex::new(r"(?m)
+\s*\(baseUrl:[\s\S]*?\)$").unwrap());
+    let raw_detail = tail_re.replace_all(args.error.trim(), "").trim().to_string();
+    let upstream_detail = if raw_detail.contains("上游详情：") { raw_detail.clone() } else { String::new() };
+
+    let protocol = if args.api_format == "responses" { "Responses" } else { "Chat / Completions" };
+    let stream_suffix = match args.stream {
+        Some(stream) => pick(
+            &format!("，{}", if stream { "流式" } else { "非流式" }),
+            &format!(", {}", if stream { "streaming" } else { "non-streaming" }),
+        ),
+        None => String::new(),
+    };
+    let display_label = args.label.unwrap_or(args.service);
+    let context = [
+        pick(&format!("服务商：{display_label}"), &format!("Service: {display_label}")),
+        pick(&format!("测试模型：{}", args.model), &format!("Test model: {}", args.model)),
+        pick(&format!("协议：{protocol}{stream_suffix}"), &format!("Protocol: {protocol}{stream_suffix}")),
+        pick(&format!("Base URL：{}", args.base_url), &format!("Base URL: {}", args.base_url)),
+    ].join("
+");
+    let upstream_prefix = |detail: &str| pick(&format!("
+上游返回：{detail}"), &format!("
+Upstream response: {detail}"));
+
+    if args.service == "google" {
+        let mut lines = vec![
+            pick("Google Gemini 测试连接失败。", "Google Gemini connection test failed."),
+            context,
+            String::new(),
+            pick("请优先检查：", "Check these first:"),
+            pick(
+                "1. API Key 是否来自 Google AI Studio 的 Gemini API key，而不是 OAuth、Vertex AI 或其它 Google 服务凭据。",
+                "1. The API Key is a Gemini API key from Google AI Studio, not an OAuth, Vertex AI, or other Google service credential.",
+            ),
+            pick(
+                "2. 该 key 所属项目是否已启用 Gemini API，并且没有被限制到其它 API、来源或服务。",
+                "2. The key's project has the Gemini API enabled and is not restricted to other APIs, origins, or services.",
+            ),
+            pick(
+                "3. 当前地区/账号是否允许访问 Gemini API。",
+                "3. Your region/account is allowed to access the Gemini API.",
+            ),
+            pick(
+                "4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。",
+                "4. If the key was ever leaked, regenerate it in AI Studio before saving.",
+            ),
+        ];
+        if !upstream_detail.is_empty() {
+            lines.push(upstream_prefix(&upstream_detail));
+        }
+        return lines.join("
+");
+    }
+
+    if args.service == "moonshot" || args.service == "kimiCodingPlan" || args.service == "kimicode" {
+        let mut lines = vec![
+            pick(&format!("{display_label} 测试连接失败。"), &format!("{display_label} connection test failed.")),
+            context,
+            String::new(),
+            pick(
+                "请优先检查模型是否可用，以及 kimi-k2.x 这类模型是否需要 temperature=1。",
+                "Check first whether the model is available, and whether models like kimi-k2.x require temperature=1.",
+            ),
+        ];
+        if !upstream_detail.is_empty() {
+            lines.push(upstream_prefix(&upstream_detail));
+        }
+        return lines.join("
+");
+    }
+
+    let mut lines = vec![
+        pick(&format!("{display_label} 测试连接失败。"), &format!("{display_label} connection test failed.")),
+        context,
+        String::new(),
+        pick(
+            "请检查 API Key、模型可用性、账号额度，以及协议类型是否匹配该服务商。",
+            "Check the API Key, model availability, account quota, and whether the protocol type matches this service.",
+        ),
+    ];
+    if !upstream_detail.is_empty() {
+        lines.push(upstream_prefix(&upstream_detail));
+    }
+    lines.join("
+")
 }
 
 // ── PUT / GET /api/v1/services/:service/secret ─────────────────
@@ -1417,6 +1630,69 @@ fn synthesize_service_entry(service: &str) -> Option<ServiceConfigEntry> {
         return Some(ServiceConfigEntry { service: service.to_string(), ..Default::default() });
     }
     None
+}
+
+#[cfg(test)]
+mod probe_error_tests {
+    use super::*;
+
+    #[test]
+    fn google_branch_four_step_checklist() {
+        let message = format_service_probe_error(&FormatProbeErrorArgs {
+            service: "google",
+            label: Some("Google Gemini"),
+            base_url: "https://generativelanguage.googleapis.com",
+            model: "gemini-2.5-flash",
+            api_format: "chat",
+            stream: Some(true),
+            error: "HTTP 400\n上游详情：invalid key\n  (baseUrl:https://x)",
+            language: "zh",
+        });
+        assert!(message.starts_with("Google Gemini 测试连接失败。"), "{message}");
+        assert!(message.contains("服务商：Google Gemini"), "{message}");
+        assert!(message.contains("测试模型：gemini-2.5-flash"), "{message}");
+        assert!(message.contains("协议：Chat / Completions，流式"), "{message}");
+        assert!(message.contains("Base URL：https://generativelanguage.googleapis.com"), "{message}");
+        assert!(message.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"), "{message}");
+        assert!(message.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"), "{message}");
+        // baseUrl 尾注被剥 + 上游详情前缀保留。
+        assert!(!message.contains("(baseUrl:https://x)"), "{message}");
+        assert!(message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"), "{message}");
+    }
+
+    #[test]
+    fn moonshot_branch_and_english() {
+        let message = format_service_probe_error(&FormatProbeErrorArgs {
+            service: "moonshot",
+            label: Some("Moonshot"),
+            base_url: "https://api.moonshot.cn",
+            model: "kimi-k2.5",
+            api_format: "responses",
+            stream: Some(false),
+            error: "HTTP 429",
+            language: "zh",
+        });
+        assert!(message.contains("Moonshot 测试连接失败。"), "{message}");
+        assert!(message.contains("协议：Responses，非流式"), "{message}");
+        assert!(message.contains("请优先检查模型是否可用，以及 kimi-k2.x 这类模型是否需要 temperature=1。"), "{message}");
+        assert!(!message.contains("上游返回"), "{message}");
+
+        let message = format_service_probe_error(&FormatProbeErrorArgs {
+            service: "deepseek",
+            label: None,
+            base_url: "https://api.deepseek.com",
+            model: "deepseek-v4",
+            api_format: "chat",
+            stream: None,
+            error: "HTTP 500",
+            language: "en",
+        });
+        // label 缺省回落 service id；en 通用四项。
+        assert!(message.contains("deepseek connection test failed."), "{message}");
+        assert!(message.contains("Service: deepseek"), "{message}");
+        assert!(message.contains("Protocol: Chat / Completions"), "{message}");
+        assert!(message.contains("Check the API Key, model availability, account quota, and whether the protocol type matches this service."), "{message}");
+    }
 }
 
 #[cfg(test)]

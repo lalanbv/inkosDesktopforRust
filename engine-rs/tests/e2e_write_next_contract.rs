@@ -14024,3 +14024,137 @@ mod sub95_e2e {
         assert_eq!(count, 2);
     }
 }
+
+mod sub96_e2e {
+    //! 96 号：/services/:service/test 深链——live /models 不可达时回退
+    //! 最小 chat 探测（成功）；google 深链失败 → 四步检查清单诊断。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::service_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt96(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app96(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/services/:service/test",
+                axum::routing::post(service_routes::test_service),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock 上游：/models 恒 404（逼深链）；/chat/completions 按
+    /// `chat_ok` 分流（SSE OK / 400）。
+    async fn mock_upstream(chat_ok: bool) -> String {
+        let app = axum::Router::new()
+            .route(
+                "/models",
+                axum::routing::get(|| async {
+                    (StatusCode::NOT_FOUND, "no models".to_string())
+                }),
+            )
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(_body): axum::Json<serde_json::Value>| async move {
+                    if chat_ok {
+                        let payload = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    } else {
+                        axum::response::IntoResponse::into_response((StatusCode::BAD_REQUEST, "invalid key"))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn deep_chat_probe_succeeds_when_models_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let upstream = mock_upstream(true).await;
+        let app = app96(rt96(&root, &upstream));
+        let body = serde_json::json!({
+            "apiKey": "sk-test",
+            "baseUrl": upstream,
+            "model": "deepseek-chat-x",
+            "apiFormat": "chat",
+            "stream": false,
+        })
+        .to_string();
+        let (status, parsed) = call(app, "POST", "/api/v1/services/deepseek/test", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true, "body: {parsed}");
+        assert_eq!(parsed["selectedModel"], "deepseek-chat-x");
+        assert_eq!(parsed["detected"]["modelsSource"], "api");
+        assert_eq!(parsed["probe"]["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn google_deep_probe_failure_returns_four_step_checklist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let upstream = mock_upstream(false).await;
+        let app = app96(rt96(&root, &upstream));
+        let body = serde_json::json!({
+            "apiKey": "bad-key",
+            "baseUrl": upstream,
+            "model": "gemini-2.5-flash",
+            "apiFormat": "chat",
+            "stream": false,
+        })
+        .to_string();
+        let (status, parsed) = call(app, "POST", "/api/v1/services/google/test", Some(&body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["ok"], false);
+        let error = parsed["error"].as_str().unwrap();
+        assert!(error.starts_with("Google Gemini 测试连接失败。"), "{error}");
+        assert!(error.contains("服务商：Google Gemini"), "{error}");
+        assert!(error.contains("测试模型：gemini-2.5-flash"), "{error}");
+        assert!(error.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"), "{error}");
+        assert!(error.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"), "{error}");
+        assert_eq!(parsed["probe"]["ok"], false);
+    }
+}
