@@ -1362,9 +1362,9 @@ async fn execute_interactive_film_create(
 }
 
 /// `createGenerateCoverTool`：generateShortFictionCover 同链（74 号 cover 基础
-/// 设施 + 76 号 generic/short 双模式提示词）。
+/// 设施 + 76 号 generic/short 双模式提示词）。89 号提 pub(crate)：聊天壳复用。
 #[allow(clippy::too_many_arguments)]
-async fn execute_generate_cover(
+pub(crate) async fn execute_generate_cover(
     runtime: &BooksRuntime,
     title: &str,
     intro: &str,

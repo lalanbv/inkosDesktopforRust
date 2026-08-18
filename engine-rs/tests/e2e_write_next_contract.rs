@@ -12647,3 +12647,262 @@ mod sub88_e2e {
         assert_eq!(std::fs::read_to_string(chapter_file(&root)).unwrap(), original);
     }
 }
+
+mod sub89_e2e {
+    //! 89 号：书会话确定性编辑工具族 + 注册矩阵对齐。
+    //! patch（三级替换精确级）+ delete_latest（.trash + 状态回滚）全链
+    //! 经聊天面 + book/edit 会话注册真值表。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt89(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app89(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：studio-agent 聊天按指令发编辑工具调用（确定性五件，无 LLM 域链）。
+    async fn spawn_mock89() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let payload = if system.contains("创作助手") || system.contains("Play 助手") {
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（编辑已完成。）" } }] })
+                        } else if last_user.contains("修改一处文字") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_p1", "function": { "name": "patch_chapter_text", "arguments": "{\"chapterNumber\":1,\"targetText\":\"灵气顺着经脉游走\",\"replacementText\":\"灵气在丹田盘旋\"}" } },
+                            ] } }] })
+                        } else if last_user.contains("删掉最新一章") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_d1", "function": { "name": "delete_latest_chapter", "arguments": "{}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "好的。" } }] })
+                        }
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    fn fixture_two_chapters(root: &std::path::Path) {
+        fixture_project(root);
+        let book = root.join("books").join("b1");
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_夜行.md"),
+            "# 第2章 夜行\n\n夜色深沉，林动一路疾行。",
+        )
+        .unwrap();
+        let snapshot = book.join("story").join("snapshots").join("1");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("current_state.md"), "# 状态\n主角在青阳镇。").unwrap();
+        std::fs::write(snapshot.join("pending_hooks.md"), "# 伏笔\n- H01 祖符").unwrap();
+    }
+
+    #[tokio::test]
+    async fn book_session_patch_and_delete_latest_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_two_chapters(&root);
+        let (llm, tool_names) = spawn_mock89().await;
+        let session_id = "1783007000005-s89a";
+        let app = app89(rt89(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ① patch_chapter_text：精确替换 + 复核标记。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"修改一处文字","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "patch_chapter_text");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        assert_eq!(card["result"].as_str().unwrap(), "Patched chapter 1 and marked it for review.");
+        let saved = std::fs::read_to_string(root.join("books/b1/chapters/0001_风起.md")).unwrap();
+        assert_eq!(saved, "# 第1章 风起\n\n林动睁开双眼，灵气在丹田盘旋。");
+
+        // ② delete_latest_chapter：.trash 保留 + 状态回滚到第 1 章快照。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"删掉最新一章","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "delete_latest_chapter");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        assert_eq!(
+            card["result"].as_str().unwrap(),
+            "Deleted latest chapter 2 from \"b1\", preserved it in trash, and rolled story state back to chapter 1."
+        );
+        let details = &card["details"];
+        assert_eq!(details["kind"], "chapter_deleted");
+        assert_eq!(details["deletedChapter"], 2);
+        assert_eq!(details["rolledBackTo"], 1);
+        assert_eq!(details["title"], "夜行");
+        let book = root.join("books").join("b1");
+        assert!(!book.join("chapters").join("0002_夜行.md").exists());
+        assert!(book.join("chapters").join(".trash").join("0002_夜行.md").is_file());
+        assert!(book.join("chapters").join("0001_风起.md").is_file());
+        // 回滚后的活状态来自第 1 章快照。
+        let state = std::fs::read_to_string(book.join("story").join("current_state.md")).unwrap();
+        assert_eq!(state, "# 状态\n主角在青阳镇。");
+
+        // book 会话注册真值表：六件 + sub_agent + research + import；无 propose。
+        let names = tool_names.lock().unwrap().clone();
+        for expected in [
+            "write_truth_file",
+            "rename_entity",
+            "patch_chapter_text",
+            "replace_chapter_text",
+            "delete_latest_chapter",
+            "generate_cover",
+            "sub_agent",
+            "research_web",
+            "import_chapters",
+        ] {
+            assert!(names.contains(&expected.to_string()), "缺 {expected}：{names:?}");
+        }
+        assert!(!names.contains(&"propose_action".to_string()), "book 会话不应注册 propose_action：{names:?}");
+    }
+
+    #[tokio::test]
+    async fn edit_session_registers_deterministic_subset_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_two_chapters(&root);
+        let (llm, tool_names) = spawn_mock89().await;
+        let session_id = "1783007000006-s89b";
+        let app = app89(rt89(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"随便聊聊","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let names = tool_names.lock().unwrap().clone();
+        for expected in [
+            "write_truth_file",
+            "rename_entity",
+            "patch_chapter_text",
+            "replace_chapter_text",
+            "delete_latest_chapter",
+        ] {
+            assert!(names.contains(&expected.to_string()), "edit 缺 {expected}：{names:?}");
+        }
+        for banned in [
+            "sub_agent",
+            "generate_cover",
+            "research_web",
+            "import_chapters",
+            "propose_action",
+        ] {
+            assert!(!names.contains(&banned.to_string()), "edit 不应注册 {banned}：{names:?}");
+        }
+    }
+}

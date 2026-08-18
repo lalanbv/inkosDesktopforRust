@@ -537,22 +537,44 @@ pub async fn post_agent(
 
     let loop_chat = RouterLoopChat { router: &runtime.router };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
-    // 工具面：文件工具 + material 双工具（全部会话）+ propose_action
-    // （play 有世界时除外）+ （play 会话且有世界时）play 三工具。
+    // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
+    // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/
+    // generate_cover/research/import）；chat/short/script/storyboard/film/
+    // play 走各自分支（chat 带 book 亦然——TS 按 sessionKind 先返回，
+    // bookId 不影响这些分支的工具面）。
+    let has_book = agent_book_id.is_some();
+    let book_session =
+        has_book && matches!(session_kind, SessionKind::Book | SessionKind::BookCreate);
+    let edit_session = has_book && session_kind == SessionKind::Edit;
+    let book_edit_session = book_session || edit_session;
+    let propose_registered =
+        !play_world_exists && (session_kind == SessionKind::Chat || !has_book);
+    let research_registered =
+        matches!(session_kind, SessionKind::Chat | SessionKind::BookCreate | SessionKind::Book);
+    let import_registered = session_kind == SessionKind::Chat || book_session;
+    // 工具面：文件工具 + material 双工具（全部会话）+ propose_action（无书
+    // 会话；play 有世界时除外）+ research/import（分支矩阵）+ sub_agent
+    // （book/book-create）+ 编辑工具族（book/edit）+ play 三工具。
     let mut tools = crate::interaction::project_tools::tools_payload();
     if let Some(entries) = tools.as_array_mut() {
         entries.extend(crate::interaction::material_tools::material_tool_schemas());
-        if !play_world_exists {
+        if propose_registered {
             entries.push(crate::interaction::propose_action_tool::propose_action_schema());
         }
-        if session_kind != SessionKind::Play {
+        if research_registered {
             entries.push(crate::interaction::research_tool::research_tool_schema());
         }
-        if session_kind == SessionKind::Chat {
+        if import_registered {
             entries.push(crate::interaction::import_chapters_tool::import_chapters_schema());
         }
-        if agent_book_id.is_some() {
+        if book_session {
             entries.push(crate::interaction::sub_agent_tool::sub_agent_schema());
+        }
+        if book_edit_session {
+            entries.extend(crate::interaction::book_edit_tools::deterministic_tool_schemas());
+        }
+        if book_session {
+            entries.push(crate::interaction::book_edit_tools::generate_cover_schema());
         }
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
@@ -564,29 +586,32 @@ pub async fn post_agent(
         router: &runtime.router,
         language: surface_language,
     });
-    // propose_action：除"play 会话且有世界"外全部注册（TS 注册矩阵；
-    // sameSession = sessionKind !== "chat"）。
-    let propose_registered = !play_world_exists;
+    // propose_action：无书会话注册（play 有世界时除外；sameSession =
+    // sessionKind !== "chat"）。
     let propose_deps = propose_registered.then(|| crate::interaction::propose_action_tool::ProposeDeps {
         language: surface_language,
         same_session: session_kind != SessionKind::Chat,
         requested_skills: &requested_skills,
     });
-    // research：非 play 会话注册（TS chat/short/script/storyboard/film/
-    // book-create/edit 分支均带，play 两分支均无）；import：仅 chat 分支。
-    let research_enabled = session_kind != SessionKind::Play;
-    let import_deps = (session_kind == SessionKind::Chat).then_some(ImportDeps {
+    // research：chat/book-create/book 分支；import：chat 与 book 分支。
+    let research_enabled = research_registered;
+    let import_deps = import_registered.then_some(ImportDeps {
         runtime: &runtime,
         active_book_id: agent_book_id.as_deref(),
     });
-    // sub_agent：书会话（agent-session edit/book 分支；architect 建书走确认面）。
-    let sub_agent_deps = agent_book_id.as_deref().map(|_| {
-        crate::interaction::sub_agent_tool::SubAgentDeps {
-            runtime: &runtime,
-            active_book_id: agent_book_id.as_deref(),
-            language: surface_language,
-        }
+    // sub_agent：book/book-create 会话（architect 建书走确认面）。
+    let sub_agent_deps = book_session.then_some(crate::interaction::sub_agent_tool::SubAgentDeps {
+        runtime: &runtime,
+        active_book_id: agent_book_id.as_deref(),
+        language: surface_language,
     });
+    // 编辑工具族（book/edit 会话；active_book_id 恒有）。
+    let book_edit_deps = book_edit_session
+        .then(|| agent_book_id.as_deref().map(|active| crate::interaction::book_edit_tools::BookEditDeps {
+            runtime: &runtime,
+            active_book_id: active,
+        }))
+        .flatten();
     let tool_executor = ChatToolRouter {
         root,
         play_deps,
@@ -594,6 +619,7 @@ pub async fn post_agent(
         research_enabled,
         import_deps,
         sub_agent_deps,
+        book_edit_deps,
     };
     let loop_result = run_agent_loop(
         &loop_chat,
@@ -704,8 +730,9 @@ struct ImportDeps<'a> {
     active_book_id: Option<&'a str>,
 }
 
-/// 聊天回环组合执行器（84/85 号）：propose_action → research/import →
-/// play 工具 → 项目文件工具（含 material 双件）。
+/// 聊天回环组合执行器（84/85/87/89 号）：propose_action → research/import
+/// → sub_agent → 书会话编辑工具族 → play 工具 → 项目文件工具（含 material
+/// 双件）。
 struct ChatToolRouter<'a> {
     root: &'a std::path::Path,
     play_deps: Option<crate::interaction::play_tools::PlayToolDeps<'a>>,
@@ -713,6 +740,7 @@ struct ChatToolRouter<'a> {
     research_enabled: bool,
     import_deps: Option<ImportDeps<'a>>,
     sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
+    book_edit_deps: Option<crate::interaction::book_edit_tools::BookEditDeps<'a>>,
 }
 
 #[async_trait::async_trait]
@@ -743,6 +771,13 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
         if name == "sub_agent" {
             if let Some(deps) = &self.sub_agent_deps {
                 return crate::interaction::sub_agent_tool::tool_sub_agent(deps, args).await;
+            }
+        }
+        if let Some(deps) = &self.book_edit_deps {
+            if let Some(result) =
+                crate::interaction::book_edit_tools::execute_book_edit_tool(deps, name, args).await
+            {
+                return result;
             }
         }
         if let Some(deps) = &self.play_deps {
