@@ -174,26 +174,42 @@ pub fn create_range_observation(
     }
 }
 
-/// TS `writeProductionRunSnapshot`：单文件原子发布快照。
+/// TS `commitProductionArtifacts`：validate 先行（拒即零写入）→ 产物与
+/// **权威完成快照同一原子事务**（快照末位——completed 的运行绝不指向
+/// 半写产物集）。deletes 随事务提交。
+pub async fn commit_production_artifacts(
+    root_dir: &std::path::Path,
+    artifacts: Vec<AtomicFileWrite>,
+    run_path: &str,
+    run: &ProductionRunSnapshot,
+    deletes: Vec<String>,
+    validate: Option<&(dyn Fn() -> Result<(), String> + Send + Sync)>,
+) -> Result<(), crate::utils::atomic_file_set::AtomicFileSetError> {
+    if let Some(validate) = validate {
+        validate().map_err(|message| {
+            crate::utils::atomic_file_set::AtomicFileSetError::UnsafePath(format!(
+                "production artifact validation failed: {message}"
+            ))
+        })?;
+    }
+    let snapshot_json = serde_json::to_string_pretty(run).map_err(|e| {
+        crate::utils::atomic_file_set::AtomicFileSetError::UnsafePath(e.to_string())
+    })?;
+    let mut writes = artifacts;
+    writes.push(AtomicFileWrite {
+        relative_path: run_path.to_string(),
+        content: FileContent::Text(format!("{snapshot_json}\n")),
+    });
+    commit_atomic_file_set(&AtomicFileSet { root_dir, writes, deletes }).await
+}
+
+/// TS `writeProductionRunSnapshot`：commitProductionArtifacts 的空集薄包装。
 pub async fn write_production_run_snapshot(
     root_dir: &std::path::Path,
     run_path: &str,
     run: &ProductionRunSnapshot,
 ) -> Result<(), crate::utils::atomic_file_set::AtomicFileSetError> {
-    commit_atomic_file_set(&AtomicFileSet {
-        root_dir,
-        writes: vec![AtomicFileWrite {
-            relative_path: run_path.to_string(),
-            content: FileContent::Text(format!(
-                "{}\n",
-                serde_json::to_string_pretty(run).map_err(|e| {
-                    crate::utils::atomic_file_set::AtomicFileSetError::UnsafePath(e.to_string())
-                })?,
-            )),
-        }],
-        deletes: Vec::new(),
-    })
-    .await
+    commit_production_artifacts(root_dir, Vec::new(), run_path, run, Vec::new(), None).await
 }
 
 #[cfg(test)]
@@ -228,6 +244,113 @@ mod tests {
 
     fn create_range_observation_helper(actual: u32, min: u32, max: u32) -> ProductionObservation {
         create_range_observation("chapter-length", actual, 3000, min, max, "zh_chars", None, None)
+    }
+
+    #[tokio::test]
+    async fn commits_artifacts_before_authoritative_completion_snapshot() {
+        // TS production-harness.test.ts 同款：产物与完成快照同事务落盘。
+        let dir = tempfile::tempdir().unwrap();
+        let run = ProductionRunSnapshot::create(CreateRunInput {
+            kind: ProductionKind::Script,
+            id: "night-shift".into(),
+            status: ProductionRunStatus::Complete,
+            stage: "commit".into(),
+            artifacts: vec!["script.md".into()],
+            observations: vec![],
+            model: None,
+            skill_ids: None,
+            resume_cursor: None,
+            error: None,
+        });
+        let validated = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = validated.clone();
+        commit_production_artifacts(
+            dir.path(),
+            vec![AtomicFileWrite {
+                relative_path: "script.md".into(),
+                content: FileContent::Text("# Night Shift".into()),
+            }],
+            "status.json",
+            &run,
+            Vec::new(),
+            Some(&move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(validated.load(std::sync::atomic::Ordering::SeqCst), 1, "validate 先行");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("script.md")).unwrap(),
+            "# Night Shift"
+        );
+        let status = std::fs::read_to_string(dir.path().join("status.json")).unwrap();
+        assert!(status.contains("\"status\": \"complete\""), "{status}");
+    }
+
+    #[tokio::test]
+    async fn validation_rejection_leaves_no_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = ProductionRunSnapshot::create(CreateRunInput {
+            kind: ProductionKind::Script,
+            id: "x".into(),
+            status: ProductionRunStatus::Complete,
+            stage: "commit".into(),
+            artifacts: vec![],
+            observations: vec![],
+            model: None,
+            skill_ids: None,
+            resume_cursor: None,
+            error: None,
+        });
+        let err = commit_production_artifacts(
+            dir.path(),
+            vec![AtomicFileWrite {
+                relative_path: "draft.md".into(),
+                content: FileContent::Text("半成品".into()),
+            }],
+            "status.json",
+            &run,
+            Vec::new(),
+            Some(&|| Err("empty deliverable".to_string())),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("validation failed"), "{err}");
+        assert!(!dir.path().join("draft.md").exists(), "拒即零写入");
+        assert!(!dir.path().join("status.json").exists());
+    }
+
+    #[tokio::test]
+    async fn deletes_commit_with_the_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("stale")).unwrap();
+        std::fs::write(dir.path().join("stale").join("old.md"), "旧稿").unwrap();
+        let run = ProductionRunSnapshot::create(CreateRunInput {
+            kind: ProductionKind::Translation,
+            id: "t1".into(),
+            status: ProductionRunStatus::Complete,
+            stage: "commit".into(),
+            artifacts: vec![],
+            observations: vec![],
+            model: None,
+            skill_ids: None,
+            resume_cursor: None,
+            error: None,
+        });
+        commit_production_artifacts(
+            dir.path(),
+            vec![],
+            "status.json",
+            &run,
+            vec!["stale/old.md".into()],
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!dir.path().join("stale").join("old.md").exists(), "deletes 生效");
+        assert!(dir.path().join("status.json").exists());
     }
 
     #[tokio::test]
