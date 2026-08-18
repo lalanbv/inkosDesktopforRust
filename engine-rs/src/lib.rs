@@ -28,6 +28,7 @@ pub mod materials;
 pub mod models;
 pub mod notify;
 pub mod pipeline;
+pub mod production;
 pub mod play;
 pub mod play_graph;
 pub mod play_parser;

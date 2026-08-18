@@ -252,7 +252,7 @@ struct ParsedVersion {
 
 /// 13 位毫秒时间戳 → ISO8601 UTC 字符串（`YYYY-MM-DDTHH:mm:ss.sssZ`）。
 /// 对齐 JS `new Date(ms).toISOString()`。无外部 chrono 依赖，手写格式化。
-fn millis_to_iso(millis: i64) -> Option<String> {
+pub fn millis_to_iso(millis: i64) -> Option<String> {
     if millis < 0 {
         return None;
     }

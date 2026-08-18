@@ -319,10 +319,173 @@ pub async fn write_next_chapter(
 ) -> Result<ChapterPipelineResult, WriteNextError> {
     let lock = acquire_book_lock(book_id).await;
     let _guard = lock.lock().await;
-    write_next_chapter_locked(
-        state, agents, ctx, config, book_id, word_count, temperature_override, external_context,
+    // 136 号：TS writeNextChapter 的运行快照（running → 终态/失败三点）。
+    // model 省略备案：Rust 装配无单值 config.model（多 agent 各自解析端点）。
+    let book_dir = state.book_dir(book_id);
+    let chapter_number = state.get_next_chapter_number(book_id).await?;
+    let padded_chapter = format!("{chapter_number:04}");
+    let run_path = format!("story/runtime/chapter-{padded_chapter}.run.json");
+    let run_id = format!("{book_id}:chapter-{padded_chapter}");
+    let base_stage = format!("chapter-{chapter_number}");
+    crate::production::write_production_run_snapshot(
+        &book_dir,
+        &run_path,
+        &crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
+            kind: crate::production::ProductionKind::LongFiction,
+            id: run_id.clone(),
+            status: crate::production::ProductionRunStatus::Running,
+            stage: base_stage.clone(),
+            artifacts: Vec::new(),
+            observations: Vec::new(),
+            model: None,
+            skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+            resume_cursor: Some(chapter_number.to_string()),
+            error: None,
+        }),
     )
     .await
+    .map_err(|e| WriteNextError::Persistence(e.to_string()))?;
+
+    let outcome =
+        write_next_chapter_locked(state, agents, ctx, config, book_id, word_count, temperature_override, external_context)
+            .await;
+    match outcome {
+        Ok(result) => {
+            let chapter_file = find_persisted_chapter_file(&book_dir, &padded_chapter).await;
+            let Some(chapter_file) = chapter_file else {
+                let error = WriteNextError::Persistence(format!(
+                    "Chapter {} completed without a persisted chapter artifact.",
+                    result.chapter_number
+                ));
+                publish_failed_run_snapshot(
+                    &book_dir, &run_path, &run_id, &base_stage, config, &error,
+                )
+                .await;
+                return Err(error);
+            };
+            // TS：lengthTelemetry ?? buildLengthSpec(wordCount ?? book 基准)。
+            let book = state.load_book_config(book_id).await.ok();
+            let spec = result.length_telemetry.as_ref().map(|telemetry| {
+                crate::models::length_governance::LengthSpec {
+                    target: telemetry.target,
+                    soft_min: telemetry.soft_min,
+                    soft_max: telemetry.soft_max,
+                    hard_min: telemetry.hard_min,
+                    hard_max: telemetry.hard_max,
+                    counting_mode: telemetry.counting_mode,
+                }
+            }).unwrap_or_else(|| {
+                let language = match book
+                    .as_ref()
+                    .and_then(|b| b.language.as_deref())
+                {
+                    Some("en") => crate::utils::language::WritingLanguage::En,
+                    _ => crate::utils::language::WritingLanguage::Zh,
+                };
+                crate::utils::length_metrics::build_length_spec(
+                    word_count.unwrap_or_else(|| book.as_ref().map(|b| b.chapter_word_count).unwrap_or(3000)),
+                    language,
+                )
+            });
+            let chapter_path = format!("chapters/{chapter_file}");
+            let artifacts = vec![
+                chapter_path.clone(),
+                "chapters/index.json".to_string(),
+                "story/current_state.md".to_string(),
+                "story/pending_hooks.md".to_string(),
+                format!("story/snapshots/{}", result.chapter_number),
+                format!("story/runtime/chapter-{padded_chapter}.trace.json"),
+            ];
+            let status = if result.status == "ready-for-review" {
+                crate::production::ProductionRunStatus::Complete
+            } else {
+                crate::production::ProductionRunStatus::NeedsReview
+            };
+            let observation = crate::production::create_range_observation(
+                "chapter-length",
+                result.word_count,
+                spec.target,
+                spec.hard_min,
+                spec.hard_max,
+                match spec.counting_mode {
+                    crate::models::length_governance::LengthCountingMode::ZhChars => "zh_chars",
+                    crate::models::length_governance::LengthCountingMode::EnWords => "en_words",
+                },
+                Some(chapter_path),
+                None,
+            );
+            crate::production::write_production_run_snapshot(
+                &book_dir,
+                &run_path,
+                &crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
+                    kind: crate::production::ProductionKind::LongFiction,
+                    id: run_id,
+                    status,
+                    stage: base_stage,
+                    artifacts,
+                    observations: vec![observation],
+                    model: None,
+                    skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+                    resume_cursor: Some(result.chapter_number.to_string()),
+                    error: None,
+                }),
+            )
+            .await
+            .map_err(|e| WriteNextError::Persistence(e.to_string()))?;
+            Ok(result)
+        }
+        Err(error) => {
+            publish_failed_run_snapshot(&book_dir, &run_path, &run_id, &base_stage, config, &error)
+                .await;
+            Err(error)
+        }
+    }
+}
+
+/// `chapters/` 下 `{padded}_*.md` 的章文件名（TS readdir + 前缀匹配）。
+async fn find_persisted_chapter_file(book_dir: &std::path::Path, padded: &str) -> Option<String> {
+    let prefix = format!("{padded}_");
+    let mut entries = tokio::fs::read_dir(book_dir.join("chapters")).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(&prefix) && name.ends_with(".md") {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// 失败/取消快照（TS catch 分支：cancelled 按 abort 信号判定；快照写失败
+/// 吞掉——不覆盖原始错误）。
+async fn publish_failed_run_snapshot(
+    book_dir: &std::path::Path,
+    run_path: &str,
+    run_id: &str,
+    stage: &str,
+    config: &WriteNextConfig,
+    error: &WriteNextError,
+) {
+    let cancelled = config
+        .abort
+        .as_ref()
+        .is_some_and(|flag| *flag.lock().unwrap());
+    let snapshot = crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
+        kind: crate::production::ProductionKind::LongFiction,
+        id: run_id.to_string(),
+        status: if cancelled {
+            crate::production::ProductionRunStatus::Cancelled
+        } else {
+            crate::production::ProductionRunStatus::Failed
+        },
+        stage: stage.to_string(),
+        artifacts: Vec::new(),
+        observations: Vec::new(),
+        model: None,
+        skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+        resume_cursor: None,
+        error: Some(error.to_string()),
+    });
+    let _ = crate::production::write_production_run_snapshot(book_dir, run_path, &snapshot).await;
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

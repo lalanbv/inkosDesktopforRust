@@ -17185,3 +17185,92 @@ mod sub132_e2e {
         assert_eq!(after, original, "degraded 时章节文件必须保持原文");
     }
 }
+
+// ── 136 号：生产运行快照（write-next 三点发布） ──────────────────────
+
+mod sub136_e2e {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_next_publishes_run_snapshot_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm_url, _calls, _llm) = spawn_mock_llm().await;
+
+        let state = Arc::new(StateManager::new(root.clone()));
+        let agents = build_agents(&llm_url);
+        let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+        let ctx = WriteNextCtx {
+            project_root: Box::leak(root.clone().into_boxed_path()),
+            builtin_genres_dir: Box::leak(root.join("assets").join("genres").into_boxed_path()),
+            prompt_store,
+            state_store: prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let result = write_next_chapter(
+            &state,
+            &agents,
+            &ctx,
+            &WriteNextConfig::default(),
+            "b1",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("write-next 应成功");
+
+        let run_path = root
+            .join("books")
+            .join("b1")
+            .join("story")
+            .join("runtime")
+            .join(format!("chapter-{:04}.run.json", result.chapter_number));
+        let raw = std::fs::read_to_string(&run_path).expect("运行快照应落盘");
+        assert!(raw.ends_with("}\n"), "pretty JSON + 尾随换行");
+        let run: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        // 终态快照（成功链：ready-for-review → complete）。
+        assert_eq!(run["version"], 1);
+        assert_eq!(run["kind"], "long-fiction");
+        assert_eq!(run["id"], format!("b1:chapter-{:04}", result.chapter_number));
+        assert_eq!(run["status"], "complete");
+        assert_eq!(run["stage"], format!("chapter-{}", result.chapter_number));
+        assert_eq!(run["skillIds"][0], "inkos-long-writing");
+        assert_eq!(run["resumeCursor"], result.chapter_number.to_string());
+        // artifacts 清单六项（TS 逐字：章文件/index/真相双文件/快照目录/trace）。
+        let artifacts: Vec<&str> = run["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(artifacts.len(), 6, "{artifacts:?}");
+        assert!(artifacts[0].starts_with("chapters/0001_"), "{artifacts:?}");
+        assert!(artifacts.contains(&"chapters/index.json"));
+        assert!(artifacts.contains(&"story/current_state.md"));
+        assert!(artifacts.contains(&"story/pending_hooks.md"));
+        assert!(artifacts.contains(&"story/snapshots/1"));
+        assert!(artifacts.contains(&"story/runtime/chapter-0001.trace.json"));
+        // chapter-length 区间观测。
+        let obs = &run["observations"][0];
+        assert_eq!(obs["metric"], "chapter-length");
+        assert!(obs["expected"]["target"].is_u64());
+        assert!(obs["expected"]["min"].is_u64());
+        assert!(obs["expected"]["max"].is_u64());
+        assert!(obs["actual"]["value"].is_u64());
+        assert_eq!(obs["evidence"], artifacts[0]);
+        assert!(matches!(obs["severity"].as_str(), Some("info") | Some("blocking")));
+        assert_eq!(obs["repairable"], obs["severity"] != "info");
+        // updatedAt 为 JS ISO 毫秒格式；可选键省略。
+        assert!(
+            run["updatedAt"].as_str().unwrap().ends_with('Z')
+                && run["updatedAt"].as_str().unwrap().len() == 24,
+            "ISO 毫秒：{}",
+            run["updatedAt"]
+        );
+        assert!(run.get("error").is_none());
+        assert!(run.get("model").is_none(), "Rust 装配无单值 model——备案省略");
+    }
+}
