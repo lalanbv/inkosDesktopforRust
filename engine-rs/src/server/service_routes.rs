@@ -95,7 +95,7 @@ fn is_custom_service_id(service_id: &str) -> bool {
 }
 
 /// 条目存储键：custom → `custom:{name ?? "Custom"}`。对齐 TS `serviceConfigKey`。
-fn service_config_key(entry: &ServiceConfigEntry) -> String {
+pub(crate) fn service_config_key(entry: &ServiceConfigEntry) -> String {
     if entry.service == "custom" {
         format!("custom:{}", entry.name.as_deref().unwrap_or("Custom"))
     } else {
@@ -251,7 +251,7 @@ pub fn sync_top_level_llm_mirror(llm: &mut Map<String, Value>) {
 }
 
 /// `resolveConfiguredServiceBaseUrl`：inline → 预设 → custom 的 config baseUrl。
-async fn resolve_configured_service_base_url(
+pub(crate) async fn resolve_configured_service_base_url(
     root: &Path,
     service_id: &str,
     inline_base_url: Option<&str>,

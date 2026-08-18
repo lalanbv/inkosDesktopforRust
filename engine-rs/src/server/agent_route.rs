@@ -198,7 +198,8 @@ pub async fn post_agent(
     State(runtime): State<BooksRuntime>,
     body: Bytes,
 ) -> impl IntoResponse {
-    let root = runtime.state.project_root();
+    let root_owned = runtime.state.project_root().to_path_buf();
+    let root: &std::path::Path = &root_owned;
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -275,6 +276,35 @@ pub async fn post_agent(
                 .into_response();
         }
     }
+    // ── 模型四层解析（97 号）：前端显式 → defaultModel → secrets 首个有 key
+    // 服务 → 项目配置端点（None）。命中即以 per-request router 覆盖本次请求
+    // 的全部代理（对齐 TS pipelineClient——子代理同用前端选定的模型）。
+    let override_service = payload.get("service").and_then(Value::as_str);
+    let override_model = payload.get("model").and_then(Value::as_str);
+    let model_override = match agent_production::resolve_agent_model_override(root, override_service, override_model).await {
+        Ok(model_override) => model_override,
+        Err(response) => return response.into_response(),
+    };
+    let runtime = if let Some(ov) = &model_override {
+        BooksRuntime {
+            hub: runtime.hub.clone(),
+            state: runtime.state.clone(),
+            router: std::sync::Arc::new(crate::llm::agent_router::AgentRouter::new(
+                crate::llm::agent_router::LlmEndpointConfig {
+                    base_url: ov.base_url.clone(),
+                    api_key: ov.api_key.clone(),
+                    model: ov.model.clone(),
+                    max_tokens: 8192,
+                    extra_headers: std::collections::HashMap::new(),
+                },
+                std::collections::HashMap::new(),
+            )),
+            builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+            revision_gate: runtime.revision_gate,
+        }
+    } else {
+        runtime
+    };
     // attachments：归一化（数组/数量/大小/文本长度校验 + dataUrl 解析落盘
     // .inkos/uploads/{session}/ + 三类分支）。93 号：注入面（多模态消息）备案。
     let attachments = match normalize_agent_attachments(root, session_id, payload.get("attachments")).await {

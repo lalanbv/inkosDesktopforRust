@@ -14158,3 +14158,164 @@ mod sub96_e2e {
         assert_eq!(parsed["probe"]["ok"], false);
     }
 }
+
+mod sub97_e2e {
+    //! 97 号：/agent 模型四层解析——层 1 命中（前端 service+model → per-request
+    //! router 覆盖，代理请求携带前端模型）+ 层 1 无 key 400 双语。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt97(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app97(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// 覆盖目标 mock：捕获请求体（model 字段）。
+    async fn mock_capture_model() -> (String, Arc<Mutex<Vec<String>>>) {
+        let models: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = models.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let sink = sink.clone();
+                async move {
+                    if let Some(model) = body["model"].as_str() {
+                        sink.lock().unwrap().push(model.to_string());
+                    }
+                    let payload = serde_json::json!({ "choices": [{ "delta": { "content": "好的，用了你选的模型。" } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), models)
+    }
+
+    #[tokio::test]
+    async fn agent_layer1_override_routes_through_frontend_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, models) = mock_capture_model().await;
+        // custom 服务条目指向覆盖 mock + secrets 有 key。
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":[{{"service":"custom:pick","baseUrl":"{llm}","apiFormat":"chat"}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:pick":{"apiKey":"sk-pick"}}}"#,
+        )
+        .unwrap();
+        let session_id = "1783007000013-s97a";
+        let app = app97(rt97(&root, "http://127.0.0.1:9"));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 层 1：service+model 显式 → 请求经覆盖端点（而非项目端点 127.0.0.1:9）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"你好","sessionId":"{session_id}","service":"custom:pick","model":"front-model-x"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "好的，用了你选的模型。");
+        let captured = models.lock().unwrap().clone();
+        assert!(!captured.is_empty(), "覆盖端点应收到请求");
+        assert!(
+            captured.iter().all(|m| m == "front-model-x"),
+            "代理请求携带前端模型：{captured:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_layer1_missing_key_bilingual_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, _) = mock_capture_model().await;
+        let session_id = "1783007000014-s97b";
+        let app = app97(rt97(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // deepseek（非本地 preset）无 key → 400 双语。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"你好","sessionId":"{session_id}","service":"deepseek","model":"deepseek-chat"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"], "请先为 deepseek 配置 API Key");
+        assert_eq!(parsed["response"], "请先在模型配置中为 deepseek 填写 API Key，然后再试。");
+    }
+}

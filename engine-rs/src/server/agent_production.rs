@@ -252,6 +252,132 @@ pub fn is_confirmed_production_action(action_source: ActionSource, intent: Reque
     )
 }
 
+/// /agent 模型解析产物（97 号四层解析）：per-request 端点覆盖。
+#[derive(Debug, Clone)]
+pub struct AgentModelOverride {
+    pub service: String,
+    pub model: String,
+    pub api_key: String,
+    pub base_url: String,
+}
+
+/// /agent 模型四层解析（TS 4968-5075 逐层）：
+/// 1. 前端显式 service+model——无 key 且非本地端点 → 400 双语（逐字）；
+/// 2. 新配置 defaultModel + services[0]（静默失败下落）；
+/// 3. secrets 首个有 key 服务的首个文本模型（listModels live+bank；静默）；
+/// 4. None → 项目配置端点（现状兜底）。
+///
+/// 返回 Err = 层 1 的 400 响应（{error, response} 双键）。
+pub async fn resolve_agent_model_override(
+    root: &std::path::Path,
+    service: Option<&str>,
+    model: Option<&str>,
+) -> Result<Option<AgentModelOverride>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    let resolve_key = |service: &str| -> Option<String> {
+        let secrets = crate::llm::secrets::load_secrets(root).unwrap_or_default();
+        crate::llm::secrets::resolve_service_api_key(&secrets, service, |name| std::env::var(name).ok())
+            .filter(|key| !key.trim().is_empty())
+    };
+
+    // ── 层 1：前端显式 service+model。 ──
+    if let (Some(service), Some(model)) = (service.map(str::trim).filter(|s| !s.is_empty()), model.map(str::trim).filter(|s| !s.is_empty())) {
+        let Some(base_url) =
+            crate::server::service_routes::resolve_configured_service_base_url(root, service, None).await
+        else {
+            // TS：resolveServiceModel 无 baseUrl 抛错（非 key 错 → 500）。
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({ "error": format!("Cannot resolve model \"{model}\" for service \"{service}\": no baseUrl available.") })),
+            ));
+        };
+        let api_key = resolve_key(service);
+        let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint("openai", Some(&base_url));
+        match (api_key, key_optional) {
+            (Some(api_key), _) => {
+                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key, base_url }));
+            }
+            (None, false) => {
+                let lang = current_project_language(root).await;
+                let (error, response) = match lang {
+                    StudioLang::En => (
+                        format!("Configure an API Key for {service} first"),
+                        format!("Fill in an API Key for {service} in the model settings, then try again."),
+                    ),
+                    StudioLang::Zh => (
+                        format!("请先为 {service} 配置 API Key"),
+                        format!("请先在模型配置中为 {service} 填写 API Key，然后再试。"),
+                    ),
+                };
+                return Err((StatusCode::BAD_REQUEST, axum::Json(json!({ "error": error, "response": response }))));
+            }
+            (None, true) => {
+                // 本地端点（Ollama 等）无 key 可用。
+                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key: String::new(), base_url }));
+            }
+        }
+    }
+
+    // ── 层 2：新配置 defaultModel + services[0]。 ──
+    if let Some(config) = crate::server::project_config_routes::load_raw_config(root).await {
+        if let Some(llm) = config.get("llm") {
+            let default_model = llm
+                .get("defaultModel")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|m| !m.is_empty());
+            let services = crate::server::service_routes::normalize_service_config(llm.get("services"));
+            if let (Some(first), Some(default_model)) = (services.first(), default_model) {
+                if is_text_chat_model_id(default_model) {
+                    let service = crate::server::service_routes::service_config_key(first);
+                    if let (Some(base_url), Some(api_key)) = (
+                        crate::server::service_routes::resolve_configured_service_base_url(root, &service, None).await,
+                        resolve_key(&service),
+                    ) {
+                        if !base_url.is_empty() && !api_key.is_empty() {
+                            return Ok(Some(AgentModelOverride { service, model: default_model.to_string(), api_key, base_url }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 层 3：secrets 首个有 key 服务的首个文本模型。 ──
+    if let Ok(secrets) = crate::llm::secrets::load_secrets(root) {
+        // HashMap 无插入序——按服务名排序迭代（确定性；TS Object.entries 为
+        // 插入序，见偏差备案）。
+        let mut keyed: Vec<(&String, &crate::llm::secrets::ServiceSecret)> =
+            secrets.services.iter().collect();
+        keyed.sort_by(|a, b| a.0.cmp(b.0));
+        for (service, secret) in keyed {
+            if secret.api_key.trim().is_empty() {
+                continue;
+            }
+            let models = crate::llm::probe::list_models_for_service(service, Some(&secret.api_key), None).await;
+            if let Some(text_model) = models.iter().find(|m| is_text_chat_model_id(&m.id)) {
+                if let Some(base_url) =
+                    crate::server::service_routes::resolve_configured_service_base_url(root, service, None).await
+                {
+                    if !base_url.is_empty() {
+                        return Ok(Some(AgentModelOverride {
+                            service: service.clone(),
+                            model: text_model.id.clone(),
+                            api_key: secret.api_key.clone(),
+                            base_url,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 层 4：项目配置端点（None）。 ──
+    Ok(None)
+}
+
 /// 非文本模型 id 片段（子串匹配，lower+trim）。对齐 TS `NON_TEXT_MODEL_ID_PARTS`。
 pub const NON_TEXT_MODEL_ID_PARTS: &[&str] = &[
     "image",
@@ -2953,6 +3079,67 @@ async fn persist_confirmed_task(
         execution: exec.to_execution(),
     };
     let _ = save_studio_task_snapshot(root, &snapshot).await;
+}
+
+#[cfg(test)]
+mod model_resolver_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn layer1_missing_key_returns_bilingual_400() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // deepseek preset base_url 非本地端点；无 secrets → 层 1 无 key 400。
+        let result = resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat")).await;
+        let (status, body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.0["error"], "请先为 deepseek 配置 API Key");
+        assert_eq!(
+            body.0["response"],
+            "请先在模型配置中为 deepseek 填写 API Key，然后再试。"
+        );
+        // en 项目语言。
+        std::fs::write(root.join("inkos.json"), r#"{"language":"en"}"#).unwrap();
+        let (_, body) = resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat"))
+            .await
+            .unwrap_err();
+        assert_eq!(body.0["error"], "Configure an API Key for deepseek first");
+        assert_eq!(
+            body.0["response"],
+            "Fill in an API Key for deepseek in the model settings, then try again."
+        );
+    }
+
+    #[tokio::test]
+    async fn layer1_with_key_and_layer4_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 层 1 命中：secrets 有 key + 非本地无 baseUrl 的 preset → 500 错误面？
+        // 用 custom 服务（inkos.json services 带 baseUrl）。
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"llm":{"services":[{"service":"custom:my","baseUrl":"http://127.0.0.1:9","apiFormat":"chat"}]}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:my":{"apiKey":"sk-x"}}}"#,
+        )
+        .unwrap();
+        let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1")).await.unwrap().unwrap();
+        assert_eq!(resolved.service, "custom:my");
+        assert_eq!(resolved.model, "m1");
+        assert_eq!(resolved.api_key, "sk-x");
+        assert_eq!(resolved.base_url, "http://127.0.0.1:9");
+
+        // 层 4：无显式 service/model 且无 defaultModel/有 key 服务（custom:my
+        // 的 models 探测不可达 127.0.0.1:9 → 静默下落）→ None。
+        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap();
+        // 层 3 可能命中 custom:my（bank 无 custom 条目 → listModels 空 → 下落）。
+        assert!(resolved.is_none());
+    }
 }
 
 #[cfg(test)]
