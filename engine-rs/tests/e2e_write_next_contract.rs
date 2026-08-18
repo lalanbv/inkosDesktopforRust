@@ -1395,6 +1395,22 @@ mod books48_e2e {
     }
 
     #[tokio::test]
+    async fn review_mode_missing_writing_key_falls_back_to_auto() {
+        // 118 号对跑勘误：writing.reviewMode 键缺失 → 200 auto（TS
+        // readProjectChapterReviewMode 默认），404 仅限 inkos.json/book.json 文件缺失。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        std::fs::write(root.join("inkos.json"), r#"{ "name": "x" }"#).unwrap();
+        let (status, parsed) =
+            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapter-review-mode", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["mode"], "auto");
+        assert_eq!(parsed["projectMode"], "auto");
+        assert!(parsed["bookMode"].is_null(), "body: {parsed}");
+    }
+
+    #[tokio::test]
     async fn review_mode_roundtrip_and_invalid_id() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();

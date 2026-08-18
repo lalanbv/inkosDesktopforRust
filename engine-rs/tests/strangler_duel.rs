@@ -286,3 +286,100 @@ async fn strangler_readonly_face_duel() {
     // 首轮目标为产出对跑报告——差异清零后此断言转为守门。
     assert!(diffs.is_empty(), "只读面双端存在契约差异（见上）");
 }
+
+/// 118 号：跨端写读一致性对跑——A) Rust 写（章节 approve）→ 双端读一致且为
+/// approved；B) TS 写（chapter-review-mode=manual）→ 双端读一致且为 manual；
+/// C) 写后复跑只读桶对跑（磁盘态演进下双端读面仍全等价）。
+#[tokio::test]
+async fn strangler_cross_write_read_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = 4800 + (std::process::id() % 1000) as u16;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+
+    let client = reqwest::Client::new();
+
+    // A) Rust 写：approve 第 1 章。
+    let response = client
+        .post(format!("{rust}/api/v1/books/b1/chapters/1/approve"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    // 双端读：book 详情的章节摘要 status=approved（index.json 跨端可见）。
+    for base in [&rust, &ts] {
+        let (status, body) = get_json(base, "/api/v1/books/b1").await;
+        assert_eq!(status, 200, "base={base} body={body}");
+        let approved = body
+            .get("chapters")
+            .and_then(|chapters| chapters.as_array())
+            .is_some_and(|chapters| {
+                chapters
+                    .iter()
+                    .any(|chapter| chapter.get("number").and_then(Value::as_u64) == Some(1)
+                        && chapter.get("status").and_then(Value::as_str) == Some("approved"))
+            });
+        assert!(approved, "approve 未跨端可见：base={base} body={body}");
+    }
+
+    // B) TS 写：chapter-review-mode=manual（book.json writing 面）。
+    let response = client
+        .put(format!("{ts}/api/v1/books/b1/chapter-review-mode"))
+        .header("content-type", "application/json")
+        .body(r#"{"mode":"manual"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "TS PUT review-mode 失败");
+    // 双端读：GET 同路径 manual。
+    for base in [&rust, &ts] {
+        let (status, body) = get_json(base, "/api/v1/books/b1/chapter-review-mode").await;
+        if status != 200 {
+            let written = std::fs::read_to_string(root.join("books").join("b1").join("book.json")).unwrap_or_default();
+            eprintln!("review-mode 读失败 base={base} book.json={written}");
+        }
+        assert_eq!(status, 200, "base={base} body={body}");
+        assert!(
+            serde_json::to_string(&body).unwrap_or_default().contains("manual"),
+            "review-mode 未跨端可见：base={base} body={body}"
+        );
+    }
+
+    // C) 写后只读桶复跑（磁盘态演进下双端仍全等价）。
+    let endpoints = [
+        "/api/v1/books",
+        "/api/v1/books/b1",
+        "/api/v1/books/b1/chapters/1",
+        "/api/v1/books/b1/truth",
+        "/api/v1/books/b1/analytics",
+        "/api/v1/skills",
+        "/api/v1/project",
+        "/api/v1/prompt-packs",
+        "/api/v1/sessions",
+        "/api/v1/logs",
+    ];
+    let mut diffs: Vec<String> = Vec::new();
+    for endpoint in endpoints {
+        let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
+        let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
+        normalize(&mut rust_body);
+        normalize(&mut ts_body);
+        if rust_status != ts_status || rust_body != ts_body {
+            diffs.push(format!(
+                "DIFF {endpoint}\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
+            ));
+        }
+    }
+    assert!(diffs.is_empty(), "写后只读复跑差异：{diffs:?}");
+    eprintln!("跨端写读对跑通过：Rust 写 approve / TS 写 review-mode 双向可见，写后 {} 端点复跑全一致", endpoints.len());
+}
