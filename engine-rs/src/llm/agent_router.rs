@@ -199,6 +199,13 @@ impl AgentRouter {
                 tools: None,
                 images: None,
                 progress: self.progress_hook.clone(),
+                // TS chatCompletion：所有 agent 聊天走管线面默认（300s/180s），
+                // env 可覆盖（INKOS_LLM_*_TIMEOUT_MS）。
+                deadline: crate::llm::streaming_client::StreamDeadlineSpec::resolve(
+                    crate::llm::streaming_client::StreamDeadlineSpec::PIPELINE,
+                    None,
+                    None,
+                ),
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;

@@ -34,6 +34,9 @@ pub enum SseEvent {
         completion_tokens: Option<u64>,
         total_tokens: Option<u64>,
     },
+    /// choices[0].finish_reason 非空（终态信号之一；可与 delta 同帧——
+    /// TS `stream closed without [DONE]/finish_reason` 守卫的数据源）。
+    FinishReason(String),
     /// 流结束（[DONE]）
     Done,
 }
@@ -58,9 +61,7 @@ impl SseStreamParser {
             let Some(end) = split_at else { break };
             let sep_len = if self.pending[end..].starts_with("\r\n\r\n") { 4 } else { 2 };
             let block: String = self.pending.drain(..end + sep_len).collect();
-            if let Some(ev) = parse_sse_block(&block) {
-                events.push(ev);
-            }
+            events.extend(parse_sse_block(&block));
         }
         events
     }
@@ -69,9 +70,7 @@ impl SseStreamParser {
     pub fn finish(&mut self) -> Vec<SseEvent> {
         let mut events = Vec::new();
         if !self.pending.is_empty() {
-            if let Some(ev) = parse_sse_block(&self.pending) {
-                events.push(ev);
-            }
+            events.extend(parse_sse_block(&self.pending));
             self.pending.clear();
         }
         events
@@ -86,7 +85,9 @@ impl Default for SseStreamParser {
 
 /// 解析单个 SSE 块（一个或多个 `data:` 行 + 可能的 event/id 行）。
 /// 取最后一个 data 行作为 payload（OpenAI 兼容每块单 data 行）。
-fn parse_sse_block(block: &str) -> Option<SseEvent> {
+/// 返回 0..2 个事件：delta 增量与 finish_reason/usage 可同帧共存（TS 逐项
+/// 处理语义——单事件模型无法表达 content+finish_reason 同帧）。
+fn parse_sse_block(block: &str) -> Vec<SseEvent> {
     let mut data_payload: Option<&str> = None;
     for line in block.lines() {
         if let Some(rest) = line.strip_prefix("data:").or_else(|| line.strip_prefix("data ")) {
@@ -98,12 +99,14 @@ fn parse_sse_block(block: &str) -> Option<SseEvent> {
         }
         // event:/id:/comment 行忽略
     }
-    let payload = data_payload?;
+    let Some(payload) = data_payload else { return Vec::new() };
     if payload == "[DONE]" {
-        return Some(SseEvent::Done);
+        return vec![SseEvent::Done];
     }
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    Some(parse_openai_chunk(&value))
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return Vec::new();
+    };
+    parse_openai_chunk(&value)
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +121,8 @@ struct OpenAiChunk {
 struct OpenAiChoice {
     #[serde(default)]
     delta: Delta,
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -163,13 +168,14 @@ struct OpenAiUsage {
     total_tokens: Option<u64>,
 }
 
-fn parse_openai_chunk(value: &serde_json::Value) -> SseEvent {
+fn parse_openai_chunk(value: &serde_json::Value) -> Vec<SseEvent> {
     let chunk: OpenAiChunk = serde_json::from_value(value.clone()).unwrap_or(OpenAiChunk { choices: vec![], usage: None });
-    // 优先返回文本/推理/工具增量；末帧 usage 单独返回
+    let mut events = Vec::new();
+    // TS 逐项处理语义：delta 增量 / finish_reason 终态 / usage 可同帧共存
     if let Some(choice) = chunk.choices.first() {
         if let Some(content) = &choice.delta.content {
             if !content.is_empty() {
-                return SseEvent::Delta(content.clone());
+                events.push(SseEvent::Delta(content.clone()));
             }
         }
         let reasoning = [
@@ -181,26 +187,30 @@ fn parse_openai_chunk(value: &serde_json::Value) -> SseEvent {
         .flatten()
         .find(|text| !text.is_empty());
         if let Some(reasoning) = reasoning {
-            return SseEvent::ReasoningDelta(reasoning.to_string());
+            events.push(SseEvent::ReasoningDelta(reasoning.to_string()));
         }
         if let Some(tc) = choice.delta.tool_calls.first() {
-            return SseEvent::ToolCallDelta {
+            events.push(SseEvent::ToolCallDelta {
                 index: tc.index,
                 id: tc.id.clone(),
                 name: tc.function.as_ref().and_then(|f| f.name.clone()),
                 arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
-            };
+            });
+        }
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            if !reason.is_empty() {
+                events.push(SseEvent::FinishReason(reason.to_string()));
+            }
         }
     }
     if let Some(usage) = chunk.usage {
-        return SseEvent::Usage {
+        events.push(SseEvent::Usage {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
-        };
+        });
     }
-    // 空帧（无 delta 无 usage）→ 返回空 Delta 作为占位（调用方可忽略）
-    SseEvent::Delta(String::new())
+    events
 }
 
 /// 便捷：把完整 SSE 文本一次性解析为所有事件。
@@ -245,11 +255,36 @@ mod tests {
             "data: {\"choices\":[{\"delta\":{\"reasoning\":\"B\"}}]}\n\n",
         );
         assert_eq!(events, vec![SseEvent::ReasoningDelta("B".to_string())]);
-        // content 同帧优先于 reasoning。
+        // content 与 reasoning 同帧：双双产出（pi-ai 双分支语义——content 块与
+        // thinking 块独立累积；130 号 Vec 化后不再互相遮蔽）。
         let events = parse_sse_stream(
             "data: {\"choices\":[{\"delta\":{\"content\":\"正文\",\"reasoning_content\":\"思考\"}}]}\n\n",
         );
-        assert_eq!(events, vec![SseEvent::Delta("正文".to_string())]);
+        assert_eq!(
+            events,
+            vec![
+                SseEvent::Delta("正文".to_string()),
+                SseEvent::ReasoningDelta("思考".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn finish_reason_shares_frame_with_delta() {
+        // 终态信号与增量同帧：两个事件都要产出（TS 逐项处理语义）。
+        let events = parse_sse_stream(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"收尾\"},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        assert_eq!(
+            events,
+            vec![
+                SseEvent::Delta("收尾".to_string()),
+                SseEvent::FinishReason("stop".to_string()),
+            ]
+        );
+        // 空帧（无 delta 无 finish_reason 无 usage）→ 零事件（原空占位移除）。
+        let events = parse_sse_stream("data: {\"choices\":[{\"delta\":{}}]}\n\n");
+        assert!(events.is_empty());
     }
 
     #[test]

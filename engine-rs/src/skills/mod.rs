@@ -53,11 +53,13 @@ pub fn normalize_skill_id_strict(value: &str) -> Result<String, SkillIdError> {
     Ok(trimmed.to_lowercase())
 }
 
-/// 技能来源。对齐 TS `z.enum(["project","user","external"])`。
+/// 技能来源。对齐 TS `z.enum(["builtin","project","user","external"])`
+/// （"builtin" 为 130 号合并同步：packages/core/skills 专业技能包）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"project\" | \"user\" | \"external\""))]
+#[cfg_attr(feature = "export-bindings", ts(export, type = "\"builtin\" | \"project\" | \"user\" | \"external\""))]
 pub enum SkillSource {
+    #[serde(rename = "builtin")] Builtin,
     #[serde(rename = "project")] Project,
     #[serde(rename = "user")] User,
     #[serde(rename = "external")] External,
@@ -134,12 +136,14 @@ pub struct BuiltinSkillRegistry {
 
 impl BuiltinSkillRegistry {
     pub fn new(skills: Vec<AgentSkill>) -> Self {
-        // 去重（按规范化 id）+ 规范化 id + 按 id 排序
+        // 去重（按规范化 id，last-write-wins——TS Map.set 覆盖语义；130 号
+        // 修正原 or_insert 的 first-wins：builtin+configured 合并后项目/用户
+        // 需能同名覆盖内置默认）+ 规范化 id + 按 id 排序
         let mut by_id: HashMap<String, AgentSkill> = HashMap::new();
         for mut s in skills {
             let nid = normalize_skill_id(&s.id);
             s.id = nid.clone();
-            by_id.entry(nid).or_insert(s);
+            by_id.insert(nid, s);
         }
         let mut skills: Vec<AgentSkill> = by_id.values().cloned().collect();
         skills.sort_by(|a, b| a.id.cmp(&b.id));

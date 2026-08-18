@@ -25,7 +25,7 @@ use crate::prompts::{builtin_prompt_packs, builtin_prompts, get_builtin_prompt, 
 use crate::prompts::prompt_pack::prompt_override_path;
 use crate::server::books_routes::BooksRuntime;
 use crate::skills::external_loader::{
-    list_project_skill_ids, load_configured_agent_skills, parse_agent_skill_document,
+    list_project_skill_ids, load_available_agent_skills, parse_agent_skill_document,
 };
 use crate::skills::{
     create_skill_registry, normalize_skill_id_strict, AgentSkill, SkillRegistry, SkillSource,
@@ -96,6 +96,7 @@ struct StudioSkill {
 
 fn skill_source_str(source: SkillSource) -> &'static str {
     match source {
+        SkillSource::Builtin => "builtin",
         SkillSource::Project => "project",
         SkillSource::User => "user",
         SkillSource::External => "external",
@@ -174,11 +175,13 @@ pub async fn list_skills(State(runtime): State<BooksRuntime>) -> impl IntoRespon
     let root = runtime.state.project_root();
     let env_dirs = env_skill_dirs();
     let home = home_dir();
-    let configured = load_configured_agent_skills(root, &env_dirs, home.as_deref()).await;
+    // 130 号合并同步：TS loadStudioSkills 从 configured-only 升级为
+    // loadAvailableAgentSkills（builtin + configured，同名后者覆盖）。
+    let available = load_available_agent_skills(root, &env_dirs, home.as_deref()).await;
     let Ok(project_skill_ids) = list_project_skill_ids(root).await else {
         return internal_error_message("failed to list project skills");
     };
-    let registry = create_skill_registry(configured.skills);
+    let registry = create_skill_registry(available.skills);
     let skills: Vec<StudioSkill> = registry
         .list_skills()
         .iter()
@@ -186,7 +189,7 @@ pub async fn list_skills(State(runtime): State<BooksRuntime>) -> impl IntoRespon
         .collect();
     (
         StatusCode::OK,
-        Json(json!({ "skills": skills, "diagnostics": configured.diagnostics })),
+        Json(json!({ "skills": skills, "diagnostics": available.diagnostics })),
     )
 }
 

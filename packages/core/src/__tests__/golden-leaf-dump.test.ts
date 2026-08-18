@@ -39,7 +39,7 @@ import {
   resolveDuplicateTitle,
 } from "../agents/post-write-validator.js";
 import { renderHookSnapshot, renderSummarySnapshot } from "../utils/story-markdown.js";
-import { computeRecyclableHooks, extractQueryTerms } from "../utils/memory-retrieval.js";
+import { computeRecyclableHooks } from "../utils/memory-retrieval.js";
 import {
   buildPlannerUserMessage,
   getPlannerMemoSystemPrompt,
@@ -51,12 +51,10 @@ import {
   extractProtagonistRow,
   extractOpponentRows,
   extractCollaboratorRows,
-  extractRelevantThreads,
   formatRecyclableHooks,
 } from "../agents/planner-context.js";
 import { PlannerAgent } from "../agents/planner.js";
 import { ReviserAgent } from "../agents/reviser.js";
-import { LengthNormalizerAgent } from "../agents/length-normalizer.js";
 import { StateValidatorAgent } from "../agents/state-validator.js";
 import { ChapterAnalyzerAgent } from "../agents/chapter-analyzer.js";
 import {
@@ -711,27 +709,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "latin-protagonist", input: { matrixMarkdown: matrixEn, chapterIntent: "unrelated text", contextPackage: pkgEn, protagonistName: "alice" }, expected: buildGovernedCharacterMatrixWorkingSet({ matrixMarkdown: matrixEn, chapterIntent: "unrelated text", contextPackage: pkgEn, protagonistName: "alice" }) },
         ];
       })(),
-      writer_build_user_prompt: (() => {
-        const spec = buildLengthSpec(3000, "zh");
-        const zhParams = {
-          chapterNumber: 2, storyBible: "世界观", currentState: "状态卡", ledger: "", hooks: "伏笔池",
-          recentChapters: "", lengthSpec: spec, externalContext: "加入伏笔",
-          chapterSummaries: "(文件尚未创建)", subplotBoard: "(文件尚未创建)", emotionalArcs: "(文件尚未创建)",
-          characterMatrix: "(文件尚未创建)", dialogueFingerprints: undefined, relevantSummaries: undefined,
-          parentCanon: undefined, language: "zh" as const,
-        };
-        const enParams = {
-          chapterNumber: 1, storyBible: "world", currentState: "state", ledger: "ledger", hooks: "hooks",
-          recentChapters: "previous", lengthSpec: buildLengthSpec(2000, "en"), externalContext: undefined,
-          chapterSummaries: "| old |", subplotBoard: "| sub |", emotionalArcs: "(文件尚未创建)",
-          characterMatrix: "(文件尚未创建)", dialogueFingerprints: "A：短句为主", relevantSummaries: "| 1 |",
-          parentCanon: "canon", language: "en" as const,
-        };
-        return [
-          { name: "zh-first-chapter", input: zhParams, expected: writerPriv.buildUserPrompt(zhParams) },
-          { name: "en-full-blocks", input: enParams, expected: writerPriv.buildUserPrompt(enParams) },
-        ];
-      })(),
       writer_build_governed_user_prompt: (() => {
         const memo: ChapterMemo = { chapter: 3, goal: "目标", isGoldenOpening: false, body: "正文要求", threadRefs: ["H01"] };
         const pkg = {
@@ -787,22 +764,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         { name: "whitespace-underscore", input: "a b  c", expected: writerPriv.sanitizeFilename("a b  c") },
         { name: "truncate-50", input: "字".repeat(60), expected: writerPriv.sanitizeFilename("字".repeat(60)) },
       ],
-      writer_extract_dialogue_fingerprints: [
-        {
-          name: "greedy-speaker-quirk",
-          input: "林动冷声道：\"你敢再来？\"\n林动冷声道：\"滚出去？\"\n苏檀儿笑道：\"人家才不怕呢，人家才不怕呢，人家才不怕呢。\"\n路人说道：\"不知道。\"",
-          expected: writerPriv.extractDialogueFingerprints("林动冷声道：\"你敢再来？\"\n林动冷声道：\"滚出去？\"\n苏檀儿笑道：\"人家才不怕呢，人家才不怕呢，人家才不怕呢。\"\n路人说道：\"不知道。\"", ""),
-        },
-        { name: "empty", input: "", expected: writerPriv.extractDialogueFingerprints("", "") },
-      ],
-      writer_find_relevant_summaries: [
-        {
-          name: "name-and-hook-match",
-          input: { chapterSummaries: "# 章节摘要\n\n| 章节 | 标题 |\n|---|---|\n| 1 | 林动初醒 |\n| 2 | 无关章节 |\n| 3 | H01 推进 |\n| 5 | 林动再战 |\n", volumeOutline: "本卷主线：林动，回收 H01 伏笔，绫清竹出场。", chapterNumber: 6 },
-          expected: writerPriv.findRelevantSummaries("# 章节摘要\n\n| 章节 | 标题 |\n|---|---|\n| 1 | 林动初醒 |\n| 2 | 无关章节 |\n| 3 | H01 推进 |\n| 5 | 林动再战 |\n", "本卷主线：林动，回收 H01 伏笔，绫清竹出场。", 6),
-        },
-        { name: "placeholder", input: { chapterSummaries: "(文件尚未创建)", volumeOutline: "卷纲", chapterNumber: 3 }, expected: writerPriv.findRelevantSummaries("(文件尚未创建)", "卷纲", 3) },
-      ],
       writer_build_style_fingerprint: [
         {
           name: "truthy-fields",
@@ -853,13 +814,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "ordering-silence-desc", input: { hooks: [h("H03", 1, 1, "open"), h("H04", 2, 2, "open")], chapterNumber: 14 }, expected: computeRecyclableHooks([h("H03", 1, 1, "open"), h("H04", 2, 2, "open")] as unknown as Parameters<typeof computeRecyclableHooks>[0], 14).map((x) => x.hookId) },
         ];
       })(),
-      extract_query_terms: [
-        { name: "chinese-focus-suffixes", input: { goal: "本章围绕林动崛起推进", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("本章围绕林动崛起推进", undefined, []) },
-        { name: "english-case-stopwords", input: { goal: "Focus on the Alliance lineage", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("Focus on the Alliance lineage", undefined, []) },
-        { name: "outline-fallback", input: { goal: "继续", outlineNode: "第3章 宗门大比", mustKeep: [] }, expected: extractQueryTerms("继续", "第3章 宗门大比", []) },
-        { name: "must-keep-prefix-word", input: { goal: "", outlineNode: undefined, mustKeep: ["保持 海上孤舟"] }, expected: extractQueryTerms("", undefined, ["保持 海上孤舟"]) },
-        { name: "negative-guidance", input: { goal: "守住城池，不要弃城", outlineNode: undefined, mustKeep: [] }, expected: extractQueryTerms("守住城池，不要弃城", undefined, []) },
-      ],
       render_summary_snapshot: (() => {
         const summaries = [
           { chapter: 1, title: "初入", characters: "林动", events: "祖符觉醒", stateChanges: "无", hookActivity: "H01 open", mood: "平静", chapterType: "开局" },
@@ -891,6 +845,7 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           recyclableHooks: "（暂无陈旧 hook——账本干净）",
           isGoldenOpening: true,
           bookRulesRelevant: "（暂无 book_rules 条目）",
+          lengthBudget: { target: 3000, softMin: 2250, softMax: 3750, hardMin: 1500, hardMax: 4500, unit: "zh_chars" },
         };
         const enBase = { ...base, isGoldenOpening: false };
         return [
@@ -935,14 +890,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
         return [
           { name: "opponent", input: { raw: matrix, kind: "opponent", limit: 3 }, expected: extractOpponentRows(matrix, 3) },
           { name: "collaborator", input: { raw: matrix, kind: "collaborator", limit: 3 }, expected: extractCollaboratorRows(matrix, 3) },
-        ];
-      })(),
-      planner_extract_relevant_threads: (() => {
-        const hooks = "| hook_id | 状态 |\n| --- | --- |\n| H01 | progressing |\n| H02 | resolved |\n";
-        const subplots = "| id | 状态 |\n| --- | --- |\n| S1 | open |\n";
-        return [
-          { name: "mixed", input: { pendingHooksRaw: hooks, subplotBoardRaw: subplots }, expected: extractRelevantThreads(hooks, subplots) },
-          { name: "empty", input: { pendingHooksRaw: "", subplotBoardRaw: "" }, expected: extractRelevantThreads("", "") },
         ];
       })(),
       planner_format_recyclable_hooks: (() => {
@@ -1059,31 +1006,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
           { name: "parse-empty", input: { content: "  " }, expected: safe(() => v.parseResult("  ")) },
         ];
       })(),
-      length_normalizer_suite: (() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const agent = new LengthNormalizerAgent({ client: {} as any, model: "m", projectRoot: "/tmp" });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const n = agent as any;
-        const spec = { target: 3000, softMin: 2250, softMax: 3750, hardMin: 1500, hardMax: 4500, countingMode: "zh_chars", normalizeMode: "none" } as any;
-        const input = { chapterContent: "正文内容。", lengthSpec: spec, chapterIntent: "## Goal\n目标", reducedControlBlock: "控制块" };
-        return [
-          { name: "system-compress", input: { mode: "compress" }, expected: n.buildSystemPrompt("compress") },
-          { name: "system-expand", input: { mode: "expand" }, expected: n.buildSystemPrompt("expand") },
-          { name: "user-full", input: { input, originalCount: 1234, mode: "expand" }, expected: n.buildUserPrompt(input, 1234, "expand") },
-          { name: "user-minimal", input: { input: { chapterContent: "短", lengthSpec: spec }, originalCount: 1, mode: "compress" }, expected: n.buildUserPrompt({ chapterContent: "短", lengthSpec: spec }, 1, "compress") },
-          { name: "sanitize-fence", input: { raw: "下面是压缩后的版本：\n```\n正文甲\n```\n完毕", fallback: "fb" }, expected: n.sanitizeNormalizedContent("下面是压缩后的版本：\n```\n正文甲\n```\n完毕", "fb") },
-          { name: "sanitize-empty", input: { raw: "  \n", fallback: "fb" }, expected: n.sanitizeNormalizedContent("  \n", "fb") },
-          { name: "sanitize-wrapper", input: { raw: "下面是修正后的正文：\n真正的正文内容在这里。", fallback: "fb" }, expected: n.sanitizeNormalizedContent("下面是修正后的正文：\n真正的正文内容在这里。", "fb") },
-          { name: "sanitize-wrapper-guard", input: { raw: "以下是压缩后的完整版本输出\n短", fallback: "fb" }, expected: n.sanitizeNormalizedContent("以下是压缩后的完整版本输出\n短", "fb") },
-          { name: "sanitize-all-wrapper", input: { raw: "我先压缩一下正文", fallback: "fb" }, expected: n.sanitizeNormalizedContent("我先压缩一下正文", "fb") },
-          { name: "truncated-matrix", input: { contents: ["正常收尾。", "code```", "他继续走了很", "话说到一半，", ""] }, expected: ["正常收尾。", "code```", "他继续走了很", "话说到一半，", ""].map((c) => n.looksTruncated(c)) },
-          { name: "warning-hard", input: { finalCount: 1000, lengthSpec: spec }, expected: n.buildWarning(1000, spec) ?? null },
-          { name: "warning-soft", input: { finalCount: 2000, lengthSpec: spec }, expected: n.buildWarning(2000, spec) ?? null },
-          { name: "warning-none", input: { finalCount: 3000, lengthSpec: spec }, expected: n.buildWarning(3000, spec) ?? null },
-          { name: "cross-opposite", input: { originalCount: 5000, candidateCount: 1000, lengthSpec: spec }, expected: n.crossesOppositeHardBound(5000, 1000, spec) },
-          { name: "cross-same-side", input: { originalCount: 5000, candidateCount: 3000, lengthSpec: spec }, expected: n.crossesOppositeHardBound(5000, 3000, spec) },
-        ];
-      })(),
       state_degraded_note: (() => {
         const issues = [
           { severity: "critical", category: "state-validation", description: "状态卡与正文矛盾", suggestion: "", repairScope: undefined },
@@ -1178,7 +1100,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.normalize_post_write_surface.length).toBeGreaterThan(0);
     expect(payload.render_hook_snapshot.length).toBeGreaterThan(0);
     expect(payload.build_governed_hook_working_set.length).toBeGreaterThan(0);
-    expect(payload.writer_build_user_prompt.length).toBeGreaterThan(0);
     expect(payload.writer_normalize_runtime_state_delta_chapter.length).toBeGreaterThan(0);
     expect(payload.validate_post_write.length).toBeGreaterThan(0);
     expect(payload.detect_cross_chapter_repetition.length).toBeGreaterThan(0);
@@ -1186,7 +1107,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.detect_duplicate_title.length).toBeGreaterThan(0);
     expect(payload.resolve_duplicate_title.length).toBeGreaterThan(0);
     expect(payload.compute_recyclable_hooks.length).toBeGreaterThan(0);
-    expect(payload.extract_query_terms.length).toBeGreaterThan(0);
     expect(payload.render_summary_snapshot.length).toBeGreaterThan(0);
     expect(payload.planner_system_prompt.length).toBeGreaterThan(0);
     expect(payload.planner_build_user_message.length).toBeGreaterThan(0);
@@ -1195,7 +1115,6 @@ describe("golden dump → engine-rs/tests/golden/utils/leaf.json", () => {
     expect(payload.build_governed_trace.length).toBeGreaterThan(0);
     expect(payload.is_protected_context_source.length).toBeGreaterThan(0);
     expect(payload.reviser_private_suite.length).toBeGreaterThan(0);
-    expect(payload.length_normalizer_suite.length).toBeGreaterThan(0);
     expect(payload.state_degraded_note.length).toBeGreaterThan(0);
   });
 });

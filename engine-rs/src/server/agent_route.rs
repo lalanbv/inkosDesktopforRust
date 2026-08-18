@@ -614,6 +614,13 @@ pub async fn post_agent(
                     tools,
                     images: (!self.images.is_empty()).then_some(self.images.as_slice()),
                     progress: None,
+                    // 交互聊天面（TS guardAssistantMessageStream 默认 120s/90s）
+                    // ——比管线面（300s/180s）紧：聊天轮不应长时间无反馈。
+                    deadline: crate::llm::streaming_client::StreamDeadlineSpec::resolve(
+                        crate::llm::streaming_client::StreamDeadlineSpec::INTERACTIVE,
+                        None,
+                        None,
+                    ),
                 })
                 .await
                 .map_err(|e| e.to_string())?;

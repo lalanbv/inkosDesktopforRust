@@ -35,6 +35,17 @@ fn repo_root() -> PathBuf {
 }
 
 fn write_fixture(root: &Path, llm: &str) {
+    // 130 号：builtin 技能包根（TS file-relative 恒指向 packages/core/skills；
+    // Rust in-process 面经 env 注入同一目录，bin 进程在 spawn 点显式传）。
+    // 各 duel 测试并发设置同值——无害。
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("engine-rs 必在仓库根下")
+        .to_path_buf();
+    std::env::set_var(
+        "INKOS_BUILTIN_SKILLS_DIR",
+        repo_root.join("packages").join("core").join("skills"),
+    );
     std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
     std::fs::write(
         root.join("assets").join("genres").join("xianxia.md"),
@@ -761,6 +772,7 @@ async fn bin_process_write_next_llm_resolution() {
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", port.to_string())
         .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
         // 启动 env 指向另一 mock：write-next 若误走启动 router（123 号前缺陷），
         // project_hits 恒 0 且本 mock 被触达——两端皆可判。
         .env("INKOS_LLM_BASE_URL", &env_llm)
@@ -870,6 +882,7 @@ async fn bin_process_static_face_duel() {
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", bin_port.to_string())
         .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
         .env("INKOS_STATIC_DIR", &dist)
         .stdout(std::process::Stdio::from(
             std::fs::File::create("/tmp/duel-bin-static-out.log").unwrap(),
@@ -1122,6 +1135,7 @@ async fn sse_event_face_duel() {
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", bin_port.to_string())
         .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
         .stdout(std::process::Stdio::from(
             std::fs::File::create("/tmp/duel-bin-sse-out.log").unwrap(),
         ))

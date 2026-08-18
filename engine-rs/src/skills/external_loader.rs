@@ -288,6 +288,66 @@ pub async fn load_configured_agent_skills(
     result
 }
 
+/// builtin 根目录（130 号）：TS `builtinSkillsRoot` = packages/core/skills
+/// （file-relative 恒可达）；Rust 独立部署无同款锚点 → env 覆盖 + cwd 相对
+/// 默认（genres 的 `INKOS_BUILTIN_GENRES_DIR` 同款约定）。返回绝对路径
+/// （`discover_skill_dirs` 强制绝对）。
+pub fn builtin_skills_root() -> PathBuf {
+    let raw = std::env::var("INKOS_BUILTIN_SKILLS_DIR")
+        .unwrap_or_else(|_| "assets/skills".to_string());
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    }
+}
+
+/// TS `loadBuiltinAgentSkills`：builtin 根目录装载（source=builtin）。
+/// 差异备案：TS 根目录缺失会抛错使端点 500（file-relative 恒存在所以实际
+/// 不触发）；Rust 默认路径在独立部署下可能未部署——缺失静默降级为零
+/// builtin，非缺失错误计入 diagnostics（不炸端点）。
+pub async fn load_builtin_agent_skills(builtin_root: &Path) -> LoadExternalAgentSkillsResult {
+    match load_external_agent_skills(builtin_root, SkillSource::Builtin).await {
+        Ok(result) => result,
+        Err(LoadCandidateError::Missing) => LoadExternalAgentSkillsResult::default(),
+        Err(error) => LoadExternalAgentSkillsResult {
+            skills: Vec::new(),
+            diagnostics: vec![ExternalSkillDiagnostic {
+                path: builtin_root.to_string_lossy().to_string(),
+                message: error.message(),
+            }],
+        },
+    }
+}
+
+/// TS `loadAvailableAgentSkills`（130 号合并同步）：builtin + configured
+/// 合并。configured 在后——registry last-write-wins，项目/用户可同名
+/// 覆盖 builtin 默认（TS 展开序逐字）。
+pub async fn load_available_agent_skills(
+    project_root: &Path,
+    env_dirs: &[String],
+    home_dir: Option<&Path>,
+) -> LoadExternalAgentSkillsResult {
+    let builtin_root = builtin_skills_root();
+    load_available_agent_skills_with_builtin_root(project_root, env_dirs, home_dir, &builtin_root)
+        .await
+}
+
+/// 显式 builtin 根变体（测试/装配注入面；上者为 env 包装）。
+pub async fn load_available_agent_skills_with_builtin_root(
+    project_root: &Path,
+    env_dirs: &[String],
+    home_dir: Option<&Path>,
+    builtin_root: &Path,
+) -> LoadExternalAgentSkillsResult {
+    let mut available = load_builtin_agent_skills(builtin_root).await;
+    let mut configured = load_configured_agent_skills(project_root, env_dirs, home_dir).await;
+    available.skills.append(&mut configured.skills);
+    available.diagnostics.append(&mut configured.diagnostics);
+    available
+}
+
 /// 单目录加载。对齐 TS `loadExternalAgentSkills`（内部 per-skill 失败 → 诊断）。
 async fn load_external_agent_skills(
     dir: &Path,
@@ -579,6 +639,60 @@ mod tests {
         // project 目录的 source 标记
         let combat = result.skills.iter().find(|s| s.id == "combat").unwrap();
         assert_eq!(combat.source, SkillSource::Project);
+    }
+
+    // ── 130 号：builtin + available 装载 ───────────────────────────────
+
+    fn write_skill(dir: &std::path::Path, id: &str, name: &str) {
+        std::fs::create_dir_all(dir.join(id)).unwrap();
+        std::fs::write(
+            dir.join(id).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: d\n---\nb"),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn builtin_leg_loads_with_builtin_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let builtin = tmp.path().join("builtin");
+        write_skill(&builtin, "inkos-story-review", "长篇审校");
+        let result = load_builtin_agent_skills(&builtin).await;
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(result.skills.len(), 1);
+        assert_eq!(result.skills[0].id, "inkos-story-review");
+        assert_eq!(result.skills[0].source, SkillSource::Builtin);
+    }
+
+    #[tokio::test]
+    async fn builtin_missing_root_degrades_to_empty() {
+        // 默认路径未部署的 graceful 降级（TS file-relative 恒存在不触发；
+        // Rust 独立部署备案差异）。
+        let result = load_builtin_agent_skills(std::path::Path::new("/nonexistent-builtin-root-xyz")).await;
+        assert!(result.skills.is_empty());
+        assert!(result.diagnostics.is_empty(), "缺失静默，不诊断");
+    }
+
+    #[tokio::test]
+    async fn available_merges_builtin_then_configured_with_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let builtin = tmp.path().join("builtin");
+        write_skill(&builtin, "shared", "内置版");
+        write_skill(&builtin, "only-builtin", "仅内置");
+        // 项目同名技能 → registry last-write-wins 应覆盖内置默认
+        write_skill(&root.join("skills"), "shared", "项目版");
+
+        let result =
+            load_available_agent_skills_with_builtin_root(root, &[], None, &builtin).await;
+        let registry = crate::skills::create_skill_registry(result.skills);
+        let listed = crate::skills::SkillRegistry::list_skills(&registry);
+        let ids: Vec<&str> = listed.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"only-builtin"), "{ids:?}");
+        assert!(ids.contains(&"shared"), "{ids:?}");
+        let shared = listed.iter().find(|s| s.id == "shared").unwrap();
+        assert_eq!(shared.name, "项目版", "configured 在后覆盖 builtin 同名默认");
+        assert_eq!(shared.source, SkillSource::Project);
     }
 
     #[tokio::test]
