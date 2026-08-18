@@ -118,10 +118,51 @@ async fn production_provider_model_labels(
     (provider, model)
 }
 
+/// llm:progress 广播钩子（126 号）：进度对象 + sessionId（TS 聊天轮
+/// pipeline 的 `sessionIdForSSE` 标记语义）。
+fn llm_progress_hook(
+    hub: &crate::server::sse::BroadcastHub,
+    session_id: &str,
+) -> crate::llm::provider::StreamProgressCallback {
+    let hub = hub.clone();
+    let session_id = session_id.to_string();
+    std::sync::Arc::new(move |progress: &crate::llm::provider::StreamProgress| {
+        let mut payload =
+            serde_json::to_value(progress).unwrap_or_else(|_| serde_json::json!({}));
+        if let Value::Object(map) = &mut payload {
+            map.insert("sessionId".into(), serde_json::json!(session_id));
+        }
+        hub.broadcast("llm:progress", &payload);
+    })
+}
+
+/// session:title 广播（126 号）：TS `refreshBookSessionFromTranscript` 的
+/// 标题语义——run 前标题为空（首条用户消息尚未落盘）、run 后 derive 出
+/// 标题时广播一次；已有标题/仍无标题均静默。
+async fn maybe_broadcast_session_title(
+    hub: &crate::server::sse::BroadcastHub,
+    project_root: &std::path::Path,
+    session_id: &str,
+    title_before_run: Option<&str>,
+) {
+    if title_before_run.is_some() {
+        return;
+    }
+    if let Some(session) = load_book_session(project_root, session_id).await {
+        if let Some(title) = session.title {
+            if !title.is_empty() {
+                hub.broadcast(
+                    "session:title",
+                    &serde_json::json!({ "sessionId": session_id, "title": title }),
+                );
+            }
+        }
+    }
+}
+
 /// appendManualSessionMessages 等价：request_started → user → assistant →
 /// request_committed 四事件（65 号消费面：直通聊天轮持久化）。
-async fn append_chat_turn(
-    project_root: &std::path::Path,
+async fn append_chat_turn(    project_root: &std::path::Path,
     session_id: &str,
     instruction: &str,
     response_text: &str,
@@ -348,6 +389,9 @@ pub async fn post_agent(
         }
     }
     let agent_book_id = requested_active_book_id.or(persisted_book_id);
+    // 126 号：run 前标题快照——run 内首条用户消息落盘后 derive 出标题时
+    // 广播 session:title（TS titleBeforeRun 语义）。
+    let title_before_run = book_session.title.clone();
     let fallback_kind = agent_book_id
         .as_ref()
         .map(|_| SessionKind::Book)
@@ -442,6 +486,14 @@ pub async fn post_agent(
                 if let Some(book_id) = &outcome.active_book_id {
                     session_obj.insert("activeBookId".into(), json!(book_id));
                 }
+                // 126 号：终态事件后补发（不扰动既有事件序列断言）。
+                maybe_broadcast_session_title(
+                    &runtime.hub,
+                    root,
+                    session_id,
+                    title_before_run.as_deref(),
+                )
+                .await;
                 (
                     StatusCode::OK,
                     Json(json!({
@@ -463,6 +515,13 @@ pub async fn post_agent(
                         "error": error.message,
                     }),
                 );
+                maybe_broadcast_session_title(
+                    &runtime.hub,
+                    root,
+                    session_id,
+                    title_before_run.as_deref(),
+                )
+                .await;
                 (
                     error.status,
                     Json(json!({
@@ -520,6 +579,9 @@ pub async fn post_agent(
         /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
         /// 与 TS pi-agent 历史保留语义一致。
         images: Vec<crate::llm::streaming_client::ChatImage>,
+        /// llm:progress 钩子（126 号）：带 sessionId 广播（TS 聊天轮
+        /// pipeline 的 sessionIdForSSE 语义）。
+        progress: Option<crate::llm::provider::StreamProgressCallback>,
     }
 
     #[async_trait::async_trait]
@@ -542,6 +604,7 @@ pub async fn post_agent(
                     extra: None,
                     tools,
                     images: (!self.images.is_empty()).then_some(self.images.as_slice()),
+                    progress: self.progress.clone(),
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -609,7 +672,11 @@ pub async fn post_agent(
     };
     let instruction: &str = &prompt_instruction;
     let loop_images = attachment_images(&attachments);
-    let loop_chat = RouterLoopChat { router: &runtime.router, images: loop_images };
+    let loop_chat = RouterLoopChat {
+        router: &runtime.router,
+        images: loop_images,
+        progress: Some(llm_progress_hook(&runtime.hub, session_id)),
+    };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/
@@ -748,6 +815,14 @@ pub async fn post_agent(
                     "sessionKind": session_kind.as_str(),
                 }),
             );
+            // 126 号：终态事件后补发（不扰动既有事件序列断言）。
+            maybe_broadcast_session_title(
+                &runtime.hub,
+                root,
+                session_id,
+                title_before_run.as_deref(),
+            )
+            .await;
             let mut session_obj = Map::new();
             session_obj.insert("sessionId".into(), json!(session_id));
             session_obj.insert("sessionKind".into(), json!(session_kind.as_str()));
@@ -775,6 +850,13 @@ pub async fn post_agent(
                     "error": error,
                 }),
             );
+            maybe_broadcast_session_title(
+                &runtime.hub,
+                root,
+                session_id,
+                title_before_run.as_deref(),
+            )
+            .await;
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// chat completions 请求参数。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatCompletionParams<'a> {
     pub model: &'a str,
     pub messages: &'a [LLMMessage],
@@ -38,6 +38,28 @@ pub struct ChatCompletionParams<'a> {
     /// `agent.prompt(message, images)` 的当轮 prompt 图——历史轮次保留。
     /// （responses 传输不注入——TS buildResponsesInput 仅 input_text。）
     pub images: Option<&'a [ChatImage]>,
+    /// 流式进度回调（126 号：TS `createStreamMonitor` / PipelineConfig
+    /// `onStreamProgress` → SSE `llm:progress`）。仅流式路径生效；节流
+    /// 30s + 流成功结束发终态 done。None = 无进度上报。
+    pub progress: Option<crate::llm::provider::StreamProgressCallback>,
+}
+
+/// 手写 Debug：progress 回调仅呈现挂载态（闭包无 Debug）。
+impl<'a> std::fmt::Debug for ChatCompletionParams<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatCompletionParams")
+            .field("model", &self.model)
+            .field("messages", &self.messages.len())
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("stream", &self.stream)
+            .field("api_format", &self.api_format)
+            .field("extra", &self.extra)
+            .field("tools", &self.tools)
+            .field("images", &self.images)
+            .field("progress", &self.progress.is_some())
+            .finish()
+    }
 }
 
 /// 多模态图片内容（base64 + mime；对应 TS `ImageContent`）。
@@ -45,6 +67,54 @@ pub struct ChatCompletionParams<'a> {
 pub struct ChatImage {
     pub data: String,
     pub mime_type: String,
+}
+
+/// 流式进度监视器（126 号）：TS `createStreamMonitor` 对应物——30s 节流发
+/// `streaming`，流成功结束发 `done`。差异：chunk 驱动节流（生成中 chunk
+/// 持续到达；完全静默期不心跳——TS setInterval 语义会，仅影响停滞期上报
+/// 频率，字段与终态一致）。字符计数：total 为 Unicode 标量数（TS `.length`
+/// 为 UTF-16 码元——BMP 内一致，星面字符差 1/字符，遥测级等价）；中文区
+/// U+4E00..U+9FFF 与 TS 正则逐字。
+struct StreamMonitor {
+    start: std::time::Instant,
+    last_emit: std::time::Instant,
+    total_chars: u32,
+    chinese_chars: u32,
+    callback: crate::llm::provider::StreamProgressCallback,
+}
+
+/// TS `createStreamMonitor(intervalMs = 30000)` 的节流间隔。
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl StreamMonitor {
+    fn new(callback: crate::llm::provider::StreamProgressCallback) -> Self {
+        let now = std::time::Instant::now();
+        Self { start: now, last_emit: now, total_chars: 0, chinese_chars: 0, callback }
+    }
+
+    fn on_delta(&mut self, text: &str) {
+        self.total_chars = self.total_chars.saturating_add(text.chars().count() as u32);
+        self.chinese_chars = self.chinese_chars.saturating_add(
+            text.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c)).count() as u32,
+        );
+        if self.last_emit.elapsed() >= PROGRESS_INTERVAL {
+            self.emit(crate::llm::provider::StreamStatus::Streaming);
+            self.last_emit = std::time::Instant::now();
+        }
+    }
+
+    fn finish(self) {
+        self.emit(crate::llm::provider::StreamStatus::Done);
+    }
+
+    fn emit(&self, status: crate::llm::provider::StreamStatus) {
+        (self.callback)(&crate::llm::provider::StreamProgress {
+            elapsed_ms: self.start.elapsed().as_millis() as u64,
+            total_chars: self.total_chars,
+            chinese_chars: self.chinese_chars,
+            status,
+        });
+    }
 }
 
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
@@ -302,13 +372,19 @@ impl StreamingChatClient {
         let mut total_tokens = None;
         let mut done = false;
         let mut tool_call_deltas: ToolCallDeltas = Vec::new();
+        let mut monitor = params.progress.clone().map(StreamMonitor::new);
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             let text = String::from_utf8_lossy(&chunk);
             for ev in parser.push(&text) {
                 match ev {
-                    SseEvent::Delta(s) => content.push_str(&s),
+                    SseEvent::Delta(s) => {
+                        if let Some(monitor) = monitor.as_mut() {
+                            monitor.on_delta(&s);
+                        }
+                        content.push_str(&s);
+                    }
                     SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
                         prompt_tokens = p;
                         completion_tokens = c;
@@ -323,7 +399,12 @@ impl StreamingChatClient {
         }
         for ev in parser.finish() {
             match ev {
-                SseEvent::Delta(s) => content.push_str(&s),
+                SseEvent::Delta(s) => {
+                    if let Some(monitor) = monitor.as_mut() {
+                        monitor.on_delta(&s);
+                    }
+                    content.push_str(&s);
+                }
                 SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
                     prompt_tokens = p;
                     completion_tokens = c;
@@ -332,6 +413,9 @@ impl StreamingChatClient {
                 SseEvent::Done => done = true,
                 _ => {}
             }
+        }
+        if let Some(monitor) = monitor {
+            monitor.finish();
         }
         let tool_calls = aggregate_tool_calls(&tool_call_deltas);
         Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done, tool_calls })
@@ -387,6 +471,7 @@ impl StreamingChatClient {
         let mut completion_tokens = None;
         let mut total_tokens = None;
         let mut saw_terminal = false;
+        let mut monitor = params.progress.clone().map(StreamMonitor::new);
         for data in sse_data_events(&text) {
             let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) else {
                 continue;
@@ -394,6 +479,9 @@ impl StreamingChatClient {
             let event_type = json.get("type").and_then(Value::as_str).unwrap_or_default();
             if event_type == "response.output_text.delta" {
                 if let Some(delta) = json.get("delta").and_then(Value::as_str) {
+                    if let Some(monitor) = monitor.as_mut() {
+                        monitor.on_delta(delta);
+                    }
                     content.push_str(delta);
                 }
             }
@@ -418,6 +506,9 @@ impl StreamingChatClient {
             return Err(StreamError::Protocol(
                 "stream closed without response.completed".to_string(),
             ));
+        }
+        if let Some(monitor) = monitor {
+            monitor.finish();
         }
         Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new() })
     }
@@ -534,7 +625,7 @@ mod tests {
             LLMMessage { role: LLMRole::System, content: "你是助手".into(), tool_calls: None, tool_call_id: None },
             LLMMessage { role: LLMRole::User, content: "你好".into(), tool_calls: None, tool_call_id: None },
         ];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: None };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: None, progress: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["temperature"], 0.7);
@@ -559,7 +650,7 @@ mod tests {
         ];
         let params = ChatCompletionParams {
             model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
-            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&images),
+            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&images), progress: None,
         };
         let body = build_chat_completion_request(&params);
         // 最后一条 user → vision 数组（text 段 + 两个 image_url 段）。
@@ -577,7 +668,7 @@ mod tests {
         let empty: [ChatImage; 0] = [];
         let params = ChatCompletionParams {
             model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
-            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&empty),
+            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&empty), progress: None,
         };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["messages"][3]["content"], "看这张图");
@@ -589,7 +680,7 @@ mod tests {
         extra.insert("model".into(), serde_json::json!("EVIL")); // 保留字段，应被忽略
         extra.insert("top_p".into(), serde_json::json!(0.9)); // 非保留，应保留
         let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, api_format: TransportApiFormat::Chat, extra: Some(&extra), tools: None, images: None };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, api_format: TransportApiFormat::Chat, extra: Some(&extra), tools: None, images: None, progress: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o"); // 未被覆盖
         assert_eq!(body["top_p"], 0.9); // 保留
@@ -611,7 +702,7 @@ mod tests {
         ];
         let params = ChatCompletionParams {
             model: "gpt-5", messages: &msgs, temperature: 0.5, max_tokens: 128,
-            stream: true, api_format: TransportApiFormat::Responses, extra: None, tools: None, images: None,
+            stream: true, api_format: TransportApiFormat::Responses, extra: None, tools: None, images: None, progress: None,
         };
         let body = build_responses_request(&params);
         assert_eq!(body["model"], "gpt-5");
@@ -635,7 +726,7 @@ mod tests {
         let msgs = vec![msg(LLMRole::User, "x")];
         let params = ChatCompletionParams {
             model: "m", messages: &msgs, temperature: 0.7, max_tokens: 16,
-            stream: false, api_format: TransportApiFormat::Responses, extra: Some(&extra), tools: None, images: None,
+            stream: false, api_format: TransportApiFormat::Responses, extra: Some(&extra), tools: None, images: None, progress: None,
         };
         let body = build_responses_request(&params);
         assert_eq!(body["temperature"], 0.2, "extra 覆盖基础键（TS ...extra 展开序）");
@@ -659,5 +750,25 @@ mod tests {
         let text = "data: {\"a\":1}\n\ndata:{\"b\":2}\n\n: keep-alive\n\ndata: [DONE]\n\n";
         let events = sse_data_events(text);
         assert_eq!(events, vec!["{\"a\":1}", "{\"b\":2}", "[DONE]"]);
+    }
+
+    #[test]
+    fn stream_monitor_counts_chars_and_emits_done() {
+        use crate::llm::provider::{StreamProgress, StreamStatus};
+        let events: std::sync::Arc<std::sync::Mutex<Vec<StreamProgress>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let mut monitor = StreamMonitor::new(std::sync::Arc::new(move |progress: &StreamProgress| {
+            sink.lock().unwrap().push(progress.clone());
+        }));
+        monitor.on_delta("你好abc世界");
+        monitor.on_delta("x");
+        monitor.finish();
+        let events = events.lock().unwrap();
+        // <30s 节流 → 无 streaming 心跳，仅终态 done（TS 同款默认间隔语义）。
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].status, StreamStatus::Done);
+        assert_eq!(events[0].total_chars, 8);
+        assert_eq!(events[0].chinese_chars, 4);
     }
 }

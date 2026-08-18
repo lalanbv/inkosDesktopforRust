@@ -5978,6 +5978,61 @@ mod agent65_e2e {
         assert!(title.contains("帮我看下"));
     }
 
+    /// 126 号：聊天轮 SSE 事件面——llm:progress（带 sessionId 标记 +
+    /// camelCase 字段，TS sessionIdForSSE 语义）与 session:title（首条
+    /// user 消息 derive 标题，终态事件后补发——不扰动既有序列断言）。
+    #[tokio::test]
+    async fn chat_broadcasts_llm_progress_and_session_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, _guard) = mock_llm().await;
+        create_session(&root).await;
+
+        let runtime = rt65(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .with_state(runtime);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我看下第二章节奏","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+
+        // SSE 顺序：agent:start → {llm:progress(done), draft:delta（桥接
+        // 增量——两者相对序不锁定）} → agent:complete → session:title。
+        assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
+        let mut saw_progress = false;
+        let mut saw_draft_delta = false;
+        loop {
+            let event = subscriber.recv().await.unwrap();
+            match event.event.as_str() {
+                "llm:progress" => {
+                    saw_progress = true;
+                    assert!(event.data.contains("\"sessionId\""), "data: {}", event.data);
+                    assert!(event.data.contains("\"elapsedMs\""), "data: {}", event.data);
+                    assert!(event.data.contains("\"totalChars\""), "data: {}", event.data);
+                    assert!(event.data.contains("\"chineseChars\""), "data: {}", event.data);
+                    assert!(event.data.contains("\"status\":\"done\""), "data: {}", event.data);
+                }
+                "draft:delta" => saw_draft_delta = true,
+                "agent:complete" => break,
+                other => panic!("agent:complete 前的意外事件 {other}: {}", event.data),
+            }
+        }
+        assert!(saw_progress, "llm:progress(done) 应在 agent:complete 前");
+        assert!(saw_draft_delta, "draft:delta 应在 agent:complete 前");
+        let title_event = subscriber.recv().await.unwrap();
+        assert_eq!(title_event.event, "session:title", "data: {}", title_event.data);
+        assert!(title_event.data.contains(SESSION_ID), "data: {}", title_event.data);
+        assert!(title_event.data.contains("帮我看下"), "data: {}", title_event.data);
+    }
+
     #[tokio::test]
     async fn book_binding_mismatch_and_missing_book() {
         let dir = tempfile::tempdir().unwrap();
@@ -16730,5 +16785,161 @@ mod sub114_e2e {
                 event.event
             );
         }
+    }
+}
+
+// ---- 126 号：SSE 事件面装配（llm:progress / context:compression）----
+
+mod sub126_e2e {
+    use super::*;
+    use inkos_engine::llm::provider::StreamStatus;
+    use inkos_engine::server::books_routes::{self, BooksRuntime};
+
+    fn rt126(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// mock SSE（流式 chat completions——中文内容驱动 monitor 计数）。
+    async fn mock_stream_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|| async {
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    sse_body("好的，我来帮你分析这个修仙故事。"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn agent_router_progress_hook_fires_done_on_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let _root = dir.path().to_path_buf();
+        let llm = mock_stream_llm().await;
+        let events: Arc<Mutex<Vec<inkos_engine::llm::provider::StreamProgress>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let router = AgentRouter::new(
+            LlmEndpointConfig {
+                base_url: llm,
+                api_key: "k".into(),
+                model: "m".into(),
+                max_tokens: 64,
+                extra_headers: HashMap::new(),
+            },
+            HashMap::new(),
+        )
+        .with_progress_hook(Arc::new(move |progress| {
+            sink.lock().unwrap().push(progress.clone());
+        }));
+        let outcome = router
+            .chat("writer", vec![inkos_engine::llm::provider::LLMMessage {
+                role: inkos_engine::llm::provider::LLMRole::User,
+                content: "你好".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            }], 0.7, None)
+            .await
+            .unwrap();
+        assert!(outcome.content.contains("修仙故事"));
+        let events = events.lock().unwrap();
+        // 测试语境 < 30s 节流 → 仅终态 done；计数 = 流内容（中文全计）。
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].status, StreamStatus::Done);
+        assert!(events[0].total_chars >= 14, "{events:?}");
+        assert!(events[0].chinese_chars >= 13, "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn effective_router_attaches_llm_progress_broadcast() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = mock_stream_llm().await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(r#"{{"llm":{{"services":{{"custom:P":{{"service":"custom","name":"P","baseUrl":"{llm}"}}}},"defaultModel":"pm"}}}}"#),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:P":{"apiKey":"pk"}}}"#,
+        )
+        .unwrap();
+        let runtime = rt126(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let effective = runtime.effective_router().await;
+        let hook = effective
+            .progress_hook()
+            .expect("effective_router 应挂 llm:progress 广播钩子");
+        hook(&inkos_engine::llm::provider::StreamProgress {
+            elapsed_ms: 1234,
+            total_chars: 42,
+            chinese_chars: 20,
+            status: StreamStatus::Streaming,
+        });
+        let event = subscriber.recv().await.unwrap();
+        assert_eq!(event.event, "llm:progress");
+        // 键序无关（serde_json Map 排序）——逐字段断言 + 不带 sessionId。
+        assert!(event.data.contains(r#""elapsedMs":1234"#), "data: {}", event.data);
+        assert!(event.data.contains(r#""totalChars":42"#), "data: {}", event.data);
+        assert!(event.data.contains(r#""chineseChars":20"#), "data: {}", event.data);
+        assert!(event.data.contains(r#""status":"streaming""#), "data: {}", event.data);
+        assert!(!event.data.contains("sessionId"), "books 面不带 sessionId：{}", event.data);
+    }
+
+    #[tokio::test]
+    async fn write_next_config_broadcasts_context_compression() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let runtime = rt126(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let config = books_routes::write_next_config_with_events(&runtime).await;
+        let callback = config
+            .on_context_compression
+            .expect("事件化配置应挂 context:compression 回调");
+        callback(&inkos_engine::models::context_compression::ContextCompressionEvent {
+            category: inkos_engine::models::context_compression::ContextCompressionCategory::SessionContext,
+            phase: inkos_engine::models::context_compression::ContextCompressionPhase::Start,
+            message: Some("压缩会话上下文".into()),
+            protected_tokens: Some(120),
+            compressible_tokens: Some(80),
+            budget_tokens: Some(200),
+            sources: None,
+        });
+        let event = subscriber.recv().await.unwrap();
+        assert_eq!(event.event, "context:compression");
+        assert!(
+            event.data.contains("\"category\"")
+                && event.data.contains("\"phase\"")
+                && event.data.contains("\"protectedTokens\"")
+                && event.data.contains("\"compressibleTokens\"")
+                && event.data.contains("\"budgetTokens\""),
+            "camelCase 负载：{}",
+            event.data
+        );
+        assert!(!event.data.contains("sources"), "可选键省略：{}", event.data);
     }
 }

@@ -1067,6 +1067,7 @@ pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &st
         extra: None,
         tools: None,
         images: None,
+        progress: None,
     };
     let attempt = client.stream_chat(&params);
     match tokio::time::timeout(std::time::Duration::from_millis(8_000), attempt).await {

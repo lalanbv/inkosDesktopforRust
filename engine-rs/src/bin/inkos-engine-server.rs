@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig};
-use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextConfig};
+use inkos_engine::pipeline::write_next::write_next_chapter;
 use inkos_engine::server::sse::BroadcastHub;
 use inkos_engine::server::{AppState, WriteNextRuntime};
 use inkos_engine::state::manager::StateManager;
@@ -125,7 +125,10 @@ fn build_router() -> axum::Router {
                     &state,
                     &agents,
                     &ctx,
-                    &WriteNextConfig::from_project(books.state.project_root()).await,
+                    // 126 号：事件化配置（context:compression 广播）——与其余
+                    // 写面同源。
+                    &inkos_engine::server::books_routes::write_next_config_with_events(&books)
+                        .await,
                     &book_id,
                     word_count,
                     temperature,

@@ -121,6 +121,9 @@ pub struct WriteNextConfig {
     /// 通知通道（111 号：章完 dispatchNotification + pipeline-complete
     /// webhook；None/空跳过——TS config.notifyChannels）。
     pub notify_channels: Option<Vec<crate::notify::NotifyChannel>>,
+    /// 上下文压缩事件回调（126 号：TS PipelineConfig.onContextCompression →
+    /// SSE `context:compression`；None 跳过广播——lib 内部调用/测试）。
+    pub on_context_compression: Option<crate::agents::composer::CompressionCallback>,
 }
 
 impl Default for WriteNextConfig {
@@ -131,6 +134,7 @@ impl Default for WriteNextConfig {
             input_governance_mode: InputGovernanceMode::V2,
             abort: None,
             notify_channels: None,
+            on_context_compression: None,
         }
     }
 }
@@ -1320,7 +1324,7 @@ pub(crate) async fn prepare_write_input(
         context_budget: ctx.context_budget,
         compiler: Some(&compiler),
         outline_section_selector: Some(&selector),
-        on_context_compression: None,
+        on_context_compression: config.on_context_compression.clone(),
     })
     .await?;
 
@@ -1555,6 +1559,7 @@ mod tests {
             input_governance_mode: InputGovernanceMode::V2,
             abort: None,
             notify_channels: None,
+            on_context_compression: None,
         };
 
         let result = write_next_chapter(

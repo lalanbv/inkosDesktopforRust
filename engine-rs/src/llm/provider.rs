@@ -88,6 +88,9 @@ pub enum StreamStatus {
     #[serde(rename = "done")] Done,
 }
 
+/// 流式进度回调（126 号：SSE `llm:progress` 的进程内载体）。
+pub type StreamProgressCallback = std::sync::Arc<dyn Fn(&StreamProgress) + Send + Sync>;
+
 // ── Token 估算 ──────────────────────────────────────────────────
 
 /// 启发式 token 估算：CJK（U+3400..U+9FFF，含 Ext A + 主区）按 1:1，其余按 4 字符/token。

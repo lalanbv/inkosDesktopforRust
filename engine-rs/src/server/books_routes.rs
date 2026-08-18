@@ -123,21 +123,35 @@ impl BooksRuntime {
                             Some("responses") => crate::llm::providers::TransportApiFormat::Responses,
                             _ => crate::llm::providers::TransportApiFormat::Chat,
                         };
-                        let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
-                        Arc::new(
-                            AgentRouter::new(
-                                crate::llm::agent_router::LlmEndpointConfig {
-                                    base_url,
-                                    api_key,
-                                    model,
-                                    max_tokens: 8192,
-                                    extra_headers: HashMap::new(),
-                                },
-                                HashMap::new(),
-                            )
-                            .with_api_format(api_format)
-                            .with_stream(stream),
+                    let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
+                    // 126 号：流式进度钩子——llm:progress 广播（books 面不带
+                    // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
+                    let hub = self.hub.clone();
+                    Arc::new(
+                        AgentRouter::new(
+                            crate::llm::agent_router::LlmEndpointConfig {
+                                base_url,
+                                api_key,
+                                model,
+                                max_tokens: 8192,
+                                extra_headers: HashMap::new(),
+                            },
+                            HashMap::new(),
                         )
+                        .with_api_format(api_format)
+                        .with_stream(stream)
+                        .with_progress_hook({
+                            std::sync::Arc::new(
+                                move |progress: &crate::llm::provider::StreamProgress| {
+                                    hub.broadcast(
+                                        "llm:progress",
+                                        &serde_json::to_value(progress)
+                                            .unwrap_or_else(|_| serde_json::json!({})),
+                                    );
+                                },
+                            )
+                        }),
+                    )
                     } else {
                         self.router.clone()
                     }
@@ -375,7 +389,7 @@ async fn run_draft(
         &ctx,
         &WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
-            ..WriteNextConfig::from_project(runtime.state.project_root()).await
+            ..write_next_config_with_events(runtime).await
         },
         book_id,
         body.word_count,
@@ -1059,6 +1073,17 @@ async fn run_compose(
     }));
     let selector = crate::agents::composer::LlmOutlineSelector { chat: composer };
     let compiler = crate::agents::composer::LlmContextCompiler { chat: composer };
+    // 126 号：context:compression 广播（与 write-next 链同款）。
+    let compression_hub = runtime.hub.clone();
+    let on_context_compression: crate::agents::composer::CompressionCallback =
+        std::sync::Arc::new(
+            move |event: &crate::models::context_compression::ContextCompressionEvent| {
+                compression_hub.broadcast(
+                    "context:compression",
+                    &serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                );
+            },
+        );
     let composed = crate::agents::composer::compose_governed_chapter(
         &crate::agents::composer::ComposeChapterInput {
             book_language: book.language.as_deref(),
@@ -1068,7 +1093,7 @@ async fn run_compose(
             context_budget: None,
             compiler: Some(&compiler),
             outline_section_selector: Some(&selector),
-            on_context_compression: None,
+            on_context_compression: Some(on_context_compression),
         },
     )
     .await
@@ -1803,6 +1828,24 @@ pub async fn export(
 }
 
 // ── 共享装配 ─────────────────────────────────────────────────────
+
+/// write-next 事件化配置（126 号）：from_project 基础上挂 context:
+/// compression 广播回调（books 面——不带 sessionId，TS 同面 pipeline 无
+/// sessionIdForSSE）。bin runner 与 run_draft/draft 等内部写面共用。
+pub async fn write_next_config_with_events(runtime: &BooksRuntime) -> WriteNextConfig {
+    let hub = runtime.hub.clone();
+    WriteNextConfig {
+        on_context_compression: Some(std::sync::Arc::new(
+            move |event: &crate::models::context_compression::ContextCompressionEvent| {
+                hub.broadcast(
+                    "context:compression",
+                    &serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                );
+            },
+        )),
+        ..WriteNextConfig::from_project(runtime.state.project_root()).await
+    }
+}
 
 pub async fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
     let effective = runtime.effective_router().await;

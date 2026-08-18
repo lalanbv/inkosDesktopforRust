@@ -70,6 +70,9 @@ pub struct AgentRouter {
     /// 流式偏好（108 号）：Some(false) → 全端点非流式调用（TS client.stream；
     /// None = 缺省流式）。
     stream: Option<bool>,
+    /// 流式进度钩子（126 号：TS PipelineConfig onStreamProgress → SSE
+    /// `llm:progress`；None = 无进度上报）。
+    progress_hook: Option<crate::llm::provider::StreamProgressCallback>,
 }
 
 impl AgentRouter {
@@ -80,6 +83,7 @@ impl AgentRouter {
             clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             api_format: crate::llm::providers::TransportApiFormat::Chat,
             stream: None,
+            progress_hook: None,
         }
     }
 
@@ -95,6 +99,21 @@ impl AgentRouter {
     pub fn with_stream(mut self, stream: Option<bool>) -> Self {
         self.stream = stream;
         self
+    }
+
+    /// 挂流式进度钩子（126 号：effective_router 从 BooksRuntime.hub 构造
+    /// 广播闭包；builder 字段语义——后续 with_* 覆盖不丢）。
+    pub fn with_progress_hook(
+        mut self,
+        hook: crate::llm::provider::StreamProgressCallback,
+    ) -> Self {
+        self.progress_hook = Some(hook);
+        self
+    }
+
+    /// 当前进度钩子（测试/诊断断言挂载态）。
+    pub fn progress_hook(&self) -> Option<&crate::llm::provider::StreamProgressCallback> {
+        self.progress_hook.as_ref()
     }
 
     /// 当前流式偏好（探测/诊断面回显）。
@@ -179,6 +198,7 @@ impl AgentRouter {
                 extra: None,
                 tools: None,
                 images: None,
+                progress: self.progress_hook.clone(),
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;
