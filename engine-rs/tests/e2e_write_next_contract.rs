@@ -14319,3 +14319,109 @@ mod sub97_e2e {
         assert_eq!(parsed["response"], "请先在模型配置中为 deepseek 填写 API Key，然后再试。");
     }
 }
+
+mod sub99_e2e {
+    //! 99 号：doctor transport 回退——models 不可达时 chat 深链，preferred
+    //! stream 首探测空响应 → 回退非 stream（llmConnected 判定链）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::ops_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt99(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app99(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/doctor", axum::routing::get(ops_routes::get_doctor))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：/models 恒 404；/chat/completions 按请求体 stream 字段分流——
+    /// stream=true 返回空内容（首传输空），stream=false 返回 "OK"（回退成功）。
+    /// `always_empty` 时两路皆空（判定未连接）。
+    async fn mock_doctor_upstream(always_empty: bool) -> (String, Arc<Mutex<Vec<bool>>>) {
+        let streams: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = streams.clone();
+        let app = axum::Router::new()
+            .route("/models", axum::routing::get(|| async { (StatusCode::NOT_FOUND, "no models") }))
+            .route(
+                "/chat/completions",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let sink = sink.clone();
+                    async move {
+                        let stream = body["stream"].as_bool().unwrap_or(false);
+                        sink.lock().unwrap().push(stream);
+                        let content = if always_empty || stream { "" } else { "OK" };
+                        let payload = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), streams)
+    }
+
+    #[tokio::test]
+    async fn doctor_falls_back_to_non_stream_when_stream_probe_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        // preferred stream=true（触发回退计划序）。
+        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true}}"#).unwrap();
+        let (llm, streams) = mock_doctor_upstream(false).await;
+        let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["llmConnected"], true, "body: {parsed}");
+        let calls = streams.lock().unwrap().clone();
+        assert_eq!(calls, vec![true, false], "首传输 stream 空 → 回退非 stream：{calls:?}");
+    }
+
+    #[tokio::test]
+    async fn doctor_reports_disconnected_when_all_transports_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true}}"#).unwrap();
+        let (llm, streams) = mock_doctor_upstream(true).await;
+        let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["llmConnected"], false, "body: {parsed}");
+        let calls = streams.lock().unwrap().clone();
+        assert_eq!(calls, vec![true, false], "两计划都试过后判未连接：{calls:?}");
+    }
+}

@@ -548,21 +548,49 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     });
     let books = runtime.state.list_books().await;
     checks["bookCount"] = json!(books.len());
-    // LLM 连通探测：全局 router 的 models 端点，3 秒总预算（慢/限流上游按
-    // 未连接上报——TS doctor 预算语义）。
-    let probe = tokio::time::timeout(Duration::from_secs(3), async {
+    // LLM 连通探测（99 号对齐 TS probeServiceCapabilities 主干）：models
+    // GET → 不可达时 chat 深链（preferred stream → 空/失败回退非 stream），
+    // 9 秒总预算（DOCTOR_LLM_PROBE_BUDGET_MS；慢/限流上游按未连接上报）。
+    let probe = tokio::time::timeout(Duration::from_secs(9), async {
         let endpoint = runtime.router.resolve("radar");
-        let base = endpoint.base_url.trim_end_matches('/');
+        let base = endpoint.base_url.trim_end_matches('/').to_string();
         let url = format!("{base}/models");
         let client = reqwest::Client::builder().no_proxy().build().unwrap_or_default();
         let mut request = client.get(&url);
         if !endpoint.api_key.is_empty() {
             request = request.bearer_auth(&endpoint.api_key);
         }
-        request.send().await.map(|response| response.status().is_success())
+        if request.send().await.map(|response| response.status().is_success()).unwrap_or(false) {
+            return true;
+        }
+        // 深链回退：候选 = 端点模型；计划 = llm.stream 优先流式 → 空/失败
+        // 回退非流式（TS buildProbePlans preferred 分支）。
+        let preferred_stream = crate::server::project_config_routes::load_raw_config(root)
+            .await
+            .and_then(|config| config.get("llm").cloned())
+            .and_then(|llm| llm.get("stream").and_then(serde_json::Value::as_bool))
+            .unwrap_or(false);
+        let mut plans = vec![preferred_stream];
+        if preferred_stream {
+            plans.push(false);
+        }
+        for stream in plans {
+            if crate::server::service_routes::minimal_chat_probe(
+                &base,
+                &endpoint.api_key,
+                &endpoint.model,
+                stream,
+            )
+            .await
+            .is_ok()
+            {
+                return true;
+            }
+        }
+        false
     })
     .await;
-    if let Ok(Ok(true)) = probe {
+    if let Ok(true) = probe {
         checks["llmConnected"] = json!(true);
     }
     (StatusCode::OK, Json(checks)).into_response()

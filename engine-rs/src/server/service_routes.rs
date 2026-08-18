@@ -855,7 +855,7 @@ pub async fn test_service(
     for model in &candidates {
         for stream in &plans {
             match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream).await {
-                Ok(()) => {
+                Ok(_content) => {
                     let probe = json!({ "ok": true, "models": discovered.len() });
                     return (
                         StatusCode::OK,
@@ -898,8 +898,10 @@ pub async fn test_service(
 }
 
 /// 深链最小 chat 探测（TS `chatCompletion` "Reply with OK only."，maxTokens
-/// 16，无重试，SERVICE_CHAT_PROBE_TIMEOUT_MS=8s）。
-async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool) -> Result<(), String> {
+/// 16，无重试，SERVICE_CHAT_PROBE_TIMEOUT_MS=8s）。返回响应文本；**空响应
+/// 判失败**（doctor 回退语义：首传输空 → 回退下一计划）。99 号提 pub(crate)
+/// 供 doctor 复用。
+pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool) -> Result<String, String> {
     use crate::llm::streaming_client::{ChatCompletionParams, StreamingChatClient};
     let client = StreamingChatClient::new(base_url.to_string(), api_key.to_string(), HashMap::new());
     let message = crate::llm::provider::LLMMessage {
@@ -920,7 +922,8 @@ async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: 
     };
     let attempt = client.stream_chat(&params);
     match tokio::time::timeout(std::time::Duration::from_millis(8_000), attempt).await {
-        Ok(Ok(_)) => Ok(()),
+        Ok(Ok(completion)) if !completion.content.trim().is_empty() => Ok(completion.content),
+        Ok(Ok(_)) => Err("probe returned an empty response".to_string()),
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => Err("service connection test timed out".to_string()),
     }
