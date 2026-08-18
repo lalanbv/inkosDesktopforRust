@@ -363,7 +363,7 @@ impl SettlePort for RoutedSettler {
             book: params.book,
             book_dir: params.book_dir,
             chapter_number: self.chapter_number,
-            baseline_chapter: None,
+            baseline_chapter: params.baseline_chapter,
             title: params.title,
             content: params.content,
             allow_reapply: Some(params.allow_reapply),

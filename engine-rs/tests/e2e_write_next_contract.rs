@@ -87,6 +87,12 @@ fn fixture_project(root: &std::path::Path) {
     let book = root.join("books").join("b1");
     std::fs::create_dir_all(book.join("chapters")).unwrap();
     std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+    // 132 号：修订链 baseline 快照（书创建链真实形态会写 snapshots/0——
+    // fixture 手工建书须同款提供，否则修订端点按 TS 语义拒绝）。
+    let snapshot0 = book.join("story").join("snapshots").join("0");
+    std::fs::create_dir_all(&snapshot0).unwrap();
+    std::fs::write(snapshot0.join("current_state.md"), "# 当前状态\n\n| 项目 | 状态 |\n| --- | --- |\n| 位置 | 青阳镇 |\n").unwrap();
+    std::fs::write(snapshot0.join("pending_hooks.md"), "# 伏笔池\n\n| hook_id | 状态 |\n| --- | --- |\n").unwrap();
     std::fs::write(
         root.join("assets").join("genres").join("xianxia.md"),
         "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
@@ -17019,5 +17025,163 @@ mod sub126_e2e {
         assert!(event.data.contains("\"tag\":\"studio\""), "data: {}", event.data);
         assert!(event.data.contains("\"message\":\"阶段：撰写章节草稿\""), "data: {}", event.data);
         assert!(!event.data.contains("sessionId"), "books 面不带标记：{}", event.data);
+    }
+}
+
+// ── 132 号：修订端点校验环（revise → settle → validate → retry） ──────
+
+mod sub132_e2e {
+    use super::*;
+    use inkos_engine::server::books_routes::{revise, BooksRuntime};
+    use axum::http::Request;
+    use axum::body::Body;
+    use tower::util::ServiceExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// validator 分派状态：调用序号 + 是否恒败模式。
+    #[derive(Clone)]
+    struct ValidatorScript {
+        calls: Arc<AtomicUsize>,
+        always_fail: bool,
+    }
+
+    async fn mock132_llm(
+        axum::extract::State(script): axum::extract::State<ValidatorScript>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let temperature = body["temperature"].as_f64();
+        let content = if system.contains("continuity validator") {
+            // 状态校验：首验 FAIL；重试复验按脚本（恒败或转 PASS）。
+            let seq = script.calls.fetch_add(1, Ordering::SeqCst);
+            if script.always_fail || seq == 0 {
+                "FAIL\n[unsupported_change] 状态卡说角色移动了，正文只有意图".to_string()
+            } else {
+                "PASS".to_string()
+            }
+        } else if system.contains("创作总编") {
+            PLANNER_RESPONSE.to_string()
+        } else if system.contains("修稿编辑") {
+            "=== FIXED_ISSUES ===\n压缩了中段\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——屈辱自今日起讨回。".to_string()
+        } else if system.contains("审") || system.contains("连续") {
+            if temperature == Some(0.0) {
+                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#.to_string()
+            } else {
+                r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
+            }
+        } else {
+            // settle（状态追踪分析师）与其余面：结算 delta 可解析。
+            WRITER_RESPONSE.to_string()
+        };
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&content),
+        ))
+    }
+
+    async fn spawn_mock132(always_fail: bool) -> (String, ValidatorScript) {
+        let script = ValidatorScript {
+            calls: Arc::new(AtomicUsize::new(0)),
+            always_fail,
+        };
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock132_llm))
+            .with_state(script.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), script)
+    }
+
+    fn rt132(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.to_string(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn post_revise(app: axum::Router) -> serde_json::Value {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/revise/1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"mode":"polish"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn revise_recovers_when_retry_settlement_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let book = root.join("books").join("b1");
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        let (llm, script) = spawn_mock132(false).await;
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(rt132(&root, &llm));
+
+        let parsed = post_revise(app).await;
+        // 首验 FAIL → 仅重试结算层 → 复验 PASS → 继续主链正常 applied。
+        assert_eq!(script.calls.load(Ordering::SeqCst), 2, "首验 + 复验");
+        assert_eq!(parsed["applied"], true, "body: {parsed}");
+        assert_eq!(parsed["status"], "ready-for-review");
+    }
+
+    #[tokio::test]
+    async fn revise_degrades_to_unchanged_when_retry_still_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let book = root.join("books").join("b1");
+        let chapter_path = book.join("chapters").join("0001_风起.md");
+        let original = "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。";
+        std::fs::write(&chapter_path, original).unwrap();
+        let (llm, script) = spawn_mock132(true).await;
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(rt132(&root, &llm));
+
+        let parsed = post_revise(app).await;
+        // 复验仍 FAIL → degraded：保持原章、真相未动、TS 文案逐字。
+        assert_eq!(script.calls.load(Ordering::SeqCst), 2, "首验 + 复验");
+        assert_eq!(parsed["applied"], false, "body: {parsed}");
+        assert_eq!(parsed["status"], "unchanged");
+        assert_eq!(
+            parsed["skippedReason"],
+            "Revision kept the original chapter because state settlement did not validate after retry."
+        );
+        let diagnostics = &parsed["revisionDiagnostics"];
+        assert_eq!(
+            diagnostics["standard"],
+            "Revision text and derived story state must both validate before any file is replaced."
+        );
+        assert_eq!(diagnostics["before"], diagnostics["after"], "degraded 用 pre 计数");
+        let after = std::fs::read_to_string(&chapter_path).unwrap();
+        assert_eq!(after, original, "degraded 时章节文件必须保持原文");
     }
 }

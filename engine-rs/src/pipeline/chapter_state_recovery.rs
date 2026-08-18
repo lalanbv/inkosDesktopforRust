@@ -166,6 +166,9 @@ pub struct SettleRequest<'a> {
     pub title: &'a str,
     pub content: &'a str,
     pub allow_reapply: bool,
+    /// 132 号：快照基准章（TS retry settle 的 baselineChapter 透传——重试
+    /// 结算同样走章前快照重放；None = 当前 story 目录）。
+    pub baseline_chapter: Option<u32>,
     pub chapter_intent: Option<&'a str>,
     pub context_package: Option<&'a crate::models::input_governance::ContextPackage>,
     pub rule_stack: Option<&'a crate::models::input_governance::RuleStack>,
@@ -208,6 +211,8 @@ pub struct SettlementRetryParams<'a> {
     pub book: &'a crate::models::book::BookConfig,
     pub book_dir: &'a std::path::Path,
     pub chapter_number: u32,
+    /// 快照基准章（TS baselineChapter）。
+    pub baseline_chapter: Option<u32>,
     pub title: &'a str,
     pub content: &'a str,
     pub control: Option<ControlInput<'a>>,
@@ -250,6 +255,7 @@ pub async fn retry_settlement_after_validation_failure(
             title: params.title,
             content: params.content,
             allow_reapply: true,
+            baseline_chapter: params.baseline_chapter,
             chapter_intent: params.control.as_ref().map(|control| control.chapter_intent),
             context_package: params.control.as_ref().map(|control| control.context_package),
             rule_stack: params.control.as_ref().map(|control| control.rule_stack),
@@ -522,6 +528,7 @@ mod retry_tests {
             book,
             book_dir: std::path::Path::new("/tmp"),
             chapter_number: 3,
+            baseline_chapter: None,
             title: "t",
             content: "c",
             control: None,

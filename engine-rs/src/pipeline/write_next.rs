@@ -817,6 +817,7 @@ async fn write_next_chapter_locked(
         book: &book,
         book_dir: &book_dir,
         chapter_number,
+        baseline_chapter: None,
         title: &persistence_output.title,
         content: &final_content,
         persistence_output: persistence_output.clone(),

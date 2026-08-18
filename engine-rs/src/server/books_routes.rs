@@ -845,6 +845,128 @@ pub(crate) async fn run_revise_chain(
     )
     .await
     .map_err(|e| internal(e.to_string()))?;
+
+    // 132 号：TS reviseDraft 校验环——settle 产物与章前快照做矛盾校验；
+    // 失败（!passed || repairRequired）走仅重试结算层；degraded 保持原章
+    // （真相未动）。快照缺失则拒绝修订（TS "Cannot revise chapter N
+    // safely" 逐字）。
+    let baseline = chapter_number.saturating_sub(1);
+    let baseline_snapshot_dir = book_dir
+        .join("story")
+        .join("snapshots")
+        .join(baseline.to_string());
+    let read_baseline = |file: &str| tokio::fs::read_to_string(baseline_snapshot_dir.join(file));
+    let (baseline_state_raw, baseline_hooks_raw) = tokio::join!(
+        read_baseline("current_state.md"),
+        read_baseline("pending_hooks.md")
+    );
+    let baseline_state = baseline_state_raw.map_err(|e| {
+        internal(format!(
+            "Cannot revise chapter {chapter_number} safely: baseline snapshot {baseline} is unavailable ({e})"
+        ))
+    })?;
+    let baseline_hooks = baseline_hooks_raw.map_err(|e| {
+        internal(format!(
+            "Cannot revise chapter {chapter_number} safely: baseline snapshot {baseline} is unavailable ({e})"
+        ))
+    })?;
+
+    let mut settled = settled;
+    let validator_chat = RoutedAgent {
+        router: (*runtime.effective_router().await).clone(),
+        agent: "state-validator",
+    };
+    let state_validation =
+        crate::agents::state_validator::validate(
+            &validator_chat,
+            &crate::agents::state_validator::ValidateParams {
+                chapter_content: &revise_output.revised_content,
+                chapter_number,
+                old_state: &baseline_state,
+                new_state: &settled.updated_state,
+                old_hooks: &baseline_hooks,
+                new_hooks: &settled.updated_hooks,
+                language,
+                authority_context: None,
+            },
+        )
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+    if !state_validation.passed || state_validation.repair_required {
+        let retry_settler = crate::llm::agent_router::RoutedSettler {
+            router: (*runtime.effective_router().await).clone(),
+            ctx: crate::agents::writer::WriterCtx {
+                project_root: Box::leak(
+                    runtime.state.project_root().to_path_buf().into_boxed_path(),
+                ),
+                builtin_genres_dir: Box::leak(
+                    runtime.builtin_genres_dir.clone().into_boxed_path(),
+                ),
+                prompt_store: Box::leak(Box::new(FsStateStore)),
+                state_store: Box::leak(Box::new(FsStateStore)),
+            },
+            chapter_number,
+        };
+        let retry_validator = RoutedValidator {
+            router: runtime.effective_router().await,
+        };
+        let recovery = retry_settlement_after_validation_failure(
+            SettlementRetryParams {
+                writer: &retry_settler,
+                validator: &retry_validator,
+                book: &book,
+                book_dir: &book_dir,
+                chapter_number,
+                baseline_chapter: Some(baseline),
+                title: &chapter_title,
+                content: &revise_output.revised_content,
+                control: None,
+                old_state: &baseline_state,
+                old_hooks: &baseline_hooks,
+                original_validation: &state_validation,
+                language,
+                log_warn: &|zh, en| tracing::warn!(target: "revise", "{zh} / {en}"),
+            },
+        )
+        .await
+        .map_err(|e| internal(e.to_string()))?;
+        match recovery {
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Degraded { issues } => {
+                let remaining_issues: Vec<RemainingIssue> = issues
+                    .iter()
+                    .map(|issue| RemainingIssue {
+                        severity: severity_string(issue.severity),
+                        category: issue.category.clone(),
+                        description: issue.description.clone(),
+                        suggestion: (!issue.suggestion.is_empty())
+                            .then(|| issue.suggestion.clone()),
+                    })
+                    .collect();
+                return Ok(unchanged_result(
+                    crate::utils::length_metrics::count_chapter_length(&content, counting_mode),
+                    "Revision kept the original chapter because state settlement did not validate after retry."
+                        .to_string(),
+                    Some(RevisionDiagnostics {
+                        standard:
+                            "Revision text and derived story state must both validate before any file is replaced.",
+                        before: gate_counts(&pre),
+                        after: gate_counts(&pre),
+                        remaining_issues,
+                    }),
+                ));
+            }
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered {
+                output,
+                validation,
+            } => {
+                settled = *output;
+                // 复验结果用于链内决策（TS 后续不读——repairRequired 链
+                // 已收敛）；显式消费避免未读赋值。
+                let _ = validation;
+            }
+        }
+    }
+
     let post_options = AuditChapterOptions {
         temperature: Some(0.0),
         truth_file_overrides: Some(TruthFileOverrides {
@@ -1236,7 +1358,7 @@ impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
                 book: params.book,
                 book_dir: params.book_dir,
                 chapter_number: self.chapter_number,
-            baseline_chapter: None,
+                baseline_chapter: params.baseline_chapter,
                 title: params.title,
                 content: params.content,
                 allow_reapply: Some(params.allow_reapply),
@@ -1375,6 +1497,7 @@ async fn run_repair_state(
             title: &target_meta.title,
             content: &content,
             allow_reapply: true,
+            baseline_chapter: None,
             chapter_intent: None,
             context_package: None,
             rule_stack: None,
@@ -1403,6 +1526,7 @@ async fn run_repair_state(
             book: &book,
             book_dir: &book_dir,
             chapter_number: target,
+            baseline_chapter: None,
             title: &target_meta.title,
             content: &content,
             control: None,
@@ -1626,6 +1750,7 @@ async fn run_resync_chain(
             title: &target_meta.title,
             content: &content,
             allow_reapply: true,
+            baseline_chapter: None,
             chapter_intent: None,
             context_package: None,
             rule_stack: None,
@@ -1653,6 +1778,7 @@ async fn run_resync_chain(
             book: &book,
             book_dir: &book_dir,
             chapter_number,
+            baseline_chapter: None,
             title: &target_meta.title,
             content: &content,
             control: None,
