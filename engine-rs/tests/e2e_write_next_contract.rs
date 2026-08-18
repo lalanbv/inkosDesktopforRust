@@ -14786,3 +14786,274 @@ mod sub101_e2e {
         );
     }
 }
+
+mod sub102_e2e {
+    //! 102 号：import 链中途截断——既有书续放（第 2、3 章），第 2 章已完整
+    //! 落盘后、第 3 章分析在途时触发 abort → 链内检查点③（分析后落盘前）命中
+    //! → 聊天面工具卡 error（英文锚文本）+ 第 3 章零落盘 + 第 1/2 章与索引
+    //! 完整保留（章粒度安全点——TS importChapters 检查点语义）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    const ANALYZER_OUTPUT: &str = "\
+=== CHAPTER_TITLE ===
+续章
+
+=== CHAPTER_CONTENT ===
+夜色渐深。
+
+=== PRE_WRITE_CHECK ===
+
+=== POST_SETTLEMENT ===
+
+=== UPDATED_STATE ===
+| Field | Value |
+| --- | --- |
+| Current Chapter | 2 |
+
+=== UPDATED_LEDGER ===
+
+=== UPDATED_HOOKS ===
+| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== CHAPTER_SUMMARY ===
+| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== UPDATED_SUBPLOTS ===
+
+=== UPDATED_EMOTIONAL_ARCS ===
+
+=== UPDATED_CHARACTER_MATRIX ===
+## 林动
+- **Role**: protagonist
+";
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// 分析器两段节奏 mock：第 1 次分析（第 2 章）即刻回包；第 2 次分析
+    /// （第 3 章）标记 seen 后睡 600ms——把"第 3 章分析在途时 abort"钉死在
+    /// 检查点③之前，无时序抖动。
+    async fn mock_two_phase_analyzer()
+        -> (String, Arc<StdMutex<bool>>, tokio::task::JoinHandle<()>) {
+        let second_seen = Arc::new(StdMutex::new(false));
+        let seen_for_server = second_seen.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let second_seen = seen_for_server.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system =
+                        messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
+                    let payload = if system.contains("连续性分析") || system.contains("continuity analyst") {
+                        if *second_seen.lock().unwrap() {
+                            // 第 3 章分析：在途回包（此时检查点③尚未到达）。
+                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                            serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
+                        } else {
+                            *second_seen.lock().unwrap() = true;
+                            serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
+                        }
+                    } else if system.contains("创作助手") {
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        if last_user.contains("续放") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_res102", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b102\",\"sourcePath\":\"novel102.txt\",\"resumeFrom\":2}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                        }
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), second_seen, handle)
+    }
+
+    #[tokio::test]
+    async fn chat_import_abort_mid_replay_keeps_landed_chapters_and_drops_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b102");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b102","title":"截断书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基（截断不得覆盖）\n\n旧内容。").unwrap();
+        // 源文件三章：续放回放第 2、3 章。
+        std::fs::write(
+            root.join("novel102.txt"),
+            "# 第一章 风起\n\n林动睁开双眼，灵气涌动。\n\n# 第二章 云涌\n\n坊市喧闹，夜色渐深。\n\n# 第三章 潮生\n\n潮声在远方滚动。",
+        )
+        .unwrap();
+
+        let (llm, second_seen, _guard) = mock_two_phase_analyzer().await;
+        let session_id = "1783099000002-imp1";
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/sessions/:sessionId/abort",
+                axum::routing::post(session_routes::abort_session),
+            )
+            .with_state(rt(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b102"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 聊天请求异步起跑（工具执行期间回不了响应）。
+        let task_app = app.clone();
+        let task = tokio::spawn(async move {
+            call(
+                task_app,
+                "POST",
+                "/api/v1/agent",
+                Some(&format!(
+                    r#"{{"instruction":"续放导入 novel102.txt 的后续章节","sessionId":"{session_id}","activeBookId":"b102"}}"#
+                )),
+            )
+            .await
+        });
+
+        // 等到第 3 章分析在途（第 2 章此刻应已完整落盘）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !*second_seen.lock().unwrap() {
+            assert!(std::time::Instant::now() < deadline, "第 3 章分析应在 10s 内出现");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // 第 2 章已落盘是章粒度安全点的前提（此刻断言而非事后，锁死语义）。
+        assert!(
+            std::fs::read_dir(book.join("chapters"))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().starts_with("0002")),
+            "第 2 章应已落盘"
+        );
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/sessions/{session_id}/abort"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["aborted"], true, "body: {parsed}");
+
+        let (status, parsed) = task.await.unwrap();
+        // 聊天面现行中止契约（66 号）：200 + 空回复占位 + 工具卡。
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "（无回复内容）");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        let card = &execs[0];
+        assert_eq!(card["tool"], "import_chapters");
+        assert_eq!(card["status"], "error", "body: {parsed}");
+        assert_eq!(
+            card["error"], "Operation aborted: the user requested to stop this task."
+        );
+
+        // 章粒度安全点：第 1/2 章保留、第 3 章零落盘、索引两章、地基未动。
+        assert!(book.join("chapters").join("0001_风起.md").is_file());
+        assert!(
+            std::fs::read_dir(book.join("chapters"))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().starts_with("0002"))
+        );
+        assert!(
+            !std::fs::read_dir(book.join("chapters"))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_name().to_string_lossy().starts_with("0003")),
+            "第 3 章不应落盘"
+        );
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json"))
+                .unwrap_or("[]".to_string()),
+        )
+        .unwrap_or(serde_json::json!([]));
+        assert_eq!(index.as_array().map(Vec::len), Some(2), "index: {index}");
+        let bible = std::fs::read_to_string(book.join("story").join("story_bible.md")).unwrap();
+        assert_eq!(bible, "# 既有地基（截断不得覆盖）\n\n旧内容。");
+    }
+}

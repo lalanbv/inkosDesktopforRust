@@ -664,6 +664,8 @@ pub async fn post_agent(
     let import_deps = import_registered.then_some(ImportDeps {
         runtime: &runtime,
         active_book_id: agent_book_id.as_deref(),
+        // 102 号：导入链在章粒度安全点响应聊天轮中止（TS signal 注入）。
+        abort: Some(abort_flag.clone()),
     });
     // sub_agent：book/book-create 会话（architect 建书走确认面）。
     let sub_agent_deps = book_session.then_some(crate::interaction::sub_agent_tool::SubAgentDeps {
@@ -800,10 +802,11 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
         .collect()
 }
 
-/// import_chapters 依赖（85 号）：runtime + 活动书。
+/// import_chapters 依赖（85 号）：runtime + 活动书 + 聊天轮中止句柄（102 号）。
 struct ImportDeps<'a> {
     runtime: &'a BooksRuntime,
     active_book_id: Option<&'a str>,
+    abort: Option<crate::interaction::agent_loop::AbortHandle>,
 }
 
 /// 聊天回环组合执行器（84/85/87/89 号）：propose_action → research/import
@@ -841,6 +844,7 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
                     self.root,
                     deps.active_book_id,
                     args,
+                    deps.abort.as_ref(),
                 )
                 .await;
             }

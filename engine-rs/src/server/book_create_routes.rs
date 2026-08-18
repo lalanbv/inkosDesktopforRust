@@ -569,10 +569,25 @@ pub(crate) async fn import_chapters_chain(
     book_id: &str,
     chapters: &[crate::utils::chapter_splitter::SplitChapter],
 ) -> Result<Value, String> {
-    import_chapters_chain_with_resume(runtime, book_id, chapters, 1, ImportMode::Continuation).await
+    import_chapters_chain_with_resume(runtime, book_id, chapters, 1, ImportMode::Continuation, None)
+        .await
 }
 
-/// `importChapters` 链（91 号补 resumeFrom/importMode）：
+/// 导入链中止错误（英文锚文本；确认/聊天执行器据此本地化——与 write_next
+/// 链 101 号 `WriteNextError::Aborted` 同一文案源）。
+pub(crate) const IMPORT_ABORTED_MESSAGE: &str =
+    "Operation aborted: the user requested to stop this task.";
+
+fn import_check_aborted(abort: Option<&crate::interaction::agent_loop::AbortHandle>) -> Result<(), String> {
+    if abort.is_some_and(|flag| *flag.lock().unwrap()) {
+        return Err(IMPORT_ABORTED_MESSAGE.to_string());
+    }
+    Ok(())
+}
+
+/// `importChapters` 链（91 号补 resumeFrom/importMode；102 号补链内中止
+/// 检查点——TS importChapters 三检查点逐位对齐：入口 / 每章回放头 /
+/// 分析后落盘前，章粒度安全点）：
 /// start_from == 1 → Step 1 全量重建（地基 + 真相重置 + 空索引 + 快照 0 +
 /// 风格指纹）；start_from > 1 → 跳过 Step 1，保留既有地基与早前章节，
 /// 逐章回放同号替换索引（resume 语义）。import_mode 直通架构师地基生成
@@ -583,7 +598,10 @@ pub(crate) async fn import_chapters_chain_with_resume(
     chapters: &[crate::utils::chapter_splitter::SplitChapter],
     start_from: u32,
     import_mode: ImportMode,
+    abort: Option<&crate::interaction::agent_loop::AbortHandle>,
 ) -> Result<Value, String> {
+    // 检查点①：入口（TS 2826——锁前即查）。
+    import_check_aborted(abort)?;
     let state = &runtime.state;
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
     let book_dir = state.book_dir(book_id);
@@ -678,6 +696,8 @@ pub(crate) async fn import_chapters_chain_with_resume(
     let mut total_words: u64 = 0;
     let mut imported_count = 0u32;
     for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
+        // 检查点②：每章回放头（TS 2858）。
+        import_check_aborted(abort)?;
         let chapter_number = (index + 1) as u32;
         let output = crate::agents::chapter_analyzer::analyze_chapter(
             analyzer_chat,
@@ -695,6 +715,9 @@ pub(crate) async fn import_chapters_chain_with_resume(
         )
         .await
         .map_err(|e| e.to_string())?;
+        // 检查点③：分析后、本章落盘前（TS 2896）——章粒度安全点：此前各章
+        // 已完整落盘（含索引与快照），本章分析与产物全部丢弃、零残留。
+        import_check_aborted(abort)?;
 
         let chapter_word_count =
             count_chapter_length(&chapter.content, counting_mode) as u32;

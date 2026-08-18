@@ -99,12 +99,15 @@ fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
     ToolResult { text: text.into(), details, is_error: false }
 }
 
-/// `import_chapters` 执行器：守卫 → 源装载 → 导入全链。
+/// `import_chapters` 执行器：守卫 → 源装载 → 导入全链（abort：链内安全点
+/// 中止——TS runPipelineWithAbortSignal(signal, () => pipeline.importChapters)
+/// 等价，102 号）。
 pub async fn tool_import_chapters(
     runtime: &BooksRuntime,
     project_root: &Path,
     active_book_id: Option<&str>,
     args: &Value,
+    abort: Option<&crate::interaction::agent_loop::AbortHandle>,
 ) -> ToolResult {
     let params_book_id = args
         .get("bookId")
@@ -164,6 +167,7 @@ pub async fn tool_import_chapters(
         &chapters,
         resume_from.unwrap_or(1),
         import_mode,
+        abort,
     )
     .await;
     let result = match result {
