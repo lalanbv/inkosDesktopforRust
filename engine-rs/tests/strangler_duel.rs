@@ -79,11 +79,26 @@ fn write_fixture(root: &Path, llm: &str) {
 async fn spawn_mock_llm() -> String {
     let app = axum::Router::new().route(
         "/chat/completions",
-        axum::routing::post(|axum::Json(_body): axum::Json<Value>| async move {
-            axum::Json(serde_json::json!({
+        axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+            // 双形态：流式请求 → SSE；非流式 → 整体 JSON（两侧客户端偏好不同）。
+            if body["stream"].as_bool().unwrap_or(false) {
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                return axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}
+
+data: {usage}
+
+data: [DONE]
+
+"),
+                ));
+            }
+            axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
                 "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
                 "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
-            }))
+            })))
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -382,4 +397,95 @@ async fn strangler_cross_write_read_duel() {
     }
     assert!(diffs.is_empty(), "写后只读复跑差异：{diffs:?}");
     eprintln!("跨端写读对跑通过：Rust 写 approve / TS 写 review-mode 双向可见，写后 {} 端点复跑全一致", endpoints.len());
+}
+
+/// 119 号：会话域跨端对跑——A) Rust 建会话（绑书）→ 双端 GET 全等价；
+/// B) TS 建会话 + 改名 → 双端可见新名；C) TS 聊天回合（mock LLM）后双端
+/// GET 仍等价（transcript 追加不改会话读面契约）。
+#[tokio::test]
+async fn strangler_session_domain_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = 4900 + (std::process::id() % 1000) as u16;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    let client = reqwest::Client::new();
+
+    // A) Rust 建会话（book 绑定）→ 双端 GET 等价。
+    let rust_session = "1783099000012-d119";
+    let response = client
+        .post(format!("{rust}/api/v1/sessions"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"sessionId":"{rust_session}","bookId":"b1","sessionKind":"book"}}"#))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let (rust_status, mut rust_body) = get_json(&rust, &format!("/api/v1/sessions/{rust_session}")).await;
+    let (ts_status, mut ts_body) = get_json(&ts, &format!("/api/v1/sessions/{rust_session}")).await;
+    assert_eq!(rust_status, 200, "rust body={rust_body}");
+    assert_eq!(ts_status, 200, "TS 读不到 Rust 会话：{ts_body}");
+    assert_eq!(rust_body["session"]["sessionId"], rust_session);
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    assert_eq!(rust_body, ts_body, "Rust 建会话双端读面不等价");
+
+    // B) TS 建会话 + 改名 → 双端可见。
+    let ts_session = "1783099000013-d119";
+    let response = client
+        .post(format!("{ts}/api/v1/sessions"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"sessionId":"{ts_session}"}}"#))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let response = client
+        .put(format!("{ts}/api/v1/sessions/{ts_session}"))
+        .header("content-type", "application/json")
+        .body(r#"{"title":"跨端改名"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "TS rename 失败");
+    for base in [&rust, &ts] {
+        let (status, body) = get_json(base, &format!("/api/v1/sessions/{ts_session}")).await;
+        assert_eq!(status, 200, "base={base} body={body}");
+        assert_eq!(
+            body["session"]["title"], "跨端改名",
+            "改名未跨端可见：base={base} body={body}"
+        );
+    }
+
+    // C) TS 聊天回合（mock）→ 双端 GET 仍等价（transcript 追加面）。
+    let response = client
+        .post(format!("{ts}/api/v1/agent"))
+        .header("content-type", "application/json")
+        .body(format!(
+            r#"{{"instruction":"打个招呼","sessionId":"{ts_session}"}}"#
+        ))
+        .send()
+        .await
+        .unwrap();
+    if response.status().as_u16() != 200 {
+        let text = response.text().await.unwrap_or_default();
+        panic!("TS 聊天回合失败: {text}");
+    }
+    let (rust_status, mut rust_body) = get_json(&rust, &format!("/api/v1/sessions/{ts_session}")).await;
+    let (ts_status, mut ts_body) = get_json(&ts, &format!("/api/v1/sessions/{ts_session}")).await;
+    assert_eq!(rust_status, 200);
+    assert_eq!(ts_status, 200);
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    assert_eq!(rust_body, ts_body, "聊天回合后双端会话读面不等价");
+    eprintln!("会话域对跑通过：Rust 建会话双端等价 / TS 建+改名跨端可见 / 聊天回合后读面等价");
 }
