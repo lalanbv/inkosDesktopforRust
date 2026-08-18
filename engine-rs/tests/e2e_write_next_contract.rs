@@ -14425,3 +14425,142 @@ mod sub99_e2e {
         assert_eq!(calls, vec![true, false], "两计划都试过后判未连接：{calls:?}");
     }
 }
+
+mod sub100_e2e {
+    //! 100 号：PDF 材料抽取经聊天面——ingest_material(file) 真抽取
+    //! （kind pdf + 页数 + 错误文案）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt100(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app100(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn mock_material_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                let payload = if system.contains("创作助手") {
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    if has_tool_result {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "（材料已归档。）" } }] })
+                    } else if last_user.contains("归档 PDF") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_pdf_1", "function": { "name": "ingest_material", "arguments": "{\"sourceKind\":\"file\",\"filePath\":\"doc.pdf\",\"purpose\":\"reference\"}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    }
+                } else {
+                    serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn chat_ingests_pdf_material_with_extracted_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.pdf"),
+            root.join("doc.pdf"),
+        )
+        .unwrap();
+        let llm = mock_material_llm().await;
+        let session_id = "1783007000015-s100a";
+        let app = app100(rt100(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"归档 PDF 材料","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "ingest_material");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.starts_with("Material ingested: "), "{result_text}");
+        // manifest：kind pdf + 页数 + 抽取文本。
+        let manifest_path = format!(".inkos/materials/{}.json", card["details"]["asset"]["id"].as_str().unwrap_or_default());
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join(manifest_path)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["kind"], "pdf");
+        assert_eq!(manifest["totalPages"], 1);
+        assert!(manifest["excerpt"].as_str().unwrap().contains("Chapter one reference material."), "excerpt: {manifest}");
+    }
+}

@@ -6,7 +6,8 @@
 //! - `retrieveMaterials`：manifest 列表 → 词项打分（title/source/body 权重 +
 //!   首现位置）→ 半径 700 片段 → 限幅排序
 //!
-//! PDF 文本抽取暂缓（TS 走 unpdf；Rust 无对应依赖，见 83 号备案）。
+//! PDF 文本抽取经 pdf-extract（100 号闭合 83 号备案；空文本判定对齐
+//! TS 的"扫描件需 OCR"文案）。
 
 use std::path::{Path, PathBuf};
 
@@ -232,10 +233,26 @@ fn extract_buffer_material(
         mime_type.to_string()
     };
     if is_pdf(filename, &mime_type) {
-        return Err(
-            "PDF text extraction is not supported by the Rust engine yet; save the PDF as text/Markdown and ingest that instead."
-                .to_string(),
-        );
+        // pdf-extract：常规文本 PDF（含 ToUnicode CMap）；页数经首层解析。
+        // 空文本 → TS 逐字错误（扫描件需 OCR）。
+        let text = pdf_extract::extract_text_from_mem(buffer)
+            .map_err(|e| format!("PDF text extraction failed: {e}"))?;
+        let text = normalize_text(&text);
+        if text.is_empty() {
+            return Err(
+                "PDF text extraction returned no text. Scanned PDFs require OCR and are not supported yet."
+                    .to_string(),
+            );
+        }
+        let total_pages = pdf_total_pages(buffer);
+        return Ok(MaterialSource {
+            kind: "pdf",
+            source: source.to_string(),
+            title: Some(strip_extension(filename)),
+            mime_type: "application/pdf".to_string(),
+            text,
+            total_pages,
+        });
     }
     let Ok(raw) = String::from_utf8(buffer.to_vec()) else {
         return Err(format!("Unsupported material type: {mime_type}"));
@@ -303,6 +320,13 @@ fn mime_from_filename(filename: &str) -> String {
         _ => "text/plain",
     }
     .to_string()
+}
+
+/// PDF 页数（lopf 文档层解析；失败省略 manifest 键）。
+fn pdf_total_pages(bytes: &[u8]) -> Option<u32> {
+    lopdf::Document::load_mem(bytes)
+        .ok()
+        .map(|doc| doc.get_pages().len() as u32)
 }
 
 fn is_pdf(filename: &str, mime_type: &str) -> bool {
@@ -642,6 +666,62 @@ fn extract_terms(query: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture_pdf() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.pdf")
+    }
+
+    #[tokio::test]
+    async fn pdf_ingestion_extracts_text_and_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::copy(fixture_pdf(), root.join("sample.pdf")).unwrap();
+        let asset = ingest_material(
+            &root,
+            &IngestMaterialInput {
+                source_kind: "file",
+                url: None,
+                file_path: Some("sample.pdf"),
+                filename: Some("sample.pdf"),
+                mime_type: None,
+                title: None,
+                purpose: Some("reference"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(asset.kind, "pdf");
+        assert_eq!(asset.title, "sample");
+        assert_eq!(asset.mime_type, "application/pdf");
+        assert!(asset.excerpt.contains("Chapter one reference material."), "excerpt: {asset:?}");
+        assert!(asset.char_count > 0);
+        assert_eq!(asset.total_pages, Some(1));
+        // 空文本（扫描件语义）：无文本流的 PDF fixture → TS 逐字错误。
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/scan.pdf"),
+            root.join("scan.pdf"),
+        )
+        .unwrap();
+        let error = ingest_material(
+            &root,
+            &IngestMaterialInput {
+                source_kind: "file",
+                url: None,
+                file_path: Some("scan.pdf"),
+                filename: Some("scanned.pdf"),
+                mime_type: None,
+                title: None,
+                purpose: Some("reference"),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "PDF text extraction returned no text. Scanned PDFs require OCR and are not supported yet."
+        );
+    }
 
     #[test]
     fn helpers_mirror_ts() {
@@ -849,7 +929,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(pdf.contains("PDF text extraction is not supported"), "{pdf}");
+        assert!(pdf.starts_with("PDF text extraction failed:"), "{pdf}");
     }
 
     #[tokio::test]
