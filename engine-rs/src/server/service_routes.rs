@@ -852,6 +852,10 @@ pub async fn test_service(
     // ── 深链（96 号）：模型候选 × 协议计划 → 最小 chat 探测。 ──
     // 候选 = preferred + discovered 前 2（TS test 路径 useCustomFallbacks=false
     // 且 includeGenericFallbacks=false）。
+    // 候选构造（120 号对跑勘误——TS buildModelCandidates 逐字）：/test 不消费
+    // payload.model；serviceFirst = endpoint.checkModel ?? preset.knownModels[0]
+    // ?? endpoint.models 首个启用；配置命中（config service == 被测服务）补
+    // defaultModel ?? model；discovered 前 2（useEndpointCheckModel 时不带）。
     let mut candidates: Vec<String> = Vec::new();
     let mut push_candidate = |value: Option<&str>| {
         if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
@@ -860,10 +864,47 @@ pub async fn test_service(
             }
         }
     };
-    let preferred_model = payload.get("model").and_then(Value::as_str);
-    push_candidate(preferred_model);
-    for model in probed.iter().take(2) {
-        push_candidate(Some(&model.id));
+    let service_first_model: Option<String> = endpoint
+        .and_then(|ep| ep.check_model.clone())
+        .or_else(|| {
+            preset
+                .as_ref()
+                .and_then(|preset| preset.known_models.first().map(|id| id.to_string()))
+        })
+        .or_else(|| {
+            endpoint.and_then(|ep| {
+                ep.models
+                    .iter()
+                    .filter(|model| model.enabled != Some(false))
+                    .map(|model| model.id.clone())
+                    .next()
+            })
+        });
+    let use_endpoint_check_model = !is_custom_service_id(&service)
+        && discovered.is_empty()
+        && endpoint.and_then(|ep| ep.check_model.as_deref()).is_some();
+    push_candidate(service_first_model.as_deref());
+    if !use_endpoint_check_model {
+        if let Some(config) = crate::server::project_config_routes::load_raw_config(root).await {
+            let llm = config.get("llm");
+            let config_service = llm
+                .and_then(|llm| llm.get("service"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if config_service.as_deref() == Some(service.as_str()) {
+                let config_model = llm
+                    .and_then(|llm| {
+                        llm.get("defaultModel")
+                            .or_else(|| llm.get("model"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(str::to_string);
+                push_candidate(config_model.as_deref());
+            }
+        }
+        for model in probed.iter().take(2) {
+            push_candidate(Some(&model.id));
+        }
     }
     if candidates.is_empty() {
         let message = match language {
@@ -890,19 +931,31 @@ pub async fn test_service(
         for (plan_api_format, stream) in &plans {
             match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream, *plan_api_format).await {
                 Ok(_content) => {
-                    let probe = json!({ "ok": true, "models": discovered.len() });
+                    // TS：live 清单空 → 静态回退清单（endpoint.models/knownModels）。
+                    let (models, models_source): (Vec<Value>, &str) = if discovered.is_empty() {
+                        (
+                            fallback_text_models(base_service)
+                                .into_iter()
+                                .map(|id| json!({ "id": id, "name": id }))
+                                .collect(),
+                            "fallback",
+                        )
+                    } else {
+                        (discovered.clone(), "api")
+                    };
+                    let probe = json!({ "ok": true, "models": models.len() });
                     return (
                         StatusCode::OK,
                         Json(json!({
                             "ok": true,
-                            "modelCount": discovered.len(),
-                            "models": discovered,
+                            "modelCount": models.len(),
+                            "models": models,
                             "selectedModel": model,
                             "detected": {
                                 "apiFormat": transport_api_format_str(*plan_api_format),
                                 "stream": stream,
                                 "baseUrl": resolved_base_url,
-                                "modelsSource": "api",
+                                "modelsSource": models_source,
                             },
                             "probe": probe,
                             "chat": null,
@@ -935,6 +988,29 @@ pub async fn test_service(
 /// 16，无重试，SERVICE_CHAT_PROBE_TIMEOUT_MS=8s）。返回响应文本；**空响应
 /// 判失败**（doctor 回退语义：首传输空 → 回退下一计划）。99 号提 pub(crate)
 /// 供 doctor 复用。
+/// `fallbackTextModelsForEndpoint`（TS 逐字）：endpoint.models（enabled≠false
+/// 且文本模型）优先，否则 preset.knownModels——/models 不可达时的静态回退清单。
+fn fallback_text_models(service_id: &str) -> Vec<String> {
+    let endpoint_models: Vec<String> = get_all_endpoints()
+        .iter()
+        .find(|ep| ep.id == service_id)
+        .map(|ep| {
+            ep.models
+                .iter()
+                .filter(|model| model.enabled != Some(false))
+                .filter(|model| is_text_chat_model_id(&model.id))
+                .map(|model| model.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !endpoint_models.is_empty() {
+        return endpoint_models;
+    }
+    resolve_service_preset(service_id)
+        .map(|preset| preset.known_models.iter().map(|id| id.to_string()).collect())
+        .unwrap_or_default()
+}
+
 fn transport_api_format_str(api_format: crate::llm::providers::TransportApiFormat) -> &'static str {
     match api_format {
         crate::llm::providers::TransportApiFormat::Chat => "chat",

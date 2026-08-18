@@ -14309,8 +14309,11 @@ mod sub96_e2e {
         let (status, parsed) = call(app, "POST", "/api/v1/services/deepseek/test", Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true, "body: {parsed}");
-        assert_eq!(parsed["selectedModel"], "deepseek-chat-x");
-        assert_eq!(parsed["detected"]["modelsSource"], "api");
+        // 120 号 TS 逐字：/test 不消费 payload.model——候选 = checkModel；
+        // discovered 空 → 预设静态回退清单（modelsSource=fallback）。
+        assert_eq!(parsed["selectedModel"], "deepseek-v4-flash", "body: {parsed}");
+        assert_eq!(parsed["detected"]["modelsSource"], "fallback", "body: {parsed}");
+        assert_eq!(parsed["modelCount"], 4, "body: {parsed}");
         assert_eq!(parsed["probe"]["ok"], true);
     }
 
@@ -15592,26 +15595,26 @@ mod sub106_e2e {
             .with_state(rt(&root, &llm));
 
         // 无 apiFormat 偏好 → 计划 [chat 非流式, responses 非流式]：chat 404
-        // → responses 探测成功（96 号"一律 chat"备案闭合）。
+        // → responses 探测成功（96 号"一律 chat"备案闭合）。deepseek 预设候选
+        // = checkModel（120 号 TS 逐字：payload.model 不参选）。
         let (status, parsed) = call(
             app,
             "POST",
-            "/api/v1/services/svc-r/test",
-            Some(&format!(
-                r#"{{"apiKey":"k","baseUrl":"{llm}","model":"resp-model"}}"#
-            )),
+            "/api/v1/services/deepseek/test",
+            Some(&format!(r#"{{"apiKey":"k","baseUrl":"{llm}","model":"resp-model"}}"#)),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true, "body: {parsed}");
         assert_eq!(parsed["detected"]["apiFormat"], "responses", "body: {parsed}");
         assert_eq!(parsed["detected"]["stream"], false, "body: {parsed}");
-        assert_eq!(parsed["selectedModel"], "resp-model");
+        assert_eq!(parsed["detected"]["modelsSource"], "fallback", "body: {parsed}");
+        assert_eq!(parsed["selectedModel"], "deepseek-v4-flash");
 
         // /responses 探测请求形态（TS chatCompletion 经 responses 传输）。
         let bodies = bodies.lock().unwrap();
         let probe = bodies.last().unwrap();
-        assert_eq!(probe["model"], "resp-model");
+        assert_eq!(probe["model"], "deepseek-v4-flash");
         assert_eq!(probe["store"], false);
         assert_eq!(probe["max_output_tokens"], 16);
         assert_eq!(probe["stream"], false);

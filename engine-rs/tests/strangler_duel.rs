@@ -489,3 +489,91 @@ async fn strangler_session_domain_duel() {
     assert_eq!(rust_body, ts_body, "聊天回合后双端会话读面不等价");
     eprintln!("会话域对跑通过：Rust 建会话双端等价 / TS 建+改名跨端可见 / 聊天回合后读面等价");
 }
+
+/// 120 号：模型配置域对跑——A) 服务列表/密钥读面双端等价；B) 密钥跨端写读
+/// （Rust 写 key → TS 读到；TS 写 → Rust 读到）；C) 深链探测（POST
+/// services/:service/test，同 mock 上游）双端响应等价。
+#[tokio::test]
+async fn strangler_services_domain_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = 4750 + (std::process::id() % 1000) as u16;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    let client = reqwest::Client::new();
+
+    // A) 服务列表读面（fixture 服务项 + secrets 键集）。
+    let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/services").await;
+    let (ts_status, mut ts_body) = get_json(&ts, "/api/v1/services").await;
+    assert_eq!(rust_status, 200, "rust: {rust_body}");
+    assert_eq!(ts_status, 200, "ts: {ts_body}");
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    if rust_body != ts_body {
+        eprintln!(
+            "服务列表差异（备案观察面）：\n  rust: {rust_body}\n  ts:   {ts_body}"
+        );
+    }
+
+    // B) 密钥跨端写读：Rust 写 → TS 读；TS 写 → Rust 读。
+    let response = client
+        .put(format!("{rust}/api/v1/services/custom:Duel2/secret"))
+        .header("content-type", "application/json")
+        .body(r#"{"apiKey":"rk-120"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "Rust 写密钥失败");
+    let (status, body) = get_json(&ts, "/api/v1/services/custom:Duel2/secret").await;
+    assert_eq!(status, 200, "TS 读不到 Rust 写的密钥：{body}");
+    let response = client
+        .put(format!("{ts}/api/v1/services/custom:Duel3/secret"))
+        .header("content-type", "application/json")
+        .body(r#"{"apiKey":"tk-120"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "TS 写密钥失败");
+    let (status, body) = get_json(&rust, "/api/v1/services/custom:Duel3/secret").await;
+    assert_eq!(status, 200, "Rust 读不到 TS 写的密钥：{body}");
+
+    // C) 深链探测（inline baseUrl 指同一 mock；无 apiFormat 偏好 → 双端
+    // 计划 [chat 非流式, responses 非流式]，chat 先中）。
+    let body = format!(r#"{{"apiKey":"k","baseUrl":"{llm}","model":"duel-model"}}"#);
+    let (rust_status, mut rust_probe) = post_json(&rust, "/api/v1/services/deepseek/test", &body).await;
+    let (ts_status, mut ts_probe) = post_json(&ts, "/api/v1/services/deepseek/test", &body).await;
+    assert_eq!(rust_status, 200, "rust probe: {rust_probe}");
+    assert_eq!(ts_status, 200, "ts probe: {ts_probe}");
+    normalize(&mut rust_probe);
+    normalize(&mut ts_probe);
+    if rust_probe != ts_probe {
+        panic!("深链探测双端不等价：
+  rust: {rust_probe}
+  ts:   {ts_probe}");
+    }
+
+    eprintln!("模型配置域对跑通过：服务列表面观察 / 密钥双向跨端写读 / 深链探测等价");
+}
+
+async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base}{path}"))
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .send()
+        .await
+        .expect("POST 失败");
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap_or_default();
+    (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+}
