@@ -14880,29 +14880,37 @@ mod sub102_e2e {
     }
 
     /// 分析器两段节奏 mock：第 1 次分析（第 2 章）即刻回包；第 2 次分析
-    /// （第 3 章）标记 seen 后睡 600ms——把"第 3 章分析在途时 abort"钉死在
-    /// 检查点③之前，无时序抖动。
+    /// （第 3 章）**到达时**标记 seen 后睡 600ms——标记时刻第 2 章必然已
+    /// 完整落盘（回放循环已推进到第 3 章头），把"第 3 章分析在途时 abort"
+    /// 钉死在检查点③之前，无时序抖动。
     async fn mock_two_phase_analyzer()
         -> (String, Arc<StdMutex<bool>>, tokio::task::JoinHandle<()>) {
         let second_seen = Arc::new(StdMutex::new(false));
         let seen_for_server = second_seen.clone();
+        let analyzer_calls = Arc::new(StdMutex::new(0u32));
+        let calls_for_server = analyzer_calls.clone();
         let app = axum::Router::new().route(
             "/chat/completions",
             axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
                 let second_seen = seen_for_server.clone();
+                let analyzer_calls = calls_for_server.clone();
                 async move {
                     let messages = body["messages"].as_array().cloned().unwrap_or_default();
                     let system =
                         messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
                     let payload = if system.contains("连续性分析") || system.contains("continuity analyst") {
-                        if *second_seen.lock().unwrap() {
-                            // 第 3 章分析：在途回包（此时检查点③尚未到达）。
-                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                            serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
-                        } else {
+                        let call_index = {
+                            let mut calls = analyzer_calls.lock().unwrap();
+                            *calls += 1;
+                            *calls
+                        };
+                        if call_index >= 2 {
+                            // 第 3 章分析到达：此刻第 2 章已完整落盘（循环头已
+                            // 推进）；在途回包（检查点③尚未到达）。
                             *second_seen.lock().unwrap() = true;
-                            serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
+                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         }
+                        serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
                     } else if system.contains("创作助手") {
                         let last_user = messages
                             .iter()
