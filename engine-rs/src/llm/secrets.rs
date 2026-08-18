@@ -72,6 +72,129 @@ pub fn resolve_service_api_key(secrets: &SecretsFile, service: &str, env_lookup:
 const SECRETS_DIR: &str = ".inkos";
 const SECRETS_FILE: &str = "secrets.json";
 
+/// services 键的磁盘插入序（104 号）。TS 层 3 迭代 `Object.entries(secrets
+/// .services)` 为 JSON 插入序——解析层 HashMap 丢失顺序（97 号偏差备案），
+/// 此处从原始 JSON 文本扫描 services 对象的一层键序；任何异常（文件缺失/
+/// 无 services/文本异常）返回空序，调用方回退按名排序。
+pub fn service_key_order(project_root: &Path) -> Vec<String> {
+    let path = project_root.join(SECRETS_DIR).join(SECRETS_FILE);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    json_object_keys(&raw, "services").unwrap_or_default()
+}
+
+/// 在 JSON 文本中定位键 `container` 的对象值，返回其一层键的文本序。
+/// 独立于 serde 解析（BTreeMap 丢序）——只处理良构文本，异常返回 None。
+fn json_object_keys(raw: &str, container: &str) -> Option<Vec<String>> {
+    let bytes = raw.as_bytes();
+    let skip_ws = |i: &mut usize| {
+        while *i < bytes.len() && matches!(bytes[*i], b' ' | b'\t' | b'\n' | b'\r') {
+            *i += 1;
+        }
+    };
+    // 定位键 "container"（后随冒号 + '{'）。
+    let needle = format!("\"{container}\"");
+    let needle = needle.as_bytes();
+    let mut cursor = 0usize;
+    let mut object_start = None;
+    while cursor + needle.len() <= bytes.len() {
+        if &bytes[cursor..cursor + needle.len()] == needle {
+            let mut j = cursor + needle.len();
+            skip_ws(&mut j);
+            if j < bytes.len() && bytes[j] == b':' {
+                j += 1;
+                skip_ws(&mut j);
+                if j < bytes.len() && bytes[j] == b'{' {
+                    object_start = Some(j);
+                }
+            }
+            break;
+        }
+        cursor += 1;
+    }
+    let start = object_start?;
+    let mut keys = Vec::new();
+    let mut i = start + 1;
+    loop {
+        skip_ws(&mut i);
+        if i >= bytes.len() {
+            return None;
+        }
+        match bytes[i] {
+            b'}' => return Some(keys),
+            b',' => {
+                i += 1;
+                continue;
+            }
+            b'"' => {}
+            _ => return None,
+        }
+        // 解析键字符串（转义按原样保留；键为 ASCII 服务 id，无实义转义）。
+        let mut key: Vec<u8> = Vec::new();
+        i += 1;
+        let mut escape = false;
+        loop {
+            if i >= bytes.len() {
+                return None;
+            }
+            let byte = bytes[i];
+            if escape {
+                key.push(byte);
+                escape = false;
+            } else if byte == b'\\' {
+                escape = true;
+            } else if byte == b'"' {
+                break;
+            } else {
+                key.push(byte);
+            }
+            i += 1;
+        }
+        i += 1;
+        skip_ws(&mut i);
+        if i >= bytes.len() || bytes[i] != b':' {
+            return None;
+        }
+        i += 1;
+        skip_ws(&mut i);
+        // 跳过值（字符串整段；嵌套对象/数组按深度，一层逗号/闭括号即值尾）。
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut value_escape = false;
+        while i < bytes.len() {
+            let byte = bytes[i];
+            if in_string {
+                if value_escape {
+                    value_escape = false;
+                } else if byte == b'\\' {
+                    value_escape = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+            } else {
+                match byte {
+                    b'"' => in_string = true,
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    b',' if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            i += 1;
+        }
+        if depth != 0 || in_string {
+            return None;
+        }
+        keys.push(String::from_utf8(key).ok()?);
+    }
+}
+
 /// 读取 secrets.json（缺失/损坏 → 空）。返回原始（未迁移）。
 pub fn read_secrets_raw(project_root: &Path) -> SecretsFile {
     let path = project_root.join(SECRETS_DIR).join(SECRETS_FILE);
@@ -185,6 +308,61 @@ mod tests {
         save_secrets(&dir, &s).unwrap();
         let loaded = load_secrets(&dir).unwrap();
         assert_eq!(loaded.services.get("openai").unwrap().api_key, "sk-123");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── 104 号：service_key_order / json_object_keys（磁盘插入序） ──
+
+    #[test]
+    fn json_object_keys_preserves_text_order() {
+        // 字母序刻意逆排（HashMap/BTreeMap 解析必失序——只有文本扫描能保住）。
+        let raw = r#"{"version":1,"services":{"zeta":{"apiKey":"k1"},"moonshot":{"apiKey":"k2"},"alpha":{"apiKey":"k3"}}}"#;
+        assert_eq!(
+            json_object_keys(raw, "services"),
+            Some(vec!["zeta".to_string(), "moonshot".to_string(), "alpha".to_string()])
+        );
+    }
+
+    #[test]
+    fn json_object_keys_skips_nested_values_and_strings() {
+        // 值含嵌套对象/数组/带逗号与括号的字符串——一层键序不受影响。
+        let raw = r#"{
+            "services": {
+                "b": {"apiKey": "x,{y}[z]"},
+                "a": {"apiKey": "k", "extra": {"deep": [1, 2], "s": "}{"}}
+            }
+        }"#;
+        assert_eq!(
+            json_object_keys(raw, "services"),
+            Some(vec!["b".to_string(), "a".to_string()])
+        );
+    }
+
+    #[test]
+    fn json_object_keys_missing_or_malformed_returns_none() {
+        assert_eq!(json_object_keys("{}", "services"), None);
+        assert_eq!(json_object_keys(r#"{"services": "not-an-object"}"#, "services"), None);
+        // 扫描越界（截断文本）→ None。
+        assert_eq!(json_object_keys(r#"{"services": {"a""#, "services"), None);
+    }
+
+    #[test]
+    fn service_key_order_reads_disk_and_falls_back_empty() {
+        let dir = std::env::temp_dir().join(format!("inkos-secrets-order-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        // 无文件 → 空序（调用方回退排序）。
+        assert!(service_key_order(&dir).is_empty());
+        std::fs::create_dir_all(dir.join(".inkos")).unwrap();
+        // 手写非字母序（模拟 sidecar 写入——serde BTreeMap 落盘必字母序）。
+        std::fs::write(
+            dir.join(".inkos").join("secrets.json"),
+            r#"{"services":{"zeta-first":{"apiKey":"k"},"alpha-second":{"apiKey":"k"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            service_key_order(&dir),
+            vec!["zeta-first".to_string(), "alpha-second".to_string()]
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -8259,6 +8259,56 @@ mod ops72_e2e {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
         assert!(parsed["error"].is_string());
     }
+
+    #[tokio::test]
+    async fn daemon_write_cycle_broadcasts_real_chapter_and_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, _calls, _guard) = spawn_mock_llm().await;
+        let runtime = rt72(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = app72_with(runtime);
+
+        let (status, _) = call(app.clone(), "POST", "/api/v1/daemon/start", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(subscriber.recv().await.unwrap().event, "daemon:started");
+
+        // 首轮写循环立即执行 → daemon:chapter 带真实章号/状态（104 号——
+        // TS onChapterComplete(bookId, result.chapterNumber, result.status)）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let data = loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "20s 内应收到 daemon:chapter"
+            );
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscriber.recv())
+                .await
+                .expect("等待事件超时")
+                .unwrap();
+            if event.event == "daemon:chapter" {
+                break event.data;
+            }
+        };
+        assert!(data.contains("\"bookId\":\"b1\""), "data: {data}");
+        assert!(data.contains("\"chapter\":1"), "真实章号而非定值 0：{data}");
+        assert!(
+            data.contains("\"status\":\"ready-for-review\""),
+            "data: {data}"
+        );
+
+        // 章节真实落盘（广播与磁盘一致）。
+        let chapters: Vec<String> = std::fs::read_dir(root.join("books").join("b1").join("chapters"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".md"))
+            .collect();
+        assert_eq!(chapters.len(), 1, "chapters: {chapters:?}");
+
+        let (status, _) = call(app, "POST", "/api/v1/daemon/stop", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
 
 mod play73_e2e {
@@ -8558,6 +8608,59 @@ mod play73_e2e {
             .step(&agents, &agents, &agents, None, "   ", None)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn play_start_english_premise_infers_en_world_and_scene() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_play_llm().await;
+        let app = app73(rt73(&root, &llm));
+        let session = "1782991000000-playen";
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 英文 title/premise → inferLanguage 判 en（104 号）→ world.json
+        // language "en" + 英文缺省开场正文（TS en 分支逐字）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{
+                "instruction": "Open a haunted manor world",
+                "sessionId": "1782991000000-playen",
+                "actionSource": "button",
+                "requestedIntent": "play_start",
+                "actionPayload": { "playStart": {
+                    "title": "Haunted Manor",
+                    "premise": "A snowbound manor hides an old case."
+                }}
+            }"#
+            .replace(char::is_whitespace, " ")
+            .as_str()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["tool"], "play_start");
+        assert_eq!(exec["status"], "completed", "body: {parsed}");
+        assert_eq!(
+            exec["details"]["sceneText"],
+            "You enter \"Haunted Manor\".\nA snowbound manor hides an old case.",
+            "body: {parsed}"
+        );
+        let world: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("worlds").join(session).join("world.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(world["language"], "en", "world: {world}");
     }
 }
 

@@ -135,7 +135,7 @@ fn write_cycle_state() -> &'static Mutex<WriteCycleState> {
     STATE.get_or_init(|| Mutex::new(WriteCycleState::default()))
 }
 
-async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: Option<f64>) -> Result<bool, String> {
+async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: Option<f64>) -> Result<(bool, u32, String), String> {
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
     let agents = crate::server::books_routes::build_write_next_agents(runtime);
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
@@ -151,7 +151,8 @@ async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: O
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(result.status == "ready-for-review")
+    let success = result.status == "ready-for-review";
+    Ok((success, result.chapter_number, result.status.to_string()))
 }
 
 async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
@@ -233,14 +234,18 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             None
         };
 
-        let success = match write_one_chapter(runtime, book_id, temperature).await {
-            Ok(success) => success,
+        // (成功位, 本章产物)——TS onChapterComplete 在成功与审计未过两条路径
+        // 都带真实章号/状态回调（异常路径才只走 onError）。
+        let (success, written) = match write_one_chapter(runtime, book_id, temperature).await {
+            Ok((success, chapter_number, status)) => {
+                (success, Some((chapter_number, status)))
+            }
             Err(error) => {
                 runtime.hub.broadcast(
                     "daemon:error",
                     &json!({ "bookId": book_id, "error": error }),
                 );
-                false
+                (false, None)
             }
         };
 
@@ -251,10 +256,14 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             let count = state.daily_counts.get(&today).copied().unwrap_or(0) + 1;
             state.daily_counts.retain(|key, _| key == &today);
             state.daily_counts.insert(today, count);
-            // onChapterComplete 广播的 chapter/status 简化为定值面（偏差备案）。
-            runtime
-                .hub
-                .broadcast("daemon:chapter", &json!({ "bookId": book_id, "chapter": 0, "status": "ready-for-review" }));
+        }
+        if let Some((chapter_number, status)) = written {
+            runtime.hub.broadcast(
+                "daemon:chapter",
+                &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+            );
+        }
+        if success {
             continue;
         }
 
@@ -271,10 +280,21 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             tokio::time::sleep(Duration::from_millis(config.retry_delay_ms)).await;
             let retry_temperature = Some((0.7 + failures as f64 * RETRY_TEMPERATURE_STEP).min(1.2));
             match write_one_chapter(runtime, book_id, retry_temperature).await {
-                Ok(true) => {
+                Ok((true, chapter_number, status)) => {
                     write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);
+                    runtime.hub.broadcast(
+                        "daemon:chapter",
+                        &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+                    );
                 }
-                _ => break,
+                Ok((false, chapter_number, status)) => {
+                    runtime.hub.broadcast(
+                        "daemon:chapter",
+                        &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+                    );
+                    break;
+                }
+                Err(_) => break,
             }
         } else {
             break;

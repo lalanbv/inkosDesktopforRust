@@ -347,19 +347,29 @@ pub async fn resolve_agent_model_override(
 
     // ── 层 3：secrets 首个有 key 服务的首个文本模型。 ──
     if let Ok(secrets) = crate::llm::secrets::load_secrets(root) {
-        // HashMap 无插入序——按服务名排序迭代（确定性；TS Object.entries 为
-        // 插入序，见偏差备案）。
-        let mut keyed: Vec<(&String, &crate::llm::secrets::ServiceSecret)> =
-            secrets.services.iter().collect();
-        keyed.sort_by(|a, b| a.0.cmp(b.0));
-        for (service, secret) in keyed {
+        // TS Object.entries 为 JSON 插入序——104 号起按磁盘键序迭代（sidecar
+        // 写入的 secrets.json 保序）；读不到键序时按名排序回退（97 号备案闭合）。
+        let mut order = crate::llm::secrets::service_key_order(root);
+        order.retain(|name| secrets.services.contains_key(name));
+        let mut rest: Vec<String> = secrets
+            .services
+            .keys()
+            .filter(|name| !order.contains(name))
+            .cloned()
+            .collect();
+        rest.sort();
+        order.extend(rest);
+        for service in order {
+            let Some(secret) = secrets.services.get(&service) else {
+                continue;
+            };
             if secret.api_key.trim().is_empty() {
                 continue;
             }
-            let models = crate::llm::probe::list_models_for_service(service, Some(&secret.api_key), None).await;
+            let models = crate::llm::probe::list_models_for_service(&service, Some(&secret.api_key), None).await;
             if let Some(text_model) = models.iter().find(|m| is_text_chat_model_id(&m.id)) {
                 if let Some(base_url) =
-                    crate::server::service_routes::resolve_configured_service_base_url(root, service, None).await
+                    crate::server::service_routes::resolve_configured_service_base_url(root, &service, None).await
                 {
                     if !base_url.is_empty() {
                         return Ok(Some(AgentModelOverride {
@@ -1882,7 +1892,19 @@ async fn execute_play_start(
     } else {
         mode
     };
-    // inferLanguage 简化：默认 zh（内容判定随后续号接 utils）。
+    // TS 逐字：inferLanguage([title, premise, worldContract, visualContract,
+    // initialScene].filter(Boolean).join("\n"))——空段剔除后按内容判 zh/en。
+    let language_source = [title, premise, world_contract, visual_contract, initial_scene]
+        .iter()
+        .filter(|segment| !segment.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let language = if crate::utils::infer_language(Some(&language_source)) == crate::utils::WritingLanguage::En {
+        "en"
+    } else {
+        "zh"
+    };
     let world = crate::play::create_world(
         root,
         &PlayWorldInput {
@@ -1892,14 +1914,22 @@ async fn execute_play_start(
             world_contract,
             visual_contract,
             mode,
-            language: "zh",
+            language,
         },
     )
     .await?;
     crate::play::ensure_run(root, &world_id, run_id).await?;
 
     let existing_transcript = crate::play::read_transcript(root, &world_id, run_id).await;
-    let default_scene = if premise.is_empty() {
+    // 缺省开场正文按世界语言分流（TS world.language === "en" 分支逐字）。
+    let default_scene = if language == "en" {
+        let premise_line = if premise.is_empty() {
+            "The scene is set. Make your first move."
+        } else {
+            premise
+        };
+        format!("You enter \"{title}\".\n{premise_line}")
+    } else if premise.is_empty() {
         format!("你进入「{title}」。\n场景已经就位，等待你的第一个动作。")
     } else {
         format!("你进入「{title}」。\n{premise}")
