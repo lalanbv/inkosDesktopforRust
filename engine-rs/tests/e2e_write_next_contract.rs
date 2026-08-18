@@ -13402,3 +13402,322 @@ mod sub91_e2e {
         assert_eq!(index.as_array().map(Vec::len), Some(2), "index: {index}");
     }
 }
+
+mod sub92_e2e {
+    //! 92 号：importMode=series 评审环——architect 首轮被拒 → 带反馈重生成
+    //! （B 稿）→ 复审通过 → 落盘 B 稿地基。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    const ARCHITECT_FIRST: &str = r#"=== SECTION: story_frame ===
+## 分岔点
+开篇之前。
+
+=== SECTION: volume_map ===
+### 第一卷（1-20章）新程
+独立冲突开启。
+
+=== SECTION: roles ===
+---ROLE---
+tier: major
+name: 林动
+---CONTENT---
+## 核心标签
+坚忍。
+
+=== SECTION: book_rules ===
+## 导入模式
+- series
+
+=== SECTION: pending_hooks ===
+| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H01 | 0 | 新谜 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷 | true |  | 开篇之谜 |
+"#;
+
+    const ARCHITECT_REVISED: &str = r#"=== SECTION: story_frame ===
+## 分岔点
+重写后的分岔。
+
+=== SECTION: volume_map ===
+### 第一卷（1-20章）系列新程
+系列冲突强化。
+
+=== SECTION: roles ===
+---ROLE---
+tier: major
+name: 林震
+---CONTENT---
+## 核心标签
+重写后的主角。
+
+=== SECTION: book_rules ===
+## 导入模式
+- series
+
+=== SECTION: pending_hooks ===
+| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H01 | 0 | 新谜 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷 | true |  | 开篇之谜 |
+"#;
+
+    const REVIEW_REJECT: &str = "\
+=== DIMENSION: 1 ===
+分数：65
+意见：系列主线偏弱。
+
+=== DIMENSION: 2 ===
+分数：66
+意见：承接不足。
+
+=== DIMENSION: 3 ===
+分数：64
+意见：设定重复。
+
+=== DIMENSION: 4 ===
+分数：67
+意见：角色扁平。
+
+=== DIMENSION: 5 ===
+分数：68
+意见：节奏偏平。
+
+=== OVERALL ===
+总分：66
+通过：否
+总评：需要重写系列主线。";
+
+    const REVIEW_PASS_SERIES: &str = "\
+=== DIMENSION: 1 ===
+分数：90
+意见：系列主线清晰。
+
+=== DIMENSION: 2 ===
+分数：88
+意见：承接有力。
+
+=== DIMENSION: 3 ===
+分数：85
+意见：设定自洽。
+
+=== DIMENSION: 4 ===
+分数：86
+意见：角色区分明显。
+
+=== DIMENSION: 5 ===
+分数：84
+意见：节奏可行。
+
+=== OVERALL ===
+总分：87
+通过：是
+总评：整体扎实。";
+
+    const ANALYZER_OUTPUT_92: &str = "\
+=== CHAPTER_TITLE ===
+风起
+
+=== CHAPTER_CONTENT ===
+林动睁开双眼。
+
+=== PRE_WRITE_CHECK ===
+
+=== POST_SETTLEMENT ===
+
+=== UPDATED_STATE ===
+| Field | Value |
+| --- | --- |
+| Current Chapter | 1 |
+
+=== UPDATED_LEDGER ===
+
+=== UPDATED_HOOKS ===
+| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== CHAPTER_SUMMARY ===
+| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== UPDATED_SUBPLOTS ===
+
+=== UPDATED_EMOTIONAL_ARCS ===
+
+=== UPDATED_CHARACTER_MATRIX ===
+## 林动
+- **Role**: protagonist
+";
+
+    fn rt92(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app92(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：architect 按反馈轮分流（消息含 "## 总评" → B 稿）；reviewer
+    /// 计数（首审拒绝 → 之后通过）；analyzer 固定输出；studio 按指令发
+    /// series 导入工具调用。
+    async fn mock_series_llm() -> (String, Arc<Mutex<usize>>) {
+        let review_calls: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+        let counter = review_calls.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let counter = counter.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    let has_feedback = messages.iter().any(|m| {
+                        m["content"].as_str().map(|c| c.contains("## 总评")).unwrap_or(false)
+                    });
+                    let payload = if system.contains("资深小说编辑") {
+                        let calls = {
+                            let mut c = counter.lock().unwrap();
+                            *c += 1;
+                            *c
+                        };
+                        let content = if calls == 1 { REVIEW_REJECT } else { REVIEW_PASS_SERIES };
+                        serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+                    } else if system.contains("总架构师") || system.contains("网络小说架构师") {
+                        let content = if has_feedback { ARCHITECT_REVISED } else { ARCHITECT_FIRST };
+                        serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+                    } else if system.contains("连续性分析") || system.contains("continuity analyst") {
+                        serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT_92 } }] })
+                    } else if system.contains("创作助手") {
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（系列导入完成。）" } }] })
+                        } else if last_user.contains("系列导入") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_ser_1", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b92\",\"sourcePath\":\"novel92.txt\",\"importMode\":\"series\"}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                        }
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), review_calls)
+    }
+
+    #[tokio::test]
+    async fn chat_series_import_reviews_and_regenerates_foundation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b92");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b92","title":"系列书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("novel92.txt"), "# 第一章 风起\n\n林动睁开双眼，灵气涌动。").unwrap();
+
+        let (llm, review_calls) = mock_series_llm().await;
+        let session_id = "1783007000010-s92a";
+        let app = app92(rt92(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b92"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"系列导入 novel92.txt","sessionId":"{session_id}","activeBookId":"b92"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "import_chapters");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.contains("Imported 1 chapter(s) into book \"b92\"."), "{result_text}");
+        assert_eq!(card["details"]["importMode"], "series");
+
+        // 评审环：首审拒绝 → 带反馈重生成 → 复审通过（恰两次评审）。
+        assert_eq!(*review_calls.lock().unwrap(), 2, "评审次数");
+        // 落盘地基来自 B 稿（反馈重生成轮）：系列强化的卷名 + 主角林震。
+        let volume_map = std::fs::read_to_string(book.join("story").join("outline").join("volume_map.md"))
+            .unwrap_or_default();
+        assert!(volume_map.contains("系列新程"), "volume_map: {volume_map}");
+        let roles_major = book.join("story").join("roles").join("主要角色");
+        let role_names: Vec<String> = std::fs::read_dir(&roles_major)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(role_names.iter().any(|n| n.contains("林震")), "roles: {role_names:?}");
+        // 章节回放照常。
+        assert!(book.join("chapters").join("0001_风起.md").is_file());
+    }
+}

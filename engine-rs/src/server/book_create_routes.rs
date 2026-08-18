@@ -342,6 +342,73 @@ async fn generate_and_review_foundation_multi(
     Ok(foundation)
 }
 
+/// series 导入评审环（92 号）：生成 → foundation-reviewer 评审（series 五维）
+/// → 不过则带反馈重生成（max 2 轮，TS `foundationReviewRetries ?? 2`）→
+/// 终审兜底接受。对齐 TS `generateAndReviewFoundation`（mode "series"，
+/// 无 sourceCanon/styleGuide；review 失败硬传播，终审容错——与确认面
+/// multi 环同 reductions）。
+async fn generate_and_review_foundation_import(
+    architect_ctx: &ArchitectCtx<'_>,
+    architect_chat: &'static RoutedAgent,
+    reviewer_chat: &'static RoutedAgent,
+    book: &BookConfig,
+    foundation_source: &str,
+    language: WritingLanguage,
+) -> Result<crate::agents::architect::ArchitectOutput, String> {
+    let target_chapters = book.target_chapters;
+    let mut feedback: Option<String> = None;
+    let mut foundation = generate_foundation_from_import(
+        architect_ctx,
+        architect_chat,
+        book,
+        foundation_source,
+        None,
+        feedback.as_deref(),
+        ImportMode::Series,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    for _ in 0..2usize {
+        let params = ReviewParams {
+            foundation: &foundation,
+            mode: FoundationReviewMode::Series,
+            source_canon: None,
+            style_guide: None,
+            language,
+            target_chapters: Some(target_chapters),
+        };
+        let review = review_foundation(reviewer_chat, &params).await?;
+        if review.passed {
+            return Ok(foundation);
+        }
+        feedback = Some(build_foundation_review_feedback(&review, language));
+        foundation = generate_foundation_from_import(
+            architect_ctx,
+            architect_chat,
+            book,
+            foundation_source,
+            None,
+            feedback.as_deref(),
+            ImportMode::Series,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    // 终审（兜底接受——不再重生成）。
+    let params = ReviewParams {
+        foundation: &foundation,
+        mode: FoundationReviewMode::Series,
+        source_canon: None,
+        style_guide: None,
+        language,
+        target_chapters: Some(target_chapters),
+    };
+    let _ = review_foundation(reviewer_chat, &params).await;
+    Ok(foundation)
+}
+
 // ── POST /api/v1/books/create ────────────────────────────────────
 
 pub async fn create_book(
@@ -545,17 +612,34 @@ pub(crate) async fn import_chapters_chain_with_resume(
             project_root: state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
         };
-        let foundation = generate_foundation_from_import(
-            &architect_ctx,
-            architect_chat,
-            &book,
-            &foundation_source,
-            None,
-            None,
-            import_mode,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let foundation = if matches!(import_mode, ImportMode::Series) {
+            // series：生成 → 评审 → 带反馈重生成（92 号评审环）。
+            let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+                router: (*runtime.router).clone(),
+                agent: "foundation-reviewer",
+            }));
+            generate_and_review_foundation_import(
+                &architect_ctx,
+                architect_chat,
+                reviewer_chat,
+                &book,
+                &foundation_source,
+                language,
+            )
+            .await?
+        } else {
+            generate_foundation_from_import(
+                &architect_ctx,
+                architect_chat,
+                &book,
+                &foundation_source,
+                None,
+                None,
+                import_mode,
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        };
         write_foundation_files(&book_dir, &foundation, language, FoundationWriteMode::Init).await?;
         reset_import_replay_truth_files(&book_dir, language).await;
         state
