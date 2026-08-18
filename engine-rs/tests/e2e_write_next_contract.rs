@@ -12421,3 +12421,229 @@ mod sub87_e2e {
         assert!(names.contains(&"propose_action".to_string()), "{names:?}");
     }
 }
+
+mod sub88_e2e {
+    //! 88 号：sub_agent reviser 聊天面——复用 47 号 /revise 审核环。
+    //! 修稿 applied 全链（pre 有 warning → 修稿 → post 通过 → 落盘）+
+    //! 门控拒绝（post 变差 → not-applied 诊断文本 + 原文保留）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt88(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app88(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：修稿编辑（TAG 输出）+ 审计温控分流（pre 默认温 1 warning；
+    /// post temp 0 由 `post_worse` 决定通过或变差）+ studio-agent 聊天
+    /// 按指令发 sub_agent reviser 工具调用。
+    async fn spawn_mock88(post_worse: bool) -> String {
+        let post_content = if post_worse {
+            r#"{"passed": false, "overallScore": 60, "summary": "变差了。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}, {"severity": "warning", "category": "文风", "description": "形容词堆积。", "suggestion": "删减。"}]}"#
+        } else {
+            r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#
+        }
+        .to_string();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let post_content = post_content.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    let temperature = body["temperature"].as_f64();
+                    let payload = if system.contains("修稿编辑") {
+                        // 修稿提示含"审稿意见"——须先于审计分支。
+                        serde_json::json!({ "choices": [{ "delta": { "content": "=== FIXED_ISSUES ===\n压缩了中段\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——屈辱自今日起讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n" } }] })
+                    } else if system.contains("审") || system.contains("连续") {
+                        let content = if temperature == Some(0.0) {
+                            post_content
+                        } else {
+                            r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
+                        };
+                        serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
+                    } else if system.contains("创作助手") {
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（已交给修订器处理。）" } }] })
+                        } else if last_user.contains("修订一章") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_r1", "function": { "name": "sub_agent", "arguments": "{\"agent\":\"reviser\",\"instruction\":\"把第一章的节奏压紧\",\"chapterNumber\":1,\"mode\":\"polish\"}" } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_r2", "function": { "name": "sub_agent", "arguments": "{\"agent\":\"reviser\",\"instruction\":\"润色最新一章\"}" } },
+                            ] } }] })
+                        }
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn chapter_file(root: &std::path::Path) -> std::path::PathBuf {
+        root.join("books").join("b1").join("chapters").join("0001_风起.md")
+    }
+
+    #[tokio::test]
+    async fn book_session_sub_agent_reviser_applied_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(chapter_file(&root), "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。").unwrap();
+        let llm = spawn_mock88(false).await;
+        let session_id = "1783007000003-s88a";
+        let app = app88(rt88(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"修订一章","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        let card = &execs[0];
+        assert_eq!(card["tool"], "sub_agent");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        assert_eq!(card["result"].as_str().unwrap(), "Revision (polish) complete for \"b1\" chapter 1.");
+        let details = &card["details"];
+        assert_eq!(details["kind"], "chapter_revision");
+        assert_eq!(details["bookId"], "b1");
+        assert_eq!(details["chapterNumber"], 1);
+        assert_eq!(details["mode"], "polish");
+        assert_eq!(details["applied"], true);
+        assert_eq!(details["status"], "ready-for-review");
+        assert!(details.get("skippedReason").is_none());
+        // 章节文件被改写（标题保留 + 修订正文）。
+        let saved = std::fs::read_to_string(chapter_file(&root)).unwrap();
+        assert!(saved.starts_with("# 第1章 风起"), "{saved}");
+        assert!(saved.contains("攥紧拳头"), "{saved}");
+    }
+
+    #[tokio::test]
+    async fn book_session_sub_agent_reviser_gate_refusal_keeps_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let original = "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。";
+        std::fs::write(chapter_file(&root), original).unwrap();
+        let llm = spawn_mock88(true).await;
+        let session_id = "1783007000004-s88b";
+        let app = app88(rt88(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"润色一下这一章","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "sub_agent");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let text = card["result"].as_str().unwrap();
+        assert!(
+            text.starts_with("Revision not applied for \"b1\" chapter 1: Manual revision kept original chapter: before blocking=1,"),
+            "{text}"
+        );
+        assert!(text.contains("Revision gate:"), "{text}");
+        assert!(text.contains("- Standard: A revision is applied only when"), "{text}");
+        assert!(text.contains("- Before: blocking=1, critical=0, aiTell=0"), "{text}");
+        assert!(text.contains("- After: blocking=2, critical=0, aiTell=0"), "{text}");
+        assert!(text.contains("- Remaining issues:"), "{text}");
+        assert!(text.contains("  - [warning] 节奏: 中段推进略缓。 (压缩。)"), "{text}");
+        let details = &card["details"];
+        assert_eq!(details["kind"], "chapter_revision");
+        assert_eq!(details["applied"], false);
+        assert_eq!(details["status"], "unchanged");
+        assert_eq!(details["mode"], "spot-fix");
+        assert!(details["skippedReason"].as_str().unwrap().starts_with("Manual revision kept original chapter"));
+        let diagnostics = &details["revisionDiagnostics"];
+        assert_eq!(diagnostics["before"]["blockingCount"], 1);
+        assert_eq!(diagnostics["after"]["blockingCount"], 2);
+        assert!(!diagnostics["remainingIssues"].as_array().unwrap().is_empty());
+        // 门控拒绝：原章保留。
+        assert_eq!(std::fs::read_to_string(chapter_file(&root)).unwrap(), original);
+    }
+}

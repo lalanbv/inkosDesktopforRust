@@ -733,27 +733,7 @@ pub async fn revise_foundation(
             Json(json!({ "error": "feedback is required" })),
         );
     };
-    let state = &runtime.state;
-    let book_dir = state.book_dir(&book_id);
-    let story_dir = book_dir.join("story");
-    let is_phase5 = story_dir.join("outline").join("story_frame.md").is_file();
-
-    // 备份：legacy 四文件 + phase5 的 outline（浅）与 roles（深）。
-    let timestamp = utc_now_iso().replace([':', '.'], "-");
-    let backup_tag = if is_phase5 { "phase5" } else { "phase4" };
-    let backup_dir = story_dir.join(format!(".backup-{backup_tag}-{timestamp}"));
-    let _ = tokio::fs::create_dir_all(&backup_dir).await;
-    for file_name in ["story_bible.md", "volume_outline.md", "book_rules.md", "character_matrix.md"] {
-        if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file_name)).await {
-            let _ = tokio::fs::write(backup_dir.join(file_name), content).await;
-        }
-    }
-    if is_phase5 {
-        copy_dir_shallow(&story_dir.join("outline"), &backup_dir.join("outline")).await;
-        copy_dir_deep(&story_dir.join("roles"), &backup_dir.join("roles")).await;
-    }
-
-    let result = revise_foundation_inner(&runtime, &book_id, feedback, is_phase5).await;
+    let result = revise_foundation_chain(&runtime, &book_id, feedback).await;
     match result {
         Ok(()) => {
             runtime
@@ -772,6 +752,37 @@ pub async fn revise_foundation(
             )
         }
     }
+}
+
+/// revise_foundation 链（无 HTTP 面，88 号提取）：phase 探测 → 备份 →
+/// architect 修订 → 容错审核 → Revise 模式落盘。sub_agent architect.revise
+/// 聊天面复用（对齐 TS pipeline.reviseFoundation）。
+pub(crate) async fn revise_foundation_chain(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    feedback: &str,
+) -> Result<(), String> {
+    let state = &runtime.state;
+    let book_dir = state.book_dir(book_id);
+    let story_dir = book_dir.join("story");
+    let is_phase5 = story_dir.join("outline").join("story_frame.md").is_file();
+
+    // 备份：legacy 四文件 + phase5 的 outline（浅）与 roles（深）。
+    let timestamp = utc_now_iso().replace([':', '.'], "-");
+    let backup_tag = if is_phase5 { "phase5" } else { "phase4" };
+    let backup_dir = story_dir.join(format!(".backup-{backup_tag}-{timestamp}"));
+    let _ = tokio::fs::create_dir_all(&backup_dir).await;
+    for file_name in ["story_bible.md", "volume_outline.md", "book_rules.md", "character_matrix.md"] {
+        if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file_name)).await {
+            let _ = tokio::fs::write(backup_dir.join(file_name), content).await;
+        }
+    }
+    if is_phase5 {
+        copy_dir_shallow(&story_dir.join("outline"), &backup_dir.join("outline")).await;
+        copy_dir_deep(&story_dir.join("roles"), &backup_dir.join("roles")).await;
+    }
+
+    revise_foundation_inner(runtime, book_id, feedback, is_phase5).await
 }
 
 async fn revise_foundation_inner(

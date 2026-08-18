@@ -430,17 +430,18 @@ use crate::pipeline::chapter_state_recovery::{
 };
 
 /// revise 链错误：NotFound 对齐 Node 404（缺章），Internal 对齐 500。
-enum ReviseChainError {
+/// 88 号提 pub(crate)：sub_agent reviser 聊天面复用链错误文本。
+pub(crate) enum ReviseChainError {
     NotFound(String),
     Internal(String),
 }
 
 impl ReviseChainError {
-    fn is_not_found(&self) -> bool {
+    pub(crate) fn is_not_found(&self) -> bool {
         matches!(self, ReviseChainError::NotFound(_))
     }
 
-    fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         match self {
             ReviseChainError::NotFound(m) | ReviseChainError::Internal(m) => m,
         }
@@ -520,7 +521,9 @@ pub struct RevisionDiagnostics {
 /// /revise 审核环主链：pre merged-audit → 修稿 → post merged-audit（temp 0 +
 /// 修稿真相覆盖）→ restore → revisionGate 三档门控 → 落盘 + 索引回写。
 /// `gate` 由端点注入（revise 用 runtime 配置；rewrite 强制 Always）。
-async fn run_revise_chain(
+/// 88 号提 pub(crate)：sub_agent reviser 聊天面复用（gate 用 runtime 配置，
+/// 对齐 TS sub_agent → pipeline.reviseDraft 的 config.revisionGate ?? strict）。
+pub(crate) async fn run_revise_chain(
     runtime: &BooksRuntime,
     book_id: &str,
     chapter_number: u32,

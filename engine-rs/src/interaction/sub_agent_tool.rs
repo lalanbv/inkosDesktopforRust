@@ -1,17 +1,16 @@
-//! sub_agent 聊天工具（87 号）——书会话五代理委托。
+//! sub_agent 聊天工具（87 号；88 号补 reviser + architect.revise）——书会话五代理委托。
 //!
 //! 移植自 `packages/core/src/agent/agent-tools.ts` 的 `createSubAgentTool`：
-//! architect（建书，复用 67 号确认执行器——文本/details 已逐字）/
-//! writer（单章 + 多章连写，复用 write_next 链）/
-//! auditor（复用 audit 链）/
-//! exporter（复用 export 工件链 + 落盘）。
-//! reviser 与 architect.revise 暂缓（87 号备案，revise 面独立轮次）。
+//! architect（建书，复用 67 号确认执行器——文本/details 已逐字；revise 模式
+//! 复用 72 号 reviseFoundation 链）/ writer（单章 + 多章连写，复用 write_next 链）/
+//! auditor（复用 audit 链）/ reviser（复用 47 号 /revise 审核环——五模式 +
+//! revision gate 诊断文本）/ exporter（复用 export 工件链 + 落盘）。
 
 use serde_json::{json, Value};
 
 use crate::interaction::import_chapters_tool::resolve_tool_book_id;
 use crate::interaction::project_tools::{error_result, ToolResult};
-use crate::server::books_routes::BooksRuntime;
+use crate::server::books_routes::{BooksRuntime, ReviseChainResult, RevisionDiagnostics};
 
 pub const SUB_AGENTS: &[&str] = &["architect", "writer", "auditor", "reviser", "exporter"];
 
@@ -53,8 +52,9 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
             None,
         );
     }
-    // 有活动书：architect 建书分支拒绝（revise 暂缓一并拦截）。
-    if deps.active_book_id.is_some() && agent == "architect" {
+    // 有活动书：architect 建书分支拒绝（revise 模式放行，走架构稿重写链）。
+    let architect_revise = args.get("revise").and_then(Value::as_bool) == Some(true);
+    if deps.active_book_id.is_some() && agent == "architect" && !architect_revise {
         let is_en = deps.language == "en";
         let message = if is_en {
             "This session already has a book, so no new book is needed. To create a new book, go back to the home page first."
@@ -64,27 +64,18 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
         return text_result(message, None);
     }
     match agent {
+        "architect" if architect_revise => architect_revise_foundation(deps, args, instruction).await,
         "architect" => architect_create(deps, args, instruction).await,
         "writer" => writer(deps, args).await,
         "auditor" => auditor(deps, args).await,
+        "reviser" => reviser(deps, args, instruction).await,
         "exporter" => exporter(deps, args, instruction).await,
-        // reviser：revise/rewrite 链（49/54 号形态）与 TS reviseDraft 参数面
-        // 差异大，独立轮次接入。
-        _ => error_result(
-            "sub_agent reviser is not supported by the Rust engine yet; use the book revise surface instead."
-                .to_string(),
-        ),
+        _ => error_result(format!("Unknown agent: {agent}")),
     }
 }
 
 /// architect：建书（复用 67 号确认执行器，文本/details 已逐字）。
 async fn architect_create(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
-    if args.get("revise").and_then(Value::as_bool) == Some(true) {
-        return error_result(
-            "sub_agent architect.revise is not supported by the Rust engine yet; use the book foundation revise surface instead."
-                .to_string(),
-        );
-    }
     let Some(title) = field_str(args, "title") else {
         return text_result("Error: title is required for the architect agent.", None);
     };
@@ -98,6 +89,39 @@ async fn architect_create(deps: &SubAgentDeps<'_>, args: &Value, instruction: &s
     .await
     {
         Ok(outcome) => text_result(outcome.text, Some(outcome.details)),
+        Err(message) => error_result(message),
+    }
+}
+
+/// architect.revise：架构稿重写（复用 72 号 reviseFoundation 链：备份 →
+/// architect 修订 → 容错审核 → Revise 模式落盘）。文案逐字对齐 TS。
+async fn architect_revise_foundation(
+    deps: &SubAgentDeps<'_>,
+    args: &Value,
+    instruction: &str,
+) -> ToolResult {
+    if deps.active_book_id.is_none() {
+        return text_result("Open the book first before revising its foundation.", None);
+    }
+    let book_id = match resolve_tool_book_id("architect", field_str(args, "bookId"), deps.active_book_id) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    // TS `feedback ?? instruction`：feedback 缺省/空串回退 instruction。
+    let feedback = field_str(args, "feedback").unwrap_or(instruction);
+    match crate::server::book_create_routes::revise_foundation_chain(deps.runtime, &book_id, feedback).await {
+        Ok(()) => {
+            let message = if deps.language == "en" {
+                format!(
+                    "Book \"{book_id}\" foundation has been rewritten as requested. The previous itemized foundation was backed up to story/.backup-phase4-<timestamp>/."
+                )
+            } else {
+                format!(
+                    "Book \"{book_id}\" 架构稿已按要求重写。原书的条目式架构稿已备份到 story/.backup-phase4-<时间戳>/。"
+                )
+            };
+            text_result(message, None)
+        }
         Err(message) => error_result(message),
     }
 }
@@ -251,6 +275,136 @@ async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     }
 }
 
+/// reviser：修一章（缺省最新章；五模式 spot-fix/polish/rewrite/rework/anti-detect，
+/// 缺省 spot-fix）。复用 47 号 /revise 审核环，gate 用 runtime 配置（TS sub_agent
+/// → pipeline.reviseDraft 的 `config.revisionGate ?? "strict"`）。文本/details 逐字。
+async fn reviser(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
+    let book_id = match resolve_tool_book_id("reviser", field_str(args, "bookId"), deps.active_book_id) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    // TS reviseDraft：显式 0/负数与"最新章 - 1 < 1"同报"无章可修"。
+    let no_chapters = error_result(format!("No chapters to revise for \"{book_id}\""));
+    let chapter_number = match args
+        .get("chapterNumber")
+        .and_then(Value::as_f64)
+        .filter(|v| v.fract() == 0.0)
+    {
+        Some(value) if value >= 1.0 => value as u32,
+        Some(_) => return no_chapters,
+        None => match deps.runtime.state.get_next_chapter_number(&book_id).await {
+            Ok(next) if next > 1 => next - 1,
+            Ok(_) => return no_chapters,
+            Err(error) => return error_result(error.to_string()),
+        },
+    };
+    let mode = field_str(args, "mode").unwrap_or("spot-fix").to_string();
+    let body = crate::server::books_routes::ReviseBody {
+        mode: Some(mode.clone()),
+        brief: Some(instruction.to_string()),
+    };
+    match crate::server::books_routes::run_revise_chain(
+        deps.runtime,
+        &book_id,
+        chapter_number,
+        &body,
+        deps.runtime.revision_gate,
+    )
+    .await
+    {
+        Ok(result) => {
+            let details = revision_details_json(&book_id, &mode, &result);
+            if result.applied {
+                text_result(
+                    format!("Revision ({mode}) complete for \"{book_id}\" chapter {chapter_number}."),
+                    Some(details),
+                )
+            } else {
+                // TS：skippedReason ?? status ?? 固定回退；诊断文本前置空行块。
+                let diagnostic_text = result
+                    .revision_diagnostics
+                    .as_ref()
+                    .map(revision_diagnostics_text)
+                    .unwrap_or_default();
+                let reason = result
+                    .skipped_reason
+                    .clone()
+                    .unwrap_or_else(|| result.status.to_string());
+                text_result(
+                    format!(
+                        "Revision not applied for \"{book_id}\" chapter {chapter_number}: {reason}.{diagnostic_text}"
+                    ),
+                    Some(details),
+                )
+            }
+        }
+        Err(error) => error_result(error.message().to_string()),
+    }
+}
+
+/// chapter_revision details（TS 键序；skippedReason/revisionDiagnostics 无值
+/// 不出现，对齐 JSON.stringify 省略 undefined）。
+fn revision_details_json(book_id: &str, mode: &str, result: &ReviseChainResult) -> Value {
+    let mut details = json!({
+        "kind": "chapter_revision",
+        "bookId": book_id,
+        "chapterNumber": result.chapter_number,
+        "mode": mode,
+        "applied": result.applied,
+        "status": result.status,
+        "wordCount": result.word_count,
+        "fixedIssues": result.fixed_issues,
+    });
+    let object = details.as_object_mut().unwrap();
+    if let Some(reason) = &result.skipped_reason {
+        object.insert("skippedReason".into(), json!(reason));
+    }
+    if let Some(diagnostics) = &result.revision_diagnostics {
+        if let Ok(value) = serde_json::to_value(diagnostics) {
+            object.insert("revisionDiagnostics".into(), value);
+        }
+    }
+    details
+}
+
+/// 门控诊断文本（TS diagnosticText 逐字：空行 + Revision gate + 前后计数 +
+/// 剩余问题缩进列表）。
+fn revision_diagnostics_text(diagnostics: &RevisionDiagnostics) -> String {
+    let mut lines = vec![
+        String::new(),
+        "Revision gate:".to_string(),
+        format!("- Standard: {}", diagnostics.standard),
+        format!(
+            "- Before: blocking={}, critical={}, aiTell={}",
+            diagnostics.before.blocking_count,
+            diagnostics.before.critical_count,
+            diagnostics.before.ai_tell_count
+        ),
+        format!(
+            "- After: blocking={}, critical={}, aiTell={}",
+            diagnostics.after.blocking_count,
+            diagnostics.after.critical_count,
+            diagnostics.after.ai_tell_count
+        ),
+    ];
+    if !diagnostics.remaining_issues.is_empty() {
+        lines.push("- Remaining issues:".to_string());
+        for issue in &diagnostics.remaining_issues {
+            let suggestion = issue
+                .suggestion
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  - [{}] {}: {}{}",
+                issue.severity, issue.category, issue.description, suggestion
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 /// exporter：导出工件（format/approvedOnly 可从 instruction 推断）+ 落盘。
 async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
     let book_id = match resolve_tool_book_id("exporter", field_str(args, "bookId"), deps.active_book_id) {
@@ -392,15 +546,93 @@ mod tests {
             "No active book. Only the architect agent can create a book from this session."
         );
         assert!(!no_book.is_error);
-        // 有书时 architect 拒绝（双语）。
+        // 有书时 architect 建书拒绝（双语；revise=true 放行不走此文案）。
         let with_book = SubAgentDeps { runtime: &books, active_book_id: Some("b1"), language: "zh" };
         let rejected = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "architect", "instruction": "建书" })));
         assert_eq!(rejected.text, "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。");
-        // reviser 暂缓拦截。
+        // reviser 无章可修（书不存在 → 最新章 - 1 = 0，TS 链内错误文本）。
         let reviser = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "reviser", "instruction": "改一章" })));
-        assert!(reviser.is_error && reviser.text.contains("reviser is not supported"));
+        assert!(reviser.is_error);
+        assert_eq!(reviser.text, "No chapters to revise for \"b1\"");
+        // reviser 显式 0 章同报无章可修。
+        let zero = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "reviser", "instruction": "改一章", "chapterNumber": 0 })));
+        assert!(zero.is_error);
+        assert_eq!(zero.text, "No chapters to revise for \"b1\"");
+        // architect.revise 无书守卫（TS 逐字）。
+        let no_book_revise = tokio_rt.block_on(tool_sub_agent(
+            &deps,
+            &json!({ "agent": "architect", "instruction": "重写架构稿", "revise": true }),
+        ));
+        assert_eq!(no_book_revise.text, "Open the book first before revising its foundation.");
+        assert!(!no_book_revise.is_error);
         // architect 缺 title。
         let no_title = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "architect", "instruction": "建书" })));
         assert_eq!(no_title.text, "Error: title is required for the architect agent.");
+    }
+
+    /// 拒绝分支的 details/诊断文本逐字（fabricated 门控拒绝结果）。
+    #[test]
+    fn revision_refusal_details_and_diagnostics_text() {
+        use crate::server::books_routes::{GateCounts, RemainingIssue};
+        let result = ReviseChainResult {
+            chapter_number: 3,
+            word_count: 2890,
+            fixed_issues: Vec::new(),
+            applied: false,
+            status: "unchanged",
+            skipped_reason: Some(
+                "Manual revision kept original chapter: before blocking=2, critical=1, aiTell=1; after blocking=3, critical=1, aiTell=0.".to_string(),
+            ),
+            revision_diagnostics: Some(RevisionDiagnostics {
+                standard: crate::pipeline::merged_audit::RevisionGate::Strict.standard(),
+                before: GateCounts { blocking_count: 2, critical_count: 1, ai_tell_count: 1 },
+                after: GateCounts { blocking_count: 3, critical_count: 1, ai_tell_count: 0 },
+                remaining_issues: vec![RemainingIssue {
+                    severity: "warning".to_string(),
+                    category: "节奏".to_string(),
+                    description: "中段推进略缓。".to_string(),
+                    suggestion: Some("压缩。".to_string()),
+                }],
+            }),
+            revised_content: None,
+        };
+        let details = revision_details_json("b1", "polish", &result);
+        assert_eq!(details["kind"], "chapter_revision");
+        assert_eq!(details["chapterNumber"], 3);
+        assert_eq!(details["mode"], "polish");
+        assert_eq!(details["applied"], false);
+        assert_eq!(details["status"], "unchanged");
+        assert!(details["skippedReason"].as_str().unwrap().starts_with("Manual revision kept"));
+        let diagnostics = &details["revisionDiagnostics"];
+        assert_eq!(diagnostics["before"]["blockingCount"], 2);
+        assert_eq!(diagnostics["after"]["aiTellCount"], 0);
+        assert_eq!(diagnostics["remainingIssues"].as_array().unwrap().len(), 1);
+        assert_eq!(diagnostics["remainingIssues"][0]["suggestion"], "压缩。");
+
+        let text = revision_diagnostics_text(result.revision_diagnostics.as_ref().unwrap());
+        assert!(text.starts_with("\nRevision gate:\n- Standard: "), "{text}");
+        assert!(text.contains("- Before: blocking=2, critical=1, aiTell=1"), "{text}");
+        assert!(text.contains("- After: blocking=3, critical=1, aiTell=0"), "{text}");
+        assert!(
+            text.contains("- Remaining issues:\n  - [warning] 节奏: 中段推进略缓。 (压缩。)"),
+            "{text}"
+        );
+
+        // applied 分支：details 无 skippedReason/revisionDiagnostics 键。
+        let applied = ReviseChainResult {
+            chapter_number: 3,
+            word_count: 3010,
+            fixed_issues: vec!["修正了措辞".to_string()],
+            applied: true,
+            status: "ready-for-review",
+            skipped_reason: None,
+            revision_diagnostics: None,
+            revised_content: Some("正文".to_string()),
+        };
+        let details = revision_details_json("b1", "spot-fix", &applied);
+        assert_eq!(details["applied"], true);
+        assert!(details.get("skippedReason").is_none());
+        assert!(details.get("revisionDiagnostics").is_none());
+        assert_eq!(details["fixedIssues"].as_array().unwrap().len(), 1);
     }
 }
