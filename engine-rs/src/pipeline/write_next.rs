@@ -118,6 +118,9 @@ pub struct WriteNextConfig {
     /// 链内中止信号（Some 时在四个安全点轮询——TS `throwIfOperationAborted`
     /// 等价物：章首 / 草稿后 / 审查环后 / 落盘前；None 全链不可截断）。
     pub abort: Option<AbortHandle>,
+    /// 通知通道（111 号：章完 dispatchNotification + pipeline-complete
+    /// webhook；None/空跳过——TS config.notifyChannels）。
+    pub notify_channels: Option<Vec<crate::notify::NotifyChannel>>,
 }
 
 impl Default for WriteNextConfig {
@@ -127,7 +130,20 @@ impl Default for WriteNextConfig {
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
             abort: None,
+            notify_channels: None,
         }
+    }
+}
+
+impl WriteNextConfig {
+    /// 项目配置装配（111 号）：default + inkos.json `notify` 数组（非法整组
+    /// 忽略——保守侧；空数组按 None 处理）。
+    pub async fn from_project(root: &Path) -> Self {
+        let notify_channels = crate::server::project_config_routes::load_raw_config(root)
+            .await
+            .map(|config| crate::notify::parse_notify_channels(config.get("notify")))
+            .filter(|channels| !channels.is_empty());
+        Self { notify_channels, ..Default::default() }
     }
 }
 
@@ -938,6 +954,70 @@ async fn write_next_chapter_locked(
         notify(&result, &book);
     }
 
+    // ── 6b. 通知通道派发（111 号：TS "6. Send notification" + emitWebhook
+    // 逐字——emoji 标题 + 正文行 + 非 info 问题行；随后 pipeline-complete
+    // 结构化 webhook）。
+    if let Some(channels) = &config.notify_channels {
+        if !channels.is_empty() {
+            let audit_result = &result.audit_result;
+            let status_emoji = if chapter_status == "state-degraded" {
+                "🧯"
+            } else if audit_result.passed {
+                "✅"
+            } else {
+                "⚠️"
+            };
+            let chapter_length =
+                crate::utils::length_metrics::format_length_count(final_word_count, length_spec.counting_mode);
+            let mut body_lines: Vec<String> = vec![
+                format!("**{}** | {}", persistence_output.title, chapter_length),
+                if revised { "📝 已自动修正".to_string() } else { String::new() },
+                if chapter_status == "state-degraded" {
+                    "状态结算: 已降级保存，需先修复 state 再继续".to_string()
+                } else {
+                    format!("审稿: {}", if audit_result.passed { "通过" } else { "需人工审核" })
+                },
+            ];
+            body_lines.extend(
+                audit_result
+                    .issues
+                    .iter()
+                    .filter(|issue| issue.severity != AuditSeverity::Info)
+                    .map(|issue| format!("- [{}] {}", severity_text(issue.severity), issue.description)),
+            );
+            let body = body_lines
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            crate::notify::dispatch_notification(
+                channels,
+                &crate::notify::NotifyMessage {
+                    title: format!("{status_emoji} {} 第{chapter_number}章", book.title),
+                    body,
+                },
+            )
+            .await;
+            crate::notify::dispatch_webhook_event(
+                channels,
+                &crate::notify::WebhookPayload {
+                    event: "pipeline-complete".to_string(),
+                    book_id: book_id.to_string(),
+                    chapter_number: Some(chapter_number),
+                    timestamp: crate::utils::utc_time::utc_now_iso(),
+                    data: Some(serde_json::json!({
+                        "title": persistence_output.title,
+                        "wordCount": final_word_count,
+                        "passed": audit_result.passed,
+                        "revised": revised,
+                        "status": chapter_status,
+                    })),
+                },
+            )
+            .await;
+        }
+    }
+
     Ok(result)
 }
 
@@ -1453,6 +1533,7 @@ mod tests {
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
             abort: None,
+            notify_channels: None,
         };
 
         let result = write_next_chapter(

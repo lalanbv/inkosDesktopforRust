@@ -152,7 +152,10 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     // 默认 Auto 审核模式（TS writeNextChapter 语义：审后 ready-for-review）。
     let config = crate::pipeline::write_next::WriteNextConfig {
         abort: deps.abort.clone(),
-        ..Default::default()
+        ..crate::pipeline::write_next::WriteNextConfig::from_project(
+            deps.runtime.state.project_root(),
+        )
+        .await
     };
     let aborted_message = || -> String {
         if deps.language == "en" {

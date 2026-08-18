@@ -161,7 +161,7 @@ fn build_router() -> axum::Router {
                     &state,
                     &agents,
                     &ctx,
-                    &WriteNextConfig::default(),
+                    &WriteNextConfig::from_project(project_ref).await,
                     &book_id,
                     word_count,
                     temperature,

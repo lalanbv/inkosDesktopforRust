@@ -1037,7 +1037,7 @@ async fn execute_write_next(
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
     let config = WriteNextConfig {
         abort: Some(abort.clone()),
-        ..Default::default()
+        ..WriteNextConfig::from_project(runtime.state.project_root()).await
     };
 
     if chapter_count > 1 {

@@ -1069,6 +1069,7 @@ dependencies = [
  "base64",
  "flate2",
  "futures-util",
+ "hmac",
  "lopdf 0.44.0",
  "pdf-extract",
  "percent-encoding",

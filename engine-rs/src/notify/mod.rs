@@ -4,11 +4,14 @@
 //! - [`format`]：stripMarkdownMarks（markdown→纯文本净化）
 //! - [`NotifyMessage`] 类型（dispatcher 的消息形状）
 //!
-//! ## 待移植（需 reqwest HTTP）
-//! dispatcher.dispatchNotification（按通道类型派发）+ telegram/feishu/wechat-work/webhook
-//! 各通道的 send*（实际 HTTP POST）。
+//! 111 号补齐 dispatcher 与四通道发送器（telegram/feishu/wechat-work/webhook
+//! ——webhook 含 HMAC-SHA256 签名与事件订阅过滤）。
 
+pub mod dispatcher;
 pub mod format;
+
+pub use dispatcher::{dispatch_notification, dispatch_webhook_event, parse_notify_channels, WebhookPayload};
+pub use crate::models::project::{NotifyChannel, NotifyFormat};
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]

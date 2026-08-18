@@ -15904,3 +15904,295 @@ mod sub109_e2e {
         assert_ne!(status, StatusCode::OK, "mtime 失效应使扫描失败：{parsed}");
     }
 }
+
+mod sub111_e2e {
+    //! 111 号：Scheduler 精简面收口——① 确认式 write_next 章完通知（webhook
+    //! 通道双发：notification-as-pipeline-complete + emitWebhook pipeline-complete，
+    //! HMAC 签名头）；② daemon 写循环检测自动改写环（detect 不过 → anti-detect
+    //! 重写 → 重测过 → detection_history.json 落盘）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::ops_routes;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// webhook 捕获 mock（任意 POST → 200，记 headers+body）。
+    async fn mock_webhook_sink() -> (String, Arc<StdMutex<Vec<(serde_json::Value, String, String)>>>) {
+        let hits = Arc::new(StdMutex::new(Vec::new()));
+        let hits_for_server = hits.clone();
+        let app = axum::Router::new().route(
+            "/hook",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, body: String| {
+                    let hits = hits_for_server.clone();
+                    async move {
+                        let signature = headers
+                            .get("X-InkOS-Signature")
+                            .map(|value| value.to_str().unwrap_or_default().to_string())
+                            .unwrap_or_default();
+                        let raw = body.clone();
+                        hits.lock().unwrap().push((
+                            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+                            signature,
+                            raw,
+                        ));
+                        StatusCode::OK
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}/hook"), hits)
+    }
+
+    #[tokio::test]
+    async fn confirmed_write_dispatches_notification_and_pipeline_complete_webhooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (sink, hits) = mock_webhook_sink().await;
+        let (llm, _calls, _guard) = spawn_mock_llm().await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"notify":[{{"type":"webhook","url":"{sink}","secret":"s3cr3t","events":[]}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let session = "1783099000007-n111";
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(
+                r#"{{"sessionId":"{session}","bookId":"b1","sessionKind":"book"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写下一章","sessionId":"{session}","requestedIntent":"write_next"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+
+        // 双发：① 通知（title/body/format 进 data）② pipeline-complete
+        // （bookId/chapterNumber/wordCount/passed/revised/status）。
+        let hits = hits.lock().unwrap().clone();
+        assert!(hits.len() >= 2, "webhook hits: {hits:?}");
+        let notification = hits
+            .iter()
+            .find(|(body, _, _)| body["data"]["body"].is_string())
+            .unwrap_or_else(|| panic!("通知事件缺失：{hits:?}"));
+        assert!(
+            notification.0["data"]["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("测试书") && title.contains("第1章")),
+            "title: {notification:?}"
+        );
+        assert!(
+            notification.0["data"]["body"]
+                .as_str()
+                .is_some_and(|body| body.contains("风起")),
+            "body: {notification:?}"
+        );
+        let complete = hits
+            .iter()
+            .find(|(body, _, _)| body["data"]["wordCount"].is_number())
+            .unwrap_or_else(|| panic!("pipeline-complete 事件缺失：{hits:?}"));
+        assert_eq!(complete.0["event"], "pipeline-complete");
+        assert_eq!(complete.0["bookId"], "b1");
+        assert_eq!(complete.0["chapterNumber"], 1);
+        assert_eq!(complete.0["data"]["status"], "ready-for-review");
+        // HMAC 签名头（sha256=hex 且与原始报文重算一致）。
+        for (_body, signature, raw) in &hits {
+            assert!(signature.starts_with("sha256="), "signature: {signature}");
+            let expected = inkos_engine::notify::dispatcher::hmac_sha256_hex(b"s3cr3t", raw.as_bytes());
+            assert_eq!(signature, &format!("sha256={expected}"));
+        }
+    }
+
+    /// 全链 mock：写作链（创作总编/作家/审稿/PASS）+ 修稿编辑 → 改写正文 +
+    /// /detect 检测（首测 0.9 → 重测 0.3）。
+    async fn mock_detect_loop_llm() -> (String, Arc<StdMutex<u32>>) {
+        let detect_calls = Arc::new(StdMutex::new(0u32));
+        let detect_for_server = detect_calls.clone();
+        let app = axum::Router::new()
+            .route(
+                "/chat/completions",
+                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("创作总编") {
+                        PLANNER_RESPONSE.to_string()
+                    } else if system.contains("修稿编辑") {
+                        "改写后的章节内容：口语更强，长短句交错， AI 痕迹更少。".to_string()
+                    } else if system.contains("作家") || system.contains("写手") {
+                        WRITER_RESPONSE.to_string()
+                    } else if system.contains("审稿") {
+                        "PASS\n95".to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        sse_body(&content),
+                    ))
+                }),
+            )
+            .route(
+                "/detect",
+                axum::routing::post(move |axum::Json(_body): axum::Json<serde_json::Value>| {
+                    let detect_calls = detect_for_server.clone();
+                    async move {
+                        let calls = {
+                            let mut counter = detect_calls.lock().unwrap();
+                            *counter += 1;
+                            *counter
+                        };
+                        // 前两次超标（调度首测 + 环首测 → 触发改写）；重测过阈。
+                        let score = if calls <= 2 { 0.9 } else { 0.3 };
+                        axum::Json(serde_json::json!({ "score": score }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), detect_calls)
+    }
+
+    #[tokio::test]
+    async fn daemon_detection_loop_rewrites_and_records_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, detect_calls) = mock_detect_loop_llm().await;
+        std::env::set_var("INKOS_TEST_DETECT_KEY_111", "dk");
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"detection":{{"provider":"custom","apiUrl":"{llm}/detect","apiKeyEnv":"INKOS_TEST_DETECT_KEY_111","threshold":0.5,"enabled":true,"autoRewrite":true,"maxRetries":2}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/v1/daemon/start", axum::routing::post(ops_routes::post_daemon_start))
+            .route("/api/v1/daemon/stop", axum::routing::post(ops_routes::post_daemon_stop))
+            .with_state(rt(&root, &llm));
+        // daemon 为进程单例——并行测试（如 sub104 daemon 用例）可能正持有，
+        // 400 时等待重试（另一测试 stop 后放行）。
+        let start_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let (status, parsed) = call(app.clone(), "POST", "/api/v1/daemon/start", None).await;
+            if status == StatusCode::OK {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < start_deadline,
+                "daemon start 一直被占用：{parsed}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 检测环完成：三次 detect（调度首测 0.9 → 环首测 0.9 → 改写 → 重测 0.3）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while *detect_calls.lock().unwrap() < 3 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "检测环未完成：{}",
+                detect_calls.lock().unwrap()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // history：一条 rewrite 记录（attempt 1，score 0.3，过阈）。
+        let history_path = root
+            .join("books")
+            .join("b1")
+            .join("story")
+            .join("detection_history.json");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if history_path.is_file() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "history 未落盘");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let history: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&history_path).unwrap(),
+        )
+        .unwrap();
+        let entries = history.as_array().unwrap();
+        assert_eq!(entries.len(), 1, "history: {history}");
+        assert_eq!(entries[0]["action"], "rewrite");
+        assert_eq!(entries[0]["attempt"], 1);
+        assert_eq!(entries[0]["score"], 0.3);
+        assert_eq!(entries[0]["provider"], "custom");
+
+        let (status, _) = call(app, "POST", "/api/v1/daemon/stop", None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+}

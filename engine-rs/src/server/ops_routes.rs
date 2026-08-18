@@ -50,6 +50,10 @@ struct DaemonConfig {
     retry_delay_ms: u64,
     cooldown_after_chapter_ms: u64,
     max_chapters_per_day: usize,
+    /// 检测自动改写环（111 号：inkos.json `detection` 节——enabled 才跑）。
+    detection: Option<crate::models::project::DetectionConfig>,
+    /// 通知通道（111 号：pause pipeline-error / diagnostic-alert webhook 事件）。
+    notify_channels: Vec<crate::notify::NotifyChannel>,
 }
 
 impl DaemonConfig {
@@ -78,6 +82,13 @@ impl DaemonConfig {
             retry_delay_ms: get_num("retryDelayMs", 30_000),
             cooldown_after_chapter_ms: get_num("cooldownAfterChapterMs", 10_000),
             max_chapters_per_day: (get_num("maxChaptersPerDay", 50) as usize).max(1),
+            detection: raw
+                .as_ref()
+                .and_then(|config| config.get("detection"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+            notify_channels: crate::notify::parse_notify_channels(
+                raw.as_ref().and_then(|config| config.get("notify")),
+            ),
         }
     }
 }
@@ -92,6 +103,8 @@ impl Default for DaemonConfig {
             retry_delay_ms: 30_000,
             cooldown_after_chapter_ms: 10_000,
             max_chapters_per_day: 50,
+            detection: None,
+            notify_channels: Vec::new(),
         }
     }
 }
@@ -128,6 +141,8 @@ struct WriteCycleState {
     consecutive_failures: HashMap<String, u32>,
     paused_books: HashSet<String>,
     daily_counts: HashMap<String, usize>,
+    /// 失败维度聚类（111 号：bookId → dimension → count；≥3 → diagnostic-alert）。
+    failure_dimensions: HashMap<String, HashMap<String, u32>>,
 }
 
 fn write_cycle_state() -> &'static Mutex<WriteCycleState> {
@@ -135,15 +150,20 @@ fn write_cycle_state() -> &'static Mutex<WriteCycleState> {
     STATE.get_or_init(|| Mutex::new(WriteCycleState::default()))
 }
 
-async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: Option<f64>) -> Result<(bool, u32, String), String> {
+async fn write_one_chapter(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    temperature: Option<f64>,
+) -> Result<(bool, u32, String, Vec<String>), String> {
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
     let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    let config = WriteNextConfig::from_project(runtime.state.project_root()).await;
     let result = write_next_chapter(
         &runtime.state,
         &agents,
         &ctx,
-        &WriteNextConfig::default(),
+        &config,
         book_id,
         None,
         temperature,
@@ -152,7 +172,14 @@ async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: O
     .await
     .map_err(|e| e.to_string())?;
     let success = result.status == "ready-for-review";
-    Ok((success, result.chapter_number, result.status.to_string()))
+    // 失败维度聚类原料（TS auditResult.issues.map(category)）。
+    let issue_categories: Vec<String> = result
+        .audit_result
+        .issues
+        .iter()
+        .map(|issue| issue.category.clone())
+        .collect();
+    Ok((success, result.chapter_number, result.status.to_string(), issue_categories))
 }
 
 async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
@@ -234,20 +261,21 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             None
         };
 
-        // (成功位, 本章产物)——TS onChapterComplete 在成功与审计未过两条路径
-        // 都带真实章号/状态回调（异常路径才只走 onError）。
-        let (success, written) = match write_one_chapter(runtime, book_id, temperature).await {
-            Ok((success, chapter_number, status)) => {
-                (success, Some((chapter_number, status)))
-            }
-            Err(error) => {
-                runtime.hub.broadcast(
-                    "daemon:error",
-                    &json!({ "bookId": book_id, "error": error }),
-                );
-                (false, None)
-            }
-        };
+        // (成功位, 本章产物, 审计失败维度)——TS onChapterComplete 在成功与
+        // 审计未过两条路径都带真实章号/状态回调（异常路径才只走 onError）。
+        let (success, written, issue_categories) =
+            match write_one_chapter(runtime, book_id, temperature).await {
+                Ok((success, chapter_number, status, issue_categories)) => {
+                    (success, Some((chapter_number, status)), issue_categories)
+                }
+                Err(error) => {
+                    runtime.hub.broadcast(
+                        "daemon:error",
+                        &json!({ "bookId": book_id, "error": error }),
+                    );
+                    (false, None, Vec::new())
+                }
+            };
 
         if success {
             write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);
@@ -257,11 +285,24 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             state.daily_counts.retain(|key, _| key == &today);
             state.daily_counts.insert(today, count);
         }
-        if let Some((chapter_number, status)) = written {
+        if let Some((chapter_number, _status)) = written.as_ref() {
             runtime.hub.broadcast(
                 "daemon:chapter",
-                &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+                &json!({ "bookId": book_id, "chapter": chapter_number, "status": _status }),
             );
+            // 检测自动改写环（111 号：TS Scheduler.runDetection——成功审计后）。
+            if let Some(detection) = &config.detection {
+                if detection.enabled {
+                    if let Err(error) =
+                        run_detection(runtime, detection, book_id, *chapter_number).await
+                    {
+                        runtime.hub.broadcast(
+                            "daemon:error",
+                            &json!({ "bookId": book_id, "error": error }),
+                        );
+                    }
+                }
+            }
         }
         if success {
             continue;
@@ -273,21 +314,67 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             *failures += 1;
             *failures
         };
+        // 失败维度聚类（111 号：任一维度 ≥3 → diagnostic-alert webhook）。
+        let clustered: Vec<(String, u32)> = {
+            let mut state = write_cycle_state().lock().unwrap();
+            let dimensions = state
+                .failure_dimensions
+                .entry(book_id.to_string())
+                .or_default();
+            for category in &issue_categories {
+                *dimensions.entry(category.clone()).or_insert(0) += 1;
+            }
+            dimensions
+                .iter()
+                .filter(|(_, count)| **count >= 3)
+                .map(|(dimension, count)| (dimension.clone(), *count))
+                .collect()
+        };
+        for (dimension, count) in clustered {
+            crate::notify::dispatch_webhook_event(
+                &config.notify_channels,
+                &crate::notify::WebhookPayload {
+                    event: "diagnostic-alert".to_string(),
+                    book_id: book_id.to_string(),
+                    chapter_number: written.as_ref().map(|(chapter, _)| *chapter),
+                    timestamp: crate::utils::utc_time::utc_now_iso(),
+                    data: Some(json!({ "dimension": dimension, "failureCount": count })),
+                },
+            )
+            .await;
+        }
         if failures >= PAUSE_AFTER_CONSECUTIVE_FAILURES {
             write_cycle_state().lock().unwrap().paused_books.insert(book_id.to_string());
+            // pipeline-error webhook（111 号：TS handleAuditFailure 暂停分支）。
+            let reason = format!(
+                "{failures} consecutive audit failures (threshold: {PAUSE_AFTER_CONSECUTIVE_FAILURES})"
+            );
+            crate::notify::dispatch_webhook_event(
+                &config.notify_channels,
+                &crate::notify::WebhookPayload {
+                    event: "pipeline-error".to_string(),
+                    book_id: book_id.to_string(),
+                    chapter_number: written
+                        .as_ref()
+                        .and_then(|(chapter, _)| (*chapter > 0).then_some(*chapter)),
+                    timestamp: crate::utils::utc_time::utc_now_iso(),
+                    data: Some(json!({ "reason": reason, "consecutiveFailures": failures })),
+                },
+            )
+            .await;
         }
         if failures <= MAX_AUDIT_RETRIES && config.retry_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(config.retry_delay_ms)).await;
             let retry_temperature = Some((0.7 + failures as f64 * RETRY_TEMPERATURE_STEP).min(1.2));
             match write_one_chapter(runtime, book_id, retry_temperature).await {
-                Ok((true, chapter_number, status)) => {
+                Ok((true, chapter_number, status, _categories)) => {
                     write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);
                     runtime.hub.broadcast(
                         "daemon:chapter",
                         &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
                     );
                 }
-                Ok((false, chapter_number, status)) => {
+                Ok((false, chapter_number, status, _categories)) => {
                     runtime.hub.broadcast(
                         "daemon:chapter",
                         &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
@@ -300,6 +387,66 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             break;
         }
     }
+}
+
+/// `Scheduler.runDetection`（111 号）：读章文 → 单章检测 → 不过且 autoRewrite
+/// → detect-and-rewrite 环（anti-detect 重写 + 重测 + history 落盘）。
+async fn run_detection(
+    runtime: &BooksRuntime,
+    config: &crate::models::project::DetectionConfig,
+    book_id: &str,
+    chapter_number: u32,
+) -> Result<(), String> {
+    let book_dir = runtime.state.book_dir(book_id);
+    // readChapterContent：chapters/NNNN*.md。
+    let padded = format!("{:04}", chapter_number);
+    let chapters_dir = book_dir.join("chapters");
+    let mut entries = tokio::fs::read_dir(&chapters_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut chapter_file: Option<String> = None;
+    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&padded) && name.ends_with(".md") {
+            chapter_file = Some(name);
+            break;
+        }
+    }
+    let Some(chapter_file) = chapter_file else {
+        return Err(format!("chapter {chapter_number} file not found"));
+    };
+    let chapter_content =
+        tokio::fs::read_to_string(chapters_dir.join(&chapter_file))
+            .await
+            .map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    let det = crate::pipeline::detection_runner::detect_chapter(&client, config, &chapter_content, chapter_number).await?;
+    if !det.passed && config.auto_rewrite {
+        let book = runtime.state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+        let router = runtime.effective_router().await;
+        let reviser_chat: &'static crate::llm::agent_router::RoutedAgent =
+            Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
+                router: (*router).clone(),
+                agent: "reviser",
+            }));
+        let reviser_ctx = crate::agents::reviser::ReviserCtx {
+            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
+            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
+            prompt_store: Box::leak(Box::new(crate::state::store::FsStateStore)),
+        };
+        crate::pipeline::detection_runner::detect_and_rewrite(
+            &client,
+            config,
+            reviser_chat,
+            &reviser_ctx,
+            &book_dir,
+            &chapter_content,
+            chapter_number,
+            Some(&book.genre),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn scheduler_running() -> bool {

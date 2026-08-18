@@ -375,7 +375,7 @@ async fn run_draft(
         &ctx,
         &WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
-            ..Default::default()
+            ..WriteNextConfig::from_project(runtime.state.project_root()).await
         },
         book_id,
         body.word_count,
