@@ -1,8 +1,10 @@
 //! inkos-engine-server —— 独立 HTTP bin（strangler 切换面宿主）。
 //!
-//! 装配 `router_with_runtime`：utility 端点 + SSE（/api/v1/events）+
+//! 装配 `router_books` 全量路由：utility 端点 + SSE（/api/v1/events）+
 //! write-next（POST /api/v1/books/:id/write-next，九路 LLM 端口经
-//! [`AgentRouter`] 真实接线）。
+//! [`AgentRouter`] 真实接线——**与其余写面同源走 `effective_router`
+//! 热解析**：inkos.json 服务项 + secrets 优先，配置不可用才回退
+//! `INKOS_LLM_*` 启动端点；bin 不持有独立 LLM 配置路径）。
 //!
 //! 配置来源（环境变量，与 Node sidecar 的 env 约定对齐）：
 //! - `INKOS_PROJECT_ROOT`：项目根（books/、inkos.json；默认 CWD）
@@ -16,12 +18,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig, RoutedAgent, RoutedSettler};
-use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextAgents, WriteNextConfig, WriteNextCtx};
+use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig};
+use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextConfig};
 use inkos_engine::server::sse::BroadcastHub;
 use inkos_engine::server::{AppState, WriteNextRuntime};
 use inkos_engine::state::manager::StateManager;
-use inkos_engine::state::store::FsStateStore;
 
 fn env(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -83,85 +84,45 @@ fn build_router() -> axum::Router {
     let state = Arc::new(StateManager::new(project_root.clone()));
     let hub = Arc::new(BroadcastHub::new());
 
-    // runner：九路端口聚合构造 + write-next 执行（生命周期收敛在 BoxFuture 内）。
-    let runner_state = state.clone();
-    let runner_project = project_root.clone();
-    let runner_router = router.clone();
+    // BooksRuntime 先建：write-next runner 复用其 effective_router 热解析
+    // （inkos.json 服务项 + secrets 优先，配置不可用回退上面的启动 env router
+    // ——与其余写面端点同源，bin 不再持有独立配置路径）。
+    let builtin_genres_dir =
+        std::path::PathBuf::from(env("INKOS_BUILTIN_GENRES_DIR", "assets/genres"));
+    let books = inkos_engine::server::books_routes::BooksRuntime {
+        hub: hub.clone(),
+        state: state.clone(),
+        router: std::sync::Arc::new(router.clone()),
+        builtin_genres_dir: builtin_genres_dir.clone(),
+        revision_gate: inkos_engine::pipeline::merged_audit::RevisionGate::parse(
+            std::env::var("INKOS_REVISION_GATE").ok().as_deref(),
+        ),
+    };
+
+    // runner：九路端口经共享装配（build_write_next_agents/ctx）+ 44 号全周期
+    // 审计器挂有效 router（write_next_chapter 内 for_chapter 按章重绑）。
+    let runner_books = books.clone();
     let runner: inkos_engine::server::WriteNextRunner = Arc::new(
         move |state, book_id, word_count, temperature| {
-            let project = runner_project.clone();
-            let llm = runner_router.clone();
-            let _ = &runner_state;
+            let books = runner_books.clone();
             Box::pin(async move {
-                // 九路端口：settler 持独立 ctx（static 生命周期经泄漏一次的
-                // store/project 根——进程生命周期单例）。
-                static STORE: std::sync::OnceLock<FsStateStore> = std::sync::OnceLock::new();
-                let prompt_store = STORE.get_or_init(|| FsStateStore);
-                let state_store = prompt_store;
-                let project_ref: &'static std::path::Path =
-                    Box::leak(project.clone().into_boxed_path());
-                let builtin: &'static std::path::Path = Box::leak(
-                    std::path::PathBuf::from(std::env::var("INKOS_BUILTIN_GENRES_DIR")
-                        .unwrap_or_else(|_| "assets/genres".to_string()))
-                    .into_boxed_path(),
-                );
-
-                let writer = Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "writer" }));
-                let planner = Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "planner" }));
-                let composer = Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "composer" }));
-                let reviser = Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "reviser" }));
-                let auditor = Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "auditor" }));
-                let normalizer =
-                    Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "length-normalizer" }));
-                let analyzer =
-                    Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "chapter-analyzer" }));
-                let state_validator =
-                    Box::leak(Box::new(RoutedAgent { router: llm.clone(), agent: "state-validator" }));
-                let settler = Box::leak(Box::new(RoutedSettler {
-                    router: llm.clone(),
-                    ctx: inkos_engine::agents::writer::WriterCtx {
-                        project_root: project_ref,
-                        builtin_genres_dir: builtin,
-                        prompt_store,
-                        state_store,
-                    },
-                    chapter_number: 0,
-                }));
-
-                let full_auditor =
-                    inkos_engine::llm::agent_router::FullCycleAuditor {
-                        router: llm.clone(),
-                        project_root: project_ref.to_path_buf(),
-                        builtin_genres_dir: builtin.to_path_buf(),
-                        book_dir: project_ref.join("books").join(&book_id),
-                        chapter_number: 0, // write-next 内部按需重建（见下）
+                let mut agents =
+                    inkos_engine::server::books_routes::build_write_next_agents(&books).await;
+                agents.full_auditor =
+                    Some(inkos_engine::llm::agent_router::FullCycleAuditor {
+                        router: (*books.effective_router().await).clone(),
+                        project_root: books.state.project_root().to_path_buf(),
+                        builtin_genres_dir: books.builtin_genres_dir.clone(),
+                        book_dir: books.state.project_root().join("books").join(&book_id),
+                        chapter_number: 0, // for_chapter 按章重绑
                         genre: String::new(),
-                    };
-                let agents = WriteNextAgents {
-                    writer,
-                    planner,
-                    composer,
-                    reviser,
-                    auditor,
-                    full_auditor: Some(full_auditor),
-                    normalizer,
-                    analyzer,
-                    state_validator,
-                    settler,
-                };
-                let ctx = WriteNextCtx {
-                    project_root: project_ref,
-                    builtin_genres_dir: builtin,
-                    prompt_store,
-                    state_store,
-                    context_budget: None,
-                    notify: None,
-                };
+                    });
+                let ctx = inkos_engine::server::books_routes::build_write_next_ctx(&books);
                 write_next_chapter(
                     &state,
                     &agents,
                     &ctx,
-                    &WriteNextConfig::from_project(project_ref).await,
+                    &WriteNextConfig::from_project(books.state.project_root()).await,
                     &book_id,
                     word_count,
                     temperature,
@@ -182,19 +143,7 @@ fn build_router() -> axum::Router {
         hub: hub.clone(),
         state: state.clone(),
         router: std::sync::Arc::new(router.clone()),
-        builtin_genres_dir: std::path::PathBuf::from(env(
-            "INKOS_BUILTIN_GENRES_DIR",
-            "assets/genres",
-        )),
-    };
-    let books = inkos_engine::server::books_routes::BooksRuntime {
-        hub: hub.clone(),
-        state,
-        router: std::sync::Arc::new(router.clone()),
-        builtin_genres_dir: audit.builtin_genres_dir.clone(),
-        revision_gate: inkos_engine::pipeline::merged_audit::RevisionGate::parse(
-            std::env::var("INKOS_REVISION_GATE").ok().as_deref(),
-        ),
+        builtin_genres_dir,
     };
     inkos_engine::server::router_books(
         AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },

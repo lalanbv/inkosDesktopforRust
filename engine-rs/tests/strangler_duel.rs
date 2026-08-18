@@ -690,3 +690,130 @@ async fn strangler_full_grey_simulation() {
 
     eprintln!("全量灰度模拟通过：四步串行 + 每步双端只读复跑全等价（sidecar 保温共存语义）");
 }
+
+/// 123 号：计数 mock LLM——每次请求原子计数并按双形态回包（触达证明用；
+/// 回包内容 "OK" 不驱动链路走完，仅证明配置源指向）。
+async fn spawn_counting_mock_llm(
+    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> String {
+    let app = axum::Router::new().route(
+        "/chat/completions",
+        axum::routing::post(
+            move |axum::Json(body): axum::Json<Value>| {
+                let hits = hits.clone();
+                async move {
+                    hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if body["stream"].as_bool().unwrap_or(false) {
+                        let chunk =
+                            serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        return axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}
+
+data: {usage}
+
+data: [DONE]
+
+"),
+                        ));
+                    }
+                    axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
+                        "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                    })))
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    format!("http://{addr}")
+}
+
+/// 123 号：真实 bin 进程装配验收——write-next 的 LLM 配置源必须走
+/// `effective_router` 热解析（inkos.json 服务项优先，配置不可用才回退
+/// `INKOS_LLM_*` 启动端点）。进程内对跑（`spawn_rust_engine`）覆盖不到
+/// bin 装配层——本测试以 `CARGO_BIN_EXE` 起真实产物补上该盲区：
+/// 项目 mock 收到链路首个 LLM 调用、启动 env mock 零触达。
+#[tokio::test]
+async fn bin_process_write_next_llm_resolution() {
+    use std::sync::atomic::Ordering;
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let project_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let env_hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let project_llm = spawn_counting_mock_llm(project_hits.clone()).await;
+    let env_llm = spawn_counting_mock_llm(env_hits.clone()).await;
+    write_fixture(&root, &project_llm);
+
+    let port = next_sidecar_port().await;
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
+        .env("INKOS_PROJECT_ROOT", &root)
+        .env("INKOS_PORT", port.to_string())
+        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        // 启动 env 指向另一 mock：write-next 若误走启动 router（123 号前缺陷），
+        // project_hits 恒 0 且本 mock 被触达——两端皆可判。
+        .env("INKOS_LLM_BASE_URL", &env_llm)
+        .env("INKOS_LLM_API_KEY", "env-key")
+        .env("INKOS_LLM_MODEL", "env-model")
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-out.log").unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-err.log").unwrap(),
+        ))
+        .spawn()
+        .expect("bin 起动失败");
+    let base = format!("http://127.0.0.1:{port}");
+    wait_ready(&base).await;
+
+    // 装配冒烟：真实产物全量路由可服务。
+    let (status, _) = get_json(&base, "/api/v1/health").await;
+    assert_eq!(
+        status,
+        200,
+        "bin health 不通：{}",
+        std::fs::read_to_string("/tmp/duel-bin-err.log").unwrap_or_default()
+    );
+    let (status, _) = get_json(&base, "/api/v1/books").await;
+    assert_eq!(status, 200);
+
+    // fire-and-forget write-next：后台链首个 LLM 调用应打 inkos.json 服务端点。
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base}/api/v1/books/b1/write-next"))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while project_hits.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "60s 内 write-next 未触达 inkos.json 服务端点（bin 配置源未走 effective_router？）stderr: {}",
+            std::fs::read_to_string("/tmp/duel-bin-err.log").unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        env_hits.load(Ordering::SeqCst),
+        0,
+        "INKOS_LLM_* 启动端点被 write-next 触达——项目配置应优先（TS studio 消费者语义）"
+    );
+
+    let _ = command.kill();
+    let _ = command.wait();
+    eprintln!(
+        "bin 进程验收通过：write-next 走 inkos.json 服务项（{} 次触达），env 端点零触达",
+        project_hits.load(Ordering::SeqCst)
+    );
+}
