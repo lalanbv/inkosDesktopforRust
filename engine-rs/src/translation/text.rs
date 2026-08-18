@@ -160,20 +160,70 @@ fn split_markdown_headings(text: &str) -> Vec<TranslationTextChapter> {
         .collect()
 }
 
+/// 段内分段（140 号：TS splitParagraph 升级——句边界打包，超长句按词边界
+/// 递归；不再硬切 maxChars）。句/词边界用 UAX #29（TS Intl.Segmenter 的
+/// locale 无关对应物——locale 细化规则差异备案）。
+use unicode_segmentation::UnicodeSegmentation;
+
 fn split_long_paragraph(paragraph: &str, max_chars: usize) -> Vec<String> {
-    let chars: Vec<char> = paragraph.chars().collect();
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < chars.len() {
-        let end = (start + max_chars).min(chars.len());
-        let chunk: String = chars[start..end].iter().collect();
-        let trimmed = chunk.trim().to_string();
-        if !trimmed.is_empty() {
-            chunks.push(trimmed);
+    let sentences: Vec<String> = paragraph
+        .unicode_sentences()
+        .map(str::to_string)
+        .filter(|sentence| !sentence.trim().is_empty())
+        .collect();
+    let units = if sentences.is_empty() {
+        vec![paragraph.to_string()]
+    } else {
+        sentences
+    };
+    pack_boundary_units(&units, max_chars)
+}
+
+/// TS `packBoundaryUnits` 逐字：贪心打包到 ≤maxChars；超长 unit 先落当前
+/// 缓冲再按词界递归（单词不可再分则整段直出）；尾 trim 过滤空。
+fn pack_boundary_units(units: &[String], max_chars: usize) -> Vec<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for unit in units {
+        if unit.chars().count() > max_chars {
+            if !current.is_empty() {
+                chunks.push(current);
+                current = String::new();
+            }
+            let words: Vec<String> = unit
+                .split_word_bounds()
+                .filter(|word| !word.is_empty())
+                .map(str::to_string)
+                .collect();
+            if words.len() <= 1 {
+                chunks.push(unit.clone());
+            } else {
+                chunks.extend(pack_boundary_units(&words, max_chars));
+            }
+            continue;
         }
-        start += max_chars;
+        let candidate = if current.is_empty() {
+            unit.clone()
+        } else {
+            format!("{current}{unit}")
+        };
+        if candidate.chars().count() <= max_chars {
+            current = candidate;
+        } else {
+            if !current.is_empty() {
+                chunks.push(current);
+            }
+            current = unit.clone();
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
     }
     chunks
+        .into_iter()
+        .map(|chunk| chunk.trim().to_string())
+        .filter(|chunk| !chunk.is_empty())
+        .collect()
 }
 
 /// 剥 HTML 标签 + 解码实体（script/style→空格，br/块级闭合→换行）。
@@ -250,5 +300,52 @@ mod tests {
         assert!(!out.contains("<p>"));
         assert!(!out.contains("script"));
         assert!(out.contains("&")); // &amp; 解码
+    }
+
+    // ── 140 号：句界打包（TS splitParagraph 升级对应面） ────────────────
+
+    #[test]
+    fn long_paragraph_packs_on_sentence_boundaries() {
+        let paragraph = "第一句完整表达一个意思。第二句继续推进情节！第三句收束？";
+        let chunks = split_long_paragraph(paragraph, 12);
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 12, "片段超限：{chunk:?}");
+            assert!(
+                chunk.ends_with('。') || chunk.ends_with('！') || chunk.ends_with('？'),
+                "句界打包不应句中截断：{chunk:?}"
+            );
+        }
+        assert_eq!(chunks.concat(), paragraph);
+    }
+
+    #[test]
+    fn oversize_sentence_recurses_on_word_boundaries() {
+        let sentence = "word1 word2 word3 word4 word5 word6 word7";
+        let chunks = split_long_paragraph(sentence, 12);
+        assert!(chunks.len() >= 2, "{chunks:?}");
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 12, "词界递归后仍超限：{chunk:?}");
+        }
+        // 连续中文：UAX 词界逐字（TS Intl.Segmenter word 粒度同）→ 递归拆包。
+        let unspaced = "这是一个没有任何边界且超过限制长度的连续中文句子没有任何分隔符";
+        let chunks = split_long_paragraph(unspaced, 10);
+        assert!(chunks.len() >= 2, "{chunks:?}");
+        assert!(chunks.iter().all(|c| c.chars().count() <= 10), "{chunks:?}");
+        // 真正不可分：单个超长 token（无任何边界）直出。
+        let token = "supercalifragilisticexpialidocious";
+        let chunks = split_long_paragraph(token, 10);
+        assert_eq!(chunks, vec![token.to_string()], "单词不可再分直出");
+    }
+
+    #[test]
+    fn seg_vec_uses_sentence_packing() {
+        let text = "第一句。第二句！第三句？";
+        let chunks = segment_translation_text_vec(text, 8);
+        assert!(!chunks.is_empty());
+        assert!(
+            chunks.iter().all(|c| c.ends_with('。') || c.ends_with('！') || c.ends_with('？')),
+            "{chunks:?}"
+        );
     }
 }

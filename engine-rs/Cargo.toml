@@ -60,6 +60,8 @@ serde_yaml = "0.9"
 tempfile = "3"
 # Unicode NFKD：skills external-loader 的 skill id 规范化（TS String.normalize("NFKD") 对应物）。
 unicode-normalization = "0.1"
+# UAX #29 句/词边界（TS Intl.Segmenter 对应物——翻译分段按句界打包、超长句词界递归，140 号）。
+unicode-segmentation = "1"
 # Percent 解码：project/files 通配路径的 decodeURIComponent 对应物（axum 传递依赖，显式声明）。
 percent-encoding = "2"
 async-stream = "0.3.6"
