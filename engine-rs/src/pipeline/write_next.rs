@@ -124,7 +124,14 @@ pub struct WriteNextConfig {
     /// 上下文压缩事件回调（126 号：TS PipelineConfig.onContextCompression →
     /// SSE `context:compression`；None 跳过广播——lib 内部调用/测试）。
     pub on_context_compression: Option<crate::agents::composer::CompressionCallback>,
+    /// 流水线阶段日志回调（127 号：TS PipelineConfig.logger.info → SSE
+    /// `log`——{level:"info", tag:"studio", message}；None 跳过。TS 面为
+    /// logStage/logInfo 双语阶段叙事，本侧同构主链阶段边界）。
+    pub on_log: Option<PipelineLogFn>,
 }
+
+/// 阶段日志回调：(level, message)——tag 恒 "studio"（TS createLogger 同款）。
+pub type PipelineLogFn = std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 impl Default for WriteNextConfig {
     fn default() -> Self {
@@ -135,6 +142,7 @@ impl Default for WriteNextConfig {
             abort: None,
             notify_channels: None,
             on_context_compression: None,
+            on_log: None,
         }
     }
 }
@@ -292,6 +300,18 @@ pub(crate) struct PreparedWriteInput {
     pub(crate) rule_stack: Option<RuleStack>,
 }
 
+/// 阶段日志（127 号）：TS `logStage` 同构——"阶段：{message}" / "Stage: {message}"
+/// 前缀 + info 级；经 config.on_log 上抛（None 静默）。
+fn stage_log(config: &WriteNextConfig, language: WritingLanguage, zh: &str, en: &str) {
+    let Some(on_log) = &config.on_log else { return };
+    let message = if language == WritingLanguage::En {
+        format!("Stage: {en}")
+    } else {
+        format!("阶段：{zh}")
+    };
+    on_log("info", &message);
+}
+
 /// writeNextChapter 主入口（锁 + 装配）。
 #[allow(clippy::too_many_arguments)]
 pub async fn write_next_chapter(
@@ -347,12 +367,14 @@ async fn write_next_chapter_locked(
         pipeline_language,
     );
 
+    stage_log(config, pipeline_language, "规划与上下文编排", "plan & context composition");
     let write_input = prepare_write_input(
         state, agents, ctx, config, &book, &book_dir, chapter_number, external_context,
     )
     .await?;
 
     // ── 1. 撰写草稿 ──
+    stage_log(config, pipeline_language, "撰写章节草稿", "write chapter draft");
     tracing::info!(target: "write-next", "撰写章节草稿");
     let writer_ctx = WriterCtx {
         project_root: ctx.project_root,
@@ -421,6 +443,7 @@ async fn write_next_chapter_locked(
         let _ = pre_audit_normalized_word_count;
     } else {
         // ── 2. 审核环（assess → revise → assess，快照择优） ──
+        stage_log(config, pipeline_language, "审核环", "review cycle");
         let control = match (
             &write_input.chapter_intent,
             &write_input.context_package,
@@ -834,6 +857,7 @@ async fn write_next_chapter_locked(
     }
     let validator = ValidatorAdapter { chat: agents.state_validator };
 
+    stage_log(config, pipeline_language, "真相结算与校验", "settle & truth validation");
     let truth = validate_chapter_truth_persistence(TruthValidationParams {
         writer: agents.settler,
         validator: &validator,
@@ -936,6 +960,7 @@ async fn write_next_chapter_locked(
         numerical_system: gp.numerical_system,
         language: pipeline_language,
     };
+    stage_log(config, pipeline_language, "章节落盘", "persist chapter");
     persist_chapter_artifacts(
         &hooks,
         &PersistChapterArtifactsParams {
@@ -1560,6 +1585,7 @@ mod tests {
             abort: None,
             notify_channels: None,
             on_context_compression: None,
+            on_log: None,
         };
 
         let result = write_next_chapter(
@@ -1606,6 +1632,92 @@ mod tests {
         // 二次 write-next：降级守卫不触发；下一章号推进（durable 链）。
         let next = state.get_next_chapter_number("b1").await.unwrap();
         assert!(next >= 2, "durable 链应推进到 2，实际 {next}");
+    }
+
+    /// 127 号：阶段日志回调——manual 链四阶段有序双语（zh 书）。
+    #[tokio::test]
+    async fn stage_logs_emit_ordered_stage_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        let builtin = dir.path().join("builtin");
+        let book = project.join("books").join("b1");
+        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(&builtin).await.unwrap();
+        tokio::fs::write(
+            builtin.join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            book.join("book.json"),
+            serde_json::json!({
+                "id": "b1", "title": "测试书", "platform": "other", "genre": "xianxia",
+                "status": "active", "targetChapters": 100, "chapterWordCount": 3000,
+                "language": "zh", "createdAt": "", "updatedAt": "",
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+
+        let state = StateManager::new(&project);
+        let chat = script();
+        let agents = WriteNextAgents {
+            writer: &chat,
+            planner: &chat,
+            composer: &chat,
+            reviser: &chat,
+            auditor: &chat,
+            full_auditor: None,
+            normalizer: &chat,
+            analyzer: &chat,
+            state_validator: &chat,
+            settler: &chat,
+        };
+        let prompt_store = InMemoryStateStore::default();
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let logs = std::sync::Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
+        let sink = logs.clone();
+        let config = WriteNextConfig {
+            chapter_review_mode: ChapterReviewMode::Manual,
+            writing_review_retries: 1,
+            input_governance_mode: InputGovernanceMode::V2,
+            abort: None,
+            notify_channels: None,
+            on_context_compression: None,
+            on_log: Some(std::sync::Arc::new(move |level: &str, message: &str| {
+                sink.lock().unwrap().push((level.to_string(), message.to_string()));
+            })),
+        };
+
+        write_next_chapter(&state, &agents, &ctx, &config, "b1", None, None, None)
+            .await
+            .expect("write-next 应成功");
+
+        let logs = logs.lock().unwrap();
+        // manual 链四阶段（无审核环），zh 书 → 阶段前缀 + info 级。
+        let messages: Vec<&str> = logs.iter().map(|(_, message)| message.as_str()).collect();
+        assert_eq!(
+            messages,
+            vec![
+                "阶段：规划与上下文编排",
+                "阶段：撰写章节草稿",
+                "阶段：真相结算与校验",
+                "阶段：章节落盘",
+            ],
+            "{logs:?}"
+        );
+        assert!(logs.iter().all(|(level, _)| level == "info"));
     }
 
     // ---- 101 号：链内安全点中止（TS throwIfOperationAborted 检查点） ----

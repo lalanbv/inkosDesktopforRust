@@ -1829,21 +1829,41 @@ pub async fn export(
 
 // ── 共享装配 ─────────────────────────────────────────────────────
 
-/// write-next 事件化配置（126 号）：from_project 基础上挂 context:
-/// compression 广播回调（books 面——不带 sessionId，TS 同面 pipeline 无
+/// write-next 事件化配置（126/127 号）：from_project 基础上挂 SSE 广播回调
+/// （context:compression + log——books 面不带 sessionId，TS 同面 pipeline 无
 /// sessionIdForSSE）。bin runner 与 run_draft/draft 等内部写面共用。
 pub async fn write_next_config_with_events(runtime: &BooksRuntime) -> WriteNextConfig {
-    let hub = runtime.hub.clone();
+    with_event_broadcasts(
+        WriteNextConfig::from_project(runtime.state.project_root()).await,
+        &runtime.hub,
+    )
+}
+
+/// 事件广播装配（127 号抽出）：任意 hub（write-next 路由运行时 / 测试）可复用。
+pub fn with_event_broadcasts(
+    config: WriteNextConfig,
+    hub: &crate::server::sse::BroadcastHub,
+) -> WriteNextConfig {
+    let compression_hub = hub.clone();
+    let log_hub = hub.clone();
     WriteNextConfig {
         on_context_compression: Some(std::sync::Arc::new(
             move |event: &crate::models::context_compression::ContextCompressionEvent| {
-                hub.broadcast(
+                compression_hub.broadcast(
                     "context:compression",
                     &serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
                 );
             },
         )),
-        ..WriteNextConfig::from_project(runtime.state.project_root()).await
+        on_log: Some(std::sync::Arc::new(move |level: &str, message: &str| {
+            // TS scopedSseSink 负载：{level, tag, message}（+ 会话/执行标记——
+            // books 面无）。
+            log_hub.broadcast(
+                "log",
+                &serde_json::json!({ "level": level, "tag": "studio", "message": message }),
+            );
+        })),
+        ..config
     }
 }
 

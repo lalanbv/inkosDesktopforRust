@@ -16942,4 +16942,26 @@ mod sub126_e2e {
         );
         assert!(!event.data.contains("sources"), "可选键省略：{}", event.data);
     }
+
+    /// 127 号：with_event_broadcasts 的 log 广播——{level, tag:"studio", message}
+    ///（TS scopedSseSink 负载形态；books 面无 sessionId/executionId）。
+    #[tokio::test]
+    async fn with_event_broadcasts_emits_log_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let runtime = rt126(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let config = books_routes::with_event_broadcasts(
+            WriteNextConfig::default(),
+            &runtime.hub,
+        );
+        let on_log = config.on_log.expect("事件化配置应挂 log 回调");
+        on_log("info", "阶段：撰写章节草稿");
+        let event = subscriber.recv().await.unwrap();
+        assert_eq!(event.event, "log");
+        assert!(event.data.contains("\"level\":\"info\""), "data: {}", event.data);
+        assert!(event.data.contains("\"tag\":\"studio\""), "data: {}", event.data);
+        assert!(event.data.contains("\"message\":\"阶段：撰写章节草稿\""), "data: {}", event.data);
+        assert!(!event.data.contains("sessionId"), "books 面不带标记：{}", event.data);
+    }
 }
