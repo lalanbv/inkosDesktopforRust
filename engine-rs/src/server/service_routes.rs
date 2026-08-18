@@ -271,6 +271,20 @@ pub(crate) async fn resolve_configured_service_api_format(
         })
 }
 
+/// 自定义服务项的 stream 偏好（108 号）。
+pub(crate) async fn resolve_configured_service_stream(
+    root: &Path,
+    service_id: &str,
+) -> Option<bool> {
+    let config = load_raw_config(root).await?;
+    let llm = config.get("llm")?;
+    let services = normalize_service_config(llm.get("services"));
+    services
+        .iter()
+        .find(|entry| service_config_key(entry) == service_id)
+        .and_then(|entry| entry.stream)
+}
+
 pub(crate) async fn resolve_configured_service_base_url(
     root: &Path,
     service_id: &str,

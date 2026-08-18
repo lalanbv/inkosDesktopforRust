@@ -250,6 +250,50 @@ impl StreamingChatClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(StreamError::BadStatus(status.as_u16(), text));
         }
+        // 非流式（108 号 stream 维度）：整体 JSON——choices[0].message.content +
+        // message.tool_calls + usage（TS chatCompletion 非流式同构）。
+        if !params.stream {
+            let raw = resp.text().await?;
+            let json: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| StreamError::Protocol(format!("invalid JSON response: {e}")))?;
+            let message = json
+                .pointer("/choices/0/message")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let content = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let tool_calls: Vec<StreamedToolCall> = message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .map(|calls| {
+                    calls
+                        .iter()
+                        .filter_map(|call| {
+                            let id = call.get("id").and_then(Value::as_str)?;
+                            let name = call.pointer("/function/name").and_then(Value::as_str)?;
+                            let arguments =
+                                call.pointer("/function/arguments").and_then(Value::as_str)?;
+                            Some(StreamedToolCall {
+                                id: id.to_string(),
+                                name: name.to_string(),
+                                arguments: arguments.to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return Ok(StreamedCompletion {
+                content,
+                prompt_tokens: json.pointer("/usage/prompt_tokens").and_then(Value::as_u64),
+                completion_tokens: json.pointer("/usage/completion_tokens").and_then(Value::as_u64),
+                total_tokens: json.pointer("/usage/total_tokens").and_then(Value::as_u64),
+                done: true,
+                tool_calls,
+            });
+        }
         // 流式：按字节块喂给 sse_parser，累积 content
         let mut parser = SseStreamParser::new();
         let mut content = String::new();

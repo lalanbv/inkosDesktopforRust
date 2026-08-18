@@ -14207,17 +14207,25 @@ mod sub96_e2e {
             )
             .route(
                 "/chat/completions",
-                axum::routing::post(move |axum::Json(_body): axum::Json<serde_json::Value>| async move {
-                    if chat_ok {
-                        let payload = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
-                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
-                        axum::response::IntoResponse::into_response((
-                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                            format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
-                        ))
-                    } else {
-                        axum::response::IntoResponse::into_response((StatusCode::BAD_REQUEST, "invalid key"))
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    if !chat_ok {
+                        return axum::response::IntoResponse::into_response((StatusCode::BAD_REQUEST, "invalid key"));
                     }
+                    // 108 号：非流式请求 → 整体 JSON（TS chatCompletion 非流式）。
+                    if !body["stream"].as_bool().unwrap_or(false) {
+                        return axum::response::IntoResponse::into_response(axum::Json(
+                            serde_json::json!({
+                                "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                                "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                            }),
+                        ));
+                    }
+                    let payload = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
                 }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -14499,6 +14507,15 @@ mod sub99_e2e {
                         let stream = body["stream"].as_bool().unwrap_or(false);
                         sink.lock().unwrap().push(stream);
                         let content = if always_empty || stream { "" } else { "OK" };
+                        // 108 号：非流式请求 → 整体 JSON；流式 → SSE。
+                        if !stream {
+                            return axum::response::IntoResponse::into_response(axum::Json(
+                                serde_json::json!({
+                                    "choices": [{ "message": { "role": "assistant", "content": content } }],
+                                    "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                                }),
+                            ));
+                        }
                         let payload = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
                         let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
                         axum::response::IntoResponse::into_response((
@@ -15618,5 +15635,152 @@ mod sub106_e2e {
             input.iter().all(|item| item["role"] != "system"),
             "system 不进 input：{input:?}"
         );
+    }
+}
+
+mod sub108_e2e {
+    //! 108 号：stream 传输维度生产面——服务项 stream:false → 97 层覆盖端点
+    //! 全非流式调用（TS client.stream）：chat 请求体 stream=false + 非流式
+    //! JSON 响应路径（不支持 SSE 的端点兼容）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// chat 双形态 mock：请求 stream=false → 非流式 JSON；true → SSE。捕获请求体。
+    async fn mock_dual_mode_chat() -> (String, Arc<StdMutex<Vec<serde_json::Value>>>) {
+        let bodies = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+        let bodies_for_server = bodies.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let bodies = bodies_for_server.clone();
+                async move {
+                    bodies.lock().unwrap().push(body.clone());
+                    if body["stream"].as_bool().unwrap_or(false) {
+                        let chunk =
+                            serde_json::json!({ "choices": [{ "delta": { "content": "流式回复。" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    } else {
+                        axum::response::IntoResponse::into_response(axum::Json(
+                            serde_json::json!({
+                                "choices": [{ "message": { "role": "assistant", "content": "非流式回复。" } }],
+                                "usage": { "prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7 },
+                            }),
+                        ))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), bodies)
+    }
+
+    #[tokio::test]
+    async fn service_stream_false_makes_agent_chat_non_streaming() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, bodies) = mock_dual_mode_chat().await;
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":{{"custom:Quiet":{{"service":"custom","name":"Quiet","baseUrl":"{llm}","stream":false}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:Quiet":{"apiKey":"sk-q"}}}"#,
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let session = "1783099000006-s108";
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"打个招呼","sessionId":"{session}","service":"custom:Quiet","model":"quiet-model"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // 非流式路径：响应来自 choices[0].message.content。
+        assert_eq!(parsed["response"], "非流式回复。", "body: {parsed}");
+
+        let bodies = bodies.lock().unwrap();
+        let request = bodies.last().expect("应命中 /chat/completions");
+        assert_eq!(request["stream"], false, "request: {request}");
+        assert_eq!(request["model"], "quiet-model");
     }
 }

@@ -67,6 +67,9 @@ pub struct AgentRouter {
     /// 传输协议（106 号）：全端点统一 chat/responses（TS client.apiFormat——
     /// 端点级配置，非 per-agent）。
     api_format: crate::llm::providers::TransportApiFormat,
+    /// 流式偏好（108 号）：Some(false) → 全端点非流式调用（TS client.stream；
+    /// None = 缺省流式）。
+    stream: Option<bool>,
 }
 
 impl AgentRouter {
@@ -76,6 +79,7 @@ impl AgentRouter {
             overrides: Arc::new(overrides),
             clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             api_format: crate::llm::providers::TransportApiFormat::Chat,
+            stream: None,
         }
     }
 
@@ -84,6 +88,18 @@ impl AgentRouter {
     pub fn with_api_format(mut self, api_format: crate::llm::providers::TransportApiFormat) -> Self {
         self.api_format = api_format;
         self
+    }
+
+    /// 覆盖流式偏好（默认流式；inkos.json llm.stream / 服务项 stream /
+    /// env INKOS_LLM_STREAM 为 false 时全端点非流式——不支持 SSE 的端点）。
+    pub fn with_stream(mut self, stream: Option<bool>) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    /// 当前流式偏好（探测/诊断面回显）。
+    pub fn stream_preference(&self) -> Option<bool> {
+        self.stream
     }
 
     /// 当前传输协议（探测/诊断面回显）。
@@ -158,7 +174,7 @@ impl AgentRouter {
                 messages: &messages,
                 temperature,
                 max_tokens: max_tokens.unwrap_or(endpoint.max_tokens),
-                stream: true,
+                stream: self.stream.unwrap_or(true),
                 api_format: self.api_format,
                 extra: None,
                 tools: None,

@@ -261,6 +261,8 @@ pub struct AgentModelOverride {
     pub base_url: String,
     /// 传输协议（106 号）：命中服务项 apiFormat=responses 时置位（层 1/2）。
     pub api_format: crate::llm::providers::TransportApiFormat,
+    /// 流式偏好（108 号）：服务项/配置 stream=false 时置 Some(false)（层 1/2）。
+    pub stream: Option<bool>,
 }
 
 /// /agent 模型四层解析（TS 4968-5075 逐层）：
@@ -299,10 +301,13 @@ pub async fn resolve_agent_model_override(
         let api_format = crate::server::service_routes::resolve_configured_service_api_format(root, service)
             .await
             .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
+        // 服务项 stream（108 号；预设服务经 resolve_effective_llm_studio 同口径——
+        // 显式请求只看 entry 直填）。
+        let stream = crate::server::service_routes::resolve_configured_service_stream(root, service).await;
         let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint("openai", Some(&base_url));
         match (api_key, key_optional) {
             (Some(api_key), _) => {
-                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key, base_url, api_format }));
+                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key, base_url, api_format, stream }));
             }
             (None, false) => {
                 let lang = current_project_language(root).await;
@@ -320,7 +325,7 @@ pub async fn resolve_agent_model_override(
             }
             (None, true) => {
                 // 本地端点（Ollama 等）无 key 可用。
-                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key: String::new(), base_url, api_format }));
+                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key: String::new(), base_url, api_format, stream }));
             }
         }
     }
@@ -352,7 +357,7 @@ pub async fn resolve_agent_model_override(
                                     _ => None,
                                 })
                                 .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
-                            return Ok(Some(AgentModelOverride { service, model: default_model.to_string(), api_key, base_url, api_format }));
+                            return Ok(Some(AgentModelOverride { service, model: default_model.to_string(), api_key, base_url, api_format, stream: first.stream }));
                         }
                     }
                 }
@@ -393,6 +398,7 @@ pub async fn resolve_agent_model_override(
                             api_key: secret.api_key.clone(),
                             base_url,
                             api_format: crate::llm::providers::TransportApiFormat::Chat,
+                            stream: None,
                         }));
                     }
                 }
