@@ -151,14 +151,18 @@ fn build_router() -> axum::Router {
     // 静态前端面（124 号）：INKOS_STATIC_DIR 指向前端产物目录（浏览器直连
     // 模式 = packages/studio/dist）；未设为纯 API 服务（Tauri 壳内嵌前端）。
     let static_dir = std::env::var("INKOS_STATIC_DIR").ok().map(std::path::PathBuf::from);
-    inkos_engine::server::static_routes::router_books_with_static(
+    let app = inkos_engine::server::static_routes::router_books_with_static(
         AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },
         hub,
         runtime,
         audit,
         books,
         static_dir,
-    )
+    );
+    // CORS（125 号）：Hono `app.use("/*", cors())` 等价——跨源前端
+    // （Tauri 壳 tauri:// / vite dev server）经 API base 直连的场景。
+    // 在最终组合路由（含静态面）之上一次性施加。
+    app.layer(inkos_engine::server::sidecar_cors_layer())
 }
 
 #[tokio::main]

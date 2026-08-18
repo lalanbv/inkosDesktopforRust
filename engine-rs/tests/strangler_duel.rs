@@ -906,7 +906,65 @@ async fn bin_process_static_face_duel() {
     let (status, _) = get_json(&bin, "/api/v1/health").await;
     assert_eq!(status, 200);
 
+    // CORS 面（125 号）：跨源请求（Tauri 壳 / vite dev）等价性——普通请求
+    // Allow-Origin 恒 *；preflight 双端 2xx 且方法/头语义一致。
+    let client = reqwest::Client::new();
+    for base in [&bin, &ts] {
+        let response = client
+            .get(format!("{base}/api/v1/health"))
+            .header("origin", "http://duel.local")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*"),
+            "{base} 普通 CORS 请求头分歧"
+        );
+        let response = client
+            .request(reqwest::Method::OPTIONS, format!("{base}/api/v1/books"))
+            .header("origin", "http://duel.local")
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "content-type")
+            .send()
+            .await
+            .unwrap();
+        // Hono 回 204 / tower-http 回 200——均属浏览器接受的 2xx preflight。
+        assert!(
+            response.status().is_success(),
+            "{base} preflight 应 2xx：{}",
+            response.status()
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("*")
+        );
+        let methods = response
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(methods.contains("post"), "{base} 方法族缺 POST: {methods}");
+        let headers = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(
+            headers.contains("content-type"),
+            "{base} 头镜像缺 content-type: {headers}"
+        );
+    }
+
     let _ = command.kill();
     let _ = command.wait();
-    eprintln!("静态面双端对跑通过：/ 与深链 SPA / 资产字节级一致，API 面不受干扰");
+    eprintln!("静态面双端对跑通过：/ 与深链 SPA / 资产字节级一致，API 面不受干扰；CORS 面等价");
 }

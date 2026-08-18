@@ -138,9 +138,28 @@ async fn cap_context(
     Ok(Json(CapContextResponse { content: cap_context_block(&req.content, opts) }))
 }
 
+/// Hono `cors()` 默认参（server.ts L2880 `app.use("/*", cors())`）的响应面
+/// 等价层（125 号）：Origin `*`（**恒设**，不看请求是否带 Origin——Hono
+/// 默认参同款）；方法族 GET/HEAD/PUT/POST/DELETE/PATCH；头**镜像请求**的
+/// `Access-Control-Request-Headers`（Hono allowHeaders=[] 的反射语义）；
+/// 无 credentials / 无 expose / 无 max-age；preflight 短路。
+pub fn sidecar_cors_layer() -> tower_http::cors::CorsLayer {
+    use axum::http::Method;
+    tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::PUT,
+            Method::POST,
+            Method::DELETE,
+            Method::PATCH,
+        ])
+        .allow_headers(tower_http::cors::AllowHeaders::mirror_request())
+}
+
 /// 构造路由（供 Tauri 命令 / 独立 bin 复用）。
-pub fn router(state: AppState) -> Router {
-    Router::new()
+pub fn router(state: AppState) -> Router {    Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/utils/derive-book-id", post(derive_book_id))
         .route("/api/v1/utils/count-length", post(count_length))
@@ -625,6 +644,82 @@ mod tests {
         let body = body_string(resp.into_body()).await;
         assert!(body.contains(r#""ok":true"#));
         assert!(body.contains("0.0.1-test"));
+    }
+
+    #[tokio::test]
+    async fn cors_layer_adds_headers_only_for_origin_requests() {
+        use axum::http::HeaderValue;
+        let app = router(AppState { version: "0.0.1-test".into() })
+            .layer(sidecar_cors_layer());
+
+        // 带 Origin 的普通请求：Allow-Origin 反射（Any → *）。
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .header("origin", "http://duel.local")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response.headers().get("access-control-allow-origin"),
+            Some(&HeaderValue::from_static("*"))
+        );
+
+        // 无 Origin 的普通请求：Allow-Origin 恒 *（Hono cors() 无条件设置、
+        // 不看请求 Origin——tower-http Any 同款）；preflight 专属头不出现。
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.headers().get("access-control-allow-origin"),
+            Some(&HeaderValue::from_static("*"))
+        );
+        assert!(response.headers().get("access-control-allow-methods").is_none());
+        assert!(response.headers().get("access-control-allow-headers").is_none());
+
+        // Preflight（OPTIONS + Access-Control-Request-Method）：短路 2xx，
+        // 方法族含 POST，头镜像请求的 content-type。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/health")
+                    .header("origin", "http://duel.local")
+                    .header("access-control-request-method", "POST")
+                    .header("access-control-request-headers", "content-type")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        assert_eq!(
+            response.headers().get("access-control-allow-origin"),
+            Some(&HeaderValue::from_static("*"))
+        );
+        let methods = response
+            .headers()
+            .get("access-control-allow-methods")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        assert!(methods.contains("post"), "方法族应含 POST: {methods}");
+        assert_eq!(
+            response.headers().get("access-control-allow-headers").cloned(),
+            Some(HeaderValue::from_str("content-type").unwrap())
+        );
     }
 
     #[tokio::test]
