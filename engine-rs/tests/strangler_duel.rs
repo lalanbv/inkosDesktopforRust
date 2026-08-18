@@ -72,7 +72,7 @@ fn write_fixture(root: &Path, llm: &str) {
     std::fs::write(
         root.join("inkos.json"),
         format!(
-            r#"{{"version":"0.1.0","name":"对跑项目","language":"zh","llm":{{"services":{{"custom:Duel":{{"service":"custom","name":"Duel","baseUrl":"{llm}","apiFormat":"chat","stream":false}}}},"defaultModel":"duel-model"}},"notify":[]}}"#
+            r#"{{"version":"0.1.0","name":"对跑项目","language":"zh","llm":{{"services":{{"custom:Duel":{{"service":"custom","name":"Duel","baseUrl":"{llm}","apiFormat":"chat","stream":true}}}},"defaultModel":"duel-model"}},"notify":[]}}"#
         ),
     )
     .unwrap();
@@ -967,4 +967,205 @@ async fn bin_process_static_face_duel() {
     let _ = command.kill();
     let _ = command.wait();
     eprintln!("静态面双端对跑通过：/ 与深链 SPA / 资产字节级一致，API 面不受干扰；CORS 面等价");
+}
+
+/// SSE 流事件采集：连接 → 触发聊天回合 → 等待终态事件后收束。
+/// 返回原始 (event, payload JSON) 序列（ping/task:snapshot 已滤）。
+async fn sse_chat_turn_events(base: &str, session_id: &str, instruction: &str) -> Vec<(String, Value)> {
+    let events: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let target = base.to_string();
+    let collector = tokio::spawn(async move {
+        let response = match reqwest::get(format!("{target}/api/v1/events")).await {
+            Ok(response) => response,
+            Err(_) => return,
+        };
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if Instant::now() > deadline {
+                break;
+            }
+            let chunk = match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+                Ok(Some(Ok(chunk))) => chunk,
+                Ok(Some(Err(_))) | Ok(None) => break,
+                Err(_) => continue,
+            };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(position) = buffer.find("\n\n") {
+                let block: String = buffer.drain(..position + 2).collect();
+                let mut name = String::new();
+                let mut data = String::new();
+                for line in block.lines() {
+                    if let Some(value) = line.strip_prefix("event:") {
+                        name = value.trim().to_string();
+                    } else if let Some(value) = line.strip_prefix("data:") {
+                        data = value.trim().to_string();
+                    }
+                }
+                if name.is_empty() || name == "ping" || name == "task:snapshot" {
+                    continue;
+                }
+                let payload = serde_json::from_str(&data).unwrap_or(Value::String(data));
+                sink.lock().unwrap().push((name, payload));
+            }
+        }
+    });
+
+    // 建会话（已存在则忽略结果）+ 聊天回合。
+    let client = reqwest::Client::new();
+    let _ = client
+        .post(format!("{base}/api/v1/sessions"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"sessionId":"{session_id}"}}"#))
+        .send()
+        .await;
+    let response = client
+        .post(format!("{base}/api/v1/agent"))
+        .header("content-type", "application/json")
+        .body(format!(
+            r#"{{"instruction":"{instruction}","sessionId":"{session_id}"}}"#
+        ))
+        .send()
+        .await
+        .expect("聊天回合请求失败");
+    assert_eq!(response.status().as_u16(), 200, "{base} 聊天回合应 200");
+
+    // 等待回合终态（agent:complete + session:title）到达。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let has_both = {
+            let seen = events.lock().unwrap();
+            seen.iter().any(|(name, _)| name == "agent:complete")
+                && seen.iter().any(|(name, _)| name == "session:title")
+        };
+        if has_both || Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let _ = collector.await;
+    let collected = events.lock().unwrap().clone();
+    collected
+}
+
+/// 事件归一：① 共享词汇过滤；② 递归剥 null 值键（TS undefined→省略 vs
+/// Rust None→null 的表示层差异）；③ llm:progress 数值遥测仅保留键语义。
+fn normalize_sse_face(mut events: Vec<(String, Value)>) -> Vec<(String, Value)> {
+    const SHARED: [&str; 4] =
+        ["agent:start", "draft:delta", "agent:complete", "session:title"];
+    fn strip_nulls(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.retain(|_, value| !value.is_null());
+                for value in map.values_mut() {
+                    strip_nulls(value);
+                }
+            }
+            Value::Array(items) => {
+                for item in items.iter_mut() {
+                    strip_nulls(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    events.retain(|(name, _)| SHARED.contains(&name.as_str()));
+    for (name, payload) in events.iter_mut() {
+        if name == "llm:progress" {
+            if let Value::Object(map) = payload {
+                for key in ["elapsedMs", "totalChars", "chineseChars"] {
+                    map.remove(key);
+                }
+            }
+        }
+        strip_nulls(payload);
+    }
+    events.sort_by(|a, b| a.0.cmp(&b.0));
+    events
+}
+
+/// 128 号：SSE 事件面双端对跑——同根双进程各自订阅 /api/v1/events 并发起
+/// 同构聊天回合，共享词汇事件（agent:start / llm:progress / draft:delta /
+/// agent:complete / session:title）的**序列（按名稳定排序）与负载形态**
+/// 双端等价（126/127 号补齐事件的真进程级验收门）。
+#[tokio::test]
+async fn sse_event_face_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let bin_port = next_sidecar_port().await;
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
+        .env("INKOS_PROJECT_ROOT", &root)
+        .env("INKOS_PORT", bin_port.to_string())
+        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-sse-out.log").unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-sse-err.log").unwrap(),
+        ))
+        .spawn()
+        .expect("bin 起动失败");
+    let bin = format!("http://127.0.0.1:{bin_port}");
+    wait_ready(&bin).await;
+    wait_ready(&ts).await;
+
+    let instruction = "帮我看下第二章节奏";
+    let ts_events =
+        normalize_sse_face(sse_chat_turn_events(&ts, "1783100000001-ssets", instruction).await);
+    let rust_events =
+        normalize_sse_face(sse_chat_turn_events(&bin, "1783100000002-sseeb", instruction).await);
+
+    // 事件名序列（排序后）等价。
+    let ts_names: Vec<&str> = ts_events.iter().map(|(name, _)| name.as_str()).collect();
+    let rust_names: Vec<&str> = rust_events.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        rust_names, ts_names,
+        "事件名序列分歧\n  rust: {rust_names:?}\n  ts:   {ts_names:?}"
+    );
+    for ((rust_name, rust_payload), (ts_name, ts_payload)) in
+        rust_events.iter().zip(ts_events.iter())
+    {
+        // sessionId 两端各自会话——剥除后负载应逐键等价。
+        let mut rust_payload = rust_payload.clone();
+        let mut ts_payload = ts_payload.clone();
+        for payload in [&mut rust_payload, &mut ts_payload] {
+            if let Value::Object(map) = payload {
+                map.remove("sessionId");
+            }
+        }
+        assert_eq!(
+            rust_name, ts_name,
+            "排序后事件错位：{rust_events:?} vs {ts_events:?}"
+        );
+        assert_eq!(
+            rust_payload, ts_payload,
+            "{rust_name} 负载分歧\n  rust: {rust_payload}\n  ts:   {ts_payload}"
+        );
+    }
+    // 四类事件齐全（回合健康性；llm:progress 不在普通聊天轮词汇——128 号
+    // 勘误：TS 仅 pipeline 面上报）。
+    for expected in ["agent:start", "draft:delta", "agent:complete", "session:title"] {
+        assert!(
+            rust_names.contains(&expected),
+            "Rust 侧缺 {expected}：{rust_names:?}"
+        );
+    }
+
+    let _ = command.kill();
+    let _ = command.wait();
+    eprintln!("SSE 事件面对跑通过：四类共享词汇事件序列与负载形态双端等价（llm:progress 不在普通聊天轮词汇）");
 }

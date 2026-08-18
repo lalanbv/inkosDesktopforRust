@@ -118,24 +118,6 @@ async fn production_provider_model_labels(
     (provider, model)
 }
 
-/// llm:progress 广播钩子（126 号）：进度对象 + sessionId（TS 聊天轮
-/// pipeline 的 `sessionIdForSSE` 标记语义）。
-fn llm_progress_hook(
-    hub: &crate::server::sse::BroadcastHub,
-    session_id: &str,
-) -> crate::llm::provider::StreamProgressCallback {
-    let hub = hub.clone();
-    let session_id = session_id.to_string();
-    std::sync::Arc::new(move |progress: &crate::llm::provider::StreamProgress| {
-        let mut payload =
-            serde_json::to_value(progress).unwrap_or_else(|_| serde_json::json!({}));
-        if let Value::Object(map) = &mut payload {
-            map.insert("sessionId".into(), serde_json::json!(session_id));
-        }
-        hub.broadcast("llm:progress", &payload);
-    })
-}
-
 /// session:title 广播（126 号）：TS `refreshBookSessionFromTranscript` 的
 /// 标题语义——run 前标题为空（首条用户消息尚未落盘）、run 后 derive 出
 /// 标题时广播一次；已有标题/仍无标题均静默。
@@ -579,9 +561,6 @@ pub async fn post_agent(
         /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
         /// 与 TS pi-agent 历史保留语义一致。
         images: Vec<crate::llm::streaming_client::ChatImage>,
-        /// llm:progress 钩子（126 号）：带 sessionId 广播（TS 聊天轮
-        /// pipeline 的 sessionIdForSSE 语义）。
-        progress: Option<crate::llm::provider::StreamProgressCallback>,
     }
 
     #[async_trait::async_trait]
@@ -604,7 +583,7 @@ pub async fn post_agent(
                     extra: None,
                     tools,
                     images: (!self.images.is_empty()).then_some(self.images.as_slice()),
-                    progress: self.progress.clone(),
+                    progress: None,
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -672,11 +651,7 @@ pub async fn post_agent(
     };
     let instruction: &str = &prompt_instruction;
     let loop_images = attachment_images(&attachments);
-    let loop_chat = RouterLoopChat {
-        router: &runtime.router,
-        images: loop_images,
-        progress: Some(llm_progress_hook(&runtime.hub, session_id)),
-    };
+    let loop_chat = RouterLoopChat { router: &runtime.router, images: loop_images };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/

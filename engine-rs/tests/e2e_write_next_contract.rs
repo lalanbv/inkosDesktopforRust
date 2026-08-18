@@ -5978,11 +5978,11 @@ mod agent65_e2e {
         assert!(title.contains("帮我看下"));
     }
 
-    /// 126 号：聊天轮 SSE 事件面——llm:progress（带 sessionId 标记 +
-    /// camelCase 字段，TS sessionIdForSSE 语义）与 session:title（首条
-    /// user 消息 derive 标题，终态事件后补发——不扰动既有序列断言）。
+    /// 126/128 号：聊天轮 SSE 事件面——session:title（首条 user 消息 derive
+    /// 标题，终态事件后补发——不扰动既有序列断言）。llm:progress **不发**
+    /// （128 号勘误：TS 仅 pipeline 面上报流式进度，普通聊天轮无）。
     #[tokio::test]
-    async fn chat_broadcasts_llm_progress_and_session_title() {
+    async fn chat_broadcasts_session_title_without_llm_progress() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let (llm, _guard) = mock_llm().await;
@@ -6004,28 +6004,19 @@ mod agent65_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
 
-        // SSE 顺序：agent:start → {llm:progress(done), draft:delta（桥接
-        // 增量——两者相对序不锁定）} → agent:complete → session:title。
+        // SSE 顺序：agent:start → draft:delta（桥接增量）→ agent:complete →
+        // session:title。
         assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
-        let mut saw_progress = false;
         let mut saw_draft_delta = false;
         loop {
             let event = subscriber.recv().await.unwrap();
             match event.event.as_str() {
-                "llm:progress" => {
-                    saw_progress = true;
-                    assert!(event.data.contains("\"sessionId\""), "data: {}", event.data);
-                    assert!(event.data.contains("\"elapsedMs\""), "data: {}", event.data);
-                    assert!(event.data.contains("\"totalChars\""), "data: {}", event.data);
-                    assert!(event.data.contains("\"chineseChars\""), "data: {}", event.data);
-                    assert!(event.data.contains("\"status\":\"done\""), "data: {}", event.data);
-                }
+                "llm:progress" => panic!("普通聊天轮不应发 llm:progress（128 号勘误）"),
                 "draft:delta" => saw_draft_delta = true,
                 "agent:complete" => break,
                 other => panic!("agent:complete 前的意外事件 {other}: {}", event.data),
             }
         }
-        assert!(saw_progress, "llm:progress(done) 应在 agent:complete 前");
         assert!(saw_draft_delta, "draft:delta 应在 agent:complete 前");
         let title_event = subscriber.recv().await.unwrap();
         assert_eq!(title_event.event, "session:title", "data: {}", title_event.data);
