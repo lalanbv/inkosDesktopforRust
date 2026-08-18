@@ -251,6 +251,79 @@ mod tests {
         }
     }
 
+
+    // ── 143 号：翻译运行快照生命周期 ────────────────────────────────────
+
+    #[tokio::test]
+    async fn runner_publishes_run_snapshot_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("in2.txt"), "Chapter 1\n\nAlpha text.").unwrap();
+        let created = project::create_translation_project_from_file(root, &input("in2.txt"))
+            .await
+            .unwrap();
+        let id = created.manifest.id.clone();
+        runner::run_translation_project(root, &id, &EchoModel, None)
+            .await
+            .unwrap();
+
+        // 终态快照：complete / stage complete / artifacts = base + 章 + 报告。
+        let run: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("translations").join(&id).join("status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(run["version"], 1);
+        assert_eq!(run["kind"], "translation");
+        assert_eq!(run["id"], id);
+        assert_eq!(run["status"], "complete");
+        assert_eq!(run["stage"], "complete");
+        let artifacts: Vec<&str> = run["artifacts"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(artifacts.contains(&format!("translations/{id}/manifest.json").as_str()), "{artifacts:?}");
+        assert!(artifacts.contains(&format!("translations/{id}/glossary.json").as_str()), "{artifacts:?}");
+        assert!(artifacts.iter().any(|a| a.contains("/translated/")), "章译文在清单：{artifacts:?}");
+        assert!(artifacts.contains(&format!("translations/{id}/review-report.md").as_str()), "{artifacts:?}");
+        assert!(run.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn runner_failed_run_publishes_failed_snapshot() {
+        struct FailingModel;
+        #[async_trait::async_trait]
+        impl TranslationModelPort for FailingModel {
+            async fn translate_segments(
+                &self,
+                _input: TranslateSegmentsInput<'_>,
+            ) -> Result<TranslateSegmentsOutput, String> {
+                Err("model exploded".to_string())
+            }
+            async fn review_chapter(
+                &self,
+                _input: ReviewChapterInput<'_>,
+            ) -> Result<ReviewChapterOutput, String> {
+                unreachable!()
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("in3.txt"), "Chapter 1\n\nAlpha text.").unwrap();
+        let created = project::create_translation_project_from_file(root, &input("in3.txt"))
+            .await
+            .unwrap();
+        let id = created.manifest.id.clone();
+        let err = runner::run_translation_project(root, &id, &FailingModel, None)
+            .await
+            .expect_err("模型失败应上抛");
+        assert!(err.contains("model exploded"), "{err}");
+        // failed 快照落地（吞写错不覆盖原错）。
+        let run: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("translations").join(&id).join("status.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(run["status"], "failed");
+        assert_eq!(run["stage"], "translate");
+        assert_eq!(run["error"], "model exploded");
+    }
+
     #[tokio::test]
     async fn runner_translates_reviews_and_reports() {
         let dir = tempfile::tempdir().unwrap();
