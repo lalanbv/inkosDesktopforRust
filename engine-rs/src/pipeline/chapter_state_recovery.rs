@@ -542,12 +542,12 @@ mod retry_tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![ValidationResult {
                 warnings: vec![],
-                passed: true,
+                passed: true, repair_required: false,
             }]),
         };
         let original = ValidationResult {
             warnings: vec![warning("c", "d")],
-            passed: false,
+            passed: false, repair_required: false,
         };
         let book = test_book();
         match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
@@ -571,10 +571,10 @@ mod retry_tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![ValidationResult {
                 warnings: vec![warning("contradiction", "硬矛盾")],
-                passed: false,
+                passed: false, repair_required: false,
             }]),
         };
-        let original = ValidationResult { warnings: vec![], passed: false };
+        let original = ValidationResult { warnings: vec![], passed: false, repair_required: false };
         let book = test_book();
         match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
             .await

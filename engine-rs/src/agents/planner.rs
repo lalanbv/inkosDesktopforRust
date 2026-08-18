@@ -27,6 +27,7 @@ use crate::agents::planner_context::{
     format_recyclable_hooks, read_book_rules_block, read_character_matrix,
     read_emotional_arcs, read_pending_hooks, read_subplot_board,
 };
+use crate::models::length_governance::LengthSpec;
 use crate::agents::planner_prompts::{
     build_planner_user_message, get_planner_memo_system_prompt, PlannerUserMessageInput,
 };
@@ -52,6 +53,9 @@ pub struct PlanChapterInput<'a> {
     pub book_dir: &'a Path,
     pub chapter_number: u32,
     pub external_context: Option<&'a str>,
+    /// 131 号：planner 侧篇幅预算基准（TS input.book.chapterWordCount——
+    /// write-next 的 wordCountOverride 不作用于此，writer 面独立计算）。
+    pub chapter_word_count: u32,
 }
 
 /// planChapter 出参。对齐 TS `PlanChapterOutput`。
@@ -168,6 +172,7 @@ pub async fn plan_chapter(
             story_dir: &story_dir,
             book_dir: input.book_dir,
             chapter_number: input.chapter_number,
+            chapter_word_count: input.chapter_word_count,
             is_golden_opening,
             fallback_goal: &goal,
             chapter_summaries_raw: &materials.seed.chapter_summaries_raw,
@@ -213,6 +218,7 @@ pub struct PlanChapterMemoInput<'a> {
     pub story_dir: &'a Path,
     pub book_dir: &'a Path,
     pub chapter_number: u32,
+    pub chapter_word_count: u32,
     pub is_golden_opening: bool,
     pub fallback_goal: &'a str,
     pub chapter_summaries_raw: &'a str,
@@ -286,6 +292,20 @@ pub async fn plan_chapter_memo(
             language,
         ),
         is_golden_opening: input.is_golden_opening,
+        length_budget: {
+            let spec = crate::utils::length_metrics::build_length_spec(
+                input.chapter_word_count,
+                input.language,
+            );
+            crate::agents::planner_prompts::PlannerLengthBudget {
+                target: spec.target,
+                soft_min: spec.soft_min,
+                soft_max: spec.soft_max,
+                hard_min: spec.hard_min,
+                hard_max: spec.hard_max,
+                unit: if input.language == WritingLanguage::En { "words" } else { "字" },
+            }
+        },
         book_rules_relevant: &{
             let trimmed = book_rules_raw.trim();
             if trimmed.is_empty() {
@@ -351,12 +371,17 @@ pub async fn plan_chapter_memo(
         MEMO_RETRY_LIMIT,
         fallback_error.0
     );
+    let fallback_spec = crate::utils::length_metrics::build_length_spec(
+        input.chapter_word_count,
+        input.language,
+    );
     let fallback_markdown = build_fallback_memo_markdown(&FallbackMemoInput {
         chapter_number: input.chapter_number,
         is_golden_opening: input.is_golden_opening,
         fallback_goal: input.fallback_goal,
         error_message: &fallback_error.0,
         language,
+        length_spec: &fallback_spec,
     });
     parse_memo(
         &fallback_markdown,
@@ -372,6 +397,8 @@ struct FallbackMemoInput<'a> {
     fallback_goal: &'a str,
     error_message: &'a str,
     language: WritingLanguage,
+    /// 131 号：场景与篇幅预算节的硬区间/目标值来源（TS fallback 同款入参）。
+    length_spec: &'a LengthSpec,
 }
 
 fn build_fallback_memo_markdown(input: &FallbackMemoInput<'_>) -> String {
@@ -393,6 +420,12 @@ fn build_fallback_memo_markdown(input: &FallbackMemoInput<'_>) -> String {
             String::new(),
             "## Thread refs".to_string(),
             "none".to_string(),
+            String::new(),
+            "## Scene and length budget".to_string(),
+            format!(
+                "Plan 2-5 concrete scenes whose combined draft length stays within {}-{} words and aims for {} words. Give each scene a distinct action, consequence, and approximate word budget.",
+                input.length_spec.hard_min, input.length_spec.hard_max, input.length_spec.target
+            ),
             String::new(),
             "## Current task".to_string(),
             format!(
@@ -443,6 +476,12 @@ fn build_fallback_memo_markdown(input: &FallbackMemoInput<'_>) -> String {
         String::new(),
         "## 关联线索".to_string(),
         "无".to_string(),
+        String::new(),
+        "## 场景与篇幅预算".to_string(),
+        format!(
+            "规划 2-5 个有明确行动与后果的真实场景，总篇幅控制在 {}-{} 字，目标约 {} 字；为每个场景分配动态字数预算，不靠总结和重复内心戏凑字数。",
+            input.length_spec.hard_min, input.length_spec.hard_max, input.length_spec.target
+        ),
         String::new(),
         "## 当前任务".to_string(),
         format!(
@@ -1249,7 +1288,7 @@ mod tests {
     fn valid_memo(chapter: u32) -> String {
         // 必备小节内容均 ≥20 UTF-16 字（parse_memo 空小节校验门槛）。
         format!(
-            "# 第 {chapter} 章 memo\n\n## 本章目标\n推进主线，兑现玉符第一步\n\n## 关联线索\n- H01\n\n## 当前任务\n林动夜探藏书阁夺回祖符，避开巡夜执事的封锁线。\n\n## 读者此刻在等什么\n期待玉符来历揭开一部分；本章部分兑现并制造更强缺口。\n\n## 该兑现的 / 暂不掀的\n- 该兑现：玉符效力 → 兑现到第一层；暂不掀：幕后主使身份继续压住。\n\n## 日常/过渡承担什么任务\n不适用 - 本章无日常过渡，全程高压推进不留闲笔。\n\n## 关键抉择过三连问\n- 主角：为救族人冒险夺符；符合当前利益；符合坚忍人设。\n\n## 章尾必须发生的改变\n信息改变：林动得知符中封印之物的一角真相。\n\n## 本章 hook 账\nopen:\n- [new] 巡夜执事的怀疑 || 理由：现在开不点破\n\nadvance:\n- H01 \"祖符来历\" → 推进（planted → pressured）\n\nresolve:\n- 无\n\ndefer:\n- H09 \"幕后主使\" → 时机未到\n\n## 不要做\n- 不要让反派降智，不要新增第三条支线。\n\n"
+            "# 第 {chapter} 章 memo\n\n## 本章目标\n推进主线，兑现玉符第一步\n\n## 关联线索\n- H01\n\n## 场景与篇幅预算\n- 场景 1：夜探藏书阁避封锁｜约 700 字\n- 场景 2：夺符交锋与异象｜约 1200 字\n- 场景 3：章尾封印一角真相｜约 900 字\n\n## 当前任务\n林动夜探藏书阁夺回祖符，避开巡夜执事的封锁线。\n\n## 读者此刻在等什么\n期待玉符来历揭开一部分；本章部分兑现并制造更强缺口。\n\n## 该兑现的 / 暂不掀的\n- 该兑现：玉符效力 → 兑现到第一层；暂不掀：幕后主使身份继续压住。\n\n## 日常/过渡承担什么任务\n不适用 - 本章无日常过渡，全程高压推进不留闲笔。\n\n## 关键抉择过三连问\n- 主角：为救族人冒险夺符；符合当前利益；符合坚忍人设。\n\n## 章尾必须发生的改变\n信息改变：林动得知符中封印之物的一角真相。\n\n## 本章 hook 账\nopen:\n- [new] 巡夜执事的怀疑 || 理由：现在开不点破\n\nadvance:\n- H01 \"祖符来历\" → 推进（planted → pressured）\n\nresolve:\n- 无\n\ndefer:\n- H09 \"幕后主使\" → 时机未到\n\n## 不要做\n- 不要让反派降智，不要新增第三条支线。\n\n"
         )
     }
 
@@ -1394,6 +1433,7 @@ mod tests {
                 book_dir: dir.path(),
                 chapter_number: 2,
                 external_context: Some("本章加入新导师"),
+                    chapter_word_count: 3000,
             },
         )
         .await
@@ -1445,6 +1485,7 @@ mod tests {
                 chapter_context: None,
                 recyclable_hooks: &[],
                 language: WritingLanguage::Zh,
+                chapter_word_count: 3000,
             },
         )
         .await
@@ -1477,6 +1518,7 @@ mod tests {
                 chapter_context: None,
                 recyclable_hooks: &[],
                 language: WritingLanguage::Zh,
+                chapter_word_count: 3000,
             },
         )
         .await
@@ -1501,6 +1543,7 @@ mod tests {
                 chapter_context: None,
                 recyclable_hooks: &[],
                 language: WritingLanguage::En,
+                chapter_word_count: 3000,
             },
         )
         .await
@@ -1518,6 +1561,14 @@ mod tests {
             fallback_goal: "目标",
             error_message: "缺小节",
             language: WritingLanguage::Zh,
+            length_spec: &LengthSpec {
+                target: 3000,
+                soft_min: 2250,
+                soft_max: 3750,
+                hard_min: 1500,
+                hard_max: 4500,
+                counting_mode: crate::models::length_governance::LengthCountingMode::ZhChars,
+            },
         });
         let memo = parse_memo(&markdown, 4, false).expect("fallback memo 应可解析");
         assert_eq!(memo.goal, "目标");

@@ -12,7 +12,7 @@
 //!
 //! 全部方法消费 `&dyn StateStore`，可注入 [`InMemoryStateStore`](crate::state::store::InMemoryStateStore) 单测。
 
-use crate::models::runtime_state::{
+use crate::models::runtime_state::{ChapterSummaryRow, CurrentStateFact, 
     ChapterSummariesState, CurrentStateState, HooksState, RuntimeStateDelta, StateManifest,
 };
 use crate::utils::hook_arbiter::arbitrate_runtime_state_delta_hooks;
@@ -93,6 +93,137 @@ pub async fn build_runtime_state_artifacts(
             constraint(format!("reducer: {e}"))
         })?;
 
+    let resolved_chapter = resolved_delta.chapter;
+    Ok(RuntimeStateArtifacts {
+        snapshot: next.clone(),
+        resolved_delta,
+        current_state_markdown: render_current_state_projection(&next.current_state, language),
+        hooks_markdown: render_hooks_projection(&next.hooks, language, Some(resolved_chapter)),
+        chapter_summaries_markdown: render_chapter_summaries_projection(&next.chapter_summaries, language),
+    })
+}
+
+
+/// 加载章前快照（TS `loadRuntimeStateSnapshotAtChapter`）：`story/snapshots/{N}`
+/// 的 state 四 JSON 优先；markdown 重建兜底（manifest.lastAppliedChapter = N，
+/// migrationWarnings 注明重建来源）。
+pub async fn load_runtime_state_snapshot_at_chapter(
+    store: &dyn StateStore,
+    book_dir: &str,
+    chapter: u32,
+    language: WritingLanguage,
+) -> crate::Result<RuntimeStateSnapshot> {
+    let snapshot_dir = join_path(&join_path(book_dir, "story"), &format!("snapshots/{}", chapter));
+    let state_dir = join_path(&snapshot_dir, "state");
+
+    let try_json = |name: &str| {
+        let path = join_path(&state_dir, name);
+        async move {
+            match store.read_to_string(&path).await {
+                Ok(Some(raw)) => serde_json::from_str::<serde_json::Value>(&raw).ok(),
+                _ => None,
+            }
+        }
+    };
+    let (manifest_raw, current_raw, hooks_raw, summaries_raw) = tokio::join!(
+        try_json("manifest.json"),
+        try_json("current_state.json"),
+        try_json("hooks.json"),
+        try_json("chapter_summaries.json"),
+    );
+    if let (Some(manifest_raw), Some(current_raw), Some(hooks_raw), Some(summaries_raw)) =
+        (manifest_raw, current_raw, hooks_raw, summaries_raw)
+    {
+        let issues = validate_runtime_state(&ValidationInput {
+            manifest: manifest_raw.clone(),
+            current_state: current_raw.clone(),
+            hooks: hooks_raw.clone(),
+            chapter_summaries: summaries_raw.clone(),
+        });
+        if !issues.is_empty() {
+            return Err(constraint(format!(
+                "Invalid runtime snapshot at chapter {}: {}",
+                chapter,
+                summarize_issues(&issues)
+            )));
+        }
+        return Ok(RuntimeStateSnapshot {
+            manifest: serde_json::from_value(manifest_raw)?,
+            current_state: serde_json::from_value(current_raw)?,
+            hooks: serde_json::from_value(hooks_raw)?,
+            chapter_summaries: serde_json::from_value(summaries_raw)?,
+        });
+    }
+
+    // markdown 重建（TS 同款：current_state.md / pending_hooks.md 必读，
+    // chapter_summaries.md 缺省为空）。
+    let read_md = |name: &str| {
+        let path = join_path(&snapshot_dir, name);
+        async move { store.read_to_string(&path).await }
+    };
+    let (current_md, hooks_md, summaries_md) = tokio::join!(
+        read_md("current_state.md"),
+        read_md("pending_hooks.md"),
+        read_md("chapter_summaries.md"),
+    );
+    let current_md = current_md?.unwrap_or_default();
+    let hooks_md = hooks_md?.unwrap_or_default();
+    let summaries_md = summaries_md?.unwrap_or_default();
+    let lang_str = if language == WritingLanguage::En { "en" } else { "zh" };
+    let facts = crate::utils::story_markdown::parse_current_state_facts(&current_md, chapter as i64)
+        .into_iter()
+        .map(|f| CurrentStateFact {
+            subject: f.subject,
+            predicate: f.predicate,
+            object: f.object,
+            valid_from_chapter: f.valid_from_chapter.max(0) as u32,
+            valid_until_chapter: f.valid_until_chapter.map(|v| v.max(0) as u32),
+            source_chapter: f.source_chapter.max(0) as u32,
+        })
+        .collect();
+    let rows = crate::utils::story_markdown::parse_chapter_summaries_markdown(&summaries_md)
+        .into_iter()
+        .map(|row| ChapterSummaryRow {
+            chapter: row.chapter.max(0) as u32,
+            title: row.title,
+            characters: row.characters,
+            events: row.events,
+            state_changes: row.state_changes,
+            hook_activity: row.hook_activity,
+            mood: row.mood,
+            chapter_type: row.chapter_type,
+        })
+        .collect();
+    Ok(RuntimeStateSnapshot {
+        manifest: StateManifest {
+            schema_version: 2,
+            language: lang_str.to_string(),
+            last_applied_chapter: chapter,
+            projection_version: 1,
+            migration_warnings: vec![format!(
+                "runtime snapshot {} reconstructed from markdown",
+                chapter
+            )],
+        },
+        current_state: CurrentStateState { chapter, facts },
+        hooks: HooksState {
+            hooks: crate::utils::story_markdown::parse_pending_hooks_markdown(&hooks_md),
+        },
+        chapter_summaries: ChapterSummariesState { rows },
+    })
+}
+
+/// 从指定快照归约产出工件（TS `buildRuntimeStateArtifactsFromSnapshot`）。
+pub async fn build_runtime_state_artifacts_from_snapshot(
+    snapshot: &RuntimeStateSnapshot,
+    delta: &RuntimeStateDelta,
+    language: WritingLanguage,
+    allow_reapply: Option<bool>,
+) -> crate::Result<RuntimeStateArtifacts> {
+    let (resolved_delta, _decisions) =
+        arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta);
+    let next = apply_runtime_state_delta(snapshot, &resolved_delta, allow_reapply)
+        .map_err(|e| constraint(format!("reducer: {e}")))?;
     let resolved_chapter = resolved_delta.chapter;
     Ok(RuntimeStateArtifacts {
         snapshot: next.clone(),

@@ -221,6 +221,7 @@ async fn run_plan(
             book_dir: &book_dir,
             chapter_number,
             external_context: context,
+                    chapter_word_count: 3000,
         },
     )
     .await?;
@@ -297,6 +298,7 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
             book: &book,
             book_dir: &book_dir,
             chapter_number: body.chapter,
+            baseline_chapter: None,
             title: &body.title,
             content: &body.content,
             allow_reapply: body.allow_reapply,
@@ -815,19 +817,43 @@ pub(crate) async fn run_revise_chain(
         return Err(internal("Reviser returned empty content".to_string()));
     }
 
-    // post merged-audit（temp 0 + 修稿器产出的临时真相覆盖）。
-    let placeholder_state = "(状态卡未更新)";
-    let placeholder_ledger = "(账本未更新)";
-    let placeholder_hooks = "(伏笔池未更新)";
+    // 131 号合并同步：reviser 契约瘦身（updated_* 标签移除）——修订后的
+    // 真相覆盖改由结算器产出（TS reviseDraft 新链：revise → settle → 覆盖审计）。
+    let settler_agent: &'static RoutedAgent =
+        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "writer" }));
+    let settled = crate::agents::writer::settle_chapter_state(
+        &crate::agents::writer::WriterCtx {
+            project_root: runtime.state.project_root(),
+            builtin_genres_dir: &runtime.builtin_genres_dir,
+            prompt_store: &FsStateStore,
+            state_store: &FsStateStore,
+        },
+        settler_agent,
+        &crate::agents::writer::SettleChapterStateInput {
+            book: &book,
+            book_dir: &book_dir,
+            chapter_number,
+            baseline_chapter: Some(chapter_number.saturating_sub(1)),
+            title: &chapter_title,
+            content: &revise_output.revised_content,
+            allow_reapply: None,
+            chapter_intent: None,
+            context_package: None,
+            rule_stack: None,
+            validation_feedback: None,
+        },
+    )
+    .await
+    .map_err(|e| internal(e.to_string()))?;
     let post_options = AuditChapterOptions {
         temperature: Some(0.0),
         truth_file_overrides: Some(TruthFileOverrides {
-            current_state: (revise_output.updated_state != placeholder_state)
-                .then(|| revise_output.updated_state.clone()),
-            ledger: (revise_output.updated_ledger != placeholder_ledger)
-                .then(|| revise_output.updated_ledger.clone()),
-            hooks: (revise_output.updated_hooks != placeholder_hooks)
-                .then(|| revise_output.updated_hooks.clone()),
+            current_state: (!settled.updated_state.is_empty())
+                .then(|| settled.updated_state.clone()),
+            ledger: (!settled.updated_ledger.is_empty())
+                .then(|| settled.updated_ledger.clone()),
+            hooks: (!settled.updated_hooks.is_empty())
+                .then(|| settled.updated_hooks.clone()),
         }),
         ..Default::default()
     };
@@ -896,17 +922,18 @@ pub(crate) async fn run_revise_chain(
         .await
         .map_err(|e| internal(e.to_string()))?;
 
-    // 仅最新章拥有当前真相（Node 语义；ledger 回写 47 号补齐）。
+    // 仅最新章拥有当前真相（Node 语义；ledger 回写 47 号补齐）。131 号：
+    // 真相来源改结算器输出（reviser 契约瘦身）。
     if is_latest {
         let story_dir = book_dir.join("story");
-        if revise_output.updated_state != placeholder_state {
-            let _ = tokio::fs::write(story_dir.join("current_state.md"), &revise_output.updated_state).await;
+        if !settled.updated_state.is_empty() {
+            let _ = tokio::fs::write(story_dir.join("current_state.md"), &settled.updated_state).await;
         }
-        if revise_output.updated_ledger != placeholder_ledger {
-            let _ = tokio::fs::write(story_dir.join("particle_ledger.md"), &revise_output.updated_ledger).await;
+        if !settled.updated_ledger.is_empty() {
+            let _ = tokio::fs::write(story_dir.join("particle_ledger.md"), &settled.updated_ledger).await;
         }
-        if revise_output.updated_hooks != placeholder_hooks {
-            let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &revise_output.updated_hooks).await;
+        if !settled.updated_hooks.is_empty() {
+            let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &settled.updated_hooks).await;
         }
     }
 
@@ -1055,6 +1082,7 @@ async fn run_compose(
                     book_dir: &book_dir,
                     chapter_number,
                     external_context: context,
+                    chapter_word_count: 3000,
                 },
             )
             .await
@@ -1208,6 +1236,7 @@ impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
                 book: params.book,
                 book_dir: params.book_dir,
                 chapter_number: self.chapter_number,
+            baseline_chapter: None,
                 title: params.title,
                 content: params.content,
                 allow_reapply: Some(params.allow_reapply),
@@ -1890,7 +1919,7 @@ pub async fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<
         reviser: leak("reviser"),
         auditor: leak("auditor"),
         full_auditor: None,
-        normalizer: leak("length-normalizer"),
+
         analyzer: leak("chapter-analyzer"),
         state_validator: leak("state-validator"),
         settler,

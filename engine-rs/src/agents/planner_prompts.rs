@@ -47,6 +47,11 @@ pub const PLANNER_MEMO_SYSTEM_PROMPT: &str = r###"你是这本小说的创作总
 - H03
 - S004
 
+## 场景与篇幅预算
+- 场景 1：<要完成的动作>｜约 700 字
+- 场景 2：<冲突或关系变化>｜约 1200 字
+- 场景 3：<章尾改变>｜约 900 字
+
 ## 当前任务
 <一句话：本章主角要完成的具体动作，不要抽象描述>
 
@@ -105,6 +110,7 @@ defer:
 
 - "## 本章目标" 不超过 50 字
 - "## 关联线索" 用 Markdown 列表写从输入 pending_hooks/subplot_board 中挑出的 id；没有就写"无"
+- "## 场景与篇幅预算" 按 2-5 个真实场景分配篇幅，各场景预算合计应落在输入的章节硬区间内；禁止用总结、重复内心戏或新增支线凑字数
 - 每个二级标题（##）必须出现，内容不能为空
 - 不要在 memo 里提方法论术语（"情绪缺口"、"cyclePhase"、"蓄压"等）——直接用这本书的人物、地点、事件说事
 - 不要产生正文片段或对话片段
@@ -145,6 +151,11 @@ Pin Door 7 tampering as live evidence
 ## Thread refs
 - H03
 - S004
+
+## Scene and length budget
+- Scene 1: <concrete action> | about 450 words
+- Scene 2: <conflict or relationship change> | about 800 words
+- Scene 3: <end-of-chapter change> | about 600 words
 
 ## Current task
 <one sentence: the concrete action the protagonist must complete this chapter — no abstractions>
@@ -204,6 +215,7 @@ defer:
 
 - "## Chapter goal" is no more than 50 characters
 - "## Thread refs" is a Markdown bullet list of ids picked from the input pending_hooks / subplot_board; write "none" if empty
+- "## Scene and length budget" allocates the requested length across 2-5 real scenes. The scene budgets must total within the supplied hard range. Never pad with recap, repeated interiority, or a new subplot.
 - Every level-2 heading (##) must appear; none may be empty
 - Do NOT use methodology jargon ("emotional gap", "cyclePhase", "pressure buildup") in the memo — speak directly using this book's people, places, events
 - Do NOT produce prose or dialogue fragments
@@ -241,6 +253,7 @@ pub const PLANNER_MEMO_USER_TEMPLATE: &str = r##"# 第 {{chapterNumber}} 章 mem
 
 ## 本章卷外约束
 - 是否黄金三章：{{isGoldenOpening}}
+- 章节篇幅预算：目标 {{lengthTarget}} {{lengthUnit}}；建议 {{lengthSoftMin}}-{{lengthSoftMax}}；硬区间 {{lengthHardMin}}-{{lengthHardMax}}
 - 硬约束（摘取本章可能触碰的条目）：
 {{book_rules_relevant}}
 
@@ -278,10 +291,22 @@ pub const PLANNER_MEMO_USER_TEMPLATE_EN: &str = r##"# Chapter {{chapterNumber}} 
 
 ## Out-of-volume constraints for this chapter
 - Golden opening chapter: {{isGoldenOpening}}
+- Chapter length budget: target {{lengthTarget}} {{lengthUnit}}; preferred {{lengthSoftMin}}-{{lengthSoftMax}}; hard {{lengthHardMin}}-{{lengthHardMax}}
 - Hard rules (excerpt of items this chapter may touch):
 {{book_rules_relevant}}
 
 Produce the memo for chapter {{chapterNumber}}. Strictly emit the plain Markdown section format above."##;
+
+/// 章节篇幅预算（TS `lengthBudget`：unit 由计数模式换算——en_words →
+/// "words"，zh_chars → "字"）。
+pub struct PlannerLengthBudget<'a> {
+    pub target: u32,
+    pub soft_min: u32,
+    pub soft_max: u32,
+    pub hard_min: u32,
+    pub hard_max: u32,
+    pub unit: &'a str,
+}
 
 /// [`build_planner_user_message`] 入参。对齐 TS `PlannerUserMessageInput`。
 pub struct PlannerUserMessageInput<'a> {
@@ -295,6 +320,7 @@ pub struct PlannerUserMessageInput<'a> {
     pub relevant_threads: &'a str,
     pub recyclable_hooks: &'a str,
     pub is_golden_opening: bool,
+    pub length_budget: PlannerLengthBudget<'a>,
     pub book_rules_relevant: &'a str,
     pub brief: Option<&'a str>,
     pub chapter_context: Option<&'a str>,
@@ -335,6 +361,14 @@ pub fn build_planner_user_message(input: &PlannerUserMessageInput<'_>) -> String
 
     let chapter_number = input.chapter_number.to_string();
     let golden_text = if input.is_golden_opening { yes_text } else { no_text };
+    let budget = &input.length_budget;
+    let (length_target, length_soft_min, length_soft_max, length_hard_min, length_hard_max) = (
+        budget.target.to_string(),
+        budget.soft_min.to_string(),
+        budget.soft_max.to_string(),
+        budget.hard_min.to_string(),
+        budget.hard_max.to_string(),
+    );
     let filled = template
         .replace("{{chapterNumber}}", &chapter_number)
         .replace("{{brief_block}}", &brief_block)
@@ -351,6 +385,12 @@ pub fn build_planner_user_message(input: &PlannerUserMessageInput<'_>) -> String
         .replace("{{relevant_threads}}", input.relevant_threads)
         .replace("{{recyclable_hooks}}", input.recyclable_hooks)
         .replace("{{isGoldenOpening}}", golden_text)
+        .replace("{{lengthTarget}}", &length_target)
+        .replace("{{lengthUnit}}", budget.unit)
+        .replace("{{lengthSoftMin}}", &length_soft_min)
+        .replace("{{lengthSoftMax}}", &length_soft_max)
+        .replace("{{lengthHardMin}}", &length_hard_min)
+        .replace("{{lengthHardMax}}", &length_hard_max)
         .replace("{{book_rules_relevant}}", input.book_rules_relevant);
 
     let golden = build_golden_opening_guidance(input.chapter_number, language);
@@ -431,6 +471,14 @@ mod tests {
             relevant_threads: "- H01: …",
             recyclable_hooks: "（暂无陈旧 hook——账本干净）",
             is_golden_opening: true,
+            length_budget: PlannerLengthBudget {
+                target: 3000,
+                soft_min: 2250,
+                soft_max: 3750,
+                hard_min: 1500,
+                hard_max: 4500,
+                unit: "zh_chars",
+            },
             book_rules_relevant: "（暂无 book_rules 条目）",
             brief: Some("都市异能，主角林动"),
             chapter_context: Some("本章加入新角色"),

@@ -58,7 +58,7 @@ pub use chapter_splitter::{split_chapters, SplitChapter};
 pub use pov_filter::{extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov};
 pub use language::{infer_language, utf16_len, WritingLanguage};
 pub use length_metrics::{
-    build_length_spec, choose_normalize_mode, count_chapter_length, default_chapter_length,
+    build_length_spec, count_chapter_length, default_chapter_length,
     format_length_count, is_outside_hard_range, is_outside_soft_range,
     resolve_length_counting_mode,
 };

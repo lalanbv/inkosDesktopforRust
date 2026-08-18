@@ -36,6 +36,8 @@ struct RequiredSection {
 }
 
 const REQUIRED_SECTIONS: &[RequiredSection] = &[
+    // 131 号合并同步：场景与篇幅预算成为 memo 必备节（planner 篇幅治理面）。
+    RequiredSection { zh: "## 场景与篇幅预算", en: "## Scene and length budget", min_content_chars: 20 },
     RequiredSection { zh: "## 当前任务", en: "## Current task", min_content_chars: 20 },
     RequiredSection { zh: "## 读者此刻在等什么", en: "## What the reader is waiting for right now", min_content_chars: 20 },
     RequiredSection { zh: "## 该兑现的 / 暂不掀的", en: "## To pay off / to keep buried", min_content_chars: 20 },
@@ -273,7 +275,7 @@ mod tests {
     fn full_memo(goal: &str) -> String {
         // 构造一个所有必备小节都满足 minContentChars（≥20 码元）的合法 memo
         format!(
-            "## 本章目标\n{goal}\n\n## 当前任务\n推进主角觉醒系统面板，并完成第一次战斗场景。\n\n## 读者此刻在等什么\n等待主角如何应对突如其来的危机，以及力量的边界。\n\n## 该兑现的 / 暂不掀的\n兑现：系统面板功能；暂不掀：幕后黑手身份。\n\n## 日常/过渡承担什么任务\n用早餐场景建立主角与同伴的关系，埋下后续冲突的种子。\n\n## 关键抉择过三连问\n是否暴露能力？是否信任同伴？是否追击敌人？\n\n## 章尾必须发生的改变\n主角公开表明自己的身份，世界对他的态度彻底转变。\n\n## 本章 hook 账\n埋伏：神秘符文；呼唤：未完成的誓言；悬念：暗处窥视者。\n\n## 不要做\n无\n"
+            "## 本章目标\n{goal}\n\n## 场景与篇幅预算\n- 场景 1：觉醒与试探｜约 800 字\n- 场景 2：首次交锋｜约 1300 字\n- 场景 3：态度转变收尾｜约 900 字\n\n## 当前任务\n推进主角觉醒系统面板，并完成第一次战斗场景。\n\n## 读者此刻在等什么\n等待主角如何应对突如其来的危机，以及力量的边界。\n\n## 该兑现的 / 暂不掀的\n兑现：系统面板功能；暂不掀：幕后黑手身份。\n\n## 日常/过渡承担什么任务\n用早餐场景建立主角与同伴的关系，埋下后续冲突的种子。\n\n## 关键抉择过三连问\n是否暴露能力？是否信任同伴？是否追击敌人？\n\n## 章尾必须发生的改变\n主角公开表明自己的身份，世界对他的态度彻底转变。\n\n## 本章 hook 账\n埋伏：神秘符文；呼唤：未完成的誓言；悬念：暗处窥视者。\n\n## 不要做\n无\n"
         )
     }
 

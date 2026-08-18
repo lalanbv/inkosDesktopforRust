@@ -2,6 +2,11 @@
 //!
 //! 移植自 `packages/core/src/models/length-governance.ts`（zod schema 定义）。
 //! 这些类型被 [`crate::utils::length_metrics`] 与后续 pipeline/state 域共用。
+//!
+//! 131 号合并同步：上游 e7c04465 移除 length-normalizer 阶段——
+//! `LengthNormalizeMode` 与 `LengthSpec.normalizeMode` 删除；遥测的
+//! postWriterNormalizeCount/normalizeApplied 换 repairApplied（审核环修复
+//! 是否改变了正文）。
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
@@ -18,25 +23,11 @@ pub enum LengthCountingMode {
     EnWords,
 }
 
-/// 长度归一化模式。对齐 TS `"expand" | "compress" | "none"`。
-/// 变体 `None` 经 serde 重命名为 `"none"`（与 `Option::None` 无关，全限定使用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"expand\" | \"compress\" | \"none\""))]
-pub enum LengthNormalizeMode {
-    #[serde(rename = "expand")]
-    Expand,
-    #[serde(rename = "compress")]
-    Compress,
-    #[serde(rename = "none")]
-    None,
-}
-
-/// 章节长度规格（目标 + 软/硬区间 + 计量/归一化模式）。
+/// 章节长度规格（目标 + 软/硬区间 + 计量模式）。
 ///
 /// 所有数值字段对齐 TS `z.number().int().min(1)`（Rust 侧用 u32，编译期非负）。
 /// `rename_all = "camelCase"` 对齐 TS JSON 契约（softMin/softMax/hardMin/hardMax/
-/// countingMode/normalizeMode），保证 strangler 切换时端点响应字段名一致。
+/// countingMode），保证 strangler 切换时端点响应字段名一致。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
@@ -48,7 +39,6 @@ pub struct LengthSpec {
     pub hard_min: u32,
     pub hard_max: u32,
     pub counting_mode: LengthCountingMode,
-    pub normalize_mode: LengthNormalizeMode,
 }
 
 /// 长度遥测（移植自 TS `LengthTelemetrySchema`）。计数类字段对齐 `z.number().int().min(0)`。
@@ -64,9 +54,9 @@ pub struct LengthTelemetry {
     pub hard_max: u32,
     pub counting_mode: LengthCountingMode,
     pub writer_count: u32,
-    pub post_writer_normalize_count: u32,
     pub post_revise_count: u32,
     pub final_count: u32,
-    pub normalize_applied: bool,
+    /// 审核环修复是否改变了正文（= revised 同式：有修复快照且终稿 ≠ 初稿）。
+    pub repair_applied: bool,
     pub length_warning: bool,
 }

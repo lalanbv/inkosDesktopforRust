@@ -4055,8 +4055,8 @@
         "autoOutputMode": "allow-full"
       },
       "expected": {
-        "revisedContent": "polish",
-        "wordCount": 6,
+        "revisedContent": "原章",
+        "wordCount": 2,
         "fixedIssues": []
       }
     },
@@ -4070,8 +4070,8 @@
         "autoOutputMode": "rewrite-only"
       },
       "expected": {
-        "revisedContent": "auto",
-        "wordCount": 4,
+        "revisedContent": "含原句的正文",
+        "wordCount": 6,
         "fixedIssues": []
       }
     },
@@ -4085,9 +4085,11 @@
         "autoOutputMode": "patch-only"
       },
       "expected": {
-        "revisedContent": "auto",
-        "wordCount": 4,
-        "fixedIssues": []
+        "revisedContent": "开头。替换句。结尾。",
+        "wordCount": 10,
+        "fixedIssues": [
+          "修了原句"
+        ]
       }
     },
     {

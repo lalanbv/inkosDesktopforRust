@@ -15,8 +15,6 @@
 //!   （41 号备案；strangler 分域下 Node/Rust 不并发写同一书）
 //! - **通知/webhook**：`notify_channels`/`emit_webhook` 回调注入，失败不阻断
 //!   主链（TS dispatchNotification 异步触发语义）
-//! - **normalizeDraftLengthIfNeeded**：临时构造 length-normalizer 端口适配
-//!   （TS 在 runner 内联创建 LengthNormalizerAgent）
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,7 +31,6 @@ use crate::agents::composer::{
     LlmOutlineSelector,
 };
 use crate::agents::continuity::{AuditIssue, AuditResult, AuditSeverity};
-use crate::agents::length_normalizer::{normalize_chapter, LengthNormalizerChat, NormalizeLengthInput};
 use crate::agents::planner::{plan_chapter, PlanChapterError, PlanChapterInput, PlannerChat};
 use crate::agents::post_write_validator::{
     detect_paragraph_length_drift, normalize_post_write_surface, resolve_duplicate_title,
@@ -57,11 +54,7 @@ use crate::pipeline::build_persistence_output::{
 use crate::pipeline::chapter_persistence::{
     persist_chapter_artifacts, PersistChapterArtifactsParams, PersistenceHooks,
 };
-use crate::pipeline::chapter_review_cycle::{
-    run_chapter_review_cycle, ChapterReviewCycleControlInput,
-    CycleAuditor, CycleReviser, DraftLengthNormalizer, NormalizeStepResult, ReviewCycleCallbacks,
-    ReviewCycleError, ReviewCycleParams, SensitiveScanResult,
-};
+use crate::pipeline::chapter_review_cycle::{run_chapter_review_cycle, ChapterReviewCycleControlInput, CycleAuditor, CycleReviser, ReviewCycleCallbacks, ReviewCycleError, ReviewCycleParams, SensitiveScanResult, };
 use crate::pipeline::chapter_state_recovery::{ControlInput, SettlePort, ValidatePort};
 use crate::pipeline::chapter_truth_validation::{
     validate_chapter_truth_persistence, TruthValidationParams,
@@ -192,7 +185,7 @@ pub struct WriteNextAgents<'a> {
     /// 完整审计器（Some 时为 auto 环主链——真实 audit_chapter 编排，
     /// 调用方用 book 上下文构造 FullCycleAuditor；None 回退 auditor）。
     pub full_auditor: Option<crate::llm::agent_router::FullCycleAuditor>,
-    pub normalizer: &'a dyn LengthNormalizerChat,
+
     pub analyzer: &'a dyn ChapterAnalyzerChat,
     pub state_validator: &'a dyn StateValidatorChat,
     /// settle 端口（writer.settleChapterState 的链内形态，truth-validation 用）。
@@ -410,8 +403,7 @@ async fn write_next_chapter_locked(
     let revised: bool;
     let mut audit_result: AuditResult;
     let post_revise_count: u32;
-    let normalize_applied: bool;
-    let pre_audit_normalized_word_count: u32;
+    let repair_applied: bool;
 
     if config.chapter_review_mode == ChapterReviewMode::Manual {
         // C4a：写完即停——跳过自动审核环（避免静默翻倍章节耗时）。
@@ -424,8 +416,7 @@ async fn write_next_chapter_locked(
         final_content = normalized;
         revised = false;
         post_revise_count = 0;
-        normalize_applied = final_content != output.content;
-        pre_audit_normalized_word_count = writer_count;
+        repair_applied = false;
         audit_result = AuditResult {
             passed: false,
             issues: Vec::new(),
@@ -439,8 +430,7 @@ async fn write_next_chapter_locked(
             token_usage: None,
         };
         let _ = post_revise_count;
-        let _ = normalize_applied;
-        let _ = pre_audit_normalized_word_count;
+        let _ = repair_applied;
     } else {
         // ── 2. 审核环（assess → revise → assess，快照择优） ──
         stage_log(config, pipeline_language, "审核环", "review cycle");
@@ -459,39 +449,6 @@ async fn write_next_chapter_locked(
             _ => None,
         };
 
-        // length-normalizer 端口适配（normalizeDraftLengthIfNeeded）。
-        struct NormalizerAdapter<'a, 'b> {
-            chat: &'a dyn LengthNormalizerChat,
-            spec: &'b LengthSpec,
-            chapter_intent: Option<String>,
-        }
-        #[async_trait]
-        impl DraftLengthNormalizer for NormalizerAdapter<'_, '_> {
-            async fn normalize(&self, content: &str) -> Result<NormalizeStepResult, String> {
-                let out = normalize_chapter(
-                    self.chat,
-                    &NormalizeLengthInput {
-                        chapter_content: content,
-                        length_spec: self.spec,
-                        chapter_intent: self.chapter_intent.as_deref(),
-                        reduced_control_block: None,
-                    },
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                Ok(NormalizeStepResult {
-                    content: out.normalized_content,
-                    word_count: out.final_count,
-                    applied: out.applied,
-                    token_usage: out.token_usage,
-                })
-            }
-        }
-        let normalizer = NormalizerAdapter {
-            chat: agents.normalizer,
-            spec: &length_spec,
-            chapter_intent: write_input.chapter_intent.clone(),
-        };
 
         // 确定性后写检查（每轮重跑）：post-write error 级 + hook 账本校验。
         let parsed_rules = read_book_rules(&book_dir).await;
@@ -652,7 +609,6 @@ async fn write_next_chapter_locked(
             },
             reviser: &cycle_reviser,
             auditor: cycle_auditor,
-            normalizer: &normalizer,
             callbacks,
             max_review_iterations: Some(config.writing_review_retries),
         })
@@ -667,9 +623,7 @@ async fn write_next_chapter_locked(
         revised = review.revised;
         audit_result = review.audit_result;
         post_revise_count = review.post_revise_count;
-        normalize_applied = review.normalize_applied;
-        pre_audit_normalized_word_count = review.pre_audit_normalized_word_count;
-        let _ = (post_revise_count, normalize_applied, pre_audit_normalized_word_count);
+        repair_applied = review.repair_applied;
     }
 
     // 检查点③：审查环收敛后（TS 1932——manual 模式同样经过）。
@@ -789,10 +743,9 @@ async fn write_next_chapter_locked(
         hard_max: length_spec.hard_max,
         counting_mode: length_spec.counting_mode,
         writer_count,
-        post_writer_normalize_count: pre_audit_normalized_word_count,
         post_revise_count,
         final_count: final_word_count,
-        normalize_applied,
+        repair_applied,
         length_warning: !length_warnings.is_empty(),
     });
     for warning in &length_warnings {
@@ -1235,11 +1188,11 @@ fn build_length_warnings(chapter_number: u32, final_count: u32, spec: &LengthSpe
         return Vec::new();
     }
     let zh = format!(
-        "第{chapter_number}章经过一次字数归一化后仍超出硬区间（{}-{}，实际 {final_count}）。",
+        "第{chapter_number}章未达到篇幅预算（{}-{}，实际 {final_count}）。",
         spec.hard_min, spec.hard_max
     );
     let en = format!(
-        "Chapter {chapter_number} remains outside hard range ({}-{}, actual {final_count}) after a single normalization pass.",
+        "Chapter {chapter_number} is outside its length budget ({}-{}, actual {final_count}).",
         spec.hard_min, spec.hard_max
     );
     vec![match spec.counting_mode {
@@ -1330,6 +1283,7 @@ pub(crate) async fn prepare_write_input(
                     book_dir,
                     chapter_number,
                     external_context,
+                    chapter_word_count: book.chapter_word_count,
                 },
             )
             .await?;
@@ -1502,12 +1456,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl LengthNormalizerChat for ScriptChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, _temperature: f64) -> Result<ChatOutcome, String> {
-            Ok(ChatOutcome { content: self.dispatch(&messages), usage: None })
-        }
-    }
 
     #[async_trait]
     impl ChapterAnalyzerChat for ScriptChat {
@@ -1564,7 +1512,6 @@ mod tests {
             reviser: &chat,
             auditor: &chat,
             full_auditor: None,
-            normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
             settler: &chat,
@@ -1672,7 +1619,6 @@ mod tests {
             reviser: &chat,
             auditor: &chat,
             full_auditor: None,
-            normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
             settler: &chat,
@@ -1800,7 +1746,6 @@ mod tests {
             reviser: &chat,
             auditor: &chat,
             full_auditor: None,
-            normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
             settler: &chat,
@@ -1846,7 +1791,6 @@ mod tests {
             reviser: &chat,
             auditor: &chat,
             full_auditor: None,
-            normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
             settler: &chat,
@@ -1927,7 +1871,6 @@ mod tests {
             reviser: &chat,
             auditor: &chat,
             full_auditor: None,
-            normalizer: &chat,
             analyzer: &chat,
             state_validator: &chat,
             settler: &chat,

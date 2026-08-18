@@ -39,7 +39,9 @@ pub fn build_settler_system_prompt(
 - 推进伏笔：已有伏笔在本章出现了新的事实、证据、关系变化、风险升级或范围收缩 → **必须**更新\"最近推进\"列为当前章节号，更新状态和备注
 - 回收伏笔：伏笔在本章被明确揭示、解决、或不再成立 → 状态改为\"已回收\"，备注回收方式
 - 延后伏笔：只有当正文明确显示该线被主动搁置、转入后台、或被剧情压后时，才标注\"延后\"；不要因为\u{201c}已经过了几章\u{201d}就机械延后
-- brand-new unresolved thread：不要直接发明新的 hookId。把候选放进 newHookCandidates，由系统决定它是映射到旧 hook、变成真正新 hook，还是被拒绝为重述
+- 当前伏笔池会同时提供活跃伏笔和与本章语义相关的休眠种子。休眠不等于无关：本章如果启动、改写或具体化了它，必须复用它已有的 hookId，并在 hookOps.upsert 中更新状态、回收方向和备注
+- 判断“正文的新表述是否仍是既有叙事承诺”是你的语义职责。即使人物、数字、证据形式或措辞发生变化，只要它承接的是同一悬念/冲突/回收承诺，就更新既有 hookId，不要另开候选
+- newHookCandidates 只用于当前伏笔池中没有任何一条能代表的全新叙事承诺。宿主只校验结构，不会再用关键词替你猜语义归属
 - payoffTiming 使用语义节奏，不用硬写章节号：只允许 immediate / near-term / mid-arc / slow-burn / endgame
 - **铁律**：不要把\u{201c}再次提到\u{201d}\u{201c}换个说法重述\u{201d}\u{201c}抽象复盘\u{201d}当成推进。只有状态真的变了，才更新最近推进。只是出现过的旧 hook，放进 mention 数组。";
 
@@ -181,8 +183,8 @@ fn build_settler_output_format(gp: &GenreProfile) -> String {
 规则：
 1. 只输出增量，不要重写完整 truth files
 2. 所有章节号字段都必须是整数，不能写自然语言
-3. hookOps.upsert 里只能写\u{201c}当前伏笔池里已经存在\u{201d}的 hookId，不允许发明新的 hookId
-4. brand-new unresolved thread 一律写进 newHookCandidates，不要自造 hookId
+3. hookOps.upsert 里只能写\u{201c}当前伏笔池里已经存在\u{201d}的 hookId，不允许发明新的 hookId；语义上承接既有伏笔时必须复用该 id
+4. 只有确认当前伏笔池没有同一叙事承诺时，brand-new unresolved thread 才写进 newHookCandidates
 5. 如果旧 hook 只是被提到、没有真实状态变化，把它放进 mention，不要更新 lastAdvancedChapter
 6. 如果本章推进了旧 hook，lastAdvancedChapter 必须等于当前章号
 7. 如果回收或延后 hook，必须放在 resolve / defer 数组里
@@ -285,7 +287,7 @@ pub fn build_settler_user_prompt(params: &SettlerUserPromptInput<'_>) -> String 
 ## 当前状态卡
 {current_state}
 {ledger_block}
-## 当前伏笔池
+## 当前伏笔池（含活跃伏笔与本章语义相关的休眠种子）
 {hooks}
 {selected_evidence_block}{summaries_block}{subplot_block}{emotional_block}{matrix_block}
 {outline_block}
@@ -433,7 +435,7 @@ mod tests {
         assert!(out.starts_with("请分析第12章「试炼」的正文，更新所有追踪文件。\n"));
         assert!(out.contains("## 本章正文\n\n正文内容。\n\n"));
         assert!(out.contains("## 当前状态卡\n状态卡内容\n"));
-        assert!(out.contains("## 当前伏笔池\n伏笔池内容\n"));
+        assert!(out.contains("## 当前伏笔池（含活跃伏笔与本章语义相关的休眠种子）\n伏笔池内容\n"));
         assert!(out.contains("## 卷纲\n第一卷：开局\n"), "无 control block 时输出卷纲");
         assert!(!out.contains("## 当前资源账本"), "空 ledger 无账本块");
         assert!(!out.contains("## 已有章节摘要"), "占位文案不输出摘要块");

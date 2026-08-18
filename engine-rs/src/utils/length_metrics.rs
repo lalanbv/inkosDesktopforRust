@@ -11,7 +11,7 @@
 //!   字节状态机（无 regex 依赖、0GC 友好）。
 //! - **markdown 剥离**：frontmatter / 代码栅栏 / ATX 标题 / 水平线，逐行 char 判断。
 
-use crate::models::length_governance::{LengthCountingMode, LengthNormalizeMode, LengthSpec};
+use crate::models::length_governance::{LengthCountingMode, LengthSpec};
 use crate::utils::language::WritingLanguage;
 
 /// 跨语言基准目标字数（soft/hard 区间 delta 按此缩放）。移植 TS `REFERENCE_TARGET`。
@@ -70,7 +70,6 @@ pub fn build_length_spec(target: u32, language: WritingLanguage) -> LengthSpec {
         hard_min,
         hard_max,
         counting_mode: resolve_length_counting_mode(language),
-        normalize_mode: LengthNormalizeMode::None,
     }
 }
 
@@ -84,16 +83,6 @@ pub fn is_outside_hard_range(count: u32, hard_min: u32, hard_max: u32) -> bool {
     count < hard_min || count > hard_max
 }
 
-/// 依当前计数相对软区间的位置选择归一化方向。
-pub fn choose_normalize_mode(count: u32, soft_min: u32, soft_max: u32) -> LengthNormalizeMode {
-    if count < soft_min {
-        LengthNormalizeMode::Expand
-    } else if count > soft_max {
-        LengthNormalizeMode::Compress
-    } else {
-        LengthNormalizeMode::None
-    }
-}
 
 /// 区间 delta 缩放：`max(1, floor(target * reference_delta / 2200))`。
 fn scale_range_delta(target: u32, reference_delta: u64) -> u32 {
@@ -245,7 +234,6 @@ mod tests {
         assert_eq!(spec.soft_min, 864);
         assert_eq!(spec.soft_max, 1136);
         assert_eq!(spec.counting_mode, LengthCountingMode::ZhChars);
-        assert_eq!(spec.normalize_mode, LengthNormalizeMode::None);
     }
 
     #[test]
@@ -256,13 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn range_checks_and_normalize_mode() {
+    fn range_checks() {
         assert!(is_outside_soft_range(50, 100, 200));
         assert!(!is_outside_soft_range(150, 100, 200));
         assert!(is_outside_hard_range(10, 100, 300));
-        assert_eq!(choose_normalize_mode(50, 100, 200), LengthNormalizeMode::Expand);
-        assert_eq!(choose_normalize_mode(250, 100, 200), LengthNormalizeMode::Compress);
-        assert_eq!(choose_normalize_mode(150, 100, 200), LengthNormalizeMode::None);
     }
 
     #[test]

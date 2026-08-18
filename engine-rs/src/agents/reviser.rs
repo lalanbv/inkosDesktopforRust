@@ -38,7 +38,6 @@ use crate::utils::context_filter::filter_summaries;
 use crate::utils::governed_context::build_governed_memory_evidence_blocks;
 use crate::utils::governed_working_set::{
     build_governed_character_matrix_working_set, build_governed_hook_working_set,
-    merge_table_markdown_by_key,
 };
 use crate::utils::language::{utf16_len, WritingLanguage};
 use crate::utils::length_metrics::count_chapter_length;
@@ -84,9 +83,6 @@ pub struct ReviseOutput {
     pub revised_content: String,
     pub word_count: u64,
     pub fixed_issues: Vec<String>,
-    pub updated_state: String,
-    pub updated_ledger: String,
-    pub updated_hooks: String,
     pub token_usage: Option<crate::agents::continuity::AuditTokenUsage>,
 }
 
@@ -300,7 +296,7 @@ fn extract_tag(content: &str, tag: &str) -> String {
 /// 解析 LLM 修稿输出。golden 守门。
 pub fn parse_reviser_output(
     content: &str,
-    numerical_system: bool,
+    _numerical_system: bool,
     mode: ReviseMode,
     original_chapter: &str,
     auto_output_mode: AutoOutputMode,
@@ -316,20 +312,6 @@ pub fn parse_reviser_output(
         // TS revisedContent.length：UTF-16 码元数。
         word_count: utf16_len(&revised_content) as u64,
         fixed_issues: if applied { fixed_issues.clone() } else { Vec::new() },
-        updated_state: {
-            let value = extract_tag(content, "UPDATED_STATE");
-            if value.is_empty() { "(状态卡未更新)".to_string() } else { value }
-        },
-        updated_ledger: if numerical_system {
-            let value = extract_tag(content, "UPDATED_LEDGER");
-            if value.is_empty() { "(账本未更新)".to_string() } else { value }
-        } else {
-            String::new()
-        },
-        updated_hooks: {
-            let value = extract_tag(content, "UPDATED_HOOKS");
-            if value.is_empty() { "(伏笔池未更新)".to_string() } else { value }
-        },
         revised_content,
         token_usage: None,
     };
@@ -515,7 +497,7 @@ pub async fn revise_chapter(
         ""
     };
     let lang_prefix = if is_english {
-        "【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT, UPDATED_STATE, UPDATED_HOOKS) MUST be in English.\n\n"
+        "【LANGUAGE OVERRIDE】ALL output (FIXED_ISSUES, PATCHES, REVISED_CONTENT) MUST be in English.\n\n"
     } else {
         ""
     };
@@ -707,13 +689,7 @@ pub async fn revise_chapter(
         chapter_content,
         auto_output_mode,
     );
-    let merged_output = if governed_mode {
-        let mut merged = output;
-        merged.updated_hooks = merge_table_markdown_by_key(&hooks, &merged.updated_hooks, &[0]);
-        merged
-    } else {
-        output
-    };
+    let merged_output = output;
     let word_count = match options.length_spec {
         Some(spec) => {
             u64::from(count_chapter_length(&merged_output.revised_content, spec.counting_mode))
@@ -813,15 +789,6 @@ pub fn build_auto_system_prompt(
     auto_output_mode: AutoOutputMode,
 ) -> String {
     let en = resolved_language == WritingLanguage::En;
-    let ledger_section = if gp.numerical_system {
-        if en {
-            "\n=== UPDATED_LEDGER ===\n(Full updated resource ledger)"
-        } else {
-            "\n=== UPDATED_LEDGER ===\n(更新后的完整资源账本)"
-        }
-    } else {
-        ""
-    };
     let rewrite_length_constraint = length_spec
         .map(|spec| {
             if en {
@@ -895,13 +862,7 @@ REPLACEMENT_TEXT:
 --- END PATCH ---
 
 === REVISED_CONTENT ===
-(Full revised chapter content — only when PATCHES cannot solve the problem. Omit this section if using PATCHES)
-
-=== UPDATED_STATE ===
-(Full updated state card)
-{ledger_section}
-=== UPDATED_HOOKS ===
-(Full updated hooks board)"#,
+(Full revised chapter content — only when PATCHES cannot solve the problem. Omit this section if using PATCHES)"#,
             name = gp.name,
         )
     } else {
@@ -947,13 +908,7 @@ REPLACEMENT_TEXT:
 --- END PATCH ---
 
 === REVISED_CONTENT ===
-(修正后的完整正文——用于字数/结构/节奏等全章级问题。仅局部问题时省略此区块)
-
-=== UPDATED_STATE ===
-(更新后的完整状态卡)
-{ledger_section}
-=== UPDATED_HOOKS ===
-(更新后的完整伏笔池)"#,
+(修正后的完整正文——用于字数/结构/节奏等全章级问题。仅局部问题时省略此区块)"#,
             name = gp.name,
         )
     }
@@ -969,29 +924,18 @@ pub fn build_legacy_system_prompt(
     mode: ReviseMode,
 ) -> String {
     let mode_desc = mode_description(mode);
-    let ledger_note = if gp.numerical_system {
-        "\n=== UPDATED_LEDGER ===\n(更新后的完整资源账本)"
-    } else {
-        ""
-    };
     let output_format = if mode == ReviseMode::SpotFix {
-        format!(
-            "=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条；如果无法安全定点修复，也在这里说明)\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n(必须从原文中精确复制、且能唯一命中的原句或原段)\nREPLACEMENT_TEXT:\n(替换后的局部文本)\n--- END PATCH ---\n\n=== UPDATED_STATE ===\n(更新后的完整状态卡)\n{ledger_note}\n=== UPDATED_HOOKS ===\n(更新后的完整伏笔池)"
-        )
+        "=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条；如果无法安全定点修复，也在这里说明)\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n(必须从原文中精确复制、且能唯一命中的原句或原段)\nREPLACEMENT_TEXT:\n(替换后的局部文本)\n--- END PATCH ---".to_string()
     } else {
-        format!(
-            "=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条)\n\n=== REVISED_CONTENT ===\n(修正后的完整正文)\n\n=== UPDATED_STATE ===\n(更新后的完整状态卡)\n{ledger_note}\n=== UPDATED_HOOKS ===\n(更新后的完整伏笔池)"
-        )
+        "=== FIXED_ISSUES ===\n(逐条说明修正了什么，一行一条)\n\n=== REVISED_CONTENT ===\n(修正后的完整正文)".to_string()
     };
     let spot_fix_extra = if mode == ReviseMode::SpotFix {
         "\n9. spot-fix 只能输出局部补丁，禁止输出整章改写；TARGET_TEXT 必须能在原文中唯一命中\n10. 如果需要大面积改写，说明无法安全 spot-fix，并让 PATCHES 留空"
     } else {
         ""
     };
-    let ledger_word = if gp.numerical_system { "、账本" } else { "" };
-
     format!(
-        "{lang_prefix}你是一位专业的{name}网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。{protagonist_block}\n\n修稿模式：{mode_desc}\n\n修稿原则：\n1. 按模式控制修改幅度\n2. 修根因，不做表面润色{numerical_rule}\n4. 伏笔状态必须与伏笔池同步\n5. 不改变剧情走向和核心冲突\n6. 保持原文的语言风格和节奏\n7. 修改后同步更新状态卡{ledger_word}、伏笔池\n{length_guardrail}\n{spot_fix_extra}\n\n输出格式：\n\n{output_format}",
+        "{lang_prefix}你是一位专业的{name}网络小说修稿编辑。你的任务是根据审稿意见对章节进行修正。{protagonist_block}\n\n修稿模式：{mode_desc}\n\n修稿原则：\n1. 按模式控制修改幅度\n2. 修根因，不做表面润色{numerical_rule}\n4. 正文必须服从既有事实和伏笔约束，但不要输出或重写状态文件；宿主会根据修订正文重新结算\n5. 不改变剧情走向和核心冲突\n6. 保持原文的语言风格和节奏\n{length_guardrail}\n{spot_fix_extra}\n\n输出格式：\n\n{output_format}",
         name = gp.name,
     )
 }
@@ -1078,9 +1022,6 @@ mod tests {
         let out = parse_reviser_output(content, true, ReviseMode::Rewrite, "旧正文", AutoOutputMode::AllowFull);
         assert_eq!(out.fixed_issues, vec!["修正A".to_string(), "修正B".to_string()]);
         assert_eq!(out.revised_content, "新正文内容");
-        assert_eq!(out.updated_state, "新状态");
-        assert_eq!(out.updated_ledger, "(账本未更新)");
-        assert_eq!(out.updated_hooks, "新伏笔池");
         assert_eq!(out.word_count, 5); // 「新正文内容」5 个 UTF-16 码元
         assert!(out.fixed_issues.len() == 2);
     }
@@ -1090,8 +1031,6 @@ mod tests {
         let out = parse_reviser_output("没有任何标记", false, ReviseMode::Polish, "原章", AutoOutputMode::AllowFull);
         assert_eq!(out.revised_content, "原章");
         assert!(out.fixed_issues.is_empty());
-        assert_eq!(out.updated_state, "(状态卡未更新)");
-        assert_eq!(out.updated_ledger, "");
     }
 
     #[test]
@@ -1123,7 +1062,6 @@ mod tests {
         assert!(zh.contains("你是一位专业的都市网络小说修稿编辑"));
         assert!(zh.contains("主角人设锁定：林动。"));
         assert!(zh.contains("分流指令"));
-        assert!(zh.contains("=== UPDATED_LEDGER ==="));
 
         let en = build_auto_system_prompt("【LANGUAGE OVERRIDE】", &gp, "", "", WritingLanguage::En, None, AutoOutputMode::PatchOnly);
         assert!(en.starts_with("【LANGUAGE OVERRIDE】You are a professional 都市"));
@@ -1142,7 +1080,6 @@ mod tests {
         assert!(out.contains("修稿模式：定点修复"));
         assert!(out.contains("8. 护栏"));
         assert!(out.contains("9. spot-fix 只能输出局部补丁"));
-        assert!(!out.contains("UPDATED_LEDGER"));
     }
 
     #[test]

@@ -38,6 +38,9 @@ pub struct ValidationWarning {
 pub struct ValidationResult {
     pub warnings: Vec<ValidationWarning>,
     pub passed: bool,
+    /// 131 号（TS repairRequired）：首行裁决 REPAIR → true；JSON 路径显式
+    /// `repairRequired === true` 才 true；跳过校验面恒 false。
+    pub repair_required: bool,
 }
 
 /// 权威上下文（story_frame / book_rules / 章节摘要节选）。
@@ -90,7 +93,7 @@ pub async fn validate(
 
     // 无变化跳过校验。
     if state_diff.is_none() && hooks_diff.is_none() {
-        return Ok(ValidationResult { warnings: Vec::new(), passed: true });
+        return Ok(ValidationResult { warnings: Vec::new(), passed: true, repair_required: false });
     }
 
     let lang_instruction = if params.language == WritingLanguage::En {
@@ -238,6 +241,7 @@ pub fn parse_result(content: &str) -> Result<ValidationResult, StateValidationEr
         return Err(StateValidationError::InvalidResponse);
     }
     let passed = pass_re().is_match(verdict_line);
+    let repair_required = repair_re().is_match(verdict_line);
 
     let mut warnings: Vec<ValidationWarning> = Vec::new();
     for line in lines.iter().skip(1) {
@@ -262,7 +266,7 @@ pub fn parse_result(content: &str) -> Result<ValidationResult, StateValidationEr
         }
     }
 
-    Ok(ValidationResult { warnings, passed })
+    Ok(ValidationResult { warnings, passed, repair_required })
 }
 
 fn try_parse_json_result(text: &str) -> Option<ValidationResult> {
@@ -276,6 +280,7 @@ fn try_parse_json_result(text: &str) -> Option<ValidationResult> {
 fn try_parse_exact_json_result(text: &str) -> Option<ValidationResult> {
     let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
     let passed = parsed.get("passed")?.as_bool()?;
+    let repair_required = parsed.get("repairRequired").and_then(|v| v.as_bool()).unwrap_or(false);
     let warnings: Vec<ValidationWarning> = parsed
         .get("warnings")
         .and_then(|value| value.as_array().cloned())
@@ -297,7 +302,7 @@ fn try_parse_exact_json_result(text: &str) -> Option<ValidationResult> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(ValidationResult { warnings, passed })
+    Some(ValidationResult { warnings, passed, repair_required })
 }
 
 /// 字符串感知的平衡 JSON 对象提取；闭合括号后仅允许空白/结构终结符
@@ -361,13 +366,19 @@ pub fn extract_balanced_json_object(text: &str) -> Option<String> {
 fn verdict_re() -> &'static regex::Regex {
     use std::sync::OnceLock;
     static R: OnceLock<regex::Regex> = OnceLock::new();
-    R.get_or_init(|| regex::Regex::new(r"(?i)^(PASS|FAIL)$").unwrap())
+    R.get_or_init(|| regex::Regex::new(r"(?i)^(PASS|REPAIR|FAIL)$").unwrap())
 }
 
 fn pass_re() -> &'static regex::Regex {
     use std::sync::OnceLock;
     static R: OnceLock<regex::Regex> = OnceLock::new();
     R.get_or_init(|| regex::Regex::new(r"(?i)^PASS$").unwrap())
+}
+
+fn repair_re() -> &'static regex::Regex {
+    use std::sync::OnceLock;
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| regex::Regex::new(r"(?i)^REPAIR$").unwrap())
 }
 
 fn category_re() -> &'static regex::Regex {

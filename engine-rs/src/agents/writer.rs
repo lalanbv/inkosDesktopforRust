@@ -131,6 +131,9 @@ pub struct SettleChapterStateInput<'a> {
     pub book: &'a BookConfig,
     pub book_dir: &'a Path,
     pub chapter_number: u32,
+    /// 131 号：快照基准章（TS baselineChapter——修订链重放语义：从章前快照
+    /// 的 truth 重新结算；None = 当前 story 目录（写新章语义））。
+    pub baseline_chapter: Option<u32>,
     pub title: &'a str,
     pub content: &'a str,
     pub allow_reapply: Option<bool>,
@@ -1408,6 +1411,7 @@ async fn build_runtime_state_artifacts_if_present(
     language: WritingLanguage,
     authoritative_chapter_number: Option<u32>,
     allow_reapply: Option<bool>,
+    baseline_chapter: Option<u32>,
 ) -> crate::Result<Option<RuntimeStateArtifacts>> {
     let Some(delta) = delta else {
         return Ok(None);
@@ -1416,9 +1420,32 @@ async fn build_runtime_state_artifacts_if_present(
         Some(authority) => normalize_runtime_state_delta_chapter(delta, authority),
         None => delta.clone(),
     };
-    build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, allow_reapply)
-        .await
-        .map(Some)
+    // 131 号：修订链重放语义——有基准章时从章前快照归约（TS
+    // buildRuntimeStateArtifactsIfPresent 的 baselineChapter 分支）。
+    match baseline_chapter {
+        Some(baseline) => {
+            let snapshot = crate::state::runtime_state_store::load_runtime_state_snapshot_at_chapter(
+                state_store,
+                book_dir,
+                baseline,
+                language,
+            )
+            .await?;
+            crate::state::runtime_state_store::build_runtime_state_artifacts_from_snapshot(
+                &snapshot,
+                &safe_delta,
+                language,
+                allow_reapply,
+            )
+            .await
+            .map(Some)
+        }
+        None => {
+            build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, allow_reapply)
+                .await
+                .map(Some)
+        }
+    }
 }
 
 /// 对齐 TS `resolveRuntimeStateArtifactsForOutput`：输出已带完整 artifacts
@@ -1854,6 +1881,7 @@ pub async fn write_chapter(
         resolved_language,
         Some(chapter_number),
         None,
+        None,
     )
     .await
     .map_err(WriteChapterError::Engine)?;
@@ -2021,7 +2049,10 @@ pub async fn settle_chapter_state(
 ) -> Result<WriteChapterOutput, WriteChapterError> {
     let book = input.book;
     let book_dir = input.book_dir;
-    let story_dir = book_dir.join("story");
+    let story_dir = match input.baseline_chapter {
+        Some(baseline) => book_dir.join("story").join("snapshots").join(baseline.to_string()),
+        None => book_dir.join("story"),
+    };
 
     let current_state = read_current_state_with_fallback(book_dir, MISSING_FILE).await;
     let ledger = read_file_or_default(&story_dir.join("particle_ledger.md")).await;
@@ -2088,6 +2119,7 @@ pub async fn settle_chapter_state(
         resolved_language,
         Some(input.chapter_number),
         input.allow_reapply,
+        input.baseline_chapter,
     )
     .await
     .map_err(WriteChapterError::Engine)?;
@@ -2909,6 +2941,7 @@ mod tests {
             book: &config,
             book_dir: &book,
             chapter_number: 3,
+            baseline_chapter: None,
             title: "旧章",
             content: "正文内容，主角突破。",
             allow_reapply: None,

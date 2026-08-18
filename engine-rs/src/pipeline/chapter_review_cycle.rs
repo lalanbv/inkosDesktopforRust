@@ -46,12 +46,13 @@ pub struct ChapterReviewCycleControlInput<'a> {
 pub struct ChapterReviewCycleResult {
     pub final_content: String,
     pub final_word_count: u32,
-    pub pre_audit_normalized_word_count: u32,
+    pub pre_audit_word_count: u32,
     pub revised: bool,
     pub audit_result: AuditResult,
     pub total_usage: AuditTokenUsage,
     pub post_revise_count: u32,
-    pub normalize_applied: bool,
+    /// 审核环修复是否改变了正文（TS：snapshots.length > 1 && final !== initial）。
+    pub repair_applied: bool,
 }
 
 /// 修订器端口（reviser::revise_chapter 的环内形态）。
@@ -75,19 +76,6 @@ pub trait CycleAuditor: Send + Sync {
         control_input: Option<&ChapterReviewCycleControlInput<'_>>,
         temperature: Option<f64>,
     ) -> Result<AuditResult, String>;
-}
-
-/// 长度归一化端口（length-normalizer 的环内形态）。
-pub struct NormalizeStepResult {
-    pub content: String,
-    pub word_count: u32,
-    pub applied: bool,
-    pub token_usage: Option<AuditTokenUsage>,
-}
-
-#[async_trait]
-pub trait DraftLengthNormalizer: Send + Sync {
-    async fn normalize(&self, chapter_content: &str) -> Result<NormalizeStepResult, String>;
 }
 
 /// 敏感词结果的最小消费面。
@@ -129,7 +117,6 @@ pub struct ReviewCycleParams<'a> {
     pub initial_usage: AuditTokenUsage,
     pub reviser: &'a dyn CycleReviser,
     pub auditor: &'a dyn CycleAuditor,
-    pub normalizer: &'a dyn DraftLengthNormalizer,
     pub callbacks: ReviewCycleCallbacks,
     pub max_review_iterations: Option<usize>,
 }
@@ -165,8 +152,6 @@ pub enum ReviewCycleError {
     Reviser(String),
     #[error("auditor failed: {0}")]
     Auditor(String),
-    #[error("length normalizer failed: {0}")]
-    Normalizer(String),
     #[error("chapter content check failed at `{stage}`: {message}")]
     EmptyContent { stage: String, message: String },
 }
@@ -182,7 +167,6 @@ pub async fn run_chapter_review_cycle(
     params: ReviewCycleParams<'_>,
 ) -> Result<ChapterReviewCycleResult, ReviewCycleError> {
     let mut total_usage = params.initial_usage;
-    let mut normalize_applied = false;
     let mut final_content = params.initial_content.to_string();
     let mut final_word_count;
 
@@ -201,33 +185,15 @@ pub async fn run_chapter_review_cycle(
 
     let counting_mode = params.length_spec.counting_mode;
 
-    // 长度归一化：专用步骤，仅明显硬区间漂移时触发；不混入 reviser 问题。
-    let word_count_now = count_chapter_length(&final_content, counting_mode);
-    let normalized_before_audit = if !is_outside_hard_range(
-        word_count_now,
-        params.length_spec.hard_min,
-        params.length_spec.hard_max,
-    ) {
-        (
-            final_content.clone(),
-            count_chapter_length(&final_content, counting_mode),
-            false,
-        )
-    } else {
-        let result = params
-            .normalizer
-            .normalize(&final_content)
-            .await
-            .map_err(ReviewCycleError::Normalizer)?;
-        total_usage = add_usage(&total_usage, result.token_usage.as_ref());
-        (result.content, result.word_count, result.applied)
-    };
+    // 131 号合并同步：环内长度归一步骤移除（上游 e7c04465——修订稿字数漂移由
+    // lengthInRange 硬门控 + 快照择优兜底，No in-loop normalize needed）。
     final_content = match &params.callbacks.normalize_post_write_surface {
-        Some(surface) => surface(&normalized_before_audit.0),
-        None => normalized_before_audit.0,
+        Some(surface) => surface(&final_content),
+        None => final_content,
     };
     final_word_count = count_chapter_length(&final_content, counting_mode);
-    normalize_applied = normalize_applied || normalized_before_audit.2;
+    // 环首计数（表面净化后、初始审计前——TS preAuditWordCount 同点取值）。
+    let pre_audit_word_count = final_word_count;
     (params.callbacks.assert_chapter_content_not_empty)(&final_content, "draft generation")
         .map_err(|message| ReviewCycleError::EmptyContent {
             stage: "draft generation".to_string(),
@@ -323,12 +289,12 @@ pub async fn run_chapter_review_cycle(
         return Ok(ChapterReviewCycleResult {
             final_content,
             final_word_count,
-            pre_audit_normalized_word_count: final_word_count,
+            pre_audit_word_count,
             revised: false,
             audit_result: current_audit.audit_result,
             total_usage,
             post_revise_count,
-            normalize_applied,
+            repair_applied: false,
         });
     }
 
@@ -490,15 +456,16 @@ pub async fn run_chapter_review_cycle(
         };
     }
 
+    let repair_applied = snapshots.len() > 1 && final_content != params.initial_content;
     Ok(ChapterReviewCycleResult {
-        pre_audit_normalized_word_count: final_word_count,
-        revised: snapshots.len() > 1 && final_content != params.initial_content,
+        pre_audit_word_count,
+        revised: repair_applied,
         final_content,
         final_word_count,
         audit_result: current_audit.audit_result,
         total_usage,
         post_revise_count,
-        normalize_applied,
+        repair_applied,
     })
 }
 
@@ -516,7 +483,7 @@ fn _revise_mode_default() -> ReviseMode {
 mod tests {
     use super::*;
     use crate::models::length_governance::{
-        LengthCountingMode, LengthNormalizeMode, LengthSpec,
+        LengthCountingMode, LengthSpec,
     };
     use std::sync::Mutex;
 
@@ -530,7 +497,6 @@ mod tests {
             hard_min: 1,
             hard_max: 10_000,
             counting_mode: LengthCountingMode::ZhChars,
-            normalize_mode: LengthNormalizeMode::None,
         }
     }
 
@@ -594,22 +560,6 @@ mod tests {
         }
     }
 
-    struct NoopNormalizer {
-        applied: bool,
-    }
-
-    #[async_trait]
-    impl DraftLengthNormalizer for NoopNormalizer {
-        async fn normalize(&self, content: &str) -> Result<NormalizeStepResult, String> {
-            Ok(NormalizeStepResult {
-                content: content.to_string(),
-                word_count: count_chapter_length(content, LengthCountingMode::ZhChars),
-                applied: self.applied,
-                token_usage: None,
-            })
-        }
-    }
-
     fn callbacks() -> ReviewCycleCallbacks {
         ReviewCycleCallbacks {
             normalize_post_write_surface: None,
@@ -636,7 +586,6 @@ mod tests {
         post_write: &'a [crate::agents::post_write_validator::PostWriteViolation],
         auditor: &'a ScriptAuditor,
         reviser: &'a ScriptReviser,
-        normalizer: &'a NoopNormalizer,
         spec: &'a LengthSpec,
         max_iterations: Option<usize>,
     ) -> ReviewCycleParams<'a> {
@@ -651,7 +600,6 @@ mod tests {
             initial_usage: AuditTokenUsage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             reviser,
             auditor,
-            normalizer,
             callbacks: callbacks(),
             max_review_iterations: max_iterations,
         }
@@ -668,14 +616,12 @@ mod tests {
             revised: "不该被用到".into(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             None,
         ))
@@ -698,14 +644,12 @@ mod tests {
             revised: "x".into(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             Some(3),
         ))
@@ -727,14 +671,12 @@ mod tests {
             revised: format!("{PASS_CONTENT}修复后追加的一句收尾。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[violation("chapter-ref")],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             None,
         ))
@@ -761,14 +703,12 @@ mod tests {
             revised: format!("{PASS_CONTENT}第二轮修复了主线偏移，并补上钩子兑现。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             None,
         ))
@@ -793,14 +733,12 @@ mod tests {
             revised: format!("{PASS_CONTENT}小幅改动但分数没怎么动。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             Some(5),
         ))
@@ -822,14 +760,12 @@ mod tests {
             revised: PASS_CONTENT.to_string(), // 与原文相同 → 无新内容
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             Some(5),
         ))
@@ -849,14 +785,12 @@ mod tests {
             revised: "   \n  ".to_string(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: false };
-        let sp = spec();
+                let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[],
             &auditor,
             &reviser,
-            &normalizer,
             &sp,
             None,
         ))
@@ -876,7 +810,6 @@ mod tests {
             revised: "x".into(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-        let normalizer = NoopNormalizer { applied: true };
         let sp = spec();
         let params = ReviewCycleParams {
             book_dir: std::path::Path::new("/tmp"),
@@ -889,7 +822,6 @@ mod tests {
             initial_usage: AuditTokenUsage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
             reviser: &reviser,
             auditor: &auditor,
-            normalizer: &normalizer,
             callbacks: ReviewCycleCallbacks {
                 normalize_post_write_surface: Some(Arc::new(|content| {
                     format!("【净化】{content}")
@@ -908,8 +840,8 @@ mod tests {
         };
         let result = run_chapter_review_cycle(params).await.unwrap();
         assert!(result.final_content.starts_with("【净化】"));
-        // normalize_applied 只反映长度归一化（宽硬区间未触发）；
-        // 表面净化是独立回调，不计入该标志（TS 同语义）。
-        assert!(!result.normalize_applied);
+        // repair_applied 反映审核环修复（131 号：环内长度归一已随上游移除；
+        // 表面净化是独立回调，不计入该标志——TS repairApplied 同语义）。
+        assert!(!result.repair_applied);
     }
 }

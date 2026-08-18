@@ -203,7 +203,6 @@ fn count_chapter_length_matches_ts() {
     }
 }
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn build_length_spec_matches_ts() {
     use inkos_engine::utils::WritingLanguage;
@@ -603,7 +602,6 @@ fn resolve_revision_gate_matches_ts() {
     }
 }
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn parse_memo_matches_ts() {
     use inkos_engine::utils::chapter_memo_parser::parse_memo;
@@ -894,7 +892,6 @@ fn lang_opt(input: &Value) -> Option<inkos_engine::utils::language::WritingLangu
     }
 }
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn build_settler_system_prompt_matches_ts() {
     use inkos_engine::agents::settler_prompts::build_settler_system_prompt;
@@ -931,7 +928,6 @@ fn build_settler_system_prompt_matches_ts() {
     }
 }
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn build_settler_user_prompt_matches_ts() {
     use inkos_engine::agents::settler_prompts::{build_settler_user_prompt, SettlerUserPromptInput};
@@ -1278,7 +1274,6 @@ fn build_governed_character_matrix_working_set_matches_ts() {
 
 
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn writer_build_governed_user_prompt_matches_ts() {
     use inkos_engine::agents::writer::{build_governed_user_prompt, GovernedUserPromptInput};
@@ -1447,7 +1442,6 @@ fn render_summary_snapshot_matches_ts() {
 
 // ---- 34 号：planner 三件套 ----
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn planner_system_prompt_matches_ts() {
     use inkos_engine::agents::planner_prompts::get_planner_memo_system_prompt;
@@ -1457,7 +1451,6 @@ fn planner_system_prompt_matches_ts() {
     }
 }
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn planner_build_user_message_matches_ts() {
     use inkos_engine::agents::planner_prompts::{build_planner_user_message, PlannerUserMessageInput};
@@ -1474,6 +1467,17 @@ fn planner_build_user_message_matches_ts() {
             relevant_threads: input["relevantThreads"].as_str().unwrap_or(""),
             recyclable_hooks: input["recyclableHooks"].as_str().unwrap_or(""),
             is_golden_opening: input["isGoldenOpening"].as_bool().unwrap_or(false),
+            length_budget: {
+                let budget = &input["lengthBudget"];
+                inkos_engine::agents::planner_prompts::PlannerLengthBudget {
+                    target: budget["target"].as_u64().unwrap_or(0) as u32,
+                    soft_min: budget["softMin"].as_u64().unwrap_or(0) as u32,
+                    soft_max: budget["softMax"].as_u64().unwrap_or(0) as u32,
+                    hard_min: budget["hardMin"].as_u64().unwrap_or(0) as u32,
+                    hard_max: budget["hardMax"].as_u64().unwrap_or(0) as u32,
+                    unit: budget["unit"].as_str().unwrap_or(""),
+                }
+            },
             book_rules_relevant: input["bookRulesRelevant"].as_str().unwrap_or(""),
             brief: input["brief"].as_str(),
             chapter_context: input["chapterContext"].as_str(),
@@ -1724,7 +1728,6 @@ fn is_protected_context_source_matches_ts() {
 
 // ---- 36 号：reviser ----
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn reviser_private_suite_matches_ts() {
     use inkos_engine::agents::reviser::{
@@ -1772,9 +1775,6 @@ fn reviser_private_suite_matches_ts() {
                     "revisedContent": out.revised_content,
                     "wordCount": out.word_count,
                     "fixedIssues": out.fixed_issues,
-                    "updatedState": out.updated_state,
-                    "updatedLedger": out.updated_ledger,
-                    "updatedHooks": out.updated_hooks,
                 })
             }
             name if name.starts_with("auto-system-prompt-") => {
@@ -1908,7 +1908,6 @@ fn state_degraded_note_matches_ts() {
 
 // ---- 38 号：state-validator ----
 
-#[ignore = "130号备案：上游e7c04465值级漂移——131号纯函数/提示词面同步轮移植"]
 #[test]
 fn state_validator_suite_matches_ts() {
     use inkos_engine::agents::state_validator::{
@@ -1943,6 +1942,7 @@ fn state_validator_suite_matches_ts() {
                     Ok(result) => serde_json::json!({
                         "warnings": result.warnings,
                         "passed": result.passed,
+                        "repairRequired": result.repair_required,
                     }),
                     Err(error) => serde_json::json!({
                         "__error": match error {

@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use crate::agents::chapter_analyzer::ChapterAnalyzerChat;
 use crate::agents::composer::ComposerChatOptions;
 use crate::agents::continuity::{AuditResult, AuditTokenUsage, ChatOutcome};
-use crate::agents::length_normalizer::LengthNormalizerChat;
 use crate::agents::planner::PlannerChat;
 use crate::agents::reviser::ReviserChat;
 use crate::agents::state_validator::StateValidatorChat;
@@ -250,7 +249,6 @@ impl_simple_chat!(FoundationReviewerChat);
 impl_simple_chat!(FanficCanonImporterChat);
 impl_simple_chat!(PlannerChat);
 impl_simple_chat!(ReviserChat);
-impl_simple_chat!(LengthNormalizerChat);
 impl_simple_chat!(ChapterAnalyzerChat);
 impl_simple_chat!(StateValidatorChat);
 #[async_trait]
@@ -365,6 +363,7 @@ impl SettlePort for RoutedSettler {
             book: params.book,
             book_dir: params.book_dir,
             chapter_number: self.chapter_number,
+            baseline_chapter: None,
             title: params.title,
             content: params.content,
             allow_reapply: Some(params.allow_reapply),

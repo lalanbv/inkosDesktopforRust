@@ -94,7 +94,7 @@ pub async fn validate_chapter_truth_persistence(
             let mut issues = audit_result.issues.clone();
             issues.push(error_issue.clone());
             return Ok(TruthValidationOutcome {
-                validation: ValidationResult { passed: true, warnings: Vec::new() },
+                validation: ValidationResult { passed: true, warnings: Vec::new(), repair_required: false },
                 chapter_status: Some("state-degraded"),
                 degraded_issues: vec![error_issue],
                 persistence_output: build_state_degraded_persistence_output(
@@ -309,7 +309,7 @@ mod tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![Ok(ValidationResult {
                 warnings: vec![],
-                passed: true,
+                passed: true, repair_required: false,
             })]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
@@ -341,8 +341,8 @@ mod tests {
     async fn fail_then_retry_recovers() {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![
-                Ok(ValidationResult { warnings: vec![], passed: false }),
-                Ok(ValidationResult { warnings: vec![], passed: true }),
+                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
+                Ok(ValidationResult { warnings: vec![], passed: true, repair_required: false }),
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
@@ -361,8 +361,8 @@ mod tests {
     async fn fail_then_retry_degrades_restoring_old_truth() {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![
-                Ok(ValidationResult { warnings: vec![], passed: false }),
-                Ok(ValidationResult { warnings: vec![], passed: false }),
+                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
+                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };

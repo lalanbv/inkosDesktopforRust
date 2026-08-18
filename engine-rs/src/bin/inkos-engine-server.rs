@@ -34,7 +34,7 @@ fn env(key: &str, default: &str) -> String {
 /// agent 名（覆盖表键）。
 const AGENTS: &[&str] = &[
     "writer", "planner", "composer", "reviser", "auditor",
-    "length-normalizer", "chapter-analyzer", "state-validator", "writer-settler",
+    "chapter-analyzer", "state-validator", "writer-settler",
 ];
 
 fn build_router() -> axum::Router {
