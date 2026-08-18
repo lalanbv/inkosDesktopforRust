@@ -1734,7 +1734,22 @@ async fn execute_draft_structure(
         Ok(Some(graph)) => summarize_story_graph_for_authoring(&graph),
         _ => "(empty graph)".to_string(),
     };
-    let system_prompt = "你是互动影游编剧。根据上下文与指令，生成分支骨架 JSON：{ \"nodes\": [StoryNode...] }。恰好 1 个 type=start，至少 2 个 branch，至少 2 个差异化 ending 节点；每条路径都能到某个 ending；只输出 JSON。";
+    let base_prompt = "你是互动影游编剧。根据上下文与指令，生成分支骨架 JSON：{ \"nodes\": [StoryNode...] }。恰好 1 个 type=start，至少 2 个 branch，至少 2 个差异化 ending 节点；每条路径都能到某个 ending；只输出 JSON。";
+    // prompt-pack 附加段（107 号：TS draft_structure 工具 interactive-film.story-graph）。
+    let system_prompt = match crate::prompts::prompt_pack::append_prompt_pack_guidance(
+        &crate::state::store::FsStateStore,
+        base_prompt,
+        &crate::prompts::prompt_pack::LoadPromptPackPromptInput {
+            prompt_id: "interactive-film.story-graph".to_string(),
+            project_root: Some(root.display().to_string()),
+            user_root: None,
+        },
+    )
+    .await
+    {
+        Ok(prompt) => prompt,
+        Err(_) => base_prompt.to_string(),
+    };
     let user_prompt = format!("{context}\n\n骨架指令：{instruction}");
     let outcome = runtime
         .router
@@ -1979,7 +1994,7 @@ async fn execute_play_start(
     let mut graph = None;
     let mut seed_mutation = None;
     if existing_transcript.is_empty() {
-        let agents = crate::play_runner::PlayAgents { router: &runtime.router };
+        let agents = crate::play_runner::PlayAgents { router: &runtime.router, root };
         let runner = crate::play_runner::PlayRunner {
             project_root: root,
             world_id: world_id.clone(),

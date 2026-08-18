@@ -8583,7 +8583,7 @@ mod play73_e2e {
         inkos_engine::play::ensure_run(&root, "w-step", "main").await.unwrap();
         inkos_engine::play::append_transcript_turn(&root, "w-step", "main", "user", "开始").await.unwrap();
 
-        let agents = PlayAgents { router: &runtime.router };
+        let agents = PlayAgents { router: &runtime.router, root: &root };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w-step".to_string(),
@@ -10220,7 +10220,7 @@ mod play79_e2e {
         .await
         .unwrap();
 
-        let agents = PlayAgents { router: &runtime.router };
+        let agents = PlayAgents { router: &runtime.router, root: &root };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w79e2e".to_string(),
@@ -10575,7 +10575,7 @@ mod play80_e2e {
         seed_world(&root, session_id).await;
 
         // 直调 runner 先走一回合（场景甲），聊天面负责重做。
-        let agents = PlayAgents { router: &shared_router };
+        let agents = PlayAgents { router: &shared_router, root: &root };
         let runner = PlayRunner {
             project_root: &root,
             world_id: session_id.to_string(),
@@ -10984,7 +10984,7 @@ mod play82_e2e {
         let runtime = rt82(&root, &llm);
         seed_en_world(&root, "w82en").await;
 
-        let agents = PlayAgents { router: &runtime.router };
+        let agents = PlayAgents { router: &runtime.router, root: &root };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w82en".to_string(),
@@ -11043,7 +11043,7 @@ mod play82_e2e {
         let runtime = rt82(&root, &llm);
         seed_en_world(&root, "w82fb").await;
 
-        let agents = PlayAgents { router: &runtime.router };
+        let agents = PlayAgents { router: &runtime.router, root: &root };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w82fb".to_string(),

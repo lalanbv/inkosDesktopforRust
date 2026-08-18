@@ -689,10 +689,16 @@ pub async fn post_node_image(
                 .into_response()
         }
     };
+    // 尺寸链（TS node-image 逐字）：body.size ?? env INKOS_FILM_IMAGE_SIZE ?? "1024x1536"。
     let size: String = body
         .as_ref()
         .and_then(|body| body.size.clone())
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("INKOS_FILM_IMAGE_SIZE")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| "1024x1536".to_string());
     let image = match crate::llm::cover::generate_image_from_prompt(&request, &prompt, &size).await
     {

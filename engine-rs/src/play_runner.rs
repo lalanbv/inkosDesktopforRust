@@ -77,6 +77,8 @@ pub trait PlaySceneReconciler: Send + Sync {
 
 pub struct PlayAgents<'a> {
     pub router: &'a AgentRouter,
+    /// 项目根（107 号：mutator/renderer 提示词的 prompt-pack 附加段加载）。
+    pub root: &'a std::path::Path,
 }
 
 fn parse_json_value(raw: &str) -> Option<Value> {
@@ -161,6 +163,47 @@ impl PlayActionInterpreter for PlayAgents<'_> {
     }
 }
 
+impl PlayAgents<'_> {
+    /// mutator 系统提示 + prompt-pack 附加段（TS play.mutator；builtin 必有，
+    /// 加载异常防御回退基础提示）。
+    async fn mutator_system_prompt(&self, language: &str) -> String {
+        let base = world_mutator_system_prompt(language);
+        match crate::prompts::prompt_pack::append_prompt_pack_guidance(
+            &crate::state::store::FsStateStore,
+            &base,
+            &crate::prompts::prompt_pack::LoadPromptPackPromptInput {
+                prompt_id: "play.mutator".to_string(),
+                project_root: Some(self.root.display().to_string()),
+                user_root: None,
+            },
+        )
+        .await
+        {
+            Ok(prompt) => prompt,
+            Err(_) => base,
+        }
+    }
+
+    /// renderer 系统提示 + prompt-pack 附加段（TS play.renderer）。
+    async fn renderer_system_prompt(&self, mode: &str, language: &str) -> String {
+        let base = scene_renderer_system_prompt(mode, language);
+        match crate::prompts::prompt_pack::append_prompt_pack_guidance(
+            &crate::state::store::FsStateStore,
+            &base,
+            &crate::prompts::prompt_pack::LoadPromptPackPromptInput {
+                prompt_id: "play.renderer".to_string(),
+                project_root: Some(self.root.display().to_string()),
+                user_root: None,
+            },
+        )
+        .await
+        {
+            Ok(prompt) => prompt,
+            Err(_) => base,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl PlayWorldMutator for PlayAgents<'_> {
     async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str, language: &str) -> Value {
@@ -168,7 +211,7 @@ impl PlayWorldMutator for PlayAgents<'_> {
             self.router,
             "play-world-mutator",
             vec![
-                LLMMessage { role: LLMRole::System, content: world_mutator_system_prompt(language), tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::System, content: self.mutator_system_prompt(language).await, tool_calls: None, tool_call_id: None },
                 LLMMessage { role: LLMRole::User, content: world_mutator_user_prompt(turn, input, action, context, language), tool_calls: None, tool_call_id: None },
             ],
             0.25,
@@ -216,7 +259,7 @@ impl PlaySceneRenderer for PlayAgents<'_> {
         replay_context: Option<&str>,
         language: &str,
     ) -> RenderedScene {
-        let system = scene_renderer_system_prompt(mode, language);
+        let system = self.renderer_system_prompt(mode, language).await;
         let user = scene_renderer_user_prompt(input, action, mutation_summary, state_brief, world_premise, replay_context, language);
         let mut messages = vec![
             LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
@@ -1782,6 +1825,39 @@ mod tests {
         assert!(en.starts_with("This is a regeneration of the previous turn"), "{en}");
         assert!(!en.contains("Replacement instruction"), "相同替换不出现：{en}");
         assert!(en.contains("Do not move the clock backward"), "{en}");
+    }
+
+
+    #[tokio::test]
+    async fn play_agent_prompts_append_project_prompt_pack_override() {
+        // 107 号：项目覆盖 prompt/play/mutator.md → mutator 系统提示带附加段；
+        // renderer 无覆盖 → builtin play.renderer 附加段（source: builtin）。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("prompt").join("play")).unwrap();
+        std::fs::write(root.join("prompt").join("play").join("mutator.md"), "自定义世界规则指引。").unwrap();
+        let router = crate::llm::agent_router::AgentRouter::new(
+            crate::llm::agent_router::LlmEndpointConfig {
+                base_url: "http://127.0.0.1:9".into(),
+                api_key: String::new(),
+                model: "m".into(),
+                max_tokens: 16,
+                extra_headers: std::collections::HashMap::new(),
+            },
+            std::collections::HashMap::new(),
+        );
+        let agents = PlayAgents { router: &router, root };
+        let mutator = agents.mutator_system_prompt("zh").await;
+        assert!(
+            mutator.contains("## Prompt Pack Guidance (play.mutator, source: project)"),
+            "{mutator}"
+        );
+        assert!(mutator.contains("自定义世界规则指引。"), "{mutator}");
+        let renderer = agents.renderer_system_prompt("open", "zh").await;
+        assert!(
+            renderer.contains("## Prompt Pack Guidance (play.renderer, source: builtin)"),
+            "{renderer}"
+        );
     }
 
     #[test]

@@ -113,7 +113,7 @@ async fn tool_play_step(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
     let Some(world) = crate::play::load_world(deps.project_root, &world_id).await else {
         return no_world_result(deps.language, false);
     };
-    let agents = PlayAgents { router: deps.router };
+    let agents = PlayAgents { router: deps.router, root: deps.project_root };
     let runner = PlayRunner {
         project_root: deps.project_root,
         world_id: world_id.clone(),
@@ -190,7 +190,7 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         .and_then(Value::as_str)
         .unwrap_or("zh")
         != "en";
-    let agents = PlayAgents { router: deps.router };
+    let agents = PlayAgents { router: deps.router, root: deps.project_root };
     let runner = PlayRunner {
         project_root: deps.project_root,
         world_id: world_id.clone(),
