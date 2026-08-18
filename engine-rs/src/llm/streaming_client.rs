@@ -29,16 +29,34 @@ pub struct ChatCompletionParams<'a> {
     pub extra: Option<&'a HashMap<String, serde_json::Value>>,
     /// OpenAI tools 数组（raw JSON schema 透传；None = 不带工具）。
     pub tools: Option<&'a serde_json::Value>,
+    /// 多模态图片（95 号）：注入**最后一条 user 消息**为 OpenAI vision
+    /// content 数组（`[{type:"text"},{type:"image_url"}…]`）。TS 侧
+    /// `agent.prompt(message, images)` 的当轮 prompt 图——历史轮次保留。
+    pub images: Option<&'a [ChatImage]>,
+}
+
+/// 多模态图片内容（base64 + mime；对应 TS `ImageContent`）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatImage {
+    pub data: String,
+    pub mime_type: String,
 }
 
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
 ///
 /// 保留字段（max_tokens/temperature/model/messages/stream）不被 extra 覆盖（对齐 stripReservedKeys）。
 pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_json::Value {
+    let images = params.images;
+    let images_target = images.is_some_and(|list| !list.is_empty());
+    let last_user_index = params
+        .messages
+        .iter()
+        .rposition(|probe| probe.role == LLMRole::User);
     let messages: Vec<serde_json::Value> = params
         .messages
         .iter()
-        .map(|m| {
+        .enumerate()
+        .map(|(index, m)| {
             let role = match m.role {
                 LLMRole::System => "system",
                 LLMRole::User => "user",
@@ -48,7 +66,21 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
             {
                 let mut obj = serde_json::Map::new();
                 obj.insert("role".into(), serde_json::json!(role));
-                obj.insert("content".into(), serde_json::json!(m.content));
+                // 多模态：最后一条 user 消息带图片时输出 vision content 数组。
+                let is_last_user =
+                    images_target && m.role == LLMRole::User && last_user_index == Some(index);
+                if is_last_user {
+                    let mut parts = vec![serde_json::json!({ "type": "text", "text": m.content })];
+                    for image in images.unwrap() {
+                        parts.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.data) },
+                        }));
+                    }
+                    obj.insert("content".into(), serde_json::Value::Array(parts));
+                } else {
+                    obj.insert("content".into(), serde_json::json!(m.content));
+                }
                 if let Some(tool_calls) = &m.tool_calls {
                     obj.insert("tool_calls".into(), tool_calls.clone());
                 }
@@ -254,7 +286,7 @@ mod tests {
             LLMMessage { role: LLMRole::System, content: "你是助手".into(), tool_calls: None, tool_call_id: None },
             LLMMessage { role: LLMRole::User, content: "你好".into(), tool_calls: None, tool_call_id: None },
         ];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, extra: None, tools: None };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, extra: None, tools: None, images: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["temperature"], 0.7);
@@ -266,12 +298,50 @@ mod tests {
     }
 
     #[test]
+    fn images_inject_vision_array_into_last_user_message_only() {
+        let msgs = vec![
+            LLMMessage { role: LLMRole::System, content: "sys".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage { role: LLMRole::User, content: "早前的用户轮".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage { role: LLMRole::Assistant, content: "回复".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage { role: LLMRole::User, content: "看这张图".into(), tool_calls: None, tool_call_id: None },
+        ];
+        let images = vec![
+            ChatImage { data: "aGVsbG8=".into(), mime_type: "image/png".into() },
+            ChatImage { data: "eXlNQQ==".into(), mime_type: "image/jpeg".into() },
+        ];
+        let params = ChatCompletionParams {
+            model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
+            stream: true, extra: None, tools: None, images: Some(&images),
+        };
+        let body = build_chat_completion_request(&params);
+        // 最后一条 user → vision 数组（text 段 + 两个 image_url 段）。
+        let last = &body["messages"][3]["content"];
+        assert!(last.is_array(), "{last}");
+        assert_eq!(last[0]["type"], "text");
+        assert_eq!(last[0]["text"], "看这张图");
+        assert_eq!(last[1]["type"], "image_url");
+        assert_eq!(last[1]["image_url"]["url"], "data:image/png;base64,aGVsbG8=");
+        assert_eq!(last[2]["image_url"]["url"], "data:image/jpeg;base64,eXlNQQ==");
+        // 早前 user 轮与其它角色保持纯字符串。
+        assert_eq!(body["messages"][1]["content"], "早前的用户轮");
+        assert_eq!(body["messages"][0]["content"], "sys");
+        // 空图片列表 → 全部纯字符串。
+        let empty: [ChatImage; 0] = [];
+        let params = ChatCompletionParams {
+            model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
+            stream: true, extra: None, tools: None, images: Some(&empty),
+        };
+        let body = build_chat_completion_request(&params);
+        assert_eq!(body["messages"][3]["content"], "看这张图");
+    }
+
+    #[test]
     fn extra_does_not_override_reserved() {
         let mut extra = HashMap::new();
         extra.insert("model".into(), serde_json::json!("EVIL")); // 保留字段，应被忽略
         extra.insert("top_p".into(), serde_json::json!(0.9)); // 非保留，应保留
         let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, extra: Some(&extra), tools: None };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, extra: Some(&extra), tools: None, images: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o"); // 未被覆盖
         assert_eq!(body["top_p"], 0.9); // 保留

@@ -145,6 +145,7 @@ impl AgentRouter {
                 stream: true,
                 extra: None,
                 tools: None,
+                images: None,
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;

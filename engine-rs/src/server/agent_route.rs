@@ -484,6 +484,9 @@ pub async fn post_agent(
 
     struct RouterLoopChat<'a> {
         router: &'a crate::llm::agent_router::AgentRouter,
+        /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
+        /// 与 TS pi-agent 历史保留语义一致。
+        images: Vec<crate::llm::streaming_client::ChatImage>,
     }
 
     #[async_trait::async_trait]
@@ -504,6 +507,7 @@ pub async fn post_agent(
                     stream: true,
                     extra: None,
                     tools,
+                    images: (!self.images.is_empty()).then_some(self.images.as_slice()),
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -554,7 +558,17 @@ pub async fn post_agent(
         },
     );
 
-    let loop_chat = RouterLoopChat { router: &runtime.router };
+    // 95 号：附件双通道注入——文本清单块拼入用户消息（TS
+    // buildAttachmentUserBlock），图片经多模态参数注入当轮 prompt。
+    let attachment_block = build_attachment_user_block(&attachments, surface_language);
+    let prompt_instruction: std::borrow::Cow<str> = if attachment_block.is_empty() {
+        std::borrow::Cow::Borrowed(instruction)
+    } else {
+        std::borrow::Cow::Owned(format!("{instruction}{attachment_block}"))
+    };
+    let instruction: &str = &prompt_instruction;
+    let loop_images = attachment_images(&attachments);
+    let loop_chat = RouterLoopChat { router: &runtime.router, images: loop_images };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/
@@ -834,17 +848,18 @@ const MAX_AGENT_ATTACHMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_AGENT_ATTACHMENT_TEXT_CHARS: usize = 120_000;
 
 /// 归一化后的附件（image 带内联 base64，text 带注入文本，其余仅落盘）。
+#[derive(Clone)]
 pub(crate) struct AgentAttachment {
     #[allow(dead_code)]
     pub id: String,
-    #[allow(dead_code)]
     pub filename: String,
-    #[allow(dead_code)]
     pub mime_type: String,
-    #[allow(dead_code)]
     pub size: usize,
-    #[allow(dead_code)]
     pub stored_path: String,
+    /// 图片附件：(base64, mime)——多模态注入（95 号）。
+    pub image: Option<(String, String)>,
+    /// 文本附件内容——用户消息注入（95 号）。
+    pub text: Option<String>,
 }
 
 /// `safeUploadFileName`：trim + 路径字符折叠 + 非 `\p{L}\p{N}._ -` 折叠 `_`
@@ -985,10 +1000,18 @@ async fn normalize_agent_attachments(
         if tokio::fs::write(upload_dir.join(&stored_name), &bytes).await.is_err() {
             return Err(internal().into_response());
         }
-        // 文本附件：注入长度校验（UTF-16 码元 ≤120k）。
-        if !mime_type.starts_with("image/") && is_text_attachment(&filename, &mime_type) {
-            let text = String::from_utf8_lossy(&bytes);
-            if text.encode_utf16().count() > MAX_AGENT_ATTACHMENT_TEXT_CHARS {
+        // 文本附件：注入长度校验（UTF-16 码元 ≤120k）并保留注入内容。
+        let mut image: Option<(String, String)> = None;
+        let mut text: Option<String> = None;
+        if mime_type.starts_with("image/") {
+            use base64::Engine;
+            image = Some((
+                base64::engine::general_purpose::STANDARD.encode(&bytes),
+                mime_type.clone(),
+            ));
+        } else if is_text_attachment(&filename, &mime_type) {
+            let decoded = String::from_utf8_lossy(&bytes);
+            if decoded.encode_utf16().count() > MAX_AGENT_ATTACHMENT_TEXT_CHARS {
                 return Err(api_error(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "ATTACHMENT_TEXT_TOO_LARGE",
@@ -996,6 +1019,7 @@ async fn normalize_agent_attachments(
                 )
                 .into_response());
             }
+            text = Some(decoded.into_owned());
         }
         let stored_path = upload_dir
             .join(&stored_name)
@@ -1009,9 +1033,74 @@ async fn normalize_agent_attachments(
             .filter(|v| !v.is_empty())
             .map(String::from)
             .unwrap_or_else(|| format!("{now_ms}-{index}"));
-        out.push(AgentAttachment { id, filename, mime_type, size: bytes.len(), stored_path });
+        out.push(AgentAttachment {
+            id,
+            filename,
+            mime_type,
+            size: bytes.len(),
+            stored_path,
+            image,
+            text,
+        });
     }
     Ok(out)
+}
+
+/// `buildAttachmentUserBlock`（双语逐字）：附件清单块追加到用户消息尾部。
+fn build_attachment_user_block(attachments: &[AgentAttachment], language: &str) -> String {
+    if attachments.is_empty() {
+        return String::new();
+    }
+    let is_en = language == "en";
+    let mut lines = vec![if is_en {
+        "\n\n## Uploaded Files (host-provided, user-authorized)".to_string()
+    } else {
+        "\n\n## 用户上传文件（宿主已接收，用户授权本轮使用）".to_string()
+    }];
+    for attachment in attachments {
+        lines.push(format!("\n### {}", attachment.filename));
+        lines.push(format!("- id: {}", attachment.id));
+        lines.push(format!("- mime: {}", if attachment.mime_type.is_empty() { "application/octet-stream" } else { &attachment.mime_type }));
+        lines.push(format!("- size: {}", attachment.size));
+        if !attachment.stored_path.is_empty() {
+            lines.push(format!("- stored_path: {}", attachment.stored_path));
+        }
+        if let Some(text) = &attachment.text {
+            lines.push(if is_en { "\nContent:".to_string() } else { "\n内容：".to_string() });
+            lines.push("```".to_string());
+            lines.push(text.clone());
+            lines.push("```".to_string());
+        } else if attachment.image.is_some() {
+            lines.push(if is_en {
+                "- image: attached as multimodal input".to_string()
+            } else {
+                "- 图片：已作为多模态输入附加".to_string()
+            });
+        } else {
+            lines.push(if is_en {
+                "- content: stored only; no extractor is available for this MIME type yet".to_string()
+            } else {
+                "- 内容：已保存；当前 MIME 类型暂未配置文本抽取器".to_string()
+            });
+        }
+    }
+    lines.join("\n")
+}
+
+/// `attachmentImages`：image 附件 → 多模态图片列表。
+fn attachment_images(attachments: &[AgentAttachment]) -> Vec<crate::llm::streaming_client::ChatImage> {
+    attachments
+        .iter()
+        .filter_map(|attachment| {
+            attachment
+                .image
+                .as_ref()
+                .map(|(data, mime_type)| crate::llm::streaming_client::ChatImage {
+                    data: data.clone(),
+                    mime_type: mime_type.clone(),
+                })
+        })
+        .collect()
 }
 
 // ── actionPayload strict 校验（ActionPayloadSchema 逐字，75 号） ──
@@ -1193,6 +1282,67 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
     Ok(())
 }
 
+
+#[cfg(test)]
+mod attachment_injection_tests {
+    use super::*;
+
+    fn attachment(filename: &str, mime: &str, image: Option<(String, String)>, text: Option<String>) -> AgentAttachment {
+        AgentAttachment {
+            id: "att-1".to_string(),
+            filename: filename.to_string(),
+            mime_type: mime.to_string(),
+            size: 10,
+            stored_path: ".inkos/uploads/s/1-f".to_string(),
+            image,
+            text,
+        }
+    }
+
+    #[test]
+    fn attachment_user_block_zh_three_branches() {
+        // text 分支：清单 + 内容代码块。
+        let text_att = attachment("notes.md", "text/markdown", None, Some("参考内容".to_string()));
+        let block = build_attachment_user_block(&[text_att], "zh");
+        assert!(block.starts_with("\n\n## 用户上传文件（宿主已接收，用户授权本轮使用）"), "{block}");
+        assert!(block.contains("\n### notes.md"), "{block}");
+        assert!(block.contains("- id: att-1"), "{block}");
+        assert!(block.contains("- mime: text/markdown"), "{block}");
+        assert!(block.contains("- size: 10"), "{block}");
+        assert!(block.contains("- stored_path: .inkos/uploads/s/1-f"), "{block}");
+        assert!(block.contains("\n内容：\n```\n参考内容\n```"), "{block}");
+
+        // image 分支：多模态标记。
+        let image_att = attachment("shot.png", "image/png", Some(("aGk=".to_string(), "image/png".to_string())), None);
+        let block = build_attachment_user_block(&[image_att], "zh");
+        assert!(block.contains("- 图片：已作为多模态输入附加"), "{block}");
+        assert!(!block.contains("```"), "{block}");
+
+        // 仅存分支。
+        let bare_att = attachment("a.pdf", "application/pdf", None, None);
+        let block = build_attachment_user_block(&[bare_att], "zh");
+        assert!(block.contains("- 内容：已保存；当前 MIME 类型暂未配置文本抽取器"), "{block}");
+
+        // 空清单 → 空串。
+        assert_eq!(build_attachment_user_block(&[], "zh"), "");
+    }
+
+    #[test]
+    fn attachment_user_block_en_and_images() {
+        let image_att = attachment("shot.png", "image/png", Some(("aGk=".to_string(), "image/png".to_string())), None);
+        let block = build_attachment_user_block(std::slice::from_ref(&image_att), "en");
+        assert!(block.starts_with("\n\n## Uploaded Files (host-provided, user-authorized)"), "{block}");
+        assert!(block.contains("- image: attached as multimodal input"), "{block}");
+        let bare_att = attachment("a.bin", "application/octet-stream", None, None);
+        let block = build_attachment_user_block(std::slice::from_ref(&bare_att), "en");
+        assert!(block.contains("- content: stored only; no extractor is available for this MIME type yet"), "{block}");
+
+        let images = attachment_images(&[image_att.clone(), bare_att.clone()]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].data, "aGk=");
+        assert_eq!(images[0].mime_type, "image/png");
+    }
+}
 
 #[cfg(test)]
 mod attachment_tests {
