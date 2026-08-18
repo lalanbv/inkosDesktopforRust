@@ -103,6 +103,49 @@ pub async fn load_translation_glossary(
         .unwrap_or_default()
 }
 
+/// TS `saveTranslationProgress`（142 号）：章译文 + 术语表**同事务**原子
+/// 落盘（commitAtomicFileSet 双写——翻译进行中的两个真值文件要么都在、
+/// 要么都不在）。
+pub async fn save_translation_progress(
+    project_root: &Path,
+    project_id: &str,
+    chapter_path: &str,
+    chapter: &TranslationChapterFile,
+    terms: &[TranslationGlossaryTerm],
+) -> Result<(), String> {
+    use crate::utils::atomic_file_set::{
+        commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent,
+    };
+    let merged = merge_glossary_terms(terms);
+    let glossary_path = to_posix_path(
+        project_root,
+        &translation_project_dir(project_root, project_id).join("glossary.json"),
+    );
+    commit_atomic_file_set(&AtomicFileSet {
+        root_dir: project_root,
+        writes: vec![
+            AtomicFileWrite {
+                relative_path: chapter_path.to_string(),
+                content: FileContent::Text(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(chapter).unwrap_or_default()
+                )),
+            },
+            AtomicFileWrite {
+                relative_path: glossary_path,
+                content: FileContent::Text(format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&serde_json::json!({ "terms": merged }))
+                        .unwrap_or_default()
+                )),
+            },
+        ],
+        deletes: Vec::new(),
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 pub async fn save_translation_glossary(
     project_root: &Path,
     project_id: &str,
@@ -149,4 +192,79 @@ pub fn to_posix_path(project_root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use crate::translation::types::{TranslationChapterFile, TranslationGlossaryTerm, TranslationSegment};
+
+    fn chapter() -> TranslationChapterFile {
+        TranslationChapterFile {
+            number: 3,
+            title: "夜巡".into(),
+            source_language: "en".into(),
+            target_language: "zh".into(),
+            segments: vec![TranslationSegment {
+                index: 0,
+                source: "Night patrol".into(),
+                target: Some("夜巡".into()),
+                notes: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn progress_writes_chapter_and_glossary_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let terms = vec![
+            TranslationGlossaryTerm { source: "patrol".into(), target: "巡逻".into(), note: None },
+            TranslationGlossaryTerm { source: "Patrol".into(), target: "巡逻（覆盖）".into(), note: None },
+        ];
+        save_translation_progress(
+            dir.path(),
+            "proj",
+            "translations/proj/chapters/0003.json",
+            &chapter(),
+            &terms,
+        )
+        .await
+        .unwrap();
+        let chapter_raw = std::fs::read_to_string(
+            dir.path().join("translations/proj/chapters/0003.json"),
+        )
+        .unwrap();
+        assert!(chapter_raw.ends_with("}\n"), "pretty + 尾换行");
+        assert!(chapter_raw.contains("\"title\": \"夜巡\""));
+        let glossary_raw = std::fs::read_to_string(
+            dir.path().join("translations/proj/glossary.json"),
+        )
+        .unwrap();
+        assert!(glossary_raw.ends_with("}\n"));
+        assert!(
+            glossary_raw.contains("\"target\": \"巡逻（覆盖）\""),
+            "trim+lower 去重后写覆盖：{glossary_raw}"
+        );
+        assert_eq!(
+            glossary_raw.matches("\"source\":").count(),
+            1,
+            "去重单条（保留后写原文形态）"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_rejects_escape_paths_with_zero_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = save_translation_progress(
+            dir.path(),
+            "proj",
+            "../escape.json",
+            &chapter(),
+            &[],
+        )
+        .await;
+        assert!(err.is_err(), "越界路径必须拒：{err:?}");
+        assert!(!dir.path().join("translations").exists(), "零写入");
+    }
 }
