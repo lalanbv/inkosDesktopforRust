@@ -6086,9 +6086,9 @@ mod agent66_e2e {
                         let msg_count = body["messages"].as_array().map(|m| m.len()).unwrap_or(0);
                         calls.lock().unwrap().push(format!("{has_tools}:{msg_count}"));
                         let chunk = if msg_count <= 2 {
-                            // 首轮：发起 read 工具调用
+                            // 首轮：发起 read 工具调用（books/ 作用域路径）
                             serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
-                                { "index": 0, "id": "call_read_1", "function": { "name": "read", "arguments": "{\"path\":\"note.md\"}" } },
+                                { "index": 0, "id": "call_read_1", "function": { "name": "read", "arguments": "{\"path\":\"b1/note.md\"}" } },
                             ] } }] })
                         } else {
                             serde_json::json!({ "choices": [{ "delta": { "content": "笔记里写着：这是主角设定草稿。" } }] })
@@ -6115,13 +6115,28 @@ mod agent66_e2e {
     async fn tool_loop_roundtrip_with_execution_cards() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        std::fs::write(root.join("note.md"), "这是主角设定草稿。").unwrap();
+        // 105 号：read 为书会话工具（books/ 作用域）——夹具走 books/b1/。
+        std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\n---\n正文指导\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("books").join("b1").join("note.md"), "这是主角设定草稿。").unwrap();
         let (llm, _guard) = mock_tool_llm().await;
         let _ = call(
             app66(&root, &llm),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{SESSION_ID}"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{SESSION_ID}","bookId":"b1","sessionKind":"book"}}"#
+            )),
         )
         .await;
 
@@ -6131,7 +6146,7 @@ mod agent66_e2e {
             "POST",
             "/api/v1/agent",
             Some(&format!(
-                r#"{{"instruction":"看看 note.md 写了什么","sessionId":"{SESSION_ID}"}}"#
+                r#"{{"instruction":"看看设定笔记写了什么","sessionId":"{SESSION_ID}","activeBookId":"b1"}}"#
             )),
         )
         .await;
@@ -10514,11 +10529,11 @@ mod play80_e2e {
         assert_eq!(execs[0]["status"], "completed");
         assert!(execs[0]["result"].as_str().unwrap().contains("场景甲"), "body: {parsed}");
 
-        // 注册面：tools 含 play_step/play_revise/read；系统提示词是 play 面（铁律）。
+        // 注册面：tools 含 play_step/play_revise（105 号：play 会话无文件三件）。
         let names = tool_names.lock().unwrap().clone();
         assert!(names.contains(&"play_step".to_string()), "{names:?}");
         assert!(names.contains(&"play_revise".to_string()), "{names:?}");
-        assert!(names.contains(&"read".to_string()), "{names:?}");
+        assert!(!names.contains(&"read".to_string()), "play 会话不应注册 read：{names:?}");
         let system = systems.lock().unwrap().clone();
         assert!(system.contains("【铁律】") && system.contains("play_step"), "{system}");
 
@@ -11181,11 +11196,11 @@ mod material83_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["response"], "（材料已归档并召回关键片段。）");
 
-        // 注册面：material 双工具对所有会话可见。
+        // 注册面：material 双工具对所有会话可见（105 号：chat 会话无文件三件）。
         let names = tool_names.lock().unwrap().clone();
         assert!(names.contains(&"ingest_material".to_string()), "{names:?}");
         assert!(names.contains(&"retrieve_material".to_string()), "{names:?}");
-        assert!(names.contains(&"read".to_string()), "{names:?}");
+        assert!(!names.contains(&"read".to_string()), "chat 会话不应注册 read：{names:?}");
 
         // 两张执行卡：ingest → completed + 归档文本；retrieve → completed + 片段。
         let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
@@ -15166,5 +15181,217 @@ mod sub102_e2e {
         assert_eq!(index.as_array().map(Vec::len), Some(2), "index: {index}");
         let bible = std::fs::read_to_string(book.join("story").join("story_bible.md")).unwrap();
         assert_eq!(bible, "# 既有地基（截断不得覆盖）\n\n旧内容。");
+    }
+}
+
+mod sub105_e2e {
+    //! 105 号：文件三件书会话化（TS createReadTool/createLsTool/createGrepTool
+    //! 逐字）——books/ 作用域 + book/edit 会话独占注册 + grep story/chapters
+    //! 前缀行号形态 + ls bytes 形态 + 空命中文案。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// 工具名捕获 mock：按指令关键词发 grep（书会话）或纯文本（chat）。
+    async fn mock_capture_tools() -> (String, Arc<StdMutex<Vec<String>>>) {
+        let names = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let names_for_server = names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let names = names_for_server.clone();
+                async move {
+                    if let Some(tools) = body["tools"].as_array() {
+                        let mut batch: Vec<String> = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect();
+                        batch.sort();
+                        // 按请求批次落一条（逗号连接）——注册矩阵按批次断言。
+                        names.lock().unwrap().push(batch.join(","));
+                    }
+                    let chunk = if body["messages"].as_array().map(Vec::len).unwrap_or(0) <= 2 {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_grep_1", "function": { "name": "grep", "arguments": "{\"bookId\":\"b105\",\"pattern\":\"LANTERN\"}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "搜到了。" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), names)
+    }
+
+    #[tokio::test]
+    async fn book_file_tools_scoped_grep_and_registration_matrix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b105");
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b105","title":"文件书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        // story 命中小写 lantern（大小写不敏感）+ chapters 命中 + 项目根文件不参与。
+        std::fs::write(book.join("story").join("current_state.md"), "灯是 lantern 亮着。").unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "他提起 Lantern 走进夜色。").unwrap();
+        std::fs::write(root.join("outside.md"), "lantern 不该被搜到").unwrap();
+
+        let (llm, names) = mock_capture_tools().await;
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(rt(&root, &llm));
+
+        // 书会话：grep（books/ 作用域 + story/chapters 前缀 + 行号 + 原行）。
+        let session = "1783099000003-f105";
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(
+                r#"{{"sessionId":"{session}","bookId":"b105","sessionKind":"book"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"搜一下灯笼线索","sessionId":"{session}","activeBookId":"b105"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        assert_eq!(execs[0]["tool"], "grep");
+        assert_eq!(execs[0]["status"], "completed", "body: {parsed}");
+        let result = execs[0]["result"].as_str().unwrap();
+        assert!(
+            result.contains("story/current_state.md:1: 灯是 lantern 亮着。"),
+            "result: {result}"
+        );
+        assert!(
+            result.contains("chapters/0001_风起.md:1: 他提起 Lantern 走进夜色。"),
+            "result: {result}"
+        );
+        assert!(!result.contains("outside.md"), "books/ 外不参与：{result}");
+        // 书会话注册面：文件三件在批次内（含 sub_agent/material 等）。
+        let registered = names.lock().unwrap().clone();
+        let book_batch = registered
+            .iter()
+            .find(|batch| batch.contains("sub_agent"))
+            .unwrap_or_else(|| panic!("书会话批次缺失：{registered:?}"));
+        for tool in ["grep", "read", "ls", "sub_agent", "ingest_material"] {
+            assert!(
+                registered
+                    .iter()
+                    .any(|batch| batch.split(',').any(|name| name == tool)),
+                "{tool} 应在书会话批次：{registered:?}"
+            );
+        }
+        let _ = book_batch;
+
+        // chat 会话：文件三件不注册（TS 矩阵）。
+        let chat = "1783099000004-c105";
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{chat}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"纯聊天","sessionId":"{chat}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let registered = names.lock().unwrap().clone();
+        // 最后一批 = chat 会话：无 read/ls/grep，有 propose_action + material。
+        let chat_batch = registered.last().unwrap();
+        assert!(
+            chat_batch.contains("propose_action") && chat_batch.contains("ingest_material"),
+            "chat 批次：{chat_batch}"
+        );
+        for tool in ["read", "ls", "grep", "sub_agent"] {
+            assert!(
+                !chat_batch.split(',').any(|name| name == tool),
+                "chat 会话不应注册 {tool}：{chat_batch}"
+            );
+        }
     }
 }

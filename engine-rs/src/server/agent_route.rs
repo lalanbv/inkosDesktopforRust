@@ -615,11 +615,16 @@ pub async fn post_agent(
     let research_registered =
         matches!(session_kind, SessionKind::Chat | SessionKind::BookCreate | SessionKind::Book);
     let import_registered = session_kind == SessionKind::Chat || book_session;
-    // 工具面：文件工具 + material 双工具（全部会话）+ propose_action（无书
-    // 会话；play 有世界时除外）+ research/import（分支矩阵）+ sub_agent
-    // （book/book-create）+ 编辑工具族（book/edit）+ play 三工具。
-    let mut tools = crate::interaction::project_tools::tools_payload();
+    // 工具面（105 号对齐 TS 矩阵）：文件三件（books/ 作用域 read/ls/grep）
+    // 仅 book/edit 会话注册（TS bookTools——chat/play/short 等会话无文件工具）
+    // + material 双工具（全部会话）+ propose_action（无书会话；play 有世界时
+    // 除外）+ research/import（分支矩阵）+ sub_agent（book/book-create）
+    // + 编辑工具族（book/edit）+ play 三工具。
+    let mut tools = serde_json::json!([]);
     if let Some(entries) = tools.as_array_mut() {
+        if book_edit_session {
+            entries.extend(crate::interaction::project_tools::book_file_tool_schemas());
+        }
         entries.extend(crate::interaction::material_tools::material_tool_schemas());
         if propose_registered {
             entries.push(crate::interaction::propose_action_tool::propose_action_schema());
@@ -872,6 +877,11 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
             if let Some(result) = crate::interaction::play_tools::execute_play_tool(deps, name, args).await {
                 return result;
             }
+        }
+        // 文件三件（105 号）：books/ 作用域——仅注册面（book/edit 会话）可达，
+        // 其余会话落到未知工具文本。
+        if matches!(name, "read" | "ls" | "grep") && self.book_edit_deps.is_some() {
+            return crate::interaction::project_tools::execute_book_file_tool(self.root, name, args).await;
         }
         crate::interaction::project_tools::execute_tool(self.root, name, args).await
     }
