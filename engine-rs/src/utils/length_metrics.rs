@@ -99,7 +99,7 @@ fn count_zh_chars(s: &str) -> u32 {
 }
 
 /// JS `\s` 等价：Unicode White_Space ∪ `\u{feff}`。
-fn is_js_whitespace(c: char) -> bool {
+pub fn is_js_whitespace(c: char) -> bool {
     c.is_whitespace() || c == '\u{feff}'
 }
 

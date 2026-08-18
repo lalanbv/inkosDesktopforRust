@@ -187,6 +187,104 @@ impl StreamMonitor {
     }
 }
 
+
+// ── 133 号：内联 <think> 块剥离器（TS think-tag-stripper.ts 逐字） ──────
+
+/// 部分 OpenAI 兼容服务（MiniMax M2.x、网关代理的 DeepSeek-R1 类）把思考
+/// 内容以 `<think>...</think>` 内联在 content 开头返回（issue #329）。只剥
+/// **响应起始处的完整块**：正文中间的字样不动；起始处未闭合的块 flush
+/// 原样返回（正文根本没生成，剥掉会丢数据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StripperState {
+    Detecting,
+    InsideThink,
+    Passthrough,
+}
+
+pub struct LeadingThinkTagStripper {
+    state: StripperState,
+    pending: String,
+}
+
+const THINK_OPEN: &str = "<think>";
+const THINK_CLOSE: &str = "</think>";
+
+impl Default for LeadingThinkTagStripper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LeadingThinkTagStripper {
+    pub fn new() -> Self {
+        LeadingThinkTagStripper { state: StripperState::Detecting, pending: String::new() }
+    }
+
+    /// 送入一段增量，返回可安全并入正文的部分（空串 = 仍在缓冲判断）。
+    pub fn push(&mut self, chunk: &str) -> String {
+        if self.state == StripperState::Passthrough {
+            return chunk.to_string();
+        }
+        self.pending.push_str(chunk);
+
+        if self.state == StripperState::Detecting {
+            let ws_len = self
+                .pending
+                .char_indices()
+                .find(|(_, c)| !crate::utils::length_metrics::is_js_whitespace(*c))
+                .map(|(i, _)| i)
+                .unwrap_or(self.pending.len());
+            let rest = &self.pending[ws_len..];
+            if rest.chars().count() < THINK_OPEN.chars().count() {
+                if THINK_OPEN.starts_with(rest) {
+                    return String::new();
+                }
+                self.state = StripperState::Passthrough;
+                return std::mem::take(&mut self.pending);
+            }
+            if !rest.starts_with(THINK_OPEN) {
+                self.state = StripperState::Passthrough;
+                return std::mem::take(&mut self.pending);
+            }
+            self.state = StripperState::InsideThink;
+        }
+
+        // InsideThink：等待闭合标签（找不到继续吞）。
+        match self.pending.find(THINK_CLOSE) {
+            None => String::new(),
+            Some(close_index) => {
+                self.state = StripperState::Passthrough;
+                let after_close =
+                    self.pending[close_index + THINK_CLOSE.len()..].to_string();
+                self.pending.clear();
+                // TS replace(/^\s+/, "")：去闭合后开头一串 JS 空白。
+                let ws_len = after_close
+                    .char_indices()
+                    .find(|(_, c)| !crate::utils::length_metrics::is_js_whitespace(*c))
+                    .map(|(i, _)| i)
+                    .unwrap_or(after_close.len());
+                after_close[ws_len..].to_string()
+            }
+        }
+    }
+
+    /// 流结束：缓冲剩余原样返回（未闭合 think 块不剥离）。
+    pub fn flush(&mut self) -> String {
+        self.state = StripperState::Passthrough;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// 非流式版本：剥离起始处完整 `<think>...</think>` 块（与流式同语义）。
+pub fn strip_leading_think_block(text: &str) -> String {
+    let mut stripper = LeadingThinkTagStripper::new();
+    let head = stripper.push(text);
+    let tail = stripper.flush();
+    let mut out = head;
+    out.push_str(&tail);
+    out
+}
+
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
 ///
 /// 保留字段（max_tokens/temperature/model/messages/stream）不被 extra 覆盖（对齐 stripReservedKeys）。
@@ -440,11 +538,24 @@ impl StreamingChatClient {
                 .pointer("/choices/0/message")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
-            let content = message
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+            let content = strip_leading_think_block(
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
+            // TS 非流式同款 output-limit 守卫（finish_reason 在 message 层）。
+            if matches!(
+                json.pointer("/choices/0/finish_reason").and_then(Value::as_str),
+                Some("length") | Some("max_tokens")
+            ) {
+                return Err(StreamError::Protocol(format!(
+                    "model reached the output limit ({})",
+                    json.pointer("/choices/0/finish_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                )));
+            }
             let tool_calls: Vec<StreamedToolCall> = message
                 .get("tool_calls")
                 .and_then(Value::as_array)
@@ -487,6 +598,9 @@ impl StreamingChatClient {
         let mut tool_call_deltas: ToolCallDeltas = Vec::new();
         let mut monitor = params.progress.clone().map(StreamMonitor::new);
         let mut reasoning = String::new();
+        // 133 号：起始处内联 <think> 块剥离（TS thinkStripper——Delta 在
+        // 并入正文/喂 monitor 前先过剥离器；空产出不发射）。
+        let mut think_stripper = LeadingThinkTagStripper::new();
         // TS `sawTerminal`/`terminalFinishReason`（[DONE] 或 finish_reason 任一即终态）。
         let mut terminal_finish_reason: Option<String> = None;
         let mut stream = resp.bytes_stream();
@@ -518,10 +632,13 @@ impl StreamingChatClient {
             for ev in parser.push(&text) {
                 match ev {
                     SseEvent::Delta(s) => {
-                        if let Some(monitor) = monitor.as_mut() {
-                            monitor.on_delta(&s);
+                        let emittable = think_stripper.push(&s);
+                        if !emittable.is_empty() {
+                            if let Some(monitor) = monitor.as_mut() {
+                                monitor.on_delta(&emittable);
+                            }
+                            content.push_str(&emittable);
                         }
-                        content.push_str(&s);
                     }
                     SseEvent::ReasoningDelta(s) => reasoning.push_str(&s),
                     SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
@@ -540,10 +657,13 @@ impl StreamingChatClient {
         for ev in parser.finish() {
             match ev {
                 SseEvent::Delta(s) => {
-                    if let Some(monitor) = monitor.as_mut() {
-                        monitor.on_delta(&s);
+                    let emittable = think_stripper.push(&s);
+                    if !emittable.is_empty() {
+                        if let Some(monitor) = monitor.as_mut() {
+                            monitor.on_delta(&emittable);
+                        }
+                        content.push_str(&emittable);
                     }
-                    content.push_str(&s);
                 }
                 SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
                     prompt_tokens = p;
@@ -554,6 +674,12 @@ impl StreamingChatClient {
                 SseEvent::FinishReason(reason) => terminal_finish_reason = Some(reason),
                 _ => {}
             }
+        }
+        // 流结束：仍在缓冲的文本原样并回（未闭合 think 块不剥离——TS
+        // thinkStripper.flush() 同点位，只并正文不发增量）。
+        let flushed = think_stripper.flush();
+        if !flushed.is_empty() {
+            content.push_str(&flushed);
         }
         if let Some(monitor) = monitor {
             monitor.finish();
@@ -1104,6 +1230,109 @@ mod tests {
     }
 
     const DONE: &str = "data: [DONE]\n\n";
+
+
+    // ── 133 号：think 剥离器（TS think-tag-stripper.test.ts 九例同款） ──
+
+    #[test]
+    fn strip_leading_block_variants() {
+        assert_eq!(strip_leading_think_block("<think>推理</think>\n\n正文开始。"), "正文开始。");
+        assert_eq!(strip_leading_think_block("\n  <think>推理</think>正文"), "正文");
+        let mid = "正文里介绍 <think> 标签的用法。";
+        assert_eq!(strip_leading_think_block(mid), mid, "正文字样不动");
+        let unterminated = "<think>推理到一半被截断";
+        assert_eq!(strip_leading_think_block(unterminated), unterminated, "未闭合不丢数据");
+        assert_eq!(strip_leading_think_block("普通正文。"), "普通正文。");
+    }
+
+    #[test]
+    fn stripper_split_chunks_suppress_leading_block() {
+        let mut stripper = LeadingThinkTagStripper::new();
+        let emitted: String = ["<th", "ink>推理A", "推理B</th", "ink>\n正文", "继续"]
+            .iter()
+            .map(|c| stripper.push(c))
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(emitted, "正文继续");
+        assert_eq!(stripper.flush(), "");
+    }
+
+    #[test]
+    fn stripper_emits_once_prefix_diverges() {
+        let mut stripper = LeadingThinkTagStripper::new();
+        let emitted: String = ["<th", "ree>不是 think 标签", "，正文"]
+            .iter()
+            .map(|c| stripper.push(c))
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(emitted, "<three>不是 think 标签，正文");
+        assert_eq!(stripper.flush(), "");
+    }
+
+    #[test]
+    fn stripper_passthrough_and_mid_text() {
+        let mut stripper = LeadingThinkTagStripper::new();
+        assert_eq!(stripper.push("正文第一段"), "正文第一段");
+        assert_eq!(stripper.push("<think>正文中间的字样不受影响"), "<think>正文中间的字样不受影响");
+        assert_eq!(stripper.flush(), "");
+    }
+
+    #[test]
+    fn stripper_flush_returns_unterminated_block() {
+        let mut stripper = LeadingThinkTagStripper::new();
+        assert_eq!(stripper.push("<think>推理没有闭合"), "");
+        assert_eq!(stripper.flush(), "<think>推理没有闭合");
+    }
+
+    #[tokio::test]
+    async fn stream_strips_leading_think_block_from_content() {
+        // 跨块 think 块被整体吞掉，正文完整到达。
+        let base = spawn_scripted_llm(vec![
+            content_chunk("<th"),
+            content_chunk("ink>让我想想"),
+            content_chunk("</think>\n"),
+            content_chunk("正文从这里开始。"),
+            DONE.to_string(),
+        ])
+        .await;
+        let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
+        assert_eq!(completion.content, "正文从这里开始。");
+        assert!(completion.done);
+    }
+
+    #[tokio::test]
+    async fn stream_flushes_unterminated_think_block_without_loss() {
+        // 未闭合 think 块 + 正常终态：flush 原样并回（数据不丢失，issue #329）。
+        let base = spawn_scripted_llm(vec![
+            content_chunk("<think>推理没有闭合"),
+            DONE.to_string(),
+        ])
+        .await;
+        let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
+        assert_eq!(completion.content, "<think>推理没有闭合");
+    }
+
+    #[tokio::test]
+    async fn non_stream_strips_leading_think_block() {
+        let body = serde_json::json!({
+            "choices": [{
+                "message": { "content": "<think>思考</think>\n\n非流式正文。" },
+                "finish_reason": "stop",
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 },
+        });
+        // 非流式：裸 JSON 响应体（非 SSE 形态）。
+        let base = spawn_scripted_llm(vec![body.to_string()]).await;
+        let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
+        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 });
+        params.stream = false;
+        let completion = client.stream_chat(&params).await.unwrap();
+        assert_eq!(completion.content, "非流式正文。");
+    }
 
     #[tokio::test]
     async fn idle_timeout_when_stream_stalls_after_first_chunk() {
