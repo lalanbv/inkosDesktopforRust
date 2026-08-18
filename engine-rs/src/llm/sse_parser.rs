@@ -18,6 +18,9 @@ use serde::Deserialize;
 pub enum SseEvent {
     /// 文本增量
     Delta(String),
+    /// 推理增量（129 号：pi-ai 同款 reasoning_content | reasoning |
+    /// reasoning_text 首个非空字段——thinking 块的流式载体）。
+    ReasoningDelta(String),
     /// 工具调用增量（index, tool_call id, name 片段, arguments 片段）
     ToolCallDelta {
         index: u32,
@@ -121,6 +124,14 @@ struct OpenAiChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    // pi-ai reasoningFields 同款三字段（llama.cpp reasoning_content / 其它
+    // OpenAI 兼容 reasoning / reasoning_text），首个非空者生效（防重复）。
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_text: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDeltaRaw>,
 }
@@ -154,12 +165,23 @@ struct OpenAiUsage {
 
 fn parse_openai_chunk(value: &serde_json::Value) -> SseEvent {
     let chunk: OpenAiChunk = serde_json::from_value(value.clone()).unwrap_or(OpenAiChunk { choices: vec![], usage: None });
-    // 优先返回文本/工具增量；末帧 usage 单独返回
+    // 优先返回文本/推理/工具增量；末帧 usage 单独返回
     if let Some(choice) = chunk.choices.first() {
         if let Some(content) = &choice.delta.content {
             if !content.is_empty() {
                 return SseEvent::Delta(content.clone());
             }
+        }
+        let reasoning = [
+            choice.delta.reasoning_content.as_deref(),
+            choice.delta.reasoning.as_deref(),
+            choice.delta.reasoning_text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|text| !text.is_empty());
+        if let Some(reasoning) = reasoning {
+            return SseEvent::ReasoningDelta(reasoning.to_string());
         }
         if let Some(tc) = choice.delta.tool_calls.first() {
             return SseEvent::ToolCallDelta {
@@ -206,6 +228,28 @@ mod tests {
         let stream = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n";
         let events = parse_sse_stream(stream);
         assert!(events.iter().any(|e| matches!(e, SseEvent::Done)));
+    }
+
+    #[test]
+    fn reasoning_delta_first_non_empty_field_wins() {
+        // reasoning_content 优先（llama.cpp 形态）。
+        let events = parse_sse_stream(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"让我想想\"}}]}\n\n",
+        );
+        assert_eq!(
+            events,
+            vec![SseEvent::ReasoningDelta("让我想想".to_string())]
+        );
+        // 无 reasoning_content 时 reasoning 兜底；两者同帧不重复（pi-ai 防重复语义）。
+        let events = parse_sse_stream(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"B\"}}]}\n\n",
+        );
+        assert_eq!(events, vec![SseEvent::ReasoningDelta("B".to_string())]);
+        // content 同帧优先于 reasoning。
+        let events = parse_sse_stream(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"正文\",\"reasoning_content\":\"思考\"}}]}\n\n",
+        );
+        assert_eq!(events, vec![SseEvent::Delta("正文".to_string())]);
     }
 
     #[test]

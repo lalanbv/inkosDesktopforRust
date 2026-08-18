@@ -561,6 +561,36 @@ pub async fn post_agent(
         /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
         /// 与 TS pi-agent 历史保留语义一致。
         images: Vec<crate::llm::streaming_client::ChatImage>,
+        /// thinking 三事件桥（129 号）：pi-ai thinking 块 → thinking:start/
+        /// delta/end 广播（TS onEvent ame.type 分支对应物；聚合语义——与
+        /// draft:delta 每轮聚合同款）。
+        thinking: Option<ThinkingBridge>,
+    }
+
+    /// thinking 事件桥：hub + 会话标记。
+    struct ThinkingBridge {
+        hub: std::sync::Arc<crate::server::sse::BroadcastHub>,
+        session_id: String,
+    }
+
+    impl ThinkingBridge {
+        fn broadcast_round(&self, reasoning: &str) {
+            if reasoning.is_empty() {
+                return;
+            }
+            self.hub.broadcast(
+                "thinking:start",
+                &json!({ "sessionId": self.session_id }),
+            );
+            self.hub.broadcast(
+                "thinking:delta",
+                &json!({ "sessionId": self.session_id, "text": reasoning }),
+            );
+            self.hub.broadcast(
+                "thinking:end",
+                &json!({ "sessionId": self.session_id }),
+            );
+        }
     }
 
     #[async_trait::async_trait]
@@ -587,6 +617,9 @@ pub async fn post_agent(
                 })
                 .await
                 .map_err(|e| e.to_string())?;
+            if let Some(thinking) = &self.thinking {
+                thinking.broadcast_round(&completion.reasoning);
+            }
             let tool_calls = completion
                 .tool_calls
                 .into_iter()
@@ -651,7 +684,11 @@ pub async fn post_agent(
     };
     let instruction: &str = &prompt_instruction;
     let loop_images = attachment_images(&attachments);
-    let loop_chat = RouterLoopChat { router: &runtime.router, images: loop_images };
+    let loop_chat = RouterLoopChat {
+        router: &runtime.router,
+        images: loop_images,
+        thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
+    };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/

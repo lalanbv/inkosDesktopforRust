@@ -6024,6 +6024,72 @@ mod agent65_e2e {
         assert!(title_event.data.contains("帮我看下"), "data: {}", title_event.data);
     }
 
+    /// 129 号：thinking 三事件——reasoning_content 增量（pi-ai reasoningFields
+    /// 同款）→ thinking:start/delta/end 广播（聚合语义，与 draft:delta 每轮
+    /// 聚合一致；text 为整轮推理文本）。
+    #[tokio::test]
+    async fn chat_broadcasts_thinking_events_for_reasoning_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 推理 mock：reasoning_content 增量在前、content 增量在后。
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|| async {
+                let reasoning = serde_json::json!({ "choices": [{ "delta": { "reasoning_content": "先分析章节节奏" } }] });
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "节奏尚可。" } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {reasoning}\n\ndata: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let llm = format!("http://{addr}");
+
+        create_session(&root).await;
+        let runtime = rt65(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .with_state(runtime);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我看下第二章节奏","sessionId":"{SESSION_ID}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert!(parsed["response"].as_str().unwrap().contains("节奏尚可"));
+
+        // SSE：agent:start → thinking 三事件 → draft:delta → agent:complete。
+        assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
+        let start = subscriber.recv().await.unwrap();
+        assert_eq!(start.event, "thinking:start", "data: {}", start.data);
+        assert!(start.data.contains(SESSION_ID), "data: {}", start.data);
+        let delta = subscriber.recv().await.unwrap();
+        assert_eq!(delta.event, "thinking:delta", "data: {}", delta.data);
+        assert!(delta.data.contains("\"text\":\"先分析章节节奏\""), "data: {}", delta.data);
+        assert!(delta.data.contains(SESSION_ID), "data: {}", delta.data);
+        let end = subscriber.recv().await.unwrap();
+        assert_eq!(end.event, "thinking:end", "data: {}", end.data);
+        let mut saw_draft = false;
+        loop {
+            let event = subscriber.recv().await.unwrap();
+            match event.event.as_str() {
+                "draft:delta" => saw_draft = true,
+                "agent:complete" => break,
+                other => panic!("agent:complete 前的意外事件 {other}: {}", event.data),
+            }
+        }
+        assert!(saw_draft, "draft:delta 仍应发出");
+    }
+
     #[tokio::test]
     async fn book_binding_mismatch_and_missing_book() {
         let dir = tempfile::tempdir().unwrap();

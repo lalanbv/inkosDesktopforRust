@@ -89,13 +89,17 @@ async fn spawn_mock_llm() -> String {
     let app = axum::Router::new().route(
         "/chat/completions",
         axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
-            // 双形态：流式请求 → SSE；非流式 → 整体 JSON（两侧客户端偏好不同）。
+            // 双形态：流式请求 → SSE（129 号起带 reasoning_content 增量——
+            // thinking 面对跑驱动）；非流式 → 整体 JSON（两侧客户端偏好不同）。
             if body["stream"].as_bool().unwrap_or(false) {
+                let reasoning = serde_json::json!({ "choices": [{ "delta": { "reasoning_content": "让我想想" } }] });
                 let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
                 let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
                 return axum::response::IntoResponse::into_response((
                     [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                    format!("data: {chunk}
+                    format!("data: {reasoning}
+
+data: {chunk}
 
 data: {usage}
 
@@ -1056,8 +1060,15 @@ async fn sse_chat_turn_events(base: &str, session_id: &str, instruction: &str) -
 /// 事件归一：① 共享词汇过滤；② 递归剥 null 值键（TS undefined→省略 vs
 /// Rust None→null 的表示层差异）；③ llm:progress 数值遥测仅保留键语义。
 fn normalize_sse_face(mut events: Vec<(String, Value)>) -> Vec<(String, Value)> {
-    const SHARED: [&str; 4] =
-        ["agent:start", "draft:delta", "agent:complete", "session:title"];
+    const SHARED: [&str; 7] = [
+        "agent:start",
+        "thinking:start",
+        "thinking:delta",
+        "thinking:end",
+        "draft:delta",
+        "agent:complete",
+        "session:title",
+    ];
     fn strip_nulls(value: &mut Value) {
         match value {
             Value::Object(map) => {
@@ -1156,9 +1167,17 @@ async fn sse_event_face_duel() {
             "{rust_name} 负载分歧\n  rust: {rust_payload}\n  ts:   {ts_payload}"
         );
     }
-    // 四类事件齐全（回合健康性；llm:progress 不在普通聊天轮词汇——128 号
-    // 勘误：TS 仅 pipeline 面上报）。
-    for expected in ["agent:start", "draft:delta", "agent:complete", "session:title"] {
+    // 七类事件齐全（回合健康性；llm:progress 不在普通聊天轮词汇——128 号
+    // 勘误：TS 仅 pipeline 面上报；thinking 三事件 129 号补齐）。
+    for expected in [
+        "agent:start",
+        "thinking:start",
+        "thinking:delta",
+        "thinking:end",
+        "draft:delta",
+        "agent:complete",
+        "session:title",
+    ] {
         assert!(
             rust_names.contains(&expected),
             "Rust 侧缺 {expected}：{rust_names:?}"
@@ -1167,5 +1186,5 @@ async fn sse_event_face_duel() {
 
     let _ = command.kill();
     let _ = command.wait();
-    eprintln!("SSE 事件面对跑通过：四类共享词汇事件序列与负载形态双端等价（llm:progress 不在普通聊天轮词汇）");
+    eprintln!("SSE 事件面对跑通过：七类共享词汇事件（含 thinking 三事件）序列与负载形态双端等价");
 }

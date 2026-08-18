@@ -211,6 +211,9 @@ pub struct StreamedCompletion {
     pub done: bool,
     /// 聚合后的工具调用（按 index 合并 name/arguments 片段）。
     pub tool_calls: Vec<StreamedToolCall>,
+    /// 聚合推理文本（129 号：reasoning_content/reasoning/reasoning_text 增量
+    /// 累积——pi-ai thinking 块对应物；与 content 分离不回填）。
+    pub reasoning: String,
 }
 
 /// 聚合后的单条工具调用。
@@ -362,6 +365,7 @@ impl StreamingChatClient {
                 total_tokens: json.pointer("/usage/total_tokens").and_then(Value::as_u64),
                 done: true,
                 tool_calls,
+                reasoning: String::new(),
             });
         }
         // 流式：按字节块喂给 sse_parser，累积 content
@@ -373,6 +377,7 @@ impl StreamingChatClient {
         let mut done = false;
         let mut tool_call_deltas: ToolCallDeltas = Vec::new();
         let mut monitor = params.progress.clone().map(StreamMonitor::new);
+        let mut reasoning = String::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -385,6 +390,7 @@ impl StreamingChatClient {
                         }
                         content.push_str(&s);
                     }
+                    SseEvent::ReasoningDelta(s) => reasoning.push_str(&s),
                     SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
                         prompt_tokens = p;
                         completion_tokens = c;
@@ -418,7 +424,7 @@ impl StreamingChatClient {
             monitor.finish();
         }
         let tool_calls = aggregate_tool_calls(&tool_call_deltas);
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done, tool_calls })
+        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done, tool_calls, reasoning })
     }
 
     /// responses 传输（106 号）：POST /responses——非流式整体解析 + 流式
@@ -457,6 +463,7 @@ impl StreamingChatClient {
                 total_tokens: json.pointer("/usage/total_tokens").and_then(Value::as_u64),
                 done: true,
                 tool_calls: Vec::new(),
+                reasoning: String::new(),
             });
         }
         // 流式：收集原始字节后统一抽 data: 事件（stream_chat 本就聚合语义）。
@@ -510,7 +517,7 @@ impl StreamingChatClient {
         if let Some(monitor) = monitor {
             monitor.finish();
         }
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new() })
+        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new(), reasoning: String::new() })
     }
 }
 
