@@ -251,6 +251,26 @@ pub fn sync_top_level_llm_mirror(llm: &mut Map<String, Value>) {
 }
 
 /// `resolveConfiguredServiceBaseUrl`：inline → 预设 → custom 的 config baseUrl。
+/// 自定义服务项的 apiFormat（106 号）：inkos.json services[] 中该服务项的
+/// 传输协议（预设服务无 entry 级 apiFormat——None）。
+pub(crate) async fn resolve_configured_service_api_format(
+    root: &Path,
+    service_id: &str,
+) -> Option<crate::llm::providers::TransportApiFormat> {
+    let config = load_raw_config(root).await?;
+    let llm = config.get("llm")?;
+    let services = normalize_service_config(llm.get("services"));
+    services
+        .iter()
+        .find(|entry| service_config_key(entry) == service_id)
+        .and_then(|entry| entry.api_format.as_deref())
+        .and_then(|value| match value {
+            "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
+            "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
+            _ => None,
+        })
+}
+
 pub(crate) async fn resolve_configured_service_base_url(
     root: &Path,
     service_id: &str,
@@ -676,10 +696,15 @@ pub async fn test_service(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let inline_base_url = payload.get("baseUrl").and_then(Value::as_str);
+    // preferred 缺省 = None（TS undefined → 无偏好计划 [chat, responses]）。
     let preferred_api_format = payload
         .get("apiFormat")
         .and_then(Value::as_str)
-        .unwrap_or("chat");
+        .and_then(|value| match value {
+            "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
+            "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
+            _ => None,
+        });
     let preferred_stream = payload.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let language = project_language(root).await;
 
@@ -755,7 +780,7 @@ pub async fn test_service(
                 "models": models,
                 "selectedModel": selected_model,
                 "detected": {
-                    "apiFormat": preferred_api_format,
+                    "apiFormat": transport_api_format_str(preferred_api_format.unwrap_or(crate::llm::providers::TransportApiFormat::Chat)),
                     "stream": preferred_stream,
                     "baseUrl": resolved_base_url,
                     "modelsSource": "api",
@@ -798,7 +823,7 @@ pub async fn test_service(
                     "models": models,
                     "selectedModel": selected_model,
                     "detected": {
-                        "apiFormat": preferred_api_format,
+                        "apiFormat": transport_api_format_str(preferred_api_format.unwrap_or(crate::llm::providers::TransportApiFormat::Chat)),
                         "stream": preferred_stream,
                         "baseUrl": resolved_base_url,
                         "modelsSource": "fallback",
@@ -838,23 +863,18 @@ pub async fn test_service(
         );
     }
 
-    // 计划：preferred 带流式 → 先流式后非流式；否则单非流式（responses 协议
-    // 传输未移植，一律以 chat completions 探测——见 96 号偏差备案）。
-    let mut plans: Vec<bool> = Vec::new();
-    if preferred_stream {
-        plans.push(true);
-        plans.push(false);
-    } else {
-        plans.push(false);
-    }
+    // 计划（106 号 buildProbePlans TS 逐字）：preferred 有值 → preferred×
+    // (stream??false) +（stream 时）preferred×false；无偏好 → [chat 非流式,
+    // responses 非流式]（96 号"一律 chat 探测"备案闭合）。
+    let plans = build_probe_plans(preferred_api_format, Some(preferred_stream));
 
     let label = endpoint
         .map(|ep| ep.label.clone())
         .or_else(|| preset.as_ref().map(|p| p.label.clone()));
     let mut last_error = String::new();
     for model in &candidates {
-        for stream in &plans {
-            match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream).await {
+        for (plan_api_format, stream) in &plans {
+            match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream, *plan_api_format).await {
                 Ok(_content) => {
                     let probe = json!({ "ok": true, "models": discovered.len() });
                     return (
@@ -865,7 +885,7 @@ pub async fn test_service(
                             "models": discovered,
                             "selectedModel": model,
                             "detected": {
-                                "apiFormat": preferred_api_format,
+                                "apiFormat": transport_api_format_str(*plan_api_format),
                                 "stream": stream,
                                 "baseUrl": resolved_base_url,
                                 "modelsSource": "api",
@@ -881,7 +901,7 @@ pub async fn test_service(
                         label: label.as_deref(),
                         base_url: &resolved_base_url,
                         model,
-                        api_format: preferred_api_format,
+                        api_format: transport_api_format_str(*plan_api_format),
                         stream: Some(*stream),
                         error: &error,
                         language,
@@ -901,7 +921,44 @@ pub async fn test_service(
 /// 16，无重试，SERVICE_CHAT_PROBE_TIMEOUT_MS=8s）。返回响应文本；**空响应
 /// 判失败**（doctor 回退语义：首传输空 → 回退下一计划）。99 号提 pub(crate)
 /// 供 doctor 复用。
-pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool) -> Result<String, String> {
+fn transport_api_format_str(api_format: crate::llm::providers::TransportApiFormat) -> &'static str {
+    match api_format {
+        crate::llm::providers::TransportApiFormat::Chat => "chat",
+        crate::llm::providers::TransportApiFormat::Responses => "responses",
+    }
+}
+
+/// `buildProbePlans`（TS 逐字，106 号）：preferred 有值 → [preferred ×
+/// (stream??false)] +（stream 时）[preferred × false]；无偏好 →
+/// [chat 非流式, responses 非流式]。去重保序。
+pub(crate) fn build_probe_plans(
+    preferred_api_format: Option<crate::llm::providers::TransportApiFormat>,
+    preferred_stream: Option<bool>,
+) -> Vec<(crate::llm::providers::TransportApiFormat, bool)> {
+    use crate::llm::providers::TransportApiFormat;
+    let mut plans: Vec<(TransportApiFormat, bool)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let push = |api_format: TransportApiFormat, stream: bool, plans: &mut Vec<_>, seen: &mut std::collections::HashSet<(TransportApiFormat, bool)>| {
+        if seen.insert((api_format, stream)) {
+            plans.push((api_format, stream));
+        }
+    };
+    match preferred_api_format {
+        Some(api_format) => {
+            push(api_format, preferred_stream.unwrap_or(false), &mut plans, &mut seen);
+            if preferred_stream == Some(true) {
+                push(api_format, false, &mut plans, &mut seen);
+            }
+        }
+        None => {
+            push(TransportApiFormat::Chat, false, &mut plans, &mut seen);
+            push(TransportApiFormat::Responses, false, &mut plans, &mut seen);
+        }
+    }
+    plans
+}
+
+pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool, api_format: crate::llm::providers::TransportApiFormat) -> Result<String, String> {
     use crate::llm::streaming_client::{ChatCompletionParams, StreamingChatClient};
     let client = StreamingChatClient::new(base_url.to_string(), api_key.to_string(), HashMap::new());
     let message = crate::llm::provider::LLMMessage {
@@ -916,6 +973,7 @@ pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &st
         temperature: 0.7,
         max_tokens: 16,
         stream,
+        api_format,
         extra: None,
         tools: None,
         images: None,
@@ -1700,6 +1758,43 @@ mod probe_error_tests {
 
 #[cfg(test)]
 mod tests {
+
+    // ── 106 号：buildProbePlans（TS 逐字） ────────────────────────────
+
+    #[test]
+    fn probe_plans_preferred_format_branches() {
+        use crate::llm::providers::TransportApiFormat;
+        // preferred responses + stream → [responses×true, responses×false]。
+        assert_eq!(
+            build_probe_plans(Some(TransportApiFormat::Responses), Some(true)),
+            vec![(TransportApiFormat::Responses, true), (TransportApiFormat::Responses, false)]
+        );
+        // preferred chat 无 stream 偏好 → 单计划 [chat×false]。
+        assert_eq!(
+            build_probe_plans(Some(TransportApiFormat::Chat), None),
+            vec![(TransportApiFormat::Chat, false)]
+        );
+        // preferred responses stream=false → [responses×false]（不加 chat 回退）。
+        assert_eq!(
+            build_probe_plans(Some(TransportApiFormat::Responses), Some(false)),
+            vec![(TransportApiFormat::Responses, false)]
+        );
+    }
+
+    #[test]
+    fn probe_plans_no_preference_tries_chat_then_responses() {
+        use crate::llm::providers::TransportApiFormat;
+        assert_eq!(
+            build_probe_plans(None, None),
+            vec![(TransportApiFormat::Chat, false), (TransportApiFormat::Responses, false)]
+        );
+        // stream 偏好在无 apiFormat 偏好时不参与（TS 同：None 分支忽略 stream）。
+        assert_eq!(
+            build_probe_plans(None, Some(true)),
+            vec![(TransportApiFormat::Chat, false), (TransportApiFormat::Responses, false)]
+        );
+    }
+
     use super::*;
 
     #[test]

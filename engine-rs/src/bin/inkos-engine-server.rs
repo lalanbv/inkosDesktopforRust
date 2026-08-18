@@ -67,7 +67,13 @@ fn build_router() -> axum::Router {
         }
     }
 
-    let router = AgentRouter::new(default, overrides);
+    // INKOS_LLM_API_FORMAT（106 号 env 对账）：responses → responses 传输。
+    let router = AgentRouter::new(default, overrides).with_api_format(
+        match std::env::var("INKOS_LLM_API_FORMAT").as_deref() {
+            Ok("responses") => inkos_engine::llm::providers::TransportApiFormat::Responses,
+            _ => inkos_engine::llm::providers::TransportApiFormat::Chat,
+        },
+    );
     let state = Arc::new(StateManager::new(project_root.clone()));
     let hub = Arc::new(BroadcastHub::new());
 

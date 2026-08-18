@@ -583,23 +583,30 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
         if request.send().await.map(|response| response.status().is_success()).unwrap_or(false) {
             return true;
         }
-        // 深链回退：候选 = 端点模型；计划 = llm.stream 优先流式 → 空/失败
-        // 回退非流式（TS buildProbePlans preferred 分支）。
-        let preferred_stream = crate::server::project_config_routes::load_raw_config(root)
+        // 深链回退：候选 = 端点模型；计划 = llm.apiFormat × llm.stream 的
+        // preferred 分支（TS buildProbePlans——106 号起含 responses 维度）。
+        let llm_config = crate::server::project_config_routes::load_raw_config(root)
             .await
-            .and_then(|config| config.get("llm").cloned())
-            .and_then(|llm| llm.get("stream").and_then(serde_json::Value::as_bool))
-            .unwrap_or(false);
-        let mut plans = vec![preferred_stream];
-        if preferred_stream {
-            plans.push(false);
-        }
-        for stream in plans {
+            .and_then(|config| config.get("llm").cloned());
+        let preferred_stream = llm_config
+            .as_ref()
+            .and_then(|llm| llm.get("stream").and_then(serde_json::Value::as_bool));
+        let preferred_api_format = llm_config.as_ref().and_then(|llm| {
+            llm.get("apiFormat").and_then(serde_json::Value::as_str).and_then(|value| match value {
+                "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
+                "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
+                _ => None,
+            })
+        });
+        for (plan_api_format, stream) in
+            crate::server::service_routes::build_probe_plans(preferred_api_format, preferred_stream)
+        {
             if crate::server::service_routes::minimal_chat_probe(
                 &base,
                 &endpoint.api_key,
                 &endpoint.model,
                 stream,
+                plan_api_format,
             )
             .await
             .is_ok()

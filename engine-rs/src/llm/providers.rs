@@ -118,7 +118,7 @@ pub struct ProviderTransportDefaults {
 }
 
 /// 传输层 apiFormat（chat/responses，与 ApiProtocol 不同——这是 config 层）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export, type = "\"chat\" | \"responses\""))]
 pub enum TransportApiFormat {

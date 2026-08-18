@@ -298,7 +298,9 @@ pub async fn post_agent(
                     extra_headers: std::collections::HashMap::new(),
                 },
                 std::collections::HashMap::new(),
-            )),
+            )
+            // 106 号：命中服务项 apiFormat=responses → 覆盖端点走 responses 传输。
+            .with_api_format(ov.api_format)),
             builtin_genres_dir: runtime.builtin_genres_dir.clone(),
             revision_gate: runtime.revision_gate,
         }
@@ -535,6 +537,7 @@ pub async fn post_agent(
                     temperature: 0.7,
                     max_tokens: endpoint.max_tokens,
                     stream: true,
+                    api_format: self.router.api_format(),
                     extra: None,
                     tools,
                     images: (!self.images.is_empty()).then_some(self.images.as_slice()),

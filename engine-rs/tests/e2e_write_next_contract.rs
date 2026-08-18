@@ -14519,8 +14519,9 @@ mod sub99_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
-        // preferred stream=true（触发回退计划序）。
-        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true}}"#).unwrap();
+        // 106 号起计划为 TS buildProbePlans 逐字：stream 偏好仅在 apiFormat
+        // 有偏好时生效（apiFormat=chat + stream=true → [chat×true, chat×false]）。
+        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#).unwrap();
         let (llm, streams) = mock_doctor_upstream(false).await;
         let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
@@ -14534,7 +14535,7 @@ mod sub99_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
-        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true}}"#).unwrap();
+        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#).unwrap();
         let (llm, streams) = mock_doctor_upstream(true).await;
         let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
@@ -15393,5 +15394,229 @@ mod sub105_e2e {
                 "chat 会话不应注册 {tool}：{chat_batch}"
             );
         }
+    }
+}
+
+mod sub106_e2e {
+    //! 106 号：responses 协议传输——探测计划维度（chat 失败回退 /responses）+
+    //! 聊天面全链（inkos.json 服务项 apiFormat=responses → 97 层覆盖端点 →
+    //! studio-agent 走 /responses：input/instructions/store/max_output_tokens
+    //! 请求形态 + delta/completed 事件流解析）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::service_routes;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// 三端点 mock：/models 404；/chat/completions 404；/responses 按请求
+    /// stream 字段分流（非流式 JSON / 流式 responses SSE 事件），捕获请求体。
+    async fn mock_responses_only() -> (String, Arc<StdMutex<Vec<serde_json::Value>>>) {
+        let bodies = Arc::new(StdMutex::new(Vec::<serde_json::Value>::new()));
+        let bodies_for_server = bodies.clone();
+        let app = axum::Router::new()
+            .route(
+                "/models",
+                axum::routing::get(|| async { StatusCode::NOT_FOUND }),
+            )
+            .route(
+                "/chat/completions",
+                axum::routing::post(|| async { StatusCode::NOT_FOUND }),
+            )
+            .route(
+                "/responses",
+                axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let bodies = bodies_for_server.clone();
+                    async move {
+                        bodies.lock().unwrap().push(body.clone());
+                        if body["stream"].as_bool().unwrap_or(false) {
+                            let events = [
+                                serde_json::json!({ "type": "response.output_text.delta", "delta": "直接回答。" }),
+                                serde_json::json!({ "type": "response.completed", "response": { "usage": { "input_tokens": 9, "output_tokens": 7, "total_tokens": 16 } } }),
+                            ];
+                            let stream: String = events
+                                .iter()
+                                .map(|event| format!("data: {event}\n\n"))
+                                .collect();
+                            axum::response::IntoResponse::into_response((
+                                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                                stream,
+                            ))
+                        } else {
+                            axum::response::IntoResponse::into_response(axum::Json(
+                                serde_json::json!({
+                                    "output": [{ "content": [{ "type": "output_text", "text": "OK" }] }],
+                                    "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },
+                                }),
+                            ))
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), bodies)
+    }
+
+    #[tokio::test]
+    async fn test_service_falls_back_to_responses_probe_when_chat_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, bodies) = mock_responses_only().await;
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/services/:service/test",
+                axum::routing::post(service_routes::test_service),
+            )
+            .with_state(rt(&root, &llm));
+
+        // 无 apiFormat 偏好 → 计划 [chat 非流式, responses 非流式]：chat 404
+        // → responses 探测成功（96 号"一律 chat"备案闭合）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/services/svc-r/test",
+            Some(&format!(
+                r#"{{"apiKey":"k","baseUrl":"{llm}","model":"resp-model"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["ok"], true, "body: {parsed}");
+        assert_eq!(parsed["detected"]["apiFormat"], "responses", "body: {parsed}");
+        assert_eq!(parsed["detected"]["stream"], false, "body: {parsed}");
+        assert_eq!(parsed["selectedModel"], "resp-model");
+
+        // /responses 探测请求形态（TS chatCompletion 经 responses 传输）。
+        let bodies = bodies.lock().unwrap();
+        let probe = bodies.last().unwrap();
+        assert_eq!(probe["model"], "resp-model");
+        assert_eq!(probe["store"], false);
+        assert_eq!(probe["max_output_tokens"], 16);
+        assert_eq!(probe["stream"], false);
+        assert_eq!(
+            probe["input"][0]["content"][0]["text"], "Reply with OK only."
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_chat_uses_responses_transport_for_configured_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, bodies) = mock_responses_only().await;
+        // 服务项 apiFormat=responses + secrets key → 97 层 1 显式命中覆盖端点。
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":{{"custom:Resp":{{"service":"custom","name":"Resp","baseUrl":"{llm}","apiFormat":"responses"}}}}}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:Resp":{"apiKey":"sk-r"}}}"#,
+        )
+        .unwrap();
+
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let session = "1783099000005-r106";
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"打个招呼","sessionId":"{session}","service":"custom:Resp","model":"resp-model"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["response"], "直接回答。", "body: {parsed}");
+
+        // 请求侧：/responses 形态（input + instructions + store + 流式）。
+        let bodies = bodies.lock().unwrap();
+        let request = bodies.last().expect("应命中 /responses");
+        assert_eq!(request["model"], "resp-model");
+        assert_eq!(request["stream"], true);
+        assert_eq!(request["store"], false);
+        assert!(
+            request["instructions"].as_str().is_some_and(|s| !s.is_empty()),
+            "system 提示应进 instructions：{request}"
+        );
+        let input = request["input"].as_array().unwrap();
+        let last = input.last().unwrap();
+        assert_eq!(last["role"], "user");
+        assert!(
+            last["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("打个招呼")),
+            "input: {input:?}"
+        );
+        assert!(
+            input.iter().all(|item| item["role"] != "system"),
+            "system 不进 input：{input:?}"
+        );
     }
 }

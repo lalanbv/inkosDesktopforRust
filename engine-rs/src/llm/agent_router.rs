@@ -64,6 +64,9 @@ pub struct AgentRouter {
     default: LlmEndpointConfig,
     overrides: Arc<HashMap<String, AgentOverride>>,
     clients: Arc<tokio::sync::Mutex<HashMap<String, Arc<StreamingChatClient>>>>,
+    /// 传输协议（106 号）：全端点统一 chat/responses（TS client.apiFormat——
+    /// 端点级配置，非 per-agent）。
+    api_format: crate::llm::providers::TransportApiFormat,
 }
 
 impl AgentRouter {
@@ -72,7 +75,20 @@ impl AgentRouter {
             default,
             overrides: Arc::new(overrides),
             clients: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            api_format: crate::llm::providers::TransportApiFormat::Chat,
         }
+    }
+
+    /// 覆盖传输协议（默认 chat；inkos.json llm.apiFormat / 服务项 apiFormat /
+    /// env INKOS_LLM_API_FORMAT 命中 responses 时置位）。
+    pub fn with_api_format(mut self, api_format: crate::llm::providers::TransportApiFormat) -> Self {
+        self.api_format = api_format;
+        self
+    }
+
+    /// 当前传输协议（探测/诊断面回显）。
+    pub fn api_format(&self) -> crate::llm::providers::TransportApiFormat {
+        self.api_format
     }
 
     /// 解析 agent 端点（无覆盖 = 默认）。
@@ -143,6 +159,7 @@ impl AgentRouter {
                 temperature,
                 max_tokens: max_tokens.unwrap_or(endpoint.max_tokens),
                 stream: true,
+                api_format: self.api_format,
                 extra: None,
                 tools: None,
                 images: None,
