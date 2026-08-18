@@ -1142,6 +1142,47 @@ mod books47_e2e {
         assert!(saved.contains("他推开门，发现灯还亮着。"));
         assert!(!saved.contains("今日起讨回"));
     }
+
+    #[tokio::test]
+    async fn revise_book_level_always_gate_overrides_project_default() {
+        // 116 号：book.writing.revisionGate=always——同恶化审计下 strict 拒绝而
+        // always 应用（book 覆盖 project 链生效证据）。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture47(&root);
+        // book 级 always（项目级未设 → 链：book.always）。
+        let book_config_path = root.join("books").join("b1").join("book.json");
+        let mut book: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&book_config_path).unwrap()).unwrap();
+        book["writing"] = serde_json::json!({ "revisionGate": "always" });
+        std::fs::write(&book_config_path, book.to_string()).unwrap();
+        let llm = spawn_mock47().await;
+        let runtime = rt47(&root, &llm);
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .with_state(runtime);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/revise/1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"mode":"polish"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["applied"], true, "body: {parsed}");
+        // 应用路径无 revisionDiagnostics（拒绝路径专属——88 号形态）。
+        // 应用后章节文件含修订文本。
+        let saved = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("0001_风起.md"))
+            .unwrap();
+        assert!(saved.contains("今日起讨回"), "{saved}");
+    }
 }
 
 // ---- 48 号：books 状态端点 E2E（列表/章节/approve/reject/truth/review-mode） ----

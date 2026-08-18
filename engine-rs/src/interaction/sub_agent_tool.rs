@@ -337,7 +337,7 @@ async fn reviser(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> To
         &book_id,
         chapter_number,
         &body,
-        deps.runtime.revision_gate,
+        crate::server::books_routes::resolve_effective_revision_gate(deps.runtime, &book_id).await,
     )
     .await
     {

@@ -413,7 +413,7 @@ pub async fn revise(
         &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
     );
 
-    match run_revise_chain(&runtime, &book_id, chapter_number, &body, runtime.revision_gate).await {
+    match run_revise_chain(&runtime, &book_id, chapter_number, &body, resolve_effective_revision_gate(&runtime, &book_id).await).await {
         Ok(result) => {
             runtime.hub.broadcast(
                 "revise:complete",
@@ -627,6 +627,37 @@ pub struct RevisionDiagnostics {
 /// `gate` 由端点注入（revise 用 runtime 配置；rewrite 强制 Always）。
 /// 88 号提 pub(crate)：sub_agent reviser 聊天面复用（gate 用 runtime 配置，
 /// 对齐 TS sub_agent → pipeline.reviseDraft 的 config.revisionGate ?? strict）。
+/// 生效修订门槛（116 号）：book.writing.revisionGate ?? inkos.json
+/// writing.revisionGate ?? runtime（bin env / 缺省 strict）——TS
+/// buildPipelineConfig 的 revisionGate 解析链（book 覆盖 project，112 号备案 2 闭合）。
+pub(crate) async fn resolve_effective_revision_gate(
+    runtime: &BooksRuntime,
+    book_id: &str,
+) -> RevisionGate {
+    let project_gate = crate::server::project_config_routes::load_raw_config(
+        runtime.state.project_root(),
+    )
+    .await
+    .and_then(|config| config.get("writing").cloned())
+    .and_then(|writing| {
+        writing
+            .get("revisionGate")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| serde_json::from_value::<crate::models::book::RevisionGateVal>(serde_json::json!(value)).ok())
+    });
+    let book_writing = runtime
+        .state
+        .load_book_config(book_id)
+        .await
+        .ok()
+        .and_then(|book| book.writing);
+    match crate::models::book::resolve_revision_gate(book_writing.as_ref(), project_gate) {
+        crate::models::book::RevisionGateVal::Lenient => RevisionGate::Lenient,
+        crate::models::book::RevisionGateVal::Always => RevisionGate::Always,
+        crate::models::book::RevisionGateVal::Strict => RevisionGate::Strict,
+    }
+}
+
 pub(crate) async fn run_revise_chain(
     runtime: &BooksRuntime,
     book_id: &str,
