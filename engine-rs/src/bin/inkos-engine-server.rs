@@ -11,6 +11,9 @@
 //! - `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL`：默认端点
 //! - `INKOS_LLM_MAX_TOKENS`：默认 max_tokens（默认 8192）
 //! - `INKOS_PORT`：监听端口（默认 8787，与 Node sidecar 同位替换时由壳层指定）
+//! - `INKOS_STATIC_DIR`：静态前端面目录（`/assets/*` + SPA 回退；浏览器直连
+//!   模式 = `packages/studio/dist`；未设为纯 API 服务——TS sidecar 无此开关、
+//!   恒挂 dist，Rust 侧显式化供 Tauri 壳内嵌前端场景）
 //!
 //! agent 覆盖表暂经 env 前缀扩展（`INKOS_AGENT_<NAME>_MODEL`），完整
 //! model-overrides 配置面随 project 配置端点接线（备案）。
@@ -145,12 +148,16 @@ fn build_router() -> axum::Router {
         router: std::sync::Arc::new(router.clone()),
         builtin_genres_dir,
     };
-    inkos_engine::server::router_books(
+    // 静态前端面（124 号）：INKOS_STATIC_DIR 指向前端产物目录（浏览器直连
+    // 模式 = packages/studio/dist）；未设为纯 API 服务（Tauri 壳内嵌前端）。
+    let static_dir = std::env::var("INKOS_STATIC_DIR").ok().map(std::path::PathBuf::from);
+    inkos_engine::server::static_routes::router_books_with_static(
         AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },
         hub,
         runtime,
         audit,
         books,
+        static_dir,
     )
 }
 

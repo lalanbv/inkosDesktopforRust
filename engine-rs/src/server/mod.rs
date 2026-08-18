@@ -27,6 +27,7 @@ pub mod session_routes;
 pub mod skill_routes;
 pub mod translation_routes;
 pub mod sse;
+pub mod static_routes;
 pub mod style_routes;
 pub mod task_store;
 pub mod write_next_route;

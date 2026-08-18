@@ -817,3 +817,96 @@ async fn bin_process_write_next_llm_resolution() {
         project_hits.load(Ordering::SeqCst)
     );
 }
+
+/// 原始 GET（状态码 + content-type + body）——静态面比 JSON 面多一个
+/// content-type 维度。
+async fn get_raw(base: &str, path: &str) -> (u16, Option<String>, String) {
+    let response = reqwest::Client::new()
+        .get(format!("{base}{path}"))
+        .send()
+        .await
+        .expect("请求失败");
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(String::from);
+    let body = response.text().await.unwrap_or_default();
+    (status, content_type, body)
+}
+
+/// 124 号：静态前端面双端对跑——真实 bin（INKOS_STATIC_DIR）与 TS sidecar
+/// 对**同一 dist 目录**的静态服务逐字节等价（/ 与深链 SPA 回退 / 资产
+/// content-type / 缺失资产 404），且 API 路由不受回退干扰。
+#[tokio::test]
+async fn bin_process_static_face_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    // sidecar 起动时自写 dist/index.html；资产预先放入（按请求读，两侧同源）。
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let dist = repo_root()
+        .join("packages")
+        .join("studio")
+        .join("dist");
+    std::fs::create_dir_all(dist.join("assets")).unwrap();
+    std::fs::write(dist.join("assets").join("app.js"), "console.log('duel')").unwrap();
+
+    // bin 在 dist/index.html 落位后起动（index 启动期缓存两侧同内容）。
+    let bin_port = next_sidecar_port().await;
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
+        .env("INKOS_PROJECT_ROOT", &root)
+        .env("INKOS_PORT", bin_port.to_string())
+        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
+        .env("INKOS_STATIC_DIR", &dist)
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-static-out.log").unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-bin-static-err.log").unwrap(),
+        ))
+        .spawn()
+        .expect("bin 起动失败");
+    let bin = format!("http://127.0.0.1:{bin_port}");
+    wait_ready(&bin).await;
+    wait_ready(&ts).await;
+
+    for path in ["/", "/editor/chapter/2", "/assets/app.js", "/assets/missing.js"] {
+        let (bin_status, bin_type, bin_body) = get_raw(&bin, path).await;
+        let (ts_status, ts_type, ts_body) = get_raw(&ts, path).await;
+        assert_eq!(
+            bin_status, ts_status,
+            "{path} 状态码分歧：bin={bin_status} ts={ts_status}"
+        );
+        assert_eq!(
+            bin_body, ts_body,
+            "{path} body 分歧：bin={bin_body:?} ts={ts_body:?}"
+        );
+        // content-type 等值比较（charset 大小写两侧客户端库不同，忽略大小写）。
+        assert_eq!(
+            bin_type.map(|v| v.to_ascii_lowercase()),
+            ts_type.map(|v| v.to_ascii_lowercase()),
+            "{path} content-type 分歧"
+        );
+    }
+
+    // 资产 content-type 精确断言（映射表逐字对齐 TS）。
+    let (_, content_type, body) = get_raw(&bin, "/assets/app.js").await;
+    assert_eq!(content_type.as_deref(), Some("application/javascript"));
+    assert_eq!(body, "console.log('duel')");
+    // 已注册 API 路由不受静态回退干扰。
+    let (status, _) = get_json(&bin, "/api/v1/health").await;
+    assert_eq!(status, 200);
+
+    let _ = command.kill();
+    let _ = command.wait();
+    eprintln!("静态面双端对跑通过：/ 与深链 SPA / 资产字节级一致，API 面不受干扰");
+}
