@@ -161,16 +161,20 @@ pub struct BookSessionSummary {
 
 impl BookSessionSummary {
     pub fn to_json(&self) -> Value {
-        json!({
+        // TS listBookSessions 摘要：playMode 未设时省略键（121 号对跑勘误）。
+        let mut map = json!({
             "sessionId": self.session_id,
             "bookId": self.book_id,
             "sessionKind": self.session_kind,
-            "playMode": self.play_mode,
             "title": self.title,
             "messageCount": self.message_count,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
-        })
+        });
+        if let Some(play_mode) = self.play_mode {
+            map["playMode"] = json!(play_mode);
+        }
+        map
     }
 }
 

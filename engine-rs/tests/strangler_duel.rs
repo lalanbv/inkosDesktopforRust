@@ -16,6 +16,15 @@ fn duel_enabled() -> bool {
     std::env::var("INKOS_DUEL").is_ok()
 }
 
+/// sidecar 唯一端口：OS 分配（bind :0 取空闲口再放行给 tsx——进程内外
+/// 均不撞车；drop 与 tsx bind 间的竞态窗口在本机测试语境可忽略）。
+async fn next_sidecar_port() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
 fn repo_root() -> PathBuf {
     // tests/ 的上两级 = 仓库根。
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -258,7 +267,7 @@ async fn strangler_readonly_face_duel() {
 
     let rust = spawn_rust_engine(&root, &llm).await;
     // sidecar 端口选随机高位（bind 冲突由 readiness 捕获）。
-    let ts_port = 4700 + (std::process::id() % 1000) as u16;
+    let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
@@ -317,7 +326,7 @@ async fn strangler_cross_write_read_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = 4800 + (std::process::id() % 1000) as u16;
+    let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
@@ -414,7 +423,7 @@ async fn strangler_session_domain_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = 4900 + (std::process::id() % 1000) as u16;
+    let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
@@ -505,7 +514,7 @@ async fn strangler_services_domain_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = 4750 + (std::process::id() % 1000) as u16;
+    let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
@@ -576,4 +585,108 @@ async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
     let status = response.status().as_u16();
     let text = response.text().await.unwrap_or_default();
     (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+}
+
+/// 121 号：全量灰度模拟（runbook 第五步终验收）——同根双进程**共存**下按
+/// 顺序串行执行前四步场景（只读对跑 → Rust 写 approve → TS 写 review-mode
+/// 与聊天回合 → 模型配置探测），每步后双端只读桶复跑等价——sidecar 保温
+/// 语义（双端共读同盘）的一站式验收。
+#[tokio::test]
+async fn strangler_full_grey_simulation() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    let client = reqwest::Client::new();
+
+    let readonly = [
+        "/api/v1/books",
+        "/api/v1/books/b1",
+        "/api/v1/books/b1/chapters/1",
+        "/api/v1/books/b1/truth",
+        "/api/v1/books/b1/analytics",
+        "/api/v1/skills",
+        "/api/v1/project",
+        "/api/v1/prompt-packs",
+        "/api/v1/sessions",
+        "/api/v1/logs",
+    ];
+    async fn assert_readonly_equivalent(
+        rust: &str,
+        ts: &str,
+        readonly: &[&str],
+        step: usize,
+    ) {
+        for endpoint in readonly {
+            let (rust_status, mut rust_body) = get_json(rust, endpoint).await;
+            let (ts_status, mut ts_body) = get_json(ts, endpoint).await;
+            normalize(&mut rust_body);
+            normalize(&mut ts_body);
+            assert_eq!(
+                (rust_status, &rust_body),
+                (ts_status, &ts_body),
+                "step{step} 后只读面分歧：{endpoint}"
+            );
+        }
+    }
+
+    // 第一步：只读基线。
+    assert_readonly_equivalent(&rust, &ts, &readonly, 1).await;
+
+    // 第二步：Rust 写（approve）→ 双端读一致。
+    let response = client
+        .post(format!("{rust}/api/v1/books/b1/chapters/1/approve"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_readonly_equivalent(&rust, &ts, &readonly, 2).await;
+
+    // 第三步：TS 写（review-mode + 会话 + 聊天回合）→ 双端读一致。
+    let response = client
+        .put(format!("{ts}/api/v1/books/b1/chapter-review-mode"))
+        .header("content-type", "application/json")
+        .body(r#"{"mode":"manual"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let grey_session = "1783099000014-g121";
+    let response = client
+        .post(format!("{ts}/api/v1/sessions"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"sessionId":"{grey_session}"}}"#))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let response = client
+        .post(format!("{ts}/api/v1/agent"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"instruction":"灰度回合","sessionId":"{grey_session}"}}"#))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_readonly_equivalent(&rust, &ts, &readonly, 3).await;
+
+    // 第四步：模型配置探测（双端各自对同 mock）→ 只读面不受扰动。
+    let body = format!(r#"{{"apiKey":"k","baseUrl":"{llm}"}}"#);
+    let (rust_status, _) = post_json(&rust, "/api/v1/services/deepseek/test", &body).await;
+    let (ts_status, _) = post_json(&ts, "/api/v1/services/deepseek/test", &body).await;
+    assert_eq!(rust_status, 200);
+    assert_eq!(ts_status, 200);
+    assert_readonly_equivalent(&rust, &ts, &readonly, 4).await;
+
+    eprintln!("全量灰度模拟通过：四步串行 + 每步双端只读复跑全等价（sidecar 保温共存语义）");
 }

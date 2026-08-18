@@ -103,7 +103,7 @@ pub struct BookSession {
     pub book_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_kind: Option<SessionKind>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "playMode", skip_serializing_if = "Option::is_none", default)]
     pub play_mode: Option<PlayMode>,
     #[serde(default)]
     pub title: Option<String>,
