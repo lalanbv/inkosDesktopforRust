@@ -262,6 +262,25 @@ pub async fn post_agent(
         Ok(skills) => skills,
         Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response(),
     };
+    // model：非文本模型（8 片段子串）→ 400 {error, response} 双语（TS
+    // `isTextChatModelId` / `nonTextModelMessage`；空串跳过——TS falsy 语义）。
+    if let Some(model) = payload.get("model").and_then(Value::as_str) {
+        if !model.is_empty() && !agent_production::is_text_chat_model_id(model) {
+            let lang = agent_production::current_project_language(root).await;
+            let message = agent_production::non_text_model_message(model, lang);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": message, "response": message })),
+            )
+                .into_response();
+        }
+    }
+    // attachments：归一化（数组/数量/大小/文本长度校验 + dataUrl 解析落盘
+    // .inkos/uploads/{session}/ + 三类分支）。93 号：注入面（多模态消息）备案。
+    let attachments = match normalize_agent_attachments(root, session_id, payload.get("attachments")).await {
+        Ok(attachments) => attachments,
+        Err(response) => return response.into_response(),
+    };
     // sourceRequestId：clientRequestId trim + 128 码元截断。
     let source_request_id: Option<String> = payload
         .get("clientRequestId")
@@ -345,7 +364,7 @@ pub async fn post_agent(
             "actionSource": action_source.as_str(),
             "requestedIntent": requested_intent.map(|intent| Value::from(intent.as_str())).unwrap_or(Value::Null),
             "requestedSkills": requested_skills,
-            "attachments": 0,
+            "attachments": attachments.len(),
         }),
     );
 
@@ -808,6 +827,193 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
     }
 }
 
+// ── attachments 归一化（93 号：normalizeAgentAttachments 逐字语义） ──
+
+const MAX_AGENT_ATTACHMENTS: usize = 8;
+const MAX_AGENT_ATTACHMENT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_AGENT_ATTACHMENT_TEXT_CHARS: usize = 120_000;
+
+/// 归一化后的附件（image 带内联 base64，text 带注入文本，其余仅落盘）。
+pub(crate) struct AgentAttachment {
+    #[allow(dead_code)]
+    pub id: String,
+    #[allow(dead_code)]
+    pub filename: String,
+    #[allow(dead_code)]
+    pub mime_type: String,
+    #[allow(dead_code)]
+    pub size: usize,
+    #[allow(dead_code)]
+    pub stored_path: String,
+}
+
+/// `safeUploadFileName`：trim + 路径字符折叠 + 非 `\p{L}\p{N}._ -` 折叠 `_`
+/// + 120 截断 + 空 → "upload"。
+fn safe_upload_file_name(value: &str) -> String {
+    static UNSAFE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static SYMBOL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let unsafe_re = UNSAFE_RE.get_or_init(|| regex::Regex::new(r"[/\\\x00]").unwrap());
+    let symbol_re = SYMBOL_RE
+        .get_or_init(|| regex::Regex::new(r"[^\p{L}\p{N}._ -]+").unwrap());
+    let trimmed = unsafe_re.replace_all(value.trim(), "_");
+    let trimmed = symbol_re.replace_all(&trimmed, "_").to_string();
+    let safe: String = trimmed.chars().take(120).collect::<String>().trim().to_string();
+    if safe.is_empty() { "upload".to_string() } else { safe }
+}
+
+/// `isTextAttachment`：text/* 或文本扩展名。
+fn is_text_attachment(filename: &str, mime_type: &str) -> bool {
+    if mime_type.starts_with("text/") {
+        return true;
+    }
+    let lower = filename.to_lowercase();
+    [".txt", ".md", ".markdown", ".json", ".csv", ".tsv", ".yaml", ".yml", ".log"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+}
+
+/// `parseDataUrl`：`data:{mime}?;{params}?;base64,{payload}` → (mime, bytes)。
+/// mime 缺省 application/octet-stream。
+fn parse_data_url(data_url: &str) -> Option<(String, Vec<u8>)> {
+    static DATA_URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = DATA_URL_RE
+        .get_or_init(|| regex::Regex::new(r"(?s)^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$").unwrap());
+    let caps = re.captures(data_url)?;
+    let mime_type = caps
+        .get(1)
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(caps[2].trim())
+        .ok()?;
+    Some((mime_type, bytes))
+}
+
+/// `normalizeAgentAttachments`：数组/数量（≤8）/单件（≤4MB）校验 + dataUrl
+/// 解码 + 落盘 `.inkos/uploads/{safeSession}/{ts}-{i}-{filename}` + 三类
+/// 分支（image 内联 base64 / text 注入校验 ≤120k 码元 / 其余仅存）。
+/// 多模态消息注入面见 93 号偏差备案（LLMMessage 无 image 内容形态）。
+async fn normalize_agent_attachments(
+    root: &std::path::Path,
+    session_id: &str,
+    value: Option<&Value>,
+) -> Result<Vec<AgentAttachment>, axum::response::Response> {
+    type Err = (StatusCode, Json<Value>);
+    let internal = || -> Err {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Unexpected server error.",
+        )
+    };
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(items) = value.as_array() else {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ATTACHMENTS",
+            "attachments must be an array",
+        )
+        .into_response());
+    };
+    if items.len() > MAX_AGENT_ATTACHMENTS {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "TOO_MANY_ATTACHMENTS",
+            format!("At most {MAX_AGENT_ATTACHMENTS} files can be attached to one message"),
+        )
+        .into_response());
+    }
+    let upload_dir = root.join(".inkos").join("uploads").join(safe_upload_file_name(session_id));
+    let now_ms = crate::utils::utc_time::utc_now_millis();
+    let mut out = Vec::new();
+    for (index, raw) in items.iter().enumerate() {
+        let Some(obj) = raw.as_object() else {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ATTACHMENT",
+                "Each attachment must be an object",
+            )
+            .into_response());
+        };
+        let fallback_name = format!("upload-{}", index + 1);
+        let filename = safe_upload_file_name(
+            obj.get("filename").and_then(Value::as_str).unwrap_or(&fallback_name),
+        );
+        let data_url = obj.get("dataUrl").and_then(Value::as_str).unwrap_or_default();
+        if data_url.is_empty() {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ATTACHMENT",
+                format!("Attachment {filename} is missing dataUrl"),
+            )
+            .into_response());
+        }
+        let Some((parsed_mime, bytes)) = parse_data_url(data_url) else {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ATTACHMENT_DATA_URL",
+                "Attachment must be a base64 data URL",
+            )
+            .into_response());
+        };
+        let mime_type = obj
+            .get("mediaType")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .unwrap_or(&parsed_mime)
+            .to_string();
+        if bytes.len() > MAX_AGENT_ATTACHMENT_BYTES {
+            return Err(api_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "ATTACHMENT_TOO_LARGE",
+                format!("{filename} exceeds {MAX_AGENT_ATTACHMENT_BYTES} bytes"),
+            )
+            .into_response());
+        }
+        if tokio::fs::create_dir_all(&upload_dir).await.is_err() {
+            return Err(internal().into_response());
+        }
+        let stored_name = format!("{now_ms}-{}-{filename}", index + 1);
+        if tokio::fs::write(upload_dir.join(&stored_name), &bytes).await.is_err() {
+            return Err(internal().into_response());
+        }
+        // 文本附件：注入长度校验（UTF-16 码元 ≤120k）。
+        if !mime_type.starts_with("image/") && is_text_attachment(&filename, &mime_type) {
+            let text = String::from_utf8_lossy(&bytes);
+            if text.encode_utf16().count() > MAX_AGENT_ATTACHMENT_TEXT_CHARS {
+                return Err(api_error(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "ATTACHMENT_TEXT_TOO_LARGE",
+                    format!("{filename} is too large to inject without semantic compaction"),
+                )
+                .into_response());
+            }
+        }
+        let stored_path = upload_dir
+            .join(&stored_name)
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| stored_name.clone());
+        let id = obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("{now_ms}-{index}"));
+        out.push(AgentAttachment { id, filename, mime_type, size: bytes.len(), stored_path });
+    }
+    Ok(out)
+}
+
 // ── actionPayload strict 校验（ActionPayloadSchema 逐字，75 号） ──
 
 enum PayloadField<'a> {
@@ -987,6 +1193,46 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
     Ok(())
 }
 
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn safe_upload_file_name_folds_and_falls_back() {
+        assert_eq!(safe_upload_file_name("notes v1.md"), "notes v1.md");
+        assert_eq!(safe_upload_file_name("../etc/passwd"), ".._etc_passwd");
+        assert_eq!(safe_upload_file_name("a/b\\c\0d.txt"), "a_b_c_d.txt");
+        assert_eq!(safe_upload_file_name("  笔记<>:.txt  "), "笔记_.txt");
+        assert_eq!(safe_upload_file_name(""), "upload");
+        assert_eq!(safe_upload_file_name("   "), "upload");
+        let long = "a".repeat(200);
+        assert_eq!(safe_upload_file_name(&long).chars().count(), 120);
+    }
+
+    #[test]
+    fn text_attachment_detection() {
+        assert!(is_text_attachment("a.txt", "application/octet-stream"));
+        assert!(is_text_attachment("a.MD", "application/octet-stream"));
+        assert!(is_text_attachment("a.bin", "text/plain"));
+        assert!(!is_text_attachment("a.png", "image/png"));
+        assert!(!is_text_attachment("a.pdf", "application/pdf"));
+    }
+
+    #[test]
+    fn parse_data_url_variants() {
+        let (mime, bytes) = parse_data_url("data:text/plain;base64,aGVsbG8=").unwrap();
+        assert_eq!(mime, "text/plain");
+        assert_eq!(bytes, b"hello");
+        // mime 缺省。
+        let (mime, _) = parse_data_url("data:;base64,aGVsbG8=").unwrap();
+        assert_eq!(mime, "application/octet-stream");
+        // 非 base64 dataUrl / 非 data 协议拒绝。
+        assert!(parse_data_url("data:text/plain,hello").is_none());
+        assert!(parse_data_url("https://example.com/x").is_none());
+        assert!(parse_data_url("data:text/plain;base64,!!!非base64!!!").is_none());
+    }
+}
 
 #[cfg(test)]
 mod payload_strict_tests {

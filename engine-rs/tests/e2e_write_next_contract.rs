@@ -13721,3 +13721,167 @@ name: 林震
         assert!(book.join("chapters").join("0001_风起.md").is_file());
     }
 }
+
+mod sub93_e2e {
+    //! 93 号：/agent model 校验（非文本模型 400 双语）+ attachments 归一化
+    //! （text/image 落盘 + 错误面）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt93(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app93(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn mock_plain_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(_body): axum::Json<serde_json::Value>| async move {
+                let payload = serde_json::json!({ "choices": [{ "delta": { "content": "好的。" } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn agent_model_guard_and_attachment_normalization() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let llm = mock_plain_llm().await;
+        let session_id = "1783007000011-s93a";
+        let app = app93(rt93(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ① 非文本模型 → 400 {error, response} 双语（zh 项目）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写点什么","sessionId":"{session_id}","model":"gemini-image-2.0"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        let message = parsed["error"].as_str().unwrap();
+        assert!(message.starts_with("模型 gemini-image-2.0 不适合文本聊天/写作。"), "{message}");
+        assert_eq!(parsed["response"].as_str().unwrap(), message);
+        // 文本模型放行（后续附件用例复用）。
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写点什么","sessionId":"{session_id}","model":"gemini-2.5-flash"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ② attachments 归一化：text + image 两件 → 落盘 + 200。
+        //    base64("参考资料内容") 与 PNG 头。
+        let attachments = serde_json::json!([
+            {"id": "att-1", "filename": "参考 notes.md", "dataUrl": "data:text/markdown;base64,5byg5ZG95oql6KGo5YaF5a65"},
+            {"filename": "shot.png", "mediaType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo="},
+        ]);
+        let body = serde_json::json!({
+            "instruction": "看看附件",
+            "sessionId": session_id,
+            "attachments": attachments,
+        })
+        .to_string();
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/agent", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let upload_dir = root.join(".inkos").join("uploads").join(session_id);
+        let mut names: Vec<String> = std::fs::read_dir(&upload_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), 2, "上传落盘：{names:?}");
+        assert!(names[0].ends_with("-1-参考 notes.md"), "{names:?}");
+        assert!(names[1].ends_with("-2-shot.png"), "{names:?}");
+
+        // ③ 错误面：非数组 → 400 INVALID_ATTACHMENTS；缺 dataUrl → 400。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"看看附件","sessionId":"{session_id}","attachments":"not-an-array"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENTS");
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"看看附件","sessionId":"{session_id}","attachments":[{{"filename":"a.md"}}]}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT");
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("a.md is missing dataUrl"));
+    }
+}

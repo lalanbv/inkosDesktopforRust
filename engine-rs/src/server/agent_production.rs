@@ -252,6 +252,36 @@ pub fn is_confirmed_production_action(action_source: ActionSource, intent: Reque
     )
 }
 
+/// 非文本模型 id 片段（子串匹配，lower+trim）。对齐 TS `NON_TEXT_MODEL_ID_PARTS`。
+pub const NON_TEXT_MODEL_ID_PARTS: &[&str] = &[
+    "image",
+    "embedding",
+    "embed",
+    "rerank",
+    "tts",
+    "speech",
+    "audio",
+    "moderation",
+];
+
+/// `isTextChatModelId`：非空且不含任何非文本片段。
+pub fn is_text_chat_model_id(model_id: &str) -> bool {
+    let normalized = model_id.trim().to_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    !NON_TEXT_MODEL_ID_PARTS.iter().any(|part| normalized.contains(part))
+}
+
+/// `nonTextModelMessage`：双语逐字。
+pub fn non_text_model_message(model_id: &str, lang: StudioLang) -> String {
+    pick(
+        lang,
+        &format!("模型 {model_id} 不适合文本聊天/写作。请在模型选择器中改用文本模型，例如 gemini-2.5-flash、gemini-2.5-pro 或对应服务的 chat 模型。"),
+        &format!("Model {model_id} is not suitable for text chat/writing. Pick a text model in the model selector, e.g. gemini-2.5-flash, gemini-2.5-pro, or the service's chat model."),
+    )
+}
+
 /// 归一确认意图：写章三来源 → write_next；button/slash 确认 intent → 原值；
 /// 其余 → None（走聊天分支）。
 pub fn resolve_confirmed_intent(
@@ -2923,6 +2953,30 @@ async fn persist_confirmed_task(
         execution: exec.to_execution(),
     };
     let _ = save_studio_task_snapshot(root, &snapshot).await;
+}
+
+#[cfg(test)]
+mod model_guard_tests {
+    use super::*;
+
+    #[test]
+    fn text_model_id_detection() {
+        assert!(is_text_chat_model_id("gemini-2.5-flash"));
+        assert!(is_text_chat_model_id("  GLM-4.7 "));
+        assert!(!is_text_chat_model_id(""));
+        assert!(!is_text_chat_model_id("some-image-model"));
+        assert!(!is_text_chat_model_id("text-embedding-3"));
+        assert!(!is_text_chat_model_id("tts-1-hd"));
+        assert!(!is_text_chat_model_id("whisper-audio"));
+    }
+
+    #[test]
+    fn non_text_model_message_bilingual() {
+        let zh = non_text_model_message("img-x", StudioLang::Zh);
+        assert!(zh.starts_with("模型 img-x 不适合文本聊天/写作。"), "{zh}");
+        let en = non_text_model_message("img-x", StudioLang::En);
+        assert!(en.starts_with("Model img-x is not suitable"), "{en}");
+    }
 }
 
 #[cfg(test)]
