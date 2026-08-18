@@ -215,6 +215,102 @@ pub fn parse_forecast_model_output(raw: &str) -> Result<ForecastModelOutput, Str
     Ok(parsed)
 }
 
+/// `NarrativeForecastSchema` 的 zod 约束手工等价（store 保存/装载双端校验）。
+/// 90 号：错误面聚焦"哪条约束不过"，供 store 包装为逐字错误文案。
+pub fn validate_narrative_forecast(forecast: &NarrativeForecast) -> Result<(), String> {
+    if forecast.version != 1 {
+        return Err(format!("version must be 1, got {}", forecast.version));
+    }
+    if forecast.forecast_id.is_empty() {
+        return Err("forecastId must be non-empty".to_string());
+    }
+    if forecast.book_id.is_empty() {
+        return Err("bookId must be non-empty".to_string());
+    }
+    if forecast.created_at.is_empty() {
+        return Err("createdAt must be non-empty".to_string());
+    }
+    if forecast.language != "zh" && forecast.language != "en" {
+        return Err(format!("language must be zh or en, got {}", forecast.language));
+    }
+    if forecast.divergence.is_empty() {
+        return Err("divergence must be non-empty".to_string());
+    }
+    if !(FORECAST_MIN_HORIZON..=FORECAST_MAX_HORIZON).contains(&forecast.horizon) {
+        return Err(format!(
+            "horizon must be between {} and {}",
+            FORECAST_MIN_HORIZON, FORECAST_MAX_HORIZON
+        ));
+    }
+    if forecast.context_fingerprint.is_empty() {
+        return Err("contextFingerprint must be non-empty".to_string());
+    }
+    let branch_count = forecast.branches.len();
+    if !(FORECAST_MIN_BRANCHES..=FORECAST_MAX_BRANCHES).contains(&branch_count) {
+        return Err(format!(
+            "branches count {branch_count} not in [{},{}]",
+            FORECAST_MIN_BRANCHES, FORECAST_MAX_BRANCHES
+        ));
+    }
+    static BRANCH_ID_RE: OnceLock<Regex> = OnceLock::new();
+    let branch_id_re = BRANCH_ID_RE.get_or_init(|| Regex::new(r"^branch-\d+$").unwrap());
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, branch) in forecast.branches.iter().enumerate() {
+        if !branch_id_re.is_match(&branch.branch_id) {
+            return Err(format!("branch[{index}].branchId must match ^branch-\\d+$"));
+        }
+        if seen.contains(&branch.branch_id.as_str()) {
+            return Err(format!("duplicate branchId: {}", branch.branch_id));
+        }
+        seen.push(&branch.branch_id);
+        if branch.title.is_empty() {
+            return Err(format!("branch[{index}].title must be non-empty"));
+        }
+        if branch.premise.is_empty() {
+            return Err(format!("branch[{index}].premise must be non-empty"));
+        }
+        if branch.beats.is_empty() {
+            return Err(format!("branch[{index}].beats must have at least 1 item"));
+        }
+        for (beat_index, beat) in branch.beats.iter().enumerate() {
+            if beat.chapter < 1 {
+                return Err(format!("branch[{index}].beats[{beat_index}].chapter must be >= 1"));
+            }
+            if beat.summary.is_empty() {
+                return Err(format!(
+                    "branch[{index}].beats[{beat_index}].summary must be non-empty"
+                ));
+            }
+        }
+        for (decision_index, decision) in branch.character_decisions.iter().enumerate() {
+            if decision.character.is_empty() {
+                return Err(format!(
+                    "branch[{index}].characterDecisions[{decision_index}].character must be non-empty"
+                ));
+            }
+            if decision.decision.is_empty() {
+                return Err(format!(
+                    "branch[{index}].characterDecisions[{decision_index}].decision must be non-empty"
+                ));
+            }
+        }
+        for (risk_index, risk) in branch.risks.iter().enumerate() {
+            if risk.description.is_empty() {
+                return Err(format!(
+                    "branch[{index}].risks[{risk_index}].description must be non-empty"
+                ));
+            }
+        }
+        if branch.intent_alignment.score > 100 {
+            return Err(format!("branch[{index}].intentAlignment.score must be <= 100"));
+        }
+        if branch.intent_alignment.rationale.is_empty() {
+            return Err(format!("branch[{index}].intentAlignment.rationale must be non-empty"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

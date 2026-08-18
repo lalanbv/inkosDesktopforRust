@@ -15,6 +15,7 @@ pub mod book_session_store;
 pub mod import_chapters_tool;
 pub mod material_tools;
 pub mod edit_controller;
+pub mod forecast_tools;
 pub mod events;
 pub mod export_artifact;
 pub mod intents;

@@ -576,6 +576,9 @@ pub async fn post_agent(
         if book_session {
             entries.push(crate::interaction::book_edit_tools::generate_cover_schema());
         }
+        if book_session {
+            entries.extend(crate::interaction::forecast_tools::forecast_tool_schemas());
+        }
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
@@ -612,6 +615,13 @@ pub async fn post_agent(
             active_book_id: active,
         }))
         .flatten();
+    // forecast 三件：仅 book/book-create（TS edit 过滤器剔除 forecast）。
+    let forecast_deps = book_session
+        .then(|| agent_book_id.as_deref().map(|active| crate::interaction::forecast_tools::ForecastDeps {
+            runtime: &runtime,
+            active_book_id: active,
+        }))
+        .flatten();
     let tool_executor = ChatToolRouter {
         root,
         play_deps,
@@ -620,6 +630,7 @@ pub async fn post_agent(
         import_deps,
         sub_agent_deps,
         book_edit_deps,
+        forecast_deps,
     };
     let loop_result = run_agent_loop(
         &loop_chat,
@@ -741,6 +752,7 @@ struct ChatToolRouter<'a> {
     import_deps: Option<ImportDeps<'a>>,
     sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
     book_edit_deps: Option<crate::interaction::book_edit_tools::BookEditDeps<'a>>,
+    forecast_deps: Option<crate::interaction::forecast_tools::ForecastDeps<'a>>,
 }
 
 #[async_trait::async_trait]
@@ -776,6 +788,13 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
         if let Some(deps) = &self.book_edit_deps {
             if let Some(result) =
                 crate::interaction::book_edit_tools::execute_book_edit_tool(deps, name, args).await
+            {
+                return result;
+            }
+        }
+        if let Some(deps) = &self.forecast_deps {
+            if let Some(result) =
+                crate::interaction::forecast_tools::execute_forecast_tool(deps, name, args).await
             {
                 return result;
             }

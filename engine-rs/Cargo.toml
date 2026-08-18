@@ -63,6 +63,8 @@ unicode-normalization = "0.1"
 # Percent 解码：project/files 通配路径的 decodeURIComponent 对应物（axum 传递依赖，显式声明）。
 percent-encoding = "2"
 async-stream = "0.3.6"
+# SHA-256：forecast 上下文指纹（TS node:crypto createHash 对应物）。
+sha2 = "0.10"
 
 [dev-dependencies]
 # 差分测试：Rust 实现 vs TS golden 向量（Phase 0.4 产出）

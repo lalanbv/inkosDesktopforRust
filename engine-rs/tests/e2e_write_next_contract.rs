@@ -12906,3 +12906,284 @@ mod sub89_e2e {
         }
     }
 }
+
+mod sub90_e2e {
+    //! 90 号：narrative forecast 三件套——create→get→select 全链经聊天面
+    //! （mock 投影代理）+ 过期检出（stale 持久化）+ book/edit 注册面。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt90(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app90(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    /// mock：投影代理（叙事推演助手系统提示 → 2 分支 JSON）+ studio-agent
+    /// 聊天按指令发 forecast 工具调用（forecastId 从指令正文中提取）。
+    async fn spawn_mock90() -> (String, Arc<Mutex<Vec<String>>>) {
+        let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let tools_in = tool_names.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let tools_in = tools_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                    if let Some(tools) = body["tools"].as_array() {
+                        let names = tools
+                            .iter()
+                            .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                            .collect::<Vec<_>>();
+                        *tools_in.lock().unwrap() = names;
+                    }
+                    let forecast_json = r#"{"branches":[
+                        {"title":"结盟","premise":"接受合作提议","beats":[{"chapter":2,"summary":"结成同盟"}],
+                         "characterDecisions":[{"character":"主角","decision":"接受"}],
+                         "projectedChanges":{"characters":["地位提升"],"relationships":[],"world":[],"hooks":["H01 推进"]},
+                         "risks":[{"kind":"causality","description":"动机偏快"}],"uncertainties":["信任边界"],
+                         "intentAlignment":{"score":88,"rationale":"贴合意图"}},
+                        {"title":"翻脸","premise":"拒绝合作提议","beats":[{"chapter":2,"summary":"当场翻脸"}],
+                         "characterDecisions":[],
+                         "projectedChanges":{"characters":[],"relationships":[],"world":[],"hooks":[]},
+                         "risks":[],"uncertainties":[],
+                         "intentAlignment":{"score":72,"rationale":"冲突更强"}}
+                    ]}"#;
+                    let payload = if system.contains("叙事推演助手") || system.contains("narrative forecast assistant") {
+                        serde_json::json!({ "choices": [{ "delta": { "content": forecast_json } }] })
+                    } else if system.contains("创作助手") || system.contains("Play 助手") {
+                        let last_user = messages
+                            .iter()
+                            .rev()
+                            .find(|m| m["role"] == "user")
+                            .and_then(|m| m["content"].as_str())
+                            .unwrap_or("");
+                        let forecast_id = last_user
+                            .split_whitespace()
+                            .find(|word| word.starts_with("fc-"))
+                            .unwrap_or("fc-unknown");
+                        let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                        if has_tool_result {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "（推演完成。）" } }] })
+                        } else if last_user.contains("推演一下") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_f1", "function": { "name": "create_narrative_forecast", "arguments": "{\"divergence\":\"合作还是对抗\",\"branchCount\":2,\"horizon\":5}" } },
+                            ] } }] })
+                        } else if last_user.contains("核验推演") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_f2", "function": { "name": "get_narrative_forecast", "arguments": format!("{{\"forecastId\":\"{forecast_id}\"}}") } },
+                            ] } }] })
+                        } else if last_user.contains("选择分支") {
+                            serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                                { "index": 0, "id": "call_f3", "function": { "name": "select_narrative_branch", "arguments": format!("{{\"forecastId\":\"{forecast_id}\",\"branchId\":\"branch-1\"}}") } },
+                            ] } }] })
+                        } else {
+                            serde_json::json!({ "choices": [{ "delta": { "content": "好的。" } }] })
+                        }
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), tool_names)
+    }
+
+    #[tokio::test]
+    async fn book_session_forecast_create_get_select_full_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(
+            root.join("books/b1/chapters/0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
+        let (llm, tool_names) = spawn_mock90().await;
+        let session_id = "1783007000007-s90a";
+        let app = app90(rt90(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ① create：投影 2 分支 + 工件落盘。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"推演一下后续走向","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "create_narrative_forecast");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.starts_with("Narrative forecast fc-"), "{result_text}");
+        assert!(result_text.contains("created with 2 isolated branches."), "{result_text}");
+        assert!(result_text.contains("branch-1 \"结盟\" — intent fit 88/100, 1 risk(s), premise: 接受合作提议"), "{result_text}");
+        let details = &card["details"];
+        assert_eq!(details["kind"], "narrative_forecast_created");
+        let forecast_id = details["forecastId"].as_str().unwrap().to_string();
+        let forecast_dir = root.join("books/b1/story/runtime/narrative-forecasts").join(&forecast_id);
+        assert!(forecast_dir.join("forecast.json").is_file());
+        assert!(forecast_dir.join("comparison.md").is_file());
+        let comparison = std::fs::read_to_string(forecast_dir.join("comparison.md")).unwrap();
+        assert!(comparison.contains("| branch-1 | 结盟 | 88 | 1 | 接受合作提议 |"));
+
+        // ② get：正史未变 → active。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"核验推演 {forecast_id}","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "get_narrative_forecast");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.contains(&format!("Forecast {forecast_id} (book b1) — status: active.")), "{result_text}");
+        assert_eq!(card["details"]["stale"], false);
+
+        // ③ select：只写 selected-branch-plan.md。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"选择分支 {forecast_id}","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "select_narrative_branch");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.starts_with(&format!("Selected branch-1 \"结盟\" from forecast {forecast_id}.")), "{result_text}");
+        let plan = std::fs::read_to_string(forecast_dir.join("selected-branch-plan.md")).unwrap();
+        assert!(plan.starts_with("# 已选分支计划：结盟"));
+        assert!(plan.contains("- 分支：branch-1"));
+
+        // ④ 正史变化 → stale 持久化 + 警告行。
+        std::fs::write(root.join("books/b1/chapters/0002_夜行.md"), "# 第2章").unwrap();
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"核验推演 {forecast_id}","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let card = &parsed["details"]["toolExecutions"][0];
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.contains("— status: stale."), "{result_text}");
+        assert!(result_text.contains("WARNING: canonical chapters or state changed"), "{result_text}");
+        assert_eq!(card["details"]["stale"], true);
+
+        // book 会话注册：forecast 三件齐备。
+        let names = tool_names.lock().unwrap().clone();
+        for expected in [
+            "create_narrative_forecast",
+            "get_narrative_forecast",
+            "select_narrative_branch",
+        ] {
+            assert!(names.contains(&expected.to_string()), "缺 {expected}：{names:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_session_does_not_register_forecast_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, tool_names) = spawn_mock90().await;
+        let session_id = "1783007000008-s90b";
+        let app = app90(rt90(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"随便聊聊","sessionId":"{session_id}","activeBookId":"b1"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let names = tool_names.lock().unwrap().clone();
+        for banned in [
+            "create_narrative_forecast",
+            "get_narrative_forecast",
+            "select_narrative_branch",
+        ] {
+            assert!(!names.contains(&banned.to_string()), "edit 不应注册 {banned}：{names:?}");
+        }
+    }
+}
