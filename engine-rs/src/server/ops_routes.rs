@@ -54,6 +54,9 @@ struct DaemonConfig {
     detection: Option<crate::models::project::DetectionConfig>,
     /// 通知通道（111 号：pause pipeline-error / diagnostic-alert webhook 事件）。
     notify_channels: Vec<crate::notify::NotifyChannel>,
+    /// 质量门控（112 号：TS config.qualityGates——maxAuditRetries /
+    /// pauseAfterConsecutiveFailures / retryTemperatureStep）。
+    quality_gates: crate::models::project::QualityGates,
 }
 
 impl DaemonConfig {
@@ -89,6 +92,11 @@ impl DaemonConfig {
             notify_channels: crate::notify::parse_notify_channels(
                 raw.as_ref().and_then(|config| config.get("notify")),
             ),
+            quality_gates: raw
+                .as_ref()
+                .and_then(|config| config.get("qualityGates"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -105,6 +113,7 @@ impl Default for DaemonConfig {
             max_chapters_per_day: 50,
             detection: None,
             notify_channels: Vec::new(),
+            quality_gates: crate::models::project::QualityGates::default(),
         }
     }
 }
@@ -227,9 +236,10 @@ async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
 }
 
 async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &str) {
-    const MAX_AUDIT_RETRIES: u32 = 2;
-    const PAUSE_AFTER_CONSECUTIVE_FAILURES: u32 = 3;
-    const RETRY_TEMPERATURE_STEP: f64 = 0.1;
+    // 质量门控经 config.qualityGates（112 号；缺省与 TS QualityGatesSchema 默认一致）。
+    let max_audit_retries = config.quality_gates.max_audit_retries;
+    let pause_after_consecutive_failures = config.quality_gates.pause_after_consecutive_failures.max(1);
+    let retry_temperature_step = config.quality_gates.retry_temperature_step;
 
     for i in 0..config.chapters_per_cycle {
         if !scheduler_running() {
@@ -256,7 +266,7 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             .copied()
             .unwrap_or(0);
         let temperature = if failures > 0 {
-            Some((0.7 + failures as f64 * RETRY_TEMPERATURE_STEP).min(1.2))
+            Some((0.7 + failures as f64 * retry_temperature_step).min(1.2))
         } else {
             None
         };
@@ -343,11 +353,11 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             )
             .await;
         }
-        if failures >= PAUSE_AFTER_CONSECUTIVE_FAILURES {
+        if failures >= pause_after_consecutive_failures {
             write_cycle_state().lock().unwrap().paused_books.insert(book_id.to_string());
             // pipeline-error webhook（111 号：TS handleAuditFailure 暂停分支）。
             let reason = format!(
-                "{failures} consecutive audit failures (threshold: {PAUSE_AFTER_CONSECUTIVE_FAILURES})"
+                "{failures} consecutive audit failures (threshold: {pause_after_consecutive_failures})"
             );
             crate::notify::dispatch_webhook_event(
                 &config.notify_channels,
@@ -363,9 +373,9 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             )
             .await;
         }
-        if failures <= MAX_AUDIT_RETRIES && config.retry_delay_ms > 0 {
+        if failures <= max_audit_retries && config.retry_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(config.retry_delay_ms)).await;
-            let retry_temperature = Some((0.7 + failures as f64 * RETRY_TEMPERATURE_STEP).min(1.2));
+            let retry_temperature = Some((0.7 + failures as f64 * retry_temperature_step).min(1.2));
             match write_one_chapter(runtime, book_id, retry_temperature).await {
                 Ok((true, chapter_number, status, _categories)) => {
                     write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);

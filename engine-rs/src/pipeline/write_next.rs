@@ -139,11 +139,32 @@ impl WriteNextConfig {
     /// 项目配置装配（111 号）：default + inkos.json `notify` 数组（非法整组
     /// 忽略——保守侧；空数组按 None 处理）。
     pub async fn from_project(root: &Path) -> Self {
-        let notify_channels = crate::server::project_config_routes::load_raw_config(root)
-            .await
+        let config = crate::server::project_config_routes::load_raw_config(root).await;
+        let notify_channels = config
+            .as_ref()
             .map(|config| crate::notify::parse_notify_channels(config.get("notify")))
             .filter(|channels| !channels.is_empty());
-        Self { notify_channels, ..Default::default() }
+        let writing = config.as_ref().and_then(|config| config.get("writing"));
+        // writing.reviewRetries（TS WritingConfigSchema：0-10，缺省 1）。
+        let writing_review_retries = writing
+            .and_then(|writing| writing.get("reviewRetries"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| (value as usize).min(10))
+            .unwrap_or(1);
+        // writing.reviewMode（auto/manual，缺省 auto）。
+        let chapter_review_mode = match writing
+            .and_then(|writing| writing.get("reviewMode"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("manual") => ChapterReviewMode::Manual,
+            _ => ChapterReviewMode::Auto,
+        };
+        Self {
+            notify_channels,
+            writing_review_retries,
+            chapter_review_mode,
+            ..Default::default()
+        }
     }
 }
 
@@ -259,12 +280,12 @@ async fn acquire_book_lock(book_id: &str) -> Arc<Mutex<()>> {
 }
 
 /// prepareWriteInput 产物（v2 治理三件或 legacy 空集）。
-struct PreparedWriteInput {
-    chapter_intent: Option<String>,
-    chapter_memo: Option<ChapterMemo>,
-    chapter_intent_data: Option<ChapterIntent>,
-    context_package: Option<ContextPackage>,
-    rule_stack: Option<RuleStack>,
+pub(crate) struct PreparedWriteInput {
+    pub(crate) chapter_intent: Option<String>,
+    pub(crate) chapter_memo: Option<ChapterMemo>,
+    pub(crate) chapter_intent_data: Option<ChapterIntent>,
+    pub(crate) context_package: Option<ContextPackage>,
+    pub(crate) rule_stack: Option<RuleStack>,
 }
 
 /// writeNextChapter 主入口（锁 + 装配）。
@@ -1249,7 +1270,7 @@ async fn run_promotion_pass(book_dir: &Path, chapter_number: u32) {
 
 /// 输入准备：v2 治理（plan 持久化复用 + composer）/ legacy。
 #[allow(clippy::too_many_arguments)]
-async fn prepare_write_input(
+pub(crate) async fn prepare_write_input(
     _state: &StateManager,
     agents: &WriteNextAgents<'_>,
     ctx: &WriteNextCtx<'_>,

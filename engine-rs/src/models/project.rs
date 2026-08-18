@@ -214,7 +214,7 @@ fn default_detection_provider() -> DetectionProvider { DetectionProvider::Custom
 fn default_threshold() -> f64 { 0.5 }
 fn default_max_retries() -> u32 { 3 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase")]

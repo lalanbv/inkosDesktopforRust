@@ -237,6 +237,7 @@ pub async fn init_book(
         external_context.map(str::to_string),
         language,
         book.target_chapters,
+        foundation_review_retries(state.project_root()).await,
     )
     .await?;
 
@@ -295,6 +296,7 @@ pub async fn init_book(
 }
 
 /// 审核环装配（生成闭包走 architect；reviewFoundation 参数绑定）。
+#[allow(clippy::too_many_arguments)]
 async fn generate_and_review_foundation_multi(
     architect_ctx: &ArchitectCtx<'_>,
     architect_chat: &'static RoutedAgent,
@@ -303,9 +305,9 @@ async fn generate_and_review_foundation_multi(
     external_context: Option<String>,
     language: WritingLanguage,
     target_chapters: u32,
+    max_retries: usize,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
     let mut feedback: Option<String> = None;
-    let max_retries = 2usize;
     let mut foundation = generate_foundation(architect_ctx, architect_chat, &book, external_context.as_deref(), feedback.as_deref())
         .await
         .map_err(|e| e.to_string())?;
@@ -354,6 +356,7 @@ async fn generate_and_review_foundation_import(
     book: &BookConfig,
     foundation_source: &str,
     language: WritingLanguage,
+    max_retries: usize,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
     let target_chapters = book.target_chapters;
     let mut feedback: Option<String> = None;
@@ -369,7 +372,7 @@ async fn generate_and_review_foundation_import(
     .await
     .map_err(|e| e.to_string())?;
 
-    for _ in 0..2usize {
+    for _ in 0..max_retries {
         let params = ReviewParams {
             foundation: &foundation,
             mode: FoundationReviewMode::Series,
@@ -643,6 +646,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
                 &book,
                 &foundation_source,
                 language,
+                foundation_review_retries(state.project_root()).await,
             )
             .await?
         } else {
@@ -695,10 +699,27 @@ pub(crate) async fn import_chapters_chain_with_resume(
 
     let mut total_words: u64 = 0;
     let mut imported_count = 0u32;
+    // 回放治理输入端口（112 号：TS importChapters 的 prepareWriteInput——
+    // v2 治理三件逐章构造，plan 持久化复用同链）。
+    let write_agents = crate::server::books_routes::build_write_next_agents(runtime).await;
+    let write_ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    let governance_config = crate::pipeline::write_next::WriteNextConfig::default();
     for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
         // 检查点②：每章回放头（TS 2858）。
         import_check_aborted(abort)?;
         let chapter_number = (index + 1) as u32;
+        let governed = crate::pipeline::write_next::prepare_write_input(
+            state,
+            &write_agents,
+            &write_ctx,
+            &governance_config,
+            &book,
+            &book_dir,
+            chapter_number,
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let output = crate::agents::chapter_analyzer::analyze_chapter(
             analyzer_chat,
             analyzer_ctx,
@@ -708,9 +729,9 @@ pub(crate) async fn import_chapters_chain_with_resume(
                 chapter_number,
                 chapter_content: &chapter.content,
                 chapter_title: Some(&chapter.title),
-                chapter_intent: None,
-                context_package: None,
-                rule_stack: None,
+                chapter_intent: governed.chapter_intent.as_deref(),
+                context_package: governed.context_package.as_ref(),
+                rule_stack: governed.rule_stack.as_ref(),
             },
         )
         .await
@@ -790,6 +811,20 @@ pub(crate) async fn import_chapters_chain_with_resume(
         "totalWords": total_words,
         "nextChapter": chapters.len() as u32 + 1,
     }))
+}
+
+/// `foundation.reviewRetries`（TS FoundationConfigSchema：0-10，缺省 2）。
+async fn foundation_review_retries(root: &Path) -> usize {
+    crate::server::project_config_routes::load_raw_config(root)
+        .await
+        .and_then(|config| config.get("foundation").cloned())
+        .and_then(|foundation| {
+            foundation
+                .get("reviewRetries")
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| (value as usize).min(10))
+        })
+        .unwrap_or(2)
 }
 
 /// 导入地基资料包（章节目录 + 正文）。对齐 `buildImportFoundationSource` 的

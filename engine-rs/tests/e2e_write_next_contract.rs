@@ -16196,3 +16196,215 @@ mod sub111_e2e {
         assert_eq!(status, StatusCode::OK);
     }
 }
+
+mod sub112_e2e {
+    //! 112 号：P3 尾量清账——① writing.reviewMode=manual 配置位经 from_project
+    //! 流入确认式 write_next（manual 写完即停 → audit-failed + 需复核文案）；
+    //! ② import 回放治理输入（TS prepareWriteInput 同构——逐章 plan 持久化）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn writing_review_mode_manual_config_reaches_confirmed_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"writing":{"reviewMode":"manual"}}"#,
+        )
+        .unwrap();
+        let (llm, _calls, _guard) = spawn_mock_llm().await;
+        let session = "1783099000008-m112";
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(
+                r#"{{"sessionId":"{session}","bookId":"b1","sessionKind":"book"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"写下一章","sessionId":"{session}","requestedIntent":"write_next"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // manual 写完即停：passed=false → audit-failed → 需复核文案。
+        let response = parsed["response"].as_str().unwrap_or_default();
+        assert!(response.contains("审稿未通过"), "response: {response}");
+        assert!(response.contains("audit-failed"), "response: {response}");
+        let exec = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(exec["details"]["status"], "audit-failed", "body: {parsed}");
+    }
+
+    /// 导入回放 mock：创作总编（plan）+ 连续性分析（analyzer）+ 创作助手（工具调用）。
+    async fn mock_replay_governed() -> String {
+        const ANALYZER_MIN: &str = "=== CHAPTER_TITLE ===\n续章\n\n=== CHAPTER_CONTENT ===\n夜色渐深。\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n\n=== UPDATED_STATE ===\n| Field | Value |\n| --- | --- |\n| Current Chapter | 2 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n\n=== CHAPTER_SUMMARY ===\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n\n=== UPDATED_SUBPLOTS ===\n\n=== UPDATED_EMOTIONAL_ARCS ===\n\n=== UPDATED_CHARACTER_MATRIX ===\n## 林动\n- **Role**: protagonist\n";
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
+                let payload = if system.contains("连续性分析") {
+                    serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_MIN } }] })
+                } else if system.contains("创作助手") {
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    if last_user.contains("续放") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_g112", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b112\",\"sourcePath\":\"novel112.txt\",\"resumeFrom\":2}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "（续放完成。）" } }] })
+                    }
+                } else if system.contains("创作总编") {
+                    serde_json::json!({ "choices": [{ "delta": { "content": PLANNER_RESPONSE } }] })
+                } else {
+                    serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn import_replay_persists_governed_plan_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b112");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story").join("runtime")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b112","title":"回放书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基\n\n旧内容。").unwrap();
+        std::fs::write(
+            root.join("novel112.txt"),
+            "# 第一章 风起\n\n林动睁开双眼。\n\n# 第二章 云涌\n\n坊市喧闹。",
+        )
+        .unwrap();
+
+        let llm = mock_replay_governed().await;
+        let session = "1783099000009-g112";
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .with_state(rt(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session}","bookId":"b112"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"续放导入 novel112.txt 的后续章节","sessionId":"{session}","activeBookId":"b112"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // 治理输入工件：回放章（第 2 章）的 plan 持久化（TS prepareWriteInput 同构）。
+        assert!(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0002.plan.md")
+                .is_file(),
+            "回放章 plan 工件应落盘：{}",
+            book.join("story").join("runtime").display()
+        );
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs[0]["tool"], "import_chapters");
+        assert_eq!(execs[0]["status"], "completed", "body: {parsed}");
+    }
+}
