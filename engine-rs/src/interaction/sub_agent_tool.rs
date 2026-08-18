@@ -39,7 +39,26 @@ fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
 /// `runWithAgentTrajectoryRole("subagent", …)`——继承回合 conversation/run
 /// 与计数器，仅切 role；外层无作用域则原样执行）。
 pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
-    crate::llm::agent_trajectory::with_subagent_scope(tool_sub_agent_inner(deps, args)).await
+    // 139 号：TS agent-tools 的 mergeActivatedSkillGuidance(workerSkills(agent),
+    // activeSkills()) → runWithAgentContext({activatedSkills})——Rust 会话面
+    // 无 use-skill 工具（激活集空），合并结果即 worker 绑定。
+    let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
+    let root = deps.runtime.state.project_root().to_path_buf();
+    let available = crate::skills::external_loader::load_available_agent_skills(
+        &root,
+        &crate::server::skill_routes::env_skill_dirs_public(),
+        crate::server::skill_routes::home_dir_public().as_deref(),
+    )
+    .await
+    .skills;
+    let worker = crate::skills::production_bindings::worker_skills_for_agent(&available, agent);
+    crate::llm::agent_trajectory::with_subagent_scope(
+        crate::skills::production_bindings::OPERATION_SKILLS.scope(
+            Some(std::sync::Arc::new(worker)),
+            tool_sub_agent_inner(deps, args),
+        ),
+    )
+    .await
 }
 
 async fn tool_sub_agent_inner(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {

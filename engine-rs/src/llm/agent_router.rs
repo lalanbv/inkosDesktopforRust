@@ -180,10 +180,19 @@ impl AgentRouter {
     pub async fn chat(
         &self,
         agent: &str,
-        messages: Vec<LLMMessage>,
+        mut messages: Vec<LLMMessage>,
         temperature: f64,
         max_tokens: Option<u32>,
     ) -> Result<ChatOutcome, String> {
+        // 139 号：生产操作激活技能注入（TS BaseAgent.chat 的
+        // appendTaskSkillGuidance 出口位置——Rust 各 agent 统一经此出口，
+        // 等价集中点；hydrate 引用检索属 local-search 面，Rust 未移植，
+        // activations 的 resources 恒空无需 hydrate）。
+        if let Some(skills) = crate::skills::production_bindings::current_operation_skills() {
+            if !skills.is_empty() {
+                crate::agents::append_activated_skill_guidance(&mut messages, &skills);
+            }
+        }
         let endpoint = self.resolve(agent);
         let client = self.client_for(&endpoint).await;
         let completion = client

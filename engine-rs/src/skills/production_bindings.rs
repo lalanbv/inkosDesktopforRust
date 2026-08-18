@@ -113,6 +113,19 @@ pub fn worker_skills_for_agent(
     }
 }
 
+
+tokio::task_local! {
+    /// 当前生产操作的激活技能（139 号：TS runner `operationContext.activatedSkills`
+    /// 的 task-local 对应物——sub_agent 工具面 set（merge worker 绑定与会话
+    /// 激活），AgentRouter::chat 出口读取注入 system 消息）。
+    pub static OPERATION_SKILLS: Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>>;
+}
+
+/// 读取当前操作激活技能（无 set → None——TS storage.getStore() 语义）。
+pub fn current_operation_skills() -> Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>> {
+    OPERATION_SKILLS.try_with(|skills| skills.clone()).ok().flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

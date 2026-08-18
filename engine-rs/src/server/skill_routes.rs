@@ -197,6 +197,16 @@ fn internal_error_message(message: &str) -> ApiErrorResponse {
     api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message)
 }
 
+/// 139 号：sub_agent 工具面的技能装载复用出口。
+pub fn env_skill_dirs_public() -> Vec<String> {
+    env_skill_dirs()
+}
+
+/// 139 号：同上。
+pub fn home_dir_public() -> Option<std::path::PathBuf> {
+    home_dir()
+}
+
 /// `INKOS_SKILL_DIRS`（路径分隔符分割 → trim → 去空）。
 fn env_skill_dirs() -> Vec<String> {
     std::env::var("INKOS_SKILL_DIRS")

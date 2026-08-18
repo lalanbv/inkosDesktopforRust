@@ -17274,3 +17274,125 @@ mod sub136_e2e {
         assert!(run.get("model").is_none(), "Rust 装配无单值 model——备案省略");
     }
 }
+
+// ── 139 号：worker 技能指导消息级注入（write-next 生产链） ────────────
+
+mod sub139_e2e {
+    use super::*;
+    use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextConfig, WriteNextCtx};
+    use inkos_engine::skills::production_bindings::{
+        worker_skills_for_agent, OPERATION_SKILLS,
+    };
+    use std::sync::Mutex;
+
+    async fn capture_system_mock(
+        systems: Arc<Mutex<Vec<String>>>,
+    ) -> String {
+        let sink = systems.clone();
+        async fn scripted_body(content: &str) -> axum::body::Body {
+            let content = content.to_string();
+            axum::body::Body::from_stream(async_stream::stream! {
+                // usage 帧 + DONE（write-next 链需要非空 content 与终态）。
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": &content } }] });
+                yield Ok::<_, std::convert::Infallible>(format!("data: {chunk}\n\n"));
+                let usage = serde_json::json!({
+                    "choices": [],
+                    "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 },
+                });
+                yield Ok(format!("data: {usage}\n\n"));
+                yield Ok("data: [DONE]\n\n".to_string());
+            })
+        }
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let sink = sink.clone();
+                async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    sink.lock().unwrap().push(system.clone());
+                    let content = if system.contains("创作总编") {
+                        PLANNER_RESPONSE.to_string()
+                    } else if system.contains("作家") || system.contains("写手") {
+                        WRITER_RESPONSE.to_string()
+                    } else if system.contains("审") {
+                        "PASS\n95".to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        scripted_body(&content).await,
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    fn fixture_skill(id: &str, body: &str) -> inkos_engine::skills::AgentSkill {
+        inkos_engine::skills::AgentSkill {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "d".into(),
+            body: body.to_string(),
+            source: inkos_engine::skills::SkillSource::Builtin,
+            base_dir: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn write_next_system_prompts_carry_worker_skill_guidance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let systems: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let llm = capture_system_mock(systems.clone()).await;
+
+        // worker 绑定（writer → longWriting）经 operation 作用域注入 write-next 链。
+        let available = vec![
+            fixture_skill("inkos-long-writing", "长篇方法论正文"),
+            fixture_skill("inkos-story-review", "审校方法论正文"),
+        ];
+        let worker = worker_skills_for_agent(&available, "writer");
+        assert_eq!(worker.len(), 1);
+
+        let state = Arc::new(StateManager::new(root.clone()));
+        let agents = build_agents(&llm);
+        let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+        let ctx = WriteNextCtx {
+            project_root: Box::leak(root.clone().into_boxed_path()),
+            builtin_genres_dir: Box::leak(root.join("assets").join("genres").into_boxed_path()),
+            prompt_store,
+            state_store: prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let result = OPERATION_SKILLS
+            .scope(
+                Some(Arc::new(worker)),
+                write_next_chapter(&state, &agents, &ctx, &WriteNextConfig::default(), "b1", None, None, None),
+            )
+            .await
+            .expect("write-next 应成功");
+        assert!(result.chapter_number >= 1);
+
+        let systems = systems.lock().unwrap();
+        let guided: Vec<&String> = systems
+            .iter()
+            .filter(|system| system.contains("## Activated professional skills"))
+            .collect();
+        assert!(!guided.is_empty(), "生产 agent 的 system 应含指导块");
+        let writer_system = guided
+            .iter()
+            .find(|system| system.contains("### inkos-long-writing — inkos-long-writing"))
+            .expect("writer 系消息应含长篇技能条目");
+        assert!(writer_system.contains("长篇方法论正文"));
+        assert!(
+            !writer_system.contains("inkos-story-review"),
+            "writer 绑定 longWriting——不含审校技能"
+        );
+    }
+}
