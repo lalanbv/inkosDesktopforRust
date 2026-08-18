@@ -14,11 +14,14 @@ use crate::server::books_routes::{BooksRuntime, ReviseChainResult, RevisionDiagn
 
 pub const SUB_AGENTS: &[&str] = &["architect", "writer", "auditor", "reviser", "exporter"];
 
-/// 工具依赖：runtime + 活动书 + 会话语言（双语守卫文案）。
+/// 工具依赖：runtime + 活动书 + 会话语言（双语守卫文案）+ 聊天轮中止句柄
+/// （101 号：writer 委托在链内安全点响应中止——TS runPipelineWithAbortSignal
+/// 把聊天轮 signal 注入 pipeline 的等价物）。
 pub struct SubAgentDeps<'a> {
     pub runtime: &'a BooksRuntime,
     pub active_book_id: Option<&'a str>,
     pub language: &'a str,
+    pub abort: Option<crate::interaction::agent_loop::AbortHandle>,
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -147,11 +150,28 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     let agents = crate::server::books_routes::build_write_next_agents(runtime);
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
     // 默认 Auto 审核模式（TS writeNextChapter 语义：审后 ready-for-review）。
-    let config = crate::pipeline::write_next::WriteNextConfig::default();
+    let config = crate::pipeline::write_next::WriteNextConfig {
+        abort: deps.abort.clone(),
+        ..Default::default()
+    };
+    let aborted_message = || -> String {
+        if deps.language == "en" {
+            "Operation aborted: the user requested to stop this task.".to_string()
+        } else {
+            "操作已中止：用户请求停止该任务。".to_string()
+        }
+    };
     let mut chapters: Vec<Value> = Vec::new();
     let mut stopped_status: Option<&'static str> = None;
     let mut last_chapter_number = 0u32;
     for _ in 0..chapter_count {
+        if deps
+            .abort
+            .as_ref()
+            .is_some_and(|flag| *flag.lock().unwrap())
+        {
+            return error_result(aborted_message());
+        }
         match crate::pipeline::write_next::write_next_chapter(
             &runtime.state,
             &agents,
@@ -177,7 +197,13 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
                     break;
                 }
             }
-            Err(error) => return error_result(error.to_string()),
+            Err(error) => {
+                // 链内安全点中止 → 双语逐字文案；其余错误面保持 to_string。
+                if matches!(error, crate::pipeline::write_next::WriteNextError::Aborted) {
+                    return error_result(aborted_message());
+                }
+                return error_result(error.to_string());
+            }
         }
     }
     if chapter_count > 1 {
@@ -533,7 +559,7 @@ mod tests {
             builtin_genres_dir: root.join("assets").join("genres"),
             revision_gate: Default::default(),
         };
-        let deps = SubAgentDeps { runtime: &books, active_book_id: None, language: "zh" };
+        let deps = SubAgentDeps { runtime: &books, active_book_id: None, language: "zh", abort: None };
         // 非法 agent / 缺 instruction。
         let bad = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "bogus", "instruction": "x" })));
         assert!(bad.is_error && bad.text.contains("Invalid sub_agent.agent"));
@@ -547,7 +573,7 @@ mod tests {
         );
         assert!(!no_book.is_error);
         // 有书时 architect 建书拒绝（双语；revise=true 放行不走此文案）。
-        let with_book = SubAgentDeps { runtime: &books, active_book_id: Some("b1"), language: "zh" };
+        let with_book = SubAgentDeps { runtime: &books, active_book_id: Some("b1"), language: "zh", abort: None };
         let rejected = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "architect", "instruction": "建书" })));
         assert_eq!(rejected.text, "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。");
         // reviser 无章可修（书不存在 → 最新章 - 1 = 0，TS 链内错误文本）。

@@ -670,6 +670,8 @@ pub async fn post_agent(
         runtime: &runtime,
         active_book_id: agent_book_id.as_deref(),
         language: surface_language,
+        // 101 号：writer 委托在链内安全点响应聊天轮中止（TS signal 注入）。
+        abort: Some(abort_flag.clone()),
     });
     // 编辑工具族（book/edit 会话；active_book_id 恒有）。
     let book_edit_deps = book_edit_session

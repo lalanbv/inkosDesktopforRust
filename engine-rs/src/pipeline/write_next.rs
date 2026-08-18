@@ -43,6 +43,7 @@ use crate::agents::reviser::{revise_chapter as reviser_revise_chapter, ReviseCha
 use crate::agents::rules_reader::read_book_rules;
 use crate::agents::sensitive_words::analyze_sensitive_words;
 use crate::agents::state_validator::{StateValidationAuthorityContext, StateValidatorChat};
+use crate::interaction::agent_loop::AbortHandle;
 use crate::agents::writer::{
     save_chapter, save_new_truth_files, write_chapter, WriteChapterError, WriteChapterInput, WriteChapterOutput, WriterChat,
     WriterCtx,
@@ -114,6 +115,9 @@ pub struct WriteNextConfig {
     pub chapter_review_mode: ChapterReviewMode,
     pub writing_review_retries: usize,
     pub input_governance_mode: InputGovernanceMode,
+    /// 链内中止信号（Some 时在四个安全点轮询——TS `throwIfOperationAborted`
+    /// 等价物：章首 / 草稿后 / 审查环后 / 落盘前；None 全链不可截断）。
+    pub abort: Option<AbortHandle>,
 }
 
 impl Default for WriteNextConfig {
@@ -122,6 +126,7 @@ impl Default for WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Auto,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            abort: None,
         }
     }
 }
@@ -181,8 +186,24 @@ pub enum WriteNextError {
     TruthValidation(String),
     #[error("persistence failed: {0}")]
     Persistence(String),
+    #[error("Operation aborted: the user requested to stop this task.")]
+    Aborted,
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// 链内安全点检查（TS `throwIfOperationAborted` 等价）：置位即抛中止。
+/// 只在无磁盘半成品的相位调用——检查点之间不存在部分落盘（落盘为
+/// staged→backup→就位三段式原子事务），中止即全书状态保持检查点前原样。
+fn check_aborted(config: &WriteNextConfig) -> Result<(), WriteNextError> {
+    if config
+        .abort
+        .as_ref()
+        .is_some_and(|flag| *flag.lock().unwrap())
+    {
+        return Err(WriteNextError::Aborted);
+    }
+    Ok(())
 }
 
 impl From<PlanChapterError> for WriteNextError {
@@ -261,6 +282,7 @@ async fn write_next_chapter_locked(
     temperature_override: Option<f64>,
     external_context: Option<&str>,
 ) -> Result<ChapterPipelineResult, WriteNextError> {
+    check_aborted(config)?;
     state.ensure_control_documents(book_id, None).await?;
     let book = state.load_book_config(book_id).await?;
     let book_dir = state.book_dir(book_id);
@@ -316,6 +338,8 @@ async fn write_next_chapter_locked(
         },
     )
     .await?;
+    // 检查点②：草稿落定后（TS 1844——writeChapter 返回即查）。
+    check_aborted(config)?;
     let writer_count = count_chapter_length(&output.content, length_spec.counting_mode);
 
     let mut total_usage = output.token_usage;
@@ -584,8 +608,15 @@ async fn write_next_chapter_locked(
         let _ = (post_revise_count, normalize_applied, pre_audit_normalized_word_count);
     }
 
+    // 检查点③：审查环收敛后（TS 1932——manual 模式同样经过）。
+    check_aborted(config)?;
+
     // ── 3b. 轻量晋级（落盘前，零 LLM） ──
     run_promotion_pass(&book_dir, chapter_number).await;
+
+    // 检查点④：落盘前（TS 1957——promotion 后、持久化装配前，中止则全书
+    // 状态与本章产物完全未动，安全回滚点）。
+    check_aborted(config)?;
 
     // ── 4. 持久化产物装配 + 标题去重双轮 ──
     tracing::info!(target: "write-next", "落盘最终章节");
@@ -1421,6 +1452,7 @@ mod tests {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            abort: None,
         };
 
         let result = write_next_chapter(
@@ -1467,6 +1499,170 @@ mod tests {
         // 二次 write-next：降级守卫不触发；下一章号推进（durable 链）。
         let next = state.get_next_chapter_number("b1").await.unwrap();
         assert!(next >= 2, "durable 链应推进到 2，实际 {next}");
+    }
+
+    // ---- 101 号：链内安全点中止（TS throwIfOperationAborted 检查点） ----
+
+    /// 中止测试夹具：与 manual 测试同构的最小项目。
+    async fn abort_fixture(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let project = dir.join("project");
+        let builtin = dir.join("builtin");
+        let book = project.join("books").join("b1");
+        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(&builtin).await.unwrap();
+        tokio::fs::write(
+            builtin.join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .await
+        .unwrap();
+        (project, builtin)
+    }
+
+    /// 草稿 LLM 调用进行中置位中止标志的 writer 端口（模拟用户在草稿
+    /// 生成期间点击停止——检查点②在草稿返回后立即命中）。
+    struct AbortingWriter<'a> {
+        script: &'a ScriptChat,
+        flag: AbortHandle,
+    }
+
+    #[async_trait]
+    impl WriterChat for AbortingWriter<'_> {
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _temperature: f64,
+        ) -> Result<ChatOutcome, String> {
+            *self.flag.lock().unwrap() = true;
+            Ok(ChatOutcome {
+                content: self.script.dispatch(&messages),
+                usage: Some(AuditTokenUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+            })
+        }
+    }
+
+    fn chapters_md_count(book: &std::path::Path) -> usize {
+        std::fs::read_dir(book.join("chapters"))
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .ends_with(".md")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn abort_before_entry_stops_without_any_llm_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, builtin) = abort_fixture(dir.path()).await;
+        let state = StateManager::new(&project);
+        let chat = script();
+        let agents = WriteNextAgents {
+            writer: &chat,
+            planner: &chat,
+            composer: &chat,
+            reviser: &chat,
+            auditor: &chat,
+            full_auditor: None,
+            normalizer: &chat,
+            analyzer: &chat,
+            state_validator: &chat,
+            settler: &chat,
+        };
+        let prompt_store = InMemoryStateStore::default();
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let flag: AbortHandle = std::sync::Arc::new(StdMutex::new(true));
+        let config = WriteNextConfig {
+            abort: Some(flag),
+            ..Default::default()
+        };
+
+        let error = write_next_chapter(&state, &agents, &ctx, &config, "b1", None, None, None)
+            .await
+            .expect_err("入口检查点应立即中止");
+
+        assert!(matches!(error, WriteNextError::Aborted));
+        // 入口即停：零 LLM 调用、零章节落盘。
+        assert!(chat.calls.lock().unwrap().is_empty(), "不应发起任何 LLM 调用");
+        assert_eq!(chapters_md_count(&project.join("books").join("b1")), 0);
+        assert_eq!(state.get_next_chapter_number("b1").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn abort_during_draft_stops_at_safe_point_without_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, builtin) = abort_fixture(dir.path()).await;
+        let state = StateManager::new(&project);
+        let chat = script();
+        let flag: AbortHandle = std::sync::Arc::new(StdMutex::new(false));
+        let aborting = AbortingWriter { script: &chat, flag: flag.clone() };
+        let agents = WriteNextAgents {
+            writer: &aborting,
+            planner: &chat,
+            composer: &chat,
+            reviser: &chat,
+            auditor: &chat,
+            full_auditor: None,
+            normalizer: &chat,
+            analyzer: &chat,
+            state_validator: &chat,
+            settler: &chat,
+        };
+        let prompt_store = InMemoryStateStore::default();
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let config = WriteNextConfig {
+            abort: Some(flag),
+            ..Default::default()
+        };
+
+        let error = write_next_chapter(&state, &agents, &ctx, &config, "b1", None, None, None)
+            .await
+            .expect_err("草稿返回后检查点②应中止");
+
+        assert!(matches!(error, WriteNextError::Aborted));
+        // 草稿已生成（planner/composer/writer 均被调用）但零落盘——安全点
+        // 语义：检查点之间不存在部分写盘，中止即全书保持原样。
+        let calls = chat.calls.lock().unwrap().clone();
+        assert!(
+            calls.iter().any(|c| c.contains("作家")),
+            "草稿调用应已发生：{calls:?}"
+        );
+        assert_eq!(chapters_md_count(&project.join("books").join("b1")), 0);
+        assert_eq!(state.get_next_chapter_number("b1").await.unwrap(), 1);
+        // 真相面同样零落盘（chapter_summaries 无 markdown 投影）。
+        let book = project.join("books").join("b1");
+        assert!(!book.join("story").join("chapter_summaries.md").exists());
     }
 
     #[tokio::test]

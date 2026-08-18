@@ -964,9 +964,27 @@ pub(crate) struct ToolOutcome {
     pub(crate) details: Value,
 }
 
+/// write_next 错误呈现（101 号：Aborted → 双语逐字（与轮间中止同一文案），
+/// 其余 to_string）。
+fn write_next_error_text(
+    error: crate::pipeline::write_next::WriteNextError,
+    lang: StudioLang,
+) -> String {
+    if matches!(error, crate::pipeline::write_next::WriteNextError::Aborted) {
+        pick(
+            lang,
+            "操作已中止：用户请求停止该任务。",
+            "Operation aborted: the user requested to stop this task.",
+        )
+    } else {
+        error.to_string()
+    }
+}
+
 /// write_next 执行器（createWriteNextChapterTool）：单章 / 多章连写。
-/// 多章每轮之间轮询 abort；单章写作中途不可截断（TS 是 pipeline 内部检查点，
-/// Rust 写作链尚无内建中止信号，偏差备案见 67 号记录）。
+/// 多章每轮之间轮询 abort；单章写作链内四个安全点检查（101 号接
+/// WriteNextConfig.abort——章首/草稿后/审查环后/落盘前，TS
+/// throwIfOperationAborted 检查点逐位对齐）。
 async fn execute_write_next(
     runtime: &BooksRuntime,
     book_id: &str,
@@ -985,6 +1003,10 @@ async fn execute_write_next(
 
     let agents = crate::server::books_routes::build_write_next_agents(runtime);
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    let config = WriteNextConfig {
+        abort: Some(abort.clone()),
+        ..Default::default()
+    };
 
     if chapter_count > 1 {
         on_progress(pick(
@@ -1005,14 +1027,14 @@ async fn execute_write_next(
                 &runtime.state,
                 &agents,
                 &ctx,
-                &WriteNextConfig::default(),
+                &config,
                 book_id,
                 None,
                 None,
                 None,
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| write_next_error_text(e, lang))?;
             on_progress(pick(
                 lang,
                 &format!(
@@ -1105,18 +1127,18 @@ async fn execute_write_next(
             &format!("正在为 {book_id} 写下一章…"),
             &format!("Writing the next chapter for {book_id}..."),
         ));
-            let write_result = write_next_chapter(
+        let write_result = write_next_chapter(
             &runtime.state,
             &agents,
             &ctx,
-            &WriteNextConfig::default(),
+            &config,
             book_id,
             None,
             None,
             None,
         )
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| write_next_error_text(e, lang))?;
             let write_needs_review = write_result.status != "ready-for-review";
         let title_part = if write_result.title.is_empty() {
             String::new()

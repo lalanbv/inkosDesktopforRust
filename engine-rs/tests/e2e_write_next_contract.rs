@@ -14564,3 +14564,225 @@ mod sub100_e2e {
         assert!(manifest["excerpt"].as_str().unwrap().contains("Chapter one reference material."), "excerpt: {manifest}");
     }
 }
+
+mod sub101_e2e {
+    //! 101 号：单章写作中途截断——确认式 write_next 任务在草稿 LLM 生成期间
+    //! 收到 abort → 链内检查点②（草稿后）命中 → 502 双语逐字错误 + 磁盘零
+    //! 落盘 + 任务快照 error + tool:end isError 广播（TS throwIfOperationAborted
+    //! 检查点语义的端到端验证）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::server::task_store::studio_task_snapshot_path;
+    use inkos_engine::state::manager::StateManager;
+    use std::sync::Mutex as StdMutex;
+
+    const SID: &str = "1783099000001-ab01";
+
+    /// 草稿分支延迟 mock：作家分支先标记 writer_seen、睡 delay_ms 再回包
+    /// （把"用户在草稿生成中点击停止"钉死在检查点②之前，测试无时序抖动）。
+    async fn spawn_slow_writer_mock(
+        delay_ms: u64,
+    ) -> (String, Arc<StdMutex<bool>>, tokio::task::JoinHandle<()>) {
+        let writer_seen = Arc::new(StdMutex::new(false));
+        let seen_for_server = writer_seen.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(
+                move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let writer_seen = seen_for_server.clone();
+                    async move {
+                        let system = body["messages"][0]["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let content = if system.contains("创作总编") {
+                            PLANNER_RESPONSE.to_string()
+                        } else if system.contains("作家") || system.contains("写手") {
+                            *writer_seen.lock().unwrap() = true;
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            WRITER_RESPONSE.to_string()
+                        } else if system.contains("审稿") {
+                            "PASS\n95".to_string()
+                        } else {
+                            "PASS".to_string()
+                        };
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            sse_body(&content),
+                        ))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), writer_seen, handle)
+    }
+
+    fn rt(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn confirmed_write_next_abort_mid_draft_stops_at_safe_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture_project(&root);
+        let (llm, writer_seen, _guard) = spawn_slow_writer_mock(600).await;
+        let runtime = rt(&root, &llm);
+        let mut subscriber = runtime.hub.subscribe();
+        let app = axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId/abort",
+                axum::routing::post(session_routes::abort_session),
+            )
+            .with_state(runtime);
+
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(
+                r#"{{"sessionId":"{SID}","bookId":"b1","sessionKind":"book"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // 确认式写作任务异步起跑（HTTP 响应要等链跑完才回）。
+        let task_app = app.clone();
+        let task = tokio::spawn(async move {
+            call(
+                task_app,
+                "POST",
+                "/api/v1/agent",
+                Some(&format!(
+                    r#"{{"instruction":"写下一章","sessionId":"{SID}","requestedIntent":"write_next"}}"#
+                )),
+            )
+            .await
+        });
+
+        // 等到草稿 LLM 调用已在途（planner/composer 即刻完成，作家分支标记后睡 600ms）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !*writer_seen.lock().unwrap() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "草稿调用应在 10s 内出现"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        // 草稿生成中触发中止（默认 scope=all 命中确认任务控制器）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/sessions/{SID}/abort"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["aborted"], true, "body: {parsed}");
+
+        let (status, parsed) = task.await.unwrap();
+        // TS formatAgentActionFailure 非忙错误面：502 AGENT_ACTION_FAILED。
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        assert_eq!(parsed["error"]["message"], "操作已中止：用户请求停止该任务。");
+        assert_eq!(parsed["response"], "操作已中止：用户请求停止该任务。");
+
+        // 安全点语义：草稿虽已生成，但检查点②先于任何落盘——章节目录、
+        // 章索引、真相面全部保持原样。
+        let chapters: usize = std::fs::read_dir(root.join("books").join("b1").join("chapters"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".md"))
+            .count();
+        assert_eq!(chapters, 0, "中止后不应有任何章节落盘");
+        assert!(
+            !root.join("books").join("b1").join("story").join("chapter_summaries.md").exists(),
+            "真相面不应有章节摘要投影"
+        );
+
+        // 任务快照：error + 双语错误文本。
+        let snapshot: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(studio_task_snapshot_path(&root, SID)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot["requestedIntent"], "write_next");
+        assert_eq!(snapshot["execution"]["status"], "error");
+        assert_eq!(
+            snapshot["execution"]["error"], "操作已中止：用户请求停止该任务。"
+        );
+
+        // 广播序：agent:start → tool:start(background) →（abort 端点的
+        // agent:aborted 插队）→ tool:end(isError:true)。
+        assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
+        let tool_start = subscriber.recv().await.unwrap();
+        assert_eq!(tool_start.event, "tool:start");
+        let mut saw_aborted = false;
+        let tool_end = loop {
+            let event = subscriber.recv().await.unwrap();
+            match event.event.as_str() {
+                "agent:aborted" => saw_aborted = true,
+                "tool:end" => break event,
+                other => panic!("意外事件 {other}"),
+            }
+        };
+        assert!(saw_aborted, "abort 端点应广播 agent:aborted");
+        assert!(
+            tool_end.data.contains("\"isError\":true"),
+            "tool:end data: {}",
+            tool_end.data
+        );
+    }
+}
