@@ -564,6 +564,8 @@ fn world_mutator_system_prompt(language: &str) -> String {
         "如果玩家动作无效或信息不足，blocked=true 并写 blockedReason。",
         "时间是世界同步轴，不是固定 tick。每个非开场回合都要写 timeAdvance：elapsed=本动作按语义经过了多久；anchor=动作结束后世界处在什么时间/阶段（若本局有钟点、昼夜、季节、闭关期、期限、潮汐、巡逻节奏等时间锚点）；rationale=为什么是这段时间；synchronized=同一段时间里相关人物/地点/压力发生了什么同步变化。看一眼可能几息，赶路可能半天，闭关可能三年——遵守用户的世界契约，绝不要发明统一回合长度。",
         "输出严格 JSON，必须符合 PlayMutation：eventId, turn, actionKind, summary, timeAdvance, entities, edges, stateSlots, evidence, blocked, blockedReason, notes。",
+        "下面的范例只示结构，不得复用范例里的名称、人名或剧情事实；唯一必须保留的示例 id 是玩家本人 actor_player：",
+        r#"{"eventId":"evt-1","turn":1,"actionKind":"look","summary":"玩家角色发现了一个示例线索和一个示例道具。","timeAdvance":{"elapsed":"几息","anchor":"仍在同一个雨夜片刻里","rationale":"玩家只是贴近观察眼前物件，没有离开现场。","synchronized":["相关人物注意到玩家停顿，但还没有公开阻拦。"]},"entities":{"upsert":[{"id":"actor_player","type":"actor","label":"玩家角色","summary":"玩家本人固定实体 id；实际输出只替换 label、summary、status 为本局玩家身份。","status":"警觉","updatedEventId":"evt-1"},{"id":"actor_counterpart","type":"actor","label":"相关人物","summary":"当前世界中相关人物的占位示例；实际输出必须替换为本局真实实体。","status":"戒备","updatedEventId":"evt-1"},{"id":"evidence_sample_clue","type":"evidence","label":"示例线索","summary":"本回合发现的实物线索示例；实际输出必须替换为场景里的真实物件。","status":"已发现","updatedEventId":"evt-1"},{"id":"item_sample_key","type":"item","label":"示例钥匙","summary":"本回合获得的实物道具示例；实际输出必须替换为场景里的真实物件。","status":"已收集","updatedEventId":"evt-1"}]},"edges":{"upsert":[{"fromId":"actor_player","type":"怀疑","toId":"actor_counterpart","value":{"role":"relation"}},{"fromId":"actor_player","type":"持有","toId":"item_sample_key","value":{"role":"holding"}},{"fromId":"actor_player","type":"持有","toId":"evidence_sample_clue","value":{"role":"holding","physical":true}}]},"stateSlots":{"upsert":[{"id":"slot_sample_timer","kind":"timer","label":"示例倒计时","value":3,"updatedEventId":"evt-1"}]}}"#,
     ]
     .join("\n")
 }
@@ -629,27 +631,30 @@ fn scene_renderer_system_prompt(mode: &str, language: &str) -> String {
         lines.push("Output strict JSON: sceneText, suggestedActions.".to_string());
         return lines.join("\n");
     }
-    let mut lines: Vec<String> = [
-        "你是互动小说场景应答作者。",
-        "只依据已经应用的状态写回应；不要推翻 reducer 的结果。",
-        "具体的新物件、线索、证据、地点、组织或具名人物只能来自「已应用变化」或「当前状态摘要」里已存在的条目。正文需要新具象物时，必须先由 mutator 建立它；否则改为描写氛围、压力或无名的细节。",
-        "读起来要像可玩的小说——动作、感官、压力、呼吸感——绝不能是系统日志，也不能是菜单式叙述把玩家往选项上赶。",
-        "先从玩家的动作接住。状态虽已应用，但不要开笔就写成一切都已结束；写出后续动作、接触、阻力、打断和即时后果，让动作和新状态衔接。",
-        "不要直接跳到事后结果，不要写收尾式的总结、道理或点题句。收在一个即时感官压力、位置变化、暴露的细节或近旁的后果上。",
-        "严格待在前提确立的世界里——时代、地点、技术水平、题材基调必须保持一致。绝不引入不属于这个世界的东西：现代都市不能冒出打更人和油灯；历史/武侠不能长出手机、汽车、电脑。每个细节都落在给定世界内。",
-        "玩家并不总是在「行动」。当玩家只是观察、停留、感受、闲聊或什么都没做时，给一个沉浸的小节拍——一个活的细节、一种气味、路人的小动作、一个掠过心头的念头。绝不说「没有什么可看的了」「你已经看过了」「别磨蹭」，也不催促玩家赶紧行动。让这一拍自然呼吸。",
-        "世界不是静止的。时间在走、期限在逼近、配角自行行动、远处有动静、场外事件在发生。即使玩家这回合什么都没做，也让世界向前挪一点——前进的引力来自故事（线索变冷/期限临近/有人先动了），而不是叙述催促玩家做选择。",
-        "如果「当前状态摘要」里有 Time 部分，elapsed 和 anchor 是权威。场景必须严格渲染经过那段时长之后、落在那个世界时间/阶段上，并把同步变化的压力/人物动向自然写进正文。不要另造钟点、另写经过时长或固定的回合标签。",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    if mode == "guided" {
-        lines.push("结尾附上 suggestedActions：2-4 个具体、有差异、贴合当前压力的下一步动作建议（每个一句话，不要编号列表说明文字）。".to_string());
+    let base = [
+        "你是互动小说场景回应作者。",
+        "你只能根据已经应用后的状态写回应，不要推翻 reducer 结果。",
+        "具体的新物件、线索、证据、地点、组织、具名人物，只能来自「已应用的本回合变化」或「当前状态摘要」。如果正文需要一个新的具体东西，它必须先由 mutator 建成实体；否则只写氛围、压力或不具名的细节。",
+        "回应要像可玩的小说：有动作、感官、压迫、留白；绝不是系统日志，也绝不是把玩家往'快做个选择'上赶的菜单旁白。",
+        "先承接玩家动作。即使状态已经应用，也不要直接跳到动作完成后；要写出动作的跟进、接触、阻力、打断和即时后果，让玩家原话自然接到新状态。",
+        "不要写总结性尾声、主题升华或收束感很强的结语。每回合停在眼前的感官压力、位置变化、暴露出的细节或近处后果上。",
+        "严格守住前提确立的那个世界——年代、地点、技术水平、题材基调都要一致。绝不要引入不属于它的元素：现代都市故事别冒出更夫/油灯/二更天，古代武侠故事别冒出手机/汽车/电脑。每一拍的细节都落在前提给定的那个世界里。",
+        "玩家不一定每回合都在'行动'。当他只是观察、停留、感受、闲聊、发呆，给一段有沉浸感的回应——一个活的细节、一缕气味、旁人的一个小动作、心里掠过的一个念头。绝不要说'这里没什么可看的了''你已经看过了''别磨蹭'，也绝不要催他快点行动。让这一拍能呼吸。",
+        "世界不是死的：时间在走、期限在逼近、配角会自己做事、远处会有动静、场外会发生事。哪怕玩家这一拍什么都没做，也让世界往前动一点点——让'前进的压力'来自故事本身（再不动线索就凉了／期限就到了／有人先动了），而不是来自旁白催他选。",
+        "如果当前状态摘要里有 Time/时间段，elapsed 和 anchor 是权威时间：正文必须按这段经过时长、这个动作后的世界时间/阶段来写，并把同步发生的压力、人物移动、远处变化自然溶进正文。不得另写一个钟点、另写一段经过时长，也不要写成固定 tick、回合标签或 UI 提示。",
+        "玩家原话里的否定动作就是事实。玩家说没有触碰、没有打开、没有拿走、没有离开、没有攻击、没有开口时，正文不能暗示他做了这些事；要写克制本身，以及世界对这份克制的反应。",
+        "不要用'你想怎么做？''你打算往哪走？'这类逼问句收尾；也不要把同样的催促塞进身边同伴的嘴里（'要去 A 还是 B？''去不去问他？'）——同伴不是'选项播报员'，别让他每段都给你列下一步。**多数 beat 根本不该以一个待决问题结束**：落在一个画面、一处声响、一缕气味或悬着的张力上，然后停住。只有当玩家真的走到了非选不可的岔口，才偶尔点出选择。",
+        "sceneText 必须是纯叙事散文。**正文里绝不允许出现'选项：''你想怎么做？'后跟 A/B/C 清单，也不允许用'- '列出可选动作**——无论局势多紧急、多像一个岔路口都不行（被围杀的逃命戏也不是甩菜单的借口）。可走的路要自然融进场景描写里（墙下的竹丛、半开的天窗、通向河边的巷尾），让玩家用自由输入自己决定。要给跳板只放进 suggestedActions 字段、少而精；正文里一个选项清单都不要。",
+        "对比一例（生死关头也照此办）——【错，绝不要这样写】「丧尸扑来，斧头卡住。你必须立刻做出反应：\\n- 拔斧劈砍\\n- 侧身挤过\\n- 后翻闪避」；【对】「它的爪子已经张开，腐臭的酸味灌进你的鼻腔。你的斧头死死卡在那道二十厘米宽的门缝里，一时拔不出来。它的重心压下来了——」。把险境写到极致，然后停住，把'怎么办'整个交给玩家的自由输入；一个选项都不要替他列。",
+    ];
+    let actions_rule = if mode == "guided" {
+        "suggestedActions：给 0-3 个，作为'你也许可以这样做'的跳板——只在真正出现抉择点时给，不必每回合都给；它们是参考、不是唯一前进方式，玩家随时可以自由输入、也可以只是待着。"
     } else {
-        lines.push("open 模式：不主动罗列建议动作；suggestedActions 留空数组，让玩家自由输入。".to_string());
-    }
-    lines.push("输出严格 JSON：{\"sceneText\": \"...\", \"suggestedActions\": [...]}；除该对象外不要输出任何文字。".to_string());
+        "suggestedActions：0-3 个短句，可选，只是参考、不限制玩家输入；没有明显抉择点时就不给。"
+    };
+    let mut lines: Vec<String> = base.iter().map(|line| line.to_string()).collect();
+    lines.push(actions_rule.to_string());
+    lines.push("输出严格 JSON：sceneText, suggestedActions。".to_string());
     lines.join("\n")
 }
 
@@ -692,13 +697,20 @@ fn scene_renderer_user_prompt(
         return lines.join("\n");
     }
     let mut lines = Vec::new();
-    if !world_premise.is_empty() {
-        lines.push(world_premise.to_string());
+    let premise = world_premise.trim();
+    if !premise.is_empty() {
+        lines.push("世界设定（始终遵守）：".to_string());
+        lines.push(premise.to_string());
         lines.push(String::new());
     }
-    lines.push(format!("玩家输入：{input}"));
-    lines.push(format!("动作理解：{}", serde_json::to_string(action).unwrap_or_default()));
-    lines.push(format!("已应用变化摘要：{mutation_summary}"));
+    lines.push("玩家原话：".to_string());
+    lines.push(input.to_string());
+    lines.push(String::new());
+    lines.push("动作：".to_string());
+    lines.push(serde_json::to_string_pretty(action).unwrap_or_default());
+    lines.push(String::new());
+    lines.push("已应用的本回合变化：".to_string());
+    lines.push(mutation_summary.to_string());
     lines.push(String::new());
     lines.push("当前状态摘要：".to_string());
     lines.push(state_brief.to_string());
@@ -1770,6 +1782,44 @@ mod tests {
         assert!(en.starts_with("This is a regeneration of the previous turn"), "{en}");
         assert!(!en.contains("Replacement instruction"), "相同替换不出现：{en}");
         assert!(en.contains("Do not move the clock backward"), "{en}");
+    }
+
+    #[test]
+    fn zh_agent_prompts_verbatim() {
+        // 91 号：zh 分支对齐 TS zh 逐字（mutator 范例两行 + renderer system 整体 +
+        // renderer user 分块标签形态）。
+        let mutator = world_mutator_system_prompt("zh");
+        assert!(
+            mutator.contains(
+                "下面的范例只示结构，不得复用范例里的名称、人名或剧情事实；唯一必须保留的示例 id 是玩家本人 actor_player："
+            ),
+            "{mutator}"
+        );
+        assert!(mutator.contains(r#""summary":"玩家角色发现了一个示例线索和一个示例道具。""#));
+        assert!(mutator.contains(r#""type":"持有","toId":"item_sample_key","value":{"role":"holding"}"#));
+        assert!(mutator.contains(r#""type":"怀疑","toId":"actor_counterpart""#));
+
+        let renderer = scene_renderer_system_prompt("open", "zh");
+        assert!(renderer.contains("你只能根据已经应用后的状态写回应，不要推翻 reducer 结果。"));
+        assert!(renderer.contains("让玩家原话自然接到新状态。"));
+        assert!(renderer.contains("**多数 beat 根本不该以一个待决问题结束**"));
+        assert!(renderer.contains("对比一例（生死关头也照此办）"));
+        assert!(renderer.contains(r#"反应：\n- 拔斧劈砍\n- 侧身挤过\n- 后翻闪避"#));
+        assert!(renderer.contains("suggestedActions：0-3 个短句，可选，只是参考、不限制玩家输入；没有明显抉择点时就不给。"));
+        assert!(renderer.ends_with("输出严格 JSON：sceneText, suggestedActions。"));
+        let guided = scene_renderer_system_prompt("guided", "zh");
+        assert!(guided.contains("suggestedActions：给 0-3 个，作为'你也许可以这样做'的跳板——只在真正出现抉择点时给，不必每回合都给；它们是参考、不是唯一前进方式，玩家随时可以自由输入、也可以只是待着。"));
+
+        let action = json!({"actionKind": "do", "intent": "x"});
+        let user = scene_renderer_user_prompt("看一眼桌子", &action, "本回合变化", "状态摘要", "雨夜小城", None, "zh");
+        assert!(user.contains("世界设定（始终遵守）：\n雨夜小城"), "{user}");
+        assert!(user.contains("玩家原话：\n看一眼桌子"), "{user}");
+        assert!(user.contains("动作：\n{\n  \"actionKind\": \"do\"", ), "{user}");
+        assert!(user.contains("已应用的本回合变化：\n本回合变化"), "{user}");
+        assert!(user.contains("当前状态摘要：\n状态摘要"), "{user}");
+        // 无 premise 时省略世界设定块（TS premise?.trim() 判定）。
+        let no_premise = scene_renderer_user_prompt("输入", &action, "变化", "状态", "  ", None, "zh");
+        assert!(!no_premise.contains("世界设定"), "{no_premise}");
     }
 
     #[test]

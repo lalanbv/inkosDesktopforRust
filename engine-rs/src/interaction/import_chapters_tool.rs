@@ -4,7 +4,7 @@
 //! 源装载）与 `createImportChaptersTool` 的守卫面（bookId 解析 + 既有章节
 //! 守卫）；导入全链复用 [`crate::server::book_create_routes::
 //! import_chapters_chain`]（Step1 地基 + Step2 逐章回放）。
-//! resumeFrom>1 续放与 series 模式暂缓（见 85 号备案）。
+//! resumeFrom 续放与 importMode=series 已落地（91 号）。
 
 use std::path::{Path, PathBuf};
 
@@ -132,22 +132,11 @@ pub async fn tool_import_chapters(
             "Book \"{book_id}\" already has {existing} chapter(s). Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first."
         ));
     }
-    // Rust 导入链为全量重建（等价 resumeFrom=1）；>1 续放暂缓。
-    if let Some(resume) = resume_from {
-        if resume > 1 {
-            return error_result(format!(
-                "resumeFrom={resume} replay is not supported by the Rust engine yet; import from chapter 1 to rebuild the book."
-            ));
-        }
-    }
-    if let Some(mode) = args.get("importMode").and_then(Value::as_str) {
-        if mode == "series" {
-            return error_result(
-                "importMode=series is not supported by the Rust engine yet; only continuation imports are available."
-                    .to_string(),
-            );
-        }
-    }
+    // importMode：continuation（缺省）/ series（地基生成模式直通）。
+    let import_mode = match args.get("importMode").and_then(Value::as_str) {
+        Some("series") => crate::agents::architect::ImportMode::Series,
+        _ => crate::agents::architect::ImportMode::Continuation,
+    };
     let Some(source_path_text) = args
         .get("sourcePath")
         .and_then(Value::as_str)
@@ -169,10 +158,12 @@ pub async fn tool_import_chapters(
         Ok(chapters) => chapters,
         Err(message) => return error_result(message),
     };
-    let result = crate::server::book_create_routes::import_chapters_chain(
+    let result = crate::server::book_create_routes::import_chapters_chain_with_resume(
         runtime,
         &book_id,
         &chapters,
+        resume_from.unwrap_or(1),
+        import_mode,
     )
     .await;
     let result = match result {
@@ -190,7 +181,11 @@ pub async fn tool_import_chapters(
                 total_words.as_u64().unwrap_or(0),
                 next_chapter.as_u64().unwrap_or(1)
             ),
-            "Foundation and truth files were reverse-engineered from the imported text; chapter files and the chapter index were rebuilt by sequential replay.".to_string(),
+            if resume_from.unwrap_or(1) == 1 {
+                "Foundation and truth files were reverse-engineered from the imported text; chapter files and the chapter index were rebuilt by sequential replay.".to_string()
+            } else {
+                format!("Resumed replay from chapter {}; earlier chapters and the existing foundation were kept.", resume_from.unwrap_or(1))
+            },
             "The book can now be continued with sub_agent(agent=\"writer\") in the book session.".to_string(),
         ]
         .join("\n"),
@@ -200,13 +195,12 @@ pub async fn tool_import_chapters(
             "importedCount": imported_count,
             "totalWords": total_words,
             "nextChapter": next_chapter,
-            "importMode": "continuation",
+            "importMode": if matches!(import_mode, crate::agents::architect::ImportMode::Series) { "series" } else { "continuation" },
         })),
     )
 }
 
-/// `import_chapters` schema（ImportChaptersParams 逐字；resumeFrom/importMode
-/// 描述保留，Rust 链暂只支持全量重建）。
+/// `import_chapters` schema（ImportChaptersParams 逐字）。
 pub fn import_chapters_schema() -> Value {
     json!({
         "type": "function",

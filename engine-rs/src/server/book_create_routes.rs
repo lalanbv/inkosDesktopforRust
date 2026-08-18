@@ -502,6 +502,21 @@ pub(crate) async fn import_chapters_chain(
     book_id: &str,
     chapters: &[crate::utils::chapter_splitter::SplitChapter],
 ) -> Result<Value, String> {
+    import_chapters_chain_with_resume(runtime, book_id, chapters, 1, ImportMode::Continuation).await
+}
+
+/// `importChapters` 链（91 号补 resumeFrom/importMode）：
+/// start_from == 1 → Step 1 全量重建（地基 + 真相重置 + 空索引 + 快照 0 +
+/// 风格指纹）；start_from > 1 → 跳过 Step 1，保留既有地基与早前章节，
+/// 逐章回放同号替换索引（resume 语义）。import_mode 直通架构师地基生成
+/// （series 评审环见 91 号偏差备案）。
+pub(crate) async fn import_chapters_chain_with_resume(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    chapters: &[crate::utils::chapter_splitter::SplitChapter],
+    start_from: u32,
+    import_mode: ImportMode,
+) -> Result<Value, String> {
     let state = &runtime.state;
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
     let book_dir = state.book_dir(book_id);
@@ -521,39 +536,41 @@ pub(crate) async fn import_chapters_chain(
     };
     let counting_mode = resolve_length_counting_mode(language);
 
-    // Step 1：地基生成 + 重置回放真相 + 空索引 + 快照 0。
-    let foundation_source = build_import_foundation_source(chapters);
-    let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "architect" }));
-    let architect_ctx = ArchitectCtx {
-        project_root: state.project_root(),
-        builtin_genres_dir: &runtime.builtin_genres_dir,
-    };
-    let foundation = generate_foundation_from_import(
-        &architect_ctx,
-        architect_chat,
-        &book,
-        &foundation_source,
-        None,
-        None,
-        ImportMode::Continuation,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    write_foundation_files(&book_dir, &foundation, language, FoundationWriteMode::Init).await?;
-    reset_import_replay_truth_files(&book_dir, language).await;
-    state
-        .save_chapter_index_at(&book_dir, &[], true)
+    // Step 1：首次导入（start_from == 1）时全量重建；续放跳过（保留既有地基）。
+    if start_from == 1 {
+        let foundation_source = build_import_foundation_source(chapters);
+        let architect_chat: &'static RoutedAgent =
+            Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "architect" }));
+        let architect_ctx = ArchitectCtx {
+            project_root: state.project_root(),
+            builtin_genres_dir: &runtime.builtin_genres_dir,
+        };
+        let foundation = generate_foundation_from_import(
+            &architect_ctx,
+            architect_chat,
+            &book,
+            &foundation_source,
+            None,
+            None,
+            import_mode,
+        )
         .await
         .map_err(|e| e.to_string())?;
-    state.snapshot_state_at(&book_dir, 0).await.map_err(|e| e.to_string())?;
+        write_foundation_files(&book_dir, &foundation, language, FoundationWriteMode::Init).await?;
+        reset_import_replay_truth_files(&book_dir, language).await;
+        state
+            .save_chapter_index_at(&book_dir, &[], true)
+            .await
+            .map_err(|e| e.to_string())?;
+        state.snapshot_state_at(&book_dir, 0).await.map_err(|e| e.to_string())?;
 
-    // 风格向导（资料包 ≥500 UTF-16 码元；吞错）。
-    if foundation_source.encode_utf16().count() >= 500 {
-        let _ = crate::server::style_routes::generate_style_guide_for_book(
-            state, &runtime.router, &runtime.builtin_genres_dir, book_id, &foundation_source, Some(&book.title),
-        )
-        .await;
+        // 风格向导（资料包 ≥500 UTF-16 码元；吞错）。
+        if foundation_source.encode_utf16().count() >= 500 {
+            let _ = crate::server::style_routes::generate_style_guide_for_book(
+                state, &runtime.router, &runtime.builtin_genres_dir, book_id, &foundation_source, Some(&book.title),
+            )
+            .await;
+        }
     }
 
     // Step 2：逐章回放。
@@ -576,7 +593,7 @@ pub(crate) async fn import_chapters_chain(
 
     let mut total_words: u64 = 0;
     let mut imported_count = 0u32;
-    for (index, chapter) in chapters.iter().enumerate() {
+    for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
         let chapter_number = (index + 1) as u32;
         let output = crate::agents::chapter_analyzer::analyze_chapter(
             analyzer_chat,

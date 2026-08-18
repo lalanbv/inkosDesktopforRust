@@ -8353,7 +8353,7 @@ mod play73_e2e {
                                 ]}
                             }).to_string()
                         }
-                    } else if system.contains("场景应答作者") {
+                    } else if system.contains("互动小说场景") {
                         serde_json::json!({
                             "sceneText": "灯笼的光晃了一下，厅堂深处有人影一闪。",
                             "suggestedActions": ["追上去", "吹灭灯笼"]
@@ -10037,7 +10037,7 @@ mod play79_e2e {
                                 ]}
                             }).to_string()
                         }
-                    } else if system.contains("场景应答作者") {
+                    } else if system.contains("互动小说场景") {
                         if user.contains("重写约束") {
                             flag_in.store(true, Ordering::SeqCst);
                         }
@@ -10279,7 +10279,7 @@ mod play80_e2e {
                                 ]}
                             }).to_string()
                         }
-                    } else if system.contains("场景应答作者") {
+                    } else if system.contains("互动小说场景") {
                         let n = render_in.fetch_add(1, Ordering::SeqCst);
                         let scene = if n == 0 {
                             serde_json::json!({ "sceneText": "场景甲：灯笼的光晃了一下。", "suggestedActions": [] })
@@ -12013,7 +12013,7 @@ mod details86_e2e {
                             { "id": "location_hall", "type": "location", "label": "厅堂", "summary": "正厅", "updatedEventId": "evt-1" }
                         ]}
                     }).to_string())
-                } else if system.contains("场景应答作者") {
+                } else if system.contains("互动小说场景") {
                     Some(serde_json::json!({
                         "sceneText": "灯笼的光晃了一下，厅堂深处有人影一闪。",
                         "suggestedActions": ["追上去", "吹灭灯笼"]
@@ -13185,5 +13185,220 @@ mod sub90_e2e {
         ] {
             assert!(!names.contains(&banned.to_string()), "edit 不应注册 {banned}：{names:?}");
         }
+    }
+}
+
+mod sub91_e2e {
+    //! 91 号：import_chapters resumeFrom 增量续放——既有书（1 章 + 既有地基）
+    //! 续放第 2 章：跳过 Step 1（地基/索引不重置）、逐章回放同号替换、
+    //! 文本 Resumed 分支 + importMode 直通。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    const ANALYZER_OUTPUT: &str = "\
+=== CHAPTER_TITLE ===
+续章
+
+=== CHAPTER_CONTENT ===
+夜色渐深。
+
+=== PRE_WRITE_CHECK ===
+
+=== POST_SETTLEMENT ===
+
+=== UPDATED_STATE ===
+| Field | Value |
+| --- | --- |
+| Current Chapter | 2 |
+
+=== UPDATED_LEDGER ===
+
+=== UPDATED_HOOKS ===
+| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== CHAPTER_SUMMARY ===
+| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+=== UPDATED_SUBPLOTS ===
+
+=== UPDATED_EMOTIONAL_ARCS ===
+
+=== UPDATED_CHARACTER_MATRIX ===
+## 林动
+- **Role**: protagonist
+";
+
+    fn rt91(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app91(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    async fn mock_resume_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
+                let payload = if system.contains("连续性分析") || system.contains("continuity analyst") {
+                    serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
+                } else if system.contains("创作助手") {
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("");
+                    let has_tool_result = messages.iter().any(|m| m["role"] == "tool");
+                    if has_tool_result {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "（续放完成。）" } }] })
+                    } else if last_user.contains("续放") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_res_1", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b91\",\"sourcePath\":\"novel91.txt\",\"resumeFrom\":2}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    }
+                } else {
+                    serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                };
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn chat_resume_import_appends_chapter_two_keeps_foundation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let book = root.join("books").join("b91");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b91","title":"续放书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        // 既有第 1 章 + 既有地基（内容标记——续放不得覆盖）。
+        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
+        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基（续放不得覆盖）\n\n旧内容。").unwrap();
+        // 源文件两章（续放从第 2 章起回放）。
+        std::fs::write(
+            root.join("novel91.txt"),
+            "# 第一章 风起\n\n林动睁开双眼，灵气涌动。\n\n# 第二章 云涌\n\n坊市喧闹，夜色渐深。",
+        )
+        .unwrap();
+
+        let llm = mock_resume_llm().await;
+        let session_id = "1783007000009-s91a";
+        let app = app91(rt91(&root, &llm));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b91"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"续放导入 novel91.txt 的后续章节","sessionId":"{session_id}","activeBookId":"b91"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
+        assert_eq!(execs.len(), 1);
+        let card = &execs[0];
+        assert_eq!(card["tool"], "import_chapters");
+        assert_eq!(card["status"], "completed", "body: {parsed}");
+        let result_text = card["result"].as_str().unwrap();
+        assert!(result_text.contains("Imported 1 chapter(s) into book \"b91\"."), "{result_text}");
+        assert!(
+            result_text.contains("Resumed replay from chapter 2; earlier chapters and the existing foundation were kept."),
+            "{result_text}"
+        );
+        let details = &card["details"];
+        assert_eq!(details["kind"], "chapters_imported");
+        assert_eq!(details["importedCount"], 1);
+        assert_eq!(details["importMode"], "continuation");
+
+        // 既有地基未被动过（Step 1 被跳过——architect mock 若被调用会写新地基）。
+        let bible = std::fs::read_to_string(book.join("story").join("story_bible.md")).unwrap();
+        assert_eq!(bible, "# 既有地基（续放不得覆盖）\n\n旧内容。");
+        // 第 1 章保留、第 2 章落盘（同号回放写 0002）。
+        assert!(book.join("chapters").join("0001_风起.md").is_file());
+        let entries: Vec<String> = std::fs::read_dir(book.join("chapters"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("0002"))
+            .collect();
+        assert_eq!(entries.len(), 1, "第 2 章应落盘：{entries:?}");
+        // 索引：两章（1 保留 + 2 新增）。
+        let index: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap_or("[]".to_string()),
+        )
+        .unwrap_or(serde_json::json!([]));
+        assert_eq!(index.as_array().map(Vec::len), Some(2), "index: {index}");
     }
 }
