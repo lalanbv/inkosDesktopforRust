@@ -561,6 +561,10 @@ pub async fn post_agent(
         /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
         /// 与 TS pi-agent 历史保留语义一致。
         images: Vec<crate::llm::streaming_client::ChatImage>,
+        /// 轨迹遥测作用域（134 号：TS runWithAgentTrajectory 回合作用域对应
+        /// 物——main 角色、conversationId=opaque(sessionId)、runId=uuid、
+        /// 回合内多次 LLM 调用共享（pi_turn 递增））。
+        trajectory: Option<std::sync::Arc<crate::llm::agent_trajectory::AgentTrajectoryScope>>,
         /// thinking 三事件桥（129 号）：pi-ai thinking 块 → thinking:start/
         /// delta/end 广播（TS onEvent ame.type 分支对应物；聚合语义——与
         /// draft:delta 每轮聚合同款）。
@@ -621,6 +625,7 @@ pub async fn post_agent(
                         None,
                         None,
                     ),
+                    trajectory: self.trajectory.clone(),
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -694,6 +699,12 @@ pub async fn post_agent(
     let loop_chat = RouterLoopChat {
         router: &runtime.router,
         images: loop_images,
+        trajectory: Some(std::sync::Arc::new(
+            crate::llm::agent_trajectory::AgentTrajectoryScope::main(
+                crate::llm::agent_trajectory::opaque_conversation_id(session_id),
+                uuid::Uuid::new_v4().to_string(),
+            ),
+        )),
         thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
     };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };

@@ -1070,6 +1070,7 @@ pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &st
         progress: None,
         // 探测面走管线面默认；外层 8s 探测窗仍为主导界限（快通快败）。
         deadline: crate::llm::streaming_client::StreamDeadlineSpec::PIPELINE,
+        trajectory: None,
     };
     let attempt = client.stream_chat(&params);
     match tokio::time::timeout(std::time::Duration::from_millis(8_000), attempt).await {

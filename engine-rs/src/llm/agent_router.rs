@@ -205,6 +205,9 @@ impl AgentRouter {
                     None,
                     None,
                 ),
+                // 管线面不挂轨迹作用域（TS 管线 agent 在 ALS 作用域外——
+                // beginAgentModelCall undefined → 零观测头，等价）。
+                trajectory: None,
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;

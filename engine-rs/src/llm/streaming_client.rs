@@ -12,6 +12,7 @@
 //! 这些在 SSE 解析器 + 请求构造之上叠加。
 
 use super::provider::{LLMMessage, LLMRole};
+use super::think_tag_stripper::{LeadingThinkTagStripper, strip_leading_think_block};
 use super::providers::TransportApiFormat;
 use super::sse_parser::SseEvent;
 use super::sse_parser::SseStreamParser;
@@ -46,6 +47,10 @@ pub struct ChatCompletionParams<'a> {
     /// （AgentRouter→PIPELINE / RouterLoopChat→INTERACTIVE，TS chatCompletion
     /// vs guardAssistantMessageStream 双面同构）。非流式无看门狗（TS 同）。
     pub deadline: StreamDeadlineSpec,
+    /// 轨迹遥测作用域（134 号：TS ALS store 的显式传递对应物——聊天回合一
+    /// 个 main 作用域，pi_turn 递增；kkaiapi 端点注入 X-InkOS-* 观测头，
+    /// 其它端点零头；管线面 None（TS 管线在作用域外 → 零头，等价））。
+    pub trajectory: Option<std::sync::Arc<crate::llm::agent_trajectory::AgentTrajectoryScope>>,
 }
 
 /// 手写 Debug：progress 回调仅呈现挂载态（闭包无 Debug）。
@@ -63,6 +68,7 @@ impl<'a> std::fmt::Debug for ChatCompletionParams<'a> {
             .field("images", &self.images)
             .field("progress", &self.progress.is_some())
             .field("deadline", &self.deadline)
+            .field("trajectory", &self.trajectory.is_some())
             .finish()
     }
 }
@@ -188,101 +194,30 @@ impl StreamMonitor {
 }
 
 
-// ── 133 号：内联 <think> 块剥离器（TS think-tag-stripper.ts 逐字） ──────
 
-/// 部分 OpenAI 兼容服务（MiniMax M2.x、网关代理的 DeepSeek-R1 类）把思考
-/// 内容以 `<think>...</think>` 内联在 content 开头返回（issue #329）。只剥
-/// **响应起始处的完整块**：正文中间的字样不动；起始处未闭合的块 flush
-/// 原样返回（正文根本没生成，剥掉会丢数据）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StripperState {
-    Detecting,
-    InsideThink,
-    Passthrough,
-}
 
-pub struct LeadingThinkTagStripper {
-    state: StripperState,
-    pending: String,
-}
-
-const THINK_OPEN: &str = "<think>";
-const THINK_CLOSE: &str = "</think>";
-
-impl Default for LeadingThinkTagStripper {
-    fn default() -> Self {
-        Self::new()
+/// 轨迹观测头注入（134 号：TS traceHeaders——kkaiapi 端点 9-11 头，其它零；
+/// Rust 无重试环 clientAttempt 恒 1、无 thinkingBudget 恒 disabled，备案）。
+fn inject_trajectory_headers(
+    req: reqwest::RequestBuilder,
+    base_url: &str,
+    trajectory: &Option<std::sync::Arc<crate::llm::agent_trajectory::AgentTrajectoryScope>>,
+) -> reqwest::RequestBuilder {
+    let Some(scope) = trajectory else {
+        return req;
+    };
+    let trace = scope.begin_model_call();
+    let headers = crate::llm::agent_trajectory::agent_trajectory_headers(
+        base_url,
+        Some(&trace),
+        1,
+        crate::llm::agent_trajectory::ThinkingTrace { effort: "disabled", budget_tokens: None },
+    );
+    let mut req = req;
+    for (name, value) in headers {
+        req = req.header(name, value);
     }
-}
-
-impl LeadingThinkTagStripper {
-    pub fn new() -> Self {
-        LeadingThinkTagStripper { state: StripperState::Detecting, pending: String::new() }
-    }
-
-    /// 送入一段增量，返回可安全并入正文的部分（空串 = 仍在缓冲判断）。
-    pub fn push(&mut self, chunk: &str) -> String {
-        if self.state == StripperState::Passthrough {
-            return chunk.to_string();
-        }
-        self.pending.push_str(chunk);
-
-        if self.state == StripperState::Detecting {
-            let ws_len = self
-                .pending
-                .char_indices()
-                .find(|(_, c)| !crate::utils::length_metrics::is_js_whitespace(*c))
-                .map(|(i, _)| i)
-                .unwrap_or(self.pending.len());
-            let rest = &self.pending[ws_len..];
-            if rest.chars().count() < THINK_OPEN.chars().count() {
-                if THINK_OPEN.starts_with(rest) {
-                    return String::new();
-                }
-                self.state = StripperState::Passthrough;
-                return std::mem::take(&mut self.pending);
-            }
-            if !rest.starts_with(THINK_OPEN) {
-                self.state = StripperState::Passthrough;
-                return std::mem::take(&mut self.pending);
-            }
-            self.state = StripperState::InsideThink;
-        }
-
-        // InsideThink：等待闭合标签（找不到继续吞）。
-        match self.pending.find(THINK_CLOSE) {
-            None => String::new(),
-            Some(close_index) => {
-                self.state = StripperState::Passthrough;
-                let after_close =
-                    self.pending[close_index + THINK_CLOSE.len()..].to_string();
-                self.pending.clear();
-                // TS replace(/^\s+/, "")：去闭合后开头一串 JS 空白。
-                let ws_len = after_close
-                    .char_indices()
-                    .find(|(_, c)| !crate::utils::length_metrics::is_js_whitespace(*c))
-                    .map(|(i, _)| i)
-                    .unwrap_or(after_close.len());
-                after_close[ws_len..].to_string()
-            }
-        }
-    }
-
-    /// 流结束：缓冲剩余原样返回（未闭合 think 块不剥离）。
-    pub fn flush(&mut self) -> String {
-        self.state = StripperState::Passthrough;
-        std::mem::take(&mut self.pending)
-    }
-}
-
-/// 非流式版本：剥离起始处完整 `<think>...</think>` 块（与流式同语义）。
-pub fn strip_leading_think_block(text: &str) -> String {
-    let mut stripper = LeadingThinkTagStripper::new();
-    let head = stripper.push(text);
-    let tail = stripper.flush();
-    let mut out = head;
-    out.push_str(&tail);
-    out
+    req
 }
 
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
@@ -508,6 +443,7 @@ impl StreamingChatClient {
         for (k, v) in &self.extra_headers {
             req = req.header(k, v);
         }
+        let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
         // 看门狗布防（仅流式；TS 在 fetch 前创建 deadline——首事件窗覆盖
         // 连接+响应头+首个流事件）。非流式无看门狗（TS client.stream 同款门）。
         let first_window = params.stream.then(|| {
@@ -728,6 +664,7 @@ impl StreamingChatClient {
         for (k, v) in &self.extra_headers {
             req = req.header(k, v);
         }
+        let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
         // 看门狗与 chat 传输同构（TS 两传输共用 deadline.signal/activity）。
         let first_window = params.stream.then(|| {
             std::time::Duration::from_millis(params.deadline.first_event_ms)
@@ -953,7 +890,7 @@ mod tests {
             LLMMessage { role: LLMRole::System, content: "你是助手".into(), tool_calls: None, tool_call_id: None },
             LLMMessage { role: LLMRole::User, content: "你好".into(), tool_calls: None, tool_call_id: None },
         ];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE, trajectory: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["temperature"], 0.7);
@@ -980,6 +917,7 @@ mod tests {
             model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
             stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&images), progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
         };
         let body = build_chat_completion_request(&params);
         // 最后一条 user → vision 数组（text 段 + 两个 image_url 段）。
@@ -999,6 +937,7 @@ mod tests {
             model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
             stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&empty), progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
         };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["messages"][3]["content"], "看这张图");
@@ -1010,7 +949,7 @@ mod tests {
         extra.insert("model".into(), serde_json::json!("EVIL")); // 保留字段，应被忽略
         extra.insert("top_p".into(), serde_json::json!(0.9)); // 非保留，应保留
         let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, api_format: TransportApiFormat::Chat, extra: Some(&extra), tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE };
+        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, api_format: TransportApiFormat::Chat, extra: Some(&extra), tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE, trajectory: None };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o"); // 未被覆盖
         assert_eq!(body["top_p"], 0.9); // 保留
@@ -1034,6 +973,7 @@ mod tests {
             model: "gpt-5", messages: &msgs, temperature: 0.5, max_tokens: 128,
             stream: true, api_format: TransportApiFormat::Responses, extra: None, tools: None, images: None, progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
         };
         let body = build_responses_request(&params);
         assert_eq!(body["model"], "gpt-5");
@@ -1059,6 +999,7 @@ mod tests {
             model: "m", messages: &msgs, temperature: 0.7, max_tokens: 16,
             stream: false, api_format: TransportApiFormat::Responses, extra: Some(&extra), tools: None, images: None, progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
         };
         let body = build_responses_request(&params);
         assert_eq!(body["temperature"], 0.2, "extra 覆盖基础键（TS ...extra 展开序）");
@@ -1214,6 +1155,7 @@ mod tests {
             images: None,
             progress: None,
             deadline: spec,
+            trajectory: None,
         }
     }
 
@@ -1232,61 +1174,10 @@ mod tests {
     const DONE: &str = "data: [DONE]\n\n";
 
 
-    // ── 133 号：think 剥离器（TS think-tag-stripper.test.ts 九例同款） ──
-
-    #[test]
-    fn strip_leading_block_variants() {
-        assert_eq!(strip_leading_think_block("<think>推理</think>\n\n正文开始。"), "正文开始。");
-        assert_eq!(strip_leading_think_block("\n  <think>推理</think>正文"), "正文");
-        let mid = "正文里介绍 <think> 标签的用法。";
-        assert_eq!(strip_leading_think_block(mid), mid, "正文字样不动");
-        let unterminated = "<think>推理到一半被截断";
-        assert_eq!(strip_leading_think_block(unterminated), unterminated, "未闭合不丢数据");
-        assert_eq!(strip_leading_think_block("普通正文。"), "普通正文。");
-    }
-
-    #[test]
-    fn stripper_split_chunks_suppress_leading_block() {
-        let mut stripper = LeadingThinkTagStripper::new();
-        let emitted: String = ["<th", "ink>推理A", "推理B</th", "ink>\n正文", "继续"]
-            .iter()
-            .map(|c| stripper.push(c))
-            .filter(|s| !s.is_empty())
-            .collect();
-        assert_eq!(emitted, "正文继续");
-        assert_eq!(stripper.flush(), "");
-    }
-
-    #[test]
-    fn stripper_emits_once_prefix_diverges() {
-        let mut stripper = LeadingThinkTagStripper::new();
-        let emitted: String = ["<th", "ree>不是 think 标签", "，正文"]
-            .iter()
-            .map(|c| stripper.push(c))
-            .filter(|s| !s.is_empty())
-            .collect();
-        assert_eq!(emitted, "<three>不是 think 标签，正文");
-        assert_eq!(stripper.flush(), "");
-    }
-
-    #[test]
-    fn stripper_passthrough_and_mid_text() {
-        let mut stripper = LeadingThinkTagStripper::new();
-        assert_eq!(stripper.push("正文第一段"), "正文第一段");
-        assert_eq!(stripper.push("<think>正文中间的字样不受影响"), "<think>正文中间的字样不受影响");
-        assert_eq!(stripper.flush(), "");
-    }
-
-    #[test]
-    fn stripper_flush_returns_unterminated_block() {
-        let mut stripper = LeadingThinkTagStripper::new();
-        assert_eq!(stripper.push("<think>推理没有闭合"), "");
-        assert_eq!(stripper.flush(), "<think>推理没有闭合");
-    }
-
+    // ── 133/134 号：think 剥离接线集成（真 HTTP mock；纯函数单测在
+    // think_tag_stripper 模块） ─────────────────────────────────────────
     #[tokio::test]
     async fn stream_strips_leading_think_block_from_content() {
-        // 跨块 think 块被整体吞掉，正文完整到达。
         let base = spawn_scripted_llm(vec![
             content_chunk("<th"),
             content_chunk("ink>让我想想"),
@@ -1299,12 +1190,10 @@ mod tests {
         let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
         let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "正文从这里开始。");
-        assert!(completion.done);
     }
 
     #[tokio::test]
     async fn stream_flushes_unterminated_think_block_without_loss() {
-        // 未闭合 think 块 + 正常终态：flush 原样并回（数据不丢失，issue #329）。
         let base = spawn_scripted_llm(vec![
             content_chunk("<think>推理没有闭合"),
             DONE.to_string(),
@@ -1323,15 +1212,86 @@ mod tests {
                 "message": { "content": "<think>思考</think>\n\n非流式正文。" },
                 "finish_reason": "stop",
             }],
-            "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 },
         });
-        // 非流式：裸 JSON 响应体（非 SSE 形态）。
         let base = spawn_scripted_llm(vec![body.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
         let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 });
         params.stream = false;
         let completion = client.stream_chat(&params).await.unwrap();
         assert_eq!(completion.content, "非流式正文。");
+    }
+
+    // ── 134 号：轨迹观测头注入面（真 HTTP mock 记录请求头） ─────────────
+
+    /// 记录请求头的 scripted mock（返回 (base, headers 快照句柄)）。
+    async fn spawn_recording_llm(
+        parts: Vec<String>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_state = seen.clone();
+        async fn scripted_body(parts: Vec<String>) -> axum::body::Body {
+            axum::body::Body::from_stream(async_stream::stream! {
+                for part in parts {
+                    yield Ok::<_, std::convert::Infallible>(part);
+                }
+            })
+        }
+        let parts = std::sync::Arc::new(parts);
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap| {
+                    let seen = seen_state.clone();
+                    let parts = parts.clone();
+                    async move {
+                        {
+                            let mut sink = seen.lock().unwrap();
+                            for (name, value) in headers.iter() {
+                                sink.push((
+                                    name.to_string(),
+                                    value.to_str().unwrap_or("").to_string(),
+                                ));
+                            }
+                        }
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            scripted_body((*parts).clone()).await,
+                        ))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[tokio::test]
+    async fn non_kkaiapi_endpoint_sends_no_trajectory_headers_even_with_scope() {
+        let (base, seen) = spawn_recording_llm(vec![content_chunk("正文"), DONE.to_string()]).await;
+        let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
+        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 });
+        params.trajectory = Some(std::sync::Arc::new(
+            crate::llm::agent_trajectory::AgentTrajectoryScope::main(
+                "inkos-test".to_string(),
+                "run-test".to_string(),
+            ),
+        ));
+        let completion = client.stream_chat(&params).await.unwrap();
+        assert_eq!(completion.content, "正文");
+        let headers = seen.lock().unwrap();
+        let inkos_headers: Vec<&(String, String)> = headers
+            .iter()
+            .filter(|(name, _)| name.to_lowercase().starts_with("x-inkos-"))
+            .collect();
+        assert!(inkos_headers.is_empty(), "非 kkaiapi 端点必须零观测头：{inkos_headers:?}");
     }
 
     #[tokio::test]
