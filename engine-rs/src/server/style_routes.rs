@@ -254,7 +254,7 @@ pub async fn style_import(
     runtime.hub.broadcast("style:start", &json!({ "bookId": book_id }));
     match generate_style_guide(
         &runtime.state,
-        &runtime.router,
+        &*runtime.effective_router().await,
         &runtime.builtin_genres_dir,
         &book_id,
         text,
@@ -416,7 +416,7 @@ pub async fn import_canon_endpoint(
         .broadcast("import:start", &json!({ "bookId": book_id, "type": "canon" }));
     match import_canon(
         &runtime.state,
-        &runtime.router,
+        &*runtime.effective_router().await,
         &runtime.builtin_genres_dir,
         &book_id,
         from_book_id,

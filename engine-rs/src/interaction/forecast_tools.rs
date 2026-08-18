@@ -73,8 +73,8 @@ fn status_str(forecast: &NarrativeForecast) -> &'static str {
     }
 }
 
-fn forecast_agent(runtime: &BooksRuntime) -> RoutedAgent {
-    RoutedAgent { router: (*runtime.router).clone(), agent: "forecast" }
+async fn forecast_agent(runtime: &BooksRuntime) -> RoutedAgent {
+    RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "forecast" }
 }
 
 /// `create_narrative_forecast`：正史上下文 + 分歧点 → 2-5 隔离候选分支。
@@ -95,7 +95,7 @@ pub async fn tool_create_narrative_forecast(deps: &ForecastDeps<'_>, args: &Valu
     };
     let branch_count = parse_bounded_u32(args, "branchCount");
     let horizon = parse_bounded_u32(args, "horizon");
-    let agent = forecast_agent(deps.runtime);
+    let agent = forecast_agent(deps.runtime).await;
     match crate::forecast::runner::create_narrative_forecast(
         &agent,
         &crate::forecast::runner::CreateNarrativeForecastOptions {

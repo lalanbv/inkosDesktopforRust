@@ -421,7 +421,7 @@ pub async fn run_translation(
         .map(|v| v as u32);
     let root = runtime.state.project_root();
     let model = crate::translation::llm_model::LlmTranslationModel {
-        router: &runtime.router,
+        router: &*runtime.effective_router().await,
         max_tokens,
     };
     match crate::translation::runner::run_translation_project(root, &id, &model, batch_size)

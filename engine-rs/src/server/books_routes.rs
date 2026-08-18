@@ -15,6 +15,7 @@
 //!   `{mode?, brief?}`（默认 spot-fix）；章节缺失 404；SSE
 //!   revise:start/complete/error；返回 ReviseOutput JSON
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -48,6 +49,109 @@ pub struct BooksRuntime {
     pub builtin_genres_dir: std::path::PathBuf,
     /// 修订门控（TS config.revisionGate，默认 strict；bin 经 INKOS_REVISION_GATE 注入）。
     pub revision_gate: RevisionGate,
+}
+
+// ── 109 号：非 agent 面运行时配置装配 ─────────────────────────────
+
+/// 有效 router 缓存条目：键 = (inkos.json mtime, secrets.json mtime, 启动
+/// router 指纹)——配置写入或启动态变化即失效。
+struct EffectiveRouterEntry {
+    key: (Option<std::time::SystemTime>, Option<std::time::SystemTime>, usize),
+    router: Arc<AgentRouter>,
+}
+
+fn effective_router_cache()
+-> &'static std::sync::Mutex<HashMap<std::path::PathBuf, EffectiveRouterEntry>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<std::path::PathBuf, EffectiveRouterEntry>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn mtime_of(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|meta| meta.modified().ok())
+}
+
+impl BooksRuntime {
+    /// 运行时有效 router（109 号，62 号备案升级件）：inkos.json 服务项选择 +
+    /// secrets key + transport（apiFormat/stream）→ AgentRouter——TS 每次用
+    /// 配置时 `loadProjectConfig(consumer:"studio")` 热解析的 Rust 等价
+    /// （studio 模式 env 忽略、服务项镜像、transport 默认链均已由
+    /// `resolve_effective_llm_studio` 承担）。配置不可用（无 baseUrl/model/
+    /// key 且非免 key 端点）回退启动 router；mtime + 启动态指纹缓存。
+    pub async fn effective_router(&self) -> Arc<AgentRouter> {
+        let root = self.state.project_root().to_path_buf();
+        let key = (
+            mtime_of(&root.join("inkos.json")),
+            mtime_of(&root.join(".inkos").join("secrets.json")),
+            std::sync::Arc::as_ptr(&self.router) as usize,
+        );
+        {
+            let cache = effective_router_cache().lock().unwrap();
+            if let Some(entry) = cache.get(&root) {
+                if entry.key == key {
+                    return entry.router.clone();
+                }
+            }
+        }
+        let router = match crate::server::project_config_routes::load_raw_config(&root).await {
+            Some(config) => match config.get("llm").and_then(serde_json::Value::as_object).cloned() {
+                Some(llm) => {
+                    let effective =
+                        crate::server::service_routes::resolve_effective_llm_studio(&root, &llm).await;
+                    let base_url = effective
+                        .get("baseUrl")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let model = effective
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let api_key = effective
+                        .get("apiKey")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
+                        effective.get("provider").and_then(serde_json::Value::as_str).unwrap_or("openai"),
+                        Some(&base_url),
+                    );
+                    if !base_url.is_empty() && !model.is_empty() && (!api_key.is_empty() || key_optional) {
+                        let api_format = match effective.get("apiFormat").and_then(serde_json::Value::as_str) {
+                            Some("responses") => crate::llm::providers::TransportApiFormat::Responses,
+                            _ => crate::llm::providers::TransportApiFormat::Chat,
+                        };
+                        let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
+                        Arc::new(
+                            AgentRouter::new(
+                                crate::llm::agent_router::LlmEndpointConfig {
+                                    base_url,
+                                    api_key,
+                                    model,
+                                    max_tokens: 8192,
+                                    extra_headers: HashMap::new(),
+                                },
+                                HashMap::new(),
+                            )
+                            .with_api_format(api_format)
+                            .with_stream(stream),
+                        )
+                    } else {
+                        self.router.clone()
+                    }
+                }
+                None => self.router.clone(),
+            },
+            None => self.router.clone(),
+        };
+        effective_router_cache()
+            .lock()
+            .unwrap()
+            .insert(root, EffectiveRouterEntry { key, router: router.clone() });
+        router
+    }
 }
 
 // ── POST /api/v1/books/:id/plan ─────────────────────────────────
@@ -95,7 +199,7 @@ async fn run_plan(
     let chapter_number = runtime.state.get_next_chapter_number(book_id).await?;
 
     let planner: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "planner" }));
+        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "planner" }));
     let plan = crate::agents::planner::plan_chapter(
         planner,
         &crate::agents::planner::PlanChapterInput {
@@ -164,7 +268,7 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
     let book_dir = runtime.state.book_dir(book_id);
 
     let writer: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "writer" }));
+        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "writer" }));
     let ctx: &'static crate::agents::writer::WriterCtx =
         Box::leak(Box::new(crate::agents::writer::WriterCtx {
             project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
@@ -263,7 +367,7 @@ async fn run_draft(
     book_id: &str,
     body: &DraftBody,
 ) -> Result<crate::pipeline::write_next::ChapterPipelineResult, crate::pipeline::write_next::WriteNextError> {
-    let agents = build_write_next_agents(runtime);
+    let agents = build_write_next_agents(runtime).await;
     let ctx = build_write_next_ctx(runtime);
     write_next_chapter(
         &runtime.state,
@@ -606,7 +710,7 @@ pub(crate) async fn run_revise_chain(
 
     // pre merged-audit（四源合并）。
     let auditor = FullCycleAuditor {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         book_dir: book_dir.clone(),
@@ -635,7 +739,7 @@ pub(crate) async fn run_revise_chain(
 
     // 修稿（以 pre 合并审计问题驱动）。
     let reviser: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "reviser" }));
+        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "reviser" }));
     let reviser_ctx: &'static crate::agents::reviser::ReviserCtx =
         Box::leak(Box::new(crate::agents::reviser::ReviserCtx {
             project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
@@ -896,7 +1000,7 @@ async fn run_compose(
         Some(plan) if context.map(str::trim).unwrap_or("").is_empty() => plan,
         _ => {
             let planner: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-                router: (*runtime.router).clone(),
+                router: (*runtime.effective_router().await).clone(),
                 agent: "planner",
             }));
             let plan = crate::agents::planner::plan_chapter(
@@ -919,7 +1023,7 @@ async fn run_compose(
 
     // compose（35 号编排；outline 选段走 LLM 端口）。
     let composer: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         agent: "composer",
     }));
     let selector = crate::agents::composer::LlmOutlineSelector { chat: composer };
@@ -959,7 +1063,7 @@ pub async fn consolidate_endpoint(
 ) -> impl IntoResponse {
     let book_dir = runtime.state.book_dir(&book_id.clone());
     let consolidator: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         agent: "consolidator",
     }));
     match run_consolidate(consolidator, &book_dir).await {
@@ -1171,12 +1275,12 @@ async fn run_repair_state(
     };
 
     let settler = RepairSettle {
-        router: runtime.router.clone(),
+        router: runtime.effective_router().await.clone(),
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         chapter_number: target,
     };
-    let validator = RoutedValidator { router: runtime.router.clone() };
+    let validator = RoutedValidator { router: runtime.effective_router().await.clone() };
 
     // settle → validate → 失败重试链。
     let repaired = settler
@@ -1424,12 +1528,12 @@ async fn run_resync_chain(
 
     // settle → validate → 失败重试链（复用 repair-state 端口装配）。
     let settler = RepairSettle {
-        router: runtime.router.clone(),
+        router: runtime.effective_router().await.clone(),
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         chapter_number,
     };
-    let validator = RoutedValidator { router: runtime.router.clone() };
+    let validator = RoutedValidator { router: runtime.effective_router().await.clone() };
     let mut synced_output = settler
         .settle(SettleRequest {
             book: &book,
@@ -1669,13 +1773,14 @@ pub async fn export(
 
 // ── 共享装配 ─────────────────────────────────────────────────────
 
-pub(crate) fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
+pub(crate) async fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
+    let effective = runtime.effective_router().await;
     let leak = |agent: &'static str| -> &'static RoutedAgent {
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent }))
+        Box::leak(Box::new(RoutedAgent { router: (*effective).clone(), agent }))
     };
     let settler: &'static crate::llm::agent_router::RoutedSettler =
         Box::leak(Box::new(crate::llm::agent_router::RoutedSettler {
-            router: (*runtime.router).clone(),
+            router: (*runtime.effective_router().await).clone(),
             ctx: crate::agents::writer::WriterCtx {
                 project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
                 builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),

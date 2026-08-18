@@ -15784,3 +15784,123 @@ mod sub108_e2e {
         assert_eq!(request["model"], "quiet-model");
     }
 }
+
+mod sub109_e2e {
+    //! 109 号：非 agent 面运行时配置装配——启动 router 指向死端点，inkos.json
+    //! 服务项（custom:Cfg + secrets key）指向 mock；radar 扫描经 effective
+    //! router 命中 mock。第二步改写 inkos.json 指回死端点 → mtime 失效 →
+    //! 扫描失败（热解析与配置写入即时生效的完整证明）。
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::ops_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt(root: &std::path::Path, dead: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: dead.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request =
+            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
+        (status, parsed)
+    }
+
+    /// 雷达 mock：市场分析师 system → 榜单 JSON。
+    async fn mock_radar_llm() -> String {
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(_body): axum::Json<serde_json::Value>| async move {
+                let content = serde_json::json!({
+                    "recommendations": [
+                        { "platform": "番茄小说", "genre": "都市脑洞", "concept": "外卖员觉醒系统", "confidence": 0.82 }
+                    ],
+                    "marketSummary": "热配置端点生效。"
+                })
+                .to_string();
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn non_agent_face_resolves_router_from_inkos_json_hot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let mock = mock_radar_llm().await;
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":{{"custom:Cfg":{{"service":"custom","name":"Cfg","baseUrl":"{mock}","defaultModelHint":true}}}},"defaultModel":"radar-model"}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:Cfg":{"apiKey":"sk-c"}}}"#,
+        )
+        .unwrap();
+
+        // 启动 router 指向死端点——radar 若走启动态必然失败。
+        let runtime = rt(&root, "http://127.0.0.1:9");
+        let app = axum::Router::new()
+            .route("/api/v1/radar/scan", axum::routing::post(ops_routes::post_radar_scan))
+            .with_state(runtime);
+        let (status, parsed) = call(app.clone(), "POST", "/api/v1/radar/scan", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["marketSummary"], "热配置端点生效。", "body: {parsed}");
+
+        // 配置改写指回死端点 → mtime 失效 → 热解析回落失败。
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"llm":{"services":{"custom:Cfg":{"service":"custom","name":"Cfg","baseUrl":"http://127.0.0.1:9"}},"defaultModel":"radar-model"}}"#,
+        )
+        .unwrap();
+        let (status, parsed) = call(app, "POST", "/api/v1/radar/scan", None).await;
+        assert_ne!(status, StatusCode::OK, "mtime 失效应使扫描失败：{parsed}");
+    }
+}

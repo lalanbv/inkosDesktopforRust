@@ -137,7 +137,7 @@ fn write_cycle_state() -> &'static Mutex<WriteCycleState> {
 
 async fn write_one_chapter(runtime: &BooksRuntime, book_id: &str, temperature: Option<f64>) -> Result<(bool, u32, String), String> {
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
-    let agents = crate::server::books_routes::build_write_next_agents(runtime);
+    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
     let result = write_next_chapter(
         &runtime.state,
@@ -311,7 +311,7 @@ fn scheduler_running() -> bool {
 }
 
 async fn run_radar_scan_and_save(runtime: &BooksRuntime) -> Result<Value, String> {
-    let result = crate::agents::radar::run_radar(&runtime.router).await?;
+    let result = crate::agents::radar::run_radar(&*runtime.effective_router().await).await?;
     let value = serde_json::to_value(&result).unwrap_or(Value::Null);
     save_radar_scan(runtime.state.project_root(), &value).await?;
     Ok(value)
@@ -572,7 +572,7 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     // GET → 不可达时 chat 深链（preferred stream → 空/失败回退非 stream），
     // 9 秒总预算（DOCTOR_LLM_PROBE_BUDGET_MS；慢/限流上游按未连接上报）。
     let probe = tokio::time::timeout(Duration::from_secs(9), async {
-        let endpoint = runtime.router.resolve("radar");
+        let endpoint = runtime.effective_router().await.resolve("radar");
         let base = endpoint.base_url.trim_end_matches('/').to_string();
         let url = format!("{base}/models");
         let client = reqwest::Client::builder().no_proxy().build().unwrap_or_default();

@@ -201,9 +201,9 @@ pub async fn init_book(
     current_focus: Option<&str>,
 ) -> Result<(), String> {
     let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "architect" }));
+        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
     let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         agent: "foundation-reviewer",
     }));
     let architect_ctx = ArchitectCtx {
@@ -625,7 +625,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
     if start_from == 1 {
         let foundation_source = build_import_foundation_source(chapters);
         let architect_chat: &'static RoutedAgent =
-            Box::leak(Box::new(RoutedAgent { router: (*runtime.router).clone(), agent: "architect" }));
+            Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
         let architect_ctx = ArchitectCtx {
             project_root: state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
@@ -633,7 +633,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
         let foundation = if matches!(import_mode, ImportMode::Series) {
             // series：生成 → 评审 → 带反馈重生成（92 号评审环）。
             let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-                router: (*runtime.router).clone(),
+                router: (*runtime.effective_router().await).clone(),
                 agent: "foundation-reviewer",
             }));
             generate_and_review_foundation_import(
@@ -669,7 +669,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
         // 风格向导（资料包 ≥500 UTF-16 码元；吞错）。
         if foundation_source.encode_utf16().count() >= 500 {
             let _ = crate::server::style_routes::generate_style_guide_for_book(
-                state, &runtime.router, &runtime.builtin_genres_dir, book_id, &foundation_source, Some(&book.title),
+                state, &*runtime.effective_router().await, &runtime.builtin_genres_dir, book_id, &foundation_source, Some(&book.title),
             )
             .await;
         }
@@ -677,7 +677,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
 
     // Step 2：逐章回放。
     let analyzer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         agent: "chapter-analyzer",
     }));
     let analyzer_ctx: &'static crate::agents::chapter_analyzer::ChapterAnalyzerCtx =
@@ -949,7 +949,7 @@ async fn revise_foundation_inner(
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
     let architect_chat: &'static crate::llm::agent_router::RoutedAgent =
         Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-            router: (*runtime.router).clone(),
+            router: (*runtime.effective_router().await).clone(),
             agent: "architect",
         }));
     let architect_ctx = ArchitectCtx {
@@ -978,7 +978,7 @@ async fn revise_foundation_inner(
     {
         let reviewer_chat: &'static crate::llm::agent_router::RoutedAgent =
             Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-                router: (*runtime.router).clone(),
+                router: (*runtime.effective_router().await).clone(),
                 agent: "foundation-reviewer",
             }));
         let language = if book.language.as_deref() == Some("en") {

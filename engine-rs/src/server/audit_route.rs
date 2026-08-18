@@ -28,6 +28,22 @@ pub struct AuditRuntime {
     pub builtin_genres_dir: std::path::PathBuf,
 }
 
+impl AuditRuntime {
+    /// 运行时有效 router（109 号，与 BooksRuntime::effective_router 同款——
+    /// state/router 均为共享 Arc，经 BooksRuntime 委托复用缓存）。
+    pub async fn effective_router(&self) -> Arc<AgentRouter> {
+        crate::server::books_routes::BooksRuntime {
+            hub: self.hub.clone(),
+            state: self.state.clone(),
+            router: self.router.clone(),
+            builtin_genres_dir: self.builtin_genres_dir.clone(),
+            revision_gate: Default::default(),
+        }
+        .effective_router()
+        .await
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct AuditBody {
     #[serde(default)]
@@ -118,7 +134,7 @@ pub(crate) async fn run_audit_flow(
 
     // 完整审计（FullCycleAuditor → 真实 audit_chapter 编排）。
     let auditor = FullCycleAuditor {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         book_dir,
@@ -126,7 +142,7 @@ pub(crate) async fn run_audit_flow(
         genre: book.genre.clone(),
     };
     let chat = RoutedAgent {
-        router: (*runtime.router).clone(),
+        router: (*runtime.effective_router().await).clone(),
         agent: "auditor",
     };
     let prompt_store = FsStateStore;

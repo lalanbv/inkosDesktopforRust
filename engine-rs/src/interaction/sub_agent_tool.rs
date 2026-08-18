@@ -147,7 +147,7 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
         .filter(|v| v.fract() == 0.0 && *v > 0.0)
         .map(|v| v as u32);
     let runtime = deps.runtime;
-    let agents = crate::server::books_routes::build_write_next_agents(runtime);
+    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
     // 默认 Auto 审核模式（TS writeNextChapter 语义：审后 ready-for-review）。
     let config = crate::pipeline::write_next::WriteNextConfig {
@@ -274,7 +274,7 @@ async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     let audit_runtime = crate::server::audit_route::AuditRuntime {
         hub: deps.runtime.hub.clone(),
         state: deps.runtime.state.clone(),
-        router: deps.runtime.router.clone(),
+        router: deps.runtime.effective_router().await.clone(),
         builtin_genres_dir: deps.runtime.builtin_genres_dir.clone(),
     };
     match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None).await {

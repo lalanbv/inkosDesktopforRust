@@ -1033,7 +1033,7 @@ async fn execute_write_next(
         ));
     }
 
-    let agents = crate::server::books_routes::build_write_next_agents(runtime);
+    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
     let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
     let config = WriteNextConfig {
         abort: Some(abort.clone()),
@@ -1291,7 +1291,7 @@ async fn execute_short_run(
     let reference_struct = reference.map(|text| ShortFictionReference { text: text.to_string() });
     let result = run_short_fiction_production(ShortFictionRunOptions {
         project_root: root,
-        router: &runtime.router,
+        router: &*runtime.effective_router().await,
         direction,
         reference: reference_struct.as_ref(),
         story_id,
@@ -1395,7 +1395,7 @@ async fn execute_script_create(
     }
     let result = run_script_creation(ScriptCreationRunOptions {
         project_root: root,
-        router: &runtime.router,
+        router: &*runtime.effective_router().await,
         title,
         instruction,
         source_kind: optional(source_kind),
@@ -1456,7 +1456,7 @@ async fn execute_storyboard_create(
     }
     let result = run_storyboard_creation(StoryboardCreationRunOptions {
         project_root: root,
-        router: &runtime.router,
+        router: &*runtime.effective_router().await,
         title,
         instruction,
         source_kind: optional(source_kind),
@@ -1521,7 +1521,7 @@ async fn execute_interactive_film_create(
     }
     let result = run_interactive_film_creation(InteractiveFilmCreationRunOptions {
         project_root: root,
-        router: &runtime.router,
+        router: &*runtime.effective_router().await,
         title,
         instruction,
         source_kind: optional(source_kind),
@@ -2000,7 +2000,7 @@ async fn execute_play_start(
     let mut graph = None;
     let mut seed_mutation = None;
     if existing_transcript.is_empty() {
-        let agents = crate::play_runner::PlayAgents { router: &runtime.router, root };
+        let agents = crate::play_runner::PlayAgents { router: &*runtime.effective_router().await, root };
         let runner = crate::play_runner::PlayRunner {
             project_root: root,
             world_id: world_id.clone(),
