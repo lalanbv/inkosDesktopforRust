@@ -561,10 +561,7 @@ pub async fn post_agent(
         /// 多模态图片（95 号）：每轮注入最后一条 user 消息（instruction），
         /// 与 TS pi-agent 历史保留语义一致。
         images: Vec<crate::llm::streaming_client::ChatImage>,
-        /// 轨迹遥测作用域（134 号：TS runWithAgentTrajectory 回合作用域对应
-        /// 物——main 角色、conversationId=opaque(sessionId)、runId=uuid、
-        /// 回合内多次 LLM 调用共享（pi_turn 递增））。
-        trajectory: Option<std::sync::Arc<crate::llm::agent_trajectory::AgentTrajectoryScope>>,
+
         /// thinking 三事件桥（129 号）：pi-ai thinking 块 → thinking:start/
         /// delta/end 广播（TS onEvent ame.type 分支对应物；聚合语义——与
         /// draft:delta 每轮聚合同款）。
@@ -625,7 +622,7 @@ pub async fn post_agent(
                         None,
                         None,
                     ),
-                    trajectory: self.trajectory.clone(),
+                    trajectory: crate::llm::agent_trajectory::current_scope(),
                 })
                 .await
                 .map_err(|e| e.to_string())?;
@@ -699,12 +696,6 @@ pub async fn post_agent(
     let loop_chat = RouterLoopChat {
         router: &runtime.router,
         images: loop_images,
-        trajectory: Some(std::sync::Arc::new(
-            crate::llm::agent_trajectory::AgentTrajectoryScope::main(
-                crate::llm::agent_trajectory::opaque_conversation_id(session_id),
-                uuid::Uuid::new_v4().to_string(),
-            ),
-        )),
         thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
     };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
@@ -812,21 +803,33 @@ pub async fn post_agent(
         book_edit_deps,
         forecast_deps,
     };
-    let loop_result = run_agent_loop(
-        &loop_chat,
-        &tool_executor,
-        &system_prompt,
-        restored,
-        instruction,
-        Some(&tools),
-        Some(&abort_flag),
-        &bridge,
-    )
-    .await;
+    // 135 号：回合作用域（TS runWithAgentTrajectory({main}) 包 agent.prompt
+    // 的对应物）——task-local 通道供 RouterLoopChat（聊天增量）与 sub_agent
+    // 工具链（派生 subagent）内的所有 LLM 调用读取；对话 id 不透明化。
+    let turn_scope = std::sync::Arc::new(
+        crate::llm::agent_trajectory::AgentTrajectoryScope::main(
+            crate::llm::agent_trajectory::opaque_conversation_id(session_id),
+            uuid::Uuid::new_v4().to_string(),
+        ),
+    );
+    let chat_result = crate::llm::agent_trajectory::TRAJECTORY_SCOPE
+        .scope(Some(turn_scope), async {
+            let loop_result = run_agent_loop(
+                &loop_chat,
+                &tool_executor,
+                &system_prompt,
+                restored,
+                instruction,
+                Some(&tools),
+                Some(&abort_flag),
+                &bridge,
+            )
+            .await;
+            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions))
+        })
+        .await;
 
     running_agent_sessions().lock().unwrap().remove(session_id);
-
-    let chat_result = loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions));
 
     match chat_result {
         Ok((raw_text, tool_executions)) => {

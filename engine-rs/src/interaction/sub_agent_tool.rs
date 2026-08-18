@@ -35,8 +35,14 @@ fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
         .filter(|v| !v.is_empty())
 }
 
-/// `sub_agent` 执行器。
+/// `sub_agent` 执行器。135 号：执行体整体包 subagent 轨迹作用域（TS
+/// `runWithAgentTrajectoryRole("subagent", …)`——继承回合 conversation/run
+/// 与计数器，仅切 role；外层无作用域则原样执行）。
 pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
+    crate::llm::agent_trajectory::with_subagent_scope(tool_sub_agent_inner(deps, args)).await
+}
+
+async fn tool_sub_agent_inner(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
     if !SUB_AGENTS.contains(&agent) {
         return error_result(format!(

@@ -29,8 +29,9 @@ pub struct AgentTrajectoryScope {
     pub run_id: String,
     pub agent_role: &'static str,
     pub parent_tool_call_id: Option<String>,
-    /// main 角色每次 model call 递增（TS counter.piTurn）。
-    pi_turn: std::sync::atomic::AtomicU32,
+    /// main 角色每次 model call 递增（TS counter.piTurn）。Arc 共享——
+    /// subagent 派生与父作用域同一计数器（TS `...current` 展开语义）。
+    pi_turn: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl AgentTrajectoryScope {
@@ -41,7 +42,20 @@ impl AgentTrajectoryScope {
             run_id,
             agent_role: "main",
             parent_tool_call_id: None,
-            pi_turn: std::sync::atomic::AtomicU32::new(0),
+            pi_turn: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+
+    /// TS `runWithAgentTrajectoryRole("subagent", task)`：继承本作用域
+    ///（conversation/run/**同一计数器**），仅切 role——agent-tools 的调用
+    /// 不传 parentToolCallId（头省略，逐字）。
+    pub fn derive_subagent(&self) -> AgentTrajectoryScope {
+        AgentTrajectoryScope {
+            conversation_id: self.conversation_id.clone(),
+            run_id: self.run_id.clone(),
+            agent_role: "subagent",
+            parent_tool_call_id: None,
+            pi_turn: std::sync::Arc::clone(&self.pi_turn),
         }
     }
 
@@ -133,6 +147,32 @@ pub fn agent_trajectory_headers(
         ));
     }
     headers
+}
+
+tokio::task_local! {
+    /// 当前轨迹作用域（135 号：agent_route 回合 set main；sub_agent 工具
+    /// 执行体 set 派生 subagent——同一 async 链内自动传播，等价 TS ALS）。
+    pub static TRAJECTORY_SCOPE: Option<std::sync::Arc<AgentTrajectoryScope>>;
+}
+
+/// 读取当前作用域（无 task-local 或未 set → None——TS storage.getStore()
+/// undefined 语义）。
+pub fn current_scope() -> Option<std::sync::Arc<AgentTrajectoryScope>> {
+    TRAJECTORY_SCOPE.try_with(|scope| scope.clone()).ok().flatten()
+}
+
+/// TS `runWithAgentTrajectoryRole("subagent", task)` 的 Rust 对应：
+/// 外层无作用域则原样执行（`if (!current) return task()` 逐字）；有则
+/// 派生 subagent 作用域包住执行体（共享 conversation/run/计数器）。
+pub async fn with_subagent_scope<F>(task: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    let derived = current_scope().map(|scope| std::sync::Arc::new(scope.derive_subagent()));
+    match derived {
+        Some(subagent) => TRAJECTORY_SCOPE.scope(Some(subagent), task).await,
+        None => task.await,
+    }
 }
 
 #[cfg(test)]
@@ -227,21 +267,42 @@ mod tests {
             .any(|(k, _)| k == "X-InkOS-Parent-Tool-Call-ID"));
     }
 
-    #[test]
-    fn scope_pi_turn_increments_only_for_main() {
-        let scope = AgentTrajectoryScope::main("inkos-x".into(), "run".into());
-        assert_eq!(scope.begin_model_call().pi_turn_index, 1);
-        assert_eq!(scope.begin_model_call().pi_turn_index, 2);
-        let nested = AgentTrajectoryScope {
-            conversation_id: "inkos-x".into(),
-            run_id: "run".into(),
-            agent_role: "subagent",
-            parent_tool_call_id: Some("tool-1".into()),
-            pi_turn: std::sync::atomic::AtomicU32::new(3),
-        };
-        let call = nested.begin_model_call();
-        assert_eq!(call.pi_turn_index, 3, "非 main 不递增");
-        assert_eq!(call.agent_role, "subagent");
-        assert_eq!(call.parent_tool_call_id.as_deref(), Some("tool-1"));
+    #[tokio::test]
+    async fn subagent_scope_shares_counter_and_never_increments() {
+        let main = std::sync::Arc::new(AgentTrajectoryScope::main("inkos-x".into(), "run".into()));
+        assert_eq!(main.begin_model_call().pi_turn_index, 1);
+        // subagent 派生：同 conversation/run、计数器共享、parent 缺省。
+        let sub = main.derive_subagent();
+        assert_eq!(sub.conversation_id, "inkos-x");
+        assert_eq!(sub.run_id, "run");
+        assert_eq!(sub.agent_role, "subagent");
+        assert!(sub.parent_tool_call_id.is_none(), "TS agent-tools 未传 parentToolCallId");
+        let call = sub.begin_model_call();
+        assert_eq!(call.pi_turn_index, 1, "subagent 读当前值不递增");
+        assert_eq!(call.model_call_id.len(), 36, "每次调用新 uuid");
+        // 回到 main：递增跨越 subagent 读取继续。
+        assert_eq!(main.begin_model_call().pi_turn_index, 2);
     }
+
+    #[tokio::test]
+    async fn task_local_channel_propagates_and_subagent_wraps() {
+        let main = std::sync::Arc::new(AgentTrajectoryScope::main("inkos-s".into(), "run-s".into()));
+        assert!(current_scope().is_none(), "无 set 时 None");
+        TRAJECTORY_SCOPE.scope(Some(main), async {
+            assert_eq!(current_scope().unwrap().agent_role, "main");
+            // subagent 包装：链内读到派生作用域；计数器共享。
+            with_subagent_scope(async {
+                let scope = current_scope().expect("包装内应有作用域");
+                assert_eq!(scope.agent_role, "subagent");
+                assert_eq!(scope.conversation_id, "inkos-s");
+            })
+            .await;
+            // 包装外回 main。
+            assert_eq!(current_scope().unwrap().agent_role, "main");
+        })
+        .await;
+        // 无外层作用域时 with_subagent_scope 原样执行（不 panic）。
+        with_subagent_scope(async {}).await;
+    }
+
 }

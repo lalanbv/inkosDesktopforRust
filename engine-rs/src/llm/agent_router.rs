@@ -205,9 +205,10 @@ impl AgentRouter {
                     None,
                     None,
                 ),
-                // 管线面不挂轨迹作用域（TS 管线 agent 在 ALS 作用域外——
-                // beginAgentModelCall undefined → 零观测头，等价）。
-                trajectory: None,
+                // 135 号：经 task-local 通道读取当前作用域——管线直调链
+                // 无 set → None（TS 管线在 ALS 作用域外零头等价）；sub_agent
+                // 工具链内 → 派生 subagent 作用域（TS runWithAgentTrajectoryRole）。
+                trajectory: crate::llm::agent_trajectory::current_scope(),
             })
             .await
             .map_err(|e: StreamError| e.to_string())?;
