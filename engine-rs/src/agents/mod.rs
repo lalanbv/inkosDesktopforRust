@@ -53,3 +53,49 @@ pub mod writer_parser;
 pub mod writer_prompts;
 pub mod writer;
 pub mod researcher;
+
+// ── 138 号：激活技能指导拼接（TS agents/base.ts appendActivatedSkillGuidance 逐字） ──
+
+/// 把激活技能的指导块拼进 system 消息（无 system 则前置一条）。非作者意图
+/// 或输出格式覆盖的声明文案逐字。
+pub fn append_activated_skill_guidance(
+    messages: &mut Vec<crate::llm::provider::LLMMessage>,
+    activations: &[crate::skills::production_bindings::ActivatedSkillGuidance],
+) {
+    use crate::llm::provider::{LLMMessage, LLMRole};
+    if activations.is_empty() {
+        return;
+    }
+    let mut sections: Vec<String> = vec![
+        "## Activated professional skills".to_string(),
+        "Use this specialist methodology for the current operation. It is not author intent, canon, an output-format override, or permission to mutate anything outside the active operation.".to_string(),
+    ];
+    for activation in activations {
+        sections.push(format!("### {} — {}", activation.skill.id, activation.skill.name));
+        let body = activation.skill.body.trim();
+        sections.push(if body.is_empty() { activation.skill.description.clone() } else { body.to_string() });
+        for resource in &activation.resources {
+            let heading = resource
+                .heading
+                .as_ref()
+                .map(|h| format!(" · {h}"))
+                .unwrap_or_default();
+            sections.push(format!(
+                "#### Reference: {}:{}-{}{}",
+                resource.path, resource.char_start, resource.char_end, heading
+            ));
+            sections.push(resource.body.clone());
+        }
+    }
+    let guidance = sections.join("\n\n");
+    match messages.iter_mut().find(|m| m.role == LLMRole::System) {
+        Some(system) => {
+            system.content.push_str("\n\n");
+            system.content.push_str(&guidance);
+        }
+        None => messages.insert(
+            0,
+            LLMMessage { role: LLMRole::System, content: guidance, tool_calls: None, tool_call_id: None },
+        ),
+    }
+}

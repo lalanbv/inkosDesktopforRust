@@ -7,6 +7,7 @@
 //! - [`normalize_skill_id_strict`]：SkillIdSchema 校验（action-envelope.ts）
 
 pub mod external_loader;
+pub mod production_bindings;
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
