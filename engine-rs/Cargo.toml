@@ -1,8 +1,8 @@
 [package]
 name = "inkos-engine"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
-description = "inkos 业务引擎的 Rust 移植目标（packages/core → Rust）。Phase 0 骨架：模块占位 + 类型同步通道。"
+description = "inkos 业务引擎的 Rust 全量移植（packages/core → Rust）：16 业务域库 + axum /api/v1/* 契约面 + 独立 server bin（inkos-engine-server）。0.1.0 = Phase 3 契约对齐完成（strangler duel 8/8）。"
 license = "AGPL-3.0-only"
 publish = false
 

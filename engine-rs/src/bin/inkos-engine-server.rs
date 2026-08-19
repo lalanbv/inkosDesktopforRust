@@ -155,7 +155,9 @@ fn build_router() -> axum::Router {
     // 模式 = packages/studio/dist）；未设为纯 API 服务（Tauri 壳内嵌前端）。
     let static_dir = std::env::var("INKOS_STATIC_DIR").ok().map(std::path::PathBuf::from);
     let app = inkos_engine::server::static_routes::router_books_with_static(
-        AppState { version: env("CARGO_PKG_VERSION", "0.0.1") },
+        // 编译期宏（非运行时 env()——CARGO_PKG_VERSION 仅构建期存在，
+        // 运行时读取恒 miss 导致版本恒为 fallback，发布冒烟已证实）。
+        AppState { version: env!("CARGO_PKG_VERSION").to_string() },
         hub,
         runtime,
         audit,

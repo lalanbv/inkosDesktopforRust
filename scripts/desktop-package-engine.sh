@@ -37,34 +37,40 @@ fi
 test -f packages/cli/dist/index.js     || { echo "FAIL: packages/cli/dist/index.js 缺失"; exit 1; }
 test -f packages/studio/dist/index.html || { echo "FAIL: packages/studio/dist/index.html 缺失"; exit 1; }
 
-# 3) 清理 + 重组装 engine/。
-echo "[engine] 组装 $ENGINE ..."
-rm -rf "$ENGINE"
-mkdir -p "$ENGINE"
-
-# cli dist + package.json → engine/（镜像 packages/cli 结构：dist + package.json +
-# node_modules）。使 `node engine/dist/index.js` 与 `node packages/cli/dist/index.js`
-# 解析路径等价（cliPackageRoot = engine，与 packages/cli 同构）。
-cp -R packages/cli/dist "$ENGINE/dist"
-cp packages/cli/package.json "$ENGINE/package.json"
-
+# 3) 组装 engine/。
+#
 # node_modules 链接/拷贝：
-# - dev（默认）：符号链接 → packages/cli/node_modules（pnpm 按包隔离依赖在此）。
-# - prod（INKOS_ENGINE_PROD=1，CI 用）：cp -L 解引用拷贝真实内容（自包含，无符号链接，
-#   打包进 .app 后在用户机可用；体积大但正确，Phase 2 SEA 优化）。
+# - dev（默认）：镜像 packages/cli 结构（dist + package.json + node_modules 符号链接
+#   → packages/cli/node_modules）。cliPackageRoot = engine，与 packages/cli 同构。
+# - prod（INKOS_ENGINE_PROD=1，CI/发布用）：`pnpm deploy` 自包含部署（hoisted 布局）。
+#
+#   **为何弃用 cp -RL**（2026-08-19 发布轮实测）：pnpm 把包的传递依赖放在
+#   .pnpm 虚拟店的**兄弟**符号链接里（如 pi-ai 的 partial-json 在
+#   .pnpm/pi-ai@x/node_modules/partial-json，而非 pi-ai 目录内）。cp -RL 只跟随
+#   被拷贝目录自身的链接，兄弟链接上下文被截断——产物在用户机 import 时
+#   ERR_MODULE_NOT_FOUND。`pnpm deploy` 按锁文件完整部署依赖闭包；
+#   --config.node-linker=hoisted 产出 npm 风格提升布局（仅 .bin 下残留 shim
+#   链接，import 解析零符号链接），打包进 .app 后用户机可直接运行。
 LN_TARGET="$ROOT/packages/cli/node_modules"
-if [ -d "$LN_TARGET" ]; then
-  if [ "${INKOS_ENGINE_PROD:-0}" = "1" ]; then
-    echo "[engine] PROD 模式：cp -L 拷贝自包含 node_modules（可能数分钟）..."
-    mkdir -p "$ENGINE/node_modules"
-    # cp -L 解引用 pnpm 的符号链接/硬链接，产出真实自包含 node_modules。
-    cp -RL "$LN_TARGET/." "$ENGINE/node_modules/"
-  else
-    ln -sfn "$LN_TARGET" "$ENGINE/node_modules"
-  fi
+if [ "${INKOS_ENGINE_PROD:-0}" = "1" ]; then
+  echo "[engine] PROD 模式：pnpm deploy 自包含部署（hoisted，可能数分钟）..."
+  rm -rf "$ENGINE"
+  CI=true npx -y pnpm@9.15.9 --filter @actalk/inkos deploy --prod \
+    --config.node-linker=hoisted "$ENGINE"
+  # 打包期冒烟：拦截依赖闭包不完整类缺陷（如上 cp -RL 兄弟链接丢失）。
+  node "$ENGINE/dist/index.js" --version >/dev/null
 else
-  echo "WARN: $LN_TARGET 不存在，跳过 node_modules（CLI 依赖无法解析）"
-  echo "      先运行 ./scripts/desktop-build-inkos.sh 安装依赖"
+  echo "[engine] 组装 $ENGINE ..."
+  rm -rf "$ENGINE"
+  mkdir -p "$ENGINE"
+  cp -R packages/cli/dist "$ENGINE/dist"
+  cp packages/cli/package.json "$ENGINE/package.json"
+  if [ -d "$LN_TARGET" ]; then
+    ln -sfn "$LN_TARGET" "$ENGINE/node_modules"
+  else
+    echo "WARN: $LN_TARGET 不存在，跳过 node_modules（CLI 依赖无法解析）"
+    echo "      先运行 ./scripts/desktop-build-inkos.sh 安装依赖"
+  fi
 fi
 
 # 4) 写 manifest.json（EngineManifest）。

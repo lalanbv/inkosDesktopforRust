@@ -77,7 +77,6 @@ import {
 } from "../utils/governed-working-set.js";
 import { WriterAgent } from "../agents/writer.js";
 import type { RuntimeStateDelta } from "../models/runtime-state.js";
-import type { LengthSpec } from "../models/length-governance.js";
 import type { ContextPackage, ChapterMemo, RuleStack } from "../models/input-governance.js";
 import type { BookConfig } from "../models/book.js";
 import type { GenreProfile } from "../models/genre-profile.js";
