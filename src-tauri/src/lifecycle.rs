@@ -179,7 +179,7 @@ impl BadgeCounter {
 
 /// 托盘控制器：`AppHandle` + `TrayIcon` + `BadgeCounter` + refresh 去抖状态。
 ///
-/// 菜单固定三项：`未读:N`（不可点） / `显示窗口` / `退出`。
+/// 菜单固定四项：`未读:N`（不可点） / `显示窗口` / `插件管理…` / `退出`。
 /// `inc_badge`/`clear_badge` 改计数后 best-effort 重建菜单（失败仅 log）。
 /// `build`/`refresh` 走真实 Tauri tray API（GUI 路径），单测不可达——
 /// 标注「集成验证待 GUI/真机」；计数逻辑在 BadgeCounter 上单测。
@@ -310,7 +310,7 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
         .context("MenuBuilder build 失败")
 }
 
-/// 菜单事件：show → window.show + set_focus；quit → app.exit(0)。
+/// 菜单事件：show → [`show_main_window`]；quit → app.exit(0)。
 /// quit 复用 main.rs RunEvent::Exit 钩子做 cleanup_sidecar + loopback release。
 ///
 /// quit 路径会先 set `ExitingFlag`（managed state），让 `on_window_event` 的
@@ -318,12 +318,7 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
 /// 若未注册 `ExitingFlag`（例如单测路径），按 `app.exit(0)` 直走，行为同前。
 fn handle_menu_event(app: &AppHandle, ev: tauri::menu::MenuEvent) {
     match ev.id().as_ref() {
-        "show" => {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-        }
+        "show" => show_main_window(app),
         // 插件管理：复用 plugin::commands::open_manager_window（与 picker 的
         // cmd_open_plugin_manager 同一入口），让常驻状态（sidecar 运行）下也能
         // 经托盘打开插件管理面板，不只 picker 阶段可达。
@@ -348,6 +343,53 @@ const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<TrayController>();
 };
+
+// =====================================================================
+// 主窗口唤回（148 修复）——「关窗→隐藏保活」设计的必要配套
+// =====================================================================
+
+/// 当前健康 sidecar 的 UI 地址（`http://127.0.0.1:{port}/`）。
+///
+/// 供 [`show_main_window`] 的防御性重建路径：主窗口按设计永不销毁
+/// （CloseRequested 恒被 prevent_close 拦下转 hide），但若未来新增销毁路径，
+/// 重建时应直连 sidecar UI 而不是停在 picker 的「启动中」页。setup 时 manage
+/// （None），sidecar 健康探测通过后由 main.rs 写入。
+#[derive(Default)]
+pub struct LiveSidecarUrl(pub Mutex<Option<tauri::Url>>);
+
+/// 显示并聚焦主窗口；缺失时防御性重建（sidecar UI 或 picker）。
+///
+/// 托盘「显示窗口」与 macOS Dock 点击（`RunEvent::Reopen`）共用此入口，
+/// 避免两处 show/focus 逻辑漂移。show/set_focus/重建均 best-effort：
+/// 唤回路径不容 panic，失败仅 log。
+pub fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if let Err(e) = w.show() {
+            eprintln!("[lifecycle] show_main_window: show 失败: {e:#}");
+        }
+        if let Err(e) = w.set_focus() {
+            eprintln!("[lifecycle] show_main_window: set_focus 失败: {e:#}");
+        }
+        return;
+    }
+    eprintln!("[lifecycle] show_main_window: main 窗口缺失，尝试重建");
+    let live_url = app
+        .try_state::<LiveSidecarUrl>()
+        .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()));
+    // 无 sidecar 地址（picker 阶段 / 探测未过）→ 回 picker 首页（frontendDist 根）。
+    let target = match live_url {
+        Some(u) => tauri::WebviewUrl::External(u),
+        None => tauri::WebviewUrl::App("index.html".into()),
+    };
+    match tauri::WebviewWindowBuilder::new(app, "main", target)
+        .title("inkosDesktop")
+        .inner_size(1280.0, 800.0)
+        .build()
+    {
+        Ok(_) => eprintln!("[lifecycle] show_main_window: 主窗口已重建"),
+        Err(e) => eprintln!("[lifecycle] show_main_window: 重建主窗口失败: {e:#}"),
+    }
+}
 
 // =====================================================================
 // ExitingFlag（M2a Task 6）—— 区分"用户点 X 关窗"与"主动退出"

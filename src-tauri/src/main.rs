@@ -13,6 +13,8 @@
 //!   `RunEvent::Exit` 时 `release(port)` best-effort。
 //! - WebView 加载：`health_probe` 通过后 `window.eval(location.replace(sidecar_url))`。
 //! - 关窗→隐藏保活：`CloseRequested` 除非 `ExitingFlag` 已置位，否则 prevent + hide。
+//!   唤回通道（148 修复）：托盘「显示窗口」setup 即建（不再等 sidecar 健康）+
+//!   macOS Dock 点击（`RunEvent::Reopen`），共用 `lifecycle::show_main_window`。
 //! - M3b：sidecar 启动逻辑提取为 [`spawn_sidecar_task`]，auto 复用与 picker 选择共用。
 //!
 //! Tauri 版本：2.11.5。
@@ -36,7 +38,8 @@ use inkos_desktop::config;
 use inkos_desktop::engine;
 use inkos_desktop::isolation::{platform_guard, LoopbackGuard};
 use inkos_desktop::lifecycle::{
-    cleanup_sidecar, install_signal_hooks, ExitingFlag, SidecarState, TrayController,
+    cleanup_sidecar, install_signal_hooks, ExitingFlag, LiveSidecarUrl, SidecarState,
+    TrayController,
 };
 use inkos_desktop::observer::notifier::{IsUnfocusedFn, NativeNotifier, NotifyFn};
 use inkos_desktop::observer::router::Router;
@@ -349,6 +352,18 @@ fn main() {
             });
 
             // =========================================================
+            // 148 修复：托盘提前到 setup 构建（原在 sidecar 健康探测后才建）。
+            // =========================================================
+            // 「关窗→隐藏保活」的设计前提是任何时刻都有办法把窗口唤回。原实现托盘
+            // 要等 health_probe 通过才存在——picker 阶段 / 探测超时期间关窗，应用
+            // 无托盘、Dock 点击又无 Reopen 处理 → 窗口永久唤不回（0.1.0 实测）。
+            // 现在唤回通道全程可用：托盘「显示窗口」+ macOS Dock 点击 →
+            // lifecycle::show_main_window（show + focus，缺失时防御性重建）。
+            app.manage(LiveSidecarUrl::default());
+            let tray = TrayController::build(&app_handle);
+            app.manage(tray);
+
+            // =========================================================
             // M3d：updater 状态（engine + shell 通道）
             // =========================================================
             // 格式校验在 EngineChannel::new 内（非法 → 回退 DEFAULT_REPO + warn）：
@@ -380,9 +395,9 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败")
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
             // Exit：进程即将退出，确保 sidecar 进程组被清理 + watcher 关闭 + guard release。
-            if let RunEvent::Exit = event {
+            RunEvent::Exit => {
                 if let Some(flag) = app_handle.try_state::<ExitingFlag>() {
                     flag.set();
                 }
@@ -404,6 +419,17 @@ fn main() {
                     }
                 }
             }
+            // macOS Dock 图标点击（applicationShouldHandleReopen）：全部窗口被
+            // 「关窗→隐藏保活」藏起后这是用户最本能的唤回路径。不处理则 App
+            // 激活但窗口不现——0.1.0「关闭窗口后再也显示不出来」的主因之一。
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows, .. } => {
+                if !has_visible_windows {
+                    // 全路径调用（仅此 macOS 分支使用，避免其它平台的 unused import）。
+                    inkos_desktop::lifecycle::show_main_window(app_handle);
+                }
+            }
+            _ => {}
         });
 }
 
@@ -571,6 +597,13 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
 
                 if healthy {
                     let url = format!("http://127.0.0.1:{}/", port);
+                    // 记录 live UI 地址：主窗口防御性重建（show_main_window）时直连
+                    // sidecar，不停留在 picker 的「启动中」页。
+                    if let Some(state) = app_handle.try_state::<LiveSidecarUrl>() {
+                        if let Ok(mut u) = state.0.lock() {
+                            *u = url.parse().ok();
+                        }
+                    }
                     if let Err(e) = window.eval(format!("window.location.replace('{}')", url)) {
                         eprintln!("[main] eval navigate 失败: {e}");
                     }
@@ -849,11 +882,9 @@ async fn cmd_get_diagnostics(app: tauri::AppHandle) -> inkos_desktop::error::Res
     inkos_desktop::observability::diagnostics::cmd_get_diagnostics(app).await
 }
 
-/// M2a Task 6 接线：health_probe 通过后构建 tray + observer + 信号钩子（未改）。
+/// M2a Task 6 接线：health_probe 通过后构建 observer（SSE 路由）。
+/// 托盘自 148 起提前到 setup 构建（关窗唤回通道需全程存在），不在此处。
 fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
-    let tray = TrayController::build(app_handle);
-    app_handle.manage(tray);
-
     let is_unfocused_app = app_handle.clone();
     let is_unfocused: IsUnfocusedFn = Arc::new(move || {
         is_unfocused_app
@@ -933,6 +964,7 @@ const _: fn() = || {
     assert_send_sync::<ExitingFlag>();
     assert_send_sync::<ObserverShutdown>();
     assert_send_sync::<TrayController>();
+    assert_send_sync::<LiveSidecarUrl>();
     assert_send_sync::<SecretsWritebackState>();
     assert_send_sync::<LaunchState>();
     assert_send_sync::<UpdaterState>();
