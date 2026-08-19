@@ -131,8 +131,10 @@
       }
       applyI18n();
 
-      // 显示结构化错误（AppError）
-      function showStructuredError(error) {
+      // 显示结构化错误（AppError）。retryLabel：按钮文案——用户操作链路传
+      // "重试"（可重发 invoke）；非用户链路（unhandledrejection）传"知道了"，
+      // 此类错误无操作可重试，"重试"按钮是误导。
+      function showStructuredError(error, retryLabel = "重试") {
         // 如果是字符串，直接显示
         if (typeof error === "string") {
           showErr(error);
@@ -162,7 +164,7 @@
           }
 
           const retryBtn = document.createElement("button");
-          retryBtn.textContent = "重试";
+          retryBtn.textContent = retryLabel;
           retryBtn.addEventListener("click", () => {
             banner.remove();
             showErr("");
@@ -189,11 +191,14 @@
 
       window.addEventListener("unhandledrejection", (event) => {
         console.error("未处理的 Promise 拒绝:", event.reason);
-        showStructuredError({
-          message: "操作失败",
-          details: event.reason?.message || String(event.reason),
-          suggestion: "请重试此操作",
-        });
+        showStructuredError(
+          {
+            message: "操作失败",
+            details: event.reason?.message || String(event.reason),
+            suggestion: "请重试此操作",
+          },
+          "知道了"
+        );
         event.preventDefault();
       });
 

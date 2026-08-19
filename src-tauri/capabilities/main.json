@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-windows",
+  "description": "主窗（picker）与插件管理窗的插件能力面。notification:default 授权 tauri-plugin-notification 的 init-iife.js 注入脚本——它在每个窗口加载时无条件调用 plugin:notification|is_permission_granted 同步 window.Notification.permission；无此授权时该调用被 ACL 拒绝，悬空 Promise 拒绝泄漏为全局 unhandledrejection，被 picker 错误横幅误报为「操作失败」。dialog:default 同理预防：dialog 插件覆写 window.alert/window.confirm 为 plugin:dialog|message|confirm 调用，页面一旦使用即触发同类 ACL 拒绝。",
+  "windows": ["main", "plugin-manager"],
+  "permissions": [
+    "notification:default",
+    "dialog:default"
+  ]
+}
