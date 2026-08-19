@@ -559,10 +559,13 @@
         }
       }
 
+      let pickingDir = false;
       async function installFromDir() {
+        if (pickingDir) return; // 对话框打开期间防重入（避免叠加原生面板）
+        pickingDir = true;
         showErr("");
         try {
-          // 复用 picker 的原生目录选择对话框（Rust 侧 blocking_pick_folder）
+          // 复用 picker 的原生目录选择对话框（Rust 侧回调式 pick_folder）
           const picked = await invoke("cmd_pick_project_dialog");
           if (!picked) return;
           const meta = await invoke("install_plugin", { path: picked });
@@ -580,6 +583,8 @@
           alertInstalled(meta);
         } catch (e) {
           showErr("安装失败：" + String(e));
+        } finally {
+          pickingDir = false;
         }
       }
 

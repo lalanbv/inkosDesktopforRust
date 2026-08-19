@@ -321,7 +321,10 @@
           const state = await invoke("cmd_get_launch_state");
           if (state.needs_project) {
             await renderRecents(state.recents || []);
+            let picking = false;
             document.getElementById("pick").addEventListener("click", async () => {
+              if (picking) return; // 对话框打开期间防重入（避免叠加原生面板）
+              picking = true;
               showErr("");
               document.querySelectorAll(".err-banner").forEach((el) => el.remove());
 
@@ -333,6 +336,8 @@
               } catch (e) {
                 console.error("选择文件夹失败:", e);
                 showStructuredError(e);
+              } finally {
+                picking = false;
               }
             });
 

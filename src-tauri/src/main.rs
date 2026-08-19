@@ -630,15 +630,30 @@ fn cmd_get_launch_state(
 }
 
 /// 原生目录选择对话框（Rust 侧 DialogExt，不经 webview ACL）。返回选中目录或 None。
+///
+/// 必须是 async 命令且禁用 blocking API：同步命令经 IPC 在主线程上执行，
+/// `blocking_pick_folder` 的 recv() 会 park 主线程，而对话框完成回调恰恰派发回
+/// 主队列——互等死锁（0.1.0 实测：对话框一关即卡死，hang report 主线程栈钉在
+/// recv）。这里改为回调桥 oneshot：命令体跑在 async runtime，主线程空出来转
+/// 对话框事件循环，取消/选中均正常返回。
 #[tauri::command]
-fn cmd_pick_project_dialog(app_handle: tauri::AppHandle) -> Option<String> {
-    let picked = app_handle
+async fn cmd_pick_project_dialog(
+    app_handle: tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle
         .dialog()
         .file()
         .set_title("选择 inkos 项目目录")
-        .blocking_pick_folder();
+        .pick_folder(move |picked| {
+            // 回调在主线程派发：只 send，不做任何重活。
+            let _ = tx.send(picked);
+        });
+    let picked = rx
+        .await
+        .map_err(|e| format!("目录选择对话框未返回结果: {e}"))?;
     // FilePath::as_path() 对本地 Path 变体返回 Some（远程 Url 变体返回 None）。
-    picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()))
+    Ok(picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned())))
 }
 
 /// 打开插件管理窗口（独立窗口加载 settings.html）。
