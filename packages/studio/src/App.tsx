@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
@@ -34,7 +34,13 @@ import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon, Monitor, Search } from "lucide-react";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { CommandPalette } from "./components/CommandPalette";
+import { HotkeyCheatSheet } from "./components/HotkeyCheatSheet";
+import { QuickOpenPalette } from "./components/QuickOpenPalette";
+import type { QuickOpenSession } from "./lib/quick-open";
+import { buildActionCommands, buildNavigationCommands } from "./lib/commands";
 import type { CommandContext } from "./lib/commands";
+import { useGlobalHotkeys } from "./hooks/use-global-hotkeys";
+import type { HotkeyDef } from "./hooks/use-global-hotkeys";
 import { deriveBreadcrumb } from "./lib/breadcrumb";
 import { deriveHeaderInsetClass, isMacPlatformAgent, isTauriRuntime } from "./lib/titlebar";
 import { useRecentsStore } from "./store/recents";
@@ -48,6 +54,13 @@ const isMacPlatform =
 // P2-1 标题栏融合：仅 macOS Tauri 壳内为交通灯预留顶栏左侧缩进
 const isTauriDesktop = isTauriRuntime(typeof window !== "undefined" ? window : undefined);
 const headerInsetClass = deriveHeaderInsetClass(isMacPlatform, isTauriDesktop);
+
+/** P2-4 快捷键注册表（单一事实源）：组合 → 命令。速查页（P2-6）由此生成。 */
+const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
+  { combo: "mod+k", commandId: "app.palette.toggle" },
+  { combo: "mod+p", commandId: "app.quickopen.toggle" },
+  { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
+];
 
 export function deriveActiveBookId(route: HashRoute): string | undefined {
   if ("bookId" in route) return route.bookId;
@@ -78,8 +91,26 @@ export function App() {
   const pushRecent = useRecentsStore((state) => state.pushRecent);
   const setInput = useChatStore((state) => state.setInput);
   const createDraftSession = useChatStore((state) => state.createDraftSession);
+  // 快速打开（P2-5）的会话索引：有标题的会话才可跳转
+  const chatSessionsMap = useChatStore((state) => state.sessions);
+  const sessionIdsByBook = useChatStore((state) => state.sessionIdsByBook);
   // 书名同源数据：面包屑与「最近访问」标签共用（P3 活动栏重组时收敛为单一 store）。
   const { data: booksData } = useApi<{ books: ReadonlyArray<{ id: string; title: string }> }>("/books");
+
+  // 快速打开的会话条目：sessionIdsByBook 的 "__null__" 键 = 项目级会话（跳 chat 页）。
+  const quickOpenSessions = useMemo<QuickOpenSession[]>(() => {
+    const entries: QuickOpenSession[] = [];
+    for (const [key, ids] of Object.entries(sessionIdsByBook ?? {})) {
+      const bookId = key === "__null__" ? null : key;
+      for (const sessionId of ids ?? []) {
+        const session = chatSessionsMap[sessionId];
+        if (session?.title) {
+          entries.push({ sessionId, title: session.title, bookId });
+        }
+      }
+    }
+    return entries;
+  }, [chatSessionsMap, sessionIdsByBook]);
 
   const isDark = theme === "dark";
 
@@ -97,17 +128,33 @@ export function App() {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
 
-  // 命令面板开关：⌘K（macOS）/ Ctrl+K（其它）。P2 迁入统一快捷键分发器。
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
+  // 全局快捷键分发器（P2-4）：单一 keydown → 归一组合 → 注册表分发。
+  // ⌘K 自 P1-5 的临时 keydown 迁入；⌘/ 打开速查（P2-6）。
+  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  useGlobalHotkeys({
+    defs: HOTKEY_DEFS,
+    runCommand: (commandId) => {
+      if (commandId === "app.palette.toggle") {
         setPaletteOpen((open) => !open);
+        return;
       }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+      if (commandId === "app.quickopen.toggle") {
+        setPaletteOpen(false);
+        setCheatSheetOpen(false);
+        setQuickOpenOpen((open) => !open);
+        return;
+      }
+      if (commandId === "app.cheatsheet.toggle") {
+        setPaletteOpen(false);
+        setCheatSheetOpen((open) => !open);
+        return;
+      }
+      const entry = [...buildNavigationCommands(), ...buildActionCommands()]
+        .find((item) => item.id === commandId);
+      entry?.run(commandCtx);
+    },
+  });
 
   useEffect(() => {
     if (project) {
@@ -503,6 +550,24 @@ export function App() {
         onOpenChange={setPaletteOpen}
         ctx={commandCtx}
         lang={currentLang}
+      />
+
+      {/* P2-6 快捷键速查（⌘/）：与快捷键注册表同源生成 */}
+      <HotkeyCheatSheet
+        open={cheatSheetOpen}
+        onOpenChange={setCheatSheetOpen}
+        defs={HOTKEY_DEFS}
+        lang={currentLang}
+        isMac={isMacPlatform}
+      />
+
+      {/* P2-5 快速打开（⌘P）：书/章节/影游/会话 内容层直达 */}
+      <QuickOpenPalette
+        open={quickOpenOpen}
+        onOpenChange={setQuickOpenOpen}
+        books={booksData?.books ?? []}
+        sessions={quickOpenSessions}
+        onNavigate={setRouteTracked}
       />
     </div>
   );
