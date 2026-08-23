@@ -36,6 +36,7 @@ import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { CommandPalette } from "./components/CommandPalette";
 import type { CommandContext } from "./lib/commands";
 import { deriveBreadcrumb } from "./lib/breadcrumb";
+import { deriveHeaderInsetClass, isMacPlatformAgent, isTauriRuntime } from "./lib/titlebar";
 import { useRecentsStore } from "./store/recents";
 import { useChatStore } from "./store/chat";
 import { setProjectChatSessionId } from "./pages/chat-page-state";
@@ -43,7 +44,10 @@ import { setProjectChatSessionId } from "./pages/chat-page-state";
 export type { HashRoute as Route } from "./hooks/use-hash-route";
 
 const isMacPlatform =
-  typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+  typeof navigator !== "undefined" && isMacPlatformAgent(navigator.platform);
+// P2-1 标题栏融合：仅 macOS Tauri 壳内为交通灯预留顶栏左侧缩进
+const isTauriDesktop = isTauriRuntime(typeof window !== "undefined" ? window : undefined);
+const headerInsetClass = deriveHeaderInsetClass(isMacPlatform, isTauriDesktop);
 
 export function deriveActiveBookId(route: HashRoute): string | undefined {
   if ("bookId" in route) return route.bookId;
@@ -256,11 +260,17 @@ export function App() {
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
         {/* Header Strip — 三段化（P1-7）：左面包屑 / 中命令面板入口 / 右语言与主题 */}
-        {/* P2: 融合标题栏时此 header 根节点将加 data-tauri-drag-region（P2-1）。 */}
-        <header className="h-14 shrink-0 flex items-center justify-between gap-4 px-8 border-b border-border/40">
+        {/* P2-1 融合标题栏：header 及三段容器标注拖拽区；Tauri 拖拽脚本只认
+            mousedown 目标元素自身的属性，按钮/输入等子元素不带属性即天然可点，
+            双击标题栏最大化由系统语义处理。 */}
+        <header
+          data-tauri-drag-region
+          className={`h-14 shrink-0 flex items-center justify-between gap-4 ${headerInsetClass} pr-8 border-b border-border/40`}
+        >
           <nav
             aria-label={tr("面包屑", "Breadcrumb")}
             data-testid="breadcrumb"
+            data-tauri-drag-region
             className="flex min-w-0 items-center gap-1.5 text-[17px]"
           >
             {crumbs.map((crumb, index) => {
@@ -286,7 +296,7 @@ export function App() {
             })}
           </nav>
 
-          <div className="flex min-w-0 flex-1 justify-center px-2">
+          <div data-tauri-drag-region className="flex min-w-0 flex-1 justify-center px-2">
             <button
               type="button"
               data-testid="command-palette-trigger"
@@ -301,7 +311,7 @@ export function App() {
             </button>
           </div>
 
-          <div className="flex shrink-0 items-center gap-3">
+          <div data-tauri-drag-region className="flex shrink-0 items-center gap-3">
             <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
               <button
                 onClick={async () => {

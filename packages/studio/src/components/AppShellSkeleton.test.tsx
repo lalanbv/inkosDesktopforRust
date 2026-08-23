@@ -33,4 +33,11 @@ describe("AppShellSkeleton", () => {
     expect(html).toContain("chat-icon-glow");
     expect(html).not.toContain("animate-spin");
   });
+
+  it("marks the header as a drag region with the default (non-Tauri) inset", () => {
+    // node 测试环境非 Tauri 壳：留白走 pl-8 分支；拖拽区属性始终存在（浏览器下惰性）
+    expect(html).toContain('data-tauri-drag-region');
+    expect(html).toContain("pl-8");
+    expect(html).not.toContain("pl-[78px]");
+  });
 });

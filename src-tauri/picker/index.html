@@ -63,6 +63,11 @@
     </style>
   </head>
   <body>
+    <!-- P2-1：macOS Overlay 标题栏下系统标题栏不再存在，此全宽顶条是 picker
+         阶段唯一的窗口拖拽区（双击最大化由 Tauri 拖拽脚本内建）。内容居中，
+         顶条与控件无重叠；浏览器/Win/Linux 下属性无效，不可见不影响。 -->
+    <div data-tauri-drag-region aria-hidden="true"
+         style="position:fixed;top:0;left:0;right:0;height:38px;z-index:1;"></div>
     <main>
       <!-- 启动中（auto 复用 或 选择后） -->
       <section id="launching" class="hidden">

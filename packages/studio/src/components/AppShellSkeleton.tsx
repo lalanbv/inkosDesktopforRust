@@ -1,6 +1,12 @@
 import { InkosLogo } from "@/components/InkosLogo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SkeletonCards, SkeletonRows } from "@/components/skeletons";
+import { deriveHeaderInsetClass, isMacPlatformAgent, isTauriRuntime } from "@/lib/titlebar";
+
+const isMacPlatform =
+  typeof navigator !== "undefined" && isMacPlatformAgent(navigator.platform);
+const isTauriDesktop = isTauriRuntime(typeof window !== "undefined" ? window : undefined);
+const headerInsetClass = deriveHeaderInsetClass(isMacPlatform, isTauriDesktop);
 
 /**
  * startupGate=loading 时的整壳骨架：顶栏 + 侧栏 + 主区三段与就绪后的
@@ -32,7 +38,13 @@ export function AppShellSkeleton() {
 
       {/* 主列：顶栏 + 内容区 */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header data-slot="skeleton-header" className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-border/40">
+        {/* P2-1：与就绪后的 header 一致——融合标题栏拖拽区 + 交通灯留白，
+            启动骨架与真实布局左缘对齐，就绪切换无跳变 */}
+        <header
+          data-slot="skeleton-header"
+          data-tauri-drag-region
+          className={`h-14 shrink-0 flex items-center justify-between ${headerInsetClass} pr-8 border-b border-border/40`}
+        >
           <Skeleton className="h-8 w-40 rounded-lg" />
           <div className="flex items-center gap-3">
             <Skeleton className="h-7 w-16 rounded-lg" />
