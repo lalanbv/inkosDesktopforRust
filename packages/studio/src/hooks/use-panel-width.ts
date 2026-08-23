@@ -10,38 +10,69 @@ export const MIN_PANEL_WIDTH = 180;
 export const MAX_PANEL_WIDTH = 400;
 export const DEFAULT_PANEL_WIDTH = 260;
 
-/** 纯函数:宽度钳制与非法值回退。 */
-export function clampPanelWidth(px: number): number {
-  if (!Number.isFinite(px)) return DEFAULT_PANEL_WIDTH;
-  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(px)));
+/** P3-4 起支持自定义边界/存储键（右侧 dock 280~700 独立记忆）与拖拽方向。 */
+export interface PanelWidthOptions {
+  min?: number;
+  max?: number;
+  defaultWidth?: number;
+  storageKey?: string;
+  /** 拖拽分隔条在面板哪一侧：left=面板贴视口左缘(默认)，right=贴右缘(dock)。 */
+  side?: "left" | "right";
 }
 
-export function readStoredPanelWidth(storage: Pick<Storage, "getItem"> | null | undefined): number {
-  const raw = Number(storage?.getItem(PANEL_WIDTH_STORAGE_KEY));
-  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_PANEL_WIDTH;
+/** 纯函数:宽度钳制与非法值回退（边界可覆写，默认左侧面板 180~400）。 */
+export function clampPanelWidth(
+  px: number,
+  min: number = MIN_PANEL_WIDTH,
+  max: number = MAX_PANEL_WIDTH,
+  fallback: number = DEFAULT_PANEL_WIDTH,
+): number {
+  if (!Number.isFinite(px)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(px)));
+}
+
+export function readStoredPanelWidth(
+  storage: Pick<Storage, "getItem"> | null | undefined,
+  storageKey: string = PANEL_WIDTH_STORAGE_KEY,
+  min: number = MIN_PANEL_WIDTH,
+  max: number = MAX_PANEL_WIDTH,
+  fallback: number = DEFAULT_PANEL_WIDTH,
+): number {
+  const raw = Number(storage?.getItem(storageKey));
+  if (!Number.isFinite(raw) || raw <= 0) return fallback;
   // 存量值也过一遍 clamp,保证范围约束向前兼容
-  return clampPanelWidth(raw);
+  return clampPanelWidth(raw, min, max, fallback);
 }
 
-export function usePanelWidth() {
+export function usePanelWidth(options: PanelWidthOptions = {}) {
+  const { min, max, defaultWidth, storageKey, side = "left" } = options;
   const [width, setWidth] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_PANEL_WIDTH;
+    const fallback = defaultWidth ?? DEFAULT_PANEL_WIDTH;
+    if (typeof window === "undefined") return fallback;
     try {
-      return readStoredPanelWidth(window.localStorage);
+      return readStoredPanelWidth(
+        window.localStorage,
+        storageKey ?? PANEL_WIDTH_STORAGE_KEY,
+        min ?? MIN_PANEL_WIDTH,
+        max ?? MAX_PANEL_WIDTH,
+        fallback,
+      );
     } catch {
-      return DEFAULT_PANEL_WIDTH;
+      return fallback;
     }
   });
   const [hidden, setHidden] = useState(false);
   const draggingRef = useRef(false);
 
+  const storageKeyRef = storageKey ?? PANEL_WIDTH_STORAGE_KEY;
+  const bounds = { min: min ?? MIN_PANEL_WIDTH, max: max ?? MAX_PANEL_WIDTH, fallback: defaultWidth ?? DEFAULT_PANEL_WIDTH };
   const persist = useCallback((next: number) => {
     try {
-      window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(next));
+      window.localStorage.setItem(storageKeyRef, String(next));
     } catch {
       // 私密模式等:会话内生效即可
     }
-  }, []);
+  }, [storageKeyRef]);
 
   // 分隔条 pointer 流:down 捕获 → move 钳制更新 → up 落盘
   const beginResize = useCallback((event: React.PointerEvent) => {
@@ -52,9 +83,10 @@ export function usePanelWidth() {
 
   const handleResizeMove = useCallback((event: React.PointerEvent) => {
     if (!draggingRef.current) return;
-    // 面板从视口左侧起算:指针 x 即新宽度
-    setWidth(clampPanelWidth(event.clientX));
-  }, []);
+    // left: 面板贴视口左缘,指针 x 即新宽度;right: 面板贴右缘,取右余量
+    const raw = side === "right" ? window.innerWidth - event.clientX : event.clientX;
+    setWidth(clampPanelWidth(raw, bounds.min, bounds.max, bounds.fallback));
+  }, [side, bounds.min, bounds.max, bounds.fallback]);
 
   const endResize = useCallback((event: React.PointerEvent) => {
     if (!draggingRef.current) return;
@@ -67,9 +99,9 @@ export function usePanelWidth() {
   }, [persist]);
 
   const resetWidth = useCallback(() => {
-    setWidth(DEFAULT_PANEL_WIDTH);
-    persist(DEFAULT_PANEL_WIDTH);
-  }, [persist]);
+    setWidth(bounds.fallback);
+    persist(bounds.fallback);
+  }, [persist, bounds.fallback]);
 
   // 兜底:指针意外丢失(切窗等)时结束拖拽并落盘
   useEffect(() => {

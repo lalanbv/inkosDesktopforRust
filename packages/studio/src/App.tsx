@@ -9,6 +9,9 @@ import { sectionForRoute } from "./lib/nav-sections";
 import { usePreferencesStore } from "./store/preferences";
 import { useTabsStore } from "./store/tabs";
 import { TabStrip } from "./components/TabStrip";
+import { ContextDock } from "./components/ContextDock";
+import { BottomPanel } from "./components/BottomPanel";
+import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
@@ -67,6 +70,8 @@ const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+k", commandId: "app.palette.toggle" },
   { combo: "mod+p", commandId: "app.quickopen.toggle" },
   { combo: "mod+b", commandId: "app.sidepanel.toggle" },
+  { combo: "mod+shift+d", commandId: "app.dock.toggle" },
+  { combo: "mod+j", commandId: "app.bottom.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
   ...Array.from({ length: 9 }, (_, i) => ({
     combo: `mod+${i + 1}`,
@@ -190,6 +195,15 @@ export function App() {
       if (navLayoutV2) setSidePanelVisible((visible) => !visible);
       return;
     }
+    // Cmd+Shift+D 右侧 dock / Cmd+J 底部面板（P3-4，按页记忆）
+    if (target === "app.dock.toggle") {
+      dockVisibility.toggle();
+      return;
+    }
+    if (target === "app.bottom.toggle") {
+      bottomVisibility.toggle();
+      return;
+    }
     // Cmd+1..9 切标签（P3-3）
     const tabIndexMatch = /^app\.tab\.([1-9])$/.exec(target);
     if (tabIndexMatch) {
@@ -297,6 +311,9 @@ export function App() {
   const activeSection = storedActiveNavSection ?? sectionForRoute(view);
   // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）
   const [sidePanelVisible, setSidePanelVisible] = useState(true);
+  // P3-4：dock / 底部面板开合按页记忆（dock 沿袭书籍页默认可见，底部默认收起）
+  const dockVisibility = usePerPageVisibility("inkos:studio:dock-visibility", view.page, true);
+  const bottomVisibility = usePerPageVisibility("inkos:studio:bottom-panel-visibility", view.page, false);
 
   // 用户导航写入「最近访问」（命令面板空查询首屏）。SSE 系统跳转
   // （useSessionEvents 直用 setRoute）不属于用户意图，不记录。
@@ -563,7 +580,15 @@ export function App() {
                 t={t}
                 sse={sse}
               />
-              <BookSidebar bookId={view.bookId} theme={theme} t={t} sse={sse} />
+              {/* P3-4：BookSidebar 泛化为 ContextDock（注册表/宽记忆/按页开合） */}
+              <ContextDock
+                bookId={view.bookId}
+                theme={theme}
+                t={t}
+                sse={sse}
+                visible={dockVisibility.visible}
+                onClose={() => dockVisibility.setVisible(false)}
+              />
               <BookSidebarToggle bookId={view.bookId} theme={theme} t={t} sse={sse} />
             </div>
           )}
@@ -675,6 +700,12 @@ export function App() {
             </Suspense>
           )}
         </main>
+
+        {/* P3-4 底部面板（Cmd+J）：任务流/日志，按页记忆开合 */}
+        <BottomPanel
+          visible={bottomVisibility.visible}
+          onClose={() => bottomVisibility.setVisible(false)}
+        />
       </div>
 
       {/* 全局命令面板（⌘K / Ctrl+K），P1-5/6 */}

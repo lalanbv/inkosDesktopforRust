@@ -81,7 +81,7 @@ function renderTruthBody(
   );
 }
 
-function ArtifactView({ bookId }: { readonly bookId: string }) {
+export function ArtifactView({ bookId }: { readonly bookId: string }) {
   const artifactFile = useChatStore((s) => s.artifactFile);
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
@@ -211,7 +211,9 @@ function ArtifactView({ bookId }: { readonly bookId: string }) {
   );
 }
 
-function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
+// P3-4：内部视图导出给 ContextDock（面板注册表复用）；BookSidebar 本体保留
+// 为旧轨（P4 走查后随双轨清理一并删除）。
+export function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
 
   // Show writing indicator only during pipeline operations (write/audit/revise)

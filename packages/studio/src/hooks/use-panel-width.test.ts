@@ -33,3 +33,13 @@ describe("readStoredPanelWidth", () => {
     expect(readStoredPanelWidth({ getItem: () => "5000" })).toBe(MAX_PANEL_WIDTH);
   });
 });
+
+describe("custom bounds and storage keys (P3-4 dock)", () => {
+  it("clamps and restores with overridden ranges", () => {
+    expect(clampPanelWidth(100, 280, 700, 512)).toBe(280);
+    expect(clampPanelWidth(9999, 280, 700, 512)).toBe(700);
+    expect(clampPanelWidth(Number.NaN, 280, 700, 512)).toBe(512);
+    expect(readStoredPanelWidth({ getItem: () => "650" }, "inkos:studio:dock-width", 280, 700, 512)).toBe(650);
+    expect(readStoredPanelWidth({ getItem: () => null }, "inkos:studio:dock-width", 280, 700, 512)).toBe(512);
+  });
+});
