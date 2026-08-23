@@ -62,4 +62,65 @@ describe("Sidebar bookshelf skeleton", () => {
     expect(html).not.toContain('data-loading="skeleton"');
     expect(html).toContain("dash.noBooks");
   });
+
+  it("zone=create renders only creation sections (P3-1 按区渲染)", () => {
+    useApiMock.mockImplementation((path: string) => {
+      if (path === "/books" || path === "/interactive-films") {
+        return { data: null, error: null, loading: true, refetch: vi.fn(), mutate: vi.fn() };
+      }
+      return { data: null, error: null, loading: false, refetch: vi.fn(), mutate: vi.fn() };
+    });
+
+    const html = renderToString(
+      <Sidebar nav={nav as never} activePage="dashboard" sse={sse} t={t} zone="create" />,
+    );
+    expect(html).toContain("nav.createSection");
+    expect(html).toContain("nav.myBooks");
+    expect(html).toContain("nav.history");
+    // 其它三区不出现
+    expect(html).not.toContain("nav.tools");
+    expect(html).not.toContain("nav.system");
+    expect(html).not.toContain("film-projects-section");
+  });
+
+  it("zone=tools merges genres into the tools group and hides manage items", () => {
+    useApiMock.mockImplementation((path: string) => {
+      if (path === "/books" || path === "/interactive-films") {
+        return { data: null, error: null, loading: false, refetch: vi.fn(), mutate: vi.fn() };
+      }
+      return { data: null, error: null, loading: false, refetch: vi.fn(), mutate: vi.fn() };
+    });
+
+    const html = renderToString(
+      <Sidebar nav={nav as never} activePage="genres" sse={sse} t={t} zone="tools" />,
+    );
+    expect(html).toContain("nav.tools");
+    expect(html).toContain("create.genre");
+    expect(html).not.toContain("nav.system");
+    expect(html).not.toContain("nav.config");
+    expect(html).not.toContain("nav.createSection");
+  });
+
+  it("zone=manage shows system items without genres, zone=film shows film projects", () => {
+    useApiMock.mockImplementation((path: string) => {
+      if (path === "/books" || path === "/interactive-films") {
+        return { data: null, error: null, loading: false, refetch: vi.fn(), mutate: vi.fn() };
+      }
+      return { data: null, error: null, loading: false, refetch: vi.fn(), mutate: vi.fn() };
+    });
+
+    const manageHtml = renderToString(
+      <Sidebar nav={nav as never} activePage="services" sse={sse} t={t} zone="manage" />,
+    );
+    expect(manageHtml).toContain("nav.system");
+    expect(manageHtml).toContain("nav.config");
+    expect(manageHtml).not.toContain("create.genre");
+    expect(manageHtml).not.toContain("nav.tools");
+
+    const filmHtml = renderToString(
+      <Sidebar nav={nav as never} activePage="film-studio:p1" sse={sse} t={t} zone="film" />,
+    );
+    expect(filmHtml).toContain("film-projects-section");
+    expect(filmHtml).not.toContain("nav.createSection");
+  });
 });

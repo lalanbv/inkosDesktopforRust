@@ -53,6 +53,8 @@ import {
 import { InkosLogo } from "./InkosLogo";
 import { SkeletonRows, useDelayedVisible } from "./skeletons";
 import { EmptyState } from "./EmptyState";
+import type { Nav } from "../lib/nav";
+import type { NavSectionId } from "../lib/nav-sections";
 
 // 历史记录里的会话混装多种类型（chat / short / play / book-create），用图标区分。
 function SessionKindIcon({ kind, className }: { readonly kind?: string; readonly className?: string }) {
@@ -75,30 +77,19 @@ interface BookSummary {
   readonly chaptersWritten: number;
 }
 
-interface Nav {
-  toDashboard: () => void;
-  toChat: () => void;
-  toBook: (id: string) => void;
-  toBookCreate: () => void;
-  toServices: () => void;
-  toProjectSettings: () => void;
-  toDaemon: () => void;
-  toLogs: () => void;
-  toGenres: () => void;
-  toStyle: () => void;
-  toTranslation: () => void;
-  toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => void;
-  toRadar: () => void;
-  toDoctor: () => void;
-  toFilmStudio: (id: string) => void;
-}
-
-export function Sidebar({ nav, activePage, sse, t }: {
+export function Sidebar({ nav, activePage, sse, t, zone }: {
   nav: Nav;
   activePage: string;
   sse: { messages: ReadonlyArray<SSEMessage> };
   t: TFunction;
+  /**
+   * P3-1 四区过滤：传入时仅渲染该区内容（活动栏布局经 SidePanel 复用）。
+   * 缺省 = V1 整栏。双轨期两种形态同一组件，零逻辑重复；题材项在
+   * V1 归「系统」组，zone=tools 时归「工具」组（nav-sections 映射）。
+   */
+  zone?: NavSectionId;
 }) {
+  const showZone = (section: NavSectionId) => !zone || zone === section;
   const { data, error: booksError, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const { data: filmsData, error: filmsError, refetch: refetchFilms } = useApi<{ films: ReadonlyArray<{ projectId: string; title: string }> }>("/interactive-films");
   const { data: daemon, refetch: refetchDaemon } = useApi<{ running: boolean }>("/daemon");
@@ -310,6 +301,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
       {/* Main Navigation */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-6">
         {/* InkOS Create Section — always visible, two columns. */}
+        {showZone("create") && (
         <div>
           <div className="px-3 mb-2.5">
             <span className="text-[16px] leading-6 uppercase tracking-[0.1em] text-muted-foreground font-bold">
@@ -331,8 +323,10 @@ export function Sidebar({ nav, activePage, sse, t }: {
             <CreateItem icon={<Gamepad2 size={16} />} label={t("nav.createFree")} onClick={() => launchProjectMode("play", "open")} />
           </div>
         </div>
+        )}
 
         {/* My Bookshelf Section */}
+        {showZone("create") && (
         <div>
           <SectionHeader label={t("nav.myBooks")} expanded={myBooksExpanded} onToggle={() => setMyBooksExpanded((v) => !v)} />
           <Collapse open={myBooksExpanded}>
@@ -455,8 +449,10 @@ export function Sidebar({ nav, activePage, sse, t }: {
           </div>
           </Collapse>
         </div>
+        )}
 
         {/* 互动影游 Section */}
+        {showZone("film") && (
         <div data-testid="film-projects-section">
           <SectionHeader label={t("nav.createInteractiveFilm")} expanded={filmsExpanded} onToggle={() => setFilmsExpanded((v) => !v)} />
           <Collapse open={filmsExpanded}>
@@ -491,8 +487,10 @@ export function Sidebar({ nav, activePage, sse, t }: {
             </div>
           </Collapse>
         </div>
+        )}
 
         {/* Sessions Section */}
+        {showZone("create") && (
         <div>
           <SectionHeader
             label={t("nav.history")}
@@ -592,8 +590,10 @@ export function Sidebar({ nav, activePage, sse, t }: {
             </div>
           </div>
         </div>
+        )}
 
-        {/* System Section */}
+        {/* System Section（zone 过滤下归「管理」区；题材项按映射归「工具」区） */}
+        {showZone("manage") && (
         <div>
           <div className="px-3 mb-3">
             <span className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
@@ -601,12 +601,14 @@ export function Sidebar({ nav, activePage, sse, t }: {
             </span>
           </div>
           <div className="space-y-1">
+            {!zone && (
             <SidebarItem
               label={t("create.genre")}
               icon={<Boxes size={16} />}
               active={activePage === "genres"}
               onClick={nav.toGenres}
             />
+            )}
             <SidebarItem
               label={t("nav.config")}
               icon={<Settings size={16} />}
@@ -635,8 +637,10 @@ export function Sidebar({ nav, activePage, sse, t }: {
             />
           </div>
         </div>
+        )}
 
         {/* Tools Section */}
+        {showZone("tools") && (
         <div>
           <div className="px-3 mb-3">
             <span className="text-[11px] uppercase tracking-widest text-muted-foreground font-bold">
@@ -644,6 +648,14 @@ export function Sidebar({ nav, activePage, sse, t }: {
             </span>
           </div>
           <div className="space-y-1">
+            {zone === "tools" && (
+            <SidebarItem
+              label={t("create.genre")}
+              icon={<Boxes size={16} />}
+              active={activePage === "genres"}
+              onClick={nav.toGenres}
+            />
+            )}
             <SidebarItem
               label={t("nav.translation")}
               icon={<Languages size={16} />}
@@ -676,6 +688,7 @@ export function Sidebar({ nav, activePage, sse, t }: {
             />
           </div>
         </div>
+        )}
       </div>
 
       {/* Footer / Status Area — only show when agent is online */}

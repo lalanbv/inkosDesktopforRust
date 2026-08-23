@@ -2,6 +2,11 @@ import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
+import { ActivityBar } from "./components/ActivityBar";
+import { SidePanel } from "./components/SidePanel";
+import { createNav } from "./lib/nav";
+import { sectionForRoute } from "./lib/nav-sections";
+import { usePreferencesStore } from "./store/preferences";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
@@ -219,6 +224,12 @@ export function App() {
 
   useSessionEvents(sse, route, setRoute);
 
+  // P3-1 活动栏布局：双轨开关 + 选中区（用户手动选择持久化，否则跟随路由）
+  const navLayoutV2 = usePreferencesStore((state) => state.navLayoutV2);
+  const storedActiveNavSection = usePreferencesStore((state) => state.activeNavSection);
+  const setActiveNavSection = usePreferencesStore((state) => state.setActiveNavSection);
+  const activeSection = storedActiveNavSection ?? sectionForRoute(route);
+
   // 用户导航写入「最近访问」（命令面板空查询首屏）。SSE 系统跳转
   // （useSessionEvents 直用 setRoute）不属于用户意图，不记录。
   const setRouteTracked = (next: HashRoute) => {
@@ -239,33 +250,8 @@ export function App() {
     setRoute(next);
   };
 
-  const nav = {
-    toDashboard: () => setRouteTracked({ page: "dashboard" }),
-    toChat: () => setRouteTracked({ page: "chat" }),
-    toBook: (bookId: string) => setRouteTracked({ page: "book", bookId }),
-    toBookSettings: (bookId: string) => setRouteTracked({ page: "book-settings", bookId }),
-    toBookCreate: () => setRouteTracked({ page: "book-create" }),
-    toChapter: (bookId: string, chapterNumber: number) =>
-      setRouteTracked({ page: "chapter", bookId, chapterNumber }),
-    toAnalytics: (bookId: string) => setRouteTracked({ page: "analytics", bookId }),
-    toServices: () => setRouteTracked({ page: "services" }),
-    toProjectSettings: () => setRouteTracked({ page: "project-settings" }),
-    toServiceDetail: (id: string) => setRouteTracked({ page: "service-detail", serviceId: id }),
-    toTruth: (bookId: string) => setRouteTracked({ page: "truth", bookId }),
-    toDaemon: () => setRouteTracked({ page: "daemon" }),
-    toLogs: () => setRouteTracked({ page: "logs" }),
-    toGenres: () => setRouteTracked({ page: "genres" }),
-    toStyle: () => setRouteTracked({ page: "style" }),
-    toTranslation: () => setRouteTracked({ page: "translation" }),
-    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRouteTracked({ page: "import", ...(tab ? { tab } : {}) }),
-    toRadar: () => setRouteTracked({ page: "radar" }),
-    toDoctor: () => setRouteTracked({ page: "doctor" }),
-    toPlay: (projectId: string) => setRouteTracked({ page: "play", projectId }),
-    toFilm: (projectId: string) => setRouteTracked({ page: "film", projectId }),
-    toFlow: (projectId: string) => setRouteTracked({ page: "flow", projectId }),
-    toFilmAuthor: (projectId: string) => setRouteTracked({ page: "film-author", projectId }),
-    toFilmStudio: (projectId: string) => setRouteTracked({ page: "film-studio", projectId }),
-  };
+  // P3-1：统一 Nav 工厂（消除 App/Sidebar 双份接口声明）；全部导航写最近访问
+  const nav = createNav(setRouteTracked);
 
   // 命令面板执行上下文：每次渲染重建，命令闭包不持有过期状态。
   // 创建类动作与 Sidebar 的 launchProjectMode/handleOpenBookCreate 等价
@@ -353,7 +339,22 @@ export function App() {
         />
       )}
       {/* Left Sidebar */}
-      <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
+      {/* P3-1 双轨导航布局：V2 = 活动栏(四区) + 按区渲染的侧面板；V1 = 整栏 Sidebar。
+          开关持久化在 preferences(navLayoutV2)，P4 走查后删旧轨。 */}
+      {navLayoutV2 ? (
+        <>
+          <ActivityBar
+            nav={nav}
+            activeSection={activeSection}
+            onSelectSection={setActiveNavSection}
+            t={t}
+            lang={currentLang}
+          />
+          <SidePanel nav={nav} activePage={activePage} sse={sse} t={t} zone={activeSection} />
+        </>
+      ) : (
+        <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
+      )}
 
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">

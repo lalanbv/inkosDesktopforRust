@@ -122,6 +122,7 @@ const strings = {
   "nav.agentOnline": { zh: "代理在线", en: "Agent Online" },
   "nav.agentOffline": { zh: "代理离线", en: "Agent Offline" },
   "nav.tools": { zh: "工具", en: "Tools" },
+  "nav.activityBar": { zh: "活动栏", en: "Activity bar" },
   "nav.history": { zh: "会话记录", en: "Sessions" },
   "nav.style": { zh: "文风", en: "Style" },
   "nav.translation": { zh: "翻译译介", en: "Translation" },
