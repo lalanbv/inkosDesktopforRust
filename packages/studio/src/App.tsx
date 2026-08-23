@@ -27,11 +27,11 @@ import { LanguageSelector } from "./pages/LanguageSelector";
 import { BookSidebar, BookSidebarToggle } from "./components/chat/BookSidebar";
 import { useSSE } from "./hooks/use-sse";
 import { useSessionEvents } from "./hooks/use-session-events";
-import { useTheme } from "./hooks/use-theme";
+import { useTheme, cycleThemeMode } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
 import { postApi, putApi, useApi } from "./hooks/use-api";
-import { Sun, Moon, Search } from "lucide-react";
+import { Sun, Moon, Monitor, Search } from "lucide-react";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { CommandPalette } from "./components/CommandPalette";
 import type { CommandContext } from "./lib/commands";
@@ -69,7 +69,7 @@ export function deriveStartupGate(input: {
 export function App() {
   const { route, setRoute } = useHashRoute();
   const sse = useSSE();
-  const { theme, setTheme } = useTheme();
+  const { theme, mode: themeMode, setThemeMode } = useTheme();
   const { t, lang: currentLang } = useI18n();
   const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
@@ -173,8 +173,7 @@ export function App() {
   // （P1 不动 Sidebar 本体，P3 活动栏重组时收敛为单一实现）。
   const commandCtx: CommandContext = {
     setRoute: setRouteTracked,
-    setTheme,
-    toggleTheme: () => setTheme(isDark ? "light" : "dark"),
+    setThemeMode,
     setProjectLanguage: (lang) => {
       void putApi("/project", { language: lang }).then(() => refetchProject());
     },
@@ -333,11 +332,14 @@ export function App() {
               </button>
             </div>
 
+            {/* P2-3 三态循环：light → dark → auto（跟随系统）→ light；图标随模式 */}
             <button
-              onClick={() => setTheme(isDark ? "light" : "dark")}
+              type="button"
+              aria-label={themeMode === "auto" ? tr("主题：跟随系统", "Theme: follow system") : isDark ? tr("主题：深色", "Theme: dark") : tr("主题：浅色", "Theme: light")}
+              onClick={() => setThemeMode(cycleThemeMode(themeMode, theme))}
               className="text-muted-foreground hover:text-foreground transition-colors"
             >
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
+              {themeMode === "auto" ? <Monitor size={18} /> : isDark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
           </div>
         </header>

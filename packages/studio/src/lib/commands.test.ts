@@ -17,8 +17,7 @@ function mockCtx(): { ctx: CommandContext; routes: unknown[]; calls: string[] } 
   const calls: string[] = [];
   const ctx: CommandContext = {
     setRoute: (route) => routes.push(route),
-    setTheme: (theme) => calls.push(`theme:${theme}`),
-    toggleTheme: () => calls.push("theme:toggle"),
+    setThemeMode: (mode) => calls.push(`theme:${mode}`),
     setProjectLanguage: (lang) => calls.push(`lang:${lang}`),
     refetchProject: () => calls.push("refresh"),
     openBookCreate: () => calls.push("bookCreate"),
@@ -76,6 +75,7 @@ describe("buildActionCommands", () => {
     actions.find((entry) => entry.id === "action.playGuided")!.run(ctx);
     actions.find((entry) => entry.id === "action.fanfic")!.run(ctx);
     actions.find((entry) => entry.id === "action.themeDark")!.run(ctx);
+    actions.find((entry) => entry.id === "action.themeAuto")!.run(ctx);
     actions.find((entry) => entry.id === "action.langEn")!.run(ctx);
     actions.find((entry) => entry.id === "action.projectRefresh")!.run(ctx);
     expect(calls).toEqual([
@@ -83,6 +83,7 @@ describe("buildActionCommands", () => {
       "launch:play:guided",
       "draft",
       "theme:dark",
+      "theme:auto",
       "lang:en",
       "refresh",
     ]);

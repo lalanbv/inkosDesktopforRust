@@ -6,6 +6,7 @@
   "permissions": [
     "notification:default",
     "dialog:default",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "window-state:default"
   ]
 }

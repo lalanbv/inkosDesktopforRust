@@ -14,6 +14,8 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-notification = "2"
 # M3b：项目目录选择对话框（Rust 侧 DialogExt，不经 webview ACL）。
 tauri-plugin-dialog = "2"
+# P2-2：窗口状态记忆（位置/尺寸/最大化，退出保存、启动恢复）。
+tauri-plugin-window-state = "2"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["blocking", "stream", "json"] }
 tokio-stream = "0.1"

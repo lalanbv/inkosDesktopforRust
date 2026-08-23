@@ -1,4 +1,5 @@
 import type { HashRoute } from "@/hooks/use-hash-route";
+import type { ThemeMode } from "@/hooks/use-theme";
 import { recentIdentity } from "@/store/recents";
 import type { RecentEntry } from "@/store/recents";
 
@@ -24,8 +25,8 @@ export type LaunchKind =
  */
 export interface CommandContext {
   setRoute: (route: HashRoute) => void;
-  setTheme: (theme: "light" | "dark") => void;
-  toggleTheme: () => void;
+  /** P2-3 三态主题：light / dark / auto（跟随系统）。 */
+  setThemeMode: (mode: ThemeMode) => void;
   setProjectLanguage: (lang: "zh" | "en") => void;
   refetchProject: () => void;
   /** 新建长篇小说（进入书籍创建对话流）。 */
@@ -127,12 +128,12 @@ export function buildActionCommands(): CommandEntry[] {
       (ctx) => ctx.createProjectChatDraft(), ["imitation", "仿写"]),
     action("action.translationSession", "翻译译介会话", "Translation Session", "languages",
       (ctx) => ctx.createProjectChatDraft(), ["translation", "翻译"]),
-    action("action.themeToggle", "切换明暗主题", "Toggle Theme", "moon",
-      (ctx) => ctx.toggleTheme(), ["theme", "主题", "dark", "light"]),
     action("action.themeLight", "切换到浅色主题", "Switch to Light Theme", "sun",
-      (ctx) => ctx.setTheme("light"), ["theme", "light", "浅色"]),
+      (ctx) => ctx.setThemeMode("light"), ["theme", "light", "浅色"]),
     action("action.themeDark", "切换到深色主题", "Switch to Dark Theme", "moon",
-      (ctx) => ctx.setTheme("dark"), ["theme", "dark", "深色"]),
+      (ctx) => ctx.setThemeMode("dark"), ["theme", "dark", "深色"]),
+    action("action.themeAuto", "主题跟随系统", "Follow System Theme", "monitor",
+      (ctx) => ctx.setThemeMode("auto"), ["theme", "auto", "跟随系统", "system"]),
     action("action.langZh", "界面语言：中文", "UI Language: Chinese", "globe",
       (ctx) => ctx.setProjectLanguage("zh"), ["language", "语言", "chinese"]),
     action("action.langEn", "界面语言：English", "UI Language: English", "globe",
