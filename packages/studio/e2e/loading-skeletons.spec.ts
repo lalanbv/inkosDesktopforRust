@@ -1,65 +1,83 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Route } from "@playwright/test";
 
 // P1-1/2/3/4 验收：三级加载体系（启动壳骨架 / 列表骨架 / 空态互斥）与首启
-// 语言选择 Dialog。全部用 page.route 在浏览器侧制造延迟与响应，不改动
-// 服务端与 test-project 数据。
+// 语言选择 Dialog。用 page.route + Promise 闸门控制响应时机（而非固定延时），
+// 消除断言与骨架窗口的时序竞态；不改动服务端与 test-project 数据。
 
 const PROJECT_READY = { language: "zh", languageExplicit: true };
 
+/** 挂起的响应：断言完成后调用 release() 放行。 */
+class GatedResponse {
+  private releaseFn: (() => void) | null = null;
+  private readonly gate: Promise<void>;
+
+  constructor() {
+    this.gate = new Promise((resolve) => {
+      this.releaseFn = resolve;
+    });
+  }
+
+  release() {
+    this.releaseFn?.();
+  }
+
+  async handle(route: Route, body: Record<string, unknown>) {
+    await this.gate;
+    await route.fulfill({ json: body });
+  }
+}
+
 test("startup renders the shell skeleton instead of a full-screen spinner", async ({ page }) => {
-  await page.route("**/api/v1/project", async (route) => {
-    // 3s：dev 模式首帧含 vite 冷转换，窗口太窄断言可能错过骨架帧
-    await page.waitForTimeout(3000);
-    await route.fulfill({ json: PROJECT_READY });
-  });
+  const project = new GatedResponse();
+  await page.route("**/api/v1/project", (route) => project.handle(route, PROJECT_READY));
 
   await page.goto("/#/");
 
-  // 启动门 loading：整壳骨架（顶栏+侧栏+主区），不得再出现整屏 spinner
+  // 启动门 loading：整壳骨架（顶栏+侧栏+主区），不得再出现整屏 spinner。
+  // /project 被闸门挂起，骨架态是确定性的，不受加载速度影响。
   const shell = page.locator('[data-loading="shell"]');
-  await expect(shell).toBeVisible();
+  await expect(shell).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body .animate-spin")).toHaveCount(0);
   await expect(shell.locator('[data-slot="skeleton-sidebar"]')).toBeVisible();
   await expect(shell.locator('[data-slot="skeleton-header"]')).toBeVisible();
   await expect(shell.locator('[data-slot="skeleton-main"]')).toBeVisible();
 
-  // 配置到达后骨架让位于真实布局
+  // 放行配置：骨架让位于真实布局
+  project.release();
   await expect(shell).toHaveCount(0, { timeout: 10_000 });
   await expect(page.locator("aside")).toBeVisible({ timeout: 10_000 });
 });
 
 test("sidebar shows row skeletons while books load, then flips to the empty state", async ({ page }) => {
   await page.route("**/api/v1/project", (route) => route.fulfill({ json: PROJECT_READY }));
-  await page.route("**/api/v1/books", async (route) => {
-    // 3s：骨架有 200ms 延迟出现逻辑，窗口太窄会让断言错过骨架帧
-    await page.waitForTimeout(3000);
-    await route.fulfill({ json: { books: [] } });
-  });
+  const books = new GatedResponse();
+  await page.route("**/api/v1/books", (route) => books.handle(route, { books: [] }));
 
   await page.goto("/#/");
 
-  // 未就绪：行骨架可见（>200ms 延迟出现），且不得误报空态
+  // 未就绪（闸门关闭）：行骨架可见，且不得误报空态
   const skeleton = page.locator('[data-loading="skeleton"]');
-  await expect(skeleton.first()).toBeVisible({ timeout: 10_000 });
+  await expect(skeleton.first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("还没有书")).toHaveCount(0);
 
-  // 就绪且空：骨架清空，空态出现（侧栏与仪表各一处）
+  // 就绪且空：骨架清空，空态出现
+  books.release();
   await expect(skeleton).toHaveCount(0, { timeout: 10_000 });
   await expect(page.getByText("还没有书").first()).toBeVisible({ timeout: 10_000 });
 });
 
 test("dashboard renders three card skeletons while the library loads", async ({ page }) => {
   await page.route("**/api/v1/project", (route) => route.fulfill({ json: PROJECT_READY }));
-  await page.route("**/api/v1/books", async (route) => {
-    await page.waitForTimeout(3000);
-    await route.fulfill({ json: { books: [] } });
-  });
+  const books = new GatedResponse();
+  await page.route("**/api/v1/books", (route) => books.handle(route, { books: [] }));
 
   await page.goto("/#/");
 
   const cards = page.locator('[data-slot="skeleton-cards"]');
-  await expect(cards).toBeVisible({ timeout: 10_000 });
+  await expect(cards).toBeVisible({ timeout: 15_000 });
   await expect(cards.locator('[data-slot="skeleton-card"]')).toHaveCount(3);
+
+  books.release();
   await expect(cards).toHaveCount(0, { timeout: 10_000 });
 });
 

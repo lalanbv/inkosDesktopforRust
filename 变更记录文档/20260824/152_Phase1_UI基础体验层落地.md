@@ -76,6 +76,8 @@
 | typecheck（client + server） | tsc --noEmit 双双 0 错误 |
 | build（vite + tsc server） | 通过（chunk 体积警告为存量） |
 | e2e（playwright，chromium） | loading-skeletons 4/4 + command-palette 2/2（⌘K 打开→过滤「日志」→回车跳转→面包屑切换→重开见最近访问；伪搜索入口） |
+| e2e 稳定性复跑 | loading-skeletons 初版用固定延时制造骨架窗口，全量运行下一次翻转；改为 Promise 闸门（断言通过前不 fulfill 响应）后全量复跑稳定 4/4 |
+| e2e 全量 | 21 用例 20 过；analysis.spec 一次 page.goto load 事件 60s 超时（页面已渲染，同规格单跑 3.2s 通过），高负载环境抖动，非 P1 回归 |
 | packages/cli 全量 | 232/232（中途一次 ERR_MODULE_NOT_FOUND 为并发 pnpm install 竞态，单独复跑通过） |
 
 ## 十一、验收口径对照（151 号 P1）
@@ -88,5 +90,6 @@
 
 ## 十二、备注
 
-- gui-test-screenshots/（1 张目测截图）为过程产物，不入库
+- gui-test-screenshots/（双主题主界面/面板空查询/过滤态/浅色题材页面包屑等 7 张目测取证截图）为过程产物，不入库；IAB 内嵌浏览器输入通道失效（点击/组合键不达页面），视觉走查改经一次式 playwright 脚本取证，功能验收以 e2e 为准
+- pnpm 11 交互确认会把 node_modules 清空重装（confirmModulesPurge），触发过一次全 workspace 依赖损毁；已由 pnpm-workspace.yaml 白名单 + 全量重装修复，playwright chromium 亦随重装补齐
 - P1 期间 App/Sidebar 双份 Nav 接口、双份创建类 handler 为已知债务，P3 活动栏重组收敛（151 号既定）
