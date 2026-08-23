@@ -153,7 +153,7 @@ open target/llvm-cov/html/index.html
 
 ## 零修改纪律
 
-仓库根是 inkos 上游内容（`packages/`、根 `package.json`、根 `README*`、根 `.gitignore`、既有 `.github/`）。**桌面壳的所有产物只进 `src-tauri/`、`scripts/desktop-*`、新增 `.github/workflows/desktop-*.yml`**，永不修改 inkos 根文件——这样 `git merge upstream/master` 近零冲突。Rust 构建忽略用 `src-tauri/.gitignore`（不追加到根 `.gitignore`）。
+仓库根是 inkos 上游内容（`packages/`、根 `package.json`、根 `README*`、根 `.gitignore`、既有 `.github/`）。**桌面壳的所有产物只进 `src-tauri/`、`scripts/desktop-*`**，永不修改 inkos 根文件——这样 `git merge upstream/master` 近零冲突。Rust 构建忽略用 `src-tauri/.gitignore`（不追加到根 `.gitignore`）。GitHub Actions/workflows 已全量移除，此后不再撰写（见 `变更记录文档/20260823/149_Phase3_移除GitHubActions与workflows.md`）。
 
 ## 协议
 

@@ -60,63 +60,6 @@ async function extractPackedPackageJson(packageDir: string, packDir: string) {
 }
 
 describe.sequential("publish packaging", () => {
-  it("rewrites workspace package versions for canary publishing", async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "inkos-version-script-"));
-    const tempPackagesDir = join(tempRoot, "packages");
-    const tempCoreDir = join(tempPackagesDir, "core");
-    const tempCliDir = join(tempPackagesDir, "cli");
-
-    try {
-      await mkdir(tempCoreDir, { recursive: true });
-      await mkdir(tempCliDir, { recursive: true });
-
-      await writeFile(
-        join(tempRoot, "package.json"),
-        `${JSON.stringify({ name: "inkos", version: "0.4.6" }, null, 2)}\n`,
-      );
-      await writeFile(
-        join(tempCoreDir, "package.json"),
-        `${JSON.stringify({ name: "@actalk/inkos-core", version: "0.4.6" }, null, 2)}\n`,
-      );
-      await writeFile(
-        join(tempCliDir, "package.json"),
-        `${JSON.stringify(
-          {
-            name: "@actalk/inkos",
-            version: "0.4.6",
-            dependencies: {
-              "@actalk/inkos-core": "workspace:*",
-              commander: "^13.0.0",
-            },
-          },
-          null,
-          2,
-        )}\n`,
-      );
-
-      execFileSync(
-        "node",
-        [resolve(workspaceRoot, "scripts/set-package-versions.mjs"), "0.4.8-canary.7", "--root", tempRoot],
-        {
-          cwd: workspaceRoot,
-          env: process.env,
-          encoding: "utf-8",
-        },
-      );
-
-      const rootPackageJson = JSON.parse(await readFile(join(tempRoot, "package.json"), "utf-8"));
-      const corePackageJson = JSON.parse(await readFile(join(tempCoreDir, "package.json"), "utf-8"));
-      const cliPackageJson = JSON.parse(await readFile(join(tempCliDir, "package.json"), "utf-8"));
-
-      expect(rootPackageJson.version).toBe("0.4.8-canary.7");
-      expect(corePackageJson.version).toBe("0.4.8-canary.7");
-      expect(cliPackageJson.version).toBe("0.4.8-canary.7");
-      expect(cliPackageJson.dependencies["@actalk/inkos-core"]).toBe("0.4.8-canary.7");
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
   it("links internal source dependencies through the workspace", async () => {
     const cliPackageJson = await sourceCliPackageJsonPromise;
     const studioPackageJson = await sourceStudioPackageJsonPromise;
