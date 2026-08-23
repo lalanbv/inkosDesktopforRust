@@ -55,6 +55,7 @@ import { SkeletonRows, useDelayedVisible } from "./skeletons";
 import { EmptyState } from "./EmptyState";
 import type { Nav } from "../lib/nav";
 import type { NavSectionId } from "../lib/nav-sections";
+import { buildBookTree, deriveExpandedBookIds, filterTree } from "../lib/tree-filter";
 
 // 历史记录里的会话混装多种类型（chat / short / play / book-create），用图标区分。
 function SessionKindIcon({ kind, className }: { readonly kind?: string; readonly className?: string }) {
@@ -77,7 +78,7 @@ interface BookSummary {
   readonly chaptersWritten: number;
 }
 
-export function Sidebar({ nav, activePage, sse, t, zone }: {
+export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery }: {
   nav: Nav;
   activePage: string;
   sse: { messages: ReadonlyArray<SSEMessage> };
@@ -88,6 +89,10 @@ export function Sidebar({ nav, activePage, sse, t, zone }: {
    * V1 归「系统」组，zone=tools 时归「工具」组（nav-sections 映射）。
    */
   zone?: NavSectionId;
+  /** P3-2：外层容器（SidePanel）接管宽度时占满。 */
+  fillWidth?: boolean;
+  /** P3-2：书/会话树过滤词；命中祖先保留、命中书自动展开。 */
+  filterQuery?: string;
 }) {
   const showZone = (section: NavSectionId) => !zone || zone === section;
   const { data, error: booksError, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
@@ -220,6 +225,37 @@ export function Sidebar({ nav, activePage, sse, t, zone }: {
     [books, sessionIdsByBook, sessions],
   );
 
+  // P3-2 树过滤：书 → 会话视图树；命中祖先保留、命中书自动展开
+  const filterQ = (filterQuery ?? "").trim();
+  const bookTree = useMemo(
+    () =>
+      buildBookTree(
+        books,
+        Object.fromEntries(
+          books.map((book) => [
+            book.id,
+            (sessionsByBook[book.id] ?? []).map((session) => ({
+              id: session.sessionId,
+              title: getSessionLabel(session),
+            })),
+          ]),
+        ),
+      ),
+    [books, sessionsByBook],
+  );
+  const filteredTree = useMemo(
+    () => (filterQ ? filterTree(bookTree, filterQ) : null),
+    [bookTree, filterQ],
+  );
+  const filterExpanded = useMemo(
+    () => deriveExpandedBookIds(bookTree, filterQ),
+    [bookTree, filterQ],
+  );
+  const visibleBookIds = filteredTree ? new Set(filteredTree.map((node) => node.id)) : null;
+  const visibleSessionIds = filteredTree
+    ? new Set(filteredTree.flatMap((node) => node.children?.map((child) => child.id) ?? []))
+    : null;
+
   const openSession = (bookId: string, sessionId: string) => {
     setInput("");
     activateSession(sessionId);
@@ -283,7 +319,10 @@ export function Sidebar({ nav, activePage, sse, t, zone }: {
   };
 
   return (
-    <aside className="w-[260px] shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none">
+    <aside
+      className={`${fillWidth ? "w-full" : "w-[260px]"} shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none`}
+      data-testid={fillWidth ? "side-panel-sidebar" : undefined}
+    >
       {/* Logo Area */}
       <div className="px-6 py-8">
         <button
@@ -336,10 +375,15 @@ export function Sidebar({ nav, activePage, sse, t, zone }: {
                 <SkeletonRows count={6} className="px-3" />
               </div>
             )}
-            {!booksPending && books.map((book) => {
-              const bookSessions = sessionsByBook[book.id] ?? [];
+            {!booksPending && books
+              .filter((book) => !visibleBookIds || visibleBookIds.has(book.id))
+              .map((book) => {
+              const bookSessions = (sessionsByBook[book.id] ?? [])
+                .filter((session) => !visibleSessionIds || visibleSessionIds.has(session.sessionId));
               const isActiveBook = activePage === `book:${book.id}`;
-              const isExpanded = expandedBooks.has(book.id);
+              const isExpanded = filterQ
+                ? filterExpanded.has(book.id) || expandedBooks.has(book.id)
+                : expandedBooks.has(book.id);
               return (
                 <div key={book.id}>
                   {/* 书名行：箭头展开；标题进入该书，避免聊天区停留在上一本文稿。 */}

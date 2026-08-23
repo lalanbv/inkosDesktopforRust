@@ -16,6 +16,7 @@ import type { HotkeyDef } from "@/hooks/use-global-hotkeys";
 const APP_ACTION_LABELS: Record<string, { zh: string; en: string }> = {
   "app.palette.toggle": { zh: "打开/关闭命令面板", en: "Toggle command palette" },
   "app.quickopen.toggle": { zh: "快速打开（书/章节/会话）", en: "Quick open (books/chapters/sessions)" },
+  "app.sidepanel.toggle": { zh: "显示/隐藏侧面板", en: "Toggle side panel" },
   "app.cheatsheet.toggle": { zh: "快捷键速查表", en: "Shortcut cheat sheet" },
 };
 

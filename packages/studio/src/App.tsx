@@ -64,6 +64,7 @@ const headerInsetClass = deriveHeaderInsetClass(isMacPlatform, isTauriDesktop);
 const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+k", commandId: "app.palette.toggle" },
   { combo: "mod+p", commandId: "app.quickopen.toggle" },
+  { combo: "mod+b", commandId: "app.sidepanel.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
 ];
 
@@ -179,6 +180,10 @@ export function App() {
       setCheatSheetOpen((open) => !open);
       return;
     }
+    if (target === "app.sidepanel.toggle") {
+      if (navLayoutV2) setSidePanelVisible((visible) => !visible);
+      return;
+    }
     const entry = [...buildNavigationCommands(), ...buildActionCommands()]
       .find((item) => item.id === target);
     entry?.run(commandCtx);
@@ -229,6 +234,8 @@ export function App() {
   const storedActiveNavSection = usePreferencesStore((state) => state.activeNavSection);
   const setActiveNavSection = usePreferencesStore((state) => state.setActiveNavSection);
   const activeSection = storedActiveNavSection ?? sectionForRoute(route);
+  // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）
+  const [sidePanelVisible, setSidePanelVisible] = useState(true);
 
   // 用户导航写入「最近访问」（命令面板空查询首屏）。SSE 系统跳转
   // （useSessionEvents 直用 setRoute）不属于用户意图，不记录。
@@ -350,7 +357,7 @@ export function App() {
             t={t}
             lang={currentLang}
           />
-          <SidePanel nav={nav} activePage={activePage} sse={sse} t={t} zone={activeSection} />
+          <SidePanel nav={nav} activePage={activePage} sse={sse} t={t} zone={activeSection} visible={sidePanelVisible} />
         </>
       ) : (
         <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
