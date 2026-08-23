@@ -7,6 +7,8 @@ import { SidePanel } from "./components/SidePanel";
 import { createNav } from "./lib/nav";
 import { sectionForRoute } from "./lib/nav-sections";
 import { usePreferencesStore } from "./store/preferences";
+import { useTabsStore } from "./store/tabs";
+import { TabStrip } from "./components/TabStrip";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
@@ -66,6 +68,10 @@ const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+p", commandId: "app.quickopen.toggle" },
   { combo: "mod+b", commandId: "app.sidepanel.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
+  ...Array.from({ length: 9 }, (_, i) => ({
+    combo: `mod+${i + 1}`,
+    commandId: `app.tab.${i + 1}`,
+  })),
 ];
 
 /** P2-7：macOS 菜单 id → 命令注册表条目/应用动作 id。 */
@@ -184,6 +190,14 @@ export function App() {
       if (navLayoutV2) setSidePanelVisible((visible) => !visible);
       return;
     }
+    // Cmd+1..9 切标签（P3-3）
+    const tabIndexMatch = /^app\.tab\.([1-9])$/.exec(target);
+    if (tabIndexMatch) {
+      const index = Number(tabIndexMatch[1]) - 1;
+      const tab = useTabsStore.getState().tabs[index];
+      if (tab) dispatchTabs({ type: "activate", id: tab.id });
+      return;
+    }
     const entry = [...buildNavigationCommands(), ...buildActionCommands()]
       .find((item) => item.id === target);
     entry?.run(commandCtx);
@@ -229,25 +243,74 @@ export function App() {
 
   useSessionEvents(sse, route, setRoute);
 
+  // ── 标签页多任务（P3-3）───────────────────────────────────────────
+  // 真相在 tabs store：主区渲染 activeTab.route；hash 仅用于深链同步。
+  const tabs = useTabsStore((state) => state.tabs);
+  const activeTabId = useTabsStore((state) => state.activeId);
+  const dispatchTabs = useTabsStore((state) => state.dispatch);
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const view = activeTab?.route ?? route;
+
+  /** 路由 → 标签标题（面包屑末段，与最近访问同源）。 */
+  const routeTitle = (next: HashRoute): string => {
+    const bookTitle =
+      "bookId" in next
+        ? booksData?.books.find((book) => book.id === next.bookId)?.title
+        : undefined;
+    return deriveBreadcrumb(next, { t, bookTitle }).at(-1)?.label ?? next.page;
+  };
+
+  // 外部 hash 深链同步：仅响应 route 自身的变化（首挂载/地址栏直达/刷新/
+  // 分享链接/SSE 系统跳转）→ 激活标签未同步时以预览开标签。
+  // 关键：依赖只有 routeKeyJson——标签切换（view 变、route 不变）不得触发
+  // 本 effect，否则会把 hash 路由"开回来"吞掉切换；关闭最后一个标签时
+  // view 回落 route 且不再重开标签（主区仍显示该页，无标签态）。
+  const routeKeyJson = JSON.stringify(route);
+  useEffect(() => {
+    const store = useTabsStore.getState();
+    const active = store.tabs.find((tab) => tab.id === store.activeId);
+    if (active && JSON.stringify(active.route) === routeKeyJson) return;
+    dispatchTabs({ type: "open", route, title: routeTitle(route), preview: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeKeyJson, dispatchTabs]);
+
+  // 书名回填（P3-3）：深链开标签时 /books 未到、标题回退「书籍」，
+  // 数据到达后按路由重命名书相关标签。
+  useEffect(() => {
+    if (!booksData?.books) return;
+    for (const tab of tabs) {
+      const route = tab.route;
+      if (!("bookId" in route)) continue;
+      const bookId: string = route.bookId;
+      const title = booksData.books.find((book) => book.id === bookId)?.title;
+      if (title && title !== tab.title) {
+        dispatchTabs({ type: "retitle", id: tab.id, title });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booksData, dispatchTabs]);
+
   // P3-1 活动栏布局：双轨开关 + 选中区（用户手动选择持久化，否则跟随路由）
   const navLayoutV2 = usePreferencesStore((state) => state.navLayoutV2);
   const storedActiveNavSection = usePreferencesStore((state) => state.activeNavSection);
   const setActiveNavSection = usePreferencesStore((state) => state.setActiveNavSection);
-  const activeSection = storedActiveNavSection ?? sectionForRoute(route);
+  const activeSection = storedActiveNavSection ?? sectionForRoute(view);
   // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）
   const [sidePanelVisible, setSidePanelVisible] = useState(true);
 
   // 用户导航写入「最近访问」（命令面板空查询首屏）。SSE 系统跳转
   // （useSessionEvents 直用 setRoute）不属于用户意图，不记录。
+  // P3-3：导航同时以「预览」语义开标签（单击替换预览标签，双击/固定转常驻）。
   const setRouteTracked = (next: HashRoute) => {
     const bookTitle =
       "bookId" in next
         ? booksData?.books.find((book) => book.id === next.bookId)?.title
         : undefined;
-    const crumbs = deriveBreadcrumb(next, { t, bookTitle });
+    const nextCrumbs = deriveBreadcrumb(next, { t, bookTitle });
+    dispatchTabs({ type: "open", route: next, title: nextCrumbs.at(-1)?.label ?? next.page, preview: true });
     pushRecent({
       page: next.page,
-      label: crumbs.at(-1)?.label ?? next.page,
+      label: nextCrumbs.at(-1)?.label ?? next.page,
       ...("bookId" in next ? { bookId: next.bookId } : {}),
       ...("chapterNumber" in next ? { chapterNumber: next.chapterNumber } : {}),
       ...("serviceId" in next ? { serviceId: next.serviceId } : {}),
@@ -288,18 +351,18 @@ export function App() {
     },
   };
 
-  const activeBookId = deriveActiveBookId(route);
+  const activeBookId = deriveActiveBookId(view);
   const activePage =
     activeBookId
       ? `book:${activeBookId}`
-      : route.page === "service-detail"
+      : view.page === "service-detail"
         ? "services"
-        : route.page;
+        : view.page;
 
   const activeBookTitle = activeBookId
     ? booksData?.books.find((book) => book.id === activeBookId)?.title
     : undefined;
-  const crumbs = deriveBreadcrumb(route, { t, bookTitle: activeBookTitle });
+  const crumbs = deriveBreadcrumb(view, { t, bookTitle: activeBookTitle });
 
   const startupGate = deriveStartupGate({ ready, projectError });
 
@@ -451,14 +514,24 @@ export function App() {
           </div>
         </header>
 
+        {/* P3-3 标签条：tabs store 为真相；无标签时整条隐藏 */}
+        <TabStrip
+          tabs={tabs}
+          activeId={activeTabId}
+          onActivate={(id) => dispatchTabs({ type: "activate", id })}
+          onClose={(id) => dispatchTabs({ type: "close", id })}
+          onCloseOthers={(id) => dispatchTabs({ type: "closeOthers", id })}
+          onPin={(id, pinned) => dispatchTabs({ type: "pin", id, pinned })}
+        />
+
         {/* Main Content Area */}
         <main className="flex-1 relative overflow-y-auto scroll-smooth">
-          {route.page === "dashboard" && (
+          {view.page === "dashboard" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
             </div>
           )}
-          {isBookCreateChatRoute(route) && (
+          {isBookCreateChatRoute(view) && (
             <div className="absolute inset-0 flex min-w-0">
               <ChatPage
                 mode="book-create"
@@ -469,7 +542,7 @@ export function App() {
               />
             </div>
           )}
-          {route.page === "chat" && (
+          {view.page === "chat" && (
             <div className="absolute inset-0 flex min-w-0">
               <ChatPage
                 mode="project-chat"
@@ -480,109 +553,109 @@ export function App() {
               />
             </div>
           )}
-          {route.page === "book" && (
+          {view.page === "book" && (
             <div className="absolute inset-0 flex min-w-0">
               <ChatPage
-                activeBookId={route.bookId}
+                activeBookId={view.bookId}
                 mode="book"
                 nav={nav}
                 theme={theme}
                 t={t}
                 sse={sse}
               />
-              <BookSidebar bookId={route.bookId} theme={theme} t={t} sse={sse} />
-              <BookSidebarToggle bookId={route.bookId} theme={theme} t={t} sse={sse} />
+              <BookSidebar bookId={view.bookId} theme={theme} t={t} sse={sse} />
+              <BookSidebarToggle bookId={view.bookId} theme={theme} t={t} sse={sse} />
             </div>
           )}
-          {route.page === "book-settings" && (
+          {view.page === "book-settings" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <BookDetail bookId={route.bookId} nav={nav} theme={theme} t={t} sse={sse} />
+              <BookDetail bookId={view.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
-          {route.page === "chapter" && (
+          {view.page === "chapter" && (
             <div className="mx-auto w-full max-w-[1400px] px-4 py-12 sm:px-6 lg:px-10 lg:py-16 2xl:px-12 fade-in">
-              <ChapterReader bookId={route.bookId} chapterNumber={route.chapterNumber} nav={nav} theme={theme} t={t} />
+              <ChapterReader bookId={view.bookId} chapterNumber={view.chapterNumber} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "analytics" && (
+          {view.page === "analytics" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <Analytics bookId={route.bookId} nav={nav} theme={theme} t={t} />
+              <Analytics bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "services" && (
+          {view.page === "services" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <ServiceListPage nav={nav} />
             </div>
           )}
-          {route.page === "project-settings" && (
+          {view.page === "project-settings" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <ProjectSettings nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "service-detail" && (
+          {view.page === "service-detail" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <ServiceDetailPage serviceId={route.serviceId} nav={nav} />
+              <ServiceDetailPage serviceId={view.serviceId} nav={nav} />
             </div>
           )}
-          {route.page === "truth" && (
+          {view.page === "truth" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <TruthFiles bookId={route.bookId} nav={nav} theme={theme} t={t} />
+              <TruthFiles bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "daemon" && (
+          {view.page === "daemon" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <DaemonControl nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
-          {route.page === "logs" && (
+          {view.page === "logs" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <LogViewer nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "genres" && (
+          {view.page === "genres" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <GenreManager nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "style" && (
+          {view.page === "style" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <StyleManager nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "translation" && (
+          {view.page === "translation" && (
             <div className="max-w-6xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <TranslationManager nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "import" && (
+          {view.page === "import" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <ImportManager nav={nav} theme={theme} t={t} initialTab={route.tab} />
+              <ImportManager nav={nav} theme={theme} t={t} initialTab={view.tab} />
             </div>
           )}
-          {route.page === "radar" && (
+          {view.page === "radar" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <RadarView nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "doctor" && (
+          {view.page === "doctor" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <DoctorView nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "play" && (
+          {view.page === "play" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <StoryPlayer projectId={route.projectId} nav={nav} theme={theme} t={t} />
+              <StoryPlayer projectId={view.projectId} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "film" && (
+          {view.page === "film" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <StoryGraphTree projectId={route.projectId} nav={nav} theme={theme} t={t} />
+              <StoryGraphTree projectId={view.projectId} nav={nav} theme={theme} t={t} />
             </div>
           )}
-          {route.page === "film-author" && (
+          {view.page === "film-author" && (
             <div className="absolute inset-0 flex min-w-0">
               <ChatPage
-                activeBookId={route.projectId}
+                activeBookId={view.projectId}
                 mode="interactive-film-authoring"
                 nav={nav}
                 theme={theme}
@@ -591,14 +664,14 @@ export function App() {
               />
             </div>
           )}
-          {route.page === "film-studio" && (
+          {view.page === "film-studio" && (
             <Suspense fallback={<div className="p-6 text-sm">{tr("加载创作向导…", "Loading creation wizard…")}</div>}>
-              <FilmWizard projectId={route.projectId} nav={nav} theme={theme} t={t} sse={sse} />
+              <FilmWizard projectId={view.projectId} nav={nav} theme={theme} t={t} sse={sse} />
             </Suspense>
           )}
-          {route.page === "flow" && (
+          {view.page === "flow" && (
             <Suspense fallback={<div className="p-6 text-sm">{tr("加载流程图…", "Loading flow view…")}</div>}>
-              <FlowView projectId={route.projectId} nav={nav} theme={theme} t={t} />
+              <FlowView projectId={view.projectId} nav={nav} theme={theme} t={t} />
             </Suspense>
           )}
         </main>
