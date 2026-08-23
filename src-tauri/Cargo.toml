@@ -1,6 +1,6 @@
 [package]
 name = "inkos-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # 多 bin 包（inkos-desktop / sign-bundle / publish-plugin）：无显式指定时
 # tauri bundle 的主二进制解析会选错（实测取到 sign-bundle 进 .app）。
