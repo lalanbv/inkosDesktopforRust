@@ -18,6 +18,7 @@ function mockCtx(): { ctx: CommandContext; routes: unknown[]; calls: string[] } 
   const ctx: CommandContext = {
     setRoute: (route) => routes.push(route),
     setThemeMode: (mode) => calls.push(`theme:${mode}`),
+    setDensity: (density) => calls.push(`density:${density}`),
     setProjectLanguage: (lang) => calls.push(`lang:${lang}`),
     refetchProject: () => calls.push("refresh"),
     openBookCreate: () => calls.push("bookCreate"),
@@ -62,7 +63,7 @@ describe("buildNavigationCommands", () => {
 
 describe("buildActionCommands", () => {
   it("registers at least 18 actions, bringing the total over 30", () => {
-    expect(actions).toHaveLength(19);
+    expect(actions).toHaveLength(21); // P4-2 密度×2
     expect(nav.length + actions.length).toBeGreaterThanOrEqual(30);
     const ids = new Set(actions.map((entry) => entry.id));
     expect(ids.size).toBe(actions.length);

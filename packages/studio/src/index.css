@@ -338,3 +338,54 @@ h3 { font-size: 1.25rem; }
 [data-streamdown="table-wrapper"] > .flex.items-center.justify-end {
   display: none;
 }
+
+/* ── P4-1 专注模式 ───────────────────────────────────────────
+   进入 = 应用根节点加 .focus-mode：chrome(活动栏/侧栏/dock/标签条)
+   隐藏,顶栏(拖拽区/面包屑)与状态栏保留;环境变量降为低对比
+   (color-mix 对浅/深主题通用)。 */
+.focus-mode {
+  --border: color-mix(in oklab, var(--border) 55%, transparent);
+  --muted: color-mix(in oklab, var(--muted) 80%, transparent);
+  --secondary: color-mix(in oklab, var(--secondary) 70%, transparent);
+}
+.focus-mode [data-slot="activity-bar"],
+.focus-mode [data-slot="side-panel"],
+.focus-mode [data-sidebar-root],
+.focus-mode [data-slot="context-dock"],
+.focus-mode [data-slot="tab-strip"] {
+  display: none;
+}
+
+/* 打字机模式(P4-1):专注时非当前段 0.55(ChapterReader 段级条件类) */
+.typewriter-dim { opacity: 0.55; }
+
+/* ── P4-2 密度档与动效规范 ────────────────────────────────────
+   密度变量驱动(默认舒适):紧凑档行高/内边距 ×0.85,不逐类覆盖。 */
+:root {
+  --row-h: 2rem;
+  --pad-y: 0.5rem;
+}
+.density-compact {
+  --row-h: 1.7rem;
+  --pad-y: 0.35rem;
+}
+
+/* 动效 token(全局统一时长标尺) */
+:root {
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+}
+
+/* prefers-reduced-motion:装饰动效瞬时完成(保留终态,stagger 不卡 opacity=0),
+   平滑滚动关闭(P4-1 验收:reduced-motion 用户默认无平滑滚动) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  html, .scroll-smooth, [style*="scroll-behavior"] {
+    scroll-behavior: auto !important;
+  }
+}

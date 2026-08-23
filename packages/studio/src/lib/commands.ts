@@ -27,6 +27,8 @@ export interface CommandContext {
   setRoute: (route: HashRoute) => void;
   /** P2-3 三态主题：light / dark / auto（跟随系统）。 */
   setThemeMode: (mode: ThemeMode) => void;
+  /** P4-2 密度档：舒适/紧凑。 */
+  setDensity: (density: "comfortable" | "compact") => void;
   setProjectLanguage: (lang: "zh" | "en") => void;
   refetchProject: () => void;
   /** 新建长篇小说（进入书籍创建对话流）。 */
@@ -134,6 +136,10 @@ export function buildActionCommands(): CommandEntry[] {
       (ctx) => ctx.setThemeMode("dark"), ["theme", "dark", "深色"]),
     action("action.themeAuto", "主题跟随系统", "Follow System Theme", "monitor",
       (ctx) => ctx.setThemeMode("auto"), ["theme", "auto", "跟随系统", "system"]),
+    action("action.densityComfortable", "界面密度：舒适", "Density: Comfortable", "rows",
+      (ctx) => ctx.setDensity("comfortable"), ["density", "密度", "舒适", "comfortable"]),
+    action("action.densityCompact", "界面密度：紧凑", "Density: Compact", "rows",
+      (ctx) => ctx.setDensity("compact"), ["density", "密度", "紧凑", "compact"]),
     action("action.langZh", "界面语言：中文", "UI Language: Chinese", "globe",
       (ctx) => ctx.setProjectLanguage("zh"), ["language", "语言", "chinese"]),
     action("action.langEn", "界面语言：English", "UI Language: English", "globe",

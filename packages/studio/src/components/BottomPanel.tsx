@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Maximize2, Minimize2, X } from "lucide-react";
+import { ArrowDownToLine, Maximize2, Minimize2, Square, X } from "lucide-react";
 import { tr } from "@/lib/app-language";
 import { useApi } from "@/hooks/use-api";
 import { chatSelectors, useChatStore } from "@/store/chat";
@@ -51,6 +51,9 @@ export function BottomPanel({ visible, onClose }: {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const messages = useChatStore(chatSelectors.activeMessages);
+  const generating = useChatStore(chatSelectors.isActiveSessionStreaming);
+  const abortSession = useChatStore((s) => s.abortSession);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const executions = useMemo(() => collectRecentExecutions(messages), [messages]);
   const { data: logsData, refetch: refetchLogs } = useApi<{ entries: ReadonlyArray<LogEntry> }>("/logs");
   const logEntries = useMemo(() => (logsData?.entries ?? []).slice(-200), [logsData]);
@@ -102,6 +105,22 @@ export function BottomPanel({ visible, onClose }: {
           {tr("日志", "Logs")}
         </button>
         <div className="flex-1" />
+        {/* P4-3 生成中可停止（复用既有 /sessions/:id/abort 契约） */}
+        {generating && (
+          <button
+            type="button"
+            data-testid="bottom-stop"
+            aria-label={tr("停止生成", "Stop generating")}
+            title={tr("停止生成", "Stop generating")}
+            onClick={() => {
+              if (activeSessionId) void abortSession(activeSessionId);
+            }}
+            className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            <Square size={11} />
+            {tr("停止", "Stop")}
+          </button>
+        )}
         <button
           type="button"
           data-testid="bottom-follow"

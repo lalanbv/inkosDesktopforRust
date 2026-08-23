@@ -21,4 +21,14 @@ export interface PreferencesStore {
   activeNavSection: NavSectionId | null;
 
   setActiveNavSection: (section: NavSectionId | null) => void;
+
+  /** P4-1 专注模式：隐藏导航 chrome + 低对比环境（Esc/⌘⇧F 退出）。 */
+  focusMode: boolean;
+
+  setFocusMode: (enabled: boolean) => void;
+
+  /** P4-2 密度档：舒适(默认)/紧凑(列表行高×0.85)。 */
+  density: "comfortable" | "compact";
+
+  setDensity: (density: "comfortable" | "compact") => void;
 }

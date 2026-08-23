@@ -12,6 +12,8 @@ import { TabStrip } from "./components/TabStrip";
 import { ContextDock } from "./components/ContextDock";
 import { BottomPanel } from "./components/BottomPanel";
 import { StatusBar } from "./components/StatusBar";
+import { NotificationCenter } from "./components/NotificationCenter";
+import { useNotificationsStore } from "./store/notifications";
 import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
@@ -73,11 +75,14 @@ const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+b", commandId: "app.sidepanel.toggle" },
   { combo: "mod+shift+d", commandId: "app.dock.toggle" },
   { combo: "mod+j", commandId: "app.bottom.toggle" },
+  { combo: "mod+shift+f", commandId: "app.focus.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
   ...Array.from({ length: 9 }, (_, i) => ({
     combo: `mod+${i + 1}`,
     commandId: `app.tab.${i + 1}`,
   })),
+  // Esc 链（P4-1）：无弹层且专注模式开启时退出专注；其余 Esc 由各组件自消费
+  { combo: "esc", commandId: "app.focus.exit" },
 ];
 
 /** P2-7：macOS 菜单 id → 命令注册表条目/应用动作 id。 */
@@ -207,6 +212,18 @@ export function App() {
       bottomVisibility.toggle();
       return;
     }
+    // P4-1 专注模式：⌘⇧F 切换；Esc 退出——仅当无弹层打开时（弹层的 Esc
+    // 由 Base UI 自身消费关层，不应连带退出专注）
+    if (target === "app.focus.toggle") {
+      setFocusMode(!usePreferencesStore.getState().focusMode);
+      return;
+    }
+    if (target === "app.focus.exit") {
+      if (paletteOpen || quickOpenOpen || cheatSheetOpen || showLanguageSelector) return;
+      if (!usePreferencesStore.getState().focusMode) return;
+      setFocusMode(false);
+      return;
+    }
     // Cmd+1..9 切标签（P3-3）
     const tabIndexMatch = /^app\.tab\.([1-9])$/.exec(target);
     if (tabIndexMatch) {
@@ -260,6 +277,32 @@ export function App() {
 
   useSessionEvents(sse, route, setRoute);
 
+  // P4-3 通知桥：关键 SSE 事件 → 通知中心（write:complete=info；错误类=error）。
+  // 按 seq 游标去重，专注模式同样入列（铃铛徽标可见，弹层非模态不打断）。
+  const lastNotifiedSeqRef = useRef(0);
+  const pushNotification = useNotificationsStore((state) => state.pushNotification);
+  useEffect(() => {
+    const fresh = sse.messages.filter((message) => message.seq > lastNotifiedSeqRef.current);
+    if (fresh.length === 0) return;
+    lastNotifiedSeqRef.current = fresh[fresh.length - 1].seq;
+    for (const message of fresh) {
+      if (message.event === "write:complete") {
+        const data = message.data as { bookId?: string; chapterNumber?: number } | null;
+        pushNotification({
+          level: "info",
+          title: tr("章节完成", "Chapter complete"),
+          detail: data?.chapterNumber !== undefined ? tr(`第 ${data.chapterNumber} 章已写完`, `Chapter ${data.chapterNumber} finished`) : undefined,
+        });
+      } else if (message.event.endsWith(":error") || message.event === "error") {
+        pushNotification({
+          level: "error",
+          title: tr("任务出错", "Task error"),
+          detail: message.event,
+        });
+      }
+    }
+  }, [sse.messages, pushNotification]);
+
   // ── 标签页多任务（P3-3）───────────────────────────────────────────
   // 真相在 tabs store：主区渲染 activeTab.route；hash 仅用于深链同步。
   const tabs = useTabsStore((state) => state.tabs);
@@ -311,6 +354,10 @@ export function App() {
   const navLayoutV2 = usePreferencesStore((state) => state.navLayoutV2);
   const storedActiveNavSection = usePreferencesStore((state) => state.activeNavSection);
   const setActiveNavSection = usePreferencesStore((state) => state.setActiveNavSection);
+  const focusMode = usePreferencesStore((state) => state.focusMode);
+  const setFocusMode = usePreferencesStore((state) => state.setFocusMode);
+  const density = usePreferencesStore((state) => state.density);
+  const setDensity = usePreferencesStore((state) => state.setDensity);
   const activeSection = storedActiveNavSection ?? sectionForRoute(view);
   // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）
   const [sidePanelVisible, setSidePanelVisible] = useState(true);
@@ -349,6 +396,7 @@ export function App() {
   const commandCtx: CommandContext = {
     setRoute: setRouteTracked,
     setThemeMode,
+    setDensity,
     setProjectLanguage: (lang) => {
       void putApi("/project", { language: lang }).then(() => refetchProject());
     },
@@ -417,7 +465,7 @@ export function App() {
   }
 
   return (
-    <div className="h-screen bg-background text-foreground flex overflow-hidden font-sans">
+    <div className={`h-screen bg-background text-foreground flex overflow-hidden font-sans ${focusMode ? "focus-mode" : ""} ${density === "compact" ? "density-compact" : ""}`.trim()}>
       {/* 首启语言选择：主布局之上的强制 Dialog（P1-3），选完壳直接填内容，无整屏切换 */}
       {showLanguageSelector && (
         <LanguageSelector
@@ -724,6 +772,9 @@ export function App() {
           onOpenBottomPanel={() => bottomVisibility.setVisible(true)}
         />
       </div>
+
+      {/* P4-3 通知中心：右下角铃铛（非模态，专注模式不打断） */}
+      <NotificationCenter />
 
       {/* 全局命令面板（⌘K / Ctrl+K），P1-5/6 */}
       <CommandPalette

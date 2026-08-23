@@ -19,6 +19,8 @@ const APP_ACTION_LABELS: Record<string, { zh: string; en: string }> = {
   "app.sidepanel.toggle": { zh: "显示/隐藏侧面板", en: "Toggle side panel" },
   "app.dock.toggle": { zh: "显示/隐藏上下文 dock", en: "Toggle context dock" },
   "app.bottom.toggle": { zh: "显示/隐藏底部面板", en: "Toggle bottom panel" },
+  "app.focus.toggle": { zh: "专注模式开/关", en: "Toggle focus mode" },
+  "app.focus.exit": { zh: "退出专注模式", en: "Exit focus mode" },
   "app.cheatsheet.toggle": { zh: "快捷键速查表", en: "Shortcut cheat sheet" },
 };
 

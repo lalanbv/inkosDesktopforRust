@@ -6,6 +6,8 @@ import type { NavSectionId } from "@/lib/nav-sections";
 export const TOOL_DETAILS_STORAGE_KEY = "inkos:studio:tool-details-default-open";
 export const NAV_LAYOUT_V2_STORAGE_KEY = "inkos:studio:nav-layout-v2";
 export const ACTIVE_NAV_SECTION_STORAGE_KEY = "inkos:studio:active-nav-section";
+export const FOCUS_MODE_STORAGE_KEY = "inkos:studio:focus-mode";
+export const DENSITY_STORAGE_KEY = "inkos:studio:density";
 
 interface PreferenceStorageLike {
   getItem(key: string): string | null;
@@ -52,6 +54,20 @@ export function readStoredActiveNavSection(
   return NAV_SECTION_IDS.includes(stored as NavSectionId) ? (stored as NavSectionId) : null;
 }
 
+/** P4-1 专注模式：仅显式存 "true" 才恢复（避免意外会话残留）。 */
+export function readStoredFocusMode(
+  storage: Pick<PreferenceStorageLike, "getItem"> | null | undefined,
+): boolean {
+  return storage?.getItem(FOCUS_MODE_STORAGE_KEY) === "true";
+}
+
+/** P4-2 密度档：仅显式 "compact" 为紧凑，其余(含缺失)为舒适默认。 */
+export function readStoredDensity(
+  storage: Pick<PreferenceStorageLike, "getItem"> | null | undefined,
+): "comfortable" | "compact" {
+  return storage?.getItem(DENSITY_STORAGE_KEY) === "compact" ? "compact" : "comfortable";
+}
+
 export const usePreferencesStore = create<PreferencesStore>()((set) => ({
   toolDetailsDefaultOpen: readStoredToolDetailsDefaultOpen(getPreferenceStorage()),
 
@@ -89,5 +105,27 @@ export const usePreferencesStore = create<PreferencesStore>()((set) => ({
       // 同上
     }
     set({ activeNavSection: section });
+  },
+
+  focusMode: readStoredFocusMode(getPreferenceStorage()),
+
+  setFocusMode: (enabled: boolean) => {
+    try {
+      getPreferenceStorage()?.setItem(FOCUS_MODE_STORAGE_KEY, String(enabled));
+    } catch {
+      // 同上
+    }
+    set({ focusMode: enabled });
+  },
+
+  density: readStoredDensity(getPreferenceStorage()),
+
+  setDensity: (density: "comfortable" | "compact") => {
+    try {
+      getPreferenceStorage()?.setItem(DENSITY_STORAGE_KEY, density);
+    } catch {
+      // 同上
+    }
+    set({ density });
   },
 }));

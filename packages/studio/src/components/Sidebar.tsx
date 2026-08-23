@@ -320,6 +320,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
 
   return (
     <aside
+      data-sidebar-root
       className={`${fillWidth ? "w-full" : "w-[260px]"} shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none`}
       data-testid={fillWidth ? "side-panel-sidebar" : undefined}
     >
@@ -425,7 +426,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                             <button
                               type="button"
                               onClick={() => openSession(book.id, session.sessionId)}
-                              className="flex min-w-0 flex-1 items-center gap-2 pl-9 pr-2 py-1.5 text-left text-[14px] leading-5 transition-colors"
+                              className="flex min-w-0 flex-1 items-center gap-2 pl-9 pr-2 py-[calc(var(--pad-y)*0.75)] text-left text-[14px] leading-5 transition-colors"
                             >
                               <span className={`truncate flex-1 ${isActiveSession ? "text-foreground" : "text-muted-foreground group-hover/session:text-foreground"}`}>
                                 {label}
@@ -469,7 +470,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                       <button
                         type="button"
                         onClick={() => void handleCreateSession(book.id)}
-                        className="w-full flex items-center gap-2 pl-9 pr-2 py-1.5 text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
+                        className="w-full flex items-center gap-2 pl-9 pr-2 py-[calc(var(--pad-y)*0.75)] text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
                       >
                         <Plus size={12} />
                         <span>{tr("新建会话", "New session")}</span>
@@ -565,7 +566,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                         <button
                           type="button"
                           onClick={() => openProjectChatSession(session.sessionId)}
-                          className="flex min-w-0 flex-1 items-center gap-2 pl-2 pr-2 py-1.5 text-left text-[14px] leading-5 transition-colors"
+                          className="flex min-w-0 flex-1 items-center gap-2 pl-2 pr-2 py-[calc(var(--pad-y)*0.75)] text-left text-[14px] leading-5 transition-colors"
                         >
                           <SessionKindIcon
                             kind={session.sessionKind}
@@ -623,7 +624,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                     <button
                       type="button"
                       onClick={handleCreateProjectChatSession}
-                      className="w-full flex items-center gap-2 pl-2 pr-2 py-1.5 text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
+                      className="w-full flex items-center gap-2 pl-2 pr-2 py-[calc(var(--pad-y)*0.75)] text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
                     >
                       <Plus size={12} />
                       <span>{tr("新建会话", "New session")}</span>
@@ -908,7 +909,7 @@ function SidebarItem({ label, icon, active, onClick, badge, badgeColor }: {
   return (
     <button
       onClick={onClick}
-      className={`w-full group flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
+      className={`w-full group flex items-center gap-3 px-3 py-[var(--pad-y)] rounded-lg text-sm transition-all duration-200 ${
         active
           ? "bg-secondary text-foreground font-medium shadow-sm border border-border"
           : "text-foreground font-medium hover:text-foreground hover:bg-secondary/50"

@@ -5,6 +5,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Skeleton } from "../components/ui/skeleton";
 import { SkeletonParagraphs } from "../components/skeletons";
+import { usePreferencesStore } from "../store/preferences";
 import { ChapterWorkspacePanel } from "../components/ChapterWorkspacePanel";
 import {
   ChevronLeft,
@@ -42,6 +43,9 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   t: TFunction;
 }) {
   const c = useColors(theme);
+  // P4-1 打字机模式：专注开启时正文段落降透明，点击段落聚焦
+  const focusMode = usePreferencesStore((state) => state.focusMode);
+  const [activeParagraph, setActiveParagraph] = useState<number | null>(null);
   const { data, loading, error, refetch } = useApi<ChapterData>(
     `/books/${bookId}/chapters/${chapterNumber}`,
   );
@@ -242,7 +246,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
         ) : (
           <article className="prose prose-zinc dark:prose-invert max-w-none">
             {paragraphs.map((para, i) => (
-              <p key={i} className="font-serif text-lg md:text-xl leading-[1.8] text-foreground/90 mb-8 first-letter:text-2xl first-letter:font-bold first-letter:text-primary/40">
+              <p
+                key={i}
+                onClick={focusMode ? () => setActiveParagraph(i) : undefined}
+                className={`font-serif text-lg md:text-xl leading-[1.8] text-foreground/90 mb-8 first-letter:text-2xl first-letter:font-bold first-letter:text-primary/40 ${focusMode && activeParagraph !== null && i !== activeParagraph ? "typewriter-dim" : ""}`}
+              >
                 {para}
               </p>
             ))}
