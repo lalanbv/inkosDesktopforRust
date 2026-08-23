@@ -31,10 +31,19 @@ import { useTheme } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr } from "./lib/app-language";
 import { postApi, putApi, useApi } from "./hooks/use-api";
-import { Sun, Moon } from "lucide-react";
-import { House } from "lucide-react";
+import { Sun, Moon, Search } from "lucide-react";
+import { AppShellSkeleton } from "./components/AppShellSkeleton";
+import { CommandPalette } from "./components/CommandPalette";
+import type { CommandContext } from "./lib/commands";
+import { deriveBreadcrumb } from "./lib/breadcrumb";
+import { useRecentsStore } from "./store/recents";
+import { useChatStore } from "./store/chat";
+import { setProjectChatSessionId } from "./pages/chat-page-state";
 
 export type { HashRoute as Route } from "./hooks/use-hash-route";
+
+const isMacPlatform =
+  typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
 export function deriveActiveBookId(route: HashRoute): string | undefined {
   if ("bookId" in route) return route.bookId;
@@ -61,6 +70,12 @@ export function App() {
   const { data: project, error: projectError, refetch: refetchProject } = useApi<{ language: string; languageExplicit: boolean }>("/project");
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [ready, setReady] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const pushRecent = useRecentsStore((state) => state.pushRecent);
+  const setInput = useChatStore((state) => state.setInput);
+  const createDraftSession = useChatStore((state) => state.createDraftSession);
+  // 书名同源数据：面包屑与「最近访问」标签共用（P3 活动栏重组时收敛为单一 store）。
+  const { data: booksData } = useApi<{ books: ReadonlyArray<{ id: string; title: string }> }>("/books");
 
   const isDark = theme === "dark";
 
@@ -78,6 +93,18 @@ export function App() {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
 
+  // 命令面板开关：⌘K（macOS）/ Ctrl+K（其它）。P2 迁入统一快捷键分发器。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   useEffect(() => {
     if (project) {
       if (!project.languageExplicit) {
@@ -89,32 +116,81 @@ export function App() {
 
   useSessionEvents(sse, route, setRoute);
 
+  // 用户导航写入「最近访问」（命令面板空查询首屏）。SSE 系统跳转
+  // （useSessionEvents 直用 setRoute）不属于用户意图，不记录。
+  const setRouteTracked = (next: HashRoute) => {
+    const bookTitle =
+      "bookId" in next
+        ? booksData?.books.find((book) => book.id === next.bookId)?.title
+        : undefined;
+    const crumbs = deriveBreadcrumb(next, { t, bookTitle });
+    pushRecent({
+      page: next.page,
+      label: crumbs.at(-1)?.label ?? next.page,
+      ...("bookId" in next ? { bookId: next.bookId } : {}),
+      ...("chapterNumber" in next ? { chapterNumber: next.chapterNumber } : {}),
+      ...("serviceId" in next ? { serviceId: next.serviceId } : {}),
+      ...("projectId" in next ? { projectId: next.projectId } : {}),
+      ...("tab" in next && next.tab ? { tab: next.tab } : {}),
+    });
+    setRoute(next);
+  };
+
   const nav = {
-    toDashboard: () => setRoute({ page: "dashboard" }),
-    toChat: () => setRoute({ page: "chat" }),
-    toBook: (bookId: string) => setRoute({ page: "book", bookId }),
-    toBookSettings: (bookId: string) => setRoute({ page: "book-settings", bookId }),
-    toBookCreate: () => setRoute({ page: "book-create" }),
+    toDashboard: () => setRouteTracked({ page: "dashboard" }),
+    toChat: () => setRouteTracked({ page: "chat" }),
+    toBook: (bookId: string) => setRouteTracked({ page: "book", bookId }),
+    toBookSettings: (bookId: string) => setRouteTracked({ page: "book-settings", bookId }),
+    toBookCreate: () => setRouteTracked({ page: "book-create" }),
     toChapter: (bookId: string, chapterNumber: number) =>
-      setRoute({ page: "chapter", bookId, chapterNumber }),
-    toAnalytics: (bookId: string) => setRoute({ page: "analytics", bookId }),
-    toServices: () => setRoute({ page: "services" }),
-    toProjectSettings: () => setRoute({ page: "project-settings" }),
-    toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
-    toTruth: (bookId: string) => setRoute({ page: "truth", bookId }),
-    toDaemon: () => setRoute({ page: "daemon" }),
-    toLogs: () => setRoute({ page: "logs" }),
-    toGenres: () => setRoute({ page: "genres" }),
-    toStyle: () => setRoute({ page: "style" }),
-    toTranslation: () => setRoute({ page: "translation" }),
-    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRoute({ page: "import", ...(tab ? { tab } : {}) }),
-    toRadar: () => setRoute({ page: "radar" }),
-    toDoctor: () => setRoute({ page: "doctor" }),
-    toPlay: (projectId: string) => setRoute({ page: "play", projectId }),
-    toFilm: (projectId: string) => setRoute({ page: "film", projectId }),
-    toFlow: (projectId: string) => setRoute({ page: "flow", projectId }),
-    toFilmAuthor: (projectId: string) => setRoute({ page: "film-author", projectId }),
-    toFilmStudio: (projectId: string) => setRoute({ page: "film-studio", projectId }),
+      setRouteTracked({ page: "chapter", bookId, chapterNumber }),
+    toAnalytics: (bookId: string) => setRouteTracked({ page: "analytics", bookId }),
+    toServices: () => setRouteTracked({ page: "services" }),
+    toProjectSettings: () => setRouteTracked({ page: "project-settings" }),
+    toServiceDetail: (id: string) => setRouteTracked({ page: "service-detail", serviceId: id }),
+    toTruth: (bookId: string) => setRouteTracked({ page: "truth", bookId }),
+    toDaemon: () => setRouteTracked({ page: "daemon" }),
+    toLogs: () => setRouteTracked({ page: "logs" }),
+    toGenres: () => setRouteTracked({ page: "genres" }),
+    toStyle: () => setRouteTracked({ page: "style" }),
+    toTranslation: () => setRouteTracked({ page: "translation" }),
+    toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation") => setRouteTracked({ page: "import", ...(tab ? { tab } : {}) }),
+    toRadar: () => setRouteTracked({ page: "radar" }),
+    toDoctor: () => setRouteTracked({ page: "doctor" }),
+    toPlay: (projectId: string) => setRouteTracked({ page: "play", projectId }),
+    toFilm: (projectId: string) => setRouteTracked({ page: "film", projectId }),
+    toFlow: (projectId: string) => setRouteTracked({ page: "flow", projectId }),
+    toFilmAuthor: (projectId: string) => setRouteTracked({ page: "film-author", projectId }),
+    toFilmStudio: (projectId: string) => setRouteTracked({ page: "film-studio", projectId }),
+  };
+
+  // 命令面板执行上下文：每次渲染重建，命令闭包不持有过期状态。
+  // 创建类动作与 Sidebar 的 launchProjectMode/handleOpenBookCreate 等价
+  // （P1 不动 Sidebar 本体，P3 活动栏重组时收敛为单一实现）。
+  const commandCtx: CommandContext = {
+    setRoute: setRouteTracked,
+    setTheme,
+    toggleTheme: () => setTheme(isDark ? "light" : "dark"),
+    setProjectLanguage: (lang) => {
+      void putApi("/project", { language: lang }).then(() => refetchProject());
+    },
+    refetchProject,
+    openBookCreate: () => {
+      setInput("");
+      nav.toBookCreate();
+    },
+    createProjectChatDraft: () => {
+      const sessionId = createDraftSession(null, "chat");
+      setProjectChatSessionId(sessionId);
+      setInput("");
+      nav.toChat();
+    },
+    launchProjectMode: (kind, playMode) => {
+      const sessionId = createDraftSession(null, kind, playMode);
+      setProjectChatSessionId(sessionId);
+      setInput("");
+      nav.toChat();
+    },
   };
 
   const activeBookId = deriveActiveBookId(route);
@@ -124,6 +200,11 @@ export function App() {
       : route.page === "service-detail"
         ? "services"
         : route.page;
+
+  const activeBookTitle = activeBookId
+    ? booksData?.books.find((book) => book.id === activeBookId)?.title
+    : undefined;
+  const crumbs = deriveBreadcrumb(route, { t, bookTitle: activeBookTitle });
 
   const startupGate = deriveStartupGate({ ready, projectError });
 
@@ -154,47 +235,73 @@ export function App() {
   }
 
   if (startupGate === "loading") {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  if (showLanguageSelector) {
-    return (
-      <LanguageSelector
-        onSelect={async (lang) => {
-          await postApi("/project/language", { language: lang });
-          setShowLanguageSelector(false);
-          refetchProject();
-        }}
-      />
-    );
+    return <AppShellSkeleton />;
   }
 
   return (
     <div className="h-screen bg-background text-foreground flex overflow-hidden font-sans">
+      {/* 首启语言选择：主布局之上的强制 Dialog（P1-3），选完壳直接填内容，无整屏切换 */}
+      {showLanguageSelector && (
+        <LanguageSelector
+          onSelect={async (lang) => {
+            await postApi("/project/language", { language: lang });
+            setShowLanguageSelector(false);
+            refetchProject();
+          }}
+        />
+      )}
       {/* Left Sidebar */}
       <Sidebar nav={nav} activePage={activePage} sse={sse} t={t} />
 
       {/* Center Content */}
       <div className="flex-1 flex flex-col min-w-0 bg-background/30 backdrop-blur-sm">
-        {/* Header Strip */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-border/40">
-          <div className="flex items-center gap-2">
-             <button
-               onClick={nav.toDashboard}
-               className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-card/70 px-3.5 py-2 text-[17px] font-semibold text-foreground hover:bg-secondary/50 transition-colors"
-             >
-               <House size={18} />
-               <span>{t("bread.home")}</span>
-               <span className="text-muted-foreground/70">/</span>
-               <span className="font-serif">InkOS Studio</span>
-             </button>
+        {/* Header Strip — 三段化（P1-7）：左面包屑 / 中命令面板入口 / 右语言与主题 */}
+        {/* P2: 融合标题栏时此 header 根节点将加 data-tauri-drag-region（P2-1）。 */}
+        <header className="h-14 shrink-0 flex items-center justify-between gap-4 px-8 border-b border-border/40">
+          <nav
+            aria-label={tr("面包屑", "Breadcrumb")}
+            data-testid="breadcrumb"
+            className="flex min-w-0 items-center gap-1.5 text-[17px]"
+          >
+            {crumbs.map((crumb, index) => {
+              const target = crumb.route;
+              return (
+                <span key={`${index}-${crumb.label}`} className="flex min-w-0 items-center gap-1.5">
+                  {index > 0 && <span className="text-muted-foreground/50">/</span>}
+                  {target ? (
+                    <button
+                      type="button"
+                      onClick={() => setRouteTracked(target)}
+                      className="truncate text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {crumb.label}
+                    </button>
+                  ) : (
+                    <span className="truncate font-serif font-medium text-foreground">
+                      {crumb.label}
+                    </span>
+                  )}
+                </span>
+              );
+            })}
+          </nav>
+
+          <div className="flex min-w-0 flex-1 justify-center px-2">
+            <button
+              type="button"
+              data-testid="command-palette-trigger"
+              onClick={() => setPaletteOpen(true)}
+              className="hidden md:flex w-64 items-center gap-2 rounded-lg border border-border/50 bg-muted/50 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary/60"
+            >
+              <Search size={14} className="shrink-0" />
+              <span className="flex-1 truncate text-left">{t("cmd.searchPlaceholder")}</span>
+              <kbd className="shrink-0 rounded border border-border/60 bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {isMacPlatform ? "⌘K" : "Ctrl K"}
+              </kbd>
+            </button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex shrink-0 items-center gap-3">
             <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
               <button
                 onClick={async () => {
@@ -377,6 +484,14 @@ export function App() {
           )}
         </main>
       </div>
+
+      {/* 全局命令面板（⌘K / Ctrl+K），P1-5/6 */}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        ctx={commandCtx}
+        lang={currentLang}
+      />
     </div>
   );
 }

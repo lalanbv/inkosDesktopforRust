@@ -3,6 +3,8 @@ import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { Skeleton } from "../components/ui/skeleton";
+import { SkeletonParagraphs } from "../components/skeletons";
 import { ChapterWorkspacePanel } from "../components/ChapterWorkspacePanel";
 import {
   ChevronLeft,
@@ -78,9 +80,12 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   };
 
   if (loading && !data) return (
-    <div className="flex flex-col items-center justify-center py-32 space-y-4">
-      <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
-      <span className="text-sm text-muted-foreground">{t("reader.openingManuscript")}</span>
+    <div data-loading="skeleton" className="space-y-10 py-4">
+      <div className="space-y-3">
+        <Skeleton className="h-9 w-2/5" />
+        <Skeleton className="h-4 w-24" />
+      </div>
+      <SkeletonParagraphs count={4} />
     </div>
   );
 

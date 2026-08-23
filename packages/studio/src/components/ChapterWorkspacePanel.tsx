@@ -254,7 +254,8 @@ export function ChapterWorkspacePanel({
           <History size={15} className="text-primary" />
           {t("reader.versionHistory")}
         </h3>
-        {data?.versions.length ? (
+        {/* 工作台接口未就绪/失败时 data 为 null：versions 可选链避免整页崩溃 */}
+        {data?.versions?.length ? (
           <div className="space-y-2">
             {data.versions.map((version) => (
               <div

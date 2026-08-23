@@ -16,7 +16,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts"],
+    // .test.tsx：组件冒烟测试（react-dom/server renderToString，无需 DOM 环境）
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     fileParallelism: false,
     // server.ts is large enough that first-load esbuild transforms can exceed
     // Vitest's default 5s timeout on a cold full-suite run.

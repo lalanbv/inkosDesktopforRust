@@ -387,6 +387,33 @@ const strings = {
   "logs.title": { zh: "日志", en: "Logs" },
   "logs.empty": { zh: "暂无日志", en: "No log entries yet" },
   "logs.showingRecent": { zh: "当前展示最近日志记录。", en: "Showing recent log entries." },
+
+  // Breadcrumb extras (P1-7)
+  "bread.chat": { zh: "对话", en: "Chat" },
+  "bread.genres": { zh: "题材管理", en: "Genre Manager" },
+  "bread.play": { zh: "互动回放", en: "Story Player" },
+  "bread.flow": { zh: "流程图", en: "Flow View" },
+  "bread.filmAuthor": { zh: "影游创作", en: "Film Authoring" },
+  "bread.filmStudio": { zh: "影游工坊", en: "Film Studio" },
+  "bread.truth": { zh: "真相文件", en: "Truth Files" },
+  "bread.bookSettings": { zh: "书籍设置", en: "Book Settings" },
+  "bread.serviceDetail": { zh: "服务详情", en: "Service Detail" },
+
+  // Command palette (P1-5/6/7)
+  "cmd.searchPlaceholder": { zh: "搜索或输入命令…", en: "Search or type a command…" },
+  "cmd.placeholder": { zh: "输入命令或搜索…", en: "Type a command or search…" },
+  "cmd.empty": { zh: "没有匹配的命令", en: "No matching commands" },
+  "cmd.emptyHint": { zh: "试试其他关键词，或直接开始创作。", en: "Try another keyword, or start creating." },
+  "cmd.group.recent": { zh: "最近访问", en: "Recent" },
+  "cmd.group.navigation": { zh: "前往", en: "Go to" },
+  "cmd.group.action": { zh: "操作", en: "Actions" },
+  "cmd.group.recommended": { zh: "推荐", en: "Recommended" },
+  "cmd.createBook": { zh: "创建新书", en: "Create new book" },
+
+  // Empty states (P1-8)
+  "empty.newSession": { zh: "新建会话", en: "New session" },
+  "empty.noSessions": { zh: "还没有会话", en: "No sessions yet" },
+  "empty.createFilmHint": { zh: "启动一个新的互动影游项目。", en: "Start a new interactive film project." },
 } as const;
 
 export type StringKey = keyof typeof strings;

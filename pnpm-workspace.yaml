@@ -1,2 +1,8 @@
 packages:
   - "packages/*"
+# pnpm 11 起构建脚本白名单从 package.json 的 pnpm 字段迁到这里。
+# 三个包的 postinstall 都是常规二进制/类型生成，此前一直允许执行。
+allowBuilds:
+  esbuild: true
+  msw: true
+  protobufjs: true

@@ -7,6 +7,8 @@ import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { deriveActiveBookIds, shouldRefetchBookCollections } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Skeleton } from "../components/ui/skeleton";
+import { SkeletonCards } from "../components/skeletons";
 import {
   Plus,
   BookOpen,
@@ -145,10 +147,16 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
     }
   }, [refetch, sse.messages]);
 
-  if (loading) return (
-    <div className="flex flex-col items-center justify-center py-32 space-y-4">
-      <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
-      <span className="text-sm text-muted-foreground animate-pulse">Gathering manuscripts...</span>
+  if (loading && !data) return (
+    <div data-loading="skeleton" className="space-y-12">
+      <div className="flex items-end justify-between border-b border-border/40 pb-8">
+        <div className="space-y-3">
+          <Skeleton className="h-9 w-48" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+        <Skeleton className="h-10 w-28 rounded-xl" />
+      </div>
+      <SkeletonCards count={3} />
     </div>
   );
 

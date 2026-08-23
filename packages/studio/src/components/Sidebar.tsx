@@ -48,8 +48,11 @@ import {
   Rows3,
   Film,
   Languages,
+  BookOpen,
 } from "lucide-react";
 import { InkosLogo } from "./InkosLogo";
+import { SkeletonRows, useDelayedVisible } from "./skeletons";
+import { EmptyState } from "./EmptyState";
 
 // 历史记录里的会话混装多种类型（chat / short / play / book-create），用图标区分。
 function SessionKindIcon({ kind, className }: { readonly kind?: string; readonly className?: string }) {
@@ -96,8 +99,8 @@ export function Sidebar({ nav, activePage, sse, t }: {
   sse: { messages: ReadonlyArray<SSEMessage> };
   t: TFunction;
 }) {
-  const { data, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
-  const { data: filmsData, refetch: refetchFilms } = useApi<{ films: ReadonlyArray<{ projectId: string; title: string }> }>("/interactive-films");
+  const { data, error: booksError, refetch: refetchBooks, mutate: mutateBooks } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
+  const { data: filmsData, error: filmsError, refetch: refetchFilms } = useApi<{ films: ReadonlyArray<{ projectId: string; title: string }> }>("/interactive-films");
   const { data: daemon, refetch: refetchDaemon } = useApi<{ running: boolean }>("/daemon");
   const sessions = useChatStore((s) => s.sessions);
   const sessionIdsByBook = useChatStore((s) => s.sessionIdsByBook);
@@ -120,6 +123,11 @@ export function Sidebar({ nav, activePage, sse, t }: {
 
   const books = data?.books ?? [];
   const films = filmsData?.films ?? [];
+  // 首次加载（data===null 且无错误）显示骨架；data 就绪且空数组才是空态。
+  // loading 态在后台 refetch 也会翻转，不能作为"未就绪"判据。
+  const skeletonVisible = useDelayedVisible();
+  const booksPending = data === null && !booksError;
+  const filmsPending = filmsData === null && !filmsError;
   const projectChatKey = "__null__";
   const projectChatSessions = useMemo(
     () =>
@@ -329,7 +337,12 @@ export function Sidebar({ nav, activePage, sse, t }: {
           <SectionHeader label={t("nav.myBooks")} expanded={myBooksExpanded} onToggle={() => setMyBooksExpanded((v) => !v)} />
           <Collapse open={myBooksExpanded}>
           <div className="space-y-0.5 pt-1">
-            {books.map((book) => {
+            {booksPending && skeletonVisible && (
+              <div data-loading="skeleton">
+                <SkeletonRows count={6} className="px-3" />
+              </div>
+            )}
+            {!booksPending && books.map((book) => {
               const bookSessions = sessionsByBook[book.id] ?? [];
               const isActiveBook = activePage === `book:${book.id}`;
               const isExpanded = expandedBooks.has(book.id);
@@ -429,10 +442,15 @@ export function Sidebar({ nav, activePage, sse, t }: {
               );
             })}
 
-            {books.length === 0 && (
-              <div className="px-3 py-6 text-xs text-muted-foreground/50 italic text-center">
-                {t("dash.noBooks")}
-              </div>
+            {!booksPending && books.length === 0 && (
+              <EmptyState
+                compact
+                icon={<BookOpen size={20} />}
+                title={t("dash.noBooks")}
+                description={t("dash.createFirst")}
+                actionLabel={t("nav.newBook")}
+                onAction={handleOpenBookCreate}
+              />
             )}
           </div>
           </Collapse>
@@ -443,7 +461,12 @@ export function Sidebar({ nav, activePage, sse, t }: {
           <SectionHeader label={t("nav.createInteractiveFilm")} expanded={filmsExpanded} onToggle={() => setFilmsExpanded((v) => !v)} />
           <Collapse open={filmsExpanded}>
             <div className="space-y-0.5 pt-1">
-              {films.map((film) => (
+              {filmsPending && skeletonVisible && (
+                <div data-loading="skeleton">
+                  <SkeletonRows count={3} className="px-3" />
+                </div>
+              )}
+              {!filmsPending && films.map((film) => (
                 <button
                   key={film.projectId}
                   type="button"
@@ -455,10 +478,15 @@ export function Sidebar({ nav, activePage, sse, t }: {
                   <span className="truncate text-[15px] text-foreground">{film.title}</span>
                 </button>
               ))}
-              {films.length === 0 && (
-                <div className="px-3 py-6 text-xs text-muted-foreground/50 italic text-center">
-                  {tr("还没有互动影游项目", "No interactive film projects yet")}
-                </div>
+              {!filmsPending && films.length === 0 && (
+                <EmptyState
+                  compact
+                  icon={<Film size={20} />}
+                  title={tr("还没有互动影游项目", "No interactive film projects yet")}
+                  description={t("empty.createFilmHint")}
+                  actionLabel={tr("开始创作", "Start creating")}
+                  onAction={() => launchProjectMode("interactive-film")}
+                />
               )}
             </div>
           </Collapse>
@@ -540,14 +568,25 @@ export function Sidebar({ nav, activePage, sse, t }: {
                       </div>
                     );
                   })}
-                  <button
-                    type="button"
-                    onClick={handleCreateProjectChatSession}
-                    className="w-full flex items-center gap-2 pl-2 pr-2 py-1.5 text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
-                  >
-                    <Plus size={12} />
-                    <span>{tr("新建会话", "New session")}</span>
-                  </button>
+                  {projectChatSessions.length === 0 && (
+                    <EmptyState
+                      compact
+                      icon={<MessageSquare size={20} />}
+                      title={t("empty.noSessions")}
+                      actionLabel={t("empty.newSession")}
+                      onAction={handleCreateProjectChatSession}
+                    />
+                  )}
+                  {projectChatSessions.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleCreateProjectChatSession}
+                      className="w-full flex items-center gap-2 pl-2 pr-2 py-1.5 text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
+                    >
+                      <Plus size={12} />
+                      <span>{tr("新建会话", "New session")}</span>
+                    </button>
+                  )}
                 </div>
               </Collapse>
             </div>
