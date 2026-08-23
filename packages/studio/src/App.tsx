@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { useHashRoute } from "./hooks/use-hash-route";
 import type { HashRoute } from "./hooks/use-hash-route";
 import { Sidebar } from "./components/Sidebar";
@@ -61,6 +61,26 @@ const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+p", commandId: "app.quickopen.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
 ];
+
+/** P2-7：macOS 菜单 id → 命令注册表条目/应用动作 id。 */
+const MENU_COMMAND_MAP: Readonly<Record<string, string>> = {
+  "menu:new-book": "action.bookCreate",
+  "menu:palette": "app.palette.toggle",
+  "menu:theme-light": "action.themeLight",
+  "menu:theme-dark": "action.themeDark",
+  "menu:theme-auto": "action.themeAuto",
+  "menu:lang-zh": "action.langZh",
+  "menu:lang-en": "action.langEn",
+};
+
+/** withGlobalTauri 注入的全局（仅取用到的最小面）。 */
+interface TauriGlobalScope {
+  __TAURI__?: {
+    event?: {
+      listen?: <T>(event: string, handler: (event: T) => void) => Promise<() => void>;
+    };
+  };
+}
 
 export function deriveActiveBookId(route: HashRoute): string | undefined {
   if ("bookId" in route) return route.bookId;
@@ -129,32 +149,64 @@ export function App() {
   }, [isDark]);
 
   // 全局快捷键分发器（P2-4）：单一 keydown → 归一组合 → 注册表分发。
-  // ⌘K 自 P1-5 的临时 keydown 迁入；⌘/ 打开速查（P2-6）。
+  // ⌘K 自 P1-5 的临时 keydown 迁入；⌘P 快速打开（P2-5）；⌘/ 速查（P2-6）。
+  // macOS 菜单栏（P2-7）经 menu://command 事件汇入同一分发函数。
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
-  useGlobalHotkeys({
-    defs: HOTKEY_DEFS,
-    runCommand: (commandId) => {
-      if (commandId === "app.palette.toggle") {
-        setPaletteOpen((open) => !open);
-        return;
-      }
-      if (commandId === "app.quickopen.toggle") {
-        setPaletteOpen(false);
-        setCheatSheetOpen(false);
-        setQuickOpenOpen((open) => !open);
-        return;
-      }
-      if (commandId === "app.cheatsheet.toggle") {
-        setPaletteOpen(false);
-        setCheatSheetOpen((open) => !open);
-        return;
-      }
-      const entry = [...buildNavigationCommands(), ...buildActionCommands()]
-        .find((item) => item.id === commandId);
-      entry?.run(commandCtx);
-    },
-  });
+
+  const dispatchCommand = (commandId: string) => {
+    const target = commandId.startsWith("menu:")
+      ? (MENU_COMMAND_MAP[commandId] ?? null)
+      : commandId;
+    if (!target) return;
+    if (target === "app.palette.toggle") {
+      setPaletteOpen((open) => !open);
+      return;
+    }
+    if (target === "app.quickopen.toggle") {
+      setPaletteOpen(false);
+      setCheatSheetOpen(false);
+      setQuickOpenOpen((open) => !open);
+      return;
+    }
+    if (target === "app.cheatsheet.toggle") {
+      setPaletteOpen(false);
+      setCheatSheetOpen((open) => !open);
+      return;
+    }
+    const entry = [...buildNavigationCommands(), ...buildActionCommands()]
+      .find((item) => item.id === target);
+    entry?.run(commandCtx);
+  };
+
+  useGlobalHotkeys({ defs: HOTKEY_DEFS, runCommand: dispatchCommand });
+
+  // Tauri 菜单事件（P2-7）：Rust on_menu_event → menu://command → 同一分发器。
+  // dispatchCommand 经 ref 保持最新；仅在 Tauri 壳内注册（浏览器无 __TAURI__）。
+  const dispatchRef = useRef(dispatchCommand);
+  dispatchRef.current = dispatchCommand;
+  useEffect(() => {
+    if (!isTauriDesktop) return;
+    const api = (window as TauriGlobalScope).__TAURI__;
+    if (typeof api?.event?.listen !== "function") return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void api.event.listen<{ payload: unknown }>("menu://command", (event) => {
+      const id = typeof event.payload === "string" ? event.payload : "";
+      if (id.startsWith("menu:")) dispatchRef.current(id);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        // 菜单事件通道不可用时静默降级：快捷键与命令面板不受影响
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (project) {

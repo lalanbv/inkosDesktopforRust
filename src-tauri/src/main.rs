@@ -27,6 +27,8 @@ use anyhow::Context;
 use serde::Serialize;
 // Manager trait 在作用域里才能用 `app.get_webview_window` / `app_handle.try_state` / `app_handle.path()`。
 use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::Emitter;
+use tauri::menu::{Menu, MenuItem, SubmenuBuilder};
 // NotificationExt 才能用 `app.notification()`。
 use tauri_plugin_notification::NotificationExt;
 // DialogExt（M3b）：项目目录选择对话框（Rust 侧，不经 webview ACL）。
@@ -130,6 +132,69 @@ fn to_js_string_literal(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| {
         format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
     })
+}
+
+/// P2-7：macOS 主菜单。菜单项不带命令语义，触发后以 `menu://command` 事件
+/// 转发给 webview，前端映射到命令面板同一注册表执行（单一事实源）。
+fn build_main_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    // macOS 应用子菜单：系统预置项（关于/服务/隐藏/退出），缺失会丢标准行为
+    let app_submenu = SubmenuBuilder::new(app, "inkosDesktop")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let file_menu = SubmenuBuilder::new(app, "文件")
+        .item(&MenuItem::with_id(
+            app,
+            "menu:new-book",
+            "新建小说",
+            true,
+            Some("CmdOrCtrl+N"),
+        )?)
+        .build()?;
+
+    // 编辑菜单交给系统预置（webview 内复制粘贴/全选由 macOS 自动补齐）
+    let edit_menu = SubmenuBuilder::new(app, "编辑")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    // 视图与命令面板项不带 accelerator：快捷键统一走 web 内注册表
+    // （HOTKEY_DEFS 单一事实源），避免 OS 级菜单键与 Web 键位双注册冲突。
+    let view_menu = SubmenuBuilder::new(app, "视图")
+        .item(&MenuItem::with_id(app, "menu:palette", "命令面板", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "menu:theme-light", "浅色主题", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:theme-dark", "深色主题", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:theme-auto", "跟随系统", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "menu:lang-zh", "中文", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "menu:lang-en", "English", true, None::<&str>)?)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "窗口")
+        .minimize()
+        .maximize()
+        .separator()
+        .close_window()
+        .build()?;
+
+    Menu::with_items(
+        app,
+        &[&app_submenu, &file_menu, &edit_menu, &view_menu, &window_menu],
+    )
 }
 
 fn main() {
@@ -393,7 +458,18 @@ fn main() {
                 apply_lock: Arc::new(tokio::sync::Mutex::new(())),
             });
 
+            // P2-7：macOS 主菜单（应用/文件/编辑/视图/窗口）。触发经
+            // on_menu_event → menu://command → webview 命令注册表执行。
+            let menu = build_main_menu(app.handle())?;
+            app.set_menu(menu)?;
+
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            let Some(window) = app.get_webview_window("main") else {
+                return;
+            };
+            let _ = window.emit("menu://command", event.id().as_ref());
         })
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败")
