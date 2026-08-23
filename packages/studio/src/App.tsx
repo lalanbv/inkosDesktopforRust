@@ -11,6 +11,7 @@ import { useTabsStore } from "./store/tabs";
 import { TabStrip } from "./components/TabStrip";
 import { ContextDock } from "./components/ContextDock";
 import { BottomPanel } from "./components/BottomPanel";
+import { StatusBar } from "./components/StatusBar";
 import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
@@ -133,6 +134,8 @@ export function App() {
   const sessionIdsByBook = useChatStore((state) => state.sessionIdsByBook);
   // 书名同源数据：面包屑与「最近访问」标签共用（P3 活动栏重组时收敛为单一 store）。
   const { data: booksData } = useApi<{ books: ReadonlyArray<{ id: string; title: string }> }>("/books");
+  // P3-5 状态栏的 daemon 运行点（与 Sidebar 同源）
+  const { data: daemonData } = useApi<{ running: boolean }>("/daemon");
 
   // 快速打开的会话条目：sessionIdsByBook 的 "__null__" 键 = 项目级会话（跳 chat 页）。
   const quickOpenSessions = useMemo<QuickOpenSession[]>(() => {
@@ -705,6 +708,20 @@ export function App() {
         <BottomPanel
           visible={bottomVisibility.visible}
           onClose={() => bottomVisibility.setVisible(false)}
+        />
+
+        {/* P3-5 状态栏：书·章·字数 / SSE+daemon 状态点 / 生成中查看 */}
+        <StatusBar
+          bookTitle={
+            view.page === "book" || view.page === "chapter" || view.page === "analytics" || view.page === "truth"
+              ? (booksData?.books.find((book) => book.id === activeBookId)?.title ?? activeBookTitle)
+              : undefined
+          }
+          chapter={view.page === "chapter" ? { bookId: view.bookId, number: view.chapterNumber } : undefined}
+          sseConnected={sse.connected}
+          onReconnect={sse.reconnect}
+          daemonRunning={daemonData?.running}
+          onOpenBottomPanel={() => bottomVisibility.setVisible(true)}
         />
       </div>
 

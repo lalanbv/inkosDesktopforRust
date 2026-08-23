@@ -84,3 +84,32 @@ test("context dock toggles on the book page and coexists with the bottom panel",
   await page.goto("/#/book/b1");
   await expect(dock).toBeVisible({ timeout: 15_000 });
 });
+
+test("status bar shows live context, connection dots and word count on a chapter (P3-5)", async ({ page }) => {
+  await page.goto("/#/book/b1");
+
+  const bar = page.getByTestId("status-bar");
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  // 书页左段显示书名
+  await expect(page.getByTestId("status-context")).toContainText("山河志");
+  // e2e 桩 daemon=false → 灰点;SSE 连真实 events 端点 → 绿点(实时)
+  await expect(page.getByTestId("status-daemon")).toBeVisible();
+  await expect(page.getByTestId("status-sse")).toBeVisible();
+
+  // 章节页:左段显示 书名·第N章;章节内容桩提供字数统计
+  await page.route("**/api/v1/books/b1", (route) =>
+    route.fulfill({ json: { book: { id: "b1", title: "山河志" }, chapters: [{ number: 2, title: "夜袭" }], nextChapter: 3 } }),
+  );
+  await page.route("**/api/v1/books/b1/chapters/2", (route) =>
+    route.fulfill({ json: { chapterNumber: 2, filename: "chapter-002.md", content: "# 第 2 章\n\n正文共十个字。" } }),
+  );
+  // ⌘P 快速打开 → 章节号 2 直达
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+p" : "Control+p");
+  const input = page.locator('[data-slot="command-input"]');
+  await expect(input).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.type("2");
+  await expect(page.getByRole("option", { name: /夜袭/ })).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-context")).toContainText("第 2 章", { timeout: 15_000 });
+  await expect(page.getByTestId("status-context")).toContainText("约 11 字");
+});

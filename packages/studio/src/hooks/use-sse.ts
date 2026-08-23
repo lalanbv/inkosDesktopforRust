@@ -88,6 +88,8 @@ export function useSSE(url = "/api/v1/events") {
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const seqRef = useRef(0);
+  // 手动重连通道（P3-5 状态栏黄点点击）：翻转 nonce 重建 EventSource
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     const es = new EventSource(url);
@@ -117,9 +119,10 @@ export function useSSE(url = "/api/v1/events") {
       es.close();
       esRef.current = null;
     };
-  }, [url]);
+  }, [url, nonce]);
 
   const clear = useCallback(() => setMessages([]), []);
+  const reconnect = useCallback(() => setNonce((value) => value + 1), []);
 
-  return { messages, connected, clear };
+  return { messages, connected, clear, reconnect };
 }
