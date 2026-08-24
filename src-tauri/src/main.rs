@@ -427,6 +427,8 @@ fn main() {
             // 现在唤回通道全程可用：托盘「显示窗口」+ macOS Dock 点击 →
             // lifecycle::show_main_window（show + focus，缺失时防御性重建）。
             app.manage(LiveSidecarUrl::default());
+            // 164：生效引擎后端状态（spawn 时写入，诊断回显）。
+            app.manage(inkos_desktop::lifecycle::EngineBackendState::default());
             let tray = TrayController::build(&app_handle);
             app.manage(tray);
 
@@ -651,7 +653,7 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 inkos_desktop::config::EngineBackend::Node => None,
             };
 
-            let (spec, probe_path) = match rust_bin {
+            let (spec, probe_path, effective_backend) = match rust_bin {
                 Some(bin) => {
                     let static_dir = inkos_desktop::engine::rustbin::resolve_static_dir(
                         resource_dir.as_deref(),
@@ -672,7 +674,11 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                         &bin,
                         static_dir.as_deref(),
                     );
-                    (spec, inkos_desktop::engine::rustbin::HEALTH_PROBE_PATH)
+                    (
+                        spec,
+                        inkos_desktop::engine::rustbin::HEALTH_PROBE_PATH,
+                        inkos_desktop::config::EngineBackend::Rust,
+                    )
                 }
                 None => {
                     if matches!(
@@ -711,9 +717,23 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                         }
                     };
                     let spec = supervisor::build_launch(&paths, port, &node_bin);
-                    (spec, "/")
+                    (
+                        spec,
+                        "/",
+                        inkos_desktop::config::EngineBackend::Node,
+                    )
                 }
             };
+
+            // 164：记录生效后端（含 miss 回退结果）供诊断回显。
+            if let Some(state) =
+                app_handle.try_state::<inkos_desktop::lifecycle::EngineBackendState>()
+            {
+                *state
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = effective_backend;
+            }
 
             // loopback 加固：spawn 之前 lock。失败仅 log 警告、继续启动。
             let guard = platform_guard();
@@ -1145,6 +1165,7 @@ const _: fn() = || {
     assert_send_sync::<ObserverShutdown>();
     assert_send_sync::<TrayController>();
     assert_send_sync::<LiveSidecarUrl>();
+    assert_send_sync::<inkos_desktop::lifecycle::EngineBackendState>();
     assert_send_sync::<SecretsWritebackState>();
     assert_send_sync::<LaunchState>();
     assert_send_sync::<UpdaterState>();

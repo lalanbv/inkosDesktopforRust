@@ -50,7 +50,15 @@ Node sidecar（engine/dist + portable Node bootstrap）——绞杀者路线（�
 - secrets 同步、loopback guard、SSE observer、托盘/关窗保活、updater 命令全部
   不变（后端无关面：磁盘格式同源、SSE 端点同名、端口策略同一函数）。
 
-### 4. 打包面
+### 4. 诊断回显（生效后端）
+
+- `lifecycle::EngineBackendState`（managed state）：`spawn_sidecar_task` 选定
+  **生效**后端（含 miss 回退结果）后写入——与配置意图区分（回退时配置是 rust、
+  生效是 node，诊断显示运行态事实）。
+- `DiagnosticInfo.engine_backend`（`rust`/`node`/`unknown`——state 未托管 =
+  启动前）：诊断命令返回，序列化契约测试覆盖。
+
+### 5. 打包面
 
 - `scripts/desktop-package-rust-engine.sh`（新）：组装 `src-tauri/engine-rust/`
   （release bin + static/ 前端副本 + manifest.json——键与 Node bundle/Rust 全量包
@@ -65,7 +73,7 @@ Node sidecar（engine/dist + portable Node bootstrap）——绞杀者路线（�
 | --- | --- |
 | 单元（rustbin 6 + config 3 新增 + 常量） | 全过（解析优先级/spec env 契约/无静态面不注入空 env/旧配置零迁移/TOML 形态） |
 | 集成 `rust_backend_launch`（新） | **2/2**：真实拉起 server——`INKOS_PORT` 契约消费、health JSON `{"ok":true,"version":"0.1.0"}`、纯 API 模式 `/` 404（探测路径依据）、静态面模式 `/`=SPA index、kill_tree 端口释放。二进制/dist 缺失自动 SKIP |
-| src-tauri 全量 cargo test | **457 lib + 全部集成面，0 失败**（含 e2e_secrets 等 env 门控项按设计 ignored） |
+| src-tauri 全量 cargo test | **567 通过 / 0 失败**（终轮含诊断回显；e2e_secrets 等 env 门控项按设计 ignored） |
 | cargo clippy `--lib --tests --bins -D warnings` | 零警告 |
 | 桌壳端到端冒烟（debug 二进制） | auto 复用项目 → 日志 `引擎后端 = rust（inkos-engine-server: .../target/debug/engine-rust/...）` → **零 node bootstrap 行** → health 407ms 成功 → SIGTERM 整树清理、无孤儿进程 |
 | 组装脚本实跑 | engine-rust/ 产出（bin 27.8MB + static + manifest：engine_version=0.1.0 / rust_target=aarch64-apple-darwin / sha256） |
@@ -89,11 +97,11 @@ Node sidecar（engine/dist + portable Node bootstrap）——绞杀者路线（�
 
 1. **engine updater 通道仍为 Node bundle 语义**：`cmd_check_updates` 的 engine
    版本读 Node engine manifest、apply 替换 app_data/engine。Rust 引擎版本经
-   `/api/v1/health` 可见。Rust 引擎 updater 通道（tarball 内层目录解包适配 +
-   版本对齐）独立立项——145 号先例：发布/updater 属外向节奏，不与切换混轮。
+   `/api/v1/health` 可见、生效后端经诊断命令回显。Rust 引擎 updater 通道
+   （tarball 内层目录解包适配 + 版本对齐）独立立项——145 号先例：发布/updater
+   属外向节奏，不与切换混轮。
 2. settings.html 前端开关（backend 字段表单化）。
-3. 诊断命令（cmd_get_diagnostics）增当前后端与 Rust 引擎版本回显。
-4. prod .app 瘦身决策：双引擎资源（engine + engine-rust）并存 vs 只留 rust——
+3. prod .app 瘦身决策：双引擎资源（engine + engine-rust）并存 vs 只留 rust——
    随 v0.3.0 发布决策（回退期建议双留）。
 
 ## 六、关联提交

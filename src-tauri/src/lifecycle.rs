@@ -357,6 +357,29 @@ const _: fn() = || {
 #[derive(Default)]
 pub struct LiveSidecarUrl(pub Mutex<Option<tauri::Url>>);
 
+/// 实际拉起的引擎后端（164 号诊断回显）。
+///
+/// `spawn_sidecar_task` 选定**生效**后端（含 Rust 二进制 miss 回退 Node 的结果）
+/// 后写入；诊断命令读取。setup 时 manage（默认值 = 配置默认 rust——仅 picker
+/// 阶段未启动 sidecar 时可见，启动后即为真实值）。
+pub struct EngineBackendState(pub Mutex<crate::config::EngineBackend>);
+
+impl Default for EngineBackendState {
+    fn default() -> Self {
+        Self(Mutex::new(crate::config::EngineBackend::default()))
+    }
+}
+
+impl EngineBackendState {
+    /// 当前生效后端的短名（诊断 JSON 字段值：`rust`/`node`）。
+    pub fn as_str(&self) -> &'static str {
+        match *self.0.lock().unwrap_or_else(|e| e.into_inner()) {
+            crate::config::EngineBackend::Rust => "rust",
+            crate::config::EngineBackend::Node => "node",
+        }
+    }
+}
+
 /// 显示并聚焦主窗口；缺失时防御性重建（sidecar UI 或 picker）。
 ///
 /// 托盘「显示窗口」与 macOS Dock 点击（`RunEvent::Reopen`）共用此入口，

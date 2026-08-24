@@ -10,6 +10,9 @@ pub struct DiagnosticInfo {
     pub arch: String,
     pub app_data_dir: String,
     pub engine_dir: String,
+    /// 生效引擎后端短名（`rust`/`node`；164 号绞杀者终切后的运行态事实，
+    /// 含 miss 回退结果——与配置意图可能不同）。
+    pub engine_backend: String,
     pub node_cache_dir: String,
     pub projects_file: String,
     pub engine_manifest: Option<String>,
@@ -66,7 +69,13 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
         .to_string_lossy()
         .to_string();
 
-    // 3. engine manifest（如果存在）
+    // 3. 生效引擎后端（spawn_sidecar_task 写入的运行态；state 未托管 = 启动前）。
+    let engine_backend = app
+        .try_state::<crate::lifecycle::EngineBackendState>()
+        .map(|s| s.as_str().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // 4. engine manifest（如果存在）
     let manifest_path = app
         .path()
         .app_data_dir()
@@ -75,7 +84,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
 
     let engine_manifest = manifest_path.and_then(|p| fs::read_to_string(&p).ok());
 
-    // 4. 最近崩溃文件（最多 5 个）
+    // 5. 最近崩溃文件（最多 5 个）
     let crash_dir: Option<PathBuf> = app
         .path()
         .app_data_dir()
@@ -118,6 +127,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
         arch,
         app_data_dir,
         engine_dir,
+        engine_backend,
         node_cache_dir,
         projects_file,
         engine_manifest,
@@ -137,6 +147,7 @@ mod tests {
             arch: "aarch64".to_string(),
             app_data_dir: "/tmp/app".to_string(),
             engine_dir: "/tmp/engine".to_string(),
+            engine_backend: "rust".to_string(),
             node_cache_dir: "/tmp/node".to_string(),
             projects_file: "/tmp/projects.json".to_string(),
             engine_manifest: Some("v1.0.0".to_string()),
@@ -146,6 +157,7 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"version\":\"0.3.0\""));
         assert!(json.contains("\"platform\":\"macos\""));
+        assert!(json.contains("\"engine_backend\":\"rust\""));
 
         let deserialized: DiagnosticInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.version, "0.3.0");
