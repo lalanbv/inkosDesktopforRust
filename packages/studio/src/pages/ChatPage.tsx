@@ -7,6 +7,7 @@ import type { ChatAttachmentPayload } from "../store/chat/types";
 import { chatSelectors, useChatStore } from "../store/chat";
 import type { ChatSessionKind } from "../store/chat";
 import { useServiceStore } from "../store/service";
+import { usePreferencesStore } from "../store/preferences";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -295,6 +296,10 @@ function SkillPickerPanel({
 // -- Component --
 
 export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+  // 消息级打字机（162 号备案 → 166 号补齐）：专注模式下点击消息聚焦、其余降暗
+  // ——与 ChapterReader 段落级同款语义（.focus-mode 全局环境层 + .typewriter-dim）。
+  const focusMode = usePreferencesStore((state) => state.focusMode);
+  const [activeMessage, setActiveMessage] = useState<number | null>(null);
   // -- Store selectors --
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
@@ -834,7 +839,11 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.map((msg, i) => (
-              <div key={`${msg.timestamp}-${i}`}>
+              <div
+                key={`${msg.timestamp}-${i}`}
+                onClick={focusMode ? () => setActiveMessage(i) : undefined}
+                className={focusMode && activeMessage !== null && i !== activeMessage ? "typewriter-dim" : undefined}
+              >
                 {msg.role === "user" ? (
                   /* User message */
                   <ChatMessage role="user" content={msg.content} timestamp={msg.timestamp} theme={theme} />
