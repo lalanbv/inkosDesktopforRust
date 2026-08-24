@@ -9,3 +9,6 @@
 
 # macOS 目录元数据
 .DS_Store
+
+# 164号：engine-rust/ 是 desktop-package-rust-engine.sh 组装的构建产物（server bin + static + manifest）
+/engine-rust

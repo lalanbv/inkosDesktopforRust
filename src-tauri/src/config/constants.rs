@@ -27,6 +27,21 @@ pub const APP_DATA_DIR_NAME: &str = "inkosDesktop";
 /// 运行态副本 = app_data/engine，由 M3d updater 维护）。
 pub const ENGINE_DIR_NAME: &str = "engine";
 
+/// Rust 引擎目录名（inkos-engine-server 二进制 + static/ 前端 + manifest）。
+/// 启动源 = resource_dir/engine-rust（打包）或 repo engine-rs/target（dev）；
+/// 运行态副本 = app_data/engine-rust（未来 Rust 引擎 updater 落点）。
+pub const RUST_ENGINE_DIR_NAME: &str = "engine-rust";
+
+/// Rust 引擎服务二进制文件名（engine-rs 的 bin inkos-engine-server）。
+pub const RUST_SERVER_BIN_NAME: &str = "inkos-engine-server";
+
+/// Rust 引擎静态前端目录名（engine-rust/static = packages/studio/dist 副本，
+/// INKOS_STATIC_DIR 直连面）。
+pub const RUST_STATIC_DIR_NAME: &str = "static";
+
+/// 后端选择 env 覆盖键（`rust`|`node`，大小写不敏感；优先于配置文件）。
+pub const ENGINE_BACKEND_ENV: &str = "INKOS_ENGINE_BACKEND";
+
 /// engine manifest 文件名。
 pub const ENGINE_MANIFEST_FILE: &str = "manifest.json";
 
@@ -88,6 +103,9 @@ mod tests {
             SECRETS_FILE_NAME,
             UPDATES_DIR_NAME,
             STAGING_DIR_NAME,
+            RUST_ENGINE_DIR_NAME,
+            RUST_SERVER_BIN_NAME,
+            RUST_STATIC_DIR_NAME,
         ] {
             assert!(!name.contains(std::path::MAIN_SEPARATOR), "{name} 含路径分隔符");
             assert!(!name.contains('/'), "{name} 含 /");

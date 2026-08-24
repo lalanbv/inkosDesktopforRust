@@ -27,7 +27,7 @@ async fn health_probe_succeeds_when_server_up() {
         }
     });
     assert!(
-        inkos_desktop::supervisor::health_probe(port, Duration::from_secs(3)).await,
+        inkos_desktop::supervisor::health_probe(port, Duration::from_secs(3), "/").await,
         "服务已起，health_probe 应成功"
     );
 }
@@ -38,7 +38,7 @@ async fn health_probe_times_out_when_no_server() {
     // 端口 9 是 discard 协议；连接通常被立即关闭或拒绝，绝无 HTTP 200。
     let port = 9;
     assert!(
-        !inkos_desktop::supervisor::health_probe(port, Duration::from_millis(500)).await,
+        !inkos_desktop::supervisor::health_probe(port, Duration::from_millis(500), "/").await,
         "无服务，health_probe 应超时返回 false"
     );
 }
@@ -94,7 +94,7 @@ async fn real_inkos_sidecar_serves_spa() {
     let spec = build_launch(&paths, port, "node");
     let mut child = spawn(&spec).expect("spawn inkos");
 
-    let ok = health_probe(port, Duration::from_secs(60)).await;
+    let ok = health_probe(port, Duration::from_secs(60), "/").await;
 
     // 无论健康与否都清理；记录 kill 失败但不阻塞断言。
     let kill_err = kill_tree(&child).err();

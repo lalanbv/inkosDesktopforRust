@@ -172,13 +172,21 @@ pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
     }
 }
 
-/// 轮询 `http://127.0.0.1:{port}/` 直到返回 2xx 或超时。
+/// 轮询 `http://127.0.0.1:{port}{probe_path}` 直到返回 2xx 或超时。
+///
+/// `probe_path` 按后端选择：Node sidecar = `/`（SPA 恒挂）；Rust 引擎 =
+/// [`crate::engine::rustbin::HEALTH_PROBE_PATH`]（`/api/v1/health` 恒 200，
+/// 不依赖静态面是否存在）。
 ///
 /// 单次请求 timeout=2s，避免 reqwest 默认行为把整个 `timeout` 预算耗在一个连不上的端口。
 /// 间隔由 [`crate::config::HEALTH_PROBE_INTERVAL`] 决定（默认 200ms）。
 /// 任何 reqwest 错误都按"未就绪"处理（连接拒绝、TLS 失败、解析失败等），返回 false 继续轮询。
-pub async fn health_probe(port: u16, timeout: std::time::Duration) -> bool {
-    let url = format!("http://127.0.0.1:{port}/");
+pub async fn health_probe(
+    port: u16,
+    timeout: std::time::Duration,
+    probe_path: &str,
+) -> bool {
+    let url = format!("http://127.0.0.1:{port}{probe_path}");
     let deadline = std::time::Instant::now() + timeout;
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))

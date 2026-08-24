@@ -29,7 +29,8 @@
       "icons/icon.png"
     ],
     "resources": [
-      "engine"
+      "engine",
+      "engine-rust"
     ]
   },
   "plugins": {

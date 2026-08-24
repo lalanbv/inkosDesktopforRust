@@ -5,6 +5,7 @@
 
 pub mod manifest;
 pub mod node;
+pub mod rustbin;
 
 use std::path::{Path, PathBuf};
 

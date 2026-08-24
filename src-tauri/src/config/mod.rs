@@ -19,7 +19,7 @@ pub use merge::ConfigManager;
 pub use paths::ConfigPaths;
 pub use reload::ConfigReloader;
 pub use types::{
-    AppConfig, ConfigLayer, EngineConfig, LoggingConfig, NetworkConfig,
+    AppConfig, ConfigLayer, EngineBackend, EngineConfig, LoggingConfig, NetworkConfig,
     UpdatesConfig, VersionPolicy,
 };
 pub use watcher::{ConfigChangeEvent, ConfigWatcher};

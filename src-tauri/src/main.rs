@@ -548,6 +548,38 @@ struct UpdatesDto {
     shell: inkos_desktop::updater::ReleaseInfo,
 }
 
+/// 绞杀者终切（164 号）：选择业务引擎后端。
+///
+/// 优先级：env `INKOS_ENGINE_BACKEND`（rust|node，大小写不敏感——测试/临时
+/// 切换用）> 合并配置 `engine.backend`（分层配置系统）> 默认 `rust`。
+/// 配置读取失败按默认处理（后端选择不得阻断启动）。
+fn select_engine_backend(app_handle: &tauri::AppHandle) -> inkos_desktop::config::EngineBackend {
+    use inkos_desktop::config::EngineBackend;
+
+    if let Ok(raw) = std::env::var(config::ENGINE_BACKEND_ENV) {
+        return match raw.trim().to_lowercase().as_str() {
+            "rust" => EngineBackend::Rust,
+            "node" => EngineBackend::Node,
+            other => {
+                eprintln!(
+                    "[main] {}={other} 非法（须 rust|node），忽略 env 覆盖",
+                    config::ENGINE_BACKEND_ENV
+                );
+                EngineBackend::default()
+            }
+        };
+    }
+
+    // 合并配置（分层 merge 已在 ConfigManager 内完成）。锁竞争可忽略
+    // （启动期一次性读取）；失败降级默认。
+    if let Some(state) = app_handle.try_state::<commands::config::AppState>() {
+        if let Ok(mut mgr) = state.config.try_lock() {
+            return mgr.merged().engine.backend;
+        }
+    }
+    EngineBackend::default()
+}
+
 /// M3b：提取的 sidecar 启动任务。auto 复用（last_opened）与 picker 选择（choose_project）
 /// 共用此入口。所有失败仅 log + 窗口 title 回显，不 panic（与 M1/M2 一致的降级纪律）。
 fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
@@ -559,6 +591,8 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 return;
             }
         };
+        // 绞杀者终切：后端选择在 engine 解析之前（决定走哪条启动路径）。
+        let backend = select_engine_backend(&app_handle);
         let outcome = async {
             // M3d：engine 解析（app_data 更新副本优先 → 否则 dev/prod 源）。
             let launch_engine = resolve_launch_engine(&app_handle);
@@ -593,27 +627,91 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 .context("pick_free_port 在 [4567, 5567) 区间无空闲端口")?;
 
             // =====================================================
-            // M3c：运行时 Node 自适应 bootstrap
+            // 绞杀者终切（164 号）：Rust 引擎直启，Node sidecar 回退。
             // =====================================================
-            // 缓存命中即用（后续启动零网络）；否则 region-aware 下载（CN 优先 npmmirror），
-            // 官方 SHASUMS256 校验，解压到 app_data/runtime/node/{ver}-{os}-{arch}/。
-            // 失败（无网/校验不过/解压失败）→ 回退系统 node（依赖 PATH），log 不阻塞。
-            let cache_dir = paths.runtime_dir().join(config::NODE_DIR_NAME);
-            let resolver = inkos_desktop::engine::node::BootstrappingResolver::new(
-                cache_dir,
-                Box::new(inkos_desktop::engine::node::LocaleMirrorSelector),
-            )
-            .with_progress(Arc::new(|stage: &str| {
-                eprintln!("[node] bootstrap: {stage}");
-            }));
-            let node_bin: String = match resolver.resolve().await {
-                Ok(p) => {
-                    eprintln!("[main] node bootstrap 完成: {}", p.display());
-                    p.to_string_lossy().into_owned()
+            // Rust 路径零 Node 依赖：不跑 portable Node bootstrap（无首启下载、
+            // 无 PATH 回退），env 契约 = INKOS_PORT/INKOS_PROJECT_ROOT/INKOS_STATIC_DIR。
+            // 二进制 miss（未打包/未构建）→ 告警回退 Node 路径，启动不阻断。
+            let app_data = dirs::data_dir()
+                .map(|d| d.join(config::APP_DATA_DIR_NAME))
+                .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
+            let resource_dir = app_handle.path().resource_dir().ok();
+            let dev_repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .context("CARGO_MANIFEST_DIR 应有父目录（仓根）")?;
+
+            let rust_bin = match backend {
+                inkos_desktop::config::EngineBackend::Rust => {
+                    inkos_desktop::engine::rustbin::resolve_server_bin(
+                        Some(&app_data),
+                        resource_dir.as_deref(),
+                        dev_repo_root,
+                    )
                 }
-                Err(e) => {
-                    eprintln!("[main] node bootstrap 失败，回退系统 node（依赖 PATH）: {e:#}");
-                    "node".to_string()
+                inkos_desktop::config::EngineBackend::Node => None,
+            };
+
+            let (spec, probe_path) = match rust_bin {
+                Some(bin) => {
+                    let static_dir = inkos_desktop::engine::rustbin::resolve_static_dir(
+                        resource_dir.as_deref(),
+                        dev_repo_root,
+                    );
+                    if static_dir.is_none() {
+                        eprintln!(
+                            "[main] Rust 引擎无静态前端面（纯 API 模式），webview 导航将 404——dev 请先跑 desktop-build-inkos.sh 构建 studio dist"
+                        );
+                    }
+                    eprintln!(
+                        "[main] 引擎后端 = rust（inkos-engine-server: {}）",
+                        bin.display()
+                    );
+                    let spec = inkos_desktop::engine::rustbin::build_launch(
+                        &paths,
+                        port,
+                        &bin,
+                        static_dir.as_deref(),
+                    );
+                    (spec, inkos_desktop::engine::rustbin::HEALTH_PROBE_PATH)
+                }
+                None => {
+                    if matches!(
+                        backend,
+                        inkos_desktop::config::EngineBackend::Rust
+                    ) {
+                        eprintln!(
+                            "[main] Rust 引擎二进制未找到（app_data/resource/engine-rs target 均 miss），回退 Node sidecar"
+                        );
+                    } else {
+                        eprintln!("[main] 引擎后端 = node（sidecar）");
+                    }
+
+                    // =================================================
+                    // M3c：运行时 Node 自适应 bootstrap（Node 回退路径）
+                    // =================================================
+                    // 缓存命中即用（后续启动零网络）；否则 region-aware 下载（CN 优先 npmmirror），
+                    // 官方 SHASUMS256 校验，解压到 app_data/runtime/node/{ver}-{os}-{arch}/。
+                    // 失败（无网/校验不过/解压失败）→ 回退系统 node（依赖 PATH），log 不阻塞。
+                    let cache_dir = paths.runtime_dir().join(config::NODE_DIR_NAME);
+                    let resolver = inkos_desktop::engine::node::BootstrappingResolver::new(
+                        cache_dir,
+                        Box::new(inkos_desktop::engine::node::LocaleMirrorSelector),
+                    )
+                    .with_progress(Arc::new(|stage: &str| {
+                        eprintln!("[node] bootstrap: {stage}");
+                    }));
+                    let node_bin: String = match resolver.resolve().await {
+                        Ok(p) => {
+                            eprintln!("[main] node bootstrap 完成: {}", p.display());
+                            p.to_string_lossy().into_owned()
+                        }
+                        Err(e) => {
+                            eprintln!("[main] node bootstrap 失败，回退系统 node（依赖 PATH）: {e:#}");
+                            "node".to_string()
+                        }
+                    };
+                    let spec = supervisor::build_launch(&paths, port, &node_bin);
+                    (spec, "/")
                 }
             };
 
@@ -636,12 +734,12 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 state.set_guard(guard);
             }
 
-            let spec = supervisor::build_launch(&paths, port, &node_bin);
             let child = supervisor::spawn(&spec).context("spawn sidecar 失败")?;
 
-            Ok::<(u16, std::process::Child, Arc<dyn SecretStore>, Arc<AtomicBool>, PathBuf), anyhow::Error>((
+            Ok::<(u16, std::process::Child, &'static str, Arc<dyn SecretStore>, Arc<AtomicBool>, PathBuf), anyhow::Error>((
                 port,
                 child,
+                probe_path,
                 store,
                 syncing,
                 secrets_path,
@@ -650,7 +748,7 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
         .await;
 
         match outcome {
-            Ok((port, child, store, syncing, secrets_path)) => {
+            Ok((port, child, probe_path, store, syncing, secrets_path)) => {
                 if let Some(state) = app_handle.try_state::<SidecarState>() {
                     state.insert(child);
                 } else {
@@ -670,8 +768,12 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                     handle: Mutex::new(Some(wb_handle)),
                 });
 
-                let healthy =
-                    supervisor::health_probe(port, config::HEALTH_PROBE_TIMEOUT).await;
+                let healthy = supervisor::health_probe(
+                    port,
+                    config::HEALTH_PROBE_TIMEOUT,
+                    probe_path,
+                )
+                .await;
 
                 if healthy {
                     let url = format!("http://127.0.0.1:{}/", port);

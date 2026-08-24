@@ -31,6 +31,11 @@ pub struct EngineConfig {
 
     #[serde(default = "default_auto_download")]
     pub auto_download: bool,
+
+    /// 业务引擎后端（绞杀者终切开关）。默认 `rust`（inkos-engine-server）；
+    /// 二进制缺失时壳层自动回退 `node` sidecar 并告警，不阻断启动。
+    #[serde(default)]
+    pub backend: EngineBackend,
 }
 
 impl Default for EngineConfig {
@@ -38,12 +43,28 @@ impl Default for EngineConfig {
         Self {
             version_policy: VersionPolicy::Latest,
             auto_download: true,
+            backend: EngineBackend::default(),
         }
     }
 }
 
 fn default_auto_download() -> bool {
     true
+}
+
+/// 业务引擎后端选择。
+///
+/// serde 数据判别器（TOML/IPC 外部契约值 `rust`/`node`），与 `ConfigLayer`
+/// 同理不适用 `None=0`/`Max` 占位约定——那会引入非法后端值污染配置契约。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineBackend {
+    /// inkos-engine-server（Rust 全量移植，strangler duel 8/8 验证）。
+    #[default]
+    Rust,
+    /// Node sidecar（engine/dist + node bootstrap，回退路径）。
+    Node,
 }
 
 /// 更新配置
@@ -183,10 +204,43 @@ mod tests {
         let cfg = AppConfig::default();
         assert!(matches!(cfg.engine.version_policy, VersionPolicy::Latest));
         assert!(cfg.engine.auto_download);
+        assert_eq!(cfg.engine.backend, EngineBackend::Rust);
         assert_eq!(cfg.updates.check_interval_hours, 24);
         assert_eq!(cfg.updates.channel, "stable");
         assert_eq!(cfg.logging.level, "info");
         assert_eq!(cfg.network.timeout_seconds, 30);
+    }
+
+    /// 旧配置（无 backend 键）零迁移：serde default → Rust 后端。
+    #[test]
+    fn test_legacy_config_without_backend_parses_to_rust() {
+        let toml = r#"
+[engine]
+auto_download = false
+"#;
+        let parsed: AppConfig = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.engine.backend, EngineBackend::Rust);
+        assert!(!parsed.engine.auto_download);
+    }
+
+    #[test]
+    fn test_engine_backend_serialization() {
+        // TOML/JSON 形态均为裸字符串 "rust"/"node"（snake_case 判别器）。
+        assert_eq!(
+            serde_json::to_string(&EngineBackend::Rust).unwrap(),
+            "\"rust\""
+        );
+        assert!(
+            toml::to_string(&EngineConfig::default())
+                .unwrap()
+                .contains("backend = \"rust\""),
+            "默认配置应显式落 rust（用户可见的当前选择）"
+        );
+        let node_cfg = toml::from_str::<EngineConfig>("[backend]\n");
+        assert!(node_cfg.is_err(), "backend 须为裸字符串枚举值，表形态应拒绝");
+        let parsed: EngineConfig =
+            toml::from_str("backend = \"node\"\nversion_policy = \"latest\"\nauto_download = true\n").unwrap();
+        assert_eq!(parsed.backend, EngineBackend::Node);
     }
 
     #[test]
@@ -205,14 +259,17 @@ mod tests {
             EngineConfig {
                 version_policy: VersionPolicy::Latest,
                 auto_download: true,
+                backend: EngineBackend::default(),
             },
             EngineConfig {
                 version_policy: VersionPolicy::Fixed("0.4.0".to_string()),
                 auto_download: false,
+                backend: EngineBackend::default(),
             },
             EngineConfig {
                 version_policy: VersionPolicy::Range("^0.4.0".to_string()),
                 auto_download: true,
+                backend: EngineBackend::default(),
             },
         ];
 
