@@ -1,0 +1,22 @@
+{
+  "_comment": "CodeGraph 项目级配置。默认已完全遵循各层 .gitignore；此处的 exclude 为关键产物/依赖目录做双保险（src-tauri/target 达 46G，必须确保不进索引），并补齐 .gitignore 未覆盖的非源码目录。",
+  "exclude": [
+    "**/node_modules/",
+    "**/target/",
+    "**/dist/",
+    "**/coverage/",
+    "**/.turbo/",
+    "src-tauri/gen/",
+    "src-tauri/engine/",
+    ".git/",
+    ".codegraph/",
+    "test-project/",
+    "docs/",
+    "books/",
+    "worlds/",
+    ".inkos/",
+    "prompt/",
+    "变更记录文档/",
+    "开发时SpecCoding'sPlan/"
+  ]
+}
