@@ -75,13 +75,17 @@ fn is_valid_url(s: &str) -> bool {
 /// 解析/schema 校验失败 → ApiError 500 `PROJECT_CONFIG_INVALID`
 /// （server.ts L4181）。env 层与 services 预设合并暂缓（偏差备案：返回
 /// raw 项目配置而非 env 合并有效值）。
+///
+/// 读侧三态与 Node `readProjectConfig`/`resolveEffectiveLLMConfig` 逐字对齐
+/// （165 号修复：真实遗留项目 inkos.json 无 `llm` 键时 Node 走
+/// `config.llm ?? {}` + noop 填充返回 200，原 Rust 实现误把 zod 缺字段
+/// 报错面复刻到了读取闸门 → 桌面切 Rust 后端后启动即 500）：
+/// - 文件缺失 → "inkos.json not found in {root}.…"（Node 指引文案）；
+/// - JSON 非法 → "inkos.json in {root} is not valid JSON.…"；
+/// - 合法 JSON 非对象 / `llm` 缺失或非对象 → 空对象（TS `?? {}` + 展开语义），
+///   后续 noop 填充兜底。
 pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
-    let raw_text = tokio::fs::read_to_string(root.join("inkos.json")).await;
-    let raw: Value = match raw_text {
-        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
-        Err(_) => Value::Null,
-    };
     let invalid = |detail: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -93,9 +97,28 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
             })),
         )
     };
-    let Some(obj) = raw.as_object() else {
-        return invalid("Unexpected token".to_string());
+    let raw_text = match tokio::fs::read_to_string(root.join("inkos.json")).await {
+        Ok(text) => text,
+        Err(_) => {
+            return invalid(format!(
+                "inkos.json not found in {}.\nMake sure you are inside an InkOS project directory (cd into the project created by 'inkos init').",
+                root.display()
+            ));
+        }
     };
+    let raw: Value = match serde_json::from_str(&raw_text) {
+        Ok(value) => value,
+        Err(_) => {
+            return invalid(format!(
+                "inkos.json in {} is not valid JSON. Check the file for syntax errors.",
+                root.display()
+            ));
+        }
+    };
+    // TS `{ ...((config.llm ?? {})) }`：根非对象（展开得 {}）/llm 缺失或非对象
+    // → 空对象，noop 填充兜底——zod 缺字段报错只发生在 Node schema 终验，
+    // 而读取层 llm 永远先被填充成合法对象，不应在此处拦截。
+    let obj: Map<String, Value> = raw.as_object().cloned().unwrap_or_default();
     // ProjectConfigSchema 校验（响应所需字段面）。
     let Some(name) = obj.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else {
         return invalid("name must contain at least 1 character(s)".to_string());
@@ -105,14 +128,16 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
         Some(Value::String(s)) if s == "zh" || s == "en" => s.as_str(),
         Some(_) => return invalid("Invalid enum value. Expected 'zh' | 'en'".to_string()),
     };
-    let Some(llm) = obj.get("llm").and_then(Value::as_object) else {
-        return invalid("Invalid input: expected object, received missing".to_string());
-    };
+    let llm: Map<String, Value> = obj
+        .get("llm")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     // 63 号补齐（56 号偏差备案）：resolveEffectiveLLMConfig 的 studio-project
     // 主路径——services 选择 + 镜像 + secrets key + noop 默认填充后取有效值。
     let effective = crate::server::service_routes::resolve_effective_llm_studio(
         runtime.state.project_root(),
-        llm,
+        &llm,
     )
     .await;
     let get_str = |key: &str| effective.get(key).and_then(Value::as_str);
@@ -688,4 +713,161 @@ pub async fn post_language(
         return flat_internal("inkos.json write failed".to_string());
     }
     ok_json(response)
+}
+
+#[cfg(test)]
+mod get_project_tests {
+    //! 165 号回归：GET /project 读侧三态与 Node `resolveEffectiveLLMConfig`
+    //! 逐字对齐——真实遗留项目 inkos.json 无 `llm` 键曾在此 500（桌面切 Rust
+    //! 后端后的启动阻断），Node 同形状走 `?? {}` + noop 填充返回 200。
+
+    use super::*;
+    use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use crate::server::sse::BroadcastHub;
+    use crate::state::manager::StateManager;
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::http::StatusCode;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    async fn run(root: &std::path::Path) -> (StatusCode, Value) {
+        // 经完整路由跑（与真实挂载一致），避免直接调 handler 的提取器差异。
+        let state = crate::server::AppState { version: "test".to_string() };
+        let hub = Arc::new(BroadcastHub::new());
+        let sm = Arc::new(StateManager::new(root.to_path_buf()));
+        let runner: crate::server::WriteNextRunner = Arc::new(|_, _, _, _| Box::pin(async { Err("unused".to_string()) }));
+        let default = LlmEndpointConfig {
+            base_url: "http://127.0.0.1:9".to_string(),
+            api_key: String::new(),
+            model: "default".to_string(),
+            max_tokens: 8192,
+            extra_headers: HashMap::new(),
+        };
+        let books = BooksRuntime {
+            hub: hub.clone(),
+            state: sm,
+            router: Arc::new(AgentRouter::new(default, HashMap::new())),
+            builtin_genres_dir: std::path::PathBuf::from("assets/genres"),
+            revision_gate: crate::pipeline::merged_audit::RevisionGate::parse(None),
+        };
+        let audit = crate::server::audit_route::AuditRuntime {
+            hub,
+            state: books.state.clone(),
+            router: books.router.clone(),
+            builtin_genres_dir: books.builtin_genres_dir.clone(),
+        };
+        let runtime = crate::server::WriteNextRuntime {
+            hub: books.hub.clone(),
+            state: books.state.clone(),
+            runner,
+            project_root: root.to_path_buf(),
+        };
+        let app = crate::server::router_books(state, books.hub.clone(), runtime, audit, books);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/project")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    /// test-project 实形状（无 llm 键）：Node `?? {}` + noop 填充 → 200。
+    #[tokio::test]
+    async fn missing_llm_key_noop_fills_like_node() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{ "name": "legacy", "version": "0.1.0", "language": "zh", "notify": [] }"#,
+        )
+        .unwrap();
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::OK, "无 llm 键应 noop 填充返回 200: {body}");
+        assert_eq!(body["model"], "noop-model");
+        assert_eq!(body["provider"], "openai");
+        assert_eq!(body["baseUrl"], "https://example.invalid/v1");
+        assert_eq!(body["name"], "legacy");
+        assert_eq!(body["language"], "zh");
+    }
+
+    /// 仓根实形状（llm 存在但 baseUrl/model 空串）：fillNoopLLMDefaults 空串
+    /// 替换语义 → 200。
+    #[tokio::test]
+    async fn empty_llm_strings_noop_fill() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{ "name": "x", "llm": { "provider": "openai", "baseUrl": "", "model": "" } }"#,
+        )
+        .unwrap();
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::OK, "空串应 noop 填充: {body}");
+        assert_eq!(body["baseUrl"], "https://example.invalid/v1");
+        assert_eq!(body["model"], "noop-model");
+    }
+
+    /// `"llm": null`：TS `null ?? {}` → 空对象 → 200。
+    #[tokio::test]
+    async fn null_llm_treated_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{ "name": "x", "llm": null }"#,
+        )
+        .unwrap();
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::OK, "llm null 应等价缺失: {body}");
+        assert_eq!(body["model"], "noop-model");
+    }
+
+    /// 文件缺失：Node readProjectConfig 指引文案（含 root 路径）。
+    #[tokio::test]
+    async fn missing_file_message_matches_node() {
+        let dir = tempfile::tempdir().unwrap(); // 无 inkos.json
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "PROJECT_CONFIG_INVALID");
+        let msg = body["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.starts_with("Failed to load inkos.json: inkos.json not found in "),
+            "文案应以 Node 指引开头: {msg}"
+        );
+        assert!(msg.contains("Make sure you are inside an InkOS project directory"), "{msg}");
+    }
+
+    /// JSON 非法：Node 文案。
+    #[tokio::test]
+    async fn invalid_json_message_matches_node() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("inkos.json"), "{ broken").unwrap();
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let msg = body["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("is not valid JSON. Check the file for syntax errors."),
+            "文案应为 Node 语法错误指引: {msg}"
+        );
+    }
+
+    /// 合法 JSON 但根非对象：TS 展开语义得 {} → name 校验 500（而非读取层拦）。
+    #[tokio::test]
+    async fn non_object_root_fails_on_name_not_read_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("inkos.json"), "42").unwrap();
+        let (status, body) = run(dir.path()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let msg = body["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("name must contain at least 1 character(s)"),
+            "非对象根应落到 name 校验（zod 终验面）: {msg}"
+        );
+    }
 }
