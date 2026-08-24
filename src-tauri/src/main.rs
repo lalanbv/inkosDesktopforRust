@@ -446,14 +446,38 @@ fn main() {
                     .map(|m| m.engine_version)
                     .unwrap_or_else(|_| "0.0.0".to_string())
             };
+            // 166：Rust 引擎（默认后端）版本——解析序同 rustbin::resolve_server_bin
+            //（app_data 更新副本 → resource 打包副本；dev 的 engine-rs/target 无
+            // manifest.json，读不到 → "0.0.0"，dev 不依赖 updater 通道）。
+            let current_rust_engine_version = {
+                let manifest_path = app_data.join(config::RUST_ENGINE_DIR_NAME).join(config::ENGINE_MANIFEST_FILE);
+                let manifest_path = if manifest_path.is_file() {
+                    manifest_path
+                } else {
+                    app_handle
+                        .path()
+                        .resource_dir()
+                        .ok()
+                        .map(|rd| rd.join(config::RUST_ENGINE_DIR_NAME).join(config::ENGINE_MANIFEST_FILE))
+                        .filter(|p| p.is_file())
+                        .unwrap_or(manifest_path)
+                };
+                inkos_desktop::engine::manifest::EngineManifest::read(&manifest_path)
+                    .map(|m| m.engine_version)
+                    .unwrap_or_else(|_| "0.0.0".to_string())
+            };
             let engine_base = dirs::data_dir()
                 .map(|d| d.join(config::APP_DATA_DIR_NAME))
                 .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME));
             app.manage(UpdaterState {
                 repo,
                 current_engine_version,
+                current_rust_engine_version,
                 engine_dir: engine_base.join(config::ENGINE_DIR_NAME),
-                bak_dir: engine_base.join(config::ENGINE_BAK_DIR_NAME),
+                engine_bak_dir: engine_base.join(config::ENGINE_BAK_DIR_NAME),
+                rust_engine_dir: engine_base.join(config::RUST_ENGINE_DIR_NAME),
+                rust_engine_bak_dir: engine_base
+                    .join(format!("{}.bak", config::RUST_ENGINE_DIR_NAME)),
                 staging_dir: engine_base
                     .join(config::UPDATES_DIR_NAME)
                     .join(config::STAGING_DIR_NAME),
@@ -531,16 +555,36 @@ fn resolve_launch_engine(app_handle: &tauri::AppHandle) -> PathBuf {
 struct UpdaterState {
     /// 本仓 "owner/repo"（从 env 或默认 origin 解析；fallback 占位）。
     repo: String,
-    /// 当前 engine 版本（manifest.engine_version；读失败 → "0.0.0" 视为总需更新）。
+    /// 当前 Node 引擎版本（回退后端；manifest.engine_version；读失败 → "0.0.0" 视为总需更新）。
     current_engine_version: String,
-    /// app_data/engine（updater 替换目标）。
+    /// 当前 Rust 引擎版本（默认后端；读失败 → "0.0.0"）。
+    current_rust_engine_version: String,
+    /// app_data/engine（Node 引擎 updater 替换目标）。
     engine_dir: PathBuf,
-    /// app_data/engine.bak（回滚备份）。
-    bak_dir: PathBuf,
+    /// app_data/engine.bak（Node 引擎回滚备份）。
+    engine_bak_dir: PathBuf,
+    /// app_data/engine-rust（Rust 引擎 updater 替换目标——166 号新增）。
+    rust_engine_dir: PathBuf,
+    /// app_data/engine-rust.bak（Rust 引擎回滚备份）。
+    rust_engine_bak_dir: PathBuf,
     /// app_data/updates/staging（下载暂存）。
     staging_dir: PathBuf,
     /// C2 审计修复：apply 串行锁（防双击/并发调用破坏 engine 状态）。
     apply_lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// engine 通道按**生效后端**选形态（166 号）：rust（默认）取
+/// `inkos-engine-*` 资产替换 app_data/engine-rust；node（回退）维持既有
+/// `engine-*` 资产替换 app_data/engine。启动前（state 未写入）按默认 rust。
+fn active_flavor(app_handle: &tauri::AppHandle) -> inkos_desktop::updater::engine::BundleFlavor {
+    use inkos_desktop::updater::engine::BundleFlavor;
+    match app_handle
+        .try_state::<inkos_desktop::lifecycle::EngineBackendState>()
+        .map(|s| s.as_str())
+    {
+        Some("node") => BundleFlavor::Node,
+        _ => BundleFlavor::Rust,
+    }
 }
 
 /// `check_updates` 返回 DTO（前端 + 日志用）。
@@ -963,8 +1007,18 @@ async fn cmd_check_updates(
 ) -> inkos_desktop::error::Result<UpdatesDto> {
     use inkos_desktop::updater::{engine::EngineChannel, ReleaseInfo};
 
+    // 166：按生效后端选通道形态与版本源（rust=默认）。
+    let flavor = active_flavor(&app_handle);
+    let current_version = match flavor {
+        inkos_desktop::updater::engine::BundleFlavor::Rust => {
+            state.current_rust_engine_version.clone()
+        }
+        inkos_desktop::updater::engine::BundleFlavor::Node => {
+            state.current_engine_version.clone()
+        }
+    };
     let engine_ch =
-        EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
+        EngineChannel::new(state.repo.clone(), current_version.clone()).with_flavor(flavor);
     let engine = match engine_ch.check().await {
         Ok(Some(tag)) => ReleaseInfo {
             channel: "engine",
@@ -973,7 +1027,7 @@ async fn cmd_check_updates(
         },
         _ => ReleaseInfo {
             channel: "engine",
-            version: state.current_engine_version.clone(),
+            version: current_version,
             needs_update: false,
         },
     };
@@ -1012,6 +1066,7 @@ async fn check_shell_update(app_handle: &tauri::AppHandle) -> Result<Option<Stri
 #[tauri::command]
 async fn cmd_apply_engine_update(
     state: tauri::State<'_, UpdaterState>,
+    app_handle: tauri::AppHandle,
 ) -> inkos_desktop::error::Result<String> {
     use inkos_desktop::error::AppError;
     use inkos_desktop::updater::engine::EngineChannel;
@@ -1019,8 +1074,21 @@ async fn cmd_apply_engine_update(
     // C2 审计修复：串行化 apply（防双击/并发调用并发下载/替换破坏 engine 状态）。
     // tokio::sync::Mutex::lock().await 返回 MutexGuard（非 Result，无中毒概念）。
     let _lock = state.apply_lock.lock().await;
-    let engine_ch =
-        EngineChannel::new(state.repo.clone(), state.current_engine_version.clone());
+    // 166：按生效后端选形态 + 版本源 + 替换目录组。
+    let flavor = active_flavor(&app_handle);
+    let (current_version, engine_dir, bak_dir) = match flavor {
+        inkos_desktop::updater::engine::BundleFlavor::Rust => (
+            state.current_rust_engine_version.clone(),
+            state.rust_engine_dir.clone(),
+            state.rust_engine_bak_dir.clone(),
+        ),
+        inkos_desktop::updater::engine::BundleFlavor::Node => (
+            state.current_engine_version.clone(),
+            state.engine_dir.clone(),
+            state.engine_bak_dir.clone(),
+        ),
+    };
+    let engine_ch = EngineChannel::new(state.repo.clone(), current_version).with_flavor(flavor);
 
     // 先 check 确认有更新（友好错误）；apply 内部再 fetch release + 下载 + 校验 + 替换。
     let latest_tag = engine_ch
@@ -1034,8 +1102,8 @@ async fn cmd_apply_engine_update(
     let ver = latest_tag.trim_start_matches('v');
     engine_ch
         .apply(
-            &state.engine_dir,
-            &state.bak_dir,
+            &engine_dir,
+            &bak_dir,
             &state.staging_dir,
             &|bundle, dest| inkos_desktop::engine::node::extract_archive(bundle, dest),
         )

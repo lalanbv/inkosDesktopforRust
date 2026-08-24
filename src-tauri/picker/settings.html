@@ -148,6 +148,13 @@
           <fieldset>
             <legend data-i18n="config.engine.legend">引擎</legend>
             <div class="cfg-row">
+              <label for="cfg-eng-backend" data-i18n="config.engine.backend">引擎后端</label>
+              <select id="cfg-eng-backend">
+                <option value="rust" data-i18n="config.backend.rust">Rust 引擎（默认）</option>
+                <option value="node" data-i18n="config.backend.node">Node sidecar（回退）</option>
+              </select>
+            </div>
+            <div class="cfg-row">
               <label for="cfg-eng-autodl" data-i18n="config.engine.auto_download">自动下载引擎</label>
               <input id="cfg-eng-autodl" type="checkbox" />
             </div>
@@ -234,6 +241,9 @@
           "config.updates.interval": "检查间隔（小时）",
           "config.updates.auto_apply": "自动应用更新",
           "config.engine.legend": "引擎",
+          "config.engine.backend": "引擎后端",
+          "config.backend.rust": "Rust 引擎（默认）",
+          "config.backend.node": "Node sidecar（回退）",
           "config.engine.auto_download": "自动下载引擎",
           "config.engine.version_policy": "版本策略",
           "config.engine.version": "锁定版本",
@@ -301,6 +311,9 @@
           "config.updates.interval": "Check Interval (hours)",
           "config.updates.auto_apply": "Auto-apply Updates",
           "config.engine.legend": "Engine",
+          "config.engine.backend": "Engine Backend",
+          "config.backend.rust": "Rust engine (default)",
+          "config.backend.node": "Node sidecar (fallback)",
           "config.engine.auto_download": "Auto-download Engine",
           "config.engine.version_policy": "Version Policy",
           "config.engine.version": "Pinned Version",
@@ -658,6 +671,8 @@
           engine: {
             version_policy,
             auto_download: document.getElementById("cfg-eng-autodl").checked,
+            // 裸字符串枚举（"rust"|"node"）——与 Rust 侧 EngineBackend serde 形态一致。
+            backend: document.getElementById("cfg-eng-backend").value,
           },
           updates: {
             check_interval_hours: numVal("cfg-upd-interval", 24),
@@ -687,6 +702,9 @@
 
         const engine = config.engine || {};
         document.getElementById("cfg-eng-autodl").checked = !!engine.auto_download;
+        // backend 裸字符串枚举；旧配置缺键 → 默认 rust（与 Rust 侧 serde default 一致）。
+        document.getElementById("cfg-eng-backend").value =
+          engine.backend === "node" ? "node" : "rust";
         // version_policy 反序列化形态：`"latest"` | `{fixed:"x"}` | `{range:"^x"}`
         const vp = engine.version_policy;
         let policy = "latest", version = "", range = "";

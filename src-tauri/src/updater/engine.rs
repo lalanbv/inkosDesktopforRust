@@ -132,6 +132,38 @@ pub struct EngineChannel {
     pub repo: String,
     pub current_version: String,
     pub client: reqwest::Client,
+    /// 引擎包形态（166 号）：默认后端已切 Rust 引擎，通道须能取
+    /// `inkos-engine-{ver}-{triple}.tar.gz`；Node 包为回退后端的既有形态。
+    pub flavor: BundleFlavor,
+}
+
+/// engine bundle 形态（asset 命名/健康预检/解包布局三分流）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BundleFlavor {
+    /// Node sidecar 引擎包：`engine-{ver}.tar.gz`，平铺布局，健康预检
+    /// `manifest.json` + `dist/index.js`（历史默认——回退后端）。
+    #[default]
+    Node,
+    /// Rust 引擎包：`inkos-engine-{ver}-{triple}.tar.gz`，顶层内层目录
+    /// `inkos-engine-{ver}-{triple}/`，健康预检 `manifest.json` +
+    /// `inkos-engine-server`（package-rust-engine.sh 产物契约）。
+    Rust,
+}
+
+/// 本机 Rust target triple（asset 名片段，与 `rustc -vV` host 对齐）。
+///
+/// 编译期映射（TARGET 变量仅在 build script 可见，故按 OS/ARCH 组合）：
+/// macOS 统一 apple/darwin；Linux 取 gnu ABI（默认工具链）；Windows 取 msvc。
+pub fn rust_triple() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", _) => "x86_64-apple-darwin",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("linux", _) => "x86_64-unknown-linux-gnu",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+        ("windows", _) => "x86_64-pc-windows-msvc",
+        _ => "unknown-unknown",
+    }
 }
 
 /// 校验 `owner/repo` 形如 GitHub slug：恰一个 `/`，两段非空，字符限
@@ -185,7 +217,14 @@ impl EngineChannel {
             repo,
             current_version,
             client,
+            flavor: BundleFlavor::default(),
         }
+    }
+
+    /// 指定引擎包形态（默认 Node——历史行为；终切后桌壳按生效后端传入）。
+    pub fn with_flavor(mut self, flavor: BundleFlavor) -> Self {
+        self.flavor = flavor;
+        self
     }
 
     /// 查 latest release tag；若新于 current 返回 tag（如 "v1.7.3"），否则 None。
@@ -208,7 +247,10 @@ impl EngineChannel {
 
         let rel = self.fetch_release().await?;
         let ver = rel.tag_name.trim_start_matches('v');
-        let tarball_name = bundle_name(ver);
+        let tarball_name = match self.flavor {
+            BundleFlavor::Node => bundle_name(ver),
+            BundleFlavor::Rust => rust_bundle_name(ver),
+        };
         let bundle_asset = asset(&rel, &tarball_name)?;
         let sha_asset = asset(&rel, &format!("{tarball_name}.sha256"))?;
         // M4c：签名 asset 可选（过渡期旧 release 可能无 .sig；有则强制验证）
@@ -323,10 +365,14 @@ impl EngineChannel {
                 .with_context(|| format!("清理旧 new_dir 失败: {}", new_dir.display()))?;
         }
         extract(bundle_path, new_dir)?;
+        // Rust 全量包 tarball 顶层为单目录（inkos-engine-{ver}-{triple}/）——
+        // 展平到 new_dir 根（Node 包平铺布局原样保留）。
+        flatten_single_top_dir(new_dir)?;
 
-        // 原子替换 + 回滚（健康预检 = 结构：manifest.json + dist/index.js 存在）。
+        // 原子替换 + 回滚（健康预检按形态：manifest + 各自入口产物）。
+        let flavor = self.flavor;
         atomic_replace_with_rollback(engine_dir, bak_dir, new_dir, &|dir| {
-            dir.join("manifest.json").is_file() && dir.join("dist/index.js").is_file()
+            bundle_health(dir, flavor)
         })
     }
 
@@ -415,6 +461,56 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes
 /// M3e CI 按此命名发布 asset + `.sha256`。
 pub fn bundle_name(ver: &str) -> String {
     format!("engine-{ver}.tar.gz")
+}
+
+/// Rust 引擎 bundle 文件名：`inkos-engine-{ver}-{triple}.tar.gz`
+/// （package-rust-engine.sh 产物契约；伴生 `.sha256` 同名追加）。
+pub fn rust_bundle_name(ver: &str) -> String {
+    format!("inkos-engine-{ver}-{}.tar.gz", rust_triple())
+}
+
+/// 各形态的解包健康预检（manifest + 入口产物）。
+pub fn bundle_health(dir: &Path, flavor: BundleFlavor) -> bool {
+    let manifest_ok = dir.join("manifest.json").is_file();
+    match flavor {
+        BundleFlavor::Node => manifest_ok && dir.join("dist/index.js").is_file(),
+        BundleFlavor::Rust => manifest_ok && dir.join("inkos-engine-server").is_file(),
+    }
+}
+
+/// 展平「顶层单目录」布局（Rust 全量包 tarball 形态）。
+///
+/// 契约：`new_dir/manifest.json` 已存在（Node 平铺布局）→ 原样返回；
+/// 恰一个子目录且其内有 manifest.json → 子目录内容上移一级后删除空壳；
+/// 其余（无 manifest、多顶层项）→ 不动，交由健康预检失败走回滚路径
+/// （错误暴露点统一，避免此处与预检双处报「结构不符」）。
+fn flatten_single_top_dir(new_dir: &Path) -> Result<()> {
+    if new_dir.join("manifest.json").is_file() {
+        return Ok(());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(new_dir)
+        .with_context(|| format!("读解压目录失败: {}", new_dir.display()))?
+        .filter_map(Result::ok)
+        .collect();
+    if entries.len() != 1 {
+        return Ok(());
+    }
+    let inner = entries.remove(0).path();
+    if !inner.join("manifest.json").is_file() {
+        return Ok(());
+    }
+    for item in std::fs::read_dir(&inner)
+        .with_context(|| format!("读内层目录失败: {}", inner.display()))?
+        .filter_map(Result::ok)
+    {
+        let from = item.path();
+        let to = new_dir.join(item.file_name());
+        std::fs::rename(&from, &to)
+            .with_context(|| format!("展平内层 {} → {} 失败", from.display(), to.display()))?;
+    }
+    std::fs::remove_dir(&inner)
+        .with_context(|| format!("删除展平后的空内层目录失败: {}", inner.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -562,6 +658,105 @@ mod tests {
     #[test]
     fn bundle_name_matches_convention() {
         assert_eq!(bundle_name("1.7.3"), "engine-1.7.3.tar.gz");
+    }
+
+    #[test]
+    fn rust_bundle_name_matches_package_script_convention() {
+        // package-rust-engine.sh 产物：inkos-engine-{ver}-{triple}.tar.gz。
+        let name = rust_bundle_name("0.1.0");
+        assert!(
+            name.starts_with("inkos-engine-0.1.0-") && name.ends_with(".tar.gz"),
+            "{name}"
+        );
+        assert!(name.contains(rust_triple()));
+    }
+
+    #[test]
+    fn rust_triple_matches_host_platform_shape() {
+        let triple = rust_triple();
+        // 当前三支持平台的形状断言（apple/darwin、gnu、msvc）；unknown 兜底
+        // 仅在不支持组合出现——此时 asset 名必然 miss，更新报「未含 asset」。
+        match std::env::consts::OS {
+            "macos" => assert!(triple.ends_with("-apple-darwin"), "{triple}"),
+            "linux" => assert!(triple.ends_with("-unknown-linux-gnu"), "{triple}"),
+            "windows" => assert!(triple.ends_with("-pc-windows-msvc"), "{triple}"),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn bundle_health_per_flavor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Node 布局：manifest + dist/index.js。
+        std::fs::create_dir_all(root.join("dist")).unwrap();
+        std::fs::write(root.join("manifest.json"), "{}").unwrap();
+        std::fs::write(root.join("dist/index.js"), "x").unwrap();
+        assert!(bundle_health(root, BundleFlavor::Node));
+        assert!(!bundle_health(root, BundleFlavor::Rust), "无 server 二进制不应过 Rust 预检");
+
+        // Rust 布局：manifest + inkos-engine-server。
+        let rust_dir = root.join("rust-layout");
+        std::fs::create_dir_all(&rust_dir).unwrap();
+        std::fs::write(rust_dir.join("manifest.json"), "{}").unwrap();
+        std::fs::write(rust_dir.join("inkos-engine-server"), "bin").unwrap();
+        assert!(bundle_health(&rust_dir, BundleFlavor::Rust));
+        assert!(!bundle_health(&rust_dir, BundleFlavor::Node), "无 dist/index.js 不应过 Node 预检");
+    }
+
+    #[test]
+    fn flatten_leaves_flat_layout_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("manifest.json"), "{}").unwrap();
+        std::fs::write(dir.join("dist"), "x").unwrap();
+        flatten_single_top_dir(dir).unwrap();
+        assert!(dir.join("manifest.json").is_file(), "平铺布局（Node 包）不得被移动");
+    }
+
+    #[test]
+    fn flatten_lifts_single_inner_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let inner = dir.join("inkos-engine-0.2.0-aarch64-apple-darwin");
+        std::fs::create_dir_all(inner.join("static")).unwrap();
+        std::fs::write(inner.join("manifest.json"), "{}").unwrap();
+        std::fs::write(inner.join("inkos-engine-server"), "bin").unwrap();
+        std::fs::write(inner.join("static").join("index.html"), "<i/>").unwrap();
+
+        flatten_single_top_dir(dir).unwrap();
+        assert!(dir.join("manifest.json").is_file(), "内层 manifest 应上移到根");
+        assert!(dir.join("inkos-engine-server").is_file());
+        assert!(dir.join("static").join("index.html").is_file());
+        assert!(!inner.exists(), "空内层壳应删除");
+    }
+
+    #[test]
+    fn flatten_ignores_garbage_layouts() {
+        // 无 manifest 的多顶层项 / 单目录但无 manifest → 原样（健康预检兜底）。
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        flatten_single_top_dir(dir).unwrap();
+        assert!(dir.join("a").is_dir() && dir.join("b").is_dir());
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        let inner = tmp2.path().join("only");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("loose.txt"), "x").unwrap();
+        flatten_single_top_dir(tmp2.path()).unwrap();
+        assert!(inner.join("loose.txt").is_file(), "无 manifest 的单目录不动");
+    }
+
+    #[test]
+    fn flavor_builder_selects_channel_shape() {
+        let ch = EngineChannel::new("owner/name".into(), "0.0.1".into())
+            .with_flavor(BundleFlavor::Rust);
+        assert_eq!(ch.flavor, BundleFlavor::Rust);
+        // 默认保持 Node（既有行为/测试零迁移）。
+        let ch = EngineChannel::new("owner/name".into(), "0.0.1".into());
+        assert_eq!(ch.flavor, BundleFlavor::Node);
     }
 
     // 真实 GitHub release 探测（需网络 + 本仓有 release）。CI 可选跑。
