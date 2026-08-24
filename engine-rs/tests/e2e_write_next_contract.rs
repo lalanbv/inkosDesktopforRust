@@ -8366,7 +8366,13 @@ mod ops72_e2e {
         assert_eq!(items.len(), 2, "items: {items:?}");
         assert_eq!(items[0]["marketSummary"], "都市脑洞热度持续。");
         assert_eq!(items[1]["summaryPreview"], "历史扫描");
-        assert!(items[0]["file"].as_str().unwrap().starts_with("scan-2026-08-1"));
+        // 日期无关断言：file 为本次新生成的扫描名（≠预置历史名，scan- 时间戳
+        // 形态）。原硬编码 "scan-2026-08-1" 前缀在 8 月 20 日后必挂。
+        let file = items[0]["file"].as_str().unwrap();
+        assert!(
+            file.starts_with("scan-") && file != "scan-2026-08-01T00-00-00-000Z.json",
+            "应为新生成的扫描文件名: {file}"
+        );
     }
 
     #[tokio::test]

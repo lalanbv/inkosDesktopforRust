@@ -304,6 +304,10 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const messages = useChatStore(chatSelectors.activeMessages);
   const activeSession = useChatStore(chatSelectors.activeSession);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
+  // 切会话时复位打字机聚焦——索引跨会话无意义，残留会把新会话消息无端降暗。
+  useEffect(() => {
+    setActiveMessage(null);
+  }, [activeSessionId]);
   const input = useChatStore((s) => s.input);
   const loading = useChatStore(chatSelectors.isActiveSessionStreaming);
   const chatStreaming = useChatStore(chatSelectors.isActiveSessionChatStreaming);

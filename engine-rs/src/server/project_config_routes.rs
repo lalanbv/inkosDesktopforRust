@@ -214,7 +214,12 @@ pub async fn put_project(
         }
     }
     if parsed.get("language") == Some(&json!("zh")) || parsed.get("language") == Some(&json!("en")) {
-        raw.as_object_mut().unwrap().insert("language".to_string(), parsed["language"].clone());
+        // 非对象根（合法 JSON 如 `42`/`[...]`）：Node strict-mode 对原始值赋属性
+        // 抛 TypeError → 500；不得 panic（会打断连接任务）。
+        let Some(obj) = raw.as_object_mut() else {
+            return flat_internal("Cannot create property 'language' on a primitive".to_string());
+        };
+        obj.insert("language".to_string(), parsed["language"].clone());
     }
     if !save_raw_config(root, &raw).await {
         return flat_internal("inkos.json write failed".to_string());
@@ -253,7 +258,10 @@ pub async fn put_input_governance_mode(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    raw.as_object_mut().unwrap().insert("inputGovernanceMode".to_string(), json!(mode));
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
+    obj.insert("inputGovernanceMode".to_string(), json!(mode));
     if !save_raw_config(root, &raw).await {
         return internal_error();
     }
@@ -389,12 +397,18 @@ pub async fn put_detection(
                     Json(json!({ "error": "Invalid input: expected object, received missing" })),
                 );
             }
-            raw.as_object_mut().unwrap().remove("detection");
+            let Some(obj) = raw.as_object_mut() else {
+                return internal_error();
+            };
+            obj.remove("detection");
             Value::Null
         }
         Some(value) => match parse_detection_config(value) {
             Ok(normalized) => {
-                raw.as_object_mut().unwrap().insert("detection".to_string(), normalized.clone());
+                let Some(obj) = raw.as_object_mut() else {
+                    return internal_error();
+                };
+                obj.insert("detection".to_string(), normalized.clone());
                 normalized
             }
             Err(errors) => {
@@ -430,12 +444,16 @@ pub async fn put_model_overrides(
         return internal_error();
     };
     // TS raw.modelOverrides = overrides：undefined 赋值在 stringify 时删键。
+    // 非对象根 → Node strict-mode TypeError → 500（同 handler 既有错误形状）。
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
     match parsed.get("overrides") {
         Some(overrides) => {
-            raw.as_object_mut().unwrap().insert("modelOverrides".to_string(), overrides.clone());
+            obj.insert("modelOverrides".to_string(), overrides.clone());
         }
         None => {
-            raw.as_object_mut().unwrap().remove("modelOverrides");
+            obj.remove("modelOverrides");
         }
     }
     if !save_raw_config(root, &raw).await {
@@ -485,9 +503,12 @@ pub async fn put_default_model(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    // llm 非对象（或缺失）→ 重建 {}。
-    if !raw.get("llm").is_some_and(|v| v.is_object()) {
-        raw.as_object_mut().unwrap().insert("llm".to_string(), json!({}));
+    // 非对象根 → 500（Node strict-mode TypeError 语义）；llm 非对象（或缺失）→ 重建 {}。
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
+    if !obj.get("llm").is_some_and(|v| v.is_object()) {
+        obj.insert("llm".to_string(), json!({}));
     }
     let service;
     {
@@ -592,9 +613,10 @@ pub async fn put_research_search(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    raw.as_object_mut()
-        .unwrap()
-        .insert("researchSearch".to_string(), research_search.clone());
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
+    obj.insert("researchSearch".to_string(), research_search.clone());
     if !save_raw_config(root, &raw).await {
         return internal_error();
     }
@@ -634,7 +656,10 @@ pub async fn put_chapter_review_mode(
         .cloned()
         .unwrap_or_default();
     writing.insert("reviewMode".to_string(), json!(next));
-    raw.as_object_mut().unwrap().insert("writing".to_string(), Value::Object(writing));
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
+    obj.insert("writing".to_string(), Value::Object(writing));
     if !save_raw_config(root, &raw).await {
         return internal_error();
     }
@@ -662,12 +687,15 @@ pub async fn put_notify(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
     match parsed.get("channels") {
         Some(channels) => {
-            raw.as_object_mut().unwrap().insert("notify".to_string(), channels.clone());
+            obj.insert("notify".to_string(), channels.clone());
         }
         None => {
-            raw.as_object_mut().unwrap().remove("notify");
+            obj.remove("notify");
         }
     }
     if !save_raw_config(root, &raw).await {
@@ -701,11 +729,18 @@ pub async fn post_language(
     let mut response = json!({ "ok": true });
     match language {
         Some(value) => {
-            raw.as_object_mut().unwrap().insert("language".to_string(), value.clone());
+            // 非对象根 → Node strict-mode TypeError → 端点自带 catch → 平铺 500。
+            let Some(obj) = raw.as_object_mut() else {
+                return flat_internal("Cannot create property 'language' on a primitive".to_string());
+            };
+            obj.insert("language".to_string(), value.clone());
             response["language"] = value;
         }
         None => {
-            raw.as_object_mut().unwrap().remove("language");
+            let Some(obj) = raw.as_object_mut() else {
+                return flat_internal("Cannot delete property on a primitive".to_string());
+            };
+            obj.remove("language");
         }
     }
     let serialized = serde_json::to_string_pretty(&raw).unwrap_or_default();
@@ -716,10 +751,14 @@ pub async fn post_language(
 }
 
 #[cfg(test)]
-mod get_project_tests {
+mod project_routes_tests {
     //! 165 号回归：GET /project 读侧三态与 Node `resolveEffectiveLLMConfig`
     //! 逐字对齐——真实遗留项目 inkos.json 无 `llm` 键曾在此 500（桌面切 Rust
     //! 后端后的启动阻断），Node 同形状走 `?? {}` + noop 填充返回 200。
+    //!
+    //! 韧性回归：合法 JSON 非对象根（如 `42`/`[...]`，用户可手改出的形状）
+    //! 走各 PUT/POST 不得 panic——对齐 Node strict-mode 对原始值赋属性的
+    //! TypeError → 500 语义（panic 会打断 hyper 连接任务，比 500 更糟）。
 
     use super::*;
     use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
@@ -732,7 +771,12 @@ mod get_project_tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    async fn run(root: &std::path::Path) -> (StatusCode, Value) {
+    async fn run_req(
+        root: &std::path::Path,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, Value) {
         // 经完整路由跑（与真实挂载一致），避免直接调 handler 的提取器差异。
         let state = crate::server::AppState { version: "test".to_string() };
         let hub = Arc::new(BroadcastHub::new());
@@ -765,19 +809,21 @@ mod get_project_tests {
             project_root: root.to_path_buf(),
         };
         let app = crate::server::router_books(state, books.hub.clone(), runtime, audit, books);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/v1/project")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut builder = Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("Content-Type", "application/json");
+        }
+        let request = builder
+            .body(body.map(str::to_string).map(Body::from).unwrap_or_else(Body::empty))
             .unwrap();
+        let response = app.oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    async fn run(root: &std::path::Path) -> (StatusCode, Value) {
+        run_req(root, "GET", "/api/v1/project", None).await
     }
 
     /// test-project 实形状（无 llm 键）：Node `?? {}` + noop 填充 → 200。
@@ -869,5 +915,47 @@ mod get_project_tests {
             msg.contains("name must contain at least 1 character(s)"),
             "非对象根应落到 name 校验（zod 终验面）: {msg}"
         );
+    }
+
+    /// 韧性回归：非对象根（数组等合法 JSON）走各 PUT 不得 panic，须 500。
+    /// 修复前此处 `as_object_mut().unwrap()` 会 panic 打断连接任务。
+    #[tokio::test]
+    async fn non_object_root_puts_return_500_not_panic() {
+        for (uri, body, expect_flat) in [
+            ("/api/v1/project", r#"{ "language": "zh" }"#, true),
+            ("/api/v1/project/input-governance-mode", r#"{ "mode": "v2" }"#, false),
+            ("/api/v1/project/detection", r#"{ "detection": null }"#, false),
+            ("/api/v1/project/model-overrides", r#"{ "overrides": {} }"#, false),
+            ("/api/v1/project/default-model", r#"{ "defaultModel": "m" }"#, false),
+            ("/api/v1/project/research-search", r#"{ "researchSearch": {} }"#, false),
+            ("/api/v1/project/chapter-review-mode", r#"{ "mode": "manual" }"#, false),
+            ("/api/v1/project/notify", r#"{ "channels": [] }"#, false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("inkos.json"), r#"[1, 2]"#).unwrap();
+            let (status, resp) = run_req(dir.path(), "PUT", uri, Some(body)).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {resp}");
+            if expect_flat {
+                assert!(resp.get("error").is_some_and(|e| e.is_string()), "{uri}: {resp}");
+            } else {
+                assert_eq!(resp["error"]["code"], "INTERNAL_ERROR", "{uri}: {resp}");
+            }
+        }
+    }
+
+    /// 韧性回归：非对象根走 POST /language（端点自带 catch → 平铺 500）。
+    #[tokio::test]
+    async fn non_object_root_post_language_returns_500_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("inkos.json"), "42").unwrap();
+        let (status, resp) = run_req(
+            dir.path(),
+            "POST",
+            "/api/v1/project/language",
+            Some(r#"{ "language": "zh" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{resp}");
+        assert!(resp.get("error").is_some_and(|e| e.is_string()), "{resp}");
     }
 }

@@ -484,7 +484,13 @@ pub fn bundle_health(dir: &Path, flavor: BundleFlavor) -> bool {
 /// 恰一个子目录且其内有 manifest.json → 子目录内容上移一级后删除空壳；
 /// 其余（无 manifest、多顶层项）→ 不动，交由健康预检失败走回滚路径
 /// （错误暴露点统一，避免此处与预检双处报「结构不符」）。
+///
+/// macOS AppleDouble 免疫：bsdtar 打包带 xattr 的源文件（cargo 产物自带
+/// `com.apple.provenance`）会向 tarball 写 `._*` 元数据条目——若不剔除，
+/// 顶层条目数 ≠1 使展平静默失败 → 健康预检拒绝 → 更新永远装不上。展平前
+/// 先清各层 `._*` 垃圾（打包脚本已设 COPYFILE_DISABLE=1，此处为解压端兜底）。
 fn flatten_single_top_dir(new_dir: &Path) -> Result<()> {
+    strip_appledouble(new_dir)?;
     if new_dir.join("manifest.json").is_file() {
         return Ok(());
     }
@@ -496,6 +502,7 @@ fn flatten_single_top_dir(new_dir: &Path) -> Result<()> {
         return Ok(());
     }
     let inner = entries.remove(0).path();
+    strip_appledouble(&inner)?;
     if !inner.join("manifest.json").is_file() {
         return Ok(());
     }
@@ -510,6 +517,24 @@ fn flatten_single_top_dir(new_dir: &Path) -> Result<()> {
     }
     std::fs::remove_dir(&inner)
         .with_context(|| format!("删除展平后的空内层目录失败: {}", inner.display()))?;
+    Ok(())
+}
+
+/// 删除目录下所有 macOS AppleDouble 垃圾条目（`._*` 普通文件）。
+/// 它们是 bsdtar 对带 xattr 源文件的打包伪影，不属于 bundle 内容。
+fn strip_appledouble(dir: &Path) -> Result<()> {
+    for item in std::fs::read_dir(dir)
+        .with_context(|| format!("读目录失败（清理 ._ 垃圾）: {}", dir.display()))?
+        .filter_map(Result::ok)
+    {
+        let path = item.path();
+        let is_junk = item.file_name().to_str().is_some_and(|n| n.starts_with("._"))
+            && path.is_file();
+        if is_junk {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("删除 AppleDouble 垃圾失败: {}", path.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -749,6 +774,36 @@ mod tests {
         assert!(inner.join("loose.txt").is_file(), "无 manifest 的单目录不动");
     }
 
+    /// macOS AppleDouble（`._*`）免疫：顶层与内层混入垃圾条目时仍正常展平，
+    /// 且垃圾不落入最终 engine 目录。bsdtar 对带 xattr 源文件（cargo 产物
+    /// 自带 com.apple.provenance）打包即产生——曾致展平静默失败、更新被拒。
+    #[test]
+    fn flatten_strips_appledouble_junk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let inner = dir.join("inkos-engine-9.9.9-aarch64-apple-darwin");
+        std::fs::create_dir_all(inner.join("static")).unwrap();
+        std::fs::write(inner.join("manifest.json"), "{}").unwrap();
+        std::fs::write(inner.join("inkos-engine-server"), "bin").unwrap();
+        std::fs::write(inner.join("static").join("index.html"), "<i/>").unwrap();
+        // bsdtar 伪影：顶层 `._{topdir}` 文件 + 内层 `._{file}` 文件。
+        std::fs::write(dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin"), "junk").unwrap();
+        std::fs::write(inner.join("._manifest.json"), "junk").unwrap();
+        std::fs::write(inner.join("._inkos-engine-server"), "junk").unwrap();
+
+        flatten_single_top_dir(dir).unwrap();
+        assert!(dir.join("manifest.json").is_file(), "内层内容应上移到根");
+        assert!(dir.join("inkos-engine-server").is_file());
+        assert!(dir.join("static").join("index.html").is_file());
+        assert!(!inner.exists(), "空内层壳应删除");
+        assert!(
+            !dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin").exists()
+                && !dir.join("._manifest.json").exists()
+                && !dir.join("._inkos-engine-server").exists(),
+            "AppleDouble 垃圾不得落入 engine 目录"
+        );
+    }
+
     #[test]
     fn flavor_builder_selects_channel_shape() {
         let ch = EngineChannel::new("owner/name".into(), "0.0.1".into())
@@ -757,6 +812,61 @@ mod tests {
         // 默认保持 Node（既有行为/测试零迁移）。
         let ch = EngineChannel::new("owner/name".into(), "0.0.1".into());
         assert_eq!(ch.flavor, BundleFlavor::Node);
+    }
+
+    /// Rust 引擎包真实链路契约闭环（166 号补强）：package-rust-engine.sh 用
+    /// 系统 tar 打包，此测试用同一实现构造 bundle（顶层单目录、二进制 0755、
+    /// manifest + static），再走桌面端 apply 的完整本地管线——
+    /// extract_archive → flatten_single_top_dir → bundle_health(Rust)——
+    /// 并断言解压后可执行位保留（丢了 +x，更新重启后 spawn 会 permission
+    /// denied 回退 Node，静默劣化）。
+    #[test]
+    #[cfg(unix)]
+    fn rust_bundle_real_tar_pipeline_contract() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let top = format!("inkos-engine-9.9.9-{}", rust_triple());
+        let src = tmp.path().join("pkg");
+        let top_dir = src.join(&top);
+        std::fs::create_dir_all(top_dir.join("static")).unwrap();
+        std::fs::write(top_dir.join("manifest.json"), r#"{"engine_version":"9.9.9"}"#).unwrap();
+        std::fs::write(top_dir.join("static").join("index.html"), "<i/>").unwrap();
+        std::fs::write(top_dir.join("inkos-engine-server"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            top_dir.join("inkos-engine-server"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        // 系统 tar（与打包脚本同实现）保证顶层单目录形态与 mode 位记录。
+        let tarball = tmp.path().join(rust_bundle_name("9.9.9"));
+        let out = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&src)
+            .arg(&top)
+            .output()
+            .expect("spawn tar 失败");
+        assert!(
+            out.status.success(),
+            "tar 打包失败: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let new_dir = tmp.path().join("new_engine");
+        crate::engine::node::extract_archive(&tarball, &new_dir).expect("解压应成功");
+        flatten_single_top_dir(&new_dir).expect("展平应成功");
+        assert!(
+            bundle_health(&new_dir, BundleFlavor::Rust),
+            "真实 tar 管线产物应过 Rust 健康预检"
+        );
+        let mode = std::fs::metadata(new_dir.join("inkos-engine-server"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "解压后二进制须保留可执行位，实际 {mode:o}");
     }
 
     // 真实 GitHub release 探测（需网络 + 本仓有 release）。CI 可选跑。

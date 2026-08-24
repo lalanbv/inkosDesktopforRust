@@ -97,9 +97,12 @@ EOF
 
 # 5) tar + sha256（detar 后顶层目录即 $PKG，无绝对路径前缀；
 #    .sha256 用 shasum 标准行格式——`shasum -a 256 -c` 可直接校验）。
+# COPYFILE_DISABLE=1：阻止 bsdtar 把源文件 xattr（cargo 产物自带
+# com.apple.provenance）写成 `._*` AppleDouble 条目——桌端 updater 曾因此
+# 展平失败、健康预检拒绝（解压端另有 strip_appledouble 兜底，此处源头消除）。
 mkdir -p "$ENGINE_RS/dist"
 OUT="$ENGINE_RS/dist/$PKG.tar.gz"
-tar czf "$OUT" -C "$STAGE" "$PKG"
+COPYFILE_DISABLE=1 tar czf "$OUT" -C "$STAGE" "$PKG"
 shasum -a 256 "$OUT" > "$OUT.sha256"
 
 echo "OK: $OUT"
