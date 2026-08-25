@@ -17,6 +17,7 @@ pub mod book_create_routes;
 pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod genre_routes;
+pub mod loopback_guard;
 pub mod ops_routes;
 pub mod play_routes;
 pub mod interactive_film_routes;
@@ -94,12 +95,16 @@ pub struct CapContextResponse {
 pub struct HealthResponse {
     pub ok: bool,
     pub version: String,
+    /// 后端标识（170 号 W-C1）：诊断面交叉核验「声明后端 vs 实际应答」。
+    /// 加法字段——Node sidecar 无 `/api/v1/health`（Rust 超集端点，62 号），
+    /// 不存在契约破坏面。
+    pub backend: String,
 }
 
 // ── Handlers ────────────────────────────────────────────────────
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    Json(HealthResponse { ok: true, version: state.version })
+    Json(HealthResponse { ok: true, version: state.version, backend: "rust-engine".to_string() })
 }
 
 async fn derive_book_id(
@@ -644,6 +649,7 @@ mod tests {
         let body = body_string(resp.into_body()).await;
         assert!(body.contains(r#""ok":true"#));
         assert!(body.contains("0.0.1-test"));
+        assert!(body.contains(r#""backend":"rust-engine""#), "170 号：应答应含后端标识");
     }
 
     #[tokio::test]

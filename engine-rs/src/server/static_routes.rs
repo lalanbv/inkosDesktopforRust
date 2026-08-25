@@ -24,9 +24,13 @@ use crate::server::sse::BroadcastHub;
 use crate::server::{AppState, write_next_route::WriteNextRuntime};
 
 /// 静态面共享态：目录 + index.html 启动期缓存（TS 同款一次性读取）。
+///
+/// index 缓存为 [`Bytes`]（170 号 W-B1 修正）：SPA 回退每次请求都要回体，
+/// `Vec<u8>` 逐请求整页 memcpy，`Bytes` 克隆为引用计数——读取时 `Vec → Bytes`
+/// 转移所有权零拷贝，此后零分配。
 struct StaticFace {
     dir: PathBuf,
-    index: Option<Vec<u8>>,
+    index: Option<axum::body::Bytes>,
 }
 
 /// 给全量路由挂静态前端面。
@@ -38,7 +42,7 @@ pub fn with_static_face(router: Router, static_dir: Option<PathBuf>) -> Router {
     let Some(dir) = static_dir else {
         return router;
     };
-    let index = std::fs::read(dir.join("index.html")).ok();
+    let index = std::fs::read(dir.join("index.html")).ok().map(axum::body::Bytes::from);
     let face = std::sync::Arc::new(StaticFace { dir, index });
     let static_router: Router = Router::new()
         .route("/assets/*path", get(serve_asset))
@@ -79,7 +83,12 @@ async fn serve_asset(
                 .unwrap_or_default();
             (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, asset_content_type(name))],
+                [
+                    (header::CONTENT_TYPE, asset_content_type(name)),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                    (header::REFERRER_POLICY, "no-referrer"),
+                    (header::X_FRAME_OPTIONS, "DENY"),
+                ],
                 bytes,
             )
                 .into_response()
@@ -104,7 +113,13 @@ async fn spa_fallback(
     match &face.index {
         Some(html) => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::REFERRER_POLICY, "no-referrer"),
+                (header::X_FRAME_OPTIONS, "DENY"),
+            ],
+            // Bytes 克隆 = 引用计数递增（170 号 W-B1：替代 Vec 整页 memcpy）。
             html.clone(),
         )
             .into_response(),
@@ -270,5 +285,54 @@ mod tests {
         assert_eq!(status, 200);
         let (status, _, _) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 404);
+    }
+
+    /// 170 号 W-A3：静态面（assets + SPA 回退）三安全头；API 面不加（契约不扰动）。
+    #[tokio::test]
+    async fn static_face_carries_security_headers() {
+        let dir = dist();
+        let mut app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
+
+        for uri in ["/assets/app.js", "/", "/editor/chapter/2"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200, "{uri}");
+            assert_eq!(
+                response.headers().get(header::X_CONTENT_TYPE_OPTIONS).and_then(|v| v.to_str().ok()),
+                Some("nosniff"),
+                "{uri}"
+            );
+            assert_eq!(
+                response.headers().get(header::REFERRER_POLICY).and_then(|v| v.to_str().ok()),
+                Some("no-referrer"),
+                "{uri}"
+            );
+            assert_eq!(
+                response.headers().get(header::X_FRAME_OPTIONS).and_then(|v| v.to_str().ok()),
+                Some("DENY"),
+                "{uri}"
+            );
+        }
+
+        // API 面对照：健康端点不带静态面安全头（保持既有契约响应面）。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert!(response.headers().get(header::X_FRAME_OPTIONS).is_none());
     }
 }

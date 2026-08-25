@@ -4,6 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
+import { createLoopbackGuardMiddleware, guardOptionsFromEnv } from "./loopback-guard.js";
 import {
   StateManager,
   PipelineRunner,
@@ -2654,6 +2655,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
+  // 回环守卫（170 号 W-A2）：注册在 cors() 之前——先守卫后 CORS，远端 Origin
+  // 在 CORS 放大面之前被 403 短路。与 engine-rs 同规则同 env 名（双端同水位）；
+  // INKOS_ENGINE_LOOPBACK_GUARD=0 可一键回退旧行为。
+  app.use("/*", createLoopbackGuardMiddleware(guardOptionsFromEnv(process.env)));
   app.use("/*", cors());
 
   // Structured error handler — ApiError returns typed JSON, others return 500

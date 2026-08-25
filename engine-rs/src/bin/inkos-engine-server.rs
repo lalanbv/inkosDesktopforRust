@@ -167,7 +167,15 @@ fn build_router() -> axum::Router {
     // CORS（125 号）：Hono `app.use("/*", cors())` 等价——跨源前端
     // （Tauri 壳 tauri:// / vite dev server）经 API base 直连的场景。
     // 在最终组合路由（含静态面）之上一次性施加。
-    app.layer(inkos_engine::server::sidecar_cors_layer())
+    let app = app.layer(inkos_engine::server::sidecar_cors_layer());
+    // 回环守卫（170 号 W-A1）：后加的 layer 在外——请求先过守卫再过 CORS，
+    // 远端 Origin / DNS rebinding Host 在 CORS 放大面之前被 403 短路。
+    // `router_books` 本身不挂（duel/单测零扰动）；env：
+    // INKOS_ENGINE_LOOPBACK_GUARD=0 可一键回退旧行为。
+    inkos_engine::server::loopback_guard::with_loopback_guard(
+        app,
+        inkos_engine::server::loopback_guard::LoopbackGuardConfig::from_env(),
+    )
 }
 
 #[tokio::main]
