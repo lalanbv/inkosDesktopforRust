@@ -5,7 +5,7 @@
 //! 权威交接工件。
 //!
 //! ## 已知分歧（非 golden 面）
-//! TS 用 js-yaml `dump(lineWidth: 120)` 序列化 rule-stack；Rust 用 serde_yaml
+//! TS 用 js-yaml `dump(lineWidth: 120)` 序列化 rule-stack；Rust 用 serde_yaml_ng
 //! `to_string`。两者语义等价（字段/值逐一对应），行折叠与引号风格不同——
 //! 该文件面向人读与下游 YAML 解析，不参与字节级 golden 差分。
 
@@ -38,7 +38,7 @@ pub async fn write_governed_runtime_artifacts(
 
     let context_json = serde_json::to_string_pretty(context_package)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let rule_stack_yaml = serde_yaml::to_string(rule_stack)
+    let rule_stack_yaml = serde_yaml_ng::to_string(rule_stack)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     let trace_json = serde_json::to_string_pretty(trace)
         .map_err(|e| std::io::Error::other(e.to_string()))?;

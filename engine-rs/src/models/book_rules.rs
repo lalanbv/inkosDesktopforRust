@@ -151,7 +151,7 @@ pub fn is_book_rules_shim(raw: &str) -> bool {
     shim_re().is_match(raw)
 }
 
-// --- frontmatter 解析（serde_yaml，对齐 TS js-yaml + zod）--------------------
+// --- frontmatter 解析（serde_yaml_ng，对齐 TS js-yaml + zod）--------------------
 
 /// frontmatter 解析失败原因。区分「没有 frontmatter」与「有但坏」（供调用方决定回退路径）。
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -174,7 +174,7 @@ struct BookRulesRaw {
     genre_lock: Option<GenreLockRaw>,
     /// z.enum(["first","third"]).optional().catch(undefined)：任意非法值静默降级为 None。
     /// 用 Value 承载以复刻 catch（类型错也不报错）。
-    narrative_person: Option<serde_yaml::Value>,
+    narrative_person: Option<serde_yaml_ng::Value>,
     numerical_system_overrides: Option<NumericalOverridesRaw>,
     era_constraints: Option<EraConstraintsRaw>,
     prohibitions: Vec<String>,
@@ -183,7 +183,7 @@ struct BookRulesRaw {
     additional_audit_dimensions: Vec<AuditDimension>,
     enable_full_cast_tracking: bool,
     /// z.enum(["canon","au","ooc","cp"]).optional()：非法值 throw（无 catch）。
-    fanfic_mode: Option<serde_yaml::Value>,
+    fanfic_mode: Option<serde_yaml_ng::Value>,
     allowed_deviations: Vec<String>,
 }
 
@@ -315,16 +315,16 @@ pub fn try_parse_book_rules_frontmatter(
     let fm = caps.get(1).expect("组 1 必在").as_str();
     let body = caps.get(2).expect("组 2 必在").as_str();
     // 对齐 TS：yaml.load("") → undefined / yaml.load("null") → null → zod parse throw
-    // （golden frontmatter-empty 向量验证）。serde_yaml 会把空输入吞成全默认结构，
+    // （golden frontmatter-empty 向量验证）。serde_yaml_ng 会把空输入吞成全默认结构，
     // 须显式拦下交给调用方回退。
-    let value: serde_yaml::Value =
-        serde_yaml::from_str(fm).map_err(|e| BookRulesFrontmatterError::Invalid(e.to_string()))?;
+    let value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(fm).map_err(|e| BookRulesFrontmatterError::Invalid(e.to_string()))?;
     if value.is_null() {
         return Err(BookRulesFrontmatterError::Invalid(
             "frontmatter 为空（yaml.load → undefined/null）".to_string(),
         ));
     }
-    let raw_rules: BookRulesRaw = serde_yaml::from_value(value)
+    let raw_rules: BookRulesRaw = serde_yaml_ng::from_value(value)
         .map_err(|e| BookRulesFrontmatterError::Invalid(e.to_string()))?;
     let rules = BookRules::try_from(raw_rules).map_err(BookRulesFrontmatterError::Invalid)?;
     Ok(ParsedBookRules {

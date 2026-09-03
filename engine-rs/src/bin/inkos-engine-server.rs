@@ -164,9 +164,9 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
         books,
         static_dir,
     );
-    // CORS（125 号）：Hono `app.use("/*", cors())` 等价——跨源前端
-    // （Tauri 壳 tauri:// / vite dev server）经 API base 直连的场景。
-    // 在最终组合路由（含静态面）之上一次性施加。
+    // CORS（125 号引入，173 号 W-A4a 收紧为回环 Origin 反射）：跨源前端
+    // （vite dev server / 浏览器直连）经 API base 的场景；反射判定与下方
+    // 守卫同规则。在最终组合路由（含静态面）之上一次性施加。
     let app = app.layer(inkos_engine::server::sidecar_cors_layer());
     // 回环守卫（170 号 W-A1）：后加的 layer 在外——请求先过守卫再过 CORS，
     // 远端 Origin / DNS rebinding Host 在 CORS 放大面之前被 403 短路。
@@ -179,10 +179,10 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     (guarded, hub)
 }
 
-/// 优雅停机信号链（172 号 W-B2）：ctrl_c / SIGTERM（unix）任一到达 →
-/// 广播 `engine:shutdown` 事件 → flush 窗口（事件经 SSE 送出）→ 关闭
-/// 全部 SSE 流（否则无限流令 graceful drain 永不完成）→ 返回后 axum
-/// 停接新连接并排空在途请求。
+/// 优雅停机信号链（172 号 W-B2；173 号修正超时语义）：ctrl_c / SIGTERM
+/// （unix）任一到达 → 广播 `engine:shutdown` 事件 → flush 窗口（事件经
+/// SSE 送出）→ 关闭全部 SSE 流（否则无限流令 graceful drain 永不完成）
+/// → 武装 drain 看门狗 → 信号 future 解析，axum 停接新连接并排空在途请求。
 async fn shutdown_signal(hub: Arc<BroadcastHub>) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -210,6 +210,16 @@ async fn shutdown_signal(hub: Arc<BroadcastHub>) {
     // 缓冲刷新），再终结流；管道残余由流内 shutdown 分支排空兜底。
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     hub.shutdown();
+    // drain 看门狗（173 号语义修正）：172 号版把 `timeout(5s)` 包在 serve
+    // 整体上——引擎启动 5 秒后即被 timeout 砍掉（sse duel 复跑暴露；短于
+    // 5s 的冒烟/静态面请求从未触及）。兜底本意只锁排空段：武装后若 drain
+    // 正常完成，进程先行退出、本任务随之消亡；在途请求 hang 死时 5s 强退
+    // 砍连接（与原"进程退出砍连接"兜底等价）。
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        eprintln!("inkos-engine-server: graceful drain watchdog fired, exiting");
+        std::process::exit(0);
+    });
 }
 
 #[tokio::main]
@@ -218,20 +228,18 @@ async fn main() -> Result<(), std::io::Error> {
     let (app, hub) = build_router();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     eprintln!("inkos-engine-server listening on 127.0.0.1:{port}");
-    // 整体超时兜底：在途请求 hang 死时 5s 强退（进程退出砍连接），
-    // 防 graceful drain 无限等待；正常路径（短请求 + 已终结的 SSE）
-    // 在信号后毫秒级排空。axum 0.7 serve 面是 IntoFuture——显式转换
-    // 后才能被 timeout 当 Future 轮询。
     let serve = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(hub))
         .into_future();
-    tokio::pin!(serve);
-    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut serve)
-        .await
-        .is_err()
-    {
-        eprintln!("inkos-engine-server: graceful drain timed out, exiting");
+    // 173 号：整体 serve 不再套 5s timeout（会变成"启动 5s 后自杀"）；
+    // 排空段兜底由 shutdown_signal 末尾的看门狗承担。axum 0.7 serve 面
+    // 是 IntoFuture——显式转换后 await。
+    match serve.await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            eprintln!("inkos-engine-server: serve error: {err}");
+            Err(err)
+        }
     }
-    Ok(())
 }
 

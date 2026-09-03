@@ -4,7 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
-import { createLoopbackGuardMiddleware, guardOptionsFromEnv } from "./loopback-guard.js";
+import { createLoopbackGuardMiddleware, guardOptionsFromEnv, originIsAllowed } from "./loopback-guard.js";
 import {
   StateManager,
   PipelineRunner,
@@ -2659,7 +2659,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // 在 CORS 放大面之前被 403 短路。与 engine-rs 同规则同 env 名（双端同水位）；
   // INKOS_ENGINE_LOOPBACK_GUARD=0 可一键回退旧行为。
   app.use("/*", createLoopbackGuardMiddleware(guardOptionsFromEnv(process.env)));
-  app.use("/*", cors());
+  // CORS（173 号 W-A4a 收紧）：回环 Origin 反射——与 engine-rs sidecar_cors_layer
+  // 同规则（共享 loopback-guard 的 origin 判定，env 白名单同源）：回环主机或
+  // 白名单命中反射请求 Origin，其余（远端 / null / 无 Origin）不发 ACAO——
+  // 守卫关闭时 * 放大面也不复活。方法族/头镜像保持 Hono 默认参（与 Rust 侧
+  // 方法族、AllowHeaders::mirror_request 对齐）。
+  const corsGuardOptions = guardOptionsFromEnv(process.env);
+  const corsExtraOrigins = corsGuardOptions.extraOrigins ?? [];
+  app.use("/*", cors({
+    origin: (origin) => (originIsAllowed(origin, corsExtraOrigins) ? origin : null),
+  }));
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {

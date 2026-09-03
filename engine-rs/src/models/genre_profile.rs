@@ -1,7 +1,7 @@
 //! 流派画像。
 //!
 //! 移植自 `packages/core/src/models/genre-profile.ts`。
-//! [`parse_genre_profile`]：YAML frontmatter（serde_yaml，对齐 TS js-yaml）+ zod 语义校验。
+//! [`parse_genre_profile`]：YAML frontmatter（serde_yaml_ng，对齐 TS js-yaml）+ zod 语义校验。
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,7 @@ pub enum GenreProfileParseError {
     #[error("Genre profile missing YAML frontmatter (--- ... ---)")]
     MissingFrontmatter,
     #[error("genre profile YAML parse failed: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_yaml_ng::Error),
     #[error("genre profile field invalid: {0}")]
     InvalidField(String),
 }
@@ -120,7 +120,7 @@ pub fn parse_genre_profile(raw: &str) -> Result<ParsedGenreProfile, GenreProfile
     let fm = caps.get(1).expect("组 1 必在").as_str();
     let body = caps.get(2).expect("组 2 必在").as_str();
 
-    let parsed: GenreProfileRaw = serde_yaml::from_str(fm)?;
+    let parsed: GenreProfileRaw = serde_yaml_ng::from_str(fm)?;
     let language = match parsed.language.as_deref() {
         None => "zh".to_string(),
         Some("zh") => "zh".to_string(),

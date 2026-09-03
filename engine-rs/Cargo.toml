@@ -54,8 +54,9 @@ flate2 = "1"
 zip = "2"
 base64 = "0.22"
 # YAML：genre-profile / book-rules 的 frontmatter 解析（TS js-yaml 的对应物）。
-# serde_yaml 0.9 已停止维护但仍是事实标准；解析面仅为受控 frontmatter，风险可控。
-serde_yaml = "0.9"
+# serde_yaml_ng = serde_yaml 0.9 的维护续作（同 API drop-in；0.9 已停维护
+# RUSTSEC-2024-0320，173 号 W-C6 迁移），输出等价性由 golden 向量 + duel 锁定。
+serde_yaml_ng = "0.10"
 # 临时目录：atomic-file-set 的事务目录 + 测试 fixture。
 tempfile = "3"
 # Unicode NFKD：skills external-loader 的 skill id 规范化（TS String.normalize("NFKD") 对应物）。

@@ -6833,3 +6833,80 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
 });
+
+describe("CORS loopback origin reflection（173 号 W-A4a）", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-studio-cors-"));
+    await writeFile(join(root, "inkos.json"), JSON.stringify(projectConfig, null, 2), "utf-8");
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function corsApp() {
+    const { createStudioServer } = await import("./server.js");
+    return createStudioServer(cloneProjectConfig() as never, root);
+  }
+
+  it("reflects loopback origins and omits ACAO otherwise", async () => {
+    const app = await corsApp();
+
+    // 回环 Origin（端口不限）：ACAO 反射请求 Origin。
+    const loopback = await app.request("http://localhost/api/v1/genres", {
+      headers: { origin: "http://localhost:5173" },
+    });
+    expect(loopback.status).toBe(200);
+    expect(loopback.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+
+    // 远端 Origin：守卫 403，不带 CORS 头。
+    const remote = await app.request("http://localhost/api/v1/genres", {
+      headers: { origin: "http://evil.example" },
+    });
+    expect(remote.status).toBe(403);
+    expect(remote.headers.get("access-control-allow-origin")).toBeNull();
+
+    // tauri://localhost（host 回环）：反射。
+    const tauri = await app.request("http://localhost/api/v1/genres", {
+      headers: { origin: "tauri://localhost" },
+    });
+    expect(tauri.status).toBe(200);
+    expect(tauri.headers.get("access-control-allow-origin")).toBe("tauri://localhost");
+
+    // 无 Origin：不发 ACAO（原 `*` 恒设语义废止）。
+    const plain = await app.request("http://localhost/api/v1/genres");
+    expect(plain.status).toBe(200);
+    expect(plain.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("reflects preflight for loopback origins and strips it for remote", async () => {
+    const app = await corsApp();
+
+    // 回环 preflight：Hono 204 短路 + 反射 + 方法族/头镜像。
+    const loopback = await app.request("http://localhost/api/v1/books", {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:5173",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(loopback.status).toBe(204);
+    expect(loopback.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+    expect(loopback.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(loopback.headers.get("access-control-allow-headers")).toContain("content-type");
+
+    // 远端 preflight：守卫 403，无 ACAO（浏览器侧等价拒绝）。
+    const remote = await app.request("http://localhost/api/v1/books", {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://evil.example",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(remote.status).toBe(403);
+    expect(remote.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});

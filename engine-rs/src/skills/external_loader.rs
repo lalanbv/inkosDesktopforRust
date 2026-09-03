@@ -121,7 +121,7 @@ pub fn parse_agent_skill_document(
 }
 
 /// frontmatter 切分 + YAML 解析。`Ok(None)` = YAML 值为 null（TS `!parsed.data` 分支）。
-fn parse_frontmatter(raw: &str) -> Result<(Option<serde_yaml::Value>, String), String> {
+fn parse_frontmatter(raw: &str) -> Result<(Option<serde_yaml_ng::Value>, String), String> {
     // TS：`raw.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")`（单 BOM + CRLF/CR → LF）
     let no_bom = raw.strip_prefix('\u{FEFF}').unwrap_or(raw);
     let mut normalized = String::with_capacity(no_bom.len());
@@ -146,18 +146,18 @@ fn parse_frontmatter(raw: &str) -> Result<(Option<serde_yaml::Value>, String), S
     let frontmatter = normalized[4..end].trim().to_string();
     let after = &normalized[end + 4..];
     let body = after.strip_prefix('\n').unwrap_or(after).to_string();
-    let data = serde_yaml::from_str::<serde_yaml::Value>(&frontmatter)
+    let data = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&frontmatter)
         .map_err(|e| e.to_string())?;
     let data = match data {
-        serde_yaml::Value::Null => None,
+        serde_yaml_ng::Value::Null => None,
         other => Some(other),
     };
     Ok((data, body))
 }
 
 /// `optionalText`：string 且 trim 非空 → trim，否则 None。
-fn optional_text(value: Option<&serde_yaml::Value>) -> Option<String> {
-    let text = value.and_then(serde_yaml::Value::as_str)?;
+fn optional_text(value: Option<&serde_yaml_ng::Value>) -> Option<String> {
+    let text = value.and_then(serde_yaml_ng::Value::as_str)?;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         None
@@ -168,7 +168,7 @@ fn optional_text(value: Option<&serde_yaml::Value>) -> Option<String> {
 
 /// `requiredText`：必填文本 + UTF-16 码元长度上限（TS `text.length`）。
 fn required_text(
-    value: Option<&serde_yaml::Value>,
+    value: Option<&serde_yaml_ng::Value>,
     field: &str,
     max_chars: usize,
 ) -> Result<String, String> {

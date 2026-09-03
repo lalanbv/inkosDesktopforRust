@@ -143,15 +143,29 @@ async fn cap_context(
     Ok(Json(CapContextResponse { content: cap_context_block(&req.content, opts) }))
 }
 
-/// Hono `cors()` 默认参（server.ts L2880 `app.use("/*", cors())`）的响应面
-/// 等价层（125 号）：Origin `*`（**恒设**，不看请求是否带 Origin——Hono
-/// 默认参同款）；方法族 GET/HEAD/PUT/POST/DELETE/PATCH；头**镜像请求**的
-/// `Access-Control-Request-Headers`（Hono allowHeaders=[] 的反射语义）；
-/// 无 credentials / 无 expose / 无 max-age；preflight 短路。
+/// 回环 Origin 反射 CORS 层（173 号 W-A4a 收紧；原 125 号为 Hono `cors()`
+/// 默认参 `Allow-Origin: *` 等价层）。allow_origin 判定与回环守卫同规则
+/// （共享 [`loopback_guard::origin_is_allowed`]）：回环主机 Origin（端口
+/// 不限）或 `INKOS_ENGINE_ALLOWED_ORIGINS` 白名单命中 → ACAO **反射请求
+/// Origin**；其余（远端、`null`、无 Origin）→ 不发 ACAO。守卫仍在更外层
+/// 403 远端 Origin，本层保证守卫被 `INKOS_ENGINE_LOOPBACK_GUARD=0` 关闭
+/// 时 `*` 放大面也不复活。方法族 GET/HEAD/PUT/POST/DELETE/PATCH；头镜像
+/// 请求的 `Access-Control-Request-Headers`；无 credentials / 无 expose /
+/// 无 max-age；preflight 短路 200（tower-http 对不允许的 preflight 也回
+/// 200、仅缺 ACAO——浏览器以无 ACAO 拒绝，与 Hono 204 无 ACAO 同效）。
 pub fn sidecar_cors_layer() -> tower_http::cors::CorsLayer {
+    sidecar_cors_layer_with_extras(loopback_guard::env_extra_origins())
+}
+
+/// [`sidecar_cors_layer`] 的显式白名单形态（供测试/嵌入装配；bin 走 env 版）。
+pub fn sidecar_cors_layer_with_extras(
+    extra_origins: Vec<String>,
+) -> tower_http::cors::CorsLayer {
     use axum::http::Method;
     tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(move |origin, _| {
+            loopback_guard::origin_is_allowed(origin.to_str().unwrap_or(""), &extra_origins)
+        }))
         .allow_methods([
             Method::GET,
             Method::HEAD,
@@ -653,31 +667,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cors_layer_adds_headers_only_for_origin_requests() {
+    async fn cors_layer_reflects_loopback_origins_only() {
         use axum::http::HeaderValue;
         let app = router(AppState { version: "0.0.1-test".into() })
             .layer(sidecar_cors_layer());
 
-        // 带 Origin 的普通请求：Allow-Origin 反射（Any → *）。
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/health")
-                    .header("origin", "http://duel.local")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status().as_u16(), 200);
-        assert_eq!(
-            response.headers().get("access-control-allow-origin"),
-            Some(&HeaderValue::from_static("*"))
-        );
+        // 回环 Origin（端口不限）：ACAO 反射请求 Origin（173 号）。
+        for origin in ["http://localhost:5173", "http://127.0.0.1:7788", "tauri://localhost"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/health")
+                        .header("origin", origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200, "{origin}");
+            assert_eq!(
+                response.headers().get("access-control-allow-origin"),
+                Some(&HeaderValue::from_str(origin).unwrap()),
+                "{origin} 应反射"
+            );
+        }
 
-        // 无 Origin 的普通请求：Allow-Origin 恒 *（Hono cors() 无条件设置、
-        // 不看请求 Origin——tower-http Any 同款）；preflight 专属头不出现。
+        // 远端 Origin：不发 ACAO（守卫缺位时本层兜底不放大；bin 装配下守卫
+        // 会先行 403——本用例锁定纯 CORS 层语义）。
+        for origin in ["http://duel.local", "null"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/health")
+                        .header("origin", origin)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200, "{origin}");
+            assert!(
+                response.headers().get("access-control-allow-origin").is_none(),
+                "{origin} 不应发 ACAO"
+            );
+        }
+
+        // 无 Origin 的普通请求：不发 ACAO（原 125 号 `*` 恒设语义废止）；
+        // preflight 专属头不出现。
         let response = app
             .clone()
             .oneshot(
@@ -688,21 +726,19 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            response.headers().get("access-control-allow-origin"),
-            Some(&HeaderValue::from_static("*"))
-        );
+        assert!(response.headers().get("access-control-allow-origin").is_none());
         assert!(response.headers().get("access-control-allow-methods").is_none());
         assert!(response.headers().get("access-control-allow-headers").is_none());
 
-        // Preflight（OPTIONS + Access-Control-Request-Method）：短路 2xx，
-        // 方法族含 POST，头镜像请求的 content-type。
+        // Preflight（回环 Origin）：短路 2xx，ACAO 反射，方法族含 POST，
+        // 头镜像请求的 content-type。
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
                     .uri("/api/v1/health")
-                    .header("origin", "http://duel.local")
+                    .header("origin", "http://localhost:5173")
                     .header("access-control-request-method", "POST")
                     .header("access-control-request-headers", "content-type")
                     .body(Body::empty())
@@ -713,7 +749,7 @@ mod tests {
         assert!(response.status().is_success());
         assert_eq!(
             response.headers().get("access-control-allow-origin"),
-            Some(&HeaderValue::from_static("*"))
+            Some(&HeaderValue::from_static("http://localhost:5173"))
         );
         let methods = response
             .headers()
@@ -726,6 +762,61 @@ mod tests {
             response.headers().get("access-control-allow-headers").cloned(),
             Some(HeaderValue::from_str("content-type").unwrap())
         );
+
+        // Preflight（远端 Origin）：tower-http 仍 200 但不发 ACAO——浏览器
+        // 以无 ACAO 拒绝（与 Hono 204 无 ACAO 同效）。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/v1/health")
+                    .header("origin", "http://duel.local")
+                    .header("access-control-request-method", "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        assert!(response.headers().get("access-control-allow-origin").is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_layer_extra_origins_reflected() {
+        use axum::http::HeaderValue;
+        let app = router(AppState { version: "0.0.1-test".into() })
+            .layer(sidecar_cors_layer_with_extras(vec!["https://embed.example".into()]));
+
+        // env 白名单（非回环）命中：同样反射（与守卫白名单同源共享）。
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .header("origin", "https://embed.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response.headers().get("access-control-allow-origin"),
+            Some(&HeaderValue::from_static("https://embed.example"))
+        );
+
+        // 白名单前缀相近但不精确命中：不反射。
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .header("origin", "https://embed.example.evil")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.headers().get("access-control-allow-origin").is_none());
     }
 
     #[tokio::test]

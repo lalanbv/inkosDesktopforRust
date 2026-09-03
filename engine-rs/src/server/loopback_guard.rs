@@ -18,7 +18,9 @@
 //!
 //! 装配位置：仅由 `inkos-engine-server` bin 挂在最外层（包 CORS 之外），
 //! `router_books` 本身不挂——duel/单测路由面零扰动。拦截响应不带 CORS 头
-//! （守卫在 CORS 层之外先行短路）。
+//! （守卫在 CORS 层之外先行短路）。CORS 层（`sidecar_cors_layer`）自 173 号
+//! 起复用本模块的 origin 判定做回环反射——守卫关闭（env）时 CORS 也不再
+//! 复活 `*` 放大面。
 //!
 //! env 开关：
 //! - `INKOS_ENGINE_LOOPBACK_GUARD`：默认开；`0`/`false`/`off`（大小写不敏感）关。
@@ -53,15 +55,20 @@ impl LoopbackGuardConfig {
             .ok()
             .map(|v| !parse_disabled(&v))
             .unwrap_or(true);
-        let extra_origins = std::env::var("INKOS_ENGINE_ALLOWED_ORIGINS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
-        Self { enabled, extra_origins }
+        Self { enabled, extra_origins: env_extra_origins() }
     }
+}
+
+/// `INKOS_ENGINE_ALLOWED_ORIGINS` 解析（守卫与 CORS 反射层共享，保证双
+/// 层面白名单一致——173 号 W-A4a）。
+pub fn env_extra_origins() -> Vec<String> {
+    std::env::var("INKOS_ENGINE_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// `0`/`false`/`off`（大小写不敏感）视为关闭指令，其余任何值（含空串）视为开启。
@@ -92,9 +99,11 @@ fn is_loopback_host(host: &str) -> bool {
     )
 }
 
-/// Origin 判定：白名单精确命中，或 `scheme://host[:port]` 的 host 为回环。
-/// 无 `://` 结构（`null`、畸形值）→ 拒绝（不冒险）。
-fn origin_is_allowed(origin: &str, extras: &[String]) -> bool {
+/// Origin 判定（`pub`：`sidecar_cors_layer` 反射谓词共享本规则——173 号
+/// W-A4a，保证守卫与 CORS 两层面判定一致）：白名单精确命中，或
+/// `scheme://host[:port]` 的 host 为回环。无 `://` 结构（`null`、畸形值）→
+/// 拒绝（不冒险）。
+pub fn origin_is_allowed(origin: &str, extras: &[String]) -> bool {
     if extras.iter().any(|allowed| allowed == origin) {
         return true;
     }

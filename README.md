@@ -156,7 +156,7 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 
 ## 开发约定
 
-- **变更记录**：每次修改归档到 `变更记录文档/{YYYYMMDD}/{编号}_标题.md`，编号连续（当前至 172 号）
+- **变更记录**：每次修改归档到 `变更记录文档/{YYYYMMDD}/{编号}_标题.md`，编号连续（当前至 173 号）
 - **不写 workflow**：GitHub Actions 已全量移除（149 号），此后不新增任何 workflow 及配套脚本，发版走本地脚本
 - **与上游的关系**：早期坚持「零修改上游文件」以降低合并冲突；150 号 UI 四期起，`packages/studio` 由本分支直接演进（fork-and-own），不再回合并上游
 - 桌壳模块保持单一职责（src-tauri 各模块 < 500 行约束）；引擎移植遵循 1:1 复刻 + golden 差分 + 契约 duel 纪律（详见 engine-rs/README.md）

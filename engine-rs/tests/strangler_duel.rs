@@ -923,27 +923,43 @@ async fn bin_process_static_face_duel() {
     let (status, _) = get_json(&bin, "/api/v1/health").await;
     assert_eq!(status, 200);
 
-    // CORS 面（125 号）：跨源请求（Tauri 壳 / vite dev）等价性——普通请求
-    // Allow-Origin 恒 *；preflight 双端 2xx 且方法/头语义一致。
+    // CORS 面（125 号引入，173 号 W-A4a 收紧为回环 Origin 反射）：回环
+    // Origin（vite dev 形态）双端反射 ACAO=Origin；远端 Origin 被守卫
+    // 403 且无 CORS 头（bin/TS 侧守卫均在 CORS 之外先行短路）；preflight
+    // （回环）双端 2xx 且反射 + 方法/头语义一致。
     let client = reqwest::Client::new();
     for base in [&bin, &ts] {
+        // GET 用双端同位的 /api/v1/books（TS 侧无 /api/v1/health——404 面
+        // 不在本 duel 断言范围）。
         let response = client
-            .get(format!("{base}/api/v1/health"))
-            .header("origin", "http://duel.local")
+            .get(format!("{base}/api/v1/books"))
+            .header("origin", "http://localhost:5173")
             .send()
             .await
             .unwrap();
+        assert_eq!(response.status().as_u16(), 200, "{base} 回环 Origin 应放行");
         assert_eq!(
             response
                 .headers()
                 .get("access-control-allow-origin")
                 .and_then(|value| value.to_str().ok()),
-            Some("*"),
-            "{base} 普通 CORS 请求头分歧"
+            Some("http://localhost:5173"),
+            "{base} 回环 Origin 应反射"
+        );
+        let response = client
+            .get(format!("{base}/api/v1/books"))
+            .header("origin", "http://duel.local")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{base} 远端 Origin 应 403");
+        assert!(
+            response.headers().get("access-control-allow-origin").is_none(),
+            "{base} 403 响应不应携带 ACAO"
         );
         let response = client
             .request(reqwest::Method::OPTIONS, format!("{base}/api/v1/books"))
-            .header("origin", "http://duel.local")
+            .header("origin", "http://localhost:5173")
             .header("access-control-request-method", "POST")
             .header("access-control-request-headers", "content-type")
             .send()
@@ -960,7 +976,8 @@ async fn bin_process_static_face_duel() {
                 .headers()
                 .get("access-control-allow-origin")
                 .and_then(|value| value.to_str().ok()),
-            Some("*")
+            Some("http://localhost:5173"),
+            "{base} preflight 应反射回环 Origin"
         );
         let methods = response
             .headers()
@@ -978,6 +995,18 @@ async fn bin_process_static_face_duel() {
         assert!(
             headers.contains("content-type"),
             "{base} 头镜像缺 content-type: {headers}"
+        );
+        let response = client
+            .request(reqwest::Method::OPTIONS, format!("{base}/api/v1/books"))
+            .header("origin", "http://duel.local")
+            .header("access-control-request-method", "POST")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 403, "{base} 远端 preflight 应被守卫 403");
+        assert!(
+            response.headers().get("access-control-allow-origin").is_none(),
+            "{base} 远端 preflight 不应携带 ACAO"
         );
     }
 
