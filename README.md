@@ -164,4 +164,5 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 ## 致谢与许可证
 
 - 上游项目：[InkOS](https://github.com/Narcooo/inkos)（Narcooo）及其贡献者；InkOS 的 agent 运行时构建在 [pi](https://github.com/badlogic/pi-mono)（`@mariozechner/pi-ai` / `@mariozechner/pi-agent-core`）之上
+- 赞助上游：感谢 [字节火山引擎](https://www.volcengine.com/activity/ai618?utm_source=OWO&utm_medium=devrel-1&utm_campaign=hw&utm_term=inkos&utm_content=hw) 赞助 InkOS（火山方舟 Agent/Coding Plan 国模套餐，支持 GLM-5.3、Kimi-K3、DeepSeek 等模型）
 - 许可证：[AGPL-3.0](LICENSE)，与上游一致
