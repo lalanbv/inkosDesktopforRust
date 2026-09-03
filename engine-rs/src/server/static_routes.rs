@@ -291,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn static_face_carries_security_headers() {
         let dir = dist();
-        let mut app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
+        let app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
 
         for uri in ["/assets/app.js", "/", "/editor/chapter/2"] {
             let response = app

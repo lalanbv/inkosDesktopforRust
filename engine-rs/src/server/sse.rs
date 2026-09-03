@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::stream::Stream;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 /// 事件通道承载单元（事件名 + JSON 负载）。
 #[derive(Debug, Clone)]
@@ -26,12 +26,17 @@ pub struct SsePayload {
 #[derive(Clone)]
 pub struct BroadcastHub {
     sender: broadcast::Sender<SsePayload>,
+    /// 优雅停机信号（172 号 W-B2）：独立 watch 通道而非广播特殊事件——
+    /// broadcast 的 `RecvError::Closed` 依赖全部 sender drop（hub 被 Clone
+    /// 持有永不发生）；且"流终结"是生命周期信号不是业务事件，语义分层。
+    shutdown: watch::Sender<bool>,
 }
 
 impl Default for BroadcastHub {
     fn default() -> Self {
         let (sender, _) = broadcast::channel(256);
-        BroadcastHub { sender }
+        let (shutdown, _) = watch::channel(false);
+        BroadcastHub { sender, shutdown }
     }
 }
 
@@ -51,6 +56,15 @@ impl BroadcastHub {
     pub fn subscribe(&self) -> broadcast::Receiver<SsePayload> {
         self.sender.subscribe()
     }
+
+    /// 通知全部 SSE 流终结（服务优雅停机路径调用）。
+    pub fn shutdown(&self) {
+        let _ = self.shutdown.send(true);
+    }
+
+    pub(crate) fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.shutdown.subscribe()
+    }
 }
 
 /// SSE 流：订阅广播 + 连接即 ping + sessionId 快照 + 30s keep-alive。
@@ -59,6 +73,9 @@ pub async fn events_handler(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut receiver = hub.subscribe();
+    // 优雅停机分支（172 号 W-B2）：hub.shutdown() 后流正常 EOF——
+    // 连接随之关闭，axum graceful drain 才能完成（无限流否则永不排空）。
+    let mut shutdown_rx = hub.subscribe_shutdown();
     let session_id = params.get("sessionId").cloned();
     let project_root = params.get("projectRoot").cloned();
 
@@ -80,16 +97,42 @@ pub async fn events_handler(
             }
         }
 
+        // select 分支只做控制流（yield 一律在 stream! 直接支持的
+        // match 里，避免嵌套宏内 yield 的展开顺序问题）。
+        enum Step {
+            Event(SsePayload),
+            Ping,
+            Closed,
+            Shutdown,
+        }
         loop {
-            match receiver.recv().await {
-                Ok(payload) => {
+            let step = tokio::select! {
+                biased;
+                _ = shutdown_rx.changed() => Step::Shutdown,
+                result = receiver.recv() => match result {
+                    Ok(payload) => Step::Event(payload),
+                    Err(broadcast::error::RecvError::Lagged(_)) => Step::Ping,
+                    Err(broadcast::error::RecvError::Closed) => Step::Closed,
+                },
+            };
+            match step {
+                Step::Shutdown => {
+                    // 停机信号到达：先排空管道内已广播事件（含 bin 停机
+                    // 路径先发的 engine:shutdown——biased 下它可能尚未被
+                    // recv，不排空会丢帧），再终结流（EOF）。
+                    while let Ok(payload) = receiver.try_recv() {
+                        yield Ok(Event::default().event(payload.event).data(payload.data));
+                    }
+                    break;
+                }
+                Step::Event(payload) => {
                     yield Ok(Event::default().event(payload.event).data(payload.data));
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
+                Step::Ping => {
                     // 慢消费者丢帧——发 ping 保活并继续。
                     yield Ok(Event::default().event("ping").data(""));
                 }
-                Err(broadcast::error::RecvError::Closed) => {
+                Step::Closed => {
                     break;
                 }
             }
@@ -145,5 +188,64 @@ mod tests {
         let hub = BroadcastHub::new();
         hub.broadcast("write:error", &serde_json::json!({ "error": "x" }));
         // 不 panic 即通过。
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_notifies_then_ends_stream() {
+        let hub = Arc::new(BroadcastHub::new());
+        let app = axum::Router::new()
+            .route("/api/v1/events", axum::routing::get(events_handler))
+            .with_state(hub.clone());
+
+        let response = app
+            .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // 停机序列（bin 停机路径同序）：先广播业务事件，再关流。
+        hub.broadcast("engine:shutdown", &serde_json::json!({ "reason": "signal" }));
+        hub.shutdown();
+
+        let mut stream = futures_util::StreamExt::boxed(response.into_body().into_data_stream());
+        let mut text = String::new();
+        loop {
+            match futures_util::StreamExt::next(&mut stream).await {
+                Some(Ok(chunk)) => text.push_str(&String::from_utf8_lossy(&chunk)),
+                // 流在 shutdown 后必须正常终结（EOF），graceful drain 才能完成。
+                Some(Err(e)) => panic!("stream errored before EOF: {e}"),
+                None => break,
+            }
+        }
+        assert!(text.contains("event: ping"));
+        assert!(text.contains("event: engine:shutdown"));
+        assert!(text.contains("\"reason\":\"signal\""));
+    }
+
+    #[tokio::test]
+    async fn shutdown_without_pending_events_also_ends_stream() {
+        let hub = Arc::new(BroadcastHub::new());
+        let app = axum::Router::new()
+            .route("/api/v1/events", axum::routing::get(events_handler))
+            .with_state(hub.clone());
+
+        let response = app
+            .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        // 订阅发生在 handler 建流时——先取流再 shutdown，保证 changed() 可见。
+        let mut stream = futures_util::StreamExt::boxed(response.into_body().into_data_stream());
+        // 等到首帧（ping）确认流已启动。
+        let first = futures_util::StreamExt::next(&mut stream).await;
+        assert!(first.is_some());
+        hub.shutdown();
+        // 有限时间内必须 EOF（而非无限 keep-alive）。
+        let drained = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            futures_util::StreamExt::collect::<Vec<_>>(stream),
+        )
+        .await
+        .expect("stream should end after shutdown");
+        assert!(drained.iter().all(|r| r.is_ok()));
     }
 }

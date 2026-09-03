@@ -19,6 +19,7 @@
 //! model-overrides 配置面随 project 配置端点接线（备案）。
 
 use std::collections::HashMap;
+use std::future::IntoFuture;
 use std::sync::Arc;
 
 use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig};
@@ -37,7 +38,7 @@ const AGENTS: &[&str] = &[
     "chapter-analyzer", "state-validator", "writer-settler",
 ];
 
-fn build_router() -> axum::Router {
+fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     let project_root = std::path::PathBuf::from(env("INKOS_PROJECT_ROOT", "."));
     let default = LlmEndpointConfig {
         base_url: env("INKOS_LLM_BASE_URL", "http://127.0.0.1:9"),
@@ -86,7 +87,6 @@ fn build_router() -> axum::Router {
         .with_stream(env_stream);
     let state = Arc::new(StateManager::new(project_root.clone()));
     let hub = Arc::new(BroadcastHub::new());
-
     // BooksRuntime 先建：write-next runner 复用其 effective_router 热解析
     // （inkos.json 服务项 + secrets 优先，配置不可用回退上面的启动 env router
     // ——与其余写面端点同源，bin 不再持有独立配置路径）。
@@ -158,7 +158,7 @@ fn build_router() -> axum::Router {
         // 编译期宏（非运行时 env()——CARGO_PKG_VERSION 仅构建期存在，
         // 运行时读取恒 miss 导致版本恒为 fallback，发布冒烟已证实）。
         AppState { version: env!("CARGO_PKG_VERSION").to_string() },
-        hub,
+        hub.clone(),
         runtime,
         audit,
         books,
@@ -172,18 +172,66 @@ fn build_router() -> axum::Router {
     // 远端 Origin / DNS rebinding Host 在 CORS 放大面之前被 403 短路。
     // `router_books` 本身不挂（duel/单测零扰动）；env：
     // INKOS_ENGINE_LOOPBACK_GUARD=0 可一键回退旧行为。
-    inkos_engine::server::loopback_guard::with_loopback_guard(
+    let guarded = inkos_engine::server::loopback_guard::with_loopback_guard(
         app,
         inkos_engine::server::loopback_guard::LoopbackGuardConfig::from_env(),
-    )
+    );
+    (guarded, hub)
+}
+
+/// 优雅停机信号链（172 号 W-B2）：ctrl_c / SIGTERM（unix）任一到达 →
+/// 广播 `engine:shutdown` 事件 → flush 窗口（事件经 SSE 送出）→ 关闭
+/// 全部 SSE 流（否则无限流令 graceful drain 永不完成）→ 返回后 axum
+/// 停接新连接并排空在途请求。
+async fn shutdown_signal(hub: Arc<BroadcastHub>) {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    eprintln!("inkos-engine-server: shutdown signal received, notifying SSE subscribers");
+    hub.broadcast("engine:shutdown", &serde_json::json!({ "reason": "signal" }));
+    // flush 窗口：事件先经各 SSE 流送出（含 keep-alive 计时器下的
+    // 缓冲刷新），再终结流；管道残余由流内 shutdown 分支排空兜底。
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    hub.shutdown();
 }
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let port: u16 = env("INKOS_PORT", "8787").parse().unwrap_or(8787);
-    let app = build_router();
+    let (app, hub) = build_router();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     eprintln!("inkos-engine-server listening on 127.0.0.1:{port}");
-    axum::serve(listener, app).await
+    // 整体超时兜底：在途请求 hang 死时 5s 强退（进程退出砍连接），
+    // 防 graceful drain 无限等待；正常路径（短请求 + 已终结的 SSE）
+    // 在信号后毫秒级排空。axum 0.7 serve 面是 IntoFuture——显式转换
+    // 后才能被 timeout 当 Future 轮询。
+    let serve = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(hub))
+        .into_future();
+    tokio::pin!(serve);
+    if tokio::time::timeout(std::time::Duration::from_secs(5), &mut serve)
+        .await
+        .is_err()
+    {
+        eprintln!("inkos-engine-server: graceful drain timed out, exiting");
+    }
+    Ok(())
 }
 

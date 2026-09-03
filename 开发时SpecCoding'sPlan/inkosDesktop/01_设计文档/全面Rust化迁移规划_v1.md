@@ -424,7 +424,7 @@ Rust 引擎仍在壳的沙箱/loopback 加固之内，额外注意：
 
 ## 附录 C：本规划与现有壳层规范的衔接
 
-- 性能/0GC：延续 `开发时SpecCoding'sPlan/性能优化/01-02_*.md` roadmap
+- 性能/0GC：延续 `开发时SpecCoding'sPlan/inkosDesktop/06_全局重构优化/历史/01-02_*.md（172 号迁入）` roadmap
 - 安全：延续 `变更记录文档/20260807/27-41_*.md` 41 项加固
 - 错误处理：延续壳层 `error.rs`（AppError + with_details/with_suggestion 模式）
 - 测试规范：延续 80% 覆盖率 + 反向验证（见 00_SUMMARY）

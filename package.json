@@ -31,6 +31,7 @@
     "typecheck": "pnpm -r typecheck",
     "audit:semantic-patterns": "node scripts/audit-semantic-patterns.mjs",
     "verify:publish-manifests": "node scripts/verify-no-workspace-protocol.mjs packages/core packages/cli packages/studio",
+    "verify:engine-bindings": "node scripts/verify-engine-bindings.mjs",
     "benchmark:studio-e2e": "node scripts/studio-e2e-benchmark.mjs",
     "release": "pnpm build && pnpm test"
   },

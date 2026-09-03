@@ -3,6 +3,7 @@
 //! 威胁模型（对标 Jupyter 4.3+ 默认 token 鉴权、VS Code 内置服务同款问题域）：
 //! - T1 远端网页跨源读取 secrets / 调用写接口（CORS `Allow-Origin: *` 放大面）；
 //! - T2 DNS rebinding（attacker.com 解析到 127.0.0.1，请求 Host 为攻击者域名）。
+//!
 //! 非目标：本地恶意进程（其本可直读 `.inkos/secrets.json`，服务侧无增量手段）。
 //!
 //! 规则（deny-first，仅拦浏览器形态请求）：

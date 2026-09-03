@@ -152,11 +152,11 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 - 🛠 模块级文档：[src-tauri/README.md](src-tauri/README.md)（桌壳）、[engine-rs/README.md](engine-rs/README.md)（引擎移植目标与纪律）、[src-tauri/tests/README.md](src-tauri/tests/README.md)（测试指引）
 - 🗂 [变更记录文档/](变更记录文档/)（逐变更归档，编号连续）与 [开发时SpecCoding'sPlan/](开发时SpecCoding'sPlan/)（设计规划）
 
-> 注意：`docs/` 下部分文档早于 164 号「Rust 引擎默认直启」切换，其中版本号、「首启下载 Node 引擎」等描述可能滞后，以本 README 与最新变更记录为准。
+> 注意：`docs/` 下部分文档（如 TROUBLESHOOTING）早于 164 号「Rust 引擎默认直启」切换，描述可能滞后；USER_GUIDE / QUICK_START 已于 172 号对齐。任何疑问以本 README 与最新变更记录为准。
 
 ## 开发约定
 
-- **变更记录**：每次修改归档到 `变更记录文档/{YYYYMMDD}/{编号}_标题.md`，编号连续（当前至 167 号）
+- **变更记录**：每次修改归档到 `变更记录文档/{YYYYMMDD}/{编号}_标题.md`，编号连续（当前至 172 号）
 - **不写 workflow**：GitHub Actions 已全量移除（149 号），此后不新增任何 workflow 及配套脚本，发版走本地脚本
 - **与上游的关系**：早期坚持「零修改上游文件」以降低合并冲突；150 号 UI 四期起，`packages/studio` 由本分支直接演进（fork-and-own），不再回合并上游
 - 桌壳模块保持单一职责（src-tauri 各模块 < 500 行约束）；引擎移植遵循 1:1 复刻 + golden 差分 + 契约 duel 纪律（详见 engine-rs/README.md）
