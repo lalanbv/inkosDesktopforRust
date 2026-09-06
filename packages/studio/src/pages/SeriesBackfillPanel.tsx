@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchJson, postApi } from "../hooks/use-api";
 import type { TFunction } from "../hooks/use-i18n";
-import { buildBackfillDiff, type BackfillItem } from "./series-backfill-diff";
+import { buildBackfillDiff, mergeBackfillItems, parseBackfillItems, type BackfillItem } from "./series-backfill-diff";
 
 interface BookOption {
   readonly id: string;
@@ -31,6 +31,8 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [existing, setExisting] = useState<string | null>(null);
   const [draftMeta, setDraftMeta] = useState<{ sourceBookId: string; updatedAt: string } | null>(null);
+  // 190 号：写入粒度——overwrite（默认，整体覆盖）| merge（保留既有 + 追加勾选）。
+  const [mode, setMode] = useState<"overwrite" | "merge">("overwrite");
 
   // 目标书变化 → 拉现有 series_backfill.md（186 号 diff 预览数据源）。
   useEffect(() => {
@@ -80,10 +82,11 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
     try {
       const res = await postApi<{ applied: number }>(`/books/${target}/series-backfill/apply`, {
         itemIds: [...selected],
+        mode,
       });
       setStatus({ kind: "ok", text: t("backfill.applied").replace("{n}", String(res.applied)) });
-      // apply 为整体覆盖——成功后立即重拉服务端文件作为 diff 新基线
-      // （否则 existing 停留在写入前，diff 会把覆盖语义显示错）。
+      // apply 成功后立即重拉服务端文件作为 diff 新基线
+      // （否则 existing 停留在写入前，diff 会把写入语义显示错）。
       try {
         const ex = await fetchJson<{ content: string | null }>(`/books/${target}/series-backfill/existing`);
         setExisting(ex.content);
@@ -95,13 +98,16 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
     }
   };
 
-  // diff 预览（186 号）：现有内容 × 勾选后的将写入内容（apply 为整体覆盖，
-  // 未勾选条目的移除在此显性化）。
+  // diff 预览（186 号；190 号按粒度联动）：现有内容 × 所选粒度下的将写入内容。
+  // overwrite：只渲染勾选子集（未勾选条目的移除在此显性化）；merge：既有条目
+  // 保留 + 勾选项去重追加（同题条目不重复写入，也不覆盖旧内容）。
   const diffLines = useMemo(() => {
     if (!draft || !draftMeta) return [];
     const selectedItems = draft.items.filter((item) => selected.has(item.id));
-    return buildBackfillDiff(existing, draftMeta.sourceBookId, draftMeta.updatedAt, selectedItems);
-  }, [draft, draftMeta, selected, existing]);
+    const nextItems =
+      mode === "merge" ? mergeBackfillItems(parseBackfillItems(existing ?? ""), selectedItems) : selectedItems;
+    return buildBackfillDiff(existing, draftMeta.sourceBookId, draftMeta.updatedAt, nextItems);
+  }, [draft, draftMeta, selected, existing, mode]);
   const removedCount = diffLines.filter((line) => line.kind === "removed").length;
   const addedCount = diffLines.filter((line) => line.kind === "added").length;
 
@@ -212,6 +218,26 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
               </div>
             </div>
           )}
+          {/* 190 号：写入粒度选择（diff 预览即时联动）。 */}
+          <div className="flex items-center gap-2" data-slot="backfill-mode">
+            <span className="text-xs font-bold text-muted-foreground">{t("backfill.modeLabel")}</span>
+            {(["overwrite", "merge"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                  mode === m
+                    ? "bg-primary/10 text-primary border-primary/30 font-bold"
+                    : "bg-secondary/40 text-muted-foreground border-border/50 hover:bg-secondary"
+                }`}
+              >
+                {m === "overwrite" ? t("backfill.modeOverwrite") : t("backfill.modeMerge")}
+              </button>
+            ))}
+            <span className="text-xs text-muted-foreground">
+              {mode === "overwrite" ? t("backfill.modeOverwriteHint") : t("backfill.modeMergeHint")}
+            </span>
+          </div>
           <button
             onClick={() => void handleApply()}
             disabled={applying || selected.size === 0}

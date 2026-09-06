@@ -1,9 +1,10 @@
 /**
- * 回填 diff 预览（186 号 C3 增强第一项）。
+ * 回填 diff 预览（186 号 C3 增强第一项；190 号增加 merge 粒度）。
  *
- * apply 语义是**整体覆盖写入** `story/series_backfill.md`——未勾选的既有
- * 条目会被移除。diff 把这个语义显性化：写入前展示「保留 / 移除 / 写入」
- * 三类行。纯函数层（LCS 行级 diff + markdown 渲染）与 UI 解耦便于单测。
+ * apply 写入粒度二选一：`overwrite`（默认，整体覆盖——未勾选的既有条目会被
+ * 移除）| `merge`（保留既有条目，勾选项按 (category, title) 去重后追加）。
+ * diff 把所选粒度的结果显性化：写入前展示「保留 / 移除 / 写入」三类行。
+ * 纯函数层（LCS 行级 diff + markdown 渲染/解析/合并）与 UI 解耦便于单测。
  */
 
 /** 回填条目（与双端 schema items 元素一致）。 */
@@ -90,4 +91,49 @@ export function buildBackfillDiff(
   const oldLines = (existingContent ?? "").split("\n").filter((line) => !isHeaderLine(line));
   const newLines = next.split("\n").filter((line) => !isHeaderLine(line));
   return diffLines(oldLines, newLines);
+}
+
+/**
+ * 解析双端 apply 机器渲染的 series_backfill.md 条目（190 号 merge 模式）。
+ * 与 Rust parse_backfill_items 逐字对齐：`## [category] title` 开新条目，
+ * 其后原始行为 content（首尾裁空白），首个条目前的头部忽略，id 合成 existing-N。
+ */
+export function parseBackfillItems(content: string): ReadonlyArray<BackfillItem> {
+  const items: BackfillItem[] = [];
+  let current: { category: string; title: string; lines: string[] } | null = null;
+  const flush = (): void => {
+    if (current) {
+      items.push({
+        id: `existing-${items.length + 1}`,
+        category: current.category,
+        title: current.title,
+        content: current.lines.join("\n").trim(),
+      });
+      current = null;
+    }
+  };
+  for (const line of content.split("\n")) {
+    const match = /^## \[([^\]]*)\] (.*)$/.exec(line);
+    if (match) {
+      flush();
+      current = { category: match[1], title: match[2], lines: [] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  flush();
+  return items;
+}
+
+/** merge 写入集合：既有条目在前，勾选项按 (category, title) 去重后追加。 */
+export function mergeBackfillItems(
+  existing: ReadonlyArray<BackfillItem>,
+  selected: ReadonlyArray<BackfillItem>,
+): ReadonlyArray<BackfillItem> {
+  const merged = [...existing];
+  for (const item of selected) {
+    const duplicate = merged.some((e) => e.category === item.category && e.title === item.title);
+    if (!duplicate) merged.push(item);
+  }
+  return merged;
 }

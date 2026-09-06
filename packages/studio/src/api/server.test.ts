@@ -6430,6 +6430,58 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(rawBook.writing.reviewMode).toBe("manual");
   });
 
+  it("series-backfill apply merge keeps existing items and dedupes (190号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const story = join(root, "books", "demo-book", "story");
+    await mkdir(story, { recursive: true });
+    await writeFile(
+      join(story, "series_backfill.md"),
+      "# 系列设定回填\n\n来源：《old》（old） · 抽取于 T · 勾选 1 条\n\n## [worldview] 灵气体系\n\n旧描述。\n\n",
+      "utf-8",
+    );
+    await writeFile(
+      join(story, "series_backfill_draft.json"),
+      JSON.stringify({
+        version: 1,
+        bookId: "demo-book",
+        sourceBookId: "src",
+        updatedAt: "2026-09-07T00:00:00.000Z",
+        items: [
+          { id: "it-1", category: "worldview", title: "灵气体系", content: "新描述。" },
+          { id: "it-2", category: "character", title: "林动", content: "主角。" },
+        ],
+      }),
+      "utf-8",
+    );
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const res = await app.request("http://localhost/api/v1/books/demo-book/series-backfill/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itemIds: ["it-1", "it-2"], mode: "merge" }),
+    });
+    await expect(res.json()).resolves.toMatchObject({ ok: true, applied: 2, total: 2, mode: "merge" });
+
+    const merged = await readFile(join(story, "series_backfill.md"), "utf-8");
+    expect(merged).toContain("旧描述。"); // 既有条目保留
+    expect(merged).toContain("## [character] 林动");
+    expect(merged).not.toContain("新描述。"); // 同题去重，不覆盖旧内容
+    // 头部与 Rust render_backfill_markdown 逐字一致（来源 id 双写）。
+    expect(merged).toContain("来源：《src》（src） · 抽取于 2026-09-07T00:00:00.000Z · 勾选 2 条");
+
+    // 默认（不带 mode）维持整体覆盖。
+    const overwrite = await app.request("http://localhost/api/v1/books/demo-book/series-backfill/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itemIds: ["it-2"] }),
+    });
+    expect(overwrite.status).toBe(200);
+    const overwritten = await readFile(join(story, "series_backfill.md"), "utf-8");
+    expect(overwritten).toContain("## [character] 林动");
+    expect(overwritten).not.toContain("灵气体系"); // 覆盖：既有条目移除
+  });
+
   it("timeline-auto-beats defaults to off and round-trips the book-level flag (189号)", async () => {
     await writeCompleteBookFixture(root, "demo-book", "Demo Book");
     const { createStudioServer } = await import("./server.js");

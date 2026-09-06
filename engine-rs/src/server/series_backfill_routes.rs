@@ -163,6 +163,10 @@ pub struct ApplyBody {
     /// 勾选的条目 id；缺省 = 全量（「预览 + 逐项勾选」的确认动作）。
     #[serde(default)]
     pub item_ids: Option<Vec<String>>,
+    /// 190 号：写入粒度——`overwrite`（默认，整体覆盖）| `merge`（保留既有
+    /// 条目，勾选项按 (category, title) 去重后追加）。
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// 把 items 渲染为 markdown 分节（独立文件，不改写既有真相文件）。
@@ -175,6 +179,65 @@ pub fn render_backfill_markdown(draft: &SeriesBackfillDraft, items: &[SeriesBack
         out.push_str(&format!("## [{}] {}\n\n{}\n\n", item.category, item.title, item.content));
     }
     out
+}
+
+/// 解析 render_backfill_markdown 产物中的条目（190 号 merge 模式数据源）。
+///
+/// 只承诺解析**本端点机器生成**的格式：`## [category] title` 行开新条目，
+/// 其后到下一标题/EOF 之间的原始行为 content（首尾空白裁掉）；首个条目前的
+/// 头部行忽略。条目 id 不在文件中——合成 `existing-N` 占位（渲染不消费 id）。
+pub fn parse_backfill_items(content: &str) -> Vec<SeriesBackfillItem> {
+    let mut items: Vec<SeriesBackfillItem> = Vec::new();
+    let mut current: Option<(String, String, Vec<&str>)> = None;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("## [") {
+            if let Some(close) = rest.find("] ") {
+                if let Some((category, title, lines)) = current.take() {
+                    items.push(SeriesBackfillItem {
+                        id: format!("existing-{}", items.len() + 1),
+                        category,
+                        title,
+                        content: lines.join("\n").trim().to_string(),
+                    });
+                }
+                current = Some((
+                    rest[..close].to_string(),
+                    rest[close + 2..].to_string(),
+                    Vec::new(),
+                ));
+                continue;
+            }
+        }
+        if let Some((_, _, lines)) = current.as_mut() {
+            lines.push(line);
+        }
+    }
+    if let Some((category, title, lines)) = current.take() {
+        items.push(SeriesBackfillItem {
+            id: format!("existing-{}", items.len() + 1),
+            category,
+            title,
+            content: lines.join("\n").trim().to_string(),
+        });
+    }
+    items
+}
+
+/// merge 写入集合：既有条目在前，勾选项按 (category, title) 去重后追加。
+pub fn merge_backfill_items(
+    existing: &[SeriesBackfillItem],
+    selected: &[SeriesBackfillItem],
+) -> Vec<SeriesBackfillItem> {
+    let mut merged: Vec<SeriesBackfillItem> = existing.to_vec();
+    for item in selected {
+        let duplicate = merged
+            .iter()
+            .any(|e| e.category == item.category && e.title == item.title);
+        if !duplicate {
+            merged.push(item.clone());
+        }
+    }
+    merged
 }
 
 /// GET /api/v1/books/:id/series-backfill/existing
@@ -216,7 +279,22 @@ pub async fn apply(
     if items.is_empty() {
         return bad_request("No items selected");
     }
-    let markdown = render_backfill_markdown(&draft, &items);
+    let mode = parsed.mode.as_deref().unwrap_or("overwrite");
+    let merged: Vec<SeriesBackfillItem> = if mode == "merge" {
+        let existing_path = runtime
+            .state
+            .book_dir(&book_id)
+            .join("story")
+            .join("series_backfill.md");
+        let existing = match tokio::fs::read_to_string(&existing_path).await {
+            Ok(content) => parse_backfill_items(&content),
+            Err(_) => Vec::new(),
+        };
+        merge_backfill_items(&existing, &items)
+    } else {
+        items.clone()
+    };
+    let markdown = render_backfill_markdown(&draft, &merged);
     let path = runtime.state.book_dir(&book_id).join("story").join("series_backfill.md");
     if let Err(error) = tokio::fs::write(&path, &markdown).await {
         return internal_error(&error.to_string());
@@ -228,6 +306,208 @@ pub async fn apply(
             // 相对路径（185 号 duel：绝对路径属服务器侧细节，不入契约）。
             "path": "story/series_backfill.md",
             "applied": items.len(),
+            // 190 号：merge 模式回传合并后的总条数（= 文件内条目数）。
+            "total": merged.len(),
+            "mode": mode,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use crate::models::series_backfill::SeriesBackfillDraft;
+    use crate::pipeline::merged_audit::RevisionGate;
+    use crate::server::books_routes::BooksRuntime;
+    use crate::server::sse::BroadcastHub;
+    use crate::state::manager::StateManager;
+    use axum::routing::post;
+    use std::sync::Arc;
+    use tower::util::ServiceExt;
+
+    fn runtime_for(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root)),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 1024,
+                    extra_headers: Default::default(),
+                },
+                Default::default(),
+            )),
+            builtin_genres_dir: root.to_path_buf(),
+            revision_gate: RevisionGate::default(),
+        }
+    }
+
+    fn app(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/books/:id/series-backfill/apply",
+                post(apply),
+            )
+            .route(
+                "/api/v1/books/:id/series-backfill/existing",
+                axum::routing::get(existing),
+            )
+            .with_state(runtime)
+    }
+
+    fn item(id: &str, category: &str, title: &str, content: &str) -> SeriesBackfillItem {
+        SeriesBackfillItem {
+            id: id.into(),
+            category: category.into(),
+            title: title.into(),
+            content: content.into(),
+        }
+    }
+
+    fn draft_with(items: &[SeriesBackfillItem]) -> SeriesBackfillDraft {
+        serde_json::from_value(json!({
+            "version": 1,
+            "bookId": "b1",
+            "sourceBookId": "src",
+            "updatedAt": "2026-09-07T00:00:00.000Z",
+            "items": items,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn render_parse_roundtrip_preserves_items() {
+        let draft = draft_with(&[
+            item("it-1", "worldview", "灵气体系", "灵气分五行。"),
+            item("it-2", "character", "林动", "主角，坚韧。"),
+        ]);
+        let markdown = render_backfill_markdown(&draft, &draft.items);
+        let parsed = parse_backfill_items(&markdown);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].category, "worldview");
+        assert_eq!(parsed[0].title, "灵气体系");
+        assert_eq!(parsed[0].content, "灵气分五行。");
+        assert_eq!(parsed[1].title, "林动");
+        // 渲染不消费 id；解析合成 existing-N。
+        assert_eq!(parsed[0].id, "existing-1");
+        // 再渲染一次与原文件逐字一致（roundtrip 收敛）。
+        assert_eq!(render_backfill_markdown(&draft, &parsed), markdown);
+    }
+
+    #[test]
+    fn parse_ignores_header_and_multiline_content() {
+        let content = "# 系列设定回填\n\n来源：《src》（src） · 抽取于 T · 勾选 1 条\n\n## [plot] 夺符\n\n第一段。\n\n第二段。\n\n";
+        let parsed = parse_backfill_items(content);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].title, "夺符");
+        assert_eq!(parsed[0].content, "第一段。\n\n第二段。");
+    }
+
+    #[test]
+    fn merge_dedupes_by_category_and_title() {
+        let existing = vec![
+            item("existing-1", "worldview", "灵气体系", "旧描述。"),
+        ];
+        let selected = vec![
+            item("it-1", "worldview", "灵气体系", "新描述。"), // 同 (category,title) → 跳过
+            item("it-2", "character", "林动", "主角。"),
+        ];
+        let merged = merge_backfill_items(&existing, &selected);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].content, "旧描述。"); // 既有在前且保留
+        assert_eq!(merged[1].id, "it-2");
+    }
+
+    #[tokio::test]
+    async fn apply_merge_appends_to_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("books").join("b1");
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"t","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        // 既有回填文件：一条 worldview 条目。
+        std::fs::write(
+            book.join("story").join("series_backfill.md"),
+            "# 系列设定回填\n\n来源：《old》（old） · 抽取于 T · 勾选 1 条\n\n## [worldview] 灵气体系\n\n旧描述。\n\n",
+        )
+        .unwrap();
+        // 新草稿：一条同题（去重）+ 一条新题。
+        std::fs::write(
+            book.join("story").join("series_backfill_draft.json"),
+            serde_json::to_string(&draft_with(&[
+                item("it-1", "worldview", "灵气体系", "新描述。"),
+                item("it-2", "character", "林动", "主角。"),
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let response = app(runtime_for(dir.path()))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/series-backfill/apply")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"itemIds":["it-1","it-2"],"mode":"merge"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["mode"], "merge");
+        assert_eq!(parsed["applied"], 2); // 勾选 2 条
+        assert_eq!(parsed["total"], 2); // 合并后 2 条（同题去重）
+
+        let content = std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
+        assert!(content.contains("旧描述。")); // 既有条目保留
+        assert!(content.contains("## [character] 林动"));
+        assert!(!content.contains("新描述。")); // 同题新内容不覆盖旧条目
+    }
+
+    #[tokio::test]
+    async fn apply_default_mode_stays_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("books").join("b1");
+        std::fs::create_dir_all(book.join("story")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"t","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("series_backfill.md"),
+            "## [worldview] 旧条目\n\n旧描述。\n\n",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("series_backfill_draft.json"),
+            serde_json::to_string(&draft_with(&[item("it-1", "character", "林动", "主角。")])).unwrap(),
+        )
+        .unwrap();
+
+        // 不带 mode 字段（旧客户端形态）→ 整体覆盖语义不变。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b1/series-backfill/apply")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"itemIds":["it-1"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let content = std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
+        assert!(content.contains("## [character] 林动"));
+        assert!(!content.contains("旧条目")); // 覆盖：既有条目移除
+    }
 }

@@ -2892,7 +2892,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ itemIds?: string[] }>().catch(() => ({ itemIds: undefined }));
+    const body = await c.req
+      .json<{ itemIds?: string[]; mode?: string }>()
+      .catch(() => ({}) as { itemIds?: string[]; mode?: string });
     const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
     let draft: { sourceBookId: string; updatedAt: string; items: Array<{ id: string; category: string; title: string; content: string }> };
     try {
@@ -2902,11 +2904,53 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const items = body.itemIds ? draft.items.filter((item) => body.itemIds!.includes(item.id)) : draft.items;
     if (items.length === 0) return c.json({ error: "No items selected" }, 400);
+    // 190 号：写入粒度——overwrite（默认，整体覆盖）| merge（保留既有条目，
+    // 勾选项按 (category, title) 去重后追加）。解析/合并/渲染与 Rust 逐字对齐。
+    const mode = body.mode ?? "overwrite";
+    let merged = items;
+    if (mode === "merge") {
+      const backfillPath = join(state.bookDir(id), "story", "series_backfill.md");
+      const existingItems: Array<{ id: string; category: string; title: string; content: string }> = [];
+      try {
+        const content = await readFile(backfillPath, "utf-8");
+        let current: { category: string; title: string; lines: string[] } | null = null;
+        for (const line of content.split("\n")) {
+          const match = /^## \[([^\]]*)\] (.*)$/.exec(line);
+          if (match) {
+            if (current) {
+              existingItems.push({
+                id: `existing-${existingItems.length + 1}`,
+                category: current.category,
+                title: current.title,
+                content: current.lines.join("\n").trim(),
+              });
+            }
+            current = { category: match[1], title: match[2], lines: [] };
+          } else if (current) {
+            current.lines.push(line);
+          }
+        }
+        if (current) {
+          existingItems.push({
+            id: `existing-${existingItems.length + 1}`,
+            category: current.category,
+            title: current.title,
+            content: current.lines.join("\n").trim(),
+          });
+        }
+      } catch { /* 无既有文件 → 空合并基线 */ }
+      merged = [...existingItems];
+      for (const item of items) {
+        const duplicate = merged.some((e) => e.category === item.category && e.title === item.title);
+        if (!duplicate) merged = [...merged, item];
+      }
+    }
     const path = join(state.bookDir(id), "story", "series_backfill.md");
-    let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》 · 抽取于 ${draft.updatedAt} · 勾选 ${items.length} 条\n\n`;
-    for (const item of items) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
+    // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。
+    let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》（${draft.sourceBookId}） · 抽取于 ${draft.updatedAt} · 勾选 ${merged.length} 条\n\n`;
+    for (const item of merged) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
     await writeFile(path, markdown, "utf-8");
-    return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length });
+    return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
   });
 
   app.get("/api/v1/books/:id/timeline", async (c) => {
