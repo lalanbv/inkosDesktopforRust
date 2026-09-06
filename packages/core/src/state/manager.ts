@@ -5,6 +5,28 @@ import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
 
+/**
+ * 单文件原子替换（199 号稳定性审计，与 Rust utils/atomic_file_set.rs 的
+ * write_file_atomic 对齐）：先写同目录唯一临时文件，再 rename 就位——
+ * 进程中途崩溃只留孤儿临时文件，目标文件要么旧内容、要么完整新内容。
+ * 适用于配置/索引类小文件（book.json / index.json）。
+ */
+async function writeFileAtomic(path: string, content: string): Promise<void> {
+  const { dirname, basename, join: joinPath } = await import("node:path");
+  const tmp = joinPath(
+    dirname(path),
+    `.${basename(path)}.tmp-${process.pid}-${randomUUID()}`,
+  );
+  await writeFile(tmp, content, "utf-8");
+  try {
+    const { rename } = await import("node:fs/promises");
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
 const BOOK_LOCK_RELEASE_RETRIES = 4;
@@ -405,10 +427,10 @@ export class StateManager {
 
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
     await mkdir(bookDir, { recursive: true });
-    await writeFile(
+    // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
+    await writeFileAtomic(
       join(bookDir, "book.json"),
       JSON.stringify(config, null, 2),
-      "utf-8",
     );
   }
 
@@ -547,10 +569,10 @@ export class StateManager {
     const safeIndex = index.length === 0 && !options.allowEmptyWithChapterFiles
       ? await this.rebuildChapterIndexFromFilesAt(bookDir).then((rebuilt) => rebuilt.length > 0 ? rebuilt : index)
       : index;
-    await writeFile(
+    // 199 号：index.json 截断虽可重建自愈，但会丢 reviewNote/审计元数据——原子替换写。
+    await writeFileAtomic(
       join(chaptersDir, "index.json"),
       JSON.stringify(safeIndex, null, 2),
-      "utf-8",
     );
   }
 

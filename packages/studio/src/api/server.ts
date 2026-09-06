@@ -2876,7 +2876,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const draft = { version: 1, bookId: id, sourceBookId: body.sourceBookId, updatedAt: new Date().toISOString(), items };
     const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
     await mkdir(dirname(draftPath), { recursive: true });
-    await writeFile(draftPath, `${JSON.stringify(draft, null, 2)}\n`, "utf-8");
+    // 199 号：原子替换写。
+    await writeFileAtomic(draftPath, `${JSON.stringify(draft, null, 2)}\n`);
     return c.json({ draft });
   });
 
@@ -2889,6 +2890,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ content: null });
     }
   });
+
+  // 199 号：单文件原子替换（temp + rename）——截断的 book.json/timeline.json
+  // 会让整本书不可加载或时间线静默丢失，写面统一走此helper。
+  const writeFileAtomic = async (path: string, content: string): Promise<void> => {
+    const { randomUUID } = await import("node:crypto");
+    const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+    await writeFile(tmp, content, "utf-8");
+    try {
+      const { rename: renameFile } = await import("node:fs/promises");
+      await renameFile(tmp, path);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  };
 
   app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
     const id = c.req.param("id");
@@ -2946,10 +2962,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
     }
     const path = join(state.bookDir(id), "story", "series_backfill.md");
-    // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。
+    // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。199 号：原子替换写。
     let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》（${draft.sourceBookId}） · 抽取于 ${draft.updatedAt} · 勾选 ${merged.length} 条\n\n`;
     for (const item of merged) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
-    await writeFile(path, markdown, "utf-8");
+    await writeFileAtomic(path, markdown);
     return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
   });
 
@@ -2982,7 +2998,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const path = join(state.bookDir(id), "story", "timeline.json");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(parsed.data, null, 2)}\n`, "utf-8");
+    // 199 号：timeline.json 损坏会被 GET 按「无时间线」静默吞掉——原子替换写。
+    await writeFileAtomic(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
     return c.json({ ok: true });
   });
 
@@ -5850,7 +5867,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           reviewMode: normalizeChapterReviewMode(mode),
         };
       }
-      await writeFile(rawBookPath, JSON.stringify(rawBook, null, 2), "utf-8");
+      // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
+      await writeFileAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
       const bookMode = readBookChapterReviewMode(rawBook);
       return c.json({
         ok: true,
@@ -5898,7 +5916,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         delete writing.autoTimelineBeats;
         rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
       }
-      await writeFile(rawBookPath, JSON.stringify(rawBook, null, 2), "utf-8");
+      // 199 号：原子替换写。
+      await writeFileAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
       return c.json({ ok: true, enabled: next });
     } catch {
       return c.json({ error: `Book "${bookId}" not found` }, 404);

@@ -215,6 +215,34 @@ pub async fn commit_atomic_file_set(input: &AtomicFileSet<'_>) -> Result<(), Ato
     Ok(())
 }
 
+/// 单文件原子替换（199 号稳定性审计）：先写同目录唯一临时文件，再
+/// `rename` 就位（同文件系统内 rename 对观察者原子）。进程在写入中途崩溃
+/// 只会留下孤儿临时文件，目标文件要么是旧内容、要么是完整新内容——
+/// 不再有「截断的 book.json 让整本书不可加载」的失败形态。
+///
+/// 适用于配置/索引类小文件（book.json / index.json / timeline.json）；
+/// 多文件事务仍走 [`commit_atomic_file_set`]。
+pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{}.tmp-{}-{}", file_name, std::process::id(), seq));
+    tokio::fs::write(&tmp, content).await?;
+    match tokio::fs::rename(&tmp, path).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +433,34 @@ mod tests {
         assert_eq!(normalize_relative("a/./b.md"), "a/b.md");
         assert_eq!(normalize_relative("a/../b.md"), "b.md");
         assert_eq!(normalize_relative("./a.md"), "a.md");
+    }
+    #[tokio::test]
+    async fn write_file_atomic_replaces_target_with_full_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("book.json");
+        tokio::fs::write(&target, "旧内容").await.unwrap();
+        write_file_atomic(&target, "{ \"完整新内容\" }").await.unwrap();
+        let content = tokio::fs::read_to_string(&target).await.unwrap();
+        assert_eq!(content, "{ \"完整新内容\" }");
+        // 目录里不留孤儿临时文件。
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_creates_new_file_and_cleans_up_on_rename_failure() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("nested").join("book.json");
+        // 父目录缺失：写临时文件即失败，不留残留。
+        assert!(write_file_atomic(&target, "x").await.is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(leftovers.is_empty(), "失败路径不应留下临时文件");
     }
 }

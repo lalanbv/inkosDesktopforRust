@@ -91,7 +91,8 @@ impl StateManager {
         tokio::fs::create_dir_all(book_dir).await?;
         let serialized = serde_json::to_string_pretty(config)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        tokio::fs::write(book_dir.join("book.json"), serialized).await?;
+        // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
+        crate::utils::atomic_file_set::write_file_atomic(&book_dir.join("book.json"), &serialized).await?;
         Ok(())
     }
 
@@ -320,7 +321,8 @@ impl StateManager {
         };
         let serialized = serde_json::to_string_pretty(&safe_index)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        tokio::fs::write(chapters_dir.join("index.json"), serialized).await?;
+        // 199 号：index.json 截断虽可重建自愈，但会丢 reviewNote/审计元数据——原子替换写。
+        crate::utils::atomic_file_set::write_file_atomic(&chapters_dir.join("index.json"), &serialized).await?;
         Ok(())
     }
 

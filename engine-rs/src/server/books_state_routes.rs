@@ -166,7 +166,8 @@ pub async fn put_timeline(
         }
     };
     serialized.push('\n');
-    match tokio::fs::write(&path, serialized).await {
+    // 199 号：timeline.json 损坏会被 GET 按「无时间线」静默吞掉——原子替换写。
+    match crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1428,9 +1429,9 @@ pub async fn put_review_mode(
     }
 
     let book_path = root.join("books").join(&book_id).join("book.json");
-    // TS JSON.stringify(raw, null, 2)：2 空格缩进、无尾换行。
+    // TS JSON.stringify(raw, null, 2)：2 空格缩进、无尾换行。199 号：原子替换写。
     let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
-    if tokio::fs::write(&book_path, serialized).await.is_err() {
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized).await.is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
@@ -1529,8 +1530,9 @@ pub async fn put_timeline_auto_beats(
         }
     }
     let book_path = root.join("books").join(&book_id).join("book.json");
+    // 199 号：原子替换写（截断的 book.json = 整本书不可加载）。
     let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
-    if tokio::fs::write(&book_path, serialized).await.is_err() {
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized).await.is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),

@@ -152,7 +152,8 @@ pub async fn extract(
         Err(error) => return internal_error(&error.to_string()),
     };
     serialized.push('\n');
-    if let Err(error) = tokio::fs::write(&path, serialized).await {
+    // 199 号：原子替换写（抽取草稿是 apply 的唯一数据源）。
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await {
         return internal_error(&error.to_string());
     }
     (StatusCode::OK, Json(json!({ "draft": draft })))
@@ -297,7 +298,8 @@ pub async fn apply(
     };
     let markdown = render_backfill_markdown(&draft, &merged);
     let path = runtime.state.book_dir(&book_id).join("story").join("series_backfill.md");
-    if let Err(error) = tokio::fs::write(&path, &markdown).await {
+    // 199 号：原子替换写（回填文件损坏 = 用户可感数据丢失）。
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &markdown).await {
         return internal_error(&error.to_string());
     }
     (
