@@ -763,6 +763,7 @@ mod tests {
             updated_at: String::new(),
             parent_book_id: None,
             fanfic_mode: None,
+            series: None,
             writing: None,
         };
         let gp = crate::models::genre_profile::GenreProfile {

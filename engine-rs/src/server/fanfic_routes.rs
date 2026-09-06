@@ -328,6 +328,7 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, body: Bytes) -> im
         updated_at: now,
         parent_book_id: None,
         fanfic_mode: Some(fanfic_mode),
+        series: None,
         writing: None,
     };
     let book_id = book.id.clone();

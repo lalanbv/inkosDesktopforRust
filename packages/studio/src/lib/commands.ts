@@ -164,6 +164,8 @@ export function recentToRoute(entry: RecentEntry): HashRoute | null {
       return entry.bookId ? { page: "book", bookId: entry.bookId } : null;
     case "book-settings":
       return entry.bookId ? { page: "book-settings", bookId: entry.bookId } : null;
+    case "book-timeline":
+      return entry.bookId ? { page: "book-timeline", bookId: entry.bookId } : null;
     case "chapter":
       return entry.bookId && entry.chapterNumber !== undefined
         ? { page: "chapter", bookId: entry.bookId, chapterNumber: entry.chapterNumber }

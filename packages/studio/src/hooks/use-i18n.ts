@@ -39,6 +39,13 @@ const strings = {
 
   // Book Detail
   "book.writeNext": { zh: "写下一章", en: "Write Next" },
+  "timeline.title": { zh: "时间线", en: "Timeline" },
+  "dash.seriesGroup": { zh: "系列 · {n} 本", en: "Series · {n} books" },
+  "timeline.mainPlotline": { zh: "主线", en: "Main plotline" },
+  "timeline.plotline": { zh: "情节线", en: "Plotline" },
+  "timeline.chapter": { zh: "第{n}章", en: "Ch.{n}" },
+  "timeline.stats": { zh: "共 {chapters} 章 · {words} 字", en: "{chapters} chapters · {words} words" },
+  "timeline.empty": { zh: "还没有章节——写下一章后会出现在时间线上。", en: "No chapters yet. They will appear on the timeline after you write one." },
   "book.stopWriting": { zh: "停止写作", en: "Stop Writing" },
   "book.draftOnly": { zh: "仅草稿", en: "Draft Only" },
   "book.approveAll": { zh: "全部通过", en: "Approve All" },

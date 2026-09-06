@@ -57,6 +57,30 @@ describe("BookConfigSchema", () => {
     expect(result.platform).toBe("tomato");
   });
 
+  it("keeps series optional and round-trips given values（180 号 C3-a）", () => {
+    // 缺省：字段省略（双端 DTO 等价的兜底形态）。
+    const bare = BookConfigSchema.parse({
+      ...validBook,
+      id: "b-bare",
+    });
+    expect("series" in bare).toBe(false);
+
+    // 给定：保真 roundtrip。
+    const parsed = BookConfigSchema.parse({
+      ...validBook,
+      series: { name: "斗气大陆", order: 3 },
+    });
+    expect(parsed.series).toEqual({ name: "斗气大陆", order: 3 });
+
+    // 非法：order < 1 / 空 name 拒绝。
+    expect(() =>
+      BookConfigSchema.parse({ ...validBook, series: { name: "x", order: 0 } }),
+    ).toThrow();
+    expect(() =>
+      BookConfigSchema.parse({ ...validBook, series: { name: "", order: 1 } }),
+    ).toThrow();
+  });
+
   it("applies default targetChapters and chapterWordCount", () => {
     const minimal = {
       id: "b1",

@@ -181,6 +181,7 @@ mod tests {
             updated_at: "2026-01-01".to_string(),
             parent_book_id: None,
             fanfic_mode: None,
+            series: None,
             writing: None,
         }
     }

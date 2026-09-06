@@ -5,6 +5,7 @@ export type HashRoute =
   | { page: "chat" }
   | { page: "book"; bookId: string }
   | { page: "book-settings"; bookId: string }
+  | { page: "book-timeline"; bookId: string }
   | { page: "book-create" }
   | { page: "services" }
   | { page: "project-settings" }
@@ -45,6 +46,9 @@ function parseHash(hash: string): HashRoute {
   const bookSettingsMatch = path.match(/^book\/([^/]+)\/settings$/);
   if (bookSettingsMatch) return { page: "book-settings", bookId: decodeURIComponent(bookSettingsMatch[1]) };
 
+  const bookTimelineMatch = path.match(/^book\/([^/]+)\/timeline$/);
+  if (bookTimelineMatch) return { page: "book-timeline", bookId: decodeURIComponent(bookTimelineMatch[1]) };
+
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
 
@@ -72,6 +76,7 @@ function routeToHash(route: HashRoute): string {
     case "chat": return "#/chat";
     case "book": return `#/book/${encodeURIComponent(route.bookId)}`;
     case "book-settings": return `#/book/${encodeURIComponent(route.bookId)}/settings`;
+    case "book-timeline": return `#/book/${encodeURIComponent(route.bookId)}/timeline`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "project-settings": return "#/settings";
@@ -89,7 +94,7 @@ function routeToHash(route: HashRoute): string {
 
 export { parseHash, routeToHash }; // for testing
 
-const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-create", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
+const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-timeline", "book-create", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
 
 export function useHashRoute() {
   const [route, setRouteState] = useState<HashRoute>(() => parseHash(window.location.hash));

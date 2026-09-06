@@ -593,6 +593,7 @@ mod tests {
             updated_at: String::new(),
             parent_book_id: None,
             fanfic_mode: None,
+            series: None,
             writing: None,
         }
     }

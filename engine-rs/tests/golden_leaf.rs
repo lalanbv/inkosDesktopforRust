@@ -866,6 +866,7 @@ fn settler_book() -> inkos_engine::models::book::BookConfig {
         updated_at: "2026-01-01T00:00:00.000Z".into(),
         parent_book_id: None,
         fanfic_mode: None,
+        series: None,
         writing: None,
     }
 }
@@ -2001,6 +2002,7 @@ fn chapter_analyzer_suite_matches_ts() {
         updated_at: String::new(),
         parent_book_id: None,
         fanfic_mode: None,
+        series: None,
         writing: None,
     };
     let profile = |value: &serde_json::Value| GenreProfile {

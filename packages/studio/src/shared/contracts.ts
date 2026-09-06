@@ -19,9 +19,15 @@ export interface HealthStatus {
 
 // --- Books ---
 
+export interface BookSeriesInfo {
+  readonly name: string;
+  readonly order: number;
+}
+
 export interface BookSummary {
   readonly id: string;
   readonly title: string;
+  readonly series?: BookSeriesInfo;
   readonly status: string;
   readonly platform: string;
   readonly genre: string;

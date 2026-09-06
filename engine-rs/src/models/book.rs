@@ -108,6 +108,16 @@ pub struct BookWritingConfig {
     pub revision_gate: Option<RevisionGateVal>,
 }
 
+/// 系列归属。对齐 TS `BookSeriesSchema`（180 号 C3-a）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct BookSeries {
+    pub name: String,
+    pub order: u32,
+}
+
 /// 书籍配置。对齐 TS `BookConfigSchema`。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
@@ -131,6 +141,8 @@ pub struct BookConfig {
     pub parent_book_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fanfic_mode: Option<FanficMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<BookSeries>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writing: Option<BookWritingConfig>,
 }
@@ -207,6 +219,35 @@ pub fn resolve_revision_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 180 号 C3-a：series 缺省时序列化完全省略（双端 DTO 等价的兜底形态）；
+    /// 给定值 roundtrip 保真。
+    #[test]
+    fn book_config_series_optional_and_roundtrip() {
+        let base = r#"{
+            "id":"b1","title":"书","platform":"other","genre":"xianxia","status":"active",
+            "targetChapters":10,"chapterWordCount":3000,
+            "createdAt":"2026-09-07T00:00:00.000Z","updatedAt":"2026-09-07T00:00:00.000Z"
+        }"#;
+        let config: BookConfig = serde_json::from_str(base).unwrap();
+        assert!(config.series.is_none());
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("series").is_none(), "缺省 series 必须省略字段");
+
+        let with_series = r#"{
+            "id":"b1","title":"书","platform":"other","genre":"xianxia","status":"active",
+            "targetChapters":10,"chapterWordCount":3000,
+            "createdAt":"2026-09-07T00:00:00.000Z","updatedAt":"2026-09-07T00:00:00.000Z",
+            "series":{"name":"斗气大陆","order":3}
+        }"#;
+        let config: BookConfig = serde_json::from_str(with_series).unwrap();
+        let series = config.series.clone().expect("series 应解析");
+        assert_eq!(series.name, "斗气大陆");
+        assert_eq!(series.order, 3);
+        let round = serde_json::to_value(&config).unwrap();
+        assert_eq!(round["series"]["name"], "斗气大陆");
+        assert_eq!(round["series"]["order"], 3);
+    }
 
     #[test]
     fn normalize_platform_aliases() {

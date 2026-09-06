@@ -18,6 +18,7 @@ import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
 import { Dashboard } from "./pages/Dashboard";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
+import { BookTimeline } from "./pages/BookTimeline";
 import { ChapterReader } from "./pages/ChapterReader";
 import { Analytics } from "./pages/Analytics";
 import { ServiceListPage } from "./pages/ServiceListPage";
@@ -646,6 +647,11 @@ export function App() {
           {view.page === "book-settings" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <BookDetail bookId={view.bookId} nav={nav} theme={theme} t={t} sse={sse} />
+            </div>
+          )}
+          {view.page === "book-timeline" && (
+            <div className="mx-auto w-full max-w-[1400px] px-4 py-12 sm:px-6 lg:px-10 lg:py-16 2xl:px-12 fade-in">
+              <BookTimeline bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {view.page === "chapter" && (

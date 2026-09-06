@@ -13,6 +13,7 @@ export interface Nav {
   toChat(): void;
   toBook(bookId: string): void;
   toBookSettings(bookId: string): void;
+  toBookTimeline(bookId: string): void;
   toBookCreate(): void;
   toChapter(bookId: string, chapterNumber: number): void;
   toAnalytics(bookId: string): void;
@@ -42,6 +43,7 @@ export function createNav(navigate: (route: HashRoute) => void): Nav {
     toChat: () => navigate({ page: "chat" }),
     toBook: (bookId) => navigate({ page: "book", bookId }),
     toBookSettings: (bookId) => navigate({ page: "book-settings", bookId }),
+    toBookTimeline: (bookId) => navigate({ page: "book-timeline", bookId }),
     toBookCreate: () => navigate({ page: "book-create" }),
     toChapter: (bookId, chapterNumber) => navigate({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId) => navigate({ page: "analytics", bookId }),

@@ -1,4 +1,6 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { groupBooksBySeries } from "./dashboard-book-groups";
+import type { BookSeriesInfo } from "../shared/contracts";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -27,6 +29,7 @@ import {
 } from "lucide-react";
 
 interface BookSummary {
+  readonly series?: BookSeriesInfo;
   readonly id: string;
   readonly title: string;
   readonly genre: string;
@@ -130,6 +133,12 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
+
+  // 180 号 C3-a：按 series 分组（纯函数见 dashboard-book-groups.ts）。
+  const bookGroups = useMemo(
+    () => groupBooksBySeries(data?.books ?? []),
+    [data],
+  );
   const writingBooks = useMemo(() => deriveActiveBookIds(sse.messages), [sse.messages]);
   const serviceStoreServices = useServiceStore((s) => s.services);
   const fetchServices = useServiceStore((s) => s.fetchServices);
@@ -220,7 +229,16 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
       </div>
 
       <div className="grid gap-6">
-        {data.books.map((book, index) => {
+        {bookGroups.map((group) => (
+          <div key={group.key} className="grid gap-6">
+            {group.name && (
+              <div className="flex items-center gap-3 pt-2">
+                <h2 className="font-serif text-xl font-bold">{group.name}</h2>
+                <span className="text-xs text-muted-foreground">{t("dash.seriesGroup").replace("{n}", String(group.books.length))}</span>
+                <div className="flex-1 h-px bg-border/60" />
+              </div>
+            )}
+            {group.books.map((book, index) => {
           const isWriting = writingBooks.has(book.id);
           const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
           return (
@@ -272,6 +290,11 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                       <span className="flex items-center gap-1 text-purple-500">
                         <Zap size={12} />
                         <span className="italic">{book.fanficMode}</span>
+                      </span>
+                    )}
+                    {book.series && (
+                      <span className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-primary/20 text-primary text-[10px] font-bold">
+                        {book.series.name} · #{book.series.order}
                       </span>
                     )}
                   </div>
@@ -328,7 +351,9 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
               )}
             </div>
           );
-        })}
+            })}
+          </div>
+        ))}
       </div>
 
       {/* Modern writing progress panel */}

@@ -52,6 +52,14 @@ export type BookStatus = z.infer<typeof BookStatusSchema>;
 export const FanficModeSchema = z.enum(["canon", "au", "ooc", "cp"]);
 export type FanficMode = z.infer<typeof FanficModeSchema>;
 
+/** 系列归属（180 号 C3-a）：丛书名 + 卷序。缺省省略（单本散书）。 */
+export const BookSeriesSchema = z.object({
+  name: z.string().min(1),
+  order: z.number().int().min(1),
+});
+
+export type BookSeries = z.infer<typeof BookSeriesSchema>;
+
 export const BookConfigSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -65,6 +73,7 @@ export const BookConfigSchema = z.object({
   updatedAt: z.string().datetime(),
   parentBookId: z.string().optional(),
   fanficMode: FanficModeSchema.optional(),
+  series: BookSeriesSchema.optional(),
   writing: z.object({
     reviewMode: z.enum(["auto", "manual"]).optional(),
     revisionGate: z.enum(["strict", "lenient", "always"]).optional(),

@@ -41,6 +41,8 @@ export function deriveBreadcrumb(
       return [home(), book(route.bookId)];
     case "book-settings":
       return [home(), book(route.bookId), { label: t("bread.bookSettings") }];
+    case "book-timeline":
+      return [home(), book(route.bookId), { label: t("timeline.title") }];
     case "chapter":
       return [
         home(),

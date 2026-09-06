@@ -61,6 +61,7 @@ interface Nav {
   toChapter: (bookId: string, num: number) => void;
   toAnalytics: (bookId: string) => void;
   toTruth: (bookId: string) => void;
+  toBookTimeline: (bookId: string) => void;
 }
 
 function translateChapterStatus(status: string, t: TFunction): string {
@@ -552,6 +553,12 @@ export function BookDetail({
           >
             {drafting ? <div className="w-4 h-4 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" /> : <Wand2 size={16} />}
             {drafting ? t("book.drafting") : t("book.draftOnly")}
+          </button>
+          <button
+            onClick={() => nav.toBookTimeline(bookId)}
+            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-secondary text-foreground rounded-xl hover:bg-secondary/80 transition-all border border-border/50"
+          >
+            {t("timeline.title")}
           </button>
           <button
             onClick={handleToggleReviewMode}
