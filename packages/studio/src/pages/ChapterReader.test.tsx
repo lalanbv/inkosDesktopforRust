@@ -49,4 +49,46 @@ describe("ChapterReader loading skeleton", () => {
     expect(html).not.toContain('data-loading="skeleton"');
     expect(html).toContain("第一章 灯下");
   });
+
+  it("breadcrumb shows the book title instead of the raw bookId (198号)", () => {
+    useApiMock.mockImplementation((path: string) => {
+      if (path === "/books/b1") {
+        return { data: { book: { id: "b1", title: "冒烟书" } }, error: null, loading: false, refetch: vi.fn() };
+      }
+      if (path.startsWith("/books/b1/chapters/1")) {
+        return {
+          data: { chapterNumber: 1, filename: "chapter-001.md", content: "# 第一章 灯下\n\n正文。" },
+          error: null,
+          loading: false,
+          refetch: vi.fn(),
+        };
+      }
+      return { data: null, error: null, loading: false, refetch: vi.fn() };
+    });
+
+    const html = renderToString(
+      <ChapterReader bookId="b1" chapterNumber={1} nav={nav as never} theme="light" t={t} />,
+    );
+    expect(html).toContain("冒烟书");
+    expect(html).not.toContain(">b1<");
+  });
+
+  it("breadcrumb falls back to bookId while book config is not loaded yet", () => {
+    useApiMock.mockImplementation((path: string) => {
+      if (path.startsWith("/books/b1/chapters/1")) {
+        return {
+          data: { chapterNumber: 1, filename: "chapter-001.md", content: "# 第一章 灯下\n\n正文。" },
+          error: null,
+          loading: false,
+          refetch: vi.fn(),
+        };
+      }
+      return { data: null, error: null, loading: false, refetch: vi.fn() };
+    });
+
+    const html = renderToString(
+      <ChapterReader bookId="b1" chapterNumber={1} nav={nav as never} theme="light" t={t} />,
+    );
+    expect(html).toContain(">b1<");
+  });
 });

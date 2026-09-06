@@ -33,6 +33,12 @@ interface ChapterData {
   readonly content: string;
 }
 
+interface BookData {
+  readonly book: {
+    readonly title: string;
+  };
+}
+
 interface Nav {
   toBook: (id: string) => void;
   toDashboard: () => void;
@@ -65,6 +71,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const { data, loading, error, refetch } = useApi<ChapterData>(
     `/books/${bookId}/chapters/${chapterNumber}`,
   );
+  // 198 号：面包屑显示书名（此前暴露 bookId，与顶栏不一致）；加载前回退 id。
+  const { data: bookData } = useApi<BookData>(`/books/${bookId}`);
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -157,7 +165,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
             onClick={() => nav.toBook(bookId)}
             className="hover:text-primary transition-colors truncate max-w-[120px]"
           >
-            {bookId}
+            {bookData?.book.title ?? bookId}
           </button>
           <span className="text-border">/</span>
           <span className="text-foreground flex items-center gap-1">
