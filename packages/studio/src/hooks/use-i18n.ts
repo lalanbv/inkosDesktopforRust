@@ -71,6 +71,8 @@ const strings = {
   "backfill.apply": { zh: "写入所选（{n} 条）", en: "Write selected ({n})" },
   "backfill.applying": { zh: "写入中…", en: "Writing…" },
   "backfill.applied": { zh: "已写入 {n} 条到 story/series_backfill.md", en: "{n} items written to story/series_backfill.md" },
+  "backfill.diffTitle": { zh: "写入差异预览（相对目标书现有文件）", en: "Write diff (against the target book's current file)" },
+  "backfill.diffHint": { zh: "写入为整体覆盖：取消勾选的既有条目将被移除（上方红色行）。", en: "Writing overwrites the file: unchecked existing items will be removed (red lines above)." },
   "backfill.applyHint": { zh: "写入的是独立文件 story/series_backfill.md，不修改任何既有真相文件。", en: "Writes the standalone file story/series_backfill.md; no existing truth files are modified." },
   "nav.import.backfill": { zh: "导入：系列书回填", en: "Import: Series Backfill" },
   "timeline.rename": { zh: "重命名", en: "Rename" },

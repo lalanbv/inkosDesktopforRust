@@ -177,6 +177,20 @@ pub fn render_backfill_markdown(draft: &SeriesBackfillDraft, items: &[SeriesBack
     out
 }
 
+/// GET /api/v1/books/:id/series-backfill/existing
+/// 读目标书现有 series_backfill.md（缺失 → `{"content":null}`）——
+/// 186 号 diff 预览的数据源（前端把「现有内容」与「将写入内容」做行级 diff）。
+pub async fn existing(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let path = runtime.state.book_dir(&book_id).join("story").join("series_backfill.md");
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
+        Err(_) => (StatusCode::OK, Json(json!({ "content": null }))),
+    }
+}
+
 /// POST /api/v1/books/:id/series-backfill/apply
 pub async fn apply(
     State(runtime): State<BooksRuntime>,

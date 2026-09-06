@@ -1,20 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchJson, postApi } from "../hooks/use-api";
 import type { TFunction } from "../hooks/use-i18n";
+import { buildBackfillDiff, type BackfillItem } from "./series-backfill-diff";
 
 interface BookOption {
   readonly id: string;
   readonly title: string;
 }
 
-interface BackfillItem {
-  readonly id: string;
-  readonly category: string;
-  readonly title: string;
-  readonly content: string;
-}
-
 interface Draft {
+  readonly bookId: string;
+  readonly sourceBookId: string;
+  readonly updatedAt: string;
   readonly items: ReadonlyArray<BackfillItem>;
 }
 
@@ -32,6 +29,19 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [applying, setApplying] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [existing, setExisting] = useState<string | null>(null);
+  const [draftMeta, setDraftMeta] = useState<{ sourceBookId: string; updatedAt: string } | null>(null);
+
+  // 目标书变化 → 拉现有 series_backfill.md（186 号 diff 预览数据源）。
+  useEffect(() => {
+    if (!target) {
+      setExisting(null);
+      return;
+    }
+    void fetchJson<{ content: string | null }>(`/books/${target}/series-backfill/existing`)
+      .then((res) => setExisting(res.content))
+      .catch(() => setExisting(null));
+  }, [target]);
 
   const categoryGrouped = useMemo(() => {
     if (!draft) return [];
@@ -55,6 +65,7 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
         sourceBookId: source,
       });
       setDraft(res.draft);
+      setDraftMeta({ sourceBookId: res.draft.sourceBookId, updatedAt: res.draft.updatedAt });
       setSelected(new Set(res.draft.items.map((item) => item.id)));
     } catch (e) {
       setStatus({ kind: "error", text: e instanceof Error ? e.message : String(e) });
@@ -71,12 +82,28 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
         itemIds: [...selected],
       });
       setStatus({ kind: "ok", text: t("backfill.applied").replace("{n}", String(res.applied)) });
+      // apply 为整体覆盖——成功后立即重拉服务端文件作为 diff 新基线
+      // （否则 existing 停留在写入前，diff 会把覆盖语义显示错）。
+      try {
+        const ex = await fetchJson<{ content: string | null }>(`/books/${target}/series-backfill/existing`);
+        setExisting(ex.content);
+      } catch { /* 保留旧基线 */ }
     } catch (e) {
       setStatus({ kind: "error", text: e instanceof Error ? e.message : String(e) });
     } finally {
       setApplying(false);
     }
   };
+
+  // diff 预览（186 号）：现有内容 × 勾选后的将写入内容（apply 为整体覆盖，
+  // 未勾选条目的移除在此显性化）。
+  const diffLines = useMemo(() => {
+    if (!draft || !draftMeta) return [];
+    const selectedItems = draft.items.filter((item) => selected.has(item.id));
+    return buildBackfillDiff(existing, draftMeta.sourceBookId, draftMeta.updatedAt, selectedItems);
+  }, [draft, draftMeta, selected, existing]);
+  const removedCount = diffLines.filter((line) => line.kind === "removed").length;
+  const addedCount = diffLines.filter((line) => line.kind === "added").length;
 
   const toggle = (id: string): void => {
     setSelected((prev) => {
@@ -161,6 +188,30 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
               ))}
             </div>
           ))}
+          {diffLines.length > 0 && (
+            <div className="rounded-lg border border-border/50 overflow-hidden" data-slot="backfill-diff">
+              <div className="px-3 py-2 text-xs font-bold text-muted-foreground bg-secondary/30 flex items-center gap-3">
+                <span>{t("backfill.diffTitle")}</span>
+                <span className="text-emerald-600 dark:text-emerald-400">+{addedCount}</span>
+                <span className="text-red-500">-{removedCount}</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto font-mono text-[11px] leading-5">
+                {diffLines.map((line: { kind: string; text: string }, idx: number) => (
+                  <div
+                    key={idx}
+                    className={`px-3 whitespace-pre-wrap break-all ${
+                      line.kind === "added" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : line.kind === "removed" ? "bg-red-500/10 text-red-500 line-through decoration-red-400/60"
+                      : "text-muted-foreground"
+                    }`}
+                    data-diff-kind={line.kind}
+                  >
+                    {line.kind === "added" ? `+ ${line.text}` : line.kind === "removed" ? `- ${line.text}` : `  ${line.text}`}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <button
             onClick={() => void handleApply()}
             disabled={applying || selected.size === 0}
@@ -170,6 +221,7 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
             {applying ? t("backfill.applying") : t("backfill.apply").replace("{n}", String(selected.size))}
           </button>
           <p className="text-xs text-muted-foreground">{t("backfill.applyHint")}</p>
+          <p className="text-xs text-muted-foreground">{t("backfill.diffHint")}</p>
         </div>
       )}
 

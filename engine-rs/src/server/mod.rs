@@ -250,6 +250,10 @@ pub fn router_books(
             post(series_backfill_routes::apply).with_state(books.clone()),
         )
         .route(
+            "/api/v1/books/:id/series-backfill/existing",
+            get(series_backfill_routes::existing).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id",
             get(books_state_routes::book_detail)
                 .put(books_state_routes::update_book)

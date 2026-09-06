@@ -1510,6 +1510,7 @@ mod tests {
             .route("/api/v1/books/:id/timeline", axum::routing::get(get_timeline).put(put_timeline))
             .route("/api/v1/books/:id/series-backfill/extract", axum::routing::post(crate::server::series_backfill_routes::extract))
             .route("/api/v1/books/:id/series-backfill/apply", axum::routing::post(crate::server::series_backfill_routes::apply))
+            .route("/api/v1/books/:id/series-backfill/existing", axum::routing::get(crate::server::series_backfill_routes::existing))
             .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
             .route("/api/v1/books/:id/chapter-review-mode", axum::routing::get(get_review_mode).put(put_review_mode))
             .with_state(runtime)

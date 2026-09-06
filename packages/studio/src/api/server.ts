@@ -2880,6 +2880,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ draft });
   });
 
+  app.get("/api/v1/books/:id/series-backfill/existing", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const content = await readFile(join(state.bookDir(id), "story", "series_backfill.md"), "utf-8");
+      return c.json({ content });
+    } catch {
+      return c.json({ content: null });
+    }
+  });
+
   app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json<{ itemIds?: string[] }>().catch(() => ({ itemIds: undefined }));
