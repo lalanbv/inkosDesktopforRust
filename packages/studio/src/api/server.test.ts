@@ -6832,6 +6832,116 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  // 174 号 W-C5：write-next 会话检查点 + SSE 重连对账。
+  const readTaskSnapshotEvent = async (
+    app: ReturnType<typeof createStudioServer>,
+    sessionId: string,
+  ): Promise<{ execution: { id: string; status: string; error?: string; completedAt?: number } }> => {
+    const live = await app.request(`http://localhost/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);
+    const reader = live.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    const deadline = Date.now() + 5_000;
+    while (!text.includes("event: task:snapshot") && Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel().catch(() => {});
+    const frame = text.split("\n\n").find((chunk) => chunk.includes("event: task:snapshot"));
+    expect(frame, `未收到 task:snapshot 帧：${text}`).toBeTruthy();
+    const dataRaw = frame!.split("\n").find((line) => line.startsWith("data:"))!.slice("data:".length).trim();
+    return JSON.parse(dataRaw);
+  };
+
+  it("write-next 会话检查点：Running 先行、在途不误杀、终态同源 startedAt（174 号 W-C5）", async () => {
+    const { createStudioServer } = await import("./server.js");
+    let releaseWrite: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    writeNextChapterMock.mockImplementation(async () => {
+      await gate;
+      throw new Error("boom");
+    });
+
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const response = await app.request("http://localhost/api/v1/books/demo-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "sess-wn", wordCount: 800 }),
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "writing", bookId: "demo-book" });
+
+    // Running 快照先行落盘（completedAt 缺席）。
+    const running = await loadStudioTaskSnapshot(root, "sess-wn");
+    expect(running?.execution).toMatchObject({
+      id: "write-next-demo-book",
+      tool: "pipeline",
+      label: "撰写下一章（demo-book）",
+      status: "running",
+      args: { wordCount: 800 },
+    });
+    expect(running?.execution.completedAt).toBeUndefined();
+
+    // 在途重连：SSE 补发对账快照——活跃集合命中，running 不被误杀。
+    const inFlight = await readTaskSnapshotEvent(app, "sess-wn");
+    expect(inFlight.execution.status).toBe("running");
+
+    releaseWrite?.();
+    await vi.waitFor(async () => {
+      const finished = await loadStudioTaskSnapshot(root, "sess-wn");
+      expect(finished?.execution.status).toBe("error");
+    });
+    const finished = await loadStudioTaskSnapshot(root, "sess-wn");
+    expect(finished?.execution.error).toBe("boom");
+    expect(finished?.execution.startedAt).toBe(running!.execution.startedAt);
+    expect(finished?.execution.completedAt).toBeGreaterThan(0);
+  });
+
+  it("write-next 无 sessionId 时零快照副作用（174 号 W-C5）", async () => {
+    const { createStudioServer } = await import("./server.js");
+    writeNextChapterMock.mockRejectedValue(new Error("boom"));
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(writeNextChapterMock).toHaveBeenCalled());
+    await expect(access(join(root, ".inkos", "tasks"))).rejects.toThrow();
+  });
+
+  it("SSE 重连补发对账后的中断快照（174 号 W-C5）", async () => {
+    const { createStudioServer } = await import("./server.js");
+    // 旧进程遗留的死 running 快照。
+    await saveStudioTaskSnapshot(root, {
+      version: 1,
+      sessionId: "sess-dead",
+      requestedIntent: "write_next",
+      updatedAt: 1_000,
+      execution: {
+        id: "write-next-gonebook",
+        tool: "pipeline",
+        label: "撰写下一章（gonebook）",
+        status: "running",
+        startedAt: 900,
+      },
+    });
+
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const snapshot = await readTaskSnapshotEvent(app, "sess-dead");
+    expect(snapshot.execution.status).toBe("error");
+    expect(snapshot.execution.error).toContain("任务已中断");
+    expect(snapshot.execution.completedAt).toBeGreaterThan(0);
+    // 改写已持久化（二次直读即终态）。
+    const persisted = await loadStudioTaskSnapshot(root, "sess-dead");
+    expect(persisted?.execution.status).toBe("error");
+  });
+
 });
 
 describe("CORS loopback origin reflection（173 号 W-A4a）", () => {

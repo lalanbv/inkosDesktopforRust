@@ -189,7 +189,15 @@ pub fn router(state: AppState) -> Router {    Router::new()
 /// 带运行时句柄的组合路由（utility + SSE + write-next）。
 pub fn router_with_runtime(state: AppState, hub: std::sync::Arc<sse::BroadcastHub>, write_next: write_next_route::WriteNextRuntime) -> Router {
     router(state)
-        .route("/api/v1/events", get(sse::events_handler).with_state(hub))
+        // SSE 快照对账用引擎项目根（前端 EventSource 只传 sessionId；
+        // write-next 运行时持有同一根——检查点落盘面与恢复面同源）。
+        .route(
+            "/api/v1/events",
+            get(sse::events_handler).with_state(sse::EventsState {
+                hub,
+                project_root: write_next.project_root.clone(),
+            }),
+        )
         .route("/api/v1/books/:id/write-next", post(write_next_route::write_next).with_state(write_next))
 }
 

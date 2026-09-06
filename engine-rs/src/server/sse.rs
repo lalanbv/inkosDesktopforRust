@@ -6,7 +6,7 @@
 //! 契约（前端零改动）：
 //! - 事件负载 JSON 序列化为 `data:` 字段
 //! - 连接建立即发 `ping`；30s keep-alive ping
-//! - `?sessionId=` 存在时补发 `task:snapshot`（task-store 快照）
+//! - `?sessionId=` 存在时补发 `task:snapshot`（重启对账后的快照）
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -67,26 +67,42 @@ impl BroadcastHub {
     }
 }
 
+/// SSE 路由状态：广播总线 + 引擎项目根（快照对账的落盘面）。
+///
+/// 前端 EventSource 只传 `?sessionId=`（use-sse.ts / chat action.ts），从不传
+/// projectRoot——快照恢复的生产链路依赖装配点注入的引擎项目根；query 里的
+/// `projectRoot`（历史形态/多项目直连）仍可覆盖。
+#[derive(Clone)]
+pub struct EventsState {
+    pub hub: Arc<BroadcastHub>,
+    pub project_root: std::path::PathBuf,
+}
+
 /// SSE 流：订阅广播 + 连接即 ping + sessionId 快照 + 30s keep-alive。
 pub async fn events_handler(
-    axum::extract::State(hub): axum::extract::State<Arc<BroadcastHub>>,
+    axum::extract::State(events): axum::extract::State<EventsState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let mut receiver = hub.subscribe();
+    let mut receiver = events.hub.subscribe();
     // 优雅停机分支（172 号 W-B2）：hub.shutdown() 后流正常 EOF——
     // 连接随之关闭，axum graceful drain 才能完成（无限流否则永不排空）。
-    let mut shutdown_rx = hub.subscribe_shutdown();
+    let mut shutdown_rx = events.hub.subscribe_shutdown();
     let session_id = params.get("sessionId").cloned();
-    let project_root = params.get("projectRoot").cloned();
+    let project_root = params
+        .get("projectRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| events.project_root.clone());
 
     let stream = async_stream::stream! {
         // 连接建立即 ping（TS await stream.writeSSE({ event: "ping", data: "" })）。
         yield Ok(Event::default().event("ping").data(""));
 
-        // task:snapshot（sessionId 存在时）。
-        if let (Some(session_id), Some(project_root)) = (&session_id, &project_root) {
-            if let Some(snapshot) = crate::server::task_store::load_studio_task_snapshot(
-                std::path::Path::new(project_root),
+        // task:snapshot（sessionId 存在时）。用对账读取（TS loadReconciledTaskSnapshot
+        // 同款，174 号 W-C5）：running 快照若本进程无存活任务（引擎重启遗留），
+        // 先改写中断终态再下发——否则重连会复活一张永远运行中的死任务卡。
+        if let Some(session_id) = &session_id {
+            if let Some(snapshot) = crate::server::agent_production::load_reconciled_task_snapshot(
+                &project_root,
                 session_id,
             )
             .await
@@ -152,7 +168,7 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(hub.clone());
+            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
 
         // 先建立连接（流消费前广播一条）。
         let response = app
@@ -195,7 +211,7 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(hub.clone());
+            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
 
         let response = app
             .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
@@ -226,7 +242,7 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(hub.clone());
+            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
 
         let response = app
             .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
@@ -247,5 +263,64 @@ mod tests {
         .await
         .expect("stream should end after shutdown");
         assert!(drained.iter().all(|r| r.is_ok()));
+    }
+
+    /// 174 号 W-C5：重连补发的快照走对账读取——重启遗留的死 running 快照
+    /// 先改写中断终态再下发（不对账则会复活永远转圈的任务卡）。
+    #[tokio::test]
+    async fn reconnect_snapshot_is_reconciled_before_send() {
+        let dir = tempfile::tempdir().unwrap();
+        let dead = serde_json::json!({
+            "version": 1,
+            "sessionId": "sess-dead",
+            "requestedIntent": "write_next",
+            "updatedAt": 1_000.0,
+            "execution": {
+                "id": "write-next-deadbook",
+                "tool": "pipeline",
+                "label": "撰写下一章（deadbook）",
+                "status": "running",
+                "startedAt": 900.0
+            }
+        });
+        // 旧进程遗留的 running 快照（直接落原始 JSON，模拟上次进程来不及收尾）。
+        let tasks_dir = dir.path().join(".inkos/tasks");
+        tokio::fs::create_dir_all(&tasks_dir).await.unwrap();
+        tokio::fs::write(tasks_dir.join("sess-dead.json"), format!("{dead}\n"))
+            .await
+            .unwrap();
+
+        let hub = Arc::new(BroadcastHub::new());
+        let app = axum::Router::new()
+            .route("/api/v1/events", axum::routing::get(events_handler))
+            .with_state(EventsState { hub: hub.clone(), project_root: dir.path().to_path_buf() });
+        // 生产形态：EventSource 只带 sessionId——项目根由装配点注入。
+        let response = app
+            .oneshot(axum::http::Request::builder().uri("/api/v1/events?sessionId=sess-dead").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let mut stream = futures_util::StreamExt::boxed(response.into_body().into_data_stream());
+        let mut text = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !text.contains("task:snapshot") && std::time::Instant::now() < deadline {
+            let next = futures_util::StreamExt::next(&mut stream);
+            match tokio::time::timeout(std::time::Duration::from_secs(1), next).await {
+                Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
+                Ok(Some(Err(_))) | Ok(None) => break,
+                Err(_) => continue,
+            }
+        }
+        assert!(text.contains("event: task:snapshot"), "未收到快照事件: {text}");
+        assert!(text.contains("\"status\":\"error\""), "应是对账后的中断终态: {text}");
+        assert!(text.contains("任务已中断"));
+        // 改写已持久化。
+        let persisted = crate::server::task_store::load_studio_task_snapshot(dir.path(), "sess-dead")
+            .await
+            .unwrap();
+        assert_eq!(
+            persisted.execution.status,
+            crate::server::task_store::StudioTaskExecutionStatus::Error
+        );
     }
 }

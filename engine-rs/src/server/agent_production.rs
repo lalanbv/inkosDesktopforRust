@@ -785,7 +785,10 @@ pub fn active_confirmed_tasks() -> &'static Mutex<HashMap<String, AbortHandle>> 
 }
 
 /// `loadReconciledTaskSnapshot`：running 快照且本进程注册表无该任务 → 改写
-/// error 终态落盘（旧进程遗留对账）。
+/// error 终态落盘（旧进程遗留对账）。活跃性双来源：确认式生产任务表
+/// （有可中止句柄）+ write-next 活跃表（174 号 W-C5，fire-and-forget 无
+/// 句柄——两表都查，存活任务不被误杀）。中断文案按项目语言双语（对齐 TS
+/// `currentProjectLanguage` 分支）。
 pub async fn load_reconciled_task_snapshot(
     root: &Path,
     session_id: &str,
@@ -795,19 +798,29 @@ pub async fn load_reconciled_task_snapshot(
         task.execution.status,
         StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
     );
-    let locally_running = active_confirmed_tasks()
-        .lock()
-        .unwrap()
-        .contains_key(&task.execution.id);
+    let locally_running = {
+        let confirmed = active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .contains_key(&task.execution.id);
+        let write_next = crate::server::write_next_route::active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .contains(&task.execution.id);
+        confirmed || write_next
+    };
     if !running || locally_running {
         return Some(task);
     }
+    let lang = current_project_language(root).await;
     let completed_at = utc_now_ms() as f64;
     task.updated_at = completed_at;
     task.execution.status = StudioTaskExecutionStatus::Error;
-    task.execution.error = Some(
-        "任务已中断：Studio 服务在任务运行期间重启，任务未能继续。请重新发起。".to_string(),
-    );
+    task.execution.error = Some(pick(
+        lang,
+        "任务已中断：Studio 服务在任务运行期间重启，任务未能继续。请重新发起。",
+        "Task interrupted: the Studio server restarted while this task was running. Please start it again.",
+    ));
     task.execution.completed_at = Some(completed_at);
     let _ = save_studio_task_snapshot(root, &task).await;
     Some(task)
@@ -3258,6 +3271,65 @@ mod model_guard_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 174 号 W-C5：重启对账——死 running 快照改写双语中断终态；
+    /// write-next 活跃表命中的存活快照不被误杀。
+    #[tokio::test]
+    async fn reconciled_snapshot_rewrites_dead_running_and_spares_live_write_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let make_running = |session: &str| StudioTaskSnapshot {
+            version: 1,
+            session_id: session.into(),
+            source_request_id: None,
+            requested_intent: "write_next".into(),
+            updated_at: 1_000.0,
+            execution: StudioTaskExecution {
+                id: "write-next-deadbook".into(),
+                tool: "pipeline".into(),
+                agent: None,
+                label: "撰写下一章（deadbook）".into(),
+                status: StudioTaskExecutionStatus::Running,
+                args: None,
+                result: None,
+                details: None,
+                error: None,
+                stages: None,
+                logs: None,
+                started_at: 900.0,
+                completed_at: None,
+            },
+        };
+
+        // 存活：write-next 活跃表命中 → 原样返回，不落盘改写。
+        save_studio_task_snapshot(root, &make_running("sess-live"))
+            .await
+            .unwrap();
+        crate::server::write_next_route::active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .insert("write-next-deadbook".into());
+        let live = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
+        assert_eq!(live.execution.status, StudioTaskExecutionStatus::Running);
+        assert_eq!(live.updated_at, 1_000.0);
+
+        // 死亡：同一执行 id 从活跃表移除 → 改写中断终态落盘（默认 zh 文案）。
+        crate::server::write_next_route::active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .remove("write-next-deadbook");
+        let dead = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
+        assert_eq!(dead.execution.status, StudioTaskExecutionStatus::Error);
+        assert_eq!(
+            dead.execution.error.as_deref(),
+            Some("任务已中断：Studio 服务在任务运行期间重启，任务未能继续。请重新发起。")
+        );
+        assert!(dead.execution.completed_at.is_some());
+        assert!(dead.updated_at > 1_000.0);
+        // 改写已持久化（二次读取直接是终态）。
+        let reread = load_studio_task_snapshot(root, "sess-live").await.unwrap();
+        assert_eq!(reread.execution.status, StudioTaskExecutionStatus::Error);
+    }
 
     #[test]
     fn write_chapter_heuristics_match_ts_regexes() {

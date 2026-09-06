@@ -11,7 +11,8 @@
 //! [`WriteNextRuntime`] 注入（LLM 域路由器之上）；测试注入全 mock。
 //! 任务快照（39 号 task-store）按会话落盘供 SSE 重连恢复。
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -21,8 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::sse::BroadcastHub;
 use crate::server::task_store::{
-    save_studio_task_snapshot, StudioTaskExecution, StudioTaskExecutionStatus,
-    StudioTaskSnapshot,
+    save_studio_task_snapshot, StudioTaskExecution, StudioTaskExecutionStatus, StudioTaskSnapshot,
 };
 use crate::state::manager::StateManager;
 
@@ -67,6 +67,18 @@ pub struct WriteNextResponse {
     pub book_id: String,
 }
 
+/// 本进程活跃 write-next 任务（执行 id 集合，174 号 W-C5）。
+///
+/// 对账活跃性的第二个来源：确认式生产任务用 [`active_confirmed_tasks`]，
+/// write-next 是无控制器消费的 fire-and-forget——若复用确认任务表，abort
+/// 端点会找到句柄并宣称 `aborted:true` 而管线实际无法取消（假停止）。独立
+/// 集合让「停止」保持诚实的「无任务可停」，同时重启对账能识别存活的
+/// running 快照不误杀。
+pub fn active_write_next_tasks() -> &'static Mutex<HashSet<String>> {
+    static REGISTRY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 /// POST /api/v1/books/:id/write-next
 pub async fn write_next(
     State(runtime): State<WriteNextRuntime>,
@@ -81,6 +93,18 @@ pub async fn write_next(
     let task_runtime = runtime.clone();
     let task_book_id = book_id.clone();
     tokio::spawn(async move {
+        // 检查点（174 号 W-C5）：sessionId 给定时任务全程留痕——启动先注册
+        // 活跃表再落 Running 快照（对账窗口语义与 TS 确认任务一致：注册先于
+        // 首次持久化），终态快照落盘后才注销。
+        let checkpoint = body
+            .session_id
+            .as_deref()
+            .map(|session_id| WriteNextCheckpoint::start(session_id, &task_book_id, &body));
+        if let Some(entry) = &checkpoint {
+            active_write_next_tasks().lock().unwrap().insert(entry.execution_id.clone());
+            entry.persist_running(&task_runtime).await;
+        }
+
         let result = (task_runtime.runner)(
             task_runtime.state.clone(),
             task_book_id.clone(),
@@ -103,15 +127,13 @@ pub async fn write_next(
                         "wordCount": outcome.word_count,
                     }),
                 );
-                if let Some(session_id) = &body.session_id {
-                    persist_task_snapshot(
-                        &task_runtime,
-                        session_id,
-                        &task_book_id,
-                        StudioTaskExecutionStatus::Completed,
-                        None,
-                    )
-                    .await;
+                if let Some(entry) = &checkpoint {
+                    entry.persist_finished(&task_runtime, StudioTaskExecutionStatus::Completed, None)
+                        .await;
+                    active_write_next_tasks()
+                        .lock()
+                        .unwrap()
+                        .remove(&entry.execution_id);
                 }
             }
             Err(error) => {
@@ -120,15 +142,17 @@ pub async fn write_next(
                     "write:error",
                     &serde_json::json!({ "bookId": task_book_id, "error": message }),
                 );
-                if let Some(session_id) = &body.session_id {
-                    persist_task_snapshot(
+                if let Some(entry) = &checkpoint {
+                    entry.persist_finished(
                         &task_runtime,
-                        session_id,
-                        &task_book_id,
                         StudioTaskExecutionStatus::Error,
                         Some(&message),
                     )
                     .await;
+                    active_write_next_tasks()
+                        .lock()
+                        .unwrap()
+                        .remove(&entry.execution_id);
                 }
             }
         }
@@ -140,64 +164,120 @@ pub async fn write_next(
     )
 }
 
-async fn persist_task_snapshot(
-    runtime: &WriteNextRuntime,
-    session_id: &str,
-    book_id: &str,
-    status: StudioTaskExecutionStatus,
-    error: Option<&str>,
-) {
-    let now = std::time::SystemTime::now()
+/// write-next 会话级检查点：一次任务的 Running/终态快照共用同一执行 id 与
+/// startedAt（TS 确认任务「同一 exec 对象演化」的最小等价形态）。
+struct WriteNextCheckpoint {
+    session_id: String,
+    execution_id: String,
+    book_id: String,
+    started_at: f64,
+    args: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl WriteNextCheckpoint {
+    fn start(session_id: &str, book_id: &str, body: &WriteNextBody) -> Self {
+        let mut args = serde_json::Map::new();
+        if let Some(word_count) = body.word_count {
+            args.insert("wordCount".into(), serde_json::json!(word_count));
+        }
+        if let Some(temperature) = body.temperature {
+            args.insert("temperature".into(), serde_json::json!(temperature));
+        }
+        Self {
+            session_id: session_id.to_string(),
+            execution_id: format!("write-next-{book_id}"),
+            book_id: book_id.to_string(),
+            started_at: now_ms(),
+            args: (!args.is_empty()).then_some(args),
+        }
+    }
+
+    fn snapshot(&self, status: StudioTaskExecutionStatus, error: Option<&str>) -> StudioTaskSnapshot {
+        let now = now_ms();
+        StudioTaskSnapshot {
+            version: 1,
+            session_id: self.session_id.clone(),
+            source_request_id: None,
+            requested_intent: "write_next".to_string(),
+            execution: StudioTaskExecution {
+                id: self.execution_id.clone(),
+                tool: "pipeline".to_string(),
+                agent: None,
+                label: format!("撰写下一章（{}）", self.book_id),
+                status,
+                args: self.args.clone(),
+                result: None,
+                details: None,
+                error: error.map(String::from),
+                stages: None,
+                logs: None,
+                started_at: self.started_at,
+                completed_at: (status != StudioTaskExecutionStatus::Running).then_some(now),
+            },
+            updated_at: now,
+        }
+    }
+
+    async fn persist_running(&self, runtime: &WriteNextRuntime) {
+        let _ = save_studio_task_snapshot(
+            &runtime.project_root,
+            &self.snapshot(StudioTaskExecutionStatus::Running, None),
+        )
+        .await;
+    }
+
+    async fn persist_finished(
+        &self,
+        runtime: &WriteNextRuntime,
+        status: StudioTaskExecutionStatus,
+        error: Option<&str>,
+    ) {
+        let _ = save_studio_task_snapshot(&runtime.project_root, &self.snapshot(status, error)).await;
+    }
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as f64;
-    let snapshot = StudioTaskSnapshot {
-        version: 1,
-        session_id: session_id.to_string(),
-        source_request_id: None,
-        requested_intent: "write_next".to_string(),
-        execution: StudioTaskExecution {
-            id: format!("write-next-{book_id}"),
-            tool: "pipeline".to_string(),
-            agent: None,
-            label: format!("撰写下一章（{book_id}）"),
-            status,
-            args: None,
-            result: None,
-            details: None,
-            error: error.map(String::from),
-            stages: None,
-            logs: None,
-            started_at: now,
-            completed_at: Some(now),
-        },
-        updated_at: now,
-    };
-    let _ = save_studio_task_snapshot(&runtime.project_root, &snapshot).await;
+        .as_millis() as f64
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::task_store::load_studio_task_snapshot;
     use crate::server::sse::BroadcastHub;
     use tower::util::ServiceExt;
 
-    #[tokio::test]
-    async fn write_next_returns_writing_immediately_and_pushes_sse() {
+    fn runtime_with(root: &std::path::Path, runner: WriteNextRunner) -> (WriteNextRuntime, Arc<BroadcastHub>) {
         let hub = Arc::new(BroadcastHub::new());
-        let state = Arc::new(StateManager::new("/tmp/inkos-test-nonexistent"));
         let runtime = WriteNextRuntime {
             hub: hub.clone(),
-            state,
+            state: Arc::new(StateManager::new(root.display().to_string().as_str())),
+            runner,
+            project_root: root.to_path_buf(),
+        };
+        (runtime, hub)
+    }
+
+    fn app_for(runtime: WriteNextRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/books/:id/write-next", axum::routing::post(write_next))
+            .with_state(runtime)
+    }
+
+    #[tokio::test]
+    async fn write_next_returns_writing_immediately_and_pushes_sse() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, hub) = runtime_with(
+            dir.path(),
             // runner 直接失败——spawn 内推 write:error。
-            runner: Arc::new(|_state, _book, _wc, _temp| {
+            Arc::new(|_state, _book, _wc, _temp| {
                 Box::pin(async { Err("book config unavailable".to_string()) })
             }),
-            project_root: "/tmp/inkos-test-nonexistent".into(),
-        };
-        let app = axum::Router::new()
-            .route("/api/v1/books/:id/write-next", axum::routing::post(write_next))
-            .with_state(runtime);
+        );
+        let app = app_for(runtime);
 
         let mut subscriber = hub.subscribe();
         let response = app
@@ -234,5 +314,132 @@ mod tests {
             .unwrap();
         assert_eq!(second.event, "write:error");
         assert!(second.data.contains("b1"));
+    }
+
+    /// 174 号 W-C5：sessionId 给定时任务全程留痕——注册活跃表 → Running
+    /// 快照（completedAt 缺席、startedAt 同源）→ 终态快照 → 注销。
+    #[tokio::test]
+    async fn session_checkpoint_lifecycle_running_then_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let gate_for_runner = gate.clone();
+        let (runtime, hub) = runtime_with(
+            dir.path(),
+            Arc::new(move |_state, _book, _wc, _temp| {
+                let gate = gate_for_runner.clone();
+                Box::pin(async move {
+                    gate.notified().await;
+                    Err::<crate::pipeline::write_next::ChapterPipelineResult, _>("boom".to_string())
+                })
+            }),
+        );
+        let app = app_for(runtime.clone());
+
+        let mut subscriber = hub.subscribe();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/bck/write-next")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"sessionId":"sess-ck","wordCount":800}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Running 快照先行落盘（轮询等待 spawn 执行到 runner 门前）。
+        let running = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                assert!(std::time::Instant::now() < deadline, "Running 快照未落盘");
+                if let Some(snapshot) =
+                    load_studio_task_snapshot(&runtime.project_root, "sess-ck").await
+                {
+                    break snapshot;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        };
+        assert_eq!(running.execution.id, "write-next-bck");
+        assert_eq!(running.execution.status, StudioTaskExecutionStatus::Running);
+        assert!(running.execution.completed_at.is_none());
+        assert_eq!(running.requested_intent, "write_next");
+        assert_eq!(
+            running.execution.args.as_ref().unwrap().get("wordCount"),
+            Some(&serde_json::json!(800))
+        );
+        assert!(active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .contains("write-next-bck"));
+
+        // 放行 runner → 失败 → 终态快照 + 注销。
+        gate.notify_one();
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
+                Ok(Ok(payload)) if payload.event == "write:error" => break,
+                Ok(Ok(_)) => continue,
+                other => panic!("write:error 事件未到达: {other:?}"),
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let finished = loop {
+            if let Some(snapshot) = load_studio_task_snapshot(&runtime.project_root, "sess-ck").await {
+                if snapshot.execution.status == StudioTaskExecutionStatus::Error {
+                    break snapshot;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "终态快照未落盘");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        assert_eq!(finished.execution.started_at, running.execution.started_at);
+        assert!(finished.execution.completed_at.is_some());
+        // WriteNextError Display 包一层「write chapter failed: …」——断言消息本体。
+        assert!(finished.execution.error.as_deref().unwrap().contains("boom"));
+        assert!(!active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .contains("write-next-bck"));
+    }
+
+    /// 不传 sessionId（UI 现状）零磁盘副作用——检查点完全休眠。
+    #[tokio::test]
+    async fn no_session_id_leaves_no_task_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, hub) = runtime_with(
+            dir.path(),
+            Arc::new(|_state, _book, _wc, _temp| {
+                Box::pin(async { Err("nope".to_string()) })
+            }),
+        );
+        let app = app_for(runtime);
+        let mut subscriber = hub.subscribe();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/b0/write-next")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
+                Ok(Ok(payload)) if payload.event == "write:error" => break,
+                Ok(Ok(_)) => continue,
+                other => panic!("write:error 事件未到达: {other:?}"),
+            }
+        }
+        assert!(!dir.path().join(".inkos/tasks").exists());
+        // 共享静态表——只断言本用例的 id 未入表（并行用例各自持有自己的 id）。
+        assert!(!active_write_next_tasks()
+            .lock()
+            .unwrap()
+            .contains("write-next-b0"));
     }
 }

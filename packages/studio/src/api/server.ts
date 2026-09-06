@@ -2557,6 +2557,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   const state = new StateManager(root);
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
+  // write-next 检查点（174 号 W-C5）：本进程活跃 write-next 任务（执行 id 集合）。
+  // 与确认式生产任务分开记账——write-next 管线不消费 AbortController 信号，
+  // 若混入 activeConfirmedTasks，abort 端点会宣称 aborted:true 而实际停不下来
+  // （假停止）。独立集合让「停止」保持诚实的「无任务可停」，重启对账则把
+  // 本集合视为 running 快照的第二个存活来源。
+  const activeWriteNextTasks = new Set<string>();
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
   // → 之后才 set controller"的 check-then-act：两个并发确认请求都能通过检查，
   // 双任务同时启动、快照互相覆盖。这里在任何 await 之前同步占位，占位失败的
@@ -2610,7 +2616,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const task = await loadStudioTaskSnapshot(root, sessionId);
     if (!task) return null;
     const running = task.execution.status === "running" || task.execution.status === "processing";
-    if (!running || activeConfirmedTasks.has(task.execution.id)) return task;
+    // 存活双来源（174 号 W-C5）：确认任务看句柄表，write-next 看活跃集合。
+    const locallyRunning = activeConfirmedTasks.has(task.execution.id)
+      || activeWriteNextTasks.has(task.execution.id);
+    if (!running || locallyRunning) return task;
     // running 快照但本进程没有对应的 AbortController，只可能是任务运行期间
     // server 进程退出过（正常流程里 controller 先于首次持久化进入 Map、晚于
     // 终态持久化删除）。任务本体已随旧进程消失，这里把快照改写为终态并保存，
@@ -3302,18 +3311,68 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number }>().catch(() => ({ wordCount: undefined }));
+    const body = await c.req.json<{ wordCount?: number; sessionId?: string }>().catch(() => ({ wordCount: undefined, sessionId: undefined }));
 
     broadcast("write:start", { bookId: id });
 
     // Fire and forget — progress/completion/errors pushed via SSE
     const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+    // 检查点（174 号 W-C5）：sessionId 给定时任务全程留痕——先占活跃集合再落
+    // Running 快照（对账窗口语义与确认任务一致），终态快照落盘后才释放。
+    const checkpoint = body.sessionId && !deletedSessionIds.has(body.sessionId)
+      ? {
+          sessionId: body.sessionId,
+          executionId: `write-next-${id}`,
+          startedAt: Date.now(),
+        }
+      : null;
+    if (checkpoint) {
+      activeWriteNextTasks.add(checkpoint.executionId);
+      await saveStudioTaskSnapshot(root, {
+        version: 1,
+        sessionId: checkpoint.sessionId,
+        requestedIntent: "write_next",
+        updatedAt: checkpoint.startedAt,
+        execution: {
+          id: checkpoint.executionId,
+          tool: "pipeline",
+          label: `撰写下一章（${id}）`,
+          status: "running",
+          ...(body.wordCount !== undefined ? { args: { wordCount: body.wordCount } } : {}),
+          startedAt: checkpoint.startedAt,
+        },
+      });
+    }
+    const finishCheckpoint = async (status: "completed" | "error", error?: string): Promise<void> => {
+      if (!checkpoint) return;
+      if (!deletedSessionIds.has(checkpoint.sessionId)) {
+        await saveStudioTaskSnapshot(root, {
+          version: 1,
+          sessionId: checkpoint.sessionId,
+          requestedIntent: "write_next",
+          updatedAt: Date.now(),
+          execution: {
+            id: checkpoint.executionId,
+            tool: "pipeline",
+            label: `撰写下一章（${id}）`,
+            status,
+            ...(body.wordCount !== undefined ? { args: { wordCount: body.wordCount } } : {}),
+            startedAt: checkpoint.startedAt,
+            completedAt: Date.now(),
+            ...(error ? { error } : {}),
+          },
+        });
+      }
+      activeWriteNextTasks.delete(checkpoint.executionId);
+    };
     pipeline.writeNextChapter(id, body.wordCount).then(
-      (result) => {
+      async (result) => {
         broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
+        await finishCheckpoint("completed");
       },
-      (e) => {
+      async (e) => {
         broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+        await finishCheckpoint("error", e instanceof Error ? e.message : String(e));
       },
     );
 
