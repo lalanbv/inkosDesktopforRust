@@ -2819,6 +2819,43 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ books });
   });
 
+  // ── 书籍时间线（181 号 C4-b）：story/timeline.json 读写面 ──────────
+  // GET 缺文件/坏载荷一律 { timeline: null }（可选面不制造 404 噪音）；
+  // PUT 走 TimelineSchema 校验（version literal 1 + plotline id 唯一），
+  // 非法 400。生成端点默认关闭（待产品决策，179 号分解文档）。
+  app.get("/api/v1/books/:id/timeline", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const raw = await readFile(join(state.bookDir(id), "story", "timeline.json"), "utf-8");
+      const { TimelineSchema } = await import("@actalk/inkos-core");
+      const parsed = TimelineSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) {
+        console.warn(`[timeline] ${id} timeline.json 不可解析，按无时间线处理`);
+        return c.json({ timeline: null });
+      }
+      return c.json({ timeline: parsed.data });
+    } catch {
+      return c.json({ timeline: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/timeline", async (c) => {
+    const id = c.req.param("id");
+    const { TimelineSchema } = await import("@actalk/inkos-core");
+    const body = await c.req.json().catch(() => null);
+    const parsed = TimelineSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid timeline payload" }, 400);
+    }
+    if (parsed.data.bookId !== id) {
+      return c.json({ error: "Timeline bookId does not match the route" }, 400);
+    }
+    const path = join(state.bookDir(id), "story", "timeline.json");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(parsed.data, null, 2)}\n`, "utf-8");
+    return c.json({ ok: true });
+  });
+
   app.get("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
     try {

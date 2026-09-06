@@ -45,7 +45,7 @@ Plottr 的核心是 **plotline × chapter 网格**：行 = 情节线（主线/�
 | 切分 | 内容 | 依赖 | 自主可落地 |
 | --- | --- | --- | --- |
 | **C4-a 只读时间线视图** | BookDetail（或独立页）新增「时间线」tab：行=情节线，列=章，数据来源**先用章节 index 现有字段 + 情节线推断的临时方案**（单线兜底），纯前端渲染网格；深链可分享章节定位 | 无 | ✅ 完全自主（纯 studio 前端，零引擎改动） |
-| **C4-b 数据面** | `books/{id}/story/timeline.json`（version 1：plotlines[] × chapters 矩阵，单元格 title/note）；引擎读写端点 + 生成端点（write-next 完成后可选让 settler 顺手产出该章各线 beats——**加法变更**，对齐 TS 后续同名键） | C4-a | ✅ 引擎侧可自主；生成质量需真实 LLM 验证 |
+| **C4-b 数据面** | ✅ **已落地（181 号）**：`books/{id}/story/timeline.json`（version 1）+ 双端 GET/PUT 端点 + BookTimeline 多线渲染（缺省回退单线）；生成端点默认关闭待产品决策 | C4-a | ✅ |
 | **C4-c 编辑与回写** | 单元格手动编辑（写回 timeline.json）+ 从时间线单元格发起「按此 beat 写下一章」的规划输入 | C4-b | ✅ 机械接线 |
 
 ### 风险与决策点

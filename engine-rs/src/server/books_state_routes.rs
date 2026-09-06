@@ -97,6 +97,84 @@ pub async fn list_books(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     (StatusCode::OK, Json(json!({ "books": books })))
 }
 
+// ── 书籍时间线（181 号 C4-b） ────────────────────────────────────
+//
+// story/timeline.json 的读写面。GET 缺文件/坏载荷一律 `{"timeline":null}`
+// （坏载荷附 tracing 警告）——时间线是可缺失的可选面，不制造 404 噪音；
+// PUT 走 schema 校验（TS TimelineSchema 同款：version literal 1 + plotline
+// id 唯一），非法 400。生成端点默认关闭（待产品决策，179 号分解文档）。
+
+async fn read_timeline_file(book_dir: &std::path::Path) -> Option<crate::models::timeline::Timeline> {
+    let raw = match tokio::fs::read_to_string(book_dir.join("story").join("timeline.json")).await {
+        Ok(raw) => raw,
+        Err(_) => return None,
+    };
+    match serde_json::from_str::<crate::models::timeline::Timeline>(&raw) {
+        Ok(timeline) => Some(timeline),
+        Err(error) => {
+            tracing::warn!(target: "books", "timeline.json 不可解析，按无时间线处理: {error}");
+            None
+        }
+    }
+}
+
+pub async fn get_timeline(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.book_dir(&book_id);
+    let timeline = read_timeline_file(&book_dir).await;
+    (StatusCode::OK, Json(json!({ "timeline": timeline })))
+}
+
+pub async fn put_timeline(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let bad_request = |message: &str| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": message })),
+        )
+    };
+    let Ok(timeline) = serde_json::from_slice::<crate::models::timeline::Timeline>(&body) else {
+        return bad_request("Invalid timeline payload");
+    };
+    if !timeline.ids_unique() {
+        return bad_request("Plotline ids must be unique");
+    }
+    if timeline.book_id != book_id {
+        return bad_request("Timeline bookId does not match the route");
+    }
+    let path = runtime.state.book_dir(&book_id).join("story").join("timeline.json");
+    if let Some(parent) = path.parent() {
+        if tokio::fs::create_dir_all(parent).await.is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to create story directory" })),
+            );
+        }
+    }
+    let mut serialized = match serde_json::to_string_pretty(&timeline) {
+        Ok(text) => text,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to serialize timeline" })),
+            )
+        }
+    };
+    serialized.push('\n');
+    match tokio::fs::write(&path, serialized).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to write timeline" })),
+        ),
+    }
+}
+
 // ── GET /api/v1/books/:id ────────────────────────────────────────
 
 pub async fn book_detail(
@@ -1695,6 +1773,98 @@ mod tests {
         assert_eq!(absent.status(), StatusCode::OK);
         let parsed = json_body(absent).await;
         assert!(parsed["content"].is_null());
+    }
+
+    /// 181 号 C4-b：timeline 读写面——GET 缺文件/坏载荷 → timeline:null；
+    /// PUT 校验（schema + id 唯一 + bookId 匹配）→ 落盘 → GET roundtrip。
+    #[tokio::test]
+    async fn timeline_get_put_roundtrip_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+
+        // 缺文件 → 200 + timeline:null。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("GET", "/api/v1/books/b1/timeline", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let parsed = json_body(response).await;
+        assert!(parsed["timeline"].is_null());
+
+        // PUT 合法载荷 → ok；GET roundtrip 保真。
+        let payload = json!({
+            "version": 1,
+            "bookId": "b1",
+            "updatedAt": "2026-09-07T00:00:00.000Z",
+            "plotlines": [
+                { "id": "main", "name": "主线", "cells": [
+                    { "chapter": 1, "title": "风起", "note": "主角入场" }
+                ]},
+                { "id": "side", "name": "支线", "cells": [] }
+            ]
+        });
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&payload.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("GET", "/api/v1/books/b1/timeline", None))
+            .await
+            .unwrap();
+        let parsed = json_body(response).await;
+        assert_eq!(parsed["timeline"]["plotlines"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["timeline"]["plotlines"][0]["cells"][0]["title"], "风起");
+
+        // 落盘位置 = story/timeline.json。
+        assert!(dir.path().join("books/b1/story/timeline.json").exists());
+
+        // id 重复 → 400。
+        let dup = json!({
+            "version": 1, "bookId": "b1", "updatedAt": "t",
+            "plotlines": [
+                { "id": "main", "name": "A" },
+                { "id": "main", "name": "B" }
+            ]
+        });
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&dup.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // bookId 与路由不符 → 400。
+        let mismatch = json!({
+            "version": 1, "bookId": "other", "updatedAt": "t", "plotlines": []
+        });
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&mismatch.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // version != 1 → 400。
+        let wrong_version = json!({
+            "version": 2, "bookId": "b1", "updatedAt": "t", "plotlines": []
+        });
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&wrong_version.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 坏载荷 → 400；随后 GET 回落 null。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some("{ not json")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("GET", "/api/v1/books/b1/timeline", None))
+            .await
+            .unwrap();
+        let parsed = json_body(response).await;
+        assert!(!parsed["timeline"].is_null(), "先前 PUT 已合法落盘，GET 应仍可读");
     }
 
     #[tokio::test]

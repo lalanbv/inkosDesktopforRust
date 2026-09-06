@@ -237,6 +237,10 @@ pub fn router_books(
         // truth 文件 + chapter-review-mode）。
         .route("/api/v1/books", get(books_state_routes::list_books).with_state(books.clone()))
         .route(
+            "/api/v1/books/:id/timeline",
+            get(books_state_routes::get_timeline).put(books_state_routes::put_timeline).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id",
             get(books_state_routes::book_detail)
                 .put(books_state_routes::update_book)

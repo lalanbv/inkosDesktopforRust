@@ -200,6 +200,8 @@ const logger = {
 vi.mock("@actalk/inkos-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@actalk/inkos-core")>();
   generatePlayImageMock.mockImplementation(actual.generatePlayImage);
+  // timeline 端点（181 号 C4-b）走真实 schema 校验——mock 透传。
+  const ActualTimelineSchema = actual.TimelineSchema;
 
   class MockSessionAlreadyMigratedError extends Error {
     constructor(message = "Session already migrated") {
@@ -325,6 +327,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     isSafeBookId: actual.isSafeBookId,
     normalizePlatformOrOther: actual.normalizePlatformOrOther,
     defaultChapterLength: actual.defaultChapterLength,
+    TimelineSchema: ActualTimelineSchema,
     inferLanguage: actual.inferLanguage,
     ingestMaterial: actual.ingestMaterial,
     chatCompletion: chatCompletionMock,
@@ -6913,6 +6916,62 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(writeNextChapterMock).toHaveBeenCalled());
     await expect(access(join(root, ".inkos", "tasks"))).rejects.toThrow();
+  });
+
+  it("timeline 读写端点：GET 缺文件 null、PUT 校验+roundtrip（181 号 C4-b）", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // 缺文件 → 200 + timeline:null。
+    const missing = await app.request("http://localhost/api/v1/books/demo-book/timeline");
+    expect(missing.status).toBe(200);
+    await expect(missing.json()).resolves.toEqual({ timeline: null });
+
+    // 非法载荷（version != 1）→ 400。
+    const badVersion = await app.request("http://localhost/api/v1/books/demo-book/timeline", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 2, bookId: "demo-book", updatedAt: "t", plotlines: [] }),
+    });
+    expect(badVersion.status).toBe(400);
+
+    // bookId 与路由不符 → 400。
+    const mismatch = await app.request("http://localhost/api/v1/books/demo-book/timeline", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, bookId: "other", updatedAt: "t", plotlines: [] }),
+    });
+    expect(mismatch.status).toBe(400);
+
+    // 合法载荷 → ok:true；GET roundtrip 保真（plotline id 重复也 400）。
+    const put = await app.request("http://localhost/api/v1/books/demo-book/timeline", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: 1,
+        bookId: "demo-book",
+        updatedAt: "2026-09-07T00:00:00.000Z",
+        plotlines: [
+          { id: "main", name: "主线", cells: [{ chapter: 1, title: "风起", note: "主角入场" }] },
+        ],
+      }),
+    });
+    expect(put.status).toBe(200);
+    await expect(put.json()).resolves.toEqual({ ok: true });
+
+    const got = await app.request("http://localhost/api/v1/books/demo-book/timeline");
+    const payload = (await got.json()) as { timeline: { plotlines: Array<{ id: string; cells: Array<{ title?: string }> }> } | null };
+    expect(payload.timeline?.plotlines[0]?.cells[0]?.title).toBe("风起");
+
+    const dup = await app.request("http://localhost/api/v1/books/demo-book/timeline", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: 1, bookId: "demo-book", updatedAt: "t",
+        plotlines: [{ id: "main", name: "A" }, { id: "main", name: "B" }],
+      }),
+    });
+    expect(dup.status).toBe(400);
   });
 
   it("SSE 重连补发对账后的中断快照（174 号 W-C5）", async () => {
