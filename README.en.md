@@ -150,11 +150,11 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 - 🛠 Module docs: [src-tauri/README.md](src-tauri/README.md) (desktop shell), [engine-rs/README.md](engine-rs/README.md) (engine porting goals & discipline), [src-tauri/tests/README.md](src-tauri/tests/README.md) (testing guide)
 - 🗂 [变更记录文档/](变更记录文档/) (change log archive, sequential numbering) and [开发时SpecCoding'sPlan/](开发时SpecCoding'sPlan/) (design & planning; directory names kept in Chinese)
 
-> Note: some documents under `docs/` (e.g. TROUBLESHOOTING) predate the #164 "Rust engine direct-launch" switch and may be stale; USER_GUIDE / QUICK_START were aligned in #172. When in doubt, this README and the latest change records are authoritative.
+> Note: some documents under `docs/` predate the #164 "Rust engine direct-launch" switch; USER_GUIDE / QUICK_START were aligned in #172 and TROUBLESHOOTING fully reviewed in #179. When in doubt, this README and the latest change records are authoritative.
 
 ## Development conventions
 
-- **Change log**: every change is archived under `变更记录文档/{YYYYMMDD}/{number}_title.md` with continuous numbering (currently at #177)
+- **Change log**: every change is archived under `变更记录文档/{YYYYMMDD}/{number}_title.md` with continuous numbering (currently at #179)
 - **No workflows**: GitHub Actions were fully removed (#149); no new workflows or companion scripts will be added — releases go through local scripts
 - **Relationship with upstream**: early on we kept a strict "zero modification of upstream files" policy to reduce merge conflicts; from #150 (the four-phase UI overhaul) `packages/studio` evolves directly on this branch (fork-and-own) and is no longer merged back upstream
 - The desktop-shell modules keep single responsibility (a < 500-line bound per src-tauri module); engine porting follows 1:1 replication + golden differentials + contract duels (see engine-rs/README.md)

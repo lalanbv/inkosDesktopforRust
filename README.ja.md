@@ -150,11 +150,11 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 - 🛠 モジュール文書：[src-tauri/README.md](src-tauri/README.md)（デスクトップシェル）、[engine-rs/README.md](engine-rs/README.md)（エンジン移植の目標と規律）、[src-tauri/tests/README.md](src-tauri/tests/README.md)（テストガイド）
 - 🗂 [变更记录文档/](变更记录文档/)（変更記録アーカイブ、連番）と [开发时SpecCoding'sPlan/](开发时SpecCoding'sPlan/)（設計計画。ディレクトリ名は中国語のまま）
 
-> 注意：`docs/` 配下の一部文書（TROUBLESHOOTING など）は第 164 号「Rust エンジン既定直起動」切替より前のもので、記述が遅れている可能性があります。USER_GUIDE / QUICK_START は第 172 号で整合済み。疑問がある場合は本 README と最新の変更記録が正です。
+> 注意：`docs/` 配下の一部文書は第 164 号「Rust エンジン既定直起動」切替より前のものです。USER_GUIDE / QUICK_START は第 172 号、TROUBLESHOOTING は第 179 号で整合・復査済み。疑問がある場合は本 README と最新の変更記録が正です。
 
 ## 開発規約
 
-- **変更記録**：すべての変更は `变更记录文档/{YYYYMMDD}/{番号}_タイトル.md` にアーカイブし、番号は連続（現在 第 177 号）
+- **変更記録**：すべての変更は `变更记录文档/{YYYYMMDD}/{番号}_タイトル.md` にアーカイブし、番号は連続（現在 第 179 号）
 - **workflow を書かない**：GitHub Actions は全廃済み（第 149 号）。以後 workflow および付随スクリプトを追加せず、リリースはローカルスクリプトで行う
 - **上流との関係**：初期はマージコンフリクトを避けるため「上流ファイルの無変更」を堅持していましたが、第 150 号の UI 四期以降は `packages/studio` を本分支で直接進化させ（fork-and-own）、上流へマージバックしません
 - デスクトップシェルのモジュールは単一責任を維持（src-tauri の各モジュールは 500 行未満の制約）。エンジン移植は 1:1 複刻 + golden 差分 + 契約 duel の規律に従います（詳細は engine-rs/README.md）
