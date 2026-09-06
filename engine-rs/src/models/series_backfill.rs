@@ -60,7 +60,10 @@ impl SeriesBackfillDraft {
             version: Self::VERSION,
             book_id: book_id.to_string(),
             source_book_id: source_book_id.to_string(),
-            updated_at: crate::interaction::session::utc_now_ms().to_string(),
+            // 192 号：ISO 8601（与 Node extract 的 toISOString 对齐）。此前为
+            // utc_now_ms()——epoch 毫秒会原样渲染进 series_backfill.md 头部的
+            // 「抽取于 …」，用户不可读。
+            updated_at: crate::utils::utc_time::utc_now_iso(),
             items: raw.items,
         })
     }
@@ -96,6 +99,15 @@ mod tests {
         assert_eq!(draft.items[0].id, "a");
         assert_eq!(draft.book_id, "target");
         assert_eq!(draft.source_book_id, "source");
+        // 192 号：updatedAt 必须是 ISO 8601（此前为 epoch 毫秒字符串，
+        // 会原样渲染进 apply 文件头部的「抽取于 …」）。
+        assert!(
+            draft.updated_at.ends_with('Z')
+                && draft.updated_at.contains('T')
+                && draft.updated_at.starts_with("20"),
+            "updatedAt 应为 ISO 8601，实际: {}",
+            draft.updated_at
+        );
     }
 
     #[test]
