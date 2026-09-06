@@ -1507,6 +1507,7 @@ mod tests {
             .route("/api/v1/books/:id/chapters/:num/approve", axum::routing::post(approve_chapter))
             .route("/api/v1/books/:id/chapters/:num/reject", axum::routing::post(reject_chapter))
             .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
+            .route("/api/v1/books/:id/timeline", axum::routing::get(get_timeline).put(put_timeline))
             .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
             .route("/api/v1/books/:id/chapter-review-mode", axum::routing::get(get_review_mode).put(put_review_mode))
             .with_state(runtime)

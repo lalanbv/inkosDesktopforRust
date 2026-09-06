@@ -3348,7 +3348,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number; sessionId?: string }>().catch(() => ({ wordCount: undefined, sessionId: undefined }));
+    // context（183 号）：规划输入，透传给 writeNextChapter 的 externalContext
+    // ——非空时替换自动 plan（时间线节拍「按此节拍写下一章」的出口）。
+    const body = await c.req.json<{ wordCount?: number; sessionId?: string; context?: string }>().catch(() => ({ wordCount: undefined, sessionId: undefined, context: undefined }));
 
     broadcast("write:start", { bookId: id });
 
@@ -3402,7 +3404,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       activeWriteNextTasks.delete(checkpoint.executionId);
     };
-    pipeline.writeNextChapter(id, body.wordCount).then(
+    pipeline.writeNextChapter(id, body.wordCount, undefined, body.context).then(
       async (result) => {
         broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
         await finishCheckpoint("completed");

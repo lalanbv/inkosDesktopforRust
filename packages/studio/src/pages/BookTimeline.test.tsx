@@ -164,6 +164,8 @@ describe("TimelineEditDialog（182 号 C4-c 编辑弹窗）", () => {
         bookId="b1"
         target={{ plotlineId: "main", plotlineName: "主线", chapter: 3, title: "危机", note: "宗门大比" }}
         saving={false}
+        writing={false}
+        onWriteFromBeat={() => {}}
         onSubmit={() => {}}
         onCancel={() => {}}
         nav={nav as never}
@@ -184,6 +186,8 @@ describe("TimelineEditDialog（182 号 C4-c 编辑弹窗）", () => {
       <TimelineEditDialog
         bookId="b1"
         target={{ plotlineId: "main", plotlineName: "主线", chapter: 3, title: "危机", note: "" }}
+        writing={false}
+        onWriteFromBeat={() => {}}
         saving
         onSubmit={() => {}}
         onCancel={() => {}}

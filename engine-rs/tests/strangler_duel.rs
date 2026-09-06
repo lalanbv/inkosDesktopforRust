@@ -156,7 +156,8 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
              _book_id: String,
              _word_count: Option<u32>,
              _temperature: Option<f64>,
-             _abort: inkos_engine::interaction::agent_loop::AbortHandle| {
+             _abort: inkos_engine::interaction::agent_loop::AbortHandle,
+             _context: Option<String>| {
                 Box::pin(async move {
                     Err::<inkos_engine::pipeline::write_next::ChapterPipelineResult, String>(
                         "duel: write face not exercised".to_string(),

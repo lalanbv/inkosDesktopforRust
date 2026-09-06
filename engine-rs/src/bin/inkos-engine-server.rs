@@ -106,7 +106,7 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     // 审计器挂有效 router（write_next_chapter 内 for_chapter 按章重绑）。
     let runner_books = books.clone();
     let runner: inkos_engine::server::WriteNextRunner = Arc::new(
-        move |state, book_id, word_count, temperature, abort| {
+        move |state, book_id, word_count, temperature, abort, context| {
             let books = runner_books.clone();
             Box::pin(async move {
                 let mut agents =
@@ -135,7 +135,7 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
                     &book_id,
                     word_count,
                     temperature,
-                    None,
+                    context.as_deref(),
                 )
                 .await
                 .map_err(|e| e.to_string())

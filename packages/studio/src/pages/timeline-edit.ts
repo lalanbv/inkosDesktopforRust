@@ -87,6 +87,30 @@ export function initializeTimelineFromChapters(
   };
 }
 
+/** 情节线重命名（trim；同名允许——schema 只约束 id 唯一）。 */
+export function buildTimelineAfterRenamePlotline(
+  doc: TimelineDoc,
+  plotlineId: string,
+  name: string,
+): TimelineDoc {
+  const trimmed = name.trim();
+  const plotlines = doc.plotlines.map((line) =>
+    line.id === plotlineId ? { ...line, name: trimmed || line.name } : line,
+  );
+  return withRefreshedUpdatedAt({ ...doc, plotlines });
+}
+
+/** 删除情节线（连其全部节拍；删空后 plotlines 为空 → 视图回退单线兜底）。 */
+export function buildTimelineAfterRemovePlotline(
+  doc: TimelineDoc,
+  plotlineId: string,
+): TimelineDoc {
+  return withRefreshedUpdatedAt({
+    ...doc,
+    plotlines: doc.plotlines.filter((line) => line.id !== plotlineId),
+  });
+}
+
 /** 新增情节线（id 用时间戳保证唯一；name 必非空——调用方保证）。 */
 export function buildTimelineAfterAddPlotline(
   doc: TimelineDoc,

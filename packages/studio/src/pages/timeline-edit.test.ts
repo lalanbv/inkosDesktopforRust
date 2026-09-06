@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildTimelineAfterCellEdit,
   buildTimelineAfterAddPlotline,
+  buildTimelineAfterRenamePlotline,
+  buildTimelineAfterRemovePlotline,
   initializeTimelineFromChapters,
   type TimelineDoc,
 } from "./timeline-edit";
@@ -73,5 +75,32 @@ describe("buildTimelineAfterAddPlotline（新增情节线）", () => {
     expect(next.plotlines).toHaveLength(3);
     expect(next.plotlines[2].name).toBe("感情线");
     expect(next.plotlines[2].cells).toEqual([]);
+  });
+});
+
+describe("情节线重命名/删除（183 号 C4 收尾）", () => {
+  it("重命名：trim 生效、其他线不变、updatedAt 刷新", () => {
+    const next = buildTimelineAfterRenamePlotline(seed(), "main", "  复仇主线  ");
+    expect(next.plotlines[0].name).toBe("复仇主线");
+    expect(next.plotlines[1].name).toBe("支线");
+    expect(next.updatedAt).not.toBe("2026-09-07T00:00:00.000Z");
+  });
+
+  it("重命名：空输入保留原名（幂等防护）", () => {
+    const next = buildTimelineAfterRenamePlotline(seed(), "main", "   ");
+    expect(next.plotlines[0].name).toBe("主线");
+  });
+
+  it("删除：按 id 移除并连其节拍；其他线保留", () => {
+    const next = buildTimelineAfterRemovePlotline(seed(), "main");
+    expect(next.plotlines.map((p) => p.id)).toEqual(["side"]);
+    // 删空全部线 → 视图层回退单线兜底（渲染语义，此处验证数据面）。
+    const emptied = buildTimelineAfterRemovePlotline(next, "side");
+    expect(emptied.plotlines).toEqual([]);
+  });
+
+  it("删除不存在的 id：原样返回（内容等价）", () => {
+    const next = buildTimelineAfterRemovePlotline(seed(), "ghost");
+    expect(next.plotlines.length).toBe(2);
   });
 });

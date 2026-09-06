@@ -31,6 +31,7 @@ use crate::state::manager::StateManager;
 ///
 /// 第五参为中止句柄（175 号）：实现方须注入 `WriteNextConfig.abort`——
 /// 管线在阶段边界轮询 `check_aborted`，stop 端点置位后任务在安全点停止。
+/// 第六参为规划输入（183 号）：非空时作为 `external_context` 替换自动 plan。
 pub type WriteNextRunner = Arc<
     dyn Fn(
             Arc<StateManager>,
@@ -38,6 +39,7 @@ pub type WriteNextRunner = Arc<
             Option<u32>,
             Option<f64>,
             AbortHandle,
+            Option<String>,
         ) -> futures_util::future::BoxFuture<
             'static,
             Result<crate::pipeline::write_next::ChapterPipelineResult, String>,
@@ -63,6 +65,10 @@ pub struct WriteNextBody {
     pub temperature: Option<f64>,
     #[serde(rename = "sessionId", default)]
     pub session_id: Option<String>,
+    /// 规划输入（183 号）：非空时替换 write-next 的自动 plan——时间线节拍
+    /// 「按此节拍写下一章」的引擎侧出口。TS 回退端同名键收下但忽略。
+    #[serde(default)]
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,6 +115,7 @@ pub async fn write_next(
             body.word_count,
             body.temperature,
             abort,
+            body.context,
         )
         .await
         .map_err(|message| {
@@ -272,7 +279,7 @@ mod tests {
         let (runtime, hub) = runtime_with(
             dir.path(),
             // runner 直接失败——spawn 内推 write:error。
-            Arc::new(|_state, _book, _wc, _temp, _abort| {
+            Arc::new(|_state, _book, _wc, _temp, _abort, _ctx| {
                 Box::pin(async { Err("book config unavailable".to_string()) })
             }),
         );
@@ -324,7 +331,7 @@ mod tests {
         let gate_for_runner = gate.clone();
         let (runtime, hub) = runtime_with(
             dir.path(),
-            Arc::new(move |_state, _book, _wc, _temp, _abort| {
+            Arc::new(move |_state, _book, _wc, _temp, _abort, _ctx| {
                 let gate = gate_for_runner.clone();
                 Box::pin(async move {
                     gate.notified().await;
@@ -411,7 +418,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (runtime, hub) = runtime_with(
             dir.path(),
-            Arc::new(|_state, _book, _wc, _temp, abort| {
+            Arc::new(|_state, _book, _wc, _temp, abort, _ctx| {
                 Box::pin(async move {
                     // 模拟管线阶段边界轮询：置位即停，10s 兜底防挂死。
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -502,7 +509,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (runtime, hub) = runtime_with(
             dir.path(),
-            Arc::new(|_state, _book, _wc, _temp, _abort| {
+            Arc::new(|_state, _book, _wc, _temp, _abort, _ctx| {
                 Box::pin(async { Err("nope".to_string()) })
             }),
         );

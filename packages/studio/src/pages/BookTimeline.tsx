@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { useApi, putApi } from "../hooks/use-api";
+import { useApi, putApi, postApi } from "../hooks/use-api";
 import { ArrowLeft, Pencil } from "lucide-react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { Nav } from "../lib/nav";
+import { writeTaskSessionId } from "../hooks/use-book-activity";
 import {
   buildTimelineAfterCellEdit,
   buildTimelineAfterAddPlotline,
+  buildTimelineAfterRenamePlotline,
+  buildTimelineAfterRemovePlotline,
   initializeTimelineFromChapters,
   type TimelineDoc,
 } from "./timeline-edit";
@@ -89,11 +92,13 @@ interface EditTarget {
  * 编辑弹窗（C4-c）。受控组件：输入值由父级持有，提交回传 title/note。
  * 独立导出便于静态渲染测试。
  */
-export function TimelineEditDialog({ bookId, target, saving, onSubmit, onCancel, nav, t }: {
+export function TimelineEditDialog({ bookId, target, saving, writing, onSubmit, onWriteFromBeat, onCancel, nav, t }: {
   bookId: string;
   target: EditTarget;
   saving: boolean;
+  writing: boolean;
   onSubmit: (patch: { title: string; note: string }) => void;
+  onWriteFromBeat: () => void;
   onCancel: () => void;
   nav: Nav;
   t: TFunction;
@@ -125,12 +130,22 @@ export function TimelineEditDialog({ bookId, target, saving, onSubmit, onCancel,
           data-slot="timeline-beat-note"
         />
         <div className="flex items-center justify-between gap-2">
-          <button
-            onClick={() => nav.toChapter(bookId, target.chapter)}
-            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-          >
-            {t("timeline.openChapter")}
-          </button>
+          <span className="flex items-center gap-3">
+            <button
+              onClick={() => nav.toChapter(bookId, target.chapter)}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+            >
+              {t("timeline.openChapter")}
+            </button>
+            <button
+              onClick={onWriteFromBeat}
+              disabled={writing || saving}
+              className="text-xs font-bold text-primary hover:underline underline-offset-2 disabled:opacity-50"
+              data-slot="timeline-write-from-beat"
+            >
+              {writing ? t("dash.writing") : t("timeline.writeFromBeat")}
+            </button>
+          </span>
           <div className="flex gap-2">
             <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-secondary/60 transition-colors">
               {t("timeline.cancel")}
@@ -173,6 +188,10 @@ export function BookTimeline({ bookId, nav, theme, t }: {
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [addingLine, setAddingLine] = useState(false);
   const [newLineName, setNewLineName] = useState("");
+  const [renamingLineId, setRenamingLineId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [removingLineId, setRemovingLineId] = useState<string | null>(null);
+  const [writeStarted, setWriteStarted] = useState(false);
 
   const chapters = useMemo(() => {
     const list = [...(data?.chapters ?? [])];
@@ -305,6 +324,11 @@ export function BookTimeline({ bookId, nav, theme, t }: {
           {t("timeline.saveFailed").replace("{message}", saveError)}
         </div>
       )}
+      {writeStarted && (
+        <div className="mb-3 text-sm text-emerald-600 dark:text-emerald-400" data-slot="timeline-write-started">
+          {t("timeline.writeStarted")}
+        </div>
+      )}
 
       {!loading && !error && chapters.length === 0 && grid.columns.length === 0 && (
         <div className="text-sm text-muted-foreground border border-border/50 rounded-xl px-5 py-8 text-center">
@@ -329,8 +353,66 @@ export function BookTimeline({ bookId, nav, theme, t }: {
             {/* 情节线行 */}
             {grid.lines.map((line) => (
               <div key={line.key} className="flex">
-                <div className="w-36 shrink-0 px-4 py-3 text-sm font-medium border-r border-border/40 flex items-center">
-                  {line.label}
+                <div className="w-36 shrink-0 px-4 py-3 text-sm font-medium border-r border-border/40 flex items-center justify-between gap-1">
+                  {renamingLineId === line.key ? (
+                    <input
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      maxLength={120}
+                      autoFocus
+                      className="w-full px-1.5 py-1 text-xs rounded border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      data-slot="timeline-rename-input"
+                    />
+                  ) : (
+                    <span className="truncate">{line.label}</span>
+                  )}
+                  {editableMode && renamingLineId === line.key ? (
+                    <span className="flex flex-col gap-0.5 shrink-0">
+                      <button
+                        onClick={async () => {
+                          const base = optimistic ?? doc;
+                          if (!base || !renameValue.trim()) return;
+                          await saveDoc(buildTimelineAfterRenamePlotline(base, line.key, renameValue));
+                          setRenamingLineId(null);
+                        }}
+                        className="text-[10px] text-emerald-600 dark:text-emerald-400 hover:underline"
+                        data-slot="timeline-rename-confirm"
+                      >
+                        {t("timeline.confirmAdd")}
+                      </button>
+                      <button onClick={() => setRenamingLineId(null)} className="text-[10px] text-muted-foreground hover:underline">
+                        {t("timeline.cancel")}
+                      </button>
+                    </span>
+                  ) : editableMode ? (
+                    <span className="flex flex-col gap-0.5 shrink-0 opacity-40 hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => { setRenamingLineId(line.key); setRenameValue(line.label); }}
+                        title={t("timeline.renamePlotline")}
+                        className="text-[10px] text-muted-foreground hover:text-primary"
+                        data-slot="timeline-rename"
+                      >
+                        {t("timeline.rename")}
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (removingLineId !== line.key) {
+                            setRemovingLineId(line.key);
+                            return;
+                          }
+                          const base = optimistic ?? doc;
+                          if (!base) return;
+                          await saveDoc(buildTimelineAfterRemovePlotline(base, line.key));
+                          setRemovingLineId(null);
+                        }}
+                        title={t("timeline.removePlotline")}
+                        className={`text-[10px] hover:underline ${removingLineId === line.key ? "text-red-500 font-bold" : "text-muted-foreground hover:text-red-500"}`}
+                        data-slot="timeline-remove"
+                      >
+                        {removingLineId === line.key ? t("timeline.removeConfirm") : t("timeline.remove")}
+                      </button>
+                    </span>
+                  ) : null}
                 </div>
                 {line.cells.map((cell) => (
                   <button
@@ -412,14 +494,25 @@ export function BookTimeline({ bookId, nav, theme, t }: {
           bookId={bookId}
           target={editTarget}
           saving={saving}
+          writing={writeStarted}
           nav={nav}
           t={t}
-          onCancel={() => setEditTarget(null)}
+          onCancel={() => { setEditTarget(null); setWriteStarted(false); }}
           onSubmit={async (patch) => {
             const base = optimistic ?? doc;
             if (!base) return;
             await saveDoc(buildTimelineAfterCellEdit(base, editTarget.plotlineId, editTarget.chapter, patch));
             setEditTarget(null);
+          }}
+          onWriteFromBeat={() => {
+            // 按此节拍写下一章：beat 文本作为规划输入（context）注入 write-next，
+            // 引擎侧非空 context 替换自动 plan；带伪会话 sessionId 激活检查点+可停止。
+            const beatParts = [editTarget.title, editTarget.note].filter((part) => part.trim());
+            const context = `时间线节拍【${editTarget.plotlineName} · 第${editTarget.chapter}章】${beatParts.join("：")}`;
+            void postApi(`/books/${bookId}/write-next`, {
+              context,
+              sessionId: writeTaskSessionId(bookId),
+            }).then(() => setWriteStarted(true)).catch(() => setWriteStarted(false));
           }}
         />
       )}
