@@ -77,6 +77,8 @@ export const BookConfigSchema = z.object({
   writing: z.object({
     reviewMode: z.enum(["auto", "manual"]).optional(),
     revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
+    /** 189 号：write-next 落盘后自动为本章沉淀时间线节拍（默认关）。 */
+    autoTimelineBeats: z.boolean().optional(),
   }).optional(),
 });
 

@@ -195,6 +195,7 @@ async fn e2e_write_next_contract_matches_node_shape() {
                 state_store: prompt_store,
                 context_budget: None,
                 notify: None,
+                timeline_beats: None,
             };
             write_next_chapter(
                 &state,
@@ -315,6 +316,7 @@ async fn e2e_llm_unreachable_pushes_write_error() {
                 state_store: prompt_store,
                 context_budget: None,
                 notify: None,
+                timeline_beats: None,
             };
             write_next_chapter(
                 &state,
@@ -17218,6 +17220,7 @@ mod sub136_e2e {
             state_store: prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let result = write_next_chapter(
             &state,
@@ -17379,6 +17382,7 @@ mod sub139_e2e {
             state_store: prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let result = OPERATION_SKILLS
             .scope(

@@ -166,7 +166,7 @@ async fn write_one_chapter(
 ) -> Result<(bool, u32, String, Vec<String>), String> {
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
     let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    let ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
     let config = WriteNextConfig::from_project(runtime.state.project_root()).await;
     let result = write_next_chapter(
         &runtime.state,

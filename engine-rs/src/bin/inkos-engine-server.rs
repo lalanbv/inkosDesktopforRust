@@ -120,7 +120,7 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
                         chapter_number: 0, // for_chapter 按章重绑
                         genre: String::new(),
                     });
-                let ctx = inkos_engine::server::books_routes::build_write_next_ctx(&books);
+                let ctx = inkos_engine::server::books_routes::build_write_next_ctx(&books).await;
                 // 126 号：事件化配置（context:compression 广播）——与其余写面
                 // 同源；175 号：注入 stop 端点置位的中止句柄（阶段边界生效）。
                 let mut config =

@@ -384,7 +384,7 @@ async fn run_draft(
     body: &DraftBody,
 ) -> Result<crate::pipeline::write_next::ChapterPipelineResult, crate::pipeline::write_next::WriteNextError> {
     let agents = build_write_next_agents(runtime).await;
-    let ctx = build_write_next_ctx(runtime);
+    let ctx = build_write_next_ctx(runtime).await;
     write_next_chapter(
         &runtime.state,
         &agents,
@@ -2052,8 +2052,14 @@ pub async fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<
     }
 }
 
-pub fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
+pub async fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
     let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+    // 189 号：时间线节拍提取端口（书籍级开关默认关；关闭时端口不会被调用）。
+    let timeline_beats: &'static crate::agents::timeline_settler::RouterTimelineBeatsChat = Box::leak(
+        Box::new(crate::agents::timeline_settler::RouterTimelineBeatsChat {
+            router: runtime.effective_router().await,
+        }),
+    );
     WriteNextCtx {
         project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
         builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
@@ -2061,6 +2067,7 @@ pub fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
         state_store: prompt_store,
         context_budget: None,
         notify: None,
+        timeline_beats: Some(timeline_beats),
     }
 }
 
@@ -2087,6 +2094,16 @@ mod tests {
             builtin_genres_dir: root.to_path_buf(),
             revision_gate: RevisionGate::default(),
         }
+    }
+
+    /// 189 号：生产装配必须挂上节拍提取端口（开关打开即生效；管线内仍有
+    /// 书籍级开关把关，端口缺失 = 静默不沉淀）。
+    #[tokio::test]
+    async fn write_next_ctx_installs_timeline_beats_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        let ctx = build_write_next_ctx(&runtime).await;
+        assert!(ctx.timeline_beats.is_some());
     }
 
     fn fixture(root: &std::path::Path) {

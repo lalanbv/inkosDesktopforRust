@@ -424,6 +424,13 @@ pub fn router_books(
                 .put(books_state_routes::put_review_mode)
                 .with_state(books.clone()),
         )
+        // 189 号：时间线节拍自动沉淀开关（书籍级，默认关）。
+        .route(
+            "/api/v1/books/:id/timeline-auto-beats",
+            get(books_state_routes::get_timeline_auto_beats)
+                .put(books_state_routes::put_timeline_auto_beats)
+                .with_state(books.clone()),
+        )
         // 60 号：skills / prompt-packs 轻域。
         .route("/api/v1/skills", get(skill_routes::list_skills).with_state(books.clone()))
         .route(

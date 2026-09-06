@@ -6430,6 +6430,42 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(rawBook.writing.reviewMode).toBe("manual");
   });
 
+  it("timeline-auto-beats defaults to off and round-trips the book-level flag (189号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const initial = await app.request("http://localhost/api/v1/books/demo-book/timeline-auto-beats");
+    await expect(initial.json()).resolves.toMatchObject({ enabled: false, bookEnabled: null });
+
+    const put = await app.request("http://localhost/api/v1/books/demo-book/timeline-auto-beats", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    await expect(put.json()).resolves.toMatchObject({ ok: true, enabled: true });
+
+    const after = await app.request("http://localhost/api/v1/books/demo-book/timeline-auto-beats");
+    await expect(after.json()).resolves.toMatchObject({ enabled: true, bookEnabled: true });
+
+    const rawBook = JSON.parse(await readFile(join(root, "books", "demo-book", "book.json"), "utf-8"));
+    expect(rawBook.writing.autoTimelineBeats).toBe(true);
+
+    // 关闭 = 删键（缺省省略语义）；writing 无其余键时整体移除。
+    const off = await app.request("http://localhost/api/v1/books/demo-book/timeline-auto-beats", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    await expect(off.json()).resolves.toMatchObject({ ok: true, enabled: false });
+    const cleaned = JSON.parse(await readFile(join(root, "books", "demo-book", "book.json"), "utf-8"));
+    expect(cleaned.writing?.autoTimelineBeats).toBeUndefined();
+
+    // 未知书 404。
+    const ghost = await app.request("http://localhost/api/v1/books/ghost/timeline-auto-beats");
+    expect(ghost.status).toBe(404);
+  });
+
   it("uses a book-level manual review override when writing the next chapter", async () => {
     await writeCompleteBookFixture(root, "demo-book", "Demo Book");
     const rawBookPath = join(root, "books", "demo-book", "book.json");

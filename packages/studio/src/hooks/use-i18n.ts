@@ -215,6 +215,11 @@ const strings = {
   "book.pipelineDrafting": { zh: "后台正在生成草稿，本页会在完成后自动刷新。", en: "Background drafting is running. This page will refresh automatically when it finishes." },
   "book.pipelineFailed": { zh: "后台任务失败", en: "Background job failed" },
   "book.writeStopped": { zh: "写作已按您的要求停止。", en: "Writing stopped at your request." },
+  "book.autoBeats": { zh: "节拍自动沉淀", en: "Auto timeline beats" },
+  "book.autoBeatsHint": {
+    zh: "开启后，每次「写下一章」完成时会按既有情节线自动为该章生成节拍并写入时间线（默认关闭）。",
+    en: "When enabled, each finished chapter automatically gets beats added to the timeline per plotline (off by default).",
+  },
   "book.save": { zh: "保存", en: "Save" },
   "book.saving": { zh: "保存中...", en: "Saving..." },
   "book.rewrite": { zh: "重写", en: "Rewrite" },

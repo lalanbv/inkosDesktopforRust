@@ -204,6 +204,8 @@ pub struct WriteNextCtx<'a> {
     pub context_budget: Option<ContextBudget>,
     /// 通知回调（失败不阻断）。
     pub notify: Option<NotifyFn>,
+    /// 189 号：时间线节拍提取端口（None = 不沉淀；书籍级开关仍需打开才触发）。
+    pub timeline_beats: Option<&'a dyn crate::agents::timeline_settler::TimelineBeatsChat>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1209,6 +1211,31 @@ async fn write_next_chapter_locked(
         }
     }
 
+    // ── 6c. 时间线节拍自动沉淀（189 号：书籍级开关默认关；失败不阻断） ──
+    if book.writing.as_ref().and_then(|w| w.auto_timeline_beats).unwrap_or(false) {
+        if let Some(beats_chat) = ctx.timeline_beats {
+            stage_log(config, pipeline_language, "时间线节拍沉淀", "timeline beat settle");
+            match crate::pipeline::timeline_settle::settle_beats_for_chapter(
+                &book_dir,
+                beats_chat,
+                chapter_number,
+                &persistence_output.title,
+                &persistence_output.chapter_summary,
+                pipeline_language,
+            )
+            .await
+            {
+                Ok(Some(applied)) if applied > 0 => {
+                    tracing::info!(target: "write-next", "[timeline] 已自动沉淀第{chapter_number}章节拍（{applied} 条情节线）");
+                }
+                Ok(_) => tracing::info!(target: "write-next", "[timeline] 本章无线条被推进，跳过节拍落盘"),
+                Err(error) => {
+                    tracing::warn!(target: "write-next", "[timeline] 节拍自动沉淀失败（不影响章节产物）: {error}");
+                }
+            }
+        }
+    }
+
     Ok(result)
 }
 
@@ -1714,6 +1741,7 @@ mod tests {
             state_store: &prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let config = WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
@@ -1821,6 +1849,7 @@ mod tests {
             state_store: &prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let logs = std::sync::Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
         let sink = logs.clone();
@@ -1917,6 +1946,7 @@ mod tests {
             state_store: &prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let config = WriteNextConfig::default();
 
@@ -2020,6 +2050,7 @@ mod tests {
             state_store: &prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let flag: AbortHandle = std::sync::Arc::new(StdMutex::new(true));
         let config = WriteNextConfig {
@@ -2065,6 +2096,7 @@ mod tests {
             state_store: &prompt_store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let config = WriteNextConfig {
             abort: Some(flag),
@@ -2145,6 +2177,7 @@ mod tests {
             state_store: &store,
             context_budget: None,
             notify: None,
+            timeline_beats: None,
         };
         let error = write_next_chapter(
             &state,
@@ -2212,6 +2245,200 @@ mod tests {
             assert_eq!(warnings.len(), 1, "count={outside}");
         }
         assert!(build_length_warnings(3, 100, &spec)[0].contains("第3章"));
+    }
+
+    // ---- 189 号：时间线节拍自动沉淀（书籍级开关，默认关） ----
+
+    struct FixedBeats {
+        result: Result<Vec<crate::models::timeline::PlotlineBeat>, String>,
+        calls: StdMutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agents::timeline_settler::TimelineBeatsChat for FixedBeats {
+        async fn beats(
+            &self,
+            req: crate::agents::timeline_settler::BeatsRequest<'_>,
+        ) -> Result<Vec<crate::models::timeline::PlotlineBeat>, String> {
+            self.calls.lock().unwrap().push(req.chapter_title.to_string());
+            self.result.clone()
+        }
+    }
+
+    /// 全管线环境（同 manual_mode 用例）：返回 (state, project, builtin, book_dir)。
+    async fn setup_timeline_beats_env(
+        dir: &tempfile::TempDir,
+        writing: serde_json::Value,
+    ) -> (StateManager, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let project = dir.path().join("project");
+        let builtin = dir.path().join("builtin");
+        let book = project.join("books").join("b1");
+        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(&builtin).await.unwrap();
+        tokio::fs::write(
+            builtin.join("xianxia.md"),
+            "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .await
+        .unwrap();
+        let mut book_json = serde_json::json!({
+            "id": "b1", "title": "测试书", "platform": "other", "genre": "xianxia",
+            "status": "active", "targetChapters": 100, "chapterWordCount": 3000,
+            "language": "zh", "createdAt": "", "updatedAt": "",
+        });
+        book_json["writing"] = writing;
+        tokio::fs::write(book.join("book.json"), book_json.to_string()).await.unwrap();
+        (StateManager::new(&project), project, builtin, book)
+    }
+
+    fn beats_agents<'a>(chat: &'a ScriptChat) -> WriteNextAgents<'a> {
+        WriteNextAgents {
+            writer: chat,
+            planner: chat,
+            composer: chat,
+            reviser: chat,
+            auditor: chat,
+            full_auditor: None,
+            analyzer: chat,
+            state_validator: chat,
+            settler: chat,
+        }
+    }
+
+    fn beats_config() -> WriteNextConfig {
+        WriteNextConfig {
+            chapter_review_mode: ChapterReviewMode::Manual,
+            writing_review_retries: 1,
+            input_governance_mode: InputGovernanceMode::V2,
+            abort: None,
+            notify_channels: None,
+            on_context_compression: None,
+            on_log: None,
+        }
+    }
+
+    fn seeded_timeline_json() -> String {
+        serde_json::json!({
+            "version": 1,
+            "bookId": "b1",
+            "updatedAt": "2026-01-01T00:00:00.000Z",
+            "plotlines": [{ "id": "main", "name": "主线", "cells": [] }],
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn auto_timeline_beats_settle_after_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, project, builtin, book) =
+            setup_timeline_beats_env(&dir, serde_json::json!({ "autoTimelineBeats": true })).await;
+        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
+            .await
+            .unwrap();
+
+        let chat = script();
+        let agents = beats_agents(&chat);
+        let prompt_store = InMemoryStateStore::default();
+        let beats = FixedBeats {
+            result: Ok(vec![crate::models::timeline::PlotlineBeat {
+                plotline_id: "main".into(),
+                title: Some("风起·沉淀".into()),
+                note: Some("少年入场".into()),
+            }]),
+            calls: StdMutex::new(Vec::new()),
+        };
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+            timeline_beats: Some(&beats),
+        };
+
+        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
+            .await
+            .expect("write-next 应成功");
+        assert_eq!(result.chapter_number, 1);
+        // 端口拿到落盘后的章节标题（传参 = 生产语义）。
+        assert_eq!(beats.calls.lock().unwrap().as_slice(), ["风起"]);
+
+        // 节拍合并进时间线并落盘。
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
+        assert_eq!(timeline.plotlines[0].cells.len(), 1);
+        assert_eq!(timeline.plotlines[0].cells[0].chapter, 1);
+        assert_eq!(timeline.plotlines[0].cells[0].title.as_deref(), Some("风起·沉淀"));
+    }
+
+    #[tokio::test]
+    async fn timeline_beats_failure_does_not_fail_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, project, builtin, book) =
+            setup_timeline_beats_env(&dir, serde_json::json!({ "autoTimelineBeats": true })).await;
+        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
+            .await
+            .unwrap();
+
+        let chat = script();
+        let agents = beats_agents(&chat);
+        let prompt_store = InMemoryStateStore::default();
+        let beats = FixedBeats { result: Err("llm down".into()), calls: StdMutex::new(Vec::new()) };
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+            timeline_beats: Some(&beats),
+        };
+
+        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
+            .await
+            .expect("沉淀失败不应拖垮管线");
+        assert_eq!(result.chapter_number, 1);
+        // 时间线保持原样（空 cells）。
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
+        assert!(timeline.plotlines[0].cells.is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeline_beats_default_off_skips_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let (state, project, builtin, book) =
+            setup_timeline_beats_env(&dir, serde_json::json!({})).await;
+        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
+            .await
+            .unwrap();
+
+        let chat = script();
+        let agents = beats_agents(&chat);
+        let prompt_store = InMemoryStateStore::default();
+        let beats = FixedBeats { result: Ok(vec![]), calls: StdMutex::new(Vec::new()) };
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+            timeline_beats: Some(&beats),
+        };
+
+        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
+            .await
+            .expect("write-next 应成功");
+        assert_eq!(result.chapter_number, 1);
+        // 默认关：端口从未被调用，时间线未被改写。
+        assert!(beats.calls.lock().unwrap().is_empty());
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
+        assert!(timeline.plotlines[0].cells.is_empty());
     }
 }
 

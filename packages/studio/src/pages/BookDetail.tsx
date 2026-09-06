@@ -27,6 +27,7 @@ import {
   Save,
   Hand,
   Settings2,
+  Waypoints,
   Square
 } from "lucide-react";
 
@@ -120,6 +121,13 @@ export function BookDetail({
   useEffect(() => {
     void fetchJson<{ mode?: string }>(`/books/${encodeURIComponent(bookId)}/chapter-review-mode`)
       .then((r) => setReviewMode(r.mode === "manual" ? "manual" : "auto"))
+      .catch(() => undefined);
+  }, [bookId]);
+  // 189 号：时间线节拍自动沉淀（书籍级开关，默认关）。
+  const [autoBeats, setAutoBeats] = useState(false);
+  useEffect(() => {
+    void fetchJson<{ enabled?: boolean }>(`/books/${encodeURIComponent(bookId)}/timeline-auto-beats`)
+      .then((r) => setAutoBeats(r.enabled === true))
       .catch(() => undefined);
   }, [bookId]);
   // 176 号：重启恢复——挂载时按伪会话订阅一次快照（引擎/服务重启后
@@ -232,6 +240,20 @@ export function BookDetail({
       });
     } catch {
       setReviewMode(reviewMode); // revert on failure
+    }
+  };
+
+  const handleToggleAutoBeats = async () => {
+    const next = !autoBeats;
+    setAutoBeats(next);
+    try {
+      await fetchJson(`/books/${encodeURIComponent(bookId)}/timeline-auto-beats`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+    } catch {
+      setAutoBeats(!next); // revert on failure
     }
   };
 
@@ -569,6 +591,23 @@ export function BookDetail({
           >
             {reviewMode === "manual" ? <Hand size={16} /> : <Settings2 size={16} />}
             {reviewMode === "manual" ? "审查：手动·写完即停" : "审查：自动"}
+          </button>
+          {/* 189 号：时间线节拍自动沉淀（书籍级开关，默认关）——开启后写完的
+              章节会按既有情节线自动补节拍到时间线。 */}
+          <button
+            onClick={handleToggleAutoBeats}
+            title={t("book.autoBeatsHint")}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border transition-all ${
+              autoBeats
+                ? "bg-primary/10 text-primary border-primary/30"
+                : "bg-secondary/60 text-muted-foreground border-border/50 hover:bg-secondary"
+            }`}
+          >
+            <Waypoints size={16} />
+            {t("book.autoBeats")}
+            <span
+              className={`ml-0.5 inline-block h-2 w-2 rounded-full ${autoBeats ? "bg-primary" : "bg-muted-foreground/40"}`}
+            />
           </button>
           <button
             onClick={() => setConfirmDeleteOpen(true)}

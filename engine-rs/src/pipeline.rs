@@ -11,6 +11,7 @@ pub mod chapter_state_recovery;
 pub mod chapter_truth_validation;
 pub mod merged_audit;
 pub mod detection_runner;
+pub mod timeline_settle;
 pub mod write_next;
 pub mod persisted_governed_plan;
 

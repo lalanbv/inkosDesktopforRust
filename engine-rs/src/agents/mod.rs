@@ -49,6 +49,7 @@ pub mod settler_prompts;
 pub mod short_fiction;
 pub mod state_validator;
 pub mod style_analyzer;
+pub mod timeline_settler;
 pub mod writer_parser;
 pub mod writer_prompts;
 pub mod writer;

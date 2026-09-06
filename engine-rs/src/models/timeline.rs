@@ -63,6 +63,42 @@ impl Timeline {
     }
 }
 
+/// 单条沉淀节拍（189 号：write-next 落盘后自动回写）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlotlineBeat {
+    pub plotline_id: String,
+    pub title: Option<String>,
+    pub note: Option<String>,
+}
+
+/// 把某章的节拍合并进时间线：命中既有 cell 则原位替换，否则按章号升序插入；
+/// 未知 plotline id 忽略。返回实际落格的线条数。
+pub fn merge_chapter_beats(timeline: &mut Timeline, chapter: u32, beats: &[PlotlineBeat]) -> usize {
+    let mut applied = 0usize;
+    for beat in beats {
+        let Some(line) = timeline.plotlines.iter_mut().find(|p| p.id == beat.plotline_id) else {
+            continue;
+        };
+        let cell = TimelineCell {
+            chapter,
+            title: beat.title.clone().filter(|t| !t.trim().is_empty()),
+            note: beat.note.clone().filter(|n| !n.trim().is_empty()),
+        };
+        match line.cells.iter().position(|c| c.chapter == chapter) {
+            Some(idx) => line.cells[idx] = cell,
+            None => {
+                let pos = line.cells.iter().take_while(|c| c.chapter < chapter).count();
+                line.cells.insert(pos, cell);
+            }
+        }
+        applied += 1;
+    }
+    if applied > 0 {
+        timeline.updated_at = crate::utils::utc_time::utc_now_iso();
+    }
+    applied
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +145,66 @@ mod tests {
     fn version_mismatch_is_rejected() {
         let bad = base_json().replace("\"version\":1", "\"version\":2");
         assert!(serde_json::from_str::<Timeline>(&bad).is_err());
+    }
+
+    fn doc() -> Timeline {
+        serde_json::from_str(&base_json()).unwrap()
+    }
+
+    fn beat(id: &str, title: Option<&str>, note: Option<&str>) -> PlotlineBeat {
+        PlotlineBeat {
+            plotline_id: id.to_string(),
+            title: title.map(str::to_string),
+            note: note.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn merge_beats_replaces_existing_cell() {
+        let mut timeline = doc();
+        let applied = merge_chapter_beats(
+            &mut timeline,
+            1,
+            &[beat("main", Some("风起（改）"), Some("更新后的节拍"))],
+        );
+        assert_eq!(applied, 1);
+        let cell = &timeline.plotlines[0].cells[0];
+        assert_eq!(cell.chapter, 1);
+        assert_eq!(cell.title.as_deref(), Some("风起（改）"));
+        assert_eq!(timeline.plotlines[0].cells.len(), 1);
+    }
+
+    #[test]
+    fn merge_beats_inserts_in_chapter_order() {
+        let mut timeline = doc();
+        let applied = merge_chapter_beats(
+            &mut timeline,
+            3,
+            &[beat("main", Some("高潮"), Some("第三章"))],
+        );
+        assert_eq!(applied, 1);
+        let applied2 = merge_chapter_beats(
+            &mut timeline,
+            2,
+            &[beat("main", Some("推进"), None)],
+        );
+        assert_eq!(applied2, 1);
+        let chapters: Vec<u32> = timeline.plotlines[0].cells.iter().map(|c| c.chapter).collect();
+        assert_eq!(chapters, vec![1, 2, 3]);
+        // 空标题/空 note 净化为 None。
+        assert_eq!(timeline.plotlines[0].cells[1].note, None);
+    }
+
+    #[test]
+    fn merge_beats_ignores_unknown_plotline_and_empty_beats() {
+        let mut timeline = doc();
+        let applied = merge_chapter_beats(
+            &mut timeline,
+            2,
+            &[beat("ghost", Some("不存在"), None), beat("main", Some("第二章"), None)],
+        );
+        assert_eq!(applied, 1);
+        assert!(timeline.plotlines.iter().all(|p| p.id != "ghost"));
+        assert_eq!(merge_chapter_beats(&mut timeline, 4, &[]), 0);
     }
 }

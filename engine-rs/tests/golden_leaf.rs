@@ -548,6 +548,7 @@ fn resolve_chapter_review_mode_matches_ts() {
                     Some(ChapterReviewModeVal::Auto)
                 },
                 revision_gate: None,
+                auto_timeline_beats: None,
             });
         let proj = c.input["projectReviewMode"].as_str().map(|s| {
             if s == "manual" {
@@ -581,6 +582,7 @@ fn resolve_revision_gate_matches_ts() {
                 "always" => RevisionGateVal::Always,
                 _ => RevisionGateVal::Strict,
             }),
+            auto_timeline_beats: None,
         });
         let proj = c.input["projectGate"].as_str().map(|s| match s {
             "lenient" => RevisionGateVal::Lenient,

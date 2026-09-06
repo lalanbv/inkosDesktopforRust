@@ -1449,6 +1449,96 @@ pub async fn put_review_mode(
     )
 }
 
+// ── GET/PUT /api/v1/books/:id/timeline-auto-beats（189 号）────────
+//
+// writing.autoTimelineBeats（默认 false）。项目级无默认（纯书籍级开关），
+// enabled=false 时删键保持 book.json 干净（与 reviewMode "inherit" 同风格）。
+
+/// book.json writing.autoTimelineBeats（仅精确 true 视为开）。
+fn book_auto_beats(raw_book: &Value) -> Option<bool> {
+    raw_book
+        .get("writing")?
+        .get("autoTimelineBeats")
+        .and_then(Value::as_bool)
+}
+
+pub async fn get_timeline_auto_beats(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let Ok(raw_book) = load_raw_book_config(root, &book_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+        );
+    };
+    let book_enabled = book_auto_beats(&raw_book);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "enabled": book_enabled.unwrap_or(false),
+            "bookEnabled": book_enabled,
+        })),
+    )
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TimelineAutoBeatsBody {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+pub async fn put_timeline_auto_beats(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<TimelineAutoBeatsBody>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+        );
+    };
+    let enabled = body.enabled.unwrap_or(false);
+    if enabled {
+        let mut writing = raw_book
+            .get("writing")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        writing.insert("autoTimelineBeats".to_string(), json!(true));
+        raw_book
+            .as_object_mut()
+            .unwrap()
+            .insert("writing".to_string(), Value::Object(writing));
+    } else {
+        // 删键；writing 空则整体移除（缺省省略语义）。
+        if let Some(writing) = raw_book.get_mut("writing").and_then(Value::as_object_mut) {
+            writing.remove("autoTimelineBeats");
+            if writing.is_empty() {
+                raw_book.as_object_mut().map(|root| root.remove("writing"));
+            }
+        }
+    }
+    let book_path = root.join("books").join(&book_id).join("book.json");
+    let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
+    if tokio::fs::write(&book_path, serialized).await.is_err() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+        );
+    }
+    (StatusCode::OK, Json(json!({ "ok": true, "enabled": enabled })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,6 +1603,10 @@ mod tests {
             .route("/api/v1/books/:id/series-backfill/existing", axum::routing::get(crate::server::series_backfill_routes::existing))
             .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
             .route("/api/v1/books/:id/chapter-review-mode", axum::routing::get(get_review_mode).put(put_review_mode))
+            .route(
+                "/api/v1/books/:id/timeline-auto-beats",
+                axum::routing::get(get_timeline_auto_beats).put(put_timeline_auto_beats),
+            )
             .with_state(runtime)
     }
 
@@ -1985,5 +2079,73 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(!raw.contains("reviewMode"));
+    }
+
+    #[tokio::test]
+    async fn timeline_auto_beats_get_and_put_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(request("GET", "/api/v1/books/b1/timeline-auto-beats", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let parsed = json_body(response).await;
+        // 默认关。
+        assert_eq!(parsed["enabled"], false);
+        assert!(parsed["bookEnabled"].is_null());
+
+        // PUT true → 落盘 writing.autoTimelineBeats。
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline-auto-beats",
+                Some(r#"{"enabled":true}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let parsed = json_body(response).await;
+        assert_eq!(parsed["enabled"], true);
+        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        assert!(raw.contains("\"autoTimelineBeats\": true"));
+
+        // GET 回读 bookEnabled = true。
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(request("GET", "/api/v1/books/b1/timeline-auto-beats", None))
+            .await
+            .unwrap();
+        let parsed = json_body(response).await;
+        assert_eq!(parsed["enabled"], true);
+        assert_eq!(parsed["bookEnabled"], true);
+
+        // PUT false → 键删除（writing 若空整体移除）。
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline-auto-beats",
+                Some(r#"{"enabled":false}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        assert!(!raw.contains("autoTimelineBeats"));
+    }
+
+    #[tokio::test]
+    async fn timeline_auto_beats_unknown_book_404() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(request("GET", "/api/v1/books/ghost/timeline-auto-beats", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -5819,6 +5819,48 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // --- Timeline auto beats (189号: write-next 落盘后自动沉淀节拍，书籍级开关默认关) ---
+
+  app.get("/api/v1/books/:id/timeline-auto-beats", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    try {
+      const rawBook = await loadRawBookConfig(root, bookId);
+      const writing = rawBook.writing as Record<string, unknown> | undefined;
+      const bookEnabled = typeof writing?.autoTimelineBeats === "boolean" ? writing.autoTimelineBeats : null;
+      return c.json({ enabled: bookEnabled ?? false, bookEnabled });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
+  app.put("/api/v1/books/:id/timeline-auto-beats", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    const { enabled } = await c.req.json<{ enabled?: boolean }>();
+    const next = enabled === true;
+    const rawBookPath = join(root, "books", bookId, "book.json");
+    try {
+      const rawBook = await loadRawBookConfig(root, bookId);
+      if (next) {
+        rawBook.writing = {
+          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
+          autoTimelineBeats: true,
+        };
+      } else {
+        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
+          ? { ...(rawBook.writing as Record<string, unknown>) }
+          : {};
+        delete writing.autoTimelineBeats;
+        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
+      }
+      await writeFile(rawBookPath, JSON.stringify(rawBook, null, 2), "utf-8");
+      return c.json({ ok: true, enabled: next });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
   // --- Notify channels ---
 
   app.get("/api/v1/project/notify", async (c) => {

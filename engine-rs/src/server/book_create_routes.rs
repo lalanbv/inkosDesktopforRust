@@ -703,7 +703,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
     // 回放治理输入端口（112 号：TS importChapters 的 prepareWriteInput——
     // v2 治理三件逐章构造，plan 持久化复用同链）。
     let write_agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let write_ctx = crate::server::books_routes::build_write_next_ctx(runtime);
+    let write_ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
     let governance_config = crate::pipeline::write_next::WriteNextConfig::default();
     for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
         // 检查点②：每章回放头（TS 2858）。

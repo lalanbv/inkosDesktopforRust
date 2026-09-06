@@ -106,6 +106,9 @@ pub struct BookWritingConfig {
     pub review_mode: Option<ChapterReviewModeVal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision_gate: Option<RevisionGateVal>,
+    /// 189 号：write-next 落盘后自动为本章沉淀时间线节拍（默认关）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_timeline_beats: Option<bool>,
 }
 
 /// 系列归属。对齐 TS `BookSeriesSchema`（180 号 C3-a）。
@@ -249,6 +252,21 @@ mod tests {
         assert_eq!(round["series"]["order"], 3);
     }
 
+    /// 189 号：writing.autoTimelineBeats 缺省省略 + roundtrip 保真。
+    #[test]
+    fn writing_config_auto_timeline_beats_optional_and_roundtrip() {
+        let bare: BookWritingConfig = serde_json::from_str(r#"{"reviewMode":"auto"}"#).unwrap();
+        assert_eq!(bare.auto_timeline_beats, None);
+        let json = serde_json::to_value(&bare).unwrap();
+        assert!(json.get("autoTimelineBeats").is_none(), "缺省 autoTimelineBeats 必须省略字段");
+
+        let flagged: BookWritingConfig =
+            serde_json::from_str(r#"{"reviewMode":"manual","autoTimelineBeats":true}"#).unwrap();
+        assert_eq!(flagged.auto_timeline_beats, Some(true));
+        let round = serde_json::to_value(&flagged).unwrap();
+        assert_eq!(round["autoTimelineBeats"], serde_json::json!(true));
+    }
+
     #[test]
     fn normalize_platform_aliases() {
         assert_eq!(normalize_platform_id("番茄小说"), Some(Platform::Tomato));
@@ -275,7 +293,7 @@ mod tests {
     fn resolve_review_mode_precedence() {
         // book 覆盖 project
         assert_eq!(
-            resolve_chapter_review_mode(Some(&BookWritingConfig { review_mode: Some(ChapterReviewModeVal::Manual), revision_gate: None }), Some(ChapterReviewModeVal::Auto)),
+            resolve_chapter_review_mode(Some(&BookWritingConfig { review_mode: Some(ChapterReviewModeVal::Manual), revision_gate: None, auto_timeline_beats: None }), Some(ChapterReviewModeVal::Auto)),
             ChapterReviewModeVal::Manual
         );
         // book 未设 → project
@@ -290,7 +308,7 @@ mod tests {
     #[test]
     fn resolve_revision_gate_precedence() {
         assert_eq!(
-            resolve_revision_gate(Some(&BookWritingConfig { review_mode: None, revision_gate: Some(RevisionGateVal::Always) }), Some(RevisionGateVal::Strict)),
+            resolve_revision_gate(Some(&BookWritingConfig { review_mode: None, revision_gate: Some(RevisionGateVal::Always), auto_timeline_beats: None }), Some(RevisionGateVal::Strict)),
             RevisionGateVal::Always
         );
         assert_eq!(resolve_revision_gate(None, None), RevisionGateVal::Strict);
