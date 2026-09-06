@@ -229,6 +229,16 @@ const strings = {
   "book.pipelineFailed": { zh: "后台任务失败", en: "Background job failed" },
   "book.writeStopped": { zh: "写作已按您的要求停止。", en: "Writing stopped at your request." },
   "book.autoBeats": { zh: "节拍自动沉淀", en: "Auto timeline beats" },
+  "book.reviewModeAuto": { zh: "审查：自动", en: "Review: Auto" },
+  "book.reviewModeManual": { zh: "审查：手动·写完即停", en: "Review: Manual" },
+  "book.reviewModeAutoHint": {
+    zh: "自动审查：写完自动审校并按需重写（更省心，但更慢）。点此切到手动·写完即停。",
+    en: "Auto review: audit and revise automatically after each chapter (hands-off, slower). Click to switch to manual — stop after draft.",
+  },
+  "book.reviewModeManualHint": {
+    zh: "手动审查：写完即停，由你点 审稿/修订/通过（更快、更可控）。点此切回自动。",
+    en: "Manual review: stop after the draft; you run audit / revise / approve (faster, more control). Click to switch back to auto.",
+  },
   "book.autoBeatsHint": {
     zh: "开启后，每次「写下一章」完成时会按既有情节线自动为该章生成节拍并写入时间线（默认关闭）。",
     en: "When enabled, each finished chapter automatically gets beats added to the timeline per plotline (off by default).",

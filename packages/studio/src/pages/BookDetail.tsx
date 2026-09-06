@@ -585,12 +585,12 @@ export function BookDetail({
           <button
             onClick={handleToggleReviewMode}
             title={reviewMode === "manual"
-              ? "手动审查：写完即停，由你点 审稿/修订/通过（更快、更可控）。点此切回自动。"
-              : "自动审查：写完自动审校并按需重写（更省心，但更慢）。点此切到手动·写完即停。"}
+              ? t("book.reviewModeManualHint")
+              : t("book.reviewModeAutoHint")}
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-secondary/60 text-foreground rounded-xl border border-border/50 hover:bg-secondary transition-all"
           >
             {reviewMode === "manual" ? <Hand size={16} /> : <Settings2 size={16} />}
-            {reviewMode === "manual" ? "审查：手动·写完即停" : "审查：自动"}
+            {reviewMode === "manual" ? t("book.reviewModeManual") : t("book.reviewModeAuto")}
           </button>
           {/* 189 号：时间线节拍自动沉淀（书籍级开关，默认关）——开启后写完的
               章节会按既有情节线自动补节拍到时间线。 */}
