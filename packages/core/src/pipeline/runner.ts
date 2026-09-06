@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { LLMClient, OnStreamProgress } from "../llm/provider.js";
-import { createLLMClient } from "../llm/provider.js";
+import { createLLMClient, chatCompletion } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
@@ -58,6 +58,7 @@ import { persistChapterArtifacts } from "./chapter-persistence.js";
 import { runChapterReviewCycle } from "./chapter-review-cycle.js";
 import { validateChapterTruthPersistence } from "./chapter-truth-validation.js";
 import { loadPersistedPlan, relativeToBookDir, savePersistedPlan } from "./persisted-governed-plan.js";
+import { buildBeatsPrompt, settleTimelineBeatsForChapter } from "./timeline-settle.js";
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
@@ -2369,6 +2370,39 @@ export class PipelineRunner {
       revised,
       status: resolvedStatus,
     });
+
+    // 191 号：时间线节拍自动沉淀（189 号 Rust 对齐——书籍级开关默认关；
+    // 失败仅告警，不影响已落盘章节产物）。
+    if (book.writing?.autoTimelineBeats) {
+      const beatsCtx = this.agentCtxFor("inspiration", bookId);
+      this.logStage(stageLanguage, { zh: "时间线节拍沉淀", en: "timeline beat settle" });
+      try {
+        const applied = await settleTimelineBeatsForChapter({
+          bookDir,
+          chapterNumber,
+          chapterTitle: persistenceOutput.title,
+          chapterSummary: persistenceOutput.chapterSummary,
+          language: pipelineLang,
+          chat: async (req) => {
+            const { system, user } = buildBeatsPrompt(req);
+            const response = await chatCompletion(beatsCtx.client, beatsCtx.model, [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ], { temperature: 0.3, maxTokens: 1500, signal: beatsCtx.signal });
+            return response.content;
+          },
+        });
+        if (applied === null) {
+          this.config.logger?.info("[timeline] 无时间线可沉淀，跳过");
+        } else if (applied === 0) {
+          this.config.logger?.info("[timeline] 本章无线条被推进，跳过节拍落盘");
+        } else {
+          this.config.logger?.info(`[timeline] 已自动沉淀第${chapterNumber}章节拍（${applied} 条情节线）`);
+        }
+      } catch (error) {
+        this.config.logger?.warn(`[timeline] 节拍自动沉淀失败（不影响章节产物）: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     return {
       chapterNumber,

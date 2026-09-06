@@ -1415,6 +1415,102 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("auto timeline beats settle into timeline.json when the book flag is on (191号)", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+
+    await Promise.all([
+      writeFile(join(state.bookDir(bookId), "story", "current_focus.md"), "# Current Focus\n\nBring focus back to the mentor conflict.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "volume_outline.md"), "# Volume Outline\n\n## Chapter 1\nTrack the merchant guild trail.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "current_state.md"), "# Current State\n\n- Lin Yue still hides the broken oath token.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "story_bible.md"), "# Story Bible\n\n- The jade seal cannot be destroyed.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "# Pending Hooks\n\n- Why the mentor vanished after the trial.\n", "utf-8"),
+      writeFile(
+        join(state.bookDir(bookId), "story", "timeline.json"),
+        JSON.stringify({ version: 1, bookId, updatedAt: "2026-01-01T00:00:00.000Z", plotlines: [{ id: "main", name: "主线", cells: [] }] }),
+        "utf-8",
+      ),
+    ]);
+    const book = await state.loadBookConfig(bookId);
+    await state.saveBookConfig(bookId, { ...book, writing: { autoTimelineBeats: true } });
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({
+        chapterNumber: 1,
+        content: "Governed pipeline draft.",
+        wordCount: "Governed pipeline draft.".length,
+      }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: true, issues: [], summary: "clean" }),
+    );
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: '{"beats":[{"plotlineId":"main","title":"风起·沉淀","note":"少年入场"}]}',
+      usage: ZERO_USAGE,
+    } as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    try {
+      const result = await runner.writeNextChapter(bookId, 220);
+      expect(result.chapterNumber).toBe(1);
+      // 写路径中另有既有 chatCompletion 调用——按节拍 prompt 形态过滤。
+      const beatsCalls = chatSpy.mock.calls.filter(([, , messages]) =>
+        (messages as ReadonlyArray<{ role: string; content: string }>).some(
+          (m) => m.role === "system" && m.content.includes("时间线编辑"),
+        ),
+      );
+      expect(beatsCalls).toHaveLength(1);
+      // 节拍 prompt 携带名册与章节梗概（传参 = 生产语义）。
+      const messages = beatsCalls[0]?.[2] ?? [];
+      expect(messages.some((m) => m.role === "user" && m.content.includes("- main: 主线"))).toBe(true);
+
+      const timeline = JSON.parse(await readFile(join(state.bookDir(bookId), "story", "timeline.json"), "utf-8"));
+      expect(timeline.plotlines[0].cells).toEqual([
+        expect.objectContaining({ chapter: 1, title: "风起·沉淀" }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps timeline beat settle off by default and never calls the LLM for it (191号)", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+
+    await Promise.all([
+      writeFile(join(state.bookDir(bookId), "story", "current_focus.md"), "# Current Focus\n\nBring focus back to the mentor conflict.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "volume_outline.md"), "# Volume Outline\n\n## Chapter 1\nTrack the merchant guild trail.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "current_state.md"), "# Current State\n\n- Lin Yue still hides the broken oath token.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "story_bible.md"), "# Story Bible\n\n- The jade seal cannot be destroyed.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "# Pending Hooks\n\n- Why the mentor vanished after the trial.\n", "utf-8"),
+      writeFile(
+        join(state.bookDir(bookId), "story", "timeline.json"),
+        JSON.stringify({ version: 1, bookId, updatedAt: "2026-01-01T00:00:00.000Z", plotlines: [{ id: "main", name: "主线", cells: [] }] }),
+        "utf-8",
+      ),
+    ]);
+
+    vi.spyOn(WriterAgent.prototype, "writeChapter").mockResolvedValue(
+      createWriterOutput({ chapterNumber: 1, content: "Draft.", wordCount: "Draft.".length }),
+    );
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: true, issues: [], summary: "clean" }),
+    );
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion");
+
+    try {
+      await runner.writeNextChapter(bookId, 220);
+      // 默认关：无节拍 prompt 形态的调用，时间线未被改写。
+      const beatsCalls = chatSpy.mock.calls.filter(([, , messages]) =>
+        (messages as ReadonlyArray<{ role: string; content: string }>).some(
+          (m) => m.role === "system" && m.content.includes("时间线编辑"),
+        ),
+      );
+      expect(beatsCalls).toHaveLength(0);
+      const timeline = JSON.parse(await readFile(join(state.bookDir(bookId), "story", "timeline.json"), "utf-8"));
+      expect(timeline.plotlines[0].cells).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes configured writeNextChapter context through planner and governed writer input", async () => {
     const chapterContext = "本章标题：雨夜账本\n必须围绕账本失窃后的当面对质展开。";
     const { root, runner, state, bookId } = await createRunnerFixture({
