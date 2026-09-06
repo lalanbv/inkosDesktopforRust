@@ -6834,7 +6834,7 @@ describe("createStudioServer daemon lifecycle", () => {
 
   // 174 号 W-C5：write-next 会话检查点 + SSE 重连对账。
   const readTaskSnapshotEvent = async (
-    app: ReturnType<typeof createStudioServer>,
+    app: { request: (input: string, init?: RequestInit) => Response | Promise<Response> },
     sessionId: string,
   ): Promise<{ execution: { id: string; status: string; error?: string; completedAt?: number } }> => {
     const live = await app.request(`http://localhost/api/v1/events?sessionId=${encodeURIComponent(sessionId)}`);

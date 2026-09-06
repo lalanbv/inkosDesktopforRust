@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SSEMessage } from "./use-sse";
 import {
+  writeTaskSessionId,
   applyBookCollectionEvent,
   deriveActiveBookIds,
   deriveBookActivity,
@@ -125,5 +126,20 @@ describe("applyBookCollectionEvent", () => {
 
   it("returns null when a collection event lacks enough data for incremental update", () => {
     expect(applyBookCollectionEvent([], msg("book:created", { bookId: "beta" }, 1))).toBeNull();
+  });
+});
+
+describe("writeTaskSessionId（176 号书籍页伪会话锚点）", () => {
+  it("为每本书生成稳定且互异的伪会话 id", () => {
+    expect(writeTaskSessionId("demo-book")).toBe("book:demo-book:write");
+    expect(writeTaskSessionId("demo-book")).toBe(writeTaskSessionId("demo-book"));
+    expect(writeTaskSessionId("a")).not.toBe(writeTaskSessionId("b"));
+  });
+
+  it("不含聊天会话目录形态——task-store 文件名键与 abort 端点对它透明", () => {
+    const id = writeTaskSessionId("xianxia-01");
+    // 形如 book:{id}:write；URL 使用处自行 encodeURIComponent（EventSource/POST 路径）。
+    expect(id.startsWith("book:")).toBe(true);
+    expect(id.endsWith(":write")).toBe(true);
   });
 });

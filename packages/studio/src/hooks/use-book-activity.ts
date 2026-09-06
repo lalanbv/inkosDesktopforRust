@@ -142,6 +142,16 @@ export function deriveBookActivity(messages: ReadonlyArray<SSEMessage>, bookId: 
   return { writing, drafting, lastError };
 }
 
+/**
+ * 书籍页 write-next 的稳定伪会话 id（176 号）：write-next 请求体 sessionId 与
+ * SSE 快照恢复/停止按钮共用同一锚点——引擎侧检查点（174 号）与真实可停止
+ * （175 号）在此激活。形如 `book:{bookId}:write`，不对应聊天会话目录
+ * （task-store 只按它做文件名键；abort 端点对无会话条目自然无害）。
+ */
+export function writeTaskSessionId(bookId: string): string {
+  return `book:${bookId}:write`;
+}
+
 export function shouldRefetchBookView(message: SSEMessage, bookId: string): boolean {
   return getBookId(message) === bookId && BOOK_REFRESH_EVENTS.has(message.event);
 }

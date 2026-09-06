@@ -39,6 +39,7 @@ const strings = {
 
   // Book Detail
   "book.writeNext": { zh: "写下一章", en: "Write Next" },
+  "book.stopWriting": { zh: "停止写作", en: "Stop Writing" },
   "book.draftOnly": { zh: "仅草稿", en: "Draft Only" },
   "book.approveAll": { zh: "全部通过", en: "Approve All" },
   "book.analytics": { zh: "数据分析", en: "Analytics" },

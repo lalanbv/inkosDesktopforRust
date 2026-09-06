@@ -4,7 +4,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
-import { deriveBookActivity, shouldRefetchBookView } from "../hooks/use-book-activity";
+import { deriveBookActivity, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   ChevronLeft,
@@ -26,7 +26,8 @@ import {
   Trash2,
   Save,
   Hand,
-  Settings2
+  Settings2,
+  Square
 } from "lucide-react";
 
 interface ChapterMeta {
@@ -120,6 +121,43 @@ export function BookDetail({
       .then((r) => setReviewMode(r.mode === "manual" ? "manual" : "auto"))
       .catch(() => undefined);
   }, [bookId]);
+  // 176 号：重启恢复——挂载时按伪会话订阅一次快照（引擎/服务重启后
+  // write:start/complete 事件已丢，只有检查点快照知道任务仍在跑）。收到
+  // running 快照 → 恢复 writing 态；终态快照 → 静默刷新视图后关闭；无快照
+  // （5s 内只有 ping）→ 超时关闭。
+  useEffect(() => {
+    const source = new EventSource(
+      `/api/v1/events?sessionId=${encodeURIComponent(writeTaskSessionId(bookId))}`,
+    );
+    let settled = false;
+    const close = () => {
+      if (settled) return;
+      settled = true;
+      source.close();
+    };
+    source.addEventListener("task:snapshot", (event) => {
+      try {
+        const snapshot = JSON.parse((event as MessageEvent).data) as {
+          execution?: { status?: string };
+        };
+        if (snapshot.execution?.status === "running" || snapshot.execution?.status === "processing") {
+          setWriteRequestPending(true);
+        } else {
+          refetch();
+        }
+      } catch {
+        // 坏快照忽略——维持默认态。
+      }
+      close();
+    });
+    const timer = window.setTimeout(close, 5000);
+    return () => {
+      window.clearTimeout(timer);
+      close();
+    };
+    // refetch 是 useApi 的稳定回调；bookId 变化即重订。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
   const activity = useMemo(() => deriveBookActivity(sse.messages, bookId), [bookId, sse.messages]);
   const writing = writeRequestPending || activity.writing;
   const drafting = draftRequestPending || activity.drafting;
@@ -152,10 +190,23 @@ export function BookDetail({
   const handleWriteNext = async () => {
     setWriteRequestPending(true);
     try {
-      await postApi(`/books/${bookId}/write-next`);
+      // 176 号：sessionId 锚定检查点 + 可停止（引擎 174/175 号能力在此激活）。
+      await postApi(`/books/${bookId}/write-next`, {
+        sessionId: writeTaskSessionId(bookId),
+      });
     } catch (e) {
       setWriteRequestPending(false);
       alert(e instanceof Error ? e.message : "Failed");
+    }
+  };
+
+  const handleStopWriteNext = async () => {
+    try {
+      // Rust 引擎实停（175 号）；Node 回退端诚实返回 aborted:false，任务
+      // 继续跑完——两端都以 write:error / write:complete 收敛 UI 态。
+      await postApi(`/sessions/${encodeURIComponent(writeTaskSessionId(bookId))}/abort`);
+    } catch {
+      // 停止失败不打断——SSE 终态事件仍会清 writing。
     }
   };
 
@@ -480,13 +531,19 @@ export function BookDetail({
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {/* 176 号：writing 时按钮语义翻转为「停止」——Rust 引擎在阶段边界
+              实停（175 号），Node 回退端诚实不可停、任务跑完自然收敛。 */}
           <button
-            onClick={handleWriteNext}
-            disabled={writing || drafting}
-            className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-primary text-primary-foreground rounded-xl hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20 disabled:opacity-50"
+            onClick={writing ? handleStopWriteNext : handleWriteNext}
+            disabled={!writing && drafting}
+            className={`flex items-center gap-2 px-5 py-2.5 text-sm font-bold rounded-xl transition-all shadow-lg disabled:opacity-50 ${
+              writing
+                ? "bg-destructive text-destructive-foreground hover:scale-105 active:scale-95 shadow-destructive/20"
+                : "bg-primary text-primary-foreground hover:scale-105 active:scale-95 shadow-primary/20"
+            }`}
           >
-            {writing ? <div className="w-4 h-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full animate-spin" /> : <Zap size={16} />}
-            {writing ? t("dash.writing") : t("book.writeNext")}
+            {writing ? <Square size={14} /> : <Zap size={16} />}
+            {writing ? t("book.stopWriting") : t("book.writeNext")}
           </button>
           <button
             onClick={handleDraft}

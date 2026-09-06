@@ -5,7 +5,7 @@ import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { deriveActiveBookIds, shouldRefetchBookCollections } from "../hooks/use-book-activity";
+import { deriveActiveBookIds, shouldRefetchBookCollections, writeTaskSessionId } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { SkeletonCards } from "../components/skeletons";
@@ -280,7 +280,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                 <div className="flex items-center gap-3 shrink-0 ml-6">
                   <button
                     onClick={async () => {
-                      try { await postApi(`/books/${book.id}/write-next`); }
+                      try { await postApi(`/books/${book.id}/write-next`, { sessionId: writeTaskSessionId(book.id) }); }
                       catch (e) { alert(e instanceof Error ? e.message : "Write failed"); }
                     }}
                     disabled={isWriting}
