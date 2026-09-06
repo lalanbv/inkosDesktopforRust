@@ -24,6 +24,7 @@
 | `packages/studio` `npm run typecheck`（双 tsconfig） | 干净 |
 | `packages/studio` vitest 全量 | **741/741 绿**（含 writeTaskSessionId 2 用例） |
 | 真 bin 三请求序列冒烟（UI 将发出的完整序列） | ①write-next 带伪会话 → 契约响应;②`SSE ?sessionId=` 下发 running 快照;③abort → `{"aborted":true}` → 管线在阶段边界停止 → error 终态快照含「Operation aborted: the user requested to stop this task.」 |
+| **浏览器级 GUI 验证**（vite dev → Rust 引擎直连） | ①首页书卡发起 → 按钮转「写作中...」+ Foundry 面板显示阶段、引擎落 `book:b1:write` running 快照;②任务在途进 settings 页（BookDetail 挂载恢复）→ 直接显示「停止写作」+「后台正在写作」提示;③点击停止 → 按钮翻回「写下一章」+ 失败横幅「Operation aborted…」→ 引擎终态快照 error/aborted/completedAt 齐备;④另观察到自然失败路径（mock 内容违规）→ write:error 收敛同样正确 |
 
 ## 四、过程教训
 
@@ -33,7 +34,7 @@
 
 ## 五、遗留
 
-- GUI 级（浏览器内）冒烟未做——本批以「UI 将发的三个请求在真 bin 上全链路验证」替代;浏览器内交互留待后续 GUI 测试批次。
 - Dashboard 书卡不做恢复/停止（卡片场景,详情页承担）;draft 接线待两端管线支持信号后同批做。
+- 书工作台（`#/book/:id`，ChatPage）的「写下一章」chip 走聊天 agent 生产任务路径（确认式任务,检查点/可停止 174 号前已具备）——与本次 REST 面接线并存,语义各归其位。
 - 总体方案剩余 backlog：W-A4b（secrets 掩码,需 UI 确认）、W-B4/B5、W-C3/C4（产品级）、W-D4（bench 对象需重选型）、en/ja README、TROUBLESHOOTING 复审。
 - 推送须在 Fork 图形端执行（既有约定）。
