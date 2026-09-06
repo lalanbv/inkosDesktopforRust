@@ -2851,7 +2851,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (canon.length === 0) return c.json({ error: "Source book has no canon files" }, 400);
     const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
     const system = "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。";
-    let user = `以下是一部已完结系列作品《${sourceTitle}》的设定文件。请为同系列的新书抽取可迁移的设定，输出纯 JSON：{"items":[{"id":"it-1","category":"worldview","title":"标题","content":"50-200字描述"}]}；category 只能取 worldview/character/plot/style；抽取 6-12 条。\n\n源书设定文件：\n`;
+    let user = `以下是一部已完结系列作品《${sourceTitle}》的设定文件。请为同系列的新书抽取可迁移的设定，输出纯 JSON：{"items":[{"id":"it-1","category":"worldview","title":"标题","content":"50-200字描述"}]}；category 只能取 worldview/character/plot/style/faction/item/location（faction=势力组织，item=关键物品法宝，location=重要地点场景）；抽取 8-14 条。\n\n源书设定文件：\n`;
     for (const file of canon) user += `\n--- ${file.name} ---\n${file.content}\n`;
     const response = await chatCompletion(
       pipelineConfig.client,

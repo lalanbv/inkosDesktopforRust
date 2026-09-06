@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToString } from "react-dom/server";
-import { SeriesBackfillPanel } from "@/pages/SeriesBackfillPanel";
+import { SeriesBackfillPanel, groupBackfillItemsByCategory } from "@/pages/SeriesBackfillPanel";
 
 const fetchJsonMock = vi.fn();
 const postApiMock = vi.fn();
@@ -40,5 +40,32 @@ describe("SeriesBackfillPanel（184 号 C3-b/c 系列书回填向导）", () => 
     // 首帧不抛错；数据就绪后的预览/勾选交互由浏览器端到端覆盖。
     const html = renderToString(<SeriesBackfillPanel t={t} />);
     expect(html).toContain('data-slot="backfill-source"');
+  });
+});
+
+describe("groupBackfillItemsByCategory（194 号类别扩展）", () => {
+  const item = (id: string, category: string) => ({ id, category, title: id, content: "描述" });
+
+  it("七类各自归位，未知类别归入 other 且垫底", () => {
+    const grouped = groupBackfillItemsByCategory([
+      item("a", "worldview"),
+      item("b", "faction"),
+      item("c", "unknown-x"),
+      item("d", "location"),
+      item("e", "item"),
+      item("f", "character"),
+      item("g", "plot"),
+      item("h", "style"),
+      item("i", "other-thing"),
+    ]);
+    expect(grouped.map(([key]) => key)).toEqual([
+      "worldview", "faction", "location", "item", "character", "plot", "style", "other",
+    ]);
+    const other = grouped.find(([key]) => key === "other")?.[1] ?? [];
+    expect(other.map((entry) => entry.id)).toEqual(["c", "i"]);
+  });
+
+  it("空输入返回空分组", () => {
+    expect(groupBackfillItemsByCategory([])).toEqual([]);
   });
 });

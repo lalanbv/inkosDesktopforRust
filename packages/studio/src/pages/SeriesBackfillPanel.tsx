@@ -15,6 +15,40 @@ interface Draft {
   readonly items: ReadonlyArray<BackfillItem>;
 }
 
+/** 已知抽取类别（194 号：faction/item/location 新增）；未知类别归入 other。 */
+export const BACKFILL_CATEGORIES = [
+  "worldview",
+  "character",
+  "plot",
+  "style",
+  "faction",
+  "item",
+  "location",
+] as const;
+
+export type BackfillCategory = (typeof BACKFILL_CATEGORIES)[number] | "other";
+
+/**
+ * 按类别分组（出现顺序），未知类别归入 other（垫底）——纯函数便于单测。
+ */
+export function groupBackfillItemsByCategory(
+  items: ReadonlyArray<BackfillItem>,
+): ReadonlyArray<readonly [BackfillCategory, BackfillItem[]]> {
+  const groups = new Map<BackfillCategory, BackfillItem[]>();
+  for (const item of items) {
+    const key = (BACKFILL_CATEGORIES as ReadonlyArray<string>).includes(item.category)
+      ? (item.category as BackfillCategory)
+      : "other";
+    const bucket = groups.get(key) ?? [];
+    bucket.push(item);
+    groups.set(key, bucket);
+  }
+  // other 垫底：其余按首次出现顺序。
+  const known = [...groups.entries()].filter(([key]) => key !== "other");
+  const other = groups.get("other");
+  return other ? [...known, ["other", other] as const] : known;
+}
+
 /**
  * 系列书回填向导（184 号 C3-b/c，对标 Sudowrite Story Bible）。
  * 三步：选源/目标书 → 抽取（LLM 摘要为结构化设定集）→ 预览勾选后写入
@@ -47,14 +81,7 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
 
   const categoryGrouped = useMemo(() => {
     if (!draft) return [];
-    const groups = new Map<string, BackfillItem[]>();
-    for (const item of draft.items) {
-      const key = ["worldview", "character", "plot", "style"].includes(item.category) ? item.category : "other";
-      const bucket = groups.get(key) ?? [];
-      bucket.push(item);
-      groups.set(key, bucket);
-    }
-    return [...groups.entries()];
+    return groupBackfillItemsByCategory(draft.items);
   }, [draft]);
 
   const handleExtract = async (): Promise<void> => {
@@ -173,7 +200,7 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
           </div>
           {categoryGrouped.map(([category, items]) => (
             <div key={category} className="space-y-2">
-              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{category}</div>
+              <div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{t(`backfill.category.${category}`)}</div>
               {items.map((item) => (
                 <label
                   key={item.id}

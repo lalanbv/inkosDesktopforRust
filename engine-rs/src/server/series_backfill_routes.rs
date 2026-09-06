@@ -72,7 +72,8 @@ fn build_extraction_prompt(source_title: &str, canon: &[(String, String)]) -> St
         "以下是一部已完结系列作品《{source_title}》的设定文件（故事圣经 / 世界观框架 / 人物卡）。\
 请为同系列的新书抽取可迁移的设定，输出**纯 JSON**（不要 markdown 围栏、不要解释文字），形如：\n\
 {{\"items\": [{{\"id\": \"it-1\", \"category\": \"worldview\", \"title\": \"标题\", \"content\": \"50-200字的具体设定描述\"}}]}}\n\
-category 只能取 worldview / character / plot / style 之一；抽取 6-12 条最有迁移价值的设定。\n\n源书设定文件：\n"
+category 只能取 worldview / character / plot / style / faction / item / location 之一\
+（faction=势力组织，item=关键物品法宝，location=重要地点场景）；抽取 8-14 条最有迁移价值的设定。\n\n源书设定文件：\n"
     );
     for (name, content) in canon {
         user.push_str(&format!("\n--- {name} ---\n{content}\n"));
@@ -419,6 +420,18 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].content, "旧描述。"); // 既有在前且保留
         assert_eq!(merged[1].id, "it-2");
+    }
+
+    /// 194 号：类别扩到 7 类（faction/item/location 新增），条数指引 8-14。
+    #[test]
+    fn extraction_prompt_lists_all_categories_and_counts() {
+        let prompt = build_extraction_prompt("源书", &[("story/story_bible.md".into(), "设定正文".into())]);
+        for category in ["worldview", "character", "plot", "style", "faction", "item", "location"] {
+            assert!(prompt.contains(category), "prompt 应包含类别 {category}");
+        }
+        assert!(prompt.contains("8-14 条"));
+        assert!(prompt.contains("story_bible.md"));
+        assert!(prompt.contains("设定正文"));
     }
 
     #[tokio::test]
