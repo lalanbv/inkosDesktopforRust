@@ -3,7 +3,6 @@
 //! 移植自 `packages/core/src/agents/sensitive-words.ts`（142 行）。纯规则分析（无 LLM），
 //! 检测中文网文的政治敏感（block）/ 色情（warn）/ 极端暴力（warn）词，产出 [`AuditIssue`]。
 
-use regex::Regex;
 
 use crate::agents::continuity::{AuditIssue, AuditSeverity};
 use crate::utils::language::WritingLanguage;
@@ -87,7 +86,7 @@ pub fn analyze_sensitive_words(
     let joiner = if is_english { ", " } else { "、" };
 
     for list in WORD_LISTS {
-        let matches = scan_words(content, list.words, list.severity);
+        let matches = scan_static_list(content, list);
         if matches.is_empty() {
             continue;
         }
@@ -162,14 +161,21 @@ pub fn analyze_sensitive_words(
     SensitiveWordResult { issues, found }
 }
 
-fn scan_words(content: &str, words: &[&str], severity: SensitiveWordSeverity) -> Vec<SensitiveWordMatch> {
-    scan_words_impl(content, words.iter().copied(), severity)
+/// 静态词表扫描。
+fn scan_static_list(content: &str, list: &WordListEntry) -> Vec<SensitiveWordMatch> {
+    scan_words_impl(content, list.words.iter().copied(), list.severity)
 }
 
+/// 自定义词表扫描。
 fn scan_words_strings(content: &str, words: &[String], severity: SensitiveWordSeverity) -> Vec<SensitiveWordMatch> {
     scan_words_impl(content, words.iter().map(|s| s.as_str()), severity)
 }
 
+/// 逐词子串计数（177 号 W-D4：TS 原实现是 `escapeRegExp` 后的字面正则
+/// 全局匹配——escape 产物只匹配字面子串，与 `str::matches` 完全等价
+/// （memmem，零编译）。基线逐词 `Regex::new` 重编译 225µs/章 → 子串扫描
+/// 后该项归零，语义由 8 个既有单测 + golden 向量锁定）。空词两侧同为
+/// 「每个位置一次空匹配」计数，行为一致。
 fn scan_words_impl<'a, I: Iterator<Item = &'a str>>(
     content: &str,
     words: I,
@@ -177,13 +183,7 @@ fn scan_words_impl<'a, I: Iterator<Item = &'a str>>(
 ) -> Vec<SensitiveWordMatch> {
     let mut matches = Vec::new();
     for word in words {
-        let pattern = regex::escape(word);
-        // 每个词独立编译（词表固定，非热路径）。全局计数。
-        let re = match Regex::new(&pattern) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let count = re.find_iter(content).count();
+        let count = content.matches(word).count();
         if count > 0 {
             matches.push(SensitiveWordMatch {
                 word: word.to_string(),
