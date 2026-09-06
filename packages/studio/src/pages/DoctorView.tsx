@@ -2,7 +2,14 @@ import { useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { Stethoscope, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Stethoscope, CheckCircle2, XCircle, AlertTriangle, Loader2 } from "lucide-react";
+
+interface DoctorBookIssue {
+  readonly bookId: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly chapter?: number;
+}
 
 interface DoctorChecks {
   readonly inkosJson: boolean;
@@ -11,6 +18,8 @@ interface DoctorChecks {
   readonly booksDir: boolean;
   readonly llmConnected: boolean;
   readonly bookCount: number;
+  /** 195 号：书籍级写作阻塞预警（旧后端缺省省略——渲染层判空跳过）。 */
+  readonly bookIssues?: ReadonlyArray<DoctorBookIssue>;
 }
 
 interface Nav { toDashboard: () => void }
@@ -29,9 +38,18 @@ function CheckRow({ label, ok, detail }: { label: string; ok: boolean; detail?: 
   );
 }
 
+/** 195 号：书籍级 issue → 人类可读文案（双语走 i18n）。 */
+function issueText(issue: DoctorBookIssue, t: TFunction): string {
+  if (issue.kind === "state-degraded") {
+    return t("doctor.issueStateDegraded").replace("{chapter}", String(issue.chapter ?? "?"));
+  }
+  return issue.kind;
+}
+
 export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const { data, refetch } = useApi<DoctorChecks>("/doctor");
+  const bookIssues = data?.bookIssues ?? [];
 
   return (
     <div className="space-y-8">
@@ -62,6 +80,30 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
           <CheckRow label={t("doctor.globalEnv")} ok={data.globalEnv} />
           <CheckRow label={t("doctor.booksDir")} ok={data.booksDir} detail={`${data.bookCount} book(s)`} />
           <CheckRow label={t("doctor.llmApi")} ok={data.llmConnected} detail={data.llmConnected ? t("doctor.connected") : t("doctor.failed")} />
+          {/* 195 号：书籍健康区——有阻塞问题时显示每条预警与修复指引。 */}
+          <div className="pt-3" data-slot="doctor-book-health">
+            {bookIssues.length === 0 ? (
+              <div className="flex items-center gap-3 py-1">
+                <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />
+                <span className="text-sm font-medium flex-1">{t("doctor.bookHealth")}</span>
+                <span className="text-xs text-emerald-600 dark:text-emerald-400">{t("doctor.bookHealthOk")}</span>
+              </div>
+            ) : (
+              bookIssues.map((issue) => (
+                <div
+                  key={`${issue.bookId}:${issue.kind}:${issue.chapter ?? ""}`}
+                  className="flex items-start gap-3 py-2"
+                  data-slot="doctor-book-issue"
+                >
+                  <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium">{issue.title}</div>
+                    <div className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{issueText(issue, t)}</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 

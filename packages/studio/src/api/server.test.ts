@@ -25,6 +25,7 @@ const deleteLatestChapterMock = vi.fn();
 const saveChapterIndexMock = vi.fn();
 const loadChapterIndexMock = vi.fn();
 const loadBookConfigMock = vi.fn();
+const listBooksMock = vi.fn();
 const createLLMClientMock = vi.fn(() => ({}));
 const chatCompletionMock = vi.fn();
 const runWorkerAgentMock = vi.fn();
@@ -214,7 +215,7 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     constructor(private readonly root: string) {}
 
     async listBooks(): Promise<string[]> {
-      return [];
+      return (await listBooksMock()) as string[];
     }
 
     async loadBookConfig(bookId?: string): Promise<never> {
@@ -516,6 +517,8 @@ describe("createStudioServer daemon lifecycle", () => {
     deleteLatestChapterMock.mockReset();
     saveChapterIndexMock.mockReset();
     loadChapterIndexMock.mockReset();
+    listBooksMock.mockReset();
+    listBooksMock.mockResolvedValue([]);
     loadBookConfigMock.mockReset();
     generatePlayImageMock.mockClear();
     await mkdir(join(root, "books", "demo-book", "chapters"), { recursive: true });
@@ -962,6 +965,38 @@ describe("createStudioServer daemon lifecycle", () => {
       expect.any(Array),
       expect.objectContaining({ maxTokens: expect.any(Number) }),
     );
+  });
+
+  it("doctor reports state-degraded latest chapters as book issues (195号)", async () => {
+    listBooksMock.mockResolvedValue(["demo-book", "healthy-book"]);
+    loadChapterIndexMock.mockImplementation(async (bookId: string) =>
+      bookId === "demo-book"
+        ? [
+            { number: 1, title: "风起", status: "approved", createdAt: "", updatedAt: "" },
+            { number: 2, title: "云涌", status: "state-degraded", createdAt: "", updatedAt: "" },
+          ]
+        : [{ number: 1, title: "风起", status: "ready-for-review", createdAt: "", updatedAt: "" }],
+    );
+    loadBookConfigMock.mockImplementation(async (bookId?: string) => ({
+      id: bookId,
+      title: bookId === "demo-book" ? "Demo Book" : "Healthy Book",
+    }));
+
+    // 探针快速失败（不打真实端点）。
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, text: async () => "Not Found" });
+    vi.stubGlobal("fetch", fetchMock as typeof fetch);
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/doctor");
+    expect(response.status).toBe(200);
+    const checks = await response.json();
+    // 降级书入列、健康书不出现在 issues。
+    expect(checks.bookIssues).toEqual([
+      expect.objectContaining({ bookId: "demo-book", title: "Demo Book", kind: "state-degraded", chapter: 2 }),
+    ]);
+    vi.unstubAllGlobals();
   });
 
   it("auto-falls back to a non-stream probe in doctor checks when the first transport returns empty", async () => {

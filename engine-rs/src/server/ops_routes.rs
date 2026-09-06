@@ -725,6 +725,33 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     });
     let books = runtime.state.list_books().await;
     checks["bookCount"] = json!(books.len());
+    // 195 号：书籍级写作阻塞预警——最新章 state-degraded 会让下一章 write-next
+    // 直接报错（PendingStateRepair），此前 doctor 不预警，用户只能等写作失败
+    // 才知道。detail 文案由客户端按 kind/chapter 组装（双语），服务端只出结构。
+    let mut book_issues: Vec<serde_json::Value> = Vec::new();
+    for book_id in &books {
+        let Ok(index) = runtime.state.load_chapter_index(book_id).await else {
+            continue;
+        };
+        let Some(latest) = index.iter().max_by_key(|meta| meta.number) else {
+            continue;
+        };
+        if latest.status == crate::models::chapter::ChapterStatus::StateDegraded {
+            let title = runtime
+                .state
+                .load_book_config(book_id)
+                .await
+                .map(|book| book.title)
+                .unwrap_or_else(|_| book_id.clone());
+            book_issues.push(json!({
+                "bookId": book_id,
+                "title": title,
+                "kind": "state-degraded",
+                "chapter": latest.number,
+            }));
+        }
+    }
+    checks["bookIssues"] = json!(book_issues);
     // LLM 连通探测（99 号对齐 TS probeServiceCapabilities 主干）：models
     // GET → 不可达时 chat 深链（preferred stream → 空/失败回退非 stream），
     // 9 秒总预算（DOCTOR_LLM_PROBE_BUDGET_MS；慢/限流上游按未连接上报）。
@@ -783,6 +810,94 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use crate::pipeline::merged_audit::RevisionGate;
+    use crate::server::books_routes::BooksRuntime;
+    use crate::server::sse::BroadcastHub;
+    use crate::state::manager::StateManager;
+    use axum::routing::get;
+    use std::sync::Arc;
+    use tower::util::ServiceExt;
+
+    fn runtime_for(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root)),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 1024,
+                    extra_headers: Default::default(),
+                },
+                Default::default(),
+            )),
+            builtin_genres_dir: root.to_path_buf(),
+            revision_gate: RevisionGate::default(),
+        }
+    }
+
+    fn book_fixture(root: &std::path::Path, index_json: &str) {
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"测试书","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(book.join("chapters").join("index.json"), index_json).unwrap();
+    }
+
+    /// 195 号：最新章 state-degraded → doctor 预警将阻塞下一章写作。
+    #[tokio::test]
+    async fn doctor_flags_state_degraded_latest_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(
+            dir.path(),
+            r#"[
+                {"number":1,"title":"风起","status":"approved","wordCount":100,"createdAt":"","updatedAt":""},
+                {"number":2,"title":"云涌","status":"state-degraded","wordCount":90,"createdAt":"","updatedAt":""}
+            ]"#,
+        );
+        let app = axum::Router::new()
+            .route("/api/v1/doctor", get(get_doctor))
+            .with_state(runtime_for(dir.path()));
+        let response = app
+            .oneshot(axum::http::Request::builder().method("GET").uri("/api/v1/doctor").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let issues = parsed["bookIssues"].as_array().unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0]["bookId"], "b1");
+        assert_eq!(issues[0]["kind"], "state-degraded");
+        assert_eq!(issues[0]["chapter"], 2);
+        assert_eq!(issues[0]["title"], "测试书");
+    }
+
+    #[tokio::test]
+    async fn doctor_reports_no_issues_for_healthy_books() {
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(
+            dir.path(),
+            r#"[
+                {"number":1,"title":"风起","status":"ready-for-review","wordCount":100,"createdAt":"","updatedAt":""}
+            ]"#,
+        );
+        let app = axum::Router::new()
+            .route("/api/v1/doctor", get(get_doctor))
+            .with_state(runtime_for(dir.path()));
+        let response = app
+            .oneshot(axum::http::Request::builder().method("GET").uri("/api/v1/doctor").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["bookIssues"].as_array().unwrap().len(), 0);
+    }
 
     #[test]
     fn cron_to_ms_matches_scheduler_semantics() {

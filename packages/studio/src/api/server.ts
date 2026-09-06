@@ -6539,11 +6539,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       booksDir: existsSync(join(root, "books")),
       llmConnected: false,
       bookCount: 0,
+      bookIssues: [] as Array<{ bookId: string; title: string; kind: string; chapter?: number }>,
     };
 
     try {
       const books = await state.listBooks();
       checks.bookCount = books.length;
+      // 195 号：书籍级写作阻塞预警——与 Rust get_doctor 对齐：最新章
+      // state-degraded 会让下一章 write-next 直接报错，doctor 需前置提示。
+      for (const bookId of books) {
+        try {
+          const index = await state.loadChapterIndex(bookId);
+          const latest = index.reduce<(typeof index)[number] | null>(
+            (acc, meta) => (acc === null || meta.number > acc.number ? meta : acc),
+            null,
+          );
+          if (latest && latest.status === "state-degraded") {
+            let title = bookId;
+            try {
+              title = (await state.loadBookConfig(bookId)).title;
+            } catch { /* 保留 bookId 兜底 */ }
+            checks.bookIssues.push({ bookId, title, kind: "state-degraded", chapter: latest.number });
+          }
+        } catch { /* 单书失败不拖垮诊断 */ }
+      }
     } catch { /* ignore */ }
 
     try {

@@ -325,6 +325,12 @@ const strings = {
   "doctor.connected": { zh: "已连接", en: "Connected" },
   "doctor.failed": { zh: "失败", en: "Failed" },
   "doctor.allPassed": { zh: "所有检查通过 — 环境健康", en: "All checks passed — environment is healthy" },
+  "doctor.bookHealth": { zh: "书籍健康", en: "Book health" },
+  "doctor.bookHealthOk": { zh: "无写作阻塞问题", en: "No writing blockers" },
+  "doctor.issueStateDegraded": {
+    zh: "第{chapter}章状态降级（state-degraded），下一章写作将被阻塞——请在书籍页点「修复状态」或重写该章。",
+    en: "Chapter {chapter} is state-degraded; writing the next chapter is blocked — use \"Repair state\" on the book page or rewrite that chapter.",
+  },
   "doctor.someFailed": { zh: "部分检查失败 — 请查看配置", en: "Some checks failed — review configuration" },
 
   // Genre extras
