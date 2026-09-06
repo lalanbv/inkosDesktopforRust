@@ -45,6 +45,7 @@ interface Nav {
   toAnalytics: (id: string) => void;
   toBookCreate: () => void;
   toServices: () => void;
+  toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill") => void;
 }
 
 function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
@@ -235,6 +236,13 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
               <div className="flex items-center gap-3 pt-2">
                 <h2 className="font-serif text-xl font-bold">{group.name}</h2>
                 <span className="text-xs text-muted-foreground">{t("dash.seriesGroup").replace("{n}", String(group.books.length))}</span>
+                <button
+                  onClick={() => nav.toImport("backfill")}
+                  className="text-xs text-muted-foreground hover:text-primary underline underline-offset-2"
+                  data-slot="series-backfill-entry"
+                >
+                  {t("dash.backfillEntry")}
+                </button>
                 <div className="flex-1 h-px bg-border/60" />
               </div>
             )}

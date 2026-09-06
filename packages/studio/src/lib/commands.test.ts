@@ -32,8 +32,8 @@ const nav = buildNavigationCommands();
 const actions = buildActionCommands();
 
 describe("buildNavigationCommands", () => {
-  it("covers every parameterless page plus import tabs (18 entries)", () => {
-    expect(nav).toHaveLength(18);
+  it("covers every parameterless page plus import tabs (19 entries)", () => {
+    expect(nav).toHaveLength(19);
     const pages = new Set(nav.map((entry) => entry.id));
     for (const id of [
       "nav.dashboard", "nav.chat", "nav.book-create", "nav.services",

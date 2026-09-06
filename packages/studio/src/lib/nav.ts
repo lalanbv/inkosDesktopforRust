@@ -6,7 +6,7 @@ import type { HashRoute } from "@/hooks/use-hash-route";
  * 新增导航入口（P1-5 命令面板、P2-7 菜单栏）时要多处同步——现收敛为单一导出。
  */
 
-export type ImportTab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation";
+export type ImportTab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill";
 
 export interface Nav {
   toDashboard(): void;

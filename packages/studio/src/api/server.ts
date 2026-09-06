@@ -2823,6 +2823,82 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // GET 缺文件/坏载荷一律 { timeline: null }（可选面不制造 404 噪音）；
   // PUT 走 TimelineSchema 校验（version literal 1 + plotline id 唯一），
   // 非法 400。生成端点默认关闭（待产品决策，179 号分解文档）。
+  // ── 系列书回填（184 号 C3-b）：抽取/应用，交互「预览+逐项勾选」 ──
+  const readSourceCanonFiles = async (sourceBookId: string): Promise<Array<{ name: string; content: string }>> => {
+    const bookDir = state.bookDir(sourceBookId);
+    const files: Array<{ name: string; content: string }> = [];
+    const rels = ["story/story_bible.md", "story/outline/story_frame.md"];
+    for (const rel of rels) {
+      try {
+        files.push({ name: rel, content: await readFile(join(bookDir, ...rel.split("/")), "utf-8") });
+      } catch { /* 缺失静默跳过 */ }
+    }
+    return files;
+  };
+
+  app.post("/api/v1/books/:id/series-backfill/extract", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ sourceBookId?: string }>().catch(() => ({ sourceBookId: undefined }));
+    if (!body.sourceBookId) return c.json({ error: "sourceBookId is required" }, 400);
+    if (body.sourceBookId === id) return c.json({ error: "Source and target books must differ" }, 400);
+    try {
+      await state.loadBookConfig(body.sourceBookId);
+    } catch {
+      return c.json({ error: "Source book not found" }, 400);
+    }
+    const sourceTitle = body.sourceBookId;
+    const canon = await readSourceCanonFiles(body.sourceBookId);
+    if (canon.length === 0) return c.json({ error: "Source book has no canon files" }, 400);
+    const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
+    const system = "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。";
+    let user = `以下是一部已完结系列作品《${sourceTitle}》的设定文件。请为同系列的新书抽取可迁移的设定，输出纯 JSON：{"items":[{"id":"it-1","category":"worldview","title":"标题","content":"50-200字描述"}]}；category 只能取 worldview/character/plot/style；抽取 6-12 条。\n\n源书设定文件：\n`;
+    for (const file of canon) user += `\n--- ${file.name} ---\n${file.content}\n`;
+    const response = await chatCompletion(
+      pipelineConfig.client,
+      pipelineConfig.model,
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { temperature: 0.3, maxTokens: 2000 },
+    );
+    const content = response.content;
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    if (start === -1 || end === -1) return c.json({ error: "LLM output contains no JSON object" }, 500);
+    let items: Array<{ id: string; category: string; title: string; content: string }>;
+    try {
+      items = (JSON.parse(content.slice(start, end + 1)) as { items: typeof items }).items;
+    } catch {
+      return c.json({ error: "LLM items JSON unparseable" }, 500);
+    }
+    if (!Array.isArray(items) || items.length === 0) return c.json({ error: "LLM returned zero backfill items" }, 500);
+    const draft = { version: 1, bookId: id, sourceBookId: body.sourceBookId, updatedAt: new Date().toISOString(), items };
+    const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
+    await mkdir(dirname(draftPath), { recursive: true });
+    await writeFile(draftPath, `${JSON.stringify(draft, null, 2)}\n`, "utf-8");
+    return c.json({ draft });
+  });
+
+  app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ itemIds?: string[] }>().catch(() => ({ itemIds: undefined }));
+    const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
+    let draft: { sourceBookId: string; updatedAt: string; items: Array<{ id: string; category: string; title: string; content: string }> };
+    try {
+      draft = JSON.parse(await readFile(draftPath, "utf-8"));
+    } catch {
+      return c.json({ error: "No backfill draft found; run extract first" }, 400);
+    }
+    const items = body.itemIds ? draft.items.filter((item) => body.itemIds!.includes(item.id)) : draft.items;
+    if (items.length === 0) return c.json({ error: "No items selected" }, 400);
+    const path = join(state.bookDir(id), "story", "series_backfill.md");
+    let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》 · 抽取于 ${draft.updatedAt} · 勾选 ${items.length} 条\n\n`;
+    for (const item of items) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
+    await writeFile(path, markdown, "utf-8");
+    return c.json({ ok: true, path, applied: items.length });
+  });
+
   app.get("/api/v1/books/:id/timeline", async (c) => {
     const id = c.req.param("id");
     try {

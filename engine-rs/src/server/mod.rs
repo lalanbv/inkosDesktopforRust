@@ -16,6 +16,7 @@ pub mod books_routes;
 pub mod book_create_routes;
 pub mod fanfic_routes;
 pub mod books_state_routes;
+pub mod series_backfill_routes;
 pub mod genre_routes;
 pub mod loopback_guard;
 pub mod ops_routes;
@@ -239,6 +240,14 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/timeline",
             get(books_state_routes::get_timeline).put(books_state_routes::put_timeline).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/series-backfill/extract",
+            post(series_backfill_routes::extract).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/series-backfill/apply",
+            post(series_backfill_routes::apply).with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id",

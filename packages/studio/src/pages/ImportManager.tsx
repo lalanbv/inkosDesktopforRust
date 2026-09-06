@@ -6,6 +6,7 @@ import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { tr } from "../lib/app-language";
 import { FileInput, BookCopy, Feather, BookMarked, Upload, Wand2 } from "lucide-react";
+import { SeriesBackfillPanel } from "./SeriesBackfillPanel";
 import { waitForStudioBookReady } from "../lib/book-ready";
 
 interface BookSummary {
@@ -15,7 +16,7 @@ interface BookSummary {
 
 interface Nav { toDashboard: () => void; toBook: (bookId: string) => void }
 
-type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation";
+type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill";
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -183,6 +184,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     { id: "fanfic", label: t("import.fanfic"), icon: <Feather size={14} /> },
     { id: "spinoff", label: t("import.spinoff"), icon: <BookMarked size={14} /> },
     { id: "imitation", label: t("import.imitation"), icon: <Wand2 size={14} /> },
+    { id: "backfill", label: t("nav.import.backfill"), icon: <BookCopy size={14} /> },
   ];
 
   return (
@@ -383,6 +385,8 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
             </button>
           </>
         )}
+
+        {tab === "backfill" && <SeriesBackfillPanel t={t} />}
 
         {status && (
           <div className={`text-sm px-3 py-2 rounded-lg ${status.startsWith("Error") ? "bg-destructive/10 text-destructive" : "bg-emerald-500/10 text-emerald-600"}`}>

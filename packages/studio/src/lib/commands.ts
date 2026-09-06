@@ -89,6 +89,7 @@ export function buildNavigationCommands(): CommandEntry[] {
     nav("nav.import.fanfic", "导入：同人创作", "Import: Fanfic", "feather", { page: "import", tab: "fanfic" }, ["同人"]),
     nav("nav.import.spinoff", "导入：番外创作", "Import: Side-story", "book-copy", { page: "import", tab: "spinoff" }, ["番外"]),
     nav("nav.import.imitation", "导入：仿写创作", "Import: Imitation", "wand", { page: "import", tab: "imitation" }, ["仿写"]),
+    nav("nav.import.backfill", "导入：系列书回填", "Import: Series Backfill", "book-copy", { page: "import", tab: "backfill" }, ["系列", "回填", "backfill"]),
     nav("nav.radar", "市场雷达", "Market Radar", "trending-up", { page: "radar" }, ["radar", "市场", "market"]),
     nav("nav.doctor", "环境诊断", "Doctor", "stethoscope", { page: "doctor" }, ["doctor", "诊断", "health"]),
   ];

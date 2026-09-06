@@ -1508,6 +1508,8 @@ mod tests {
             .route("/api/v1/books/:id/chapters/:num/reject", axum::routing::post(reject_chapter))
             .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
             .route("/api/v1/books/:id/timeline", axum::routing::get(get_timeline).put(put_timeline))
+            .route("/api/v1/books/:id/series-backfill/extract", axum::routing::post(crate::server::series_backfill_routes::extract))
+            .route("/api/v1/books/:id/series-backfill/apply", axum::routing::post(crate::server::series_backfill_routes::apply))
             .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
             .route("/api/v1/books/:id/chapter-review-mode", axum::routing::get(get_review_mode).put(put_review_mode))
             .with_state(runtime)
@@ -1866,6 +1868,74 @@ mod tests {
             .unwrap();
         let parsed = json_body(response).await;
         assert!(!parsed["timeline"].is_null(), "先前 PUT 已合法落盘，GET 应仍可读");
+    }
+
+    /// 184 号 C3-b：系列回填 apply/extract 校验面（LLM 前路径）。
+    #[tokio::test]
+    async fn series_backfill_apply_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let book_dir = dir.path().join("books").join("b1");
+
+        // 未抽取先 apply → 400。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some("{}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // extract：缺 sourceBookId → 400；源书不存在 → 400；源=目标 → 400。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some("{}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some(r#"{"sourceBookId":"ghost"}"#)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some(r#"{"sourceBookId":"b1"}"#)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // 手工放一份草稿（模拟抽取产物）→ apply 勾选子集 → series_backfill.md 生成。
+        let draft = r#"{
+            "version": 1, "bookId": "b1", "sourceBookId": "b1",
+            "updatedAt": "2026-09-07T00:00:00.000Z",
+            "items": [
+                { "id": "it-1", "category": "worldview", "title": "元气体系", "content": "灵气分九品。" },
+                { "id": "it-2", "category": "character", "title": "反派", "content": "国师。" }
+            ]
+        }"#;
+        std::fs::create_dir_all(book_dir.join("story")).unwrap();
+        std::fs::write(book_dir.join("story").join("series_backfill_draft.json"), draft).unwrap();
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some(r#"{"itemIds":["it-2"]}"#)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let md = std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
+        assert!(md.contains("反派"));
+        assert!(!md.contains("元气体系"), "勾选子集不应包含未选项");
+
+        // 缺省全量。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some("{}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let md = std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
+        assert!(md.contains("元气体系") && md.contains("反派"));
+
+        // 空勾选 → 400。
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some(r#"{"itemIds":[]}"#)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
