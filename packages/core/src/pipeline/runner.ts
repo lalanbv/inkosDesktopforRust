@@ -66,6 +66,8 @@ import { toPosixPath } from "../utils/posix-path.js";
 import {
   createProductionRunSnapshot,
   createRangeObservation,
+  pruneRuntimeArtifacts,
+  runtimeRetentionChapters,
   writeProductionRunSnapshot,
 } from "../production/harness.js";
 
@@ -2370,6 +2372,13 @@ export class PipelineRunner {
       revised,
       status: resolvedStatus,
     });
+
+    // 200 号：运行时观测工件保留策略（Rust 对齐：默认每书留最近 20 章的
+    // run/trace/context/rule-stack；trace 含完整 LLM 轨迹，长书无限增长）。
+    const retention = runtimeRetentionChapters();
+    if (retention > 0) {
+      await pruneRuntimeArtifacts(bookDir, chapterNumber, retention).catch(() => undefined);
+    }
 
     // 191 号：时间线节拍自动沉淀（189 号 Rust 对齐——书籍级开关默认关；
     // 失败仅告警，不影响已落盘章节产物）。

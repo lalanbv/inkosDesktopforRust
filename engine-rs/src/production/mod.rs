@@ -212,6 +212,55 @@ pub async fn write_production_run_snapshot(
     commit_production_artifacts(root_dir, Vec::new(), run_path, run, Vec::new(), None).await
 }
 
+/// 运行时观测工件的保留章数（每书）。`INKOS_RUNTIME_RETENTION_CHAPTERS`
+/// 可覆盖；0 = 关闭清理（完全兼容旧行为）。
+pub fn runtime_retention_chapters() -> u32 {
+    std::env::var("INKOS_RUNTIME_RETENTION_CHAPTERS")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(20)
+}
+
+/// 清理旧章的运行时观测工件（200 号稳定性审计）。
+///
+/// `story/runtime/` 下每章累积 run.json / trace.json / context.json /
+/// rule-stack.yaml 四类观测文件（trace 含完整 LLM 交互轨迹，长书无限增长）。
+/// 本函数只保留最近 `keep` 章的观测工件；**plan.md / intent.md 治理产物
+/// 保留**（体积小、回溯有用）。清理失败仅逐文件忽略——属事后打扫，
+/// 任何失败都不值得让写作管线报错。
+pub async fn prune_runtime_artifacts(book_dir: &std::path::Path, latest_chapter: u32, keep: u32) {
+    if keep == 0 || latest_chapter <= keep {
+        return;
+    }
+    let cutoff = latest_chapter - keep; // 章号 <= cutoff 的观测工件过期
+    let runtime_dir = book_dir.join("story").join("runtime");
+    let Ok(mut entries) = tokio::fs::read_dir(&runtime_dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // 观测工件命名：chapter-{padded}.{run.json|trace.json|context.json|rule-stack.yaml}
+        let is_observability = ["run.json", "trace.json", "context.json", "rule-stack.yaml"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix));
+        if !is_observability {
+            continue;
+        }
+        let Some(digits) = name
+            .strip_prefix("chapter-")
+            .and_then(|rest| rest.split('.').next())
+        else {
+            continue;
+        };
+        let Ok(number) = digits.parse::<u32>() else {
+            continue;
+        };
+        if number <= cutoff {
+            let _ = tokio::fs::remove_file(entry.path()).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +293,53 @@ mod tests {
 
     fn create_range_observation_helper(actual: u32, min: u32, max: u32) -> ProductionObservation {
         create_range_observation("chapter-length", actual, 3000, min, max, "zh_chars", None, None)
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_recent_observability_files_and_governance_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("story").join("runtime");
+        tokio::fs::create_dir_all(&runtime).await.unwrap();
+        // 1..=5 章的观测工件 + 治理产物。
+        for n in 1..=5u32 {
+            let padded = format!("{n:04}");
+            for suffix in ["run.json", "trace.json", "context.json", "rule-stack.yaml"] {
+                tokio::fs::write(runtime.join(format!("chapter-{padded}.{suffix}")), "x").await.unwrap();
+            }
+            tokio::fs::write(runtime.join(format!("chapter-{padded}.plan.md")), "plan").await.unwrap();
+            tokio::fs::write(runtime.join(format!("chapter-{padded}.intent.md")), "intent").await.unwrap();
+        }
+        prune_runtime_artifacts(dir.path(), 5, 2).await;
+        // 章号 <= 3 的观测工件被清；最近 2 章 + 治理产物全保留。
+        for n in 1..=3u32 {
+            let padded = format!("{n:04}");
+            assert!(!runtime.join(format!("chapter-{padded}.run.json")).exists(), "chapter {n} run.json 应被清理");
+            assert!(!runtime.join(format!("chapter-{padded}.trace.json")).exists(), "chapter {n} trace.json 应被清理");
+        }
+        for n in 4..=5u32 {
+            let padded = format!("{n:04}");
+            assert!(runtime.join(format!("chapter-{padded}.run.json")).exists());
+            assert!(runtime.join(format!("chapter-{padded}.trace.json")).exists());
+        }
+        for n in 1..=5u32 {
+            let padded = format!("{n:04}");
+            assert!(runtime.join(format!("chapter-{padded}.plan.md")).exists(), "plan.md 应保留");
+            assert!(runtime.join(format!("chapter-{padded}.intent.md")).exists(), "intent.md 应保留");
+        }
+    }
+
+    #[tokio::test]
+    async fn prune_is_noop_when_keep_is_zero_or_range_not_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("story").join("runtime");
+        tokio::fs::create_dir_all(&runtime).await.unwrap();
+        tokio::fs::write(runtime.join("chapter-0001.run.json"), "x").await.unwrap();
+        // keep=0 = 关闭清理。
+        prune_runtime_artifacts(dir.path(), 5, 0).await;
+        assert!(runtime.join("chapter-0001.run.json").exists());
+        // 未超出保留窗口：无操作。
+        prune_runtime_artifacts(dir.path(), 1, 20).await;
+        assert!(runtime.join("chapter-0001.run.json").exists());
     }
 
     #[tokio::test]

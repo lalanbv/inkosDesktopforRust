@@ -1211,6 +1211,16 @@ async fn write_next_chapter_locked(
         }
     }
 
+    // ── 6b-2. 运行时观测工件保留策略（200 号：默认每书留最近 20 章的
+    // run/trace/context/rule-stack；trace 含完整 LLM 轨迹，长书无限增长。
+    // 失败/清理均为事后打扫，不阻断——cleanup 失败连日志都省了）。 ──
+    {
+        let keep = crate::production::runtime_retention_chapters();
+        if keep > 0 {
+            crate::production::prune_runtime_artifacts(&book_dir, chapter_number, keep).await;
+        }
+    }
+
     // ── 6c. 时间线节拍自动沉淀（189 号：书籍级开关默认关；失败不阻断） ──
     if book.writing.as_ref().and_then(|w| w.auto_timeline_beats).unwrap_or(false) {
         if let Some(beats_chat) = ctx.timeline_beats {

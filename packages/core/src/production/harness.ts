@@ -1,3 +1,5 @@
+import { readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
 
 export type ProductionKind =
@@ -116,4 +118,45 @@ export async function writeProductionRunSnapshot(input: {
     runPath: input.runPath,
     run: input.run,
   });
+}
+
+/**
+ * 运行时观测工件的保留章数（每书）。`INKOS_RUNTIME_RETENTION_CHAPTERS`
+ * 可覆盖；0 = 关闭清理。与 Rust production::runtime_retention_chapters 对齐。
+ */
+export function runtimeRetentionChapters(): number {
+  const raw = process.env.INKOS_RUNTIME_RETENTION_CHAPTERS;
+  const parsed = raw === undefined ? Number.NaN : Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 20;
+}
+
+/**
+ * 清理旧章的运行时观测工件（200 号稳定性审计，与 Rust
+ * production::prune_runtime_artifacts 对齐）：`story/runtime/` 下每章累积
+ * run/trace/context/rule-stack 四类观测文件，只保留最近 `keep` 章的；
+ * plan.md / intent.md 治理产物保留。逐文件失败忽略——事后打扫不报错。
+ */
+export async function pruneRuntimeArtifacts(
+  bookDir: string,
+  latestChapter: number,
+  keep: number,
+): Promise<void> {
+  if (keep <= 0 || latestChapter <= keep) return;
+  const cutoff = latestChapter - keep;
+  const runtimeDir = join(bookDir, "story", "runtime");
+  let entries: string[];
+  try {
+    entries = await readdir(runtimeDir);
+  } catch {
+    return;
+  }
+  const observabilitySuffixes = ["run.json", "trace.json", "context.json", "rule-stack.yaml"];
+  for (const name of entries) {
+    if (!observabilitySuffixes.some((suffix) => name.endsWith(suffix))) continue;
+    const digits = name.startsWith("chapter-") ? name.slice("chapter-".length).split(".")[0] : undefined;
+    const number = digits === undefined ? Number.NaN : Number(digits);
+    if (Number.isInteger(number) && number > 0 && number <= cutoff) {
+      await rm(join(runtimeDir, name), { force: true }).catch(() => undefined);
+    }
+  }
 }
