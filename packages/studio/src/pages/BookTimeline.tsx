@@ -1,9 +1,15 @@
-import { useMemo } from "react";
-import { useApi } from "../hooks/use-api";
-import { ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useApi, putApi } from "../hooks/use-api";
+import { ArrowLeft, Pencil } from "lucide-react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { Nav } from "../lib/nav";
+import {
+  buildTimelineAfterCellEdit,
+  buildTimelineAfterAddPlotline,
+  initializeTimelineFromChapters,
+  type TimelineDoc,
+} from "./timeline-edit";
 
 interface ChapterMeta {
   readonly number: number;
@@ -24,6 +30,9 @@ interface BookData {
 /** story/timeline.json（181 号 C4-b）的 GET 响应载荷。 */
 interface TimelinePayload {
   readonly timeline: {
+    readonly version: 1;
+    readonly bookId: string;
+    readonly updatedAt: string;
     readonly plotlines: ReadonlyArray<{
       readonly id: string;
       readonly name: string;
@@ -36,16 +45,19 @@ interface TimelinePayload {
   } | null;
 }
 
-/** 网格单元格的统一展示形态（兜底章 / timeline 节拍共用）。 */
+/** 网格单元格的统一展示形态（兜底章 / timeline 节拍 / 空占位共用）。 */
 interface TimelineGridCell {
   readonly number: number;
   readonly title: string;
   readonly subtitle: string;
   readonly tone: Tone;
+  /** timeline 线的可编辑格（兜底格点击仍是「去阅读」）。 */
+  readonly editable: boolean;
+  /** 空占位格：该线该章暂无节拍，点击 = 新建节拍。 */
+  readonly placeholder: boolean;
 }
 
-/** 展示色分组。planned = timeline 节拍（无写作状态的规划格）。 */
-type Tone = "done" | "review" | "failed" | "wip" | "imported" | "planned";
+type Tone = "done" | "review" | "failed" | "wip" | "imported" | "planned" | "empty";
 
 function statusTone(status: string): Tone {
   if (status === "approved" || status === "published") return "done";
@@ -62,14 +74,87 @@ const TONE_CLASS: Record<Tone, string> = {
   wip: "bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400",
   imported: "bg-muted border-border text-muted-foreground",
   planned: "bg-violet-500/10 border-violet-500/40 text-violet-600 dark:text-violet-400",
+  empty: "bg-transparent border-dashed border-border/60 text-muted-foreground/60",
 };
 
+interface EditTarget {
+  readonly plotlineId: string;
+  readonly plotlineName: string;
+  readonly chapter: number;
+  readonly title: string;
+  readonly note: string;
+}
+
 /**
- * 书籍时间线（180 号 W-C4-a + 181 号 C4-b，对标 Plottr 的回顾型只读网格）。
+ * 编辑弹窗（C4-c）。受控组件：输入值由父级持有，提交回传 title/note。
+ * 独立导出便于静态渲染测试。
+ */
+export function TimelineEditDialog({ bookId, target, saving, onSubmit, onCancel, nav, t }: {
+  bookId: string;
+  target: EditTarget;
+  saving: boolean;
+  onSubmit: (patch: { title: string; note: string }) => void;
+  onCancel: () => void;
+  nav: Nav;
+  t: TFunction;
+}) {
+  const [title, setTitle] = useState(target.title);
+  const [note, setNote] = useState(target.note);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" data-testid="timeline-edit-dialog">
+      <div className="w-[380px] rounded-2xl bg-background border border-border shadow-2xl p-6">
+        <div className="text-xs text-muted-foreground mb-1">
+          {target.plotlineName} · {t("timeline.chapter").replace("{n}", String(target.chapter))}
+        </div>
+        <h2 className="text-lg font-bold mb-4">{t("timeline.editBeat")}</h2>
+        <label className="block text-xs font-medium text-muted-foreground mb-1">{t("timeline.beatTitle")}</label>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          maxLength={200}
+          className="w-full mb-3 px-3 py-2 text-sm rounded-lg border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary/40"
+          data-slot="timeline-beat-title"
+        />
+        <label className="block text-xs font-medium text-muted-foreground mb-1">{t("timeline.beatNote")}</label>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={2000}
+          rows={3}
+          className="w-full mb-4 px-3 py-2 text-sm rounded-lg border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary/40 resize-none"
+          data-slot="timeline-beat-note"
+        />
+        <div className="flex items-center justify-between gap-2">
+          <button
+            onClick={() => nav.toChapter(bookId, target.chapter)}
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+          >
+            {t("timeline.openChapter")}
+          </button>
+          <div className="flex gap-2">
+            <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-secondary/60 transition-colors">
+              {t("timeline.cancel")}
+            </button>
+            <button
+              onClick={() => onSubmit({ title, note })}
+              disabled={saving}
+              className="px-4 py-2 text-sm font-bold rounded-lg bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-transform disabled:opacity-50"
+              data-slot="timeline-save"
+            >
+              {saving ? t("timeline.saving") : t("timeline.save")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 书籍时间线（180 号 W-C4-a、181 号 C4-b 多线、182 号 C4-c 编辑回写）。
  *
- * 行 = 情节线，列 = 章。数据源：`story/timeline.json`（GET /books/:id/timeline）
- * 的 plotlines 优先；缺文件/空 plotlines 时回退单条「主线」（chapters/index.json
- * 兜底）——写入该文件即升级为多线，组件无需再改。
+ * 数据源：story/timeline.json 多线优先；缺省回退单线只读兜底（点「编辑时间线」
+ * 初始化后进入可编辑态）。保存走 PUT 端点 + 乐观更新，失败回滚并提示。
  */
 export function BookTimeline({ bookId, nav, theme, t }: {
   bookId: string;
@@ -79,7 +164,15 @@ export function BookTimeline({ bookId, nav, theme, t }: {
 }) {
   void theme; // 样式走语义色 token，无需调色板
   const { data, loading, error } = useApi<BookData>(`/books/${bookId}`);
-  const { data: timelineRes } = useApi<TimelinePayload>(`/books/${bookId}/timeline`);
+  const { data: timelineRes, loading: timelineLoading, refetch: refetchTimeline } = useApi<TimelinePayload>(`/books/${bookId}/timeline`);
+
+  // 乐观更新：保存期间用本地 doc 渲染，成功后 refetch 对齐服务端，失败回滚。
+  const [optimistic, setOptimistic] = useState<TimelineDoc | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const [addingLine, setAddingLine] = useState(false);
+  const [newLineName, setNewLineName] = useState("");
 
   const chapters = useMemo(() => {
     const list = [...(data?.chapters ?? [])];
@@ -87,28 +180,69 @@ export function BookTimeline({ bookId, nav, theme, t }: {
     return list;
   }, [data]);
 
-  // 多线（timeline.json 优先）→ 单线兜底。grid 线与章网格共享列轴（章号集合）。
+  const doc: TimelineDoc | null = optimistic ?? timelineRes?.timeline ?? null;
+
+  const saveDoc = async (next: TimelineDoc): Promise<void> => {
+    setSaving(true);
+    setSaveError(null);
+    setOptimistic(next);
+    try {
+      await putApi(`/books/${bookId}/timeline`, next);
+      setOptimistic(null);
+      refetchTimeline();
+    } catch (e) {
+      setOptimistic(null); // 失败回滚：放弃本地 doc，回服务端真值
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const startEditableTimeline = async (): Promise<void> => {
+    const next = initializeTimelineFromChapters(bookId, chapters, t("timeline.mainPlotline"));
+    await saveDoc(next);
+  };
+
+  // 多线（timeline 存在且至少一条线有节拍）优先；否则单线只读兜底。
   const grid = useMemo(() => {
-    const timelinePlotlines = timelineRes?.timeline?.plotlines ?? [];
-    const fromTimeline = timelinePlotlines.filter((line) => line.cells.length > 0);
-    if (fromTimeline.length > 0) {
+    const timelinePlotlines = doc?.plotlines ?? [];
+    if (timelinePlotlines.length > 0) {
+      // 列轴 = 各线 cells 章号并集；全空（新建线尚未填节拍）时回退章节表。
       const chapterNumbers = new Set<number>();
-      for (const line of fromTimeline) {
+      for (const line of timelinePlotlines) {
         for (const cell of line.cells) chapterNumbers.add(cell.chapter);
       }
+      if (chapterNumbers.size === 0) {
+        for (const ch of chapters) chapterNumbers.add(ch.number);
+      }
+      const columns = [...chapterNumbers].sort((a, b) => a - b);
+      const fromTimeline = timelinePlotlines;
       return {
-        columns: [...chapterNumbers].sort((a, b) => a - b),
+        columns,
         lines: fromTimeline.map((line) => ({
           key: line.id,
           label: line.name,
-          cells: [...line.cells]
-            .sort((a, b) => a.chapter - b.chapter)
-            .map<TimelineGridCell>((cell) => ({
-              number: cell.chapter,
-              title: cell.title ?? t("timeline.chapter").replace("{n}", String(cell.chapter)),
+          cells: columns.map<TimelineGridCell>((number) => {
+            const cell = line.cells.find((c) => c.chapter === number);
+            if (!cell) {
+              return {
+                number,
+                title: t("timeline.chapter").replace("{n}", String(number)),
+                subtitle: t("timeline.addBeat"),
+                tone: "empty" as Tone,
+                editable: true,
+                placeholder: true,
+              };
+            }
+            return {
+              number,
+              title: cell.title ?? t("timeline.chapter").replace("{n}", String(number)),
               subtitle: cell.note ?? "",
               tone: "planned" as Tone,
-            })),
+              editable: true,
+              placeholder: false,
+            };
+          }),
         })),
       };
     }
@@ -122,17 +256,21 @@ export function BookTimeline({ bookId, nav, theme, t }: {
           title: ch.title,
           subtitle: ch.wordCount.toLocaleString(),
           tone: statusTone(ch.status),
+          editable: false,
+          placeholder: false,
         })),
       }],
     };
-  }, [timelineRes, chapters, t]);
+  }, [doc, chapters, t]);
 
   const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount || 0), 0);
-  const hasGrid = !loading && !error && (chapters.length > 0 || grid.columns.length > 0);
+  // 双源就绪才渲染网格：timeline 未到时先按兜底渲染会让快速点击误跳阅读器。
+  const hasGrid = !loading && !timelineLoading && !error && (chapters.length > 0 || grid.columns.length > 0);
+  const editableMode = grid.lines.some((line) => line.cells.some((cell) => cell.editable));
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10 md:px-12 fade-in" data-page="book-timeline">
-      <div className="flex items-center gap-3 mb-6">
+      <div className="flex items-center justify-between gap-3 mb-6">
         <button
           onClick={() => nav.toBook(bookId)}
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -140,6 +278,17 @@ export function BookTimeline({ bookId, nav, theme, t }: {
           <ArrowLeft size={16} />
           <span>{data?.book.title ?? bookId}</span>
         </button>
+        {!loading && !error && !editableMode && chapters.length > 0 && (
+          <button
+            onClick={() => void startEditableTimeline()}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-border hover:bg-secondary/60 transition-colors disabled:opacity-50"
+            data-slot="timeline-init"
+          >
+            <Pencil size={12} />
+            {t("timeline.editTimeline")}
+          </button>
+        )}
       </div>
 
       <h1 className="text-2xl font-bold mb-1">{t("timeline.title")}</h1>
@@ -151,6 +300,11 @@ export function BookTimeline({ bookId, nav, theme, t }: {
 
       {loading && <div className="text-sm text-muted-foreground" data-loading="skeleton">{t("common.loading")}</div>}
       {error && <div className="text-sm text-red-500">{String(error)}</div>}
+      {saveError && (
+        <div className="mb-3 text-sm text-red-500" data-slot="timeline-save-error">
+          {t("timeline.saveFailed").replace("{message}", saveError)}
+        </div>
+      )}
 
       {!loading && !error && chapters.length === 0 && grid.columns.length === 0 && (
         <div className="text-sm text-muted-foreground border border-border/50 rounded-xl px-5 py-8 text-center">
@@ -172,7 +326,7 @@ export function BookTimeline({ bookId, nav, theme, t }: {
                 </div>
               ))}
             </div>
-            {/* 情节线行（timeline 多线或单线兜底） */}
+            {/* 情节线行 */}
             {grid.lines.map((line) => (
               <div key={line.key} className="flex">
                 <div className="w-36 shrink-0 px-4 py-3 text-sm font-medium border-r border-border/40 flex items-center">
@@ -181,11 +335,24 @@ export function BookTimeline({ bookId, nav, theme, t }: {
                 {line.cells.map((cell) => (
                   <button
                     key={cell.number}
-                    onClick={() => nav.toChapter(bookId, cell.number)}
+                    onClick={() => {
+                      if (!cell.editable) {
+                        nav.toChapter(bookId, cell.number);
+                        return;
+                      }
+                      setEditTarget({
+                        plotlineId: line.key,
+                        plotlineName: line.label,
+                        chapter: cell.number,
+                        title: cell.placeholder ? "" : cell.title,
+                        note: cell.placeholder ? "" : cell.subtitle,
+                      });
+                    }}
                     title={`${cell.title} · ${cell.subtitle}`}
-                    className={`w-36 shrink-0 px-3 py-3 border-r border-border/30 last:border-r-0 border-b-0 text-left hover:scale-[1.03] transition-transform ${TONE_CLASS[cell.tone]}`}
+                    className={`w-36 shrink-0 px-3 py-3 border-r border-border/30 last:border-r-0 border-b-0 text-left transition-transform ${cell.editable ? "hover:scale-[1.03]" : ""} ${TONE_CLASS[cell.tone]}`}
                     data-timeline-cell={cell.number}
                     data-tone={cell.tone}
+                    data-editable={cell.editable ? "true" : "false"}
                   >
                     <div className="text-xs font-semibold truncate">{cell.title}</div>
                     <div className="text-[11px] opacity-70 mt-0.5 truncate">{cell.subtitle}</div>
@@ -195,6 +362,66 @@ export function BookTimeline({ bookId, nav, theme, t }: {
             ))}
           </div>
         </div>
+      )}
+
+      {/* 新增情节线（可编辑态） */}
+      {editableMode && !addingLine && (
+        <button
+          onClick={() => setAddingLine(true)}
+          className="mt-4 text-xs text-muted-foreground hover:text-primary underline underline-offset-2"
+          data-slot="timeline-add-line"
+        >
+          {t("timeline.addPlotline")}
+        </button>
+      )}
+      {editableMode && addingLine && (
+        <div className="mt-4 flex items-center gap-2" data-slot="timeline-add-line-form">
+          <input
+            value={newLineName}
+            onChange={(e) => setNewLineName(e.target.value)}
+            maxLength={120}
+            placeholder={t("timeline.plotlineName")}
+            className="px-3 py-1.5 text-sm rounded-lg border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary/40"
+            data-slot="timeline-add-line-name"
+          />
+          <button
+            onClick={async () => {
+              const base = optimistic ?? doc;
+              if (!base || !newLineName.trim() || !base.plotlines) return;
+              await saveDoc(buildTimelineAfterAddPlotline(base, newLineName));
+              setAddingLine(false);
+              setNewLineName("");
+            }}
+            disabled={saving}
+            className="px-3 py-1.5 text-xs font-bold rounded-lg bg-primary text-primary-foreground disabled:opacity-50"
+            data-slot="timeline-add-line-confirm"
+          >
+            {t("timeline.confirmAdd")}
+          </button>
+          <button
+            onClick={() => { setAddingLine(false); setNewLineName(""); }}
+            className="px-3 py-1.5 text-xs rounded-lg border border-border hover:bg-secondary/60"
+          >
+            {t("timeline.cancel")}
+          </button>
+        </div>
+      )}
+
+      {editTarget && (
+        <TimelineEditDialog
+          bookId={bookId}
+          target={editTarget}
+          saving={saving}
+          nav={nav}
+          t={t}
+          onCancel={() => setEditTarget(null)}
+          onSubmit={async (patch) => {
+            const base = optimistic ?? doc;
+            if (!base) return;
+            await saveDoc(buildTimelineAfterCellEdit(base, editTarget.plotlineId, editTarget.chapter, patch));
+            setEditTarget(null);
+          }}
+        />
       )}
     </div>
   );

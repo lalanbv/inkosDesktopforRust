@@ -1,13 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToString } from "react-dom/server";
-import { BookTimeline } from "@/pages/BookTimeline";
+import { BookTimeline, TimelineEditDialog } from "@/pages/BookTimeline";
 
-const useApiMock = vi.fn();
+const { useApiMock, putApiMock } = vi.hoisted(() => ({
+  useApiMock: vi.fn(),
+  putApiMock: vi.fn(),
+}));
 
 vi.mock("@/hooks/use-api", () => ({
   useApi: (path: string) => useApiMock(path),
   fetchJson: vi.fn(),
   postApi: vi.fn(),
+  putApi: putApiMock,
 }));
 
 // 两个 useApi 调用按 path 分流：book 详情 / timeline。
@@ -89,6 +93,9 @@ describe("BookTimeline（180 号 W-C4-a 只读时间线）", () => {
         chapters: [{ number: 1, title: "第一章", status: "approved", wordCount: 1000 }],
       },
       timeline: {
+        version: 1,
+        bookId: "b1",
+        updatedAt: "2026-09-07T00:00:00.000Z",
         plotlines: [
           { id: "main", name: "主线", cells: [{ chapter: 1, title: "风起", note: "主角入场" }] },
           { id: "side", name: "支线", cells: [{ chapter: 2, note: "伏笔埋设" }] },
@@ -107,8 +114,12 @@ describe("BookTimeline（180 号 W-C4-a 只读时间线）", () => {
     expect(html).toContain("伏笔埋设");
     expect(html).toContain("timeline.chapter");
     // 章列轴来自 timeline cells（含第 2 章，即使 chapters 无第 2 章）。
+    // 每线渲染全列轴：主线 1,2 + 支线 1,2（占位格以 empty tone 补齐）。
     const order = [...html.matchAll(/data-timeline-cell="(\d+)"/g)].map((m) => Number(m[1]));
-    expect(order).toEqual([1, 2]);
+    expect(order).toEqual([1, 2, 1, 2]);
+    // timeline 格可编辑；占位格（该线该章无节拍）以 empty tone 暴露。
+    expect(html).toContain('data-editable="true"');
+    expect(html).toContain('data-tone="empty"');
   });
 
   it("timeline.json 为 null 时回退单线兜底", () => {
@@ -126,6 +137,9 @@ describe("BookTimeline（180 号 W-C4-a 只读时间线）", () => {
     expect(html).toContain("timeline.mainPlotline");
     expect(html).toContain('data-tone="done"');
     expect(html).not.toContain('data-tone="planned"');
+    // 兜底格只读（点击去阅读），但提供「编辑时间线」初始化入口。
+    expect(html).toContain('data-editable="false"');
+    expect(html).toContain('data-slot="timeline-init"');
   });
 
   it("imported 章节归 imported tone", () => {
@@ -140,5 +154,44 @@ describe("BookTimeline（180 号 W-C4-a 只读时间线）", () => {
       <BookTimeline bookId="b1" nav={nav as never} theme="light" t={t} />,
     );
     expect(html).toContain('data-tone="imported"');
+  });
+});
+
+describe("TimelineEditDialog（182 号 C4-c 编辑弹窗）", () => {
+  it("表单结构：标题/备注输入 + 打开章节 + 保存/取消", () => {
+    const html = renderToString(
+      <TimelineEditDialog
+        bookId="b1"
+        target={{ plotlineId: "main", plotlineName: "主线", chapter: 3, title: "危机", note: "宗门大比" }}
+        saving={false}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        nav={nav as never}
+        t={t}
+      />,
+    );
+    expect(html).toContain('data-testid="timeline-edit-dialog"');
+    expect(html).toContain('data-slot="timeline-beat-title"');
+    expect(html).toContain('data-slot="timeline-beat-note"');
+    expect(html).toContain("主线");
+    expect(html).toContain("timeline.editBeat");
+    expect(html).toContain("timeline.openChapter");
+    expect(html).toContain('data-slot="timeline-save"');
+  });
+
+  it("saving 态保存按钮禁用并显示保存中文案", () => {
+    const html = renderToString(
+      <TimelineEditDialog
+        bookId="b1"
+        target={{ plotlineId: "main", plotlineName: "主线", chapter: 3, title: "危机", note: "" }}
+        saving
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        nav={nav as never}
+        t={t}
+      />,
+    );
+    expect(html).toContain("timeline.saving");
+    expect(html).toContain("disabled");
   });
 });

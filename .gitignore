@@ -37,3 +37,4 @@ CLAUDE.md
 
 # CodeGraph 代码索引（本机生成，不入库；codegraph.json 配置需团队共享故不忽略）
 .codegraph/
+*.log
