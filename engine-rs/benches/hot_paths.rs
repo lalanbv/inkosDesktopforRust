@@ -93,5 +93,98 @@ fn bench_sse_broadcast(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_sensitive_words, bench_sse_broadcast);
+/// 196 号：write-next 每章必经的非 LLM 纯 CPU 路径基准补强。
+///
+/// - `title_dedup/resolve_*`：标题去重每章两次调用（writer 输出 + 持久化
+///   装配），长书既有标题 200 个为规模锚点；
+/// - `paragraph_scan/detect_shape`：落盘后段落形态检查，每章一次；
+/// - `chapter_index/parse`：章节索引反序列化——长书 index 数百条，每章
+///   load_chapter_index 至少两次。
+fn bench_write_next_hot_paths(c: &mut Criterion) {
+    // 标题去重：200 个既有标题；无重复（走 collapse 扫描主路径）与
+    // 重复命中（触发重生成候选循环）两形态。
+    let titles: Vec<String> = (1..=200)
+        .map(|i| format!("第{i}章 风起于青萍之末的{i}种写法"))
+        .collect();
+    let content = chapter_content();
+    let mut group = c.benchmark_group("title_dedup");
+    group.sample_size(30);
+    group.bench_function("resolve_no_duplicate_200", |b| {
+        b.iter(|| {
+            inkos_engine::agents::post_write_validator::resolve_duplicate_title(
+                "第201章 崭新的标题",
+                &titles,
+                WritingLanguage::Zh,
+                Some(&content),
+            )
+        })
+    });
+    group.bench_function("resolve_duplicate_hit_200", |b| {
+        b.iter(|| {
+            inkos_engine::agents::post_write_validator::resolve_duplicate_title(
+                "第5章 风起于青萍之末的5种写法",
+                &titles,
+                WritingLanguage::Zh,
+                Some(&content),
+            )
+        })
+    });
+    group.finish();
+
+    // 段落形态扫描（正文同 sensitive_words 的 ~3000 中文章节）。
+    let mut group = c.benchmark_group("paragraph_scan");
+    group.throughput(Throughput::Bytes(content.len() as u64));
+    group.sample_size(30);
+    group.bench_function("detect_shape_3000zh", |b| {
+        b.iter(|| {
+            inkos_engine::agents::post_write_validator::detect_paragraph_shape_warnings(
+                &content,
+                WritingLanguage::Zh,
+            )
+        })
+    });
+    group.finish();
+
+    // 章节索引反序列化（200 条 camelCase ChapterMeta）。
+    let index_json = {
+        use inkos_engine::models::chapter::{ChapterMeta, ChapterStatus};
+        let metas: Vec<ChapterMeta> = (1..=200)
+            .map(|i| ChapterMeta {
+                number: i,
+                title: format!("第{i}章 标题{i}"),
+                status: ChapterStatus::Approved,
+                word_count: 3000,
+                created_at: "2026-09-07T00:00:00.000Z".to_string(),
+                updated_at: "2026-09-07T00:00:00.000Z".to_string(),
+                audit_issues: Vec::new(),
+                length_warnings: Vec::new(),
+                review_note: None,
+                detection_score: None,
+                detection_provider: None,
+                detected_at: None,
+                length_telemetry: None,
+                token_usage: None,
+            })
+            .collect();
+        serde_json::to_string(&metas).expect("serialize index")
+    };
+    let mut group = c.benchmark_group("chapter_index");
+    group.throughput(Throughput::Bytes(index_json.len() as u64));
+    group.sample_size(30);
+    group.bench_function("parse_200", |b| {
+        b.iter(|| {
+            let metas: Vec<inkos_engine::models::chapter::ChapterMeta> =
+                serde_json::from_str(&index_json).expect("parse index");
+            metas
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_sensitive_words,
+    bench_sse_broadcast,
+    bench_write_next_hot_paths
+);
 criterion_main!(benches);

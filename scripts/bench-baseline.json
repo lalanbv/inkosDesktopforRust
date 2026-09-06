@@ -1,11 +1,15 @@
 {
-  "collectedAt": "2026-09-06T16:26:39.091Z",
+  "collectedAt": "2026-09-06T22:43:29.052Z",
   "host": "darwin/arm64",
   "benches": {
-    "sensitive_words/scan_chapter": 16603.57379468248,
-    "sensitive_words/scan_chapter_builtin_only": 9575.749766288973,
-    "sse_broadcast/dispatch/1": 127.72833310825112,
-    "sse_broadcast/dispatch/32": 130.57279334295546,
-    "sse_broadcast/dispatch/8": 128.28286808932054
+    "chapter_index/parse_200": 42830.77605830052,
+    "paragraph_scan/detect_shape_3000zh": 1812.1676483976362,
+    "sensitive_words/scan_chapter": 16664.32486631276,
+    "sensitive_words/scan_chapter_builtin_only": 9603.79847769783,
+    "sse_broadcast/dispatch/1": 142.15097731646935,
+    "sse_broadcast/dispatch/32": 126.72863672555368,
+    "sse_broadcast/dispatch/8": 126.3884292676114,
+    "title_dedup/resolve_duplicate_hit_200": 432543.67947122717,
+    "title_dedup/resolve_no_duplicate_200": 61045.42672339462
   }
 }
