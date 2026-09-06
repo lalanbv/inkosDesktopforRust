@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToString } from "react-dom/server";
-import { BookTimeline, TimelineEditDialog } from "@/pages/BookTimeline";
+import { BookTimeline, TimelineEditDialog, statusTone } from "@/pages/BookTimeline";
 
 const { useApiMock, putApiMock } = vi.hoisted(() => ({
   useApiMock: vi.fn(),
@@ -120,6 +120,44 @@ describe("BookTimeline（180 号 W-C4-a 只读时间线）", () => {
     // timeline 格可编辑；占位格（该线该章无节拍）以 empty tone 暴露。
     expect(html).toContain('data-editable="true"');
     expect(html).toContain('data-tone="empty"');
+  });
+
+  it("statusTone：章节状态 → 展示 tone 映射（187 号）", () => {
+    expect(statusTone("approved")).toBe("done");
+    expect(statusTone("published")).toBe("done");
+    expect(statusTone("ready-for-review")).toBe("review");
+    expect(statusTone("audit-failed")).toBe("failed");
+    expect(statusTone("imported")).toBe("imported");
+    expect(statusTone("drafting")).toBe("wip");
+  });
+
+  it("多线 beat 的章节状态角标：approved 章节叠加 done 角标", () => {
+    mockSources({
+      book: {
+        book: { id: "b1", title: "角标书" },
+        nextChapter: 2,
+        chapters: [{ number: 1, title: "第一章", status: "approved", wordCount: 1000 }],
+      },
+      timeline: {
+        version: 1,
+        bookId: "b1",
+        updatedAt: "t",
+        plotlines: [
+          { id: "main", name: "主线", cells: [{ chapter: 1, title: "风起", note: "入场" }] },
+          { id: "side", name: "支线", cells: [{ chapter: 2, note: "尚未写作" }] },
+        ],
+      },
+    });
+    const html = renderToString(
+      <BookTimeline bookId="b1" nav={nav as never} theme="light" t={t} />,
+    );
+    // 主线第 1 章：章节存在且 approved → planned 格叠加 done 角标。
+    expect(html).toMatch(/data-timeline-cell="1"[^>]*data-status-tone="done"/);
+    // 支线第 2 章：无对应章节 → 无角标（纯规划 planned）。
+    expect(html).toContain('data-tone="planned"');
+    const plannedCells = [...html.matchAll(/data-timeline-cell="2"[^>]*>/g)].map((m) => m[0]);
+    expect(plannedCells.every((tag) => !tag.includes("data-status-tone"))).toBe(true);
+    expect(html).toContain('data-slot="timeline-status-dot"');
   });
 
   it("timeline.json 为 null 时回退单线兜底", () => {

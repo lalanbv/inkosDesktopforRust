@@ -58,17 +58,31 @@ interface TimelineGridCell {
   readonly editable: boolean;
   /** 空占位格：该线该章暂无节拍，点击 = 新建节拍。 */
   readonly placeholder: boolean;
+  /** 187 号：该章在 chapters/index.json 的真实状态（缺失 = 纯规划节拍）。 */
+  readonly chapterStatus?: string;
 }
 
 type Tone = "done" | "review" | "failed" | "wip" | "imported" | "planned" | "empty";
 
-function statusTone(status: string): Tone {
+/** 章节写作状态 → 展示 tone（187 号导出：供节拍状态角标映射与单测）。 */
+export function statusTone(status: string): Tone {
   if (status === "approved" || status === "published") return "done";
   if (status === "ready-for-review" || status === "audit-passed") return "review";
   if (status === "audit-failed" || status === "rejected" || status === "state-degraded") return "failed";
   if (status === "imported") return "imported";
   return "wip";
 }
+
+/** 状态角标色（187 号：planned 格叠加真实章节状态的视觉锚点）。 */
+const STATUS_DOT_CLASS: Record<Tone, string> = {
+  done: "bg-emerald-500",
+  review: "bg-amber-500",
+  failed: "bg-red-500",
+  wip: "bg-sky-500",
+  imported: "bg-muted-foreground",
+  planned: "bg-violet-400",
+  empty: "bg-transparent",
+};
 
 const TONE_CLASS: Record<Tone, string> = {
   done: "bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
@@ -243,6 +257,8 @@ export function BookTimeline({ bookId, nav, theme, t }: {
           label: line.name,
           cells: columns.map<TimelineGridCell>((number) => {
             const cell = line.cells.find((c) => c.chapter === number);
+            // 187 号：节拍关联的章节真实状态（chapters/index.json），缺失 = 纯规划。
+            const chapter = chapters.find((ch) => ch.number === number);
             if (!cell) {
               return {
                 number,
@@ -251,6 +267,8 @@ export function BookTimeline({ bookId, nav, theme, t }: {
                 tone: "empty" as Tone,
                 editable: true,
                 placeholder: true,
+                // 占位格（「添加节拍」）不带状态角标——还没有节拍与章节状态
+                // 的关联语义。
               };
             }
             return {
@@ -260,6 +278,7 @@ export function BookTimeline({ bookId, nav, theme, t }: {
               tone: "planned" as Tone,
               editable: true,
               placeholder: false,
+              chapterStatus: chapter?.status,
             };
           }),
         })),
@@ -430,13 +449,20 @@ export function BookTimeline({ bookId, nav, theme, t }: {
                         note: cell.placeholder ? "" : cell.subtitle,
                       });
                     }}
-                    title={`${cell.title} · ${cell.subtitle}`}
-                    className={`w-36 shrink-0 px-3 py-3 border-r border-border/30 last:border-r-0 border-b-0 text-left transition-transform ${cell.editable ? "hover:scale-[1.03]" : ""} ${TONE_CLASS[cell.tone]}`}
+                    title={`${cell.title} · ${cell.subtitle}${cell.chapterStatus ? ` · ${cell.chapterStatus}` : ""}`}
+                    className={`relative w-36 shrink-0 px-3 py-3 border-r border-border/30 last:border-r-0 border-b-0 text-left transition-transform ${cell.editable ? "hover:scale-[1.03]" : ""} ${TONE_CLASS[cell.tone]}`}
                     data-timeline-cell={cell.number}
                     data-tone={cell.tone}
                     data-editable={cell.editable ? "true" : "false"}
+                    data-status-tone={cell.chapterStatus ? statusTone(cell.chapterStatus) : undefined}
                   >
-                    <div className="text-xs font-semibold truncate">{cell.title}</div>
+                    {cell.chapterStatus && (
+                      <span
+                        className={`absolute top-1 right-1 w-2 h-2 rounded-full ${STATUS_DOT_CLASS[statusTone(cell.chapterStatus)]}`}
+                        data-slot="timeline-status-dot"
+                      />
+                    )}
+                    <div className="text-xs font-semibold truncate pr-2">{cell.title}</div>
                     <div className="text-[11px] opacity-70 mt-0.5 truncate">{cell.subtitle}</div>
                   </button>
                 ))}
