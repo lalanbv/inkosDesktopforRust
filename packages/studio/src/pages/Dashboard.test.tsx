@@ -42,6 +42,21 @@ describe("Dashboard loading skeleton", () => {
     expect(html).toContain("长夜余火");
   });
 
+  it("keeps a persistent series-backfill CTA in the header for populated libraries (193号)", () => {
+    // 193 号：回填入口此前只在系列分组 header 出现——无 series 字段的散书
+    // 项目在 Dashboard 上不可见；页头常驻按钮修复可发现性。
+    useApiMock.mockReturnValue({
+      data: { books: [{ id: "b1", title: "散书一本", genre: "玄幻", status: "active", chaptersWritten: 2 }] },
+      error: null,
+      loading: false,
+      refetch: vi.fn(),
+    });
+
+    const html = renderToString(<Dashboard nav={nav as never} sse={sse} theme="light" t={t} />);
+    expect(html).toContain('data-slot="dashboard-backfill-cta"');
+    expect(html).toContain("dash.backfillEntry");
+  });
+
   it("renders the empty library state when data is ready and empty", () => {
     useApiMock.mockReturnValue({ data: { books: [] }, error: null, loading: false, refetch: vi.fn() });
 

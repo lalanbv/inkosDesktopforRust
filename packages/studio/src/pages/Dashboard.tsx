@@ -13,6 +13,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { SkeletonCards } from "../components/skeletons";
 import {
   Plus,
+  BookCopy,
   BookOpen,
   BarChart2,
   Zap,
@@ -220,13 +221,26 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
           <h1 className="font-serif text-4xl mb-2">{t("dash.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("dash.subtitle")}</p>
         </div>
-        <button
-          onClick={nav.toBookCreate}
-          className="group flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20"
-        >
-          <Plus size={16} />
-          {t("nav.newBook")}
-        </button>
+        <div className="flex items-center gap-3">
+          {/* 193 号：回填向导常驻入口——此前只在系列分组 header 出现，
+              无 series 字段的散书项目在 Dashboard 上不可见。 */}
+          <button
+            onClick={() => nav.toImport("backfill")}
+            title={t("backfill.hint")}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-secondary/60 text-foreground border border-border/50 hover:bg-secondary transition-all"
+            data-slot="dashboard-backfill-cta"
+          >
+            <BookCopy size={16} />
+            {t("dash.backfillEntry")}
+          </button>
+          <button
+            onClick={nav.toBookCreate}
+            className="group flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold bg-primary text-primary-foreground hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20"
+          >
+            <Plus size={16} />
+            {t("nav.newBook")}
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-6">
