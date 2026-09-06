@@ -585,13 +585,18 @@ export function BookDetail({
         <div
           className={`rounded-2xl border px-4 py-3 text-sm ${
             activity.lastError
-              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              ? activity.lastError.includes("Operation aborted")
+                ? // 188 号：用户主动停止属中性结果，不以红色失败呈现
+                  "border-border/60 bg-secondary/30 text-muted-foreground"
+                : "border-destructive/30 bg-destructive/5 text-destructive"
               : "border-primary/20 bg-primary/[0.04] text-foreground"
           }`}
         >
           {activity.lastError ? (
             <span>
-              {t("book.pipelineFailed")}: {activity.lastError}
+              {activity.lastError.includes("Operation aborted")
+                ? `${t("book.writeStopped")}`
+                : `${t("book.pipelineFailed")}: ${activity.lastError}`}
             </span>
           ) : writing ? (
             <span>{t("book.pipelineWriting")}</span>

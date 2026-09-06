@@ -144,15 +144,22 @@ pub async fn write_next(
             }
             Err(error) => {
                 let message = error.to_string();
+                // 188 号：用户主动停止（175 号 abort）不是「失败」——快照与
+                // 广播改用中性文案，UI 据此以「已停止」而非红色失败呈现。
+                let user_message = if message.contains("Operation aborted") {
+                    "写作已按您的要求停止。".to_string()
+                } else {
+                    message.clone()
+                };
                 task_runtime.hub.broadcast(
                     "write:error",
-                    &serde_json::json!({ "bookId": task_book_id, "error": message }),
+                    &serde_json::json!({ "bookId": task_book_id, "error": user_message }),
                 );
                 if let Some(entry) = &checkpoint {
                     entry.persist_finished(
                         &task_runtime,
                         StudioTaskExecutionStatus::Error,
-                        Some(&message),
+                        Some(&user_message),
                     )
                     .await;
                     active_confirmed_tasks()
@@ -475,7 +482,8 @@ mod tests {
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
                 Ok(Ok(payload)) if payload.event == "write:error" => {
-                    assert!(payload.data.contains("Operation aborted"));
+                    // 188 号：用户停止的广播文案已友好化（不再含 "Operation aborted" 前缀包装）。
+                    assert!(payload.data.contains("写作已按您的要求停止"));
                     break;
                 }
                 Ok(Ok(_)) => continue,
@@ -496,7 +504,7 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         };
-        assert!(finished.execution.error.as_deref().unwrap().contains("aborted"));
+        assert!(finished.execution.error.as_deref().unwrap().contains("已按您的要求停止"));
         assert!(!active_confirmed_tasks()
             .lock()
             .unwrap()

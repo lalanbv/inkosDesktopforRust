@@ -538,7 +538,7 @@ async fn write_next_chapter_locked(
         prompt_store: ctx.prompt_store,
         state_store: ctx.state_store,
     };
-    let output = write_chapter(
+    let mut output = write_chapter(
         &writer_ctx,
         agents.writer,
         &WriteChapterInput {
@@ -557,6 +557,30 @@ async fn write_next_chapter_locked(
         },
     )
     .await?;
+    // 188 号：LLM 偶发返回空正文（服务抖动/中转异常/只回 reasoning 不回
+    // content）——自动重试一次；仍空则由 review cycle 空内容检查兜底报错。
+    if output.content.trim().is_empty() {
+        tracing::warn!(target: "write-next", "writer 返回空正文，自动重试一次");
+        output = write_chapter(
+            &writer_ctx,
+            agents.writer,
+            &WriteChapterInput {
+                book: &book,
+                book_dir: &book_dir,
+                chapter_number,
+                external_context,
+                chapter_intent: write_input.chapter_intent.as_deref(),
+                chapter_memo: write_input.chapter_memo.as_ref(),
+                chapter_intent_data: write_input.chapter_intent_data.as_ref(),
+                context_package: write_input.context_package.as_ref(),
+                rule_stack: write_input.rule_stack.as_ref(),
+                length_spec: Some(length_spec.clone()),
+                word_count_override: word_count,
+                temperature_override,
+            },
+        )
+        .await?;
+    }
     // 检查点②：草稿落定后（TS 1844——writeChapter 返回即查）。
     check_aborted(config)?;
     let writer_count = count_chapter_length(&output.content, length_spec.counting_mode);
@@ -1367,7 +1391,9 @@ fn build_length_warnings(chapter_number: u32, final_count: u32, spec: &LengthSpe
 
 fn assert_chapter_content_not_empty(content: &str, stage: &str) -> Result<(), String> {
     if content.trim().is_empty() {
-        return Err(format!("chapter content is empty after `{stage}`"));
+        return Err(format!(
+            "chapter content is empty after `{stage}`（模型未返回有效正文，请检查模型服务是否正常或更换模型后重试）"
+        ));
     }
     Ok(())
 }
@@ -1828,6 +1854,78 @@ mod tests {
             "{logs:?}"
         );
         assert!(logs.iter().all(|(level, _)| level == "info"));
+    }
+
+    // ---- 188 号：writer 空正文自动重试一次 ----
+
+    /// 首次返回空正文、之后委托真实脚本响应的 writer（模拟 LLM 瞬时抖动）。
+    struct FlakyEmptyWriter<'a> {
+        inner: &'a ScriptChat,
+        calls: StdMutex<u32>,
+    }
+
+    impl<'a> FlakyEmptyWriter<'a> {
+        fn new(inner: &'a ScriptChat) -> Self {
+            Self { inner, calls: StdMutex::new(0) }
+        }
+    }
+
+    #[async_trait]
+    impl WriterChat for FlakyEmptyWriter<'_> {
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            temperature: f64,
+        ) -> Result<ChatOutcome, String> {
+            let is_first = {
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
+                *calls == 1
+            };
+            if is_first {
+                // 第一次：空正文（LLM 抖动）。
+                return Ok(ChatOutcome { content: String::new(), usage: None });
+            }
+            WriterChat::chat(self.inner, messages, temperature).await
+        }
+    }
+
+    /// 空正文触发一次自动重试，重试成功后管线正常完成（章节落盘）。
+    #[tokio::test]
+    async fn empty_writer_output_is_retried_once_then_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, builtin) = abort_fixture(dir.path()).await;
+        let state = StateManager::new(&project);
+        let chat = script();
+        let flaky = FlakyEmptyWriter::new(&chat);
+        let agents = WriteNextAgents {
+            writer: &flaky,
+            planner: &chat,
+            composer: &chat,
+            reviser: &chat,
+            auditor: &chat,
+            full_auditor: None,
+            analyzer: &chat,
+            state_validator: &chat,
+            settler: &chat,
+        };
+        let prompt_store = InMemoryStateStore::default();
+        let ctx = WriteNextCtx {
+            project_root: &project,
+            builtin_genres_dir: &builtin,
+            prompt_store: &prompt_store,
+            state_store: &prompt_store,
+            context_budget: None,
+            notify: None,
+        };
+        let config = WriteNextConfig::default();
+
+        write_next_chapter(&state, &agents, &ctx, &config, "b1", None, None, None)
+            .await
+            .expect("重试后应成功");
+        // 重试恰好一次后成功：writer 链上多处复用端口，调用数 ≥ 2（原 + 重试）。
+        assert!(*flaky.calls.lock().unwrap() >= 2);
+        assert_eq!(chapters_md_count(&project.join("books").join("b1")), 1);
     }
 
     // ---- 101 号：链内安全点中止（TS throwIfOperationAborted 检查点） ----

@@ -214,6 +214,7 @@ const strings = {
   "book.pipelineWriting": { zh: "后台正在写作，本页会在完成后自动刷新。", en: "Background writing is running. This page will refresh automatically when it finishes." },
   "book.pipelineDrafting": { zh: "后台正在生成草稿，本页会在完成后自动刷新。", en: "Background drafting is running. This page will refresh automatically when it finishes." },
   "book.pipelineFailed": { zh: "后台任务失败", en: "Background job failed" },
+  "book.writeStopped": { zh: "写作已按您的要求停止。", en: "Writing stopped at your request." },
   "book.save": { zh: "保存", en: "Save" },
   "book.saving": { zh: "保存中...", en: "Saving..." },
   "book.rewrite": { zh: "重写", en: "Rewrite" },
