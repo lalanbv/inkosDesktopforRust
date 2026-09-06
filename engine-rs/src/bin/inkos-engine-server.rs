@@ -106,7 +106,7 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     // 审计器挂有效 router（write_next_chapter 内 for_chapter 按章重绑）。
     let runner_books = books.clone();
     let runner: inkos_engine::server::WriteNextRunner = Arc::new(
-        move |state, book_id, word_count, temperature| {
+        move |state, book_id, word_count, temperature, abort| {
             let books = runner_books.clone();
             Box::pin(async move {
                 let mut agents =
@@ -121,14 +121,17 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
                         genre: String::new(),
                     });
                 let ctx = inkos_engine::server::books_routes::build_write_next_ctx(&books);
+                // 126 号：事件化配置（context:compression 广播）——与其余写面
+                // 同源；175 号：注入 stop 端点置位的中止句柄（阶段边界生效）。
+                let mut config =
+                    inkos_engine::server::books_routes::write_next_config_with_events(&books)
+                        .await;
+                config.abort = Some(abort);
                 write_next_chapter(
                     &state,
                     &agents,
                     &ctx,
-                    // 126 号：事件化配置（context:compression 广播）——与其余
-                    // 写面同源。
-                    &inkos_engine::server::books_routes::write_next_config_with_events(&books)
-                        .await,
+                    &config,
                     &book_id,
                     word_count,
                     temperature,

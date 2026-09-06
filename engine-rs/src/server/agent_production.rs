@@ -785,10 +785,10 @@ pub fn active_confirmed_tasks() -> &'static Mutex<HashMap<String, AbortHandle>> 
 }
 
 /// `loadReconciledTaskSnapshot`：running 快照且本进程注册表无该任务 → 改写
-/// error 终态落盘（旧进程遗留对账）。活跃性双来源：确认式生产任务表
-/// （有可中止句柄）+ write-next 活跃表（174 号 W-C5，fire-and-forget 无
-/// 句柄——两表都查，存活任务不被误杀）。中断文案按项目语言双语（对齐 TS
-/// `currentProjectLanguage` 分支）。
+/// error 终态落盘（旧进程遗留对账）。确认任务句柄表是唯一活跃来源——
+/// write-next（175 号）注册同一张表，其句柄被管线真实消费（stop 端点置位
+/// → 阶段边界停止）。中断文案按项目语言双语（对齐 TS `currentProjectLanguage`
+/// 分支）。
 pub async fn load_reconciled_task_snapshot(
     root: &Path,
     session_id: &str,
@@ -798,17 +798,10 @@ pub async fn load_reconciled_task_snapshot(
         task.execution.status,
         StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
     );
-    let locally_running = {
-        let confirmed = active_confirmed_tasks()
-            .lock()
-            .unwrap()
-            .contains_key(&task.execution.id);
-        let write_next = crate::server::write_next_route::active_write_next_tasks()
-            .lock()
-            .unwrap()
-            .contains(&task.execution.id);
-        confirmed || write_next
-    };
+    let locally_running = active_confirmed_tasks()
+        .lock()
+        .unwrap()
+        .contains_key(&task.execution.id);
     if !running || locally_running {
         return Some(task);
     }
@@ -3301,20 +3294,24 @@ mod tests {
             },
         };
 
-        // 存活：write-next 活跃表命中 → 原样返回，不落盘改写。
+        // 存活：确认任务表命中（175 号起 write-next 也注册此表）→ 原样返回，
+        // 不落盘改写。
         save_studio_task_snapshot(root, &make_running("sess-live"))
             .await
             .unwrap();
-        crate::server::write_next_route::active_write_next_tasks()
+        active_confirmed_tasks()
             .lock()
             .unwrap()
-            .insert("write-next-deadbook".into());
+            .insert(
+                "write-next-deadbook".into(),
+                crate::interaction::agent_loop::AbortHandle::default(),
+            );
         let live = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
         assert_eq!(live.execution.status, StudioTaskExecutionStatus::Running);
         assert_eq!(live.updated_at, 1_000.0);
 
-        // 死亡：同一执行 id 从活跃表移除 → 改写中断终态落盘（默认 zh 文案）。
-        crate::server::write_next_route::active_write_next_tasks()
+        // 死亡：同一执行 id 从注册表移除 → 改写中断终态落盘（默认 zh 文案）。
+        active_confirmed_tasks()
             .lock()
             .unwrap()
             .remove("write-next-deadbook");

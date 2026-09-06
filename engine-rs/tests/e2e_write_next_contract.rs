@@ -154,6 +154,7 @@ type E2eRunner = Arc<
             String,
             Option<u32>,
             Option<f64>,
+            inkos_engine::interaction::agent_loop::AbortHandle,
         ) -> futures_util::future::BoxFuture<
             'static,
             Result<inkos_engine::pipeline::write_next::ChapterPipelineResult, String>,
@@ -175,7 +176,7 @@ async fn e2e_write_next_contract_matches_node_shape() {
     let runner_project = project.clone();
     let runner_state = state.clone();
     let runner_url = llm_url.clone();
-    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature| {
+    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature, _abort| {
         let project = runner_project.clone();
         let llm_url = runner_url.clone();
         let _ = &runner_state;
@@ -298,7 +299,7 @@ async fn e2e_llm_unreachable_pushes_write_error() {
     let hub = Arc::new(BroadcastHub::new());
 
     let runner_project = project.clone();
-    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature| {
+    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature, _abort| {
         let project = runner_project.clone();
         Box::pin(async move {
             // 端口 9（discard）——不可达端点。

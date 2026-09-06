@@ -11,8 +11,7 @@
 //! [`WriteNextRuntime`] 注入（LLM 域路由器之上）；测试注入全 mock。
 //! 任务快照（39 号 task-store）按会话落盘供 SSE 重连恢复。
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -20,6 +19,8 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use crate::interaction::agent_loop::AbortHandle;
+use crate::server::agent_production::active_confirmed_tasks;
 use crate::server::sse::BroadcastHub;
 use crate::server::task_store::{
     save_studio_task_snapshot, StudioTaskExecution, StudioTaskExecutionStatus, StudioTaskSnapshot,
@@ -27,12 +28,16 @@ use crate::server::task_store::{
 use crate::state::manager::StateManager;
 
 /// 执行器闭包：构造九路端口聚合并在其生命周期内跑完 write-next。
+///
+/// 第五参为中止句柄（175 号）：实现方须注入 `WriteNextConfig.abort`——
+/// 管线在阶段边界轮询 `check_aborted`，stop 端点置位后任务在安全点停止。
 pub type WriteNextRunner = Arc<
     dyn Fn(
             Arc<StateManager>,
             String,
             Option<u32>,
             Option<f64>,
+            AbortHandle,
         ) -> futures_util::future::BoxFuture<
             'static,
             Result<crate::pipeline::write_next::ChapterPipelineResult, String>,
@@ -67,18 +72,6 @@ pub struct WriteNextResponse {
     pub book_id: String,
 }
 
-/// 本进程活跃 write-next 任务（执行 id 集合，174 号 W-C5）。
-///
-/// 对账活跃性的第二个来源：确认式生产任务用 [`active_confirmed_tasks`]，
-/// write-next 是无控制器消费的 fire-and-forget——若复用确认任务表，abort
-/// 端点会找到句柄并宣称 `aborted:true` 而管线实际无法取消（假停止）。独立
-/// 集合让「停止」保持诚实的「无任务可停」，同时重启对账能识别存活的
-/// running 快照不误杀。
-pub fn active_write_next_tasks() -> &'static Mutex<HashSet<String>> {
-    static REGISTRY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
 /// POST /api/v1/books/:id/write-next
 pub async fn write_next(
     State(runtime): State<WriteNextRuntime>,
@@ -93,15 +86,20 @@ pub async fn write_next(
     let task_runtime = runtime.clone();
     let task_book_id = book_id.clone();
     tokio::spawn(async move {
-        // 检查点（174 号 W-C5）：sessionId 给定时任务全程留痕——启动先注册
-        // 活跃表再落 Running 快照（对账窗口语义与 TS 确认任务一致：注册先于
-        // 首次持久化），终态快照落盘后才注销。
+        // 检查点（174 号 W-C5）+ 可停止（175 号）：sessionId 给定时任务全程
+        // 留痕且真实可中止——启动先注册确认任务表（句柄被管线真实消费，
+        // stop 端点与重启对账同一来源）再落 Running 快照（对账窗口语义与
+        // TS 确认任务一致），终态快照落盘后才注销。
         let checkpoint = body
             .session_id
             .as_deref()
             .map(|session_id| WriteNextCheckpoint::start(session_id, &task_book_id, &body));
+        let abort: AbortHandle = Arc::new(std::sync::Mutex::new(false));
         if let Some(entry) = &checkpoint {
-            active_write_next_tasks().lock().unwrap().insert(entry.execution_id.clone());
+            active_confirmed_tasks()
+                .lock()
+                .unwrap()
+                .insert(entry.execution_id.clone(), abort.clone());
             entry.persist_running(&task_runtime).await;
         }
 
@@ -110,6 +108,7 @@ pub async fn write_next(
             task_book_id.clone(),
             body.word_count,
             body.temperature,
+            abort,
         )
         .await
         .map_err(|message| {
@@ -130,7 +129,7 @@ pub async fn write_next(
                 if let Some(entry) = &checkpoint {
                     entry.persist_finished(&task_runtime, StudioTaskExecutionStatus::Completed, None)
                         .await;
-                    active_write_next_tasks()
+                    active_confirmed_tasks()
                         .lock()
                         .unwrap()
                         .remove(&entry.execution_id);
@@ -149,7 +148,7 @@ pub async fn write_next(
                         Some(&message),
                     )
                     .await;
-                    active_write_next_tasks()
+                    active_confirmed_tasks()
                         .lock()
                         .unwrap()
                         .remove(&entry.execution_id);
@@ -273,7 +272,7 @@ mod tests {
         let (runtime, hub) = runtime_with(
             dir.path(),
             // runner 直接失败——spawn 内推 write:error。
-            Arc::new(|_state, _book, _wc, _temp| {
+            Arc::new(|_state, _book, _wc, _temp, _abort| {
                 Box::pin(async { Err("book config unavailable".to_string()) })
             }),
         );
@@ -325,7 +324,7 @@ mod tests {
         let gate_for_runner = gate.clone();
         let (runtime, hub) = runtime_with(
             dir.path(),
-            Arc::new(move |_state, _book, _wc, _temp| {
+            Arc::new(move |_state, _book, _wc, _temp, _abort| {
                 let gate = gate_for_runner.clone();
                 Box::pin(async move {
                     gate.notified().await;
@@ -370,10 +369,10 @@ mod tests {
             running.execution.args.as_ref().unwrap().get("wordCount"),
             Some(&serde_json::json!(800))
         );
-        assert!(active_write_next_tasks()
+        assert!(active_confirmed_tasks()
             .lock()
             .unwrap()
-            .contains("write-next-bck"));
+            .contains_key("write-next-bck"));
 
         // 放行 runner → 失败 → 终态快照 + 注销。
         gate.notify_one();
@@ -398,10 +397,103 @@ mod tests {
         assert!(finished.execution.completed_at.is_some());
         // WriteNextError Display 包一层「write chapter failed: …」——断言消息本体。
         assert!(finished.execution.error.as_deref().unwrap().contains("boom"));
-        assert!(!active_write_next_tasks()
+        assert!(!active_confirmed_tasks()
             .lock()
             .unwrap()
-            .contains("write-next-bck"));
+            .contains_key("write-next-bck"));
+    }
+
+    /// 175 号：stop 端点路径真实停止 write-next——find_running_task_controller
+    /// 找到注册句柄 → 置位（abort_session 同款）→ runner 在检查点退出 →
+    /// error 终态 + 注册表释放。
+    #[tokio::test]
+    async fn stop_handle_registered_and_setting_it_stops_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, hub) = runtime_with(
+            dir.path(),
+            Arc::new(|_state, _book, _wc, _temp, abort| {
+                Box::pin(async move {
+                    // 模拟管线阶段边界轮询：置位即停，10s 兜底防挂死。
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    loop {
+                        if *abort.lock().unwrap() {
+                            return Err::<crate::pipeline::write_next::ChapterPipelineResult, _>(
+                                "Operation aborted: the user requested to stop this task."
+                                    .to_string(),
+                            );
+                        }
+                        assert!(std::time::Instant::now() < deadline, "abort 未到达");
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+            }),
+        );
+        let app = app_for(runtime.clone());
+
+        let mut subscriber = hub.subscribe();
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/books/stp/write-next")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"sessionId":"sess-stp"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Running 快照落盘后，stop 端点同款查找必须命中。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "Running 快照未落盘");
+            if load_studio_task_snapshot(&runtime.project_root, "sess-stp")
+                .await
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let handle = crate::server::agent_production::find_running_task_controller(
+            &runtime.project_root,
+            "sess-stp",
+        )
+        .await
+        .expect("stop 端点应找到 write-next 句柄");
+
+        // abort_session 的置位动作 → runner 在检查点退出。
+        *handle.lock().unwrap() = true;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
+                Ok(Ok(payload)) if payload.event == "write:error" => {
+                    assert!(payload.data.contains("Operation aborted"));
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                other => panic!("write:error 事件未到达: {other:?}"),
+            }
+        }
+        let finished = loop {
+            if let Some(snapshot) =
+                load_studio_task_snapshot(&runtime.project_root, "sess-stp").await
+            {
+                if snapshot.execution.status == StudioTaskExecutionStatus::Error {
+                    break snapshot;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline + std::time::Duration::from_secs(5),
+                "终态快照未落盘"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        assert!(finished.execution.error.as_deref().unwrap().contains("aborted"));
+        assert!(!active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .contains_key("write-next-stp"));
     }
 
     /// 不传 sessionId（UI 现状）零磁盘副作用——检查点完全休眠。
@@ -410,7 +502,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (runtime, hub) = runtime_with(
             dir.path(),
-            Arc::new(|_state, _book, _wc, _temp| {
+            Arc::new(|_state, _book, _wc, _temp, _abort| {
                 Box::pin(async { Err("nope".to_string()) })
             }),
         );
@@ -437,9 +529,9 @@ mod tests {
         }
         assert!(!dir.path().join(".inkos/tasks").exists());
         // 共享静态表——只断言本用例的 id 未入表（并行用例各自持有自己的 id）。
-        assert!(!active_write_next_tasks()
+        assert!(!active_confirmed_tasks()
             .lock()
             .unwrap()
-            .contains("write-next-b0"));
+            .contains_key("write-next-b0"));
     }
 }
