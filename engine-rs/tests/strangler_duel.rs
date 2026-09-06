@@ -8,7 +8,7 @@
 //! 运行：`INKOS_DUEL=1 cargo test --test strangler_duel -- --nocapture`
 //! （缺 env 直接跳过——不进基线六项）。
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -121,6 +121,33 @@ data: [DONE]
             }
             axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
                 "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+            })))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    format!("http://{addr}")
+}
+
+/// 系列回填抽取用 mock LLM：内容为围栏 JSON 的 items（测宽松提取）。
+async fn spawn_backfill_mock_llm() -> String {
+    let content = r#"抽取结果：```json
+{"items": [{"id": "it-1", "category": "worldview", "title": "九品灵气", "content": "灵气分九品。"}, {"id": "it-2", "category": "character", "title": "林动", "content": "隐忍坚韧的主角。"}]}
+```"#;
+    let app = axum::Router::new().route(
+        "/chat/completions",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            if body["stream"].as_bool().unwrap_or(false) {
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                return axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+                ));
+            }
+            axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
+                "choices": [{ "message": { "role": "assistant", "content": content } }],
                 "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
             })))
         }),
@@ -1232,4 +1259,216 @@ async fn sse_event_face_duel() {
     let _ = command.kill();
     let _ = command.wait();
     eprintln!("SSE 事件面对跑通过：七类共享词汇事件（含 thinking 三事件）序列与负载形态双端等价");
+}
+
+/// 185 号：timeline 双端契约对跑——GET 缺文件 `timeline:null`、PUT 合法落盘
+/// roundtrip、PUT 非法（version≠1）400。normalize 剥除 updatedAt/version 后
+/// 双端 DTO 必须等价（185 号：把「测试路由 vs 生产装配」「双端 DTO 等价」
+/// 从单测提升到契约层——两台真进程对跑，装配差异无所遁形）。
+#[tokio::test]
+async fn strangler_timeline_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+
+    let valid_timeline = json!({
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "2026-09-07T00:00:00.000Z",
+        "plotlines": [
+            { "id": "main", "name": "主线", "cells": [{ "chapter": 1, "title": "风起", "note": "主角入场" }] },
+            { "id": "side", "name": "支线", "cells": [] }
+        ]
+    });
+    let mut diffs: Vec<String> = Vec::new();
+
+    // A) 缺文件 → 双端 200 + timeline:null。
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .get(format!("{base}/api/v1/books/b1/timeline"))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let mut body: Value = response.json().await.unwrap_or(Value::Null);
+        normalize(&mut body);
+        if status != 200 || body != json!({ "timeline": null }) {
+            diffs.push(format!("timeline GET 缺文件 {base} [{status}]: {body}"));
+        }
+    }
+
+    // B) PUT 合法 → 双端 200 ok；PUT 非法 version → 双端 400。
+    for base in [&rust, &ts] {
+        let client = reqwest::Client::new();
+        let ok = client
+            .put(format!("{base}/api/v1/books/b1/timeline"))
+            .json(&valid_timeline)
+            .send()
+            .await
+            .unwrap();
+        if ok.status().as_u16() != 200 {
+            diffs.push(format!("timeline PUT 合法 {base} [{:x}]", ok.status().as_u16()));
+        }
+        let mut bad = valid_timeline.clone();
+        bad["version"] = json!(2);
+        let bad_response = client
+            .put(format!("{base}/api/v1/books/b1/timeline"))
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
+        if bad_response.status().as_u16() != 400 {
+            diffs.push(format!("timeline PUT 非法 {base} [{:x}]", bad_response.status().as_u16()));
+        }
+    }
+
+    // C) roundtrip：双端 GET（normalize 后等价——plotlines/cells 结构一致）。
+    let mut bodies: Vec<(u16, Value)> = Vec::new();
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .get(format!("{base}/api/v1/books/b1/timeline"))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let mut body: Value = response.json().await.unwrap_or(Value::Null);
+        normalize(&mut body);
+        bodies.push((status, body));
+    }
+    if bodies[0].0 != bodies[1].0 || bodies[0].1 != bodies[1].1 {
+        diffs.push(format!(
+            "timeline GET roundtrip 不等价\n  rust[{:?}]\n  ts  [{:?}]",
+            bodies[0], bodies[1]
+        ));
+    }
+
+    assert!(
+        diffs.is_empty(),
+        "timeline 契约差异 {} 处：\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
+}
+
+/// 185 号：series-backfill 双端契约对跑——extract 走 mock LLM（围栏 JSON 宽松
+/// 解析）→ 草稿 DTO normalize 等价 → apply 勾选子集 → 校验面 400 语义。
+#[tokio::test]
+async fn strangler_series_backfill_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_backfill_mock_llm().await;
+    write_fixture(&root, &llm);
+    // 目标书 b2（extract 校验目标必须存在——双端同水位）。
+    std::fs::create_dir_all(root.join("books").join("b2").join("story")).unwrap();
+    std::fs::write(
+        root.join("books").join("b2").join("book.json"),
+        r#"{"id":"b2","title":"回填新书","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":300,"language":"zh","createdAt":"2026-09-07T00:00:00.000Z","updatedAt":"2026-09-07T00:00:00.000Z"}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("books").join("b2").join("story").join("story_bible.md"), "新书圣经").unwrap();
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+
+    let mut diffs: Vec<String> = Vec::new();
+
+    // A) apply 无草稿 → 双端 400。
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .post(format!("{base}/api/v1/books/b1/series-backfill/apply"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        if response.status().as_u16() != 400 {
+            diffs.push(format!("apply 无草稿 {base} [{:x}]", response.status().as_u16()));
+        }
+    }
+
+    // B) extract 缺 sourceBookId → 双端 400。
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .post(format!("{base}/api/v1/books/b1/series-backfill/extract"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        if response.status().as_u16() != 400 {
+            diffs.push(format!("extract 缺参 {base} [{:x}]", response.status().as_u16()));
+        }
+    }
+
+    // C) extract 合法（走 mock LLM）→ 双端 200，草稿 normalize 后等价。
+    let mut drafts: Vec<(u16, Value)> = Vec::new();
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .post(format!("{base}/api/v1/books/b2/series-backfill/extract"))
+            .json(&json!({ "sourceBookId": "b1" }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let mut body: Value = response.json().await.unwrap_or(Value::Null);
+        normalize(&mut body);
+        drafts.push((status, body));
+    }
+    if drafts[0].0 != 200 || drafts[1].0 != 200 {
+        diffs.push(format!("extract 非双 200：{:?} / {:?}", drafts[0].0, drafts[1].0));
+    } else {
+        let rust_items = drafts[0].1["draft"]["items"].clone();
+        let ts_items = drafts[1].1["draft"]["items"].clone();
+        if rust_items != ts_items {
+            diffs.push(format!(
+                "extract items DTO 不等价\n  rust: {rust_items}\n  ts:   {ts_items}"
+            ));
+        }
+        // 宽松解析有效性：围栏 JSON 被提取为 2 条。
+        for (label, body) in [("rust", &drafts[0].1), ("ts", &drafts[1].1)] {
+            if body["draft"]["items"].as_array().map(|a| a.len()) != Some(2) {
+                diffs.push(format!("extract {label} items 数量异常: {body}"));
+            }
+        }
+    }
+
+    // D) apply 勾选子集 → 双端 200 + applied:1。
+    for base in [&rust, &ts] {
+        let response = reqwest::Client::new()
+            .post(format!("{base}/api/v1/books/b2/series-backfill/apply"))
+            .json(&json!({ "itemIds": ["it-1"] }))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let mut body: Value = response.json().await.unwrap_or(Value::Null);
+        let applied = body.get("applied").cloned().unwrap_or(Value::Null);
+        normalize(&mut body);
+        if status != 200 || applied != json!(1) {
+            diffs.push(format!("apply 勾选 {base} [{status}]: {body}"));
+        }
+    }
+
+    assert!(
+        diffs.is_empty(),
+        "series-backfill 契约差异 {} 处：\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
 }

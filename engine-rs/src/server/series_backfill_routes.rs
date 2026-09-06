@@ -211,7 +211,8 @@ pub async fn apply(
         StatusCode::OK,
         Json(json!({
             "ok": true,
-            "path": path.to_string_lossy(),
+            // 相对路径（185 号 duel：绝对路径属服务器侧细节，不入契约）。
+            "path": "story/series_backfill.md",
             "applied": items.len(),
         })),
     )

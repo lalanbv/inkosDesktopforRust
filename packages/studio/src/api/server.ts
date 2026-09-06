@@ -2896,7 +2896,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》 · 抽取于 ${draft.updatedAt} · 勾选 ${items.length} 条\n\n`;
     for (const item of items) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
     await writeFile(path, markdown, "utf-8");
-    return c.json({ ok: true, path, applied: items.length });
+    return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length });
   });
 
   app.get("/api/v1/books/:id/timeline", async (c) => {
