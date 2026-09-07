@@ -1,0 +1,167 @@
+{
+  "$comment": "212 号：节拍沉淀纯函数域共享 golden 向量（parse/merge）。engine tests/golden_beats_diff.rs 与 core __tests__/golden-beats.test.ts 读同一文件逐例断言——双端「逐字对齐」（191 号声明）由差分守门。updatedAt 为非确定值：merge 断言只比 plotlines/applied，updatedAt 单独断言刷新语义。",
+  "parse": [
+    {
+      "name": "fenced-json",
+      "text": "```json\n{\"beats\":[{\"plotlineId\":\"main\",\"title\":\"风起\",\"note\":\"主角入场\"}]}\n```",
+      "validIds": ["main", "love"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "main", "title": "风起", "note": "主角入场" }
+      ]
+    },
+    {
+      "name": "bare-json",
+      "text": "{\"beats\":[{\"plotlineId\":\"love\",\"title\":\"初遇\"}]}",
+      "validIds": ["main", "love"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "love", "title": "初遇" }
+      ]
+    },
+    {
+      "name": "unknown-id-filtered",
+      "text": "{\"beats\":[{\"plotlineId\":\"main\",\"title\":\"a\"},{\"plotlineId\":\"ghost\",\"title\":\"b\"}]}",
+      "validIds": ["main"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "main", "title": "a" }
+      ]
+    },
+    {
+      "name": "blank-title-and-note-dropped",
+      "text": "{\"beats\":[{\"plotlineId\":\"main\",\"title\":\"   \",\"note\":\"\"},{\"plotlineId\":\"main\",\"title\":\"有效\",\"note\":\"说明\"}]}",
+      "validIds": ["main"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "main", "title": "有效", "note": "说明" }
+      ]
+    },
+    {
+      "name": "blank-title-kept-when-note-present",
+      "text": "{\"beats\":[{\"plotlineId\":\"main\",\"title\":\"  \",\"note\":\"仅说明\"}]}",
+      "validIds": ["main"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "main", "title": "  ", "note": "仅说明" }
+      ]
+    },
+    {
+      "name": "non-string-plotline-id-skipped",
+      "text": "{\"beats\":[{\"plotlineId\":7,\"title\":\"x\"},{\"plotlineId\":\"main\",\"title\":\"y\"}]}",
+      "validIds": ["main"],
+      "error": null,
+      "expected": [
+        { "plotlineId": "main", "title": "y" }
+      ]
+    },
+    {
+      "name": "missing-beats-array",
+      "text": "{\"items\":[]}",
+      "validIds": ["main"],
+      "errorContains": "missing `beats` array",
+      "expected": null
+    },
+    {
+      "name": "non-json-text",
+      "text": "这不是 JSON",
+      "validIds": ["main"],
+      "errorContains": "beats JSON parse failed",
+      "expected": null
+    }
+  ],
+  "merge": [
+    {
+      "name": "replace-existing-cell",
+      "timeline": {
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "t0",
+        "plotlines": [
+          { "id": "main", "name": "主线", "cells": [{ "chapter": 3, "title": "旧标题" }] }
+        ]
+      },
+      "chapter": 3,
+      "beats": [{ "plotlineId": "main", "title": "新标题", "note": "新说明" }],
+      "expectedApplied": 1,
+      "expectedPlotlines": [
+        { "id": "main", "name": "主线", "cells": [{ "chapter": 3, "title": "新标题", "note": "新说明" }] }
+      ]
+    },
+    {
+      "name": "insert-middle-ascending",
+      "timeline": {
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "t0",
+        "plotlines": [
+          { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }, { "chapter": 5 }] }
+        ]
+      },
+      "chapter": 3,
+      "beats": [{ "plotlineId": "main", "title": "中段" }],
+      "expectedApplied": 1,
+      "expectedPlotlines": [
+        { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }, { "chapter": 3, "title": "中段" }, { "chapter": 5 }] }
+      ]
+    },
+    {
+      "name": "insert-tail-and-blank-sanitized",
+      "timeline": {
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "t0",
+        "plotlines": [
+          { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }] }
+        ]
+      },
+      "chapter": 9,
+      "beats": [{ "plotlineId": "main", "title": "   ", "note": "仅注" }],
+      "expectedApplied": 1,
+      "expectedPlotlines": [
+        { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }, { "chapter": 9, "note": "仅注" }] }
+      ]
+    },
+    {
+      "name": "unknown-plotline-ignored-multi-line-applied",
+      "timeline": {
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "t0",
+        "plotlines": [
+          { "id": "main", "name": "主线", "cells": [] },
+          { "id": "love", "name": "感情线", "cells": [] }
+        ]
+      },
+      "chapter": 2,
+      "beats": [
+        { "plotlineId": "ghost", "title": "忽略" },
+        { "plotlineId": "main", "title": "主线节拍" },
+        { "plotlineId": "love", "note": "感情节拍" }
+      ],
+      "expectedApplied": 2,
+      "expectedPlotlines": [
+        { "id": "main", "name": "主线", "cells": [{ "chapter": 2, "title": "主线节拍" }] },
+        { "id": "love", "name": "感情线", "cells": [{ "chapter": 2, "note": "感情节拍" }] }
+      ]
+    },
+    {
+      "name": "no-applied-keeps-updatedat",
+      "timeline": {
+        "version": 1,
+        "bookId": "b1",
+        "updatedAt": "t0",
+        "plotlines": [
+          { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }] }
+        ]
+      },
+      "chapter": 4,
+      "beats": [{ "plotlineId": "ghost", "title": "全部忽略" }],
+      "expectedApplied": 0,
+      "expectedPlotlines": [
+        { "id": "main", "name": "主线", "cells": [{ "chapter": 1 }] }
+      ],
+      "expectedUpdatedAt": "t0"
+    }
+  ]
+}
