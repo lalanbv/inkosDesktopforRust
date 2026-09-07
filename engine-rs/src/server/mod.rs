@@ -24,6 +24,7 @@ pub mod play_routes;
 pub mod interactive_film_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
+pub mod segment_guard;
 pub mod service_routes;
 pub mod session_routes;
 pub mod skill_routes;
@@ -656,6 +657,10 @@ pub fn router_books(
             "/api/v1/books/:id/foundation/revise",
             post(book_create_routes::revise_foundation).with_state(books),
         )
+        // 路径段守卫（201 号）：books/projects 的 id 段 percent-decode 后统一过
+        // is_safe_book_id，拦 `..%2F` 注入穿越——对齐 Node 侧
+        // `/api/v1/books/:id*` 中间件，补齐默认引擎的文件面纵深。
+        .layer(axum::middleware::from_fn(segment_guard::guard))
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。

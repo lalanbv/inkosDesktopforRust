@@ -810,6 +810,19 @@ describe("createStudioServer daemon lifecycle", () => {
     });
   });
 
+  it("rejects project routes with path traversal ids", async () => {
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/projects/..%2Fetc%2Fpasswd", {
+      method: "GET",
+    });
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("INVALID_ID");
+  });
+
   it("allows reading and updating fixed control truth files", async () => {
     const bookDir = join(root, "books", "demo-book");
     const storyDir = join(bookDir, "story");

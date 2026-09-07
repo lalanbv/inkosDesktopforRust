@@ -2711,6 +2711,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     await next();
   });
 
+  // Projects id validation（201 号）：对齐 books 段守卫与 engine-rs
+  // segment_guard（projects 段同样以 id 拼 interactive-films/翻译项目路径）。
+  // 错误码沿用双端 story-graph 端点既有契约 INVALID_ID。
+  app.use("/api/v1/projects/:id/*", async (c, next) => {
+    const projectId = c.req.param("id");
+    if (!isSafeBookId(projectId)) {
+      throw new ApiError(400, "INVALID_ID", `Invalid project ID: "${projectId}"`);
+    }
+    await next();
+  });
+  app.use("/api/v1/projects/:id", async (c, next) => {
+    const projectId = c.req.param("id");
+    if (!isSafeBookId(projectId)) {
+      throw new ApiError(400, "INVALID_ID", `Invalid project ID: "${projectId}"`);
+    }
+    await next();
+  });
+
   // Logger sink that broadcasts to SSE
   const sseSink: LogSink = {
     write(entry: LogEntry): void {
