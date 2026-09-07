@@ -233,8 +233,12 @@ impl AgentRouter {
 }
 
 /// 单 agent 的端口实现（宏生成同签名 trait 实现）。
+///
+/// 202 号：`router` 改 `Arc<AgentRouter>`——端口装配共享同一 router 句柄
+/// （每章 write-next 原先对 AgentRouter 做 9 份深拷贝再整体泄漏）；
+/// chat 实现经 Deref 无感，`clone()` 变计数递增。
 pub struct RoutedAgent {
-    pub router: AgentRouter,
+    pub router: Arc<AgentRouter>,
     pub agent: &'static str,
 }
 
@@ -359,14 +363,18 @@ impl CycleAuditor for RoutedAgent {
 }
 
 /// settle 端口：writer.settleChapterState 的链内包装（ctx 自持）。
-pub struct RoutedSettler {
-    pub router: AgentRouter,
-    pub ctx: WriterCtx<'static>,
+///
+/// 202 号：`ctx` 由 `'static` 泛型化为 `'a`——write-next 装配改为 owned
+/// 持有者 + 同帧借用（无泄漏）；低频端点的既有 `Box::leak` 装配传
+/// `'static` 值仍兼容（`'static: 'a`）。
+pub struct RoutedSettler<'a> {
+    pub router: Arc<AgentRouter>,
+    pub ctx: WriterCtx<'a>,
     pub chapter_number: u32,
 }
 
 #[async_trait]
-impl SettlePort for RoutedSettler {
+impl SettlePort for RoutedSettler<'_> {
     async fn settle(&self, params: SettleRequest<'_>) -> Result<WriteChapterOutput, String> {
         let agent = RoutedAgent {
             router: self.router.clone(),
@@ -398,7 +406,7 @@ impl SettlePort for RoutedSettler {
 /// 这些是调用级常量；治理控制入参（intent/memo/package/ruleStack）经
 /// 环的 control 逐调用传入。
 pub struct FullCycleAuditor {
-    pub router: AgentRouter,
+    pub router: Arc<AgentRouter>,
     pub project_root: std::path::PathBuf,
     pub builtin_genres_dir: std::path::PathBuf,
     pub book_dir: std::path::PathBuf,
@@ -529,7 +537,7 @@ mod tests {
     #[tokio::test]
     async fn chat_failure_is_string_error() {
         let router = router_with(HashMap::new());
-        let agent = RoutedAgent { router, agent: "writer" };
+        let agent = RoutedAgent { router: std::sync::Arc::new(router), agent: "writer" };
         let error = crate::agents::writer::WriterChat::chat(
             &agent,
             vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }],
@@ -545,7 +553,7 @@ mod tests {
     async fn auditor_protocol_parses() {
         // 本地 mock LLM：首行 PASS + 问题行 + 分数行。
         let router = router_with(HashMap::new());
-        let agent = RoutedAgent { router, agent: "auditor" };
+        let agent = RoutedAgent { router: std::sync::Arc::new(router), agent: "auditor" };
         // 直接测协议解析逻辑——通过注入式结果不可行（无 mock 面），
         // 用最小内联复算验证（真实 HTTP 面由 E2E 契约测试覆盖）。
         let content = "PASS\n[节奏] 节奏拖沓\n92";

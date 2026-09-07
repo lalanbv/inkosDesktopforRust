@@ -109,18 +109,24 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
         move |state, book_id, word_count, temperature, abort, context| {
             let books = runner_books.clone();
             Box::pin(async move {
-                let mut agents =
-                    inkos_engine::server::books_routes::build_write_next_agents(&books).await;
+                // 202 号：owned 装配（write_next_assembly 宏适合直接调用，此
+                // 处需填 full_auditor，手写展开同构）。
+                let agent_ports =
+                    inkos_engine::server::books_routes::WriteNextAgentPorts::build(&books).await;
+                let settler = agent_ports.settler(0);
+                let mut agents = agent_ports.agents(&settler);
                 agents.full_auditor =
                     Some(inkos_engine::llm::agent_router::FullCycleAuditor {
-                        router: (*books.effective_router().await).clone(),
+                        router: books.effective_router().await,
                         project_root: books.state.project_root().to_path_buf(),
                         builtin_genres_dir: books.builtin_genres_dir.clone(),
                         book_dir: books.state.project_root().join("books").join(&book_id),
                         chapter_number: 0, // for_chapter 按章重绑
                         genre: String::new(),
                     });
-                let ctx = inkos_engine::server::books_routes::build_write_next_ctx(&books).await;
+                let ports =
+                    inkos_engine::server::books_routes::WriteNextPorts::build(&books).await;
+                let ctx = ports.ctx();
                 // 126 号：事件化配置（context:compression 广播）——与其余写面
                 // 同源；175 号：注入 stop 端点置位的中止句柄（阶段边界生效）。
                 let mut config =

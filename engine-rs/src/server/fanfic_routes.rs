@@ -93,7 +93,7 @@ async fn review_loop(
     mut regenerate: impl FnMut(Option<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::agents::architect::ArchitectOutput, String>> + Send>>,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
     let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "foundation-reviewer",
     }));
     let mut feedback: Option<String> = None;
@@ -135,7 +135,7 @@ async fn init_fanfic_book(
 
     // Step 1：同人正典导入。
     let importer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "fanfic-canon-importer",
     }));
     let canon = import_from_text(importer_chat, source_text, source_name, fanfic_mode).await?;
@@ -147,7 +147,7 @@ async fn init_fanfic_book(
 
     // Step 2：审核环（fanfic 模式 + sourceCanon）。
     let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
     let foundation = review_loop(
         runtime,
         book,
@@ -224,7 +224,7 @@ async fn init_spinoff_book(
     // spinoff 上下文 + 审核环（original 模式）。
     let spinoff_context = build_spinoff_foundation_context(&parent_canon, direction, language);
     let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
     let foundation = review_loop(
         runtime,
         book,
@@ -374,7 +374,7 @@ pub async fn fanfic_refresh(
         let book = runtime.state.load_book_config(&book_id).await.map_err(|e| e.to_string())?;
         let fanfic_mode = book.fanfic_mode.unwrap_or(FanficMode::Canon);
         let importer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-            router: (*runtime.effective_router().await).clone(),
+            router: runtime.effective_router().await,
             agent: "fanfic-canon-importer",
         }));
         let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("source");

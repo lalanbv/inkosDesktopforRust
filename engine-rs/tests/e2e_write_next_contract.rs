@@ -121,10 +121,10 @@ fn build_agents(base_url: &str) -> WriteNextAgents<'static> {
         )]),
     );
     let leak = |agent: &'static str| -> &'static RoutedAgent {
-        Box::leak(Box::new(RoutedAgent { router: router.clone(), agent }))
+        Box::leak(Box::new(RoutedAgent { router: std::sync::Arc::new(router.clone()), agent }))
     };
     let settler: &'static RoutedSettler = Box::leak(Box::new(RoutedSettler {
-        router: router.clone(),
+        router: std::sync::Arc::new(router.clone()),
         ctx: inkos_engine::agents::writer::WriterCtx {
             project_root: Box::leak(std::path::PathBuf::from("/nonexistent").into_boxed_path()),
             builtin_genres_dir: Box::leak(

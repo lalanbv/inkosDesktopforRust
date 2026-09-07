@@ -1039,8 +1039,7 @@ async fn execute_write_next(
         ));
     }
 
-    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
+    crate::write_next_assembly!(runtime, agents, ctx);
     let config = WriteNextConfig {
         abort: Some(abort.clone()),
         ..WriteNextConfig::from_project(runtime.state.project_root()).await

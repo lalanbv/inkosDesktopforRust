@@ -74,7 +74,7 @@ fn status_str(forecast: &NarrativeForecast) -> &'static str {
 }
 
 async fn forecast_agent(runtime: &BooksRuntime) -> RoutedAgent {
-    RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "forecast" }
+    RoutedAgent { router: runtime.effective_router().await, agent: "forecast" }
 }
 
 /// `create_narrative_forecast`：正史上下文 + 分歧点 → 2-5 隔离候选分支。

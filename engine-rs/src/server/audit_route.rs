@@ -134,7 +134,7 @@ pub(crate) async fn run_audit_flow(
 
     // 完整审计（FullCycleAuditor → 真实 audit_chapter 编排）。
     let auditor = FullCycleAuditor {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         book_dir,
@@ -142,7 +142,7 @@ pub(crate) async fn run_audit_flow(
         genre: book.genre.clone(),
     };
     let chat = RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "auditor",
     };
     let prompt_store = FsStateStore;

@@ -202,9 +202,9 @@ pub async fn init_book(
     current_focus: Option<&str>,
 ) -> Result<(), String> {
     let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
     let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "foundation-reviewer",
     }));
     let architect_ctx = ArchitectCtx {
@@ -629,7 +629,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
     if start_from == 1 {
         let foundation_source = build_import_foundation_source(chapters);
         let architect_chat: &'static RoutedAgent =
-            Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "architect" }));
+            Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
         let architect_ctx = ArchitectCtx {
             project_root: state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
@@ -637,7 +637,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
         let foundation = if matches!(import_mode, ImportMode::Series) {
             // series：生成 → 评审 → 带反馈重生成（92 号评审环）。
             let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-                router: (*runtime.effective_router().await).clone(),
+                router: runtime.effective_router().await,
                 agent: "foundation-reviewer",
             }));
             generate_and_review_foundation_import(
@@ -682,7 +682,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
 
     // Step 2：逐章回放。
     let analyzer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "chapter-analyzer",
     }));
     let analyzer_ctx: &'static crate::agents::chapter_analyzer::ChapterAnalyzerCtx =
@@ -702,8 +702,11 @@ pub(crate) async fn import_chapters_chain_with_resume(
     let mut imported_count = 0u32;
     // 回放治理输入端口（112 号：TS importChapters 的 prepareWriteInput——
     // v2 治理三件逐章构造，plan 持久化复用同链）。
-    let write_agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let write_ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
+    let agent_ports = crate::server::books_routes::WriteNextAgentPorts::build(runtime).await;
+    let write_ports = crate::server::books_routes::WriteNextPorts::build(runtime).await;
+    let write_settler = agent_ports.settler(0);
+    let write_agents = agent_ports.agents(&write_settler);
+    let write_ctx = write_ports.ctx();
     let governance_config = crate::pipeline::write_next::WriteNextConfig::default();
     for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
         // 检查点②：每章回放头（TS 2858）。
@@ -994,7 +997,7 @@ async fn revise_foundation_inner(
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
     let architect_chat: &'static crate::llm::agent_router::RoutedAgent =
         Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-            router: (*runtime.effective_router().await).clone(),
+            router: runtime.effective_router().await,
             agent: "architect",
         }));
     let architect_ctx = ArchitectCtx {
@@ -1023,7 +1026,7 @@ async fn revise_foundation_inner(
     {
         let reviewer_chat: &'static crate::llm::agent_router::RoutedAgent =
             Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-                router: (*runtime.effective_router().await).clone(),
+                router: runtime.effective_router().await,
                 agent: "foundation-reviewer",
             }));
         let language = if book.language.as_deref() == Some("en") {

@@ -165,8 +165,7 @@ async fn write_one_chapter(
     temperature: Option<f64>,
 ) -> Result<(bool, u32, String, Vec<String>), String> {
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
-    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
+    crate::write_next_assembly!(runtime, agents, ctx);
     let config = WriteNextConfig::from_project(runtime.state.project_root()).await;
     let result = write_next_chapter(
         &runtime.state,
@@ -436,7 +435,7 @@ async fn run_detection(
         let router = runtime.effective_router().await;
         let reviser_chat: &'static crate::llm::agent_router::RoutedAgent =
             Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-                router: (*router).clone(),
+                router: router.clone(),
                 agent: "reviser",
             }));
         let reviser_ctx = crate::agents::reviser::ReviserCtx {

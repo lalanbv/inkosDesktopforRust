@@ -172,8 +172,7 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
         .filter(|v| v.fract() == 0.0 && *v > 0.0)
         .map(|v| v as u32);
     let runtime = deps.runtime;
-    let agents = crate::server::books_routes::build_write_next_agents(runtime).await;
-    let ctx = crate::server::books_routes::build_write_next_ctx(runtime).await;
+    crate::write_next_assembly!(runtime, agents, ctx);
     // 默认 Auto 审核模式（TS writeNextChapter 语义：审后 ready-for-review）。
     let config = crate::pipeline::write_next::WriteNextConfig {
         abort: deps.abort.clone(),

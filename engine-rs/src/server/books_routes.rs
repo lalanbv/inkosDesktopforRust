@@ -213,7 +213,7 @@ async fn run_plan(
     let chapter_number = runtime.state.get_next_chapter_number(book_id).await?;
 
     let planner: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "planner" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "planner" }));
     let plan = crate::agents::planner::plan_chapter(
         planner,
         &crate::agents::planner::PlanChapterInput {
@@ -283,7 +283,7 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
     let book_dir = runtime.state.book_dir(book_id);
 
     let writer: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "writer" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "writer" }));
     let ctx: &'static crate::agents::writer::WriterCtx =
         Box::leak(Box::new(crate::agents::writer::WriterCtx {
             project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
@@ -383,8 +383,7 @@ async fn run_draft(
     book_id: &str,
     body: &DraftBody,
 ) -> Result<crate::pipeline::write_next::ChapterPipelineResult, crate::pipeline::write_next::WriteNextError> {
-    let agents = build_write_next_agents(runtime).await;
-    let ctx = build_write_next_ctx(runtime).await;
+    crate::write_next_assembly!(runtime, agents, ctx);
     write_next_chapter(
         &runtime.state,
         &agents,
@@ -757,7 +756,7 @@ pub(crate) async fn run_revise_chain(
 
     // pre merged-audit（四源合并）。
     let auditor = FullCycleAuditor {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         project_root: runtime.state.project_root().to_path_buf(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         book_dir: book_dir.clone(),
@@ -786,7 +785,7 @@ pub(crate) async fn run_revise_chain(
 
     // 修稿（以 pre 合并审计问题驱动）。
     let reviser: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "reviser" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "reviser" }));
     let reviser_ctx: &'static crate::agents::reviser::ReviserCtx =
         Box::leak(Box::new(crate::agents::reviser::ReviserCtx {
             project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
@@ -820,7 +819,7 @@ pub(crate) async fn run_revise_chain(
     // 131 号合并同步：reviser 契约瘦身（updated_* 标签移除）——修订后的
     // 真相覆盖改由结算器产出（TS reviseDraft 新链：revise → settle → 覆盖审计）。
     let settler_agent: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: (*runtime.effective_router().await).clone(), agent: "writer" }));
+        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "writer" }));
     let settled = crate::agents::writer::settle_chapter_state(
         &crate::agents::writer::WriterCtx {
             project_root: runtime.state.project_root(),
@@ -873,7 +872,7 @@ pub(crate) async fn run_revise_chain(
 
     let mut settled = settled;
     let validator_chat = RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "state-validator",
     };
     let state_validation =
@@ -894,7 +893,7 @@ pub(crate) async fn run_revise_chain(
         .map_err(|e| internal(e.to_string()))?;
     if !state_validation.passed || state_validation.repair_required {
         let retry_settler = crate::llm::agent_router::RoutedSettler {
-            router: (*runtime.effective_router().await).clone(),
+            router: runtime.effective_router().await,
             ctx: crate::agents::writer::WriterCtx {
                 project_root: Box::leak(
                     runtime.state.project_root().to_path_buf().into_boxed_path(),
@@ -1194,7 +1193,7 @@ async fn run_compose(
         Some(plan) if context.map(str::trim).unwrap_or("").is_empty() => plan,
         _ => {
             let planner: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-                router: (*runtime.effective_router().await).clone(),
+                router: runtime.effective_router().await,
                 agent: "planner",
             }));
             let plan = crate::agents::planner::plan_chapter(
@@ -1218,7 +1217,7 @@ async fn run_compose(
 
     // compose（35 号编排；outline 选段走 LLM 端口）。
     let composer: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "composer",
     }));
     let selector = crate::agents::composer::LlmOutlineSelector { chat: composer };
@@ -1269,7 +1268,7 @@ pub async fn consolidate_endpoint(
 ) -> impl IntoResponse {
     let book_dir = runtime.state.book_dir(&book_id.clone());
     let consolidator: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
-        router: (*runtime.effective_router().await).clone(),
+        router: runtime.effective_router().await,
         agent: "consolidator",
     }));
     match run_consolidate(consolidator, &book_dir).await {
@@ -1308,7 +1307,7 @@ impl ValidatePort for RoutedValidator {
         params: crate::pipeline::chapter_state_recovery::ValidateRequest<'_>,
     ) -> Result<crate::agents::state_validator::ValidationResult, String> {
         let chat = RoutedAgent {
-            router: (*self.router).clone(),
+            router: self.router.clone(),
             agent: "state-validator",
         };
         validate_state(
@@ -1341,7 +1340,7 @@ struct RepairSettle {
 impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
     async fn settle(&self, params: SettleRequest<'_>) -> Result<crate::agents::writer::WriteChapterOutput, String> {
         let writer = RoutedAgent {
-            router: (*self.router).clone(),
+            router: self.router.clone(),
             agent: "writer",
         };
         let ctx: &'static crate::agents::writer::WriterCtx =
@@ -2022,53 +2021,129 @@ pub fn with_event_broadcasts(
     }
 }
 
-pub async fn build_write_next_agents(runtime: &BooksRuntime) -> WriteNextAgents<'static> {
-    let effective = runtime.effective_router().await;
-    let leak = |agent: &'static str| -> &'static RoutedAgent {
-        Box::leak(Box::new(RoutedAgent { router: (*effective).clone(), agent }))
-    };
-    let settler: &'static crate::llm::agent_router::RoutedSettler =
-        Box::leak(Box::new(crate::llm::agent_router::RoutedSettler {
-            router: (*runtime.effective_router().await).clone(),
-            ctx: crate::agents::writer::WriterCtx {
-                project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-                builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-                prompt_store: Box::leak(Box::new(FsStateStore)),
-                state_store: Box::leak(Box::new(FsStateStore)),
-            },
-            chapter_number: 0,
-        }));
-    WriteNextAgents {
-        writer: leak("writer"),
-        planner: leak("planner"),
-        composer: leak("composer"),
-        reviser: leak("reviser"),
-        auditor: leak("auditor"),
-        full_auditor: None,
+/// write-next agents 装配的拥有型持有者（202 号）：取代 `Box::leak`
+/// 'static 泄漏装配（旧形态每章泄漏 9 个端口对象 + 9 份 AgentRouter 深拷贝）。
+/// router 共享单一 [`Arc`]；settle 端口的 WriterCtx 依赖以 owned 字段持有，
+/// [`Self::settler`] 借用它们构造端口（结构体不能自引用——依赖与端口分置）。
+pub struct WriteNextAgentPorts {
+    router: std::sync::Arc<AgentRouter>,
+    writer: RoutedAgent,
+    planner: RoutedAgent,
+    composer: RoutedAgent,
+    reviser: RoutedAgent,
+    auditor: RoutedAgent,
+    analyzer: RoutedAgent,
+    state_validator: RoutedAgent,
+    settle_project_root: std::path::PathBuf,
+    settle_builtin_genres_dir: std::path::PathBuf,
+    settle_prompt_store: FsStateStore,
+    settle_state_store: FsStateStore,
+}
 
-        analyzer: leak("chapter-analyzer"),
-        state_validator: leak("state-validator"),
-        settler,
+impl WriteNextAgentPorts {
+    pub async fn build(runtime: &BooksRuntime) -> Self {
+        let effective = runtime.effective_router().await;
+        let routed = |agent: &'static str| RoutedAgent { router: effective.clone(), agent };
+        Self {
+            writer: routed("writer"),
+            planner: routed("planner"),
+            composer: routed("composer"),
+            reviser: routed("reviser"),
+            auditor: routed("auditor"),
+            analyzer: routed("chapter-analyzer"),
+            state_validator: routed("state-validator"),
+            router: effective,
+            settle_project_root: runtime.state.project_root().to_path_buf(),
+            settle_builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+            settle_prompt_store: FsStateStore,
+            settle_state_store: FsStateStore,
+        }
+    }
+
+    /// settle 端口（chapter_number 由管线按章重绑；借用 self 的依赖字段——
+    /// 须与 [`Self::agents`] 同一调用帧使用）。
+    pub fn settler(&self, chapter_number: u32) -> crate::llm::agent_router::RoutedSettler<'_> {
+        crate::llm::agent_router::RoutedSettler {
+            router: self.router.clone(),
+            ctx: crate::agents::writer::WriterCtx {
+                project_root: &self.settle_project_root,
+                builtin_genres_dir: &self.settle_builtin_genres_dir,
+                prompt_store: &self.settle_prompt_store,
+                state_store: &self.settle_state_store,
+            },
+            chapter_number,
+        }
+    }
+
+    /// agents 聚合视图（settler 为同帧临时值）。
+    pub fn agents<'a>(
+        &'a self,
+        settler: &'a crate::llm::agent_router::RoutedSettler<'a>,
+    ) -> WriteNextAgents<'a> {
+        WriteNextAgents {
+            writer: &self.writer,
+            planner: &self.planner,
+            composer: &self.composer,
+            reviser: &self.reviser,
+            auditor: &self.auditor,
+            full_auditor: None,
+            analyzer: &self.analyzer,
+            state_validator: &self.state_validator,
+            settler,
+        }
     }
 }
 
-pub async fn build_write_next_ctx(runtime: &BooksRuntime) -> WriteNextCtx<'static> {
-    let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
-    // 189 号：时间线节拍提取端口（书籍级开关默认关；关闭时端口不会被调用）。
-    let timeline_beats: &'static crate::agents::timeline_settler::RouterTimelineBeatsChat = Box::leak(
-        Box::new(crate::agents::timeline_settler::RouterTimelineBeatsChat {
-            router: runtime.effective_router().await,
-        }),
-    );
-    WriteNextCtx {
-        project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-        builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-        prompt_store,
-        state_store: prompt_store,
-        context_budget: None,
-        notify: None,
-        timeline_beats: Some(timeline_beats),
+/// write-next 环境依赖的拥有型持有者（202 号，同 [`WriteNextAgentPorts`]
+/// 取代泄漏装配）。189 号的节拍提取端口以 owned 字段持有（开关默认关，
+/// 关闭时端口不会被调用）。
+pub struct WriteNextPorts {
+    project_root: std::path::PathBuf,
+    builtin_genres_dir: std::path::PathBuf,
+    store: FsStateStore,
+    timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat,
+}
+
+impl WriteNextPorts {
+    pub async fn build(runtime: &BooksRuntime) -> Self {
+        Self {
+            project_root: runtime.state.project_root().to_path_buf(),
+            builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+            store: FsStateStore,
+            timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat {
+                router: runtime.effective_router().await,
+            },
+        }
     }
+
+    pub fn ctx(&self) -> WriteNextCtx<'_> {
+        WriteNextCtx {
+            project_root: &self.project_root,
+            builtin_genres_dir: &self.builtin_genres_dir,
+            prompt_store: &self.store,
+            state_store: &self.store,
+            context_budget: None,
+            notify: None,
+            timeline_beats: Some(&self.timeline_beats),
+        }
+    }
+}
+
+/// write-next 全套装配（202 号）：owned 持有者 + 同帧借用展开。调用点：
+/// `crate::write_next_assembly!(runtime, agents, ctx);`——宏展开引入的
+/// 持有者变量活到当前函数块结束，`agents`/`ctx` 借用它们，随帧整体 drop
+/// （零泄漏；旧 `build_write_next_ctx`/`build_write_next_agents` 泄漏装配
+/// 已删除）。
+#[macro_export]
+macro_rules! write_next_assembly {
+    ($runtime:expr, $agents:ident, $ctx:ident) => {
+        let agent_ports = $crate::server::books_routes::WriteNextAgentPorts::build($runtime).await;
+        let ports = $crate::server::books_routes::WriteNextPorts::build($runtime).await;
+        let settler = agent_ports.settler(0);
+        let $agents = agent_ports.agents(&settler);
+        let $ctx = ports.ctx();
+        let _ = (&agent_ports, &ports, &settler);
+    };
 }
 
 #[cfg(test)]
@@ -2102,7 +2177,8 @@ mod tests {
     async fn write_next_ctx_installs_timeline_beats_port() {
         let dir = tempfile::tempdir().unwrap();
         let runtime = runtime_for(dir.path());
-        let ctx = build_write_next_ctx(&runtime).await;
+        let ports = WriteNextPorts::build(&runtime).await;
+        let ctx = ports.ctx();
         assert!(ctx.timeline_beats.is_some());
     }
 
