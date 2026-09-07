@@ -1849,13 +1849,24 @@ export class PipelineRunner {
     try {
       const results: ChapterPipelineResult[] = [];
       for (let index = 0; index < chapterCount; index += 1) {
-        this.throwIfOperationAborted();
-        const result = await this._writeNextChapterLocked(
-          bookId,
-          options.wordCount,
-          options.temperatureOverride,
-          options.externalContext ?? this.config.externalContext,
-        );
+        try {
+          this.throwIfOperationAborted();
+        } catch (error) {
+          // 209 号：连写中途用户中止——已完成章节已落盘，错误携带部分完成
+          // 摘要（此前裸 throw 掩盖 k 章资产；首章前中止维持原错误）。
+          throw withBatchProgress(error, results, chapterCount, "aborted");
+        }
+        let result: ChapterPipelineResult;
+        try {
+          result = await this._writeNextChapterLocked(
+            bookId,
+            options.wordCount,
+            options.temperatureOverride,
+            options.externalContext ?? this.config.externalContext,
+          );
+        } catch (error) {
+          throw withBatchProgress(error, results, chapterCount, "failed");
+        }
         results.push(result);
         options.onChapterComplete?.(result, results.length, chapterCount);
         if (result.status !== "ready-for-review") break;
@@ -3922,4 +3933,26 @@ ${matrix}`,
     const contentStart = lines.findIndex((l, i) => i > 0 && l.trim().length > 0);
     return contentStart >= 0 ? lines.slice(contentStart).join("\n") : raw;
   }
+}
+
+/**
+ * 209 号：批量连写章间失败/中止的进度增强。已完成章节已真实落盘——
+ * 已有成果时在错误消息前附加部分完成摘要；首章前失败原样抛出。
+ */
+function withBatchProgress(
+  error: unknown,
+  results: ReadonlyArray<{ readonly chapterNumber: number }>,
+  chapterCount: number,
+  reason: "aborted" | "failed",
+): unknown {
+  if (results.length === 0) return error;
+  const first = results[0].chapterNumber;
+  const last = results[results.length - 1].chapterNumber;
+  const base = error instanceof Error ? error.message : String(error);
+  const reasonText = reason === "aborted" ? "operation aborted" : "a later chapter failed";
+  const enriched = new Error(
+    `Completed and persisted ${results.length}/${chapterCount} chapter(s) ` +
+      `(chapters ${first}-${last}); ${reasonText}: ${base}`,
+  );
+  return enriched;
 }

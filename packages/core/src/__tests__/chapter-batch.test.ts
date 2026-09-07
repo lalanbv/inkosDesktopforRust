@@ -135,4 +135,51 @@ describe("PipelineRunner.writeChapters", () => {
     await expect(runner.writeChapters("demo-book", 0)).rejects.toThrow(/chapterCount/i);
     await expect(runner.writeChapters("demo-book", 21)).rejects.toThrow(/chapterCount/i);
   });
+
+// ── 209 号：章间失败/中止的部分完成摘要 ─────────────────────────────
+
+  it("enriches a mid-batch chapter failure with the partial completion summary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-batch-"));
+    roots.push(root);
+    const runner = new PipelineRunner({
+      client: {} as never,
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.fn(async () => vi.fn(async () => undefined));
+    // 第 1 章成功，第 2 章失败。
+    const writeLocked = vi.fn()
+      .mockResolvedValueOnce(chapter(11))
+      .mockRejectedValueOnce(new Error("HTTP 429 rate limit"));
+    const internals = runner as unknown as {
+      state: { acquireBookLock: typeof acquireBookLock };
+      _writeNextChapterLocked: typeof writeLocked;
+    };
+    internals.state = { acquireBookLock };
+    internals._writeNextChapterLocked = writeLocked;
+
+    await expect(runner.writeChapters("demo-book", 2)).rejects.toThrow(
+      /Completed and persisted 1\/2 chapter\(s\) \(chapters 11-11\); a later chapter failed: HTTP 429/,
+    );
+  });
+
+  it("keeps the plain error when the very first chapter fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-batch-"));
+    roots.push(root);
+    const runner = new PipelineRunner({
+      client: {} as never,
+      model: "test-model",
+      projectRoot: root,
+    });
+    const acquireBookLock = vi.fn(async () => vi.fn(async () => undefined));
+    const writeLocked = vi.fn().mockRejectedValue(new Error("plan chapter failed"));
+    const internals = runner as unknown as {
+      state: { acquireBookLock: typeof acquireBookLock };
+      _writeNextChapterLocked: typeof writeLocked;
+    };
+    internals.state = { acquireBookLock };
+    internals._writeNextChapterLocked = writeLocked;
+
+    await expect(runner.writeChapters("demo-book", 3)).rejects.toThrow(/^plan chapter failed$/);
+  });
 });

@@ -1004,6 +1004,61 @@ pub(crate) struct ToolOutcome {
 
 /// write_next 错误呈现（101 号：Aborted → 双语逐字（与轮间中止同一文案），
 /// 其余 to_string）。
+/// 已有成果时的中止文案（209 号：连写中途用户中止——保留部分完成摘要；
+/// 首章前中止维持原文案）。
+fn abort_text_with_partial(
+    results: &[crate::pipeline::write_next::ChapterPipelineResult],
+    lang: StudioLang,
+) -> String {
+    if results.is_empty() {
+        return pick(
+            lang,
+            "操作已中止：用户请求停止该任务。",
+            "Operation aborted: the user requested to stop this task.",
+        );
+    }
+    let first = results.first().map(|r| r.chapter_number).unwrap_or(0);
+    let last = results.last().map(|r| r.chapter_number).unwrap_or(0);
+    pick(
+        lang,
+        &format!(
+            "操作已中止：已完成 {n} 章并落盘（第 {first} 章至第 {last} 章），后续章节未写入。",
+            n = results.len(),
+        ),
+        &format!(
+            "Operation aborted: {n} chapter(s) persisted (chapters {first}-{last}); later chapters were not written.",
+            n = results.len(),
+        ),
+    )
+}
+
+/// 章间失败文案（209 号）：已完成章节已落盘——错误携带部分完成摘要。
+fn chapter_error_text_with_partial(
+    results: &[crate::pipeline::write_next::ChapterPipelineResult],
+    chapter_count: u32,
+    error_text: String,
+    lang: StudioLang,
+) -> String {
+    if results.is_empty() {
+        return error_text;
+    }
+    let first = results.first().map(|r| r.chapter_number).unwrap_or(0);
+    let last = results.last().map(|r| r.chapter_number).unwrap_or(0);
+    pick(
+        lang,
+        &format!(
+            "已完成 {done}/{total} 章并落盘（第 {first} 章至第 {last} 章）；后续章节失败：{error_text}",
+            done = results.len(),
+            total = chapter_count,
+        ),
+        &format!(
+            "Completed and persisted {done}/{total} chapter(s) (chapters {first}-{last}); a later chapter failed: {error_text}",
+            done = results.len(),
+            total = chapter_count,
+        ),
+    )
+}
+
 fn write_next_error_text(
     error: crate::pipeline::write_next::WriteNextError,
     lang: StudioLang,
@@ -1054,11 +1109,7 @@ async fn execute_write_next(
         let mut results: Vec<ChapterPipelineResult> = Vec::new();
         for _ in 0..chapter_count {
             if *abort.lock().unwrap() {
-                return Err(pick(
-                    lang,
-                    "操作已中止：用户请求停止该任务。",
-                    "Operation aborted: the user requested to stop this task.",
-                ));
+                return Err(abort_text_with_partial(&results, lang));
             }
             let result = write_next_chapter(
                 &runtime.state,
@@ -1071,7 +1122,9 @@ async fn execute_write_next(
                 None,
             )
             .await
-            .map_err(|e| write_next_error_text(e, lang))?;
+            // 209 号：章间失败不丢已写成果汇报——已完成章节已真实落盘，
+            // 错误文本须携带部分完成摘要（此前裸 Err 掩盖 k 章资产）。
+            .map_err(|e| chapter_error_text_with_partial(&results, chapter_count, write_next_error_text(e, lang), lang))?;
             on_progress(pick(
                 lang,
                 &format!(
@@ -3262,6 +3315,43 @@ mod model_guard_tests {
 
 #[cfg(test)]
 mod tests {
+    /// 209 号：章间失败/中止的部分完成摘要——空成果维持原文案。
+    #[test]
+    fn batch_partial_texts_keep_plain_form_when_no_results() {
+        assert!(abort_text_with_partial(&[], StudioLang::Zh).contains("操作已中止"));
+        assert_eq!(
+            chapter_error_text_with_partial(&[], 3, "LLM down".to_string(), StudioLang::Zh),
+            "LLM down"
+        );
+    }
+
+    #[test]
+    fn batch_partial_texts_carry_summary_when_results_exist() {
+        let mk = |n: u32| crate::pipeline::write_next::ChapterPipelineResult {
+            chapter_number: n,
+            title: format!("t{n}"),
+            word_count: 100,
+            audit_result: crate::agents::continuity::AuditResult {
+                passed: true,
+                issues: vec![],
+                summary: String::new(),
+                parse_failed: None,
+                overall_score: None,
+                token_usage: Default::default(),
+            },
+            revised: false,
+            status: "ready-for-review",
+            length_warnings: vec![],
+            length_telemetry: None,
+            token_usage: Default::default(),
+        };
+        let results = vec![mk(2), mk(3), mk(4)];
+        let aborted = abort_text_with_partial(&results, StudioLang::Zh);
+        assert!(aborted.contains("已完成 3 章") && aborted.contains("第 2 章至第 4 章"), "{aborted}");
+        let failed = chapter_error_text_with_partial(&results, 5, "HTTP 429".to_string(), StudioLang::En);
+        assert!(failed.contains("3/5") && failed.contains("chapters 2-4") && failed.contains("HTTP 429"), "{failed}");
+    }
+
     use super::*;
 
     /// 174 号 W-C5：重启对账——死 running 快照改写双语中断终态；
