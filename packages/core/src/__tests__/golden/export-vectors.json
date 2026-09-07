@@ -1,0 +1,65 @@
+{
+  "$comment": "214 号：导出面 markdown→simple html 共享 golden 向量。engine tests/golden_export_diff.rs 与 core __tests__/golden-export.test.ts 读同一文件逐例断言。期望值以 TS 语义为基准（/^#\\s+/m 提取标题——接受空格或制表符分隔）；Rust 侧若漂移即红即修。",
+  "cases": [
+    {
+      "name": "basic-title-and-paragraphs",
+      "markdown": "# 风起云涌\n\n第一段正文。\n第二段正文。\n\n\n第三段。\n",
+      "expectedTitle": "风起云涌",
+      "expectedHtml": "<p>第一段正文。</p>\n<p>第二段正文。</p>\n<p>第三段。</p>"
+    },
+    {
+      "name": "heading-lines-excluded-from-html",
+      "markdown": "# 主标题\n\n## 副标题行应滤除\n正文一。\n",
+      "expectedTitle": "主标题",
+      "expectedHtml": "<p>正文一。</p>"
+    },
+    {
+      "name": "html-escaping",
+      "markdown": "# 转义章\n\nA < B 且 C & D，引号\"x\"。\n",
+      "expectedTitle": "转义章",
+      "expectedHtml": "<p>A &lt; B 且 C &amp; D，引号\"x\"。</p>"
+    },
+    {
+      "name": "no-heading-falls-back-untitled",
+      "markdown": "只有正文没有标题。\n",
+      "expectedTitle": "Untitled Chapter",
+      "expectedHtml": "<p>只有正文没有标题。</p>"
+    },
+    {
+      "name": "hash-prefixed-body-line-excluded",
+      "markdown": "# 标题\n\n#tag 开头的行也滤除\n普通行。\n",
+      "expectedTitle": "标题",
+      "expectedHtml": "<p>普通行。</p>"
+    },
+    {
+      "name": "multiline-heading-pick-first",
+      "markdown": "引子正文。\n\n# 第二章标题\n\n正文。\n",
+      "expectedTitle": "第二章标题",
+      "expectedHtml": "<p>引子正文。</p>\n<p>正文。</p>"
+    },
+    {
+      "name": "heading-with-tab-separator",
+      "markdown": "#\t制表符标题\n\n正文。\n",
+      "expectedTitle": "制表符标题",
+      "expectedHtml": "<p>正文。</p>"
+    },
+    {
+      "name": "heading-with-extra-spaces-trimmed",
+      "markdown": "#   多空格标题  \n\n正文。\n",
+      "expectedTitle": "多空格标题",
+      "expectedHtml": "<p>正文。</p>"
+    },
+    {
+      "name": "empty-heading-fallback",
+      "markdown": "#   \n\n正文。\n",
+      "expectedTitle": "Untitled Chapter",
+      "expectedHtml": "<p>正文。</p>"
+    },
+    {
+      "name": "heading-inline-specials-escaped-in-title-not",
+      "markdown": "# 第1章 <序>\n\n正文含 > 尖号。\n",
+      "expectedTitle": "第1章 <序>",
+      "expectedHtml": "<p>正文含 &gt; 尖号。</p>"
+    }
+  ]
+}

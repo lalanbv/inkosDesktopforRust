@@ -95,12 +95,15 @@ fn escape_html(text: &str) -> String {
 
 /// markdown → 简单 xhtml：首个 `# ` 标题 + 非 # 行变 `<p>`。
 fn markdown_to_simple_html(markdown: &str) -> (String, String) {
+    // 214 号：对齐 TS `^#[ \t]+`——行首 # 后任意个空格/制表符（此前
+    // strip_prefix("# ") 只接受恰一个空格，`#\t标题` 漂移）；标题内容
+    // trim 后为空回退 Untitled（共享 golden 差分守门）。
     let title = markdown
         .lines()
         .find_map(|line| {
-            let rest = line.strip_prefix("# ")?;
+            let rest = line.strip_prefix('#')?.trim_start_matches([' ', '\t']);
             let trimmed = rest.trim();
-            (!trimmed.is_empty()).then_some(trimmed.to_string())
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
         .unwrap_or_else(|| "Untitled Chapter".to_string());
     let html = markdown
@@ -112,6 +115,12 @@ fn markdown_to_simple_html(markdown: &str) -> (String, String) {
         .collect::<Vec<_>>()
         .join("\n");
     (title, html)
+}
+
+/// 214 号：共享 golden 差分入口（tests/golden_export_diff.rs）——
+/// `#[cfg(test)]` 之外的 pub 包装（集成测试无法触达私有 fn）。
+pub fn markdown_to_simple_html_for_test(markdown: &str) -> (String, String) {
+    markdown_to_simple_html(markdown)
 }
 
 /// 构建导出工件。state 注入 StateManager；output_path 缺省 root/{bookId}_export.{format}。

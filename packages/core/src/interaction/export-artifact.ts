@@ -43,8 +43,12 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function markdownToSimpleHtml(markdown: string): { title: string; html: string } {
-  const title = markdown.match(/^#\s+(.+)/m)?.[1]?.trim() ?? "Untitled Chapter";
+/** 214 号：导出供共享 golden 差分（engine tests/golden_export_diff.rs 同向量）。 */
+export function markdownToSimpleHtml(markdown: string): { title: string; html: string } {
+  // 214 号：\s 含换行——「# + 纯空白行」会把下一行正文误当标题（golden 差分
+  // 抓到）；改行内空白 [ \t]，且 trim 后为空回退 Untitled（对齐 Rust）。
+  const matched = markdown.match(/^#[ \t]+(.+)/m)?.[1]?.trim();
+  const title = matched ? matched : "Untitled Chapter";
   const html = markdown
     .split("\n")
     .filter((line) => !line.startsWith("#"))
