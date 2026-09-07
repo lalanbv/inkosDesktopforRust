@@ -125,6 +125,35 @@ const TRANSIENT_PHRASES: &[&str] = &[
     "try again later",
 ];
 
+/// 传输层瞬时短语（205 号，对齐 TS isTransientLLMTransportError 的
+/// reqwest 文本形态：`error sending request` / `operation timed out` /
+/// 连接重置与关闭）。
+const TRANSIENT_TRANSPORT_PHRASES: &[&str] = &[
+    "error sending request",
+    "operation timed out",
+    "connection reset",
+    "connection closed",
+    "broken pipe",
+    "socket hang up",
+];
+
+/// 判定 LLM 调用错误是否值得重试（205 号，对齐 TS isRetryableLLMError 的
+/// 文本面子集）：瞬时 HTTP（429/5xx/限流短语）∪ 传输层瞬时 ∪ 流不活动
+/// 超时（首事件/空闲——网关挂起典型瞬时）。输入是 chat 链字符串化后的
+/// 错误文本（`StreamError::to_string` 形态）。
+pub fn is_retryable_llm_error(text: &str) -> bool {
+    if is_transient_llm_http_error(text) {
+        return true;
+    }
+    let lower = text.to_lowercase();
+    TRANSIENT_TRANSPORT_PHRASES.iter().any(|p| lower.contains(p))
+        || lower.contains("llm stream produced no event")
+        || lower.contains("llm stream produced no new event")
+        // 协议层空响应/缺终态（TS isIncompleteLLMResponseError——文本逐字）
+        || lower.contains("llm returned reasoning without a final answer")
+        || lower.contains("llm returned empty response")
+}
+
 /// 判定是否瞬时 HTTP 错误（可重试）。排除 `model_not_available`（非瞬时）。
 /// 输入是已收集的错误文本（调用方负责 collect）。
 pub fn is_transient_llm_http_error(text: &str) -> bool {
@@ -186,6 +215,36 @@ pub fn merge_user_agent(headers: Option<&HashMap<String, String>>) -> HashMap<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 205 号：可重试判定——瞬时 HTTP ∪ 传输层 ∪ 流不活动 ∪ 协议层空响应。
+    #[test]
+    fn is_retryable_covers_transient_faces() {
+        // HTTP 瞬时（BadStatus 文本形态）
+        assert!(is_retryable_llm_error("HTTP 429: {\"error\":\"rate limit\"}"));
+        assert!(is_retryable_llm_error("HTTP 503: service unavailable"));
+        // 传输层（reqwest 文本形态）
+        assert!(is_retryable_llm_error(
+            "HTTP 错误: error sending request for url (http://127.0.0.1:9/chat/completions)"
+        ));
+        assert!(is_retryable_llm_error("operation timed out"));
+        // 流不活动（StreamError::Inactivity 文本逐字）
+        assert!(is_retryable_llm_error("LLM stream produced no event within 300000ms"));
+        assert!(is_retryable_llm_error("LLM stream produced no new event for 180000ms"));
+        // 协议层空响应/缺终态（TS isIncompleteLLMResponseError 逐字）
+        assert!(is_retryable_llm_error("LLM returned empty response"));
+        assert!(is_retryable_llm_error("LLM returned reasoning without a final answer"));
+    }
+
+    #[test]
+    fn is_retryable_rejects_permanent_faces() {
+        // 非瞬时：显式排除 model_not_available（重试无用）
+        assert!(!is_retryable_llm_error("HTTP 500: {\"error\":{\"code\":\"model_not_available\"}}"));
+        assert!(!is_retryable_llm_error("model not available on inference"));
+        // 4xx 业务错与未知文本（status_re 只匹配 429/502/503/504）
+        assert!(!is_retryable_llm_error("HTTP 401: unauthorized"));
+        assert!(!is_retryable_llm_error("HTTP 404: not found"));
+        assert!(!is_retryable_llm_error("plan chapter failed: something else"));
+    }
 
     #[test]
     fn estimate_tokens_cjk_and_latin() {

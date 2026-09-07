@@ -176,7 +176,14 @@ impl AgentRouter {
         client
     }
 
-    /// 单次 chat（agent 路由 + 流式收集）。
+    /// chat（agent 路由 + 流式收集 + 瞬时错误重试）。
+    ///
+    /// 205 号：对齐 TS `chatCompletion` 的 `withTransientLLMRetry`——429/
+    /// 5xx/限流短语/传输层瞬时/流不活动超时线性退避重试 2 次（800ms/
+    /// 1600ms），重试完整重新生成；`INKOS_LLM_TRANSIENT_RETRY=0` 关闭
+    /// （诊断快测面）。无 UI 文本增量面（progress_hook 是进度事件，对齐
+    /// TS onStreamProgress 不禁重试的语义）；用户中止在阶段边界生效
+    /// （175 号），与本重试不冲突。
     pub async fn chat(
         &self,
         agent: &str,
@@ -193,6 +200,34 @@ impl AgentRouter {
                 crate::agents::append_activated_skill_guidance(&mut messages, &skills);
             }
         }
+        const TRANSIENT_RETRIES: usize = 2;
+        let mut attempt: usize = 0;
+        loop {
+            match self.chat_once(agent, messages.clone(), temperature, max_tokens).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(text) => {
+                    if attempt >= TRANSIENT_RETRIES
+                        || !transient_retry_enabled()
+                        || !crate::llm::provider::is_retryable_llm_error(&text)
+                    {
+                        return Err(text);
+                    }
+                    attempt += 1;
+                    tracing::warn!(agent, attempt, "LLM 瞬时错误，退避后重试：{text}");
+                    tokio::time::sleep(std::time::Duration::from_millis(800 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+
+    /// 单次 chat 尝试（无重试——由 [`Self::chat`] 包裹）。
+    async fn chat_once(
+        &self,
+        agent: &str,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+        max_tokens: Option<u32>,
+    ) -> Result<ChatOutcome, String> {
         let endpoint = self.resolve(agent);
         let client = self.client_for(&endpoint).await;
         let completion = client
@@ -230,6 +265,14 @@ impl AgentRouter {
             }),
         })
     }
+}
+
+/// 瞬时重试开关（205 号）：默认开；`INKOS_LLM_TRANSIENT_RETRY=0|false|off`
+/// 关闭（诊断快测面，对齐 TS options.retry=false）。
+fn transient_retry_enabled() -> bool {
+    std::env::var("INKOS_LLM_TRANSIENT_RETRY")
+        .map(|v| !matches!(v.as_str(), "0" | "false" | "off"))
+        .unwrap_or(true)
 }
 
 /// 单 agent 的端口实现（宏生成同签名 trait 实现）。
@@ -532,6 +575,99 @@ mod tests {
         let writer = router.resolve("writer");
         assert_eq!(writer.model, "default-model");
         assert_eq!(writer.max_tokens, 8192);
+    }
+
+    /// 205 号：可编程失败次数的 mock LLM——前 `fail_times` 次返回指定
+    /// 状态码，之后返回正常 SSE/JSON（计数控供断言重试次数）。
+    async fn spawn_flaky_llm(fail_times: usize, status: u16, err_body: &str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+        let err_body = err_body.to_string();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(req): axum::Json<serde_json::Value>| {
+                let hits = hits_clone.clone();
+                let err_body = err_body.clone();
+                async move {
+                    let n = hits.fetch_add(1, Ordering::SeqCst);
+                    if n < fail_times {
+                        return axum::response::IntoResponse::into_response((
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            err_body,
+                        ));
+                    }
+                    if req["stream"].as_bool().unwrap_or(false) {
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        return axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ));
+                    }
+                    axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
+                        "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                    })))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), hits)
+    }
+
+    fn router_at(base: &str) -> AgentRouter {
+        AgentRouter::new(
+            LlmEndpointConfig {
+                base_url: base.into(),
+                api_key: "k".into(),
+                model: "m".into(),
+                max_tokens: 64,
+                extra_headers: HashMap::new(),
+            },
+            HashMap::new(),
+        )
+    }
+
+    fn user_message() -> Vec<LLMMessage> {
+        vec![LLMMessage { role: crate::llm::provider::LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }]
+    }
+
+    /// 429 一次后退避重试成功（对齐 TS withTransientLLMRetry：2 次预算）。
+    #[tokio::test]
+    async fn chat_retries_transient_429_then_succeeds() {
+        use std::sync::atomic::Ordering;
+        let (base, hits) = spawn_flaky_llm(1, 429, r#"{"error":"rate limit"}"#).await;
+        let router = router_at(&base);
+        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        assert_eq!(outcome.content, "OK");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "首次 429 + 重试 1 次");
+    }
+
+    /// 重试预算耗尽（2 次）如实抛最后一次错——共 3 次尝试。
+    #[tokio::test]
+    async fn chat_exhausts_transient_retries_and_fails() {
+        use std::sync::atomic::Ordering;
+        let (base, hits) = spawn_flaky_llm(9, 503, r#"{"error":"service unavailable"}"#).await;
+        let router = router_at(&base);
+        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
+        assert!(err.contains("503"), "{err}");
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "1 次原始 + 2 次重试");
+    }
+
+    /// 非瞬时错误（model_not_available 的 500）不重试——立即失败。
+    #[tokio::test]
+    async fn chat_does_not_retry_permanent_error() {
+        use std::sync::atomic::Ordering;
+        let (base, hits) =
+            spawn_flaky_llm(9, 500, r#"{"error":{"code":"model_not_available"}}"#).await;
+        let router = router_at(&base);
+        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
+        assert!(err.contains("500") || err.contains("model_not_available"), "{err}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "非瞬时直接失败");
     }
 
     #[tokio::test]
