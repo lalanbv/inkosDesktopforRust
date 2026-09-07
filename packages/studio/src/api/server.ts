@@ -132,6 +132,7 @@ import {
   type RequestedIntent,
   type SessionKind,
   type AgentSessionAttachment,
+  createFileSink,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -2795,7 +2796,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           },
         }
       : sseSink;
-    const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink] });
+    // 210 号：inkos.log 落盘通道（get_logs 读、LogViewer/doctor 展示——
+    // 此前该文件零写入方，日志面空转）。
+    const fileSink = createFileSink(join(root, "inkos.log"));
+    const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink, fileSink] });
     return {
       client: overrides?.client ?? createLLMClient(currentConfig.llm),
       model: overrides?.model ?? currentConfig.llm.model,

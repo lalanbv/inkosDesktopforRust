@@ -323,6 +323,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     Scheduler: MockScheduler,
     createLLMClient: createLLMClientMock,
     createLogger: vi.fn(() => logger),
+    // 210 号：inkos.log 落盘 sink——透传真实现（测试断言走 logger mock 面）。
+    createFileSink: actual.createFileSink,
     evaluateBookQuality: evaluateBookQualityMock,
     computeAnalytics: vi.fn(() => ({})),
     isSafeBookId: actual.isSafeBookId,

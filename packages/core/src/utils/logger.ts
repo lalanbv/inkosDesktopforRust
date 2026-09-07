@@ -1,3 +1,5 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 // === Types ===
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -81,6 +83,27 @@ export function createJsonLineSink(writable: NodeJS.WritableStream): LogSink {
 export const nullSink: LogSink = {
   write(): void {},
 };
+
+// === File Sink（210 号） ===
+
+/**
+ * 项目 `inkos.log` 落盘 sink——`GET /api/v1/logs` 双端都读该文件，但此前
+ * 零写入方（LogViewer/doctor 日志面空转）。JSON 行追加；失败静默（日志
+ * 不阻断业务）。字段形态同 LogEntry（Rust 侧 utils/log_file.rs 对齐）。
+ */
+export function createFileSink(path: string): LogSink {
+  return {
+    write(entry: LogEntry): void {
+      try {
+        const dir = dirname(path);
+        mkdirSync(dir, { recursive: true });
+        appendFileSync(path, JSON.stringify(entry) + "\n", "utf-8");
+      } catch {
+        // 静默：日志写失败不得影响业务流
+      }
+    },
+  };
+}
 
 // === Factory ===
 

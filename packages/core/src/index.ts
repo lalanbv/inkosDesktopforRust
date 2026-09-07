@@ -554,7 +554,7 @@ export { loadRuntimeStateSnapshot, buildRuntimeStateArtifacts, saveRuntimeStateS
 export { splitChapters, type SplitChapter } from "./utils/chapter-splitter.js";
 export * from "./translation/index.js";
 export { countChapterLength, resolveLengthCountingMode, formatLengthCount, buildLengthSpec, defaultChapterLength, DEFAULT_CHAPTER_LENGTH_ZH, DEFAULT_CHAPTER_LENGTH_EN, isOutsideSoftRange, isOutsideHardRange, type LengthLanguage } from "./utils/length-metrics.js";
-export { createLogger, createStderrSink, createJsonLineSink, nullSink, type Logger, type LogSink, type LogLevel, type LogEntry } from "./utils/logger.js";
+export { createLogger, createStderrSink, createJsonLineSink, createFileSink, nullSink, type Logger, type LogSink, type LogLevel, type LogEntry } from "./utils/logger.js";
 export { inferLanguage, type WritingLanguage } from "./utils/language.js";
 export { loadProjectConfig, GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH, isApiKeyOptionalForEndpoint } from "./utils/config-loader.js";
 export { resolveEffectiveLLMConfig, type EffectiveLLMConfigResult, type EffectiveLLMDiagnostics, type LLMConfigCliOverrides, type LLMConfigMode, type LLMConsumer, type LLMValueSource } from "./utils/effective-llm-config.js";

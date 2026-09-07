@@ -1109,7 +1109,14 @@ async fn execute_write_next(
         let mut results: Vec<ChapterPipelineResult> = Vec::new();
         for _ in 0..chapter_count {
             if *abort.lock().unwrap() {
-                return Err(abort_text_with_partial(&results, lang));
+                let text = abort_text_with_partial(&results, lang);
+                crate::utils::log_file::append_log_event(
+                    runtime.state.project_root(),
+                    "warn",
+                    "write-next",
+                    &format!("[{book_id}] 连写中止：{text}"),
+                );
+                return Err(text);
             }
             let result = write_next_chapter(
                 &runtime.state,
@@ -1124,7 +1131,23 @@ async fn execute_write_next(
             .await
             // 209 号：章间失败不丢已写成果汇报——已完成章节已真实落盘，
             // 错误文本须携带部分完成摘要（此前裸 Err 掩盖 k 章资产）。
-            .map_err(|e| chapter_error_text_with_partial(&results, chapter_count, write_next_error_text(e, lang), lang))?;
+            // 210 号：任务级失败落 inkos.log（get_logs/LogViewer 此前
+            // 读的是零写入方的空文件——重启后诊断无据）。
+            .map_err(|e| {
+                let text = chapter_error_text_with_partial(
+                    &results,
+                    chapter_count,
+                    write_next_error_text(e, lang),
+                    lang,
+                );
+                crate::utils::log_file::append_log_event(
+                    runtime.state.project_root(),
+                    "error",
+                    "write-next",
+                    &format!("[{book_id}] 连写失败：{text}"),
+                );
+                text
+            })?;
             on_progress(pick(
                 lang,
                 &format!(
@@ -1228,7 +1251,17 @@ async fn execute_write_next(
             None,
         )
         .await
-        .map_err(|e| write_next_error_text(e, lang))?;
+        // 210 号：单章任务失败同落 inkos.log（与连写分支同通道）。
+        .map_err(|e| {
+            let text = write_next_error_text(e, lang);
+            crate::utils::log_file::append_log_event(
+                runtime.state.project_root(),
+                "error",
+                "write-next",
+                &format!("[{book_id}] 单章写作失败：{text}"),
+            );
+            text
+        })?;
             let write_needs_review = write_result.status != "ready-for-review";
         let title_part = if write_result.title.is_empty() {
             String::new()
