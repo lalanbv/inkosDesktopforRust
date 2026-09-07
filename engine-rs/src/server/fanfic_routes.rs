@@ -92,10 +92,10 @@ async fn review_loop(
     source_canon: Option<&str>,
     mut regenerate: impl FnMut(Option<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::agents::architect::ArchitectOutput, String>> + Send>>,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
-    let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let reviewer_chat = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "foundation-reviewer",
-    }));
+    };
     let mut feedback: Option<String> = None;
     let mut foundation = regenerate(feedback.clone()).await?;
     for _ in 0..2 {
@@ -107,7 +107,7 @@ async fn review_loop(
             language,
             target_chapters: Some(book.target_chapters),
         };
-        let review = review_foundation(reviewer_chat, &params).await?;
+        let review = review_foundation(&reviewer_chat, &params).await?;
         if review.passed {
             return Ok(foundation);
         }
@@ -134,11 +134,11 @@ async fn init_fanfic_book(
     state.save_book_config(&book.id, book).await.map_err(|e| e.to_string())?;
 
     // Step 1：同人正典导入。
-    let importer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let importer_chat = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "fanfic-canon-importer",
-    }));
-    let canon = import_from_text(importer_chat, source_text, source_name, fanfic_mode).await?;
+    };
+    let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
     let story_dir = book_dir.join("story");
     tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
     tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)
@@ -146,8 +146,9 @@ async fn init_fanfic_book(
         .map_err(|e| e.to_string())?;
 
     // Step 2：审核环（fanfic 模式 + sourceCanon）。
-    let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
+    // 204 号：闭包 future 需 'static（`dyn Future + Send` 默认约束）——捕获
+    // Arc 句柄、块内构造局部端口（每次 review 重生成一个栈值，零泄漏）。
+    let architect_router = runtime.effective_router().await;
     let foundation = review_loop(
         runtime,
         book,
@@ -159,10 +160,11 @@ async fn init_fanfic_book(
             let canon_text = canon.full_document.clone();
             let builtin = runtime.builtin_genres_dir.clone();
             let root = state.project_root().to_path_buf();
-            let chat = architect_chat;
+            let router = architect_router.clone();
             Box::pin(async move {
                 let ctx = ArchitectCtx { project_root: &root, builtin_genres_dir: &builtin };
-                generate_fanfic_foundation(&ctx, chat, &book, &canon_text, fanfic_mode, feedback.as_deref())
+                let chat = RoutedAgent { router, agent: "architect" };
+                generate_fanfic_foundation(&ctx, &chat, &book, &canon_text, fanfic_mode, feedback.as_deref())
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -223,8 +225,7 @@ async fn init_spinoff_book(
 
     // spinoff 上下文 + 审核环（original 模式）。
     let spinoff_context = build_spinoff_foundation_context(&parent_canon, direction, language);
-    let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
+    let architect_router = runtime.effective_router().await;
     let foundation = review_loop(
         runtime,
         book,
@@ -236,10 +237,11 @@ async fn init_spinoff_book(
             let context = spinoff_context.clone();
             let builtin = runtime.builtin_genres_dir.clone();
             let root = state.project_root().to_path_buf();
-            let chat = architect_chat;
+            let router = architect_router.clone();
             Box::pin(async move {
                 let ctx = ArchitectCtx { project_root: &root, builtin_genres_dir: &builtin };
-                generate_foundation(&ctx, chat, &book, Some(&context), feedback.as_deref())
+                let chat = RoutedAgent { router, agent: "architect" };
+                generate_foundation(&ctx, &chat, &book, Some(&context), feedback.as_deref())
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -373,12 +375,12 @@ pub async fn fanfic_refresh(
     let result = async {
         let book = runtime.state.load_book_config(&book_id).await.map_err(|e| e.to_string())?;
         let fanfic_mode = book.fanfic_mode.unwrap_or(FanficMode::Canon);
-        let importer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+        let importer_chat = RoutedAgent {
             router: runtime.effective_router().await,
             agent: "fanfic-canon-importer",
-        }));
+        };
         let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("source");
-        let canon = import_from_text(importer_chat, source_text, source_name, fanfic_mode).await?;
+        let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
         let story_dir = runtime.state.book_dir(&book_id).join("story");
         tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
         tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)

@@ -433,21 +433,16 @@ async fn run_detection(
     if !det.passed && config.auto_rewrite {
         let book = runtime.state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
         let router = runtime.effective_router().await;
-        let reviser_chat: &'static crate::llm::agent_router::RoutedAgent =
-            Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-                router: router.clone(),
-                agent: "reviser",
-            }));
-        let reviser_ctx = crate::agents::reviser::ReviserCtx {
-            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-            prompt_store: Box::leak(Box::new(crate::state::store::FsStateStore)),
+        let reviser_chat = crate::llm::agent_router::RoutedAgent {
+            router: router.clone(),
+            agent: "reviser",
         };
+        let reviser_ports = crate::server::books_routes::AgentCtxPorts::new(runtime);
         crate::pipeline::detection_runner::detect_and_rewrite(
             &client,
             config,
-            reviser_chat,
-            &reviser_ctx,
+            &reviser_chat,
+            &reviser_ports.reviser_ctx(),
             &book_dir,
             &chapter_content,
             chapter_number,

@@ -2150,6 +2150,14 @@ impl AgentCtxPorts {
             prompt_store: &crate::state::store::FS_STATE_STORE,
         }
     }
+
+    /// 章节分析 ctx（204 号：book_create 回放链复用本持有者的路径字段）。
+    pub fn analyzer_ctx(&self) -> crate::agents::chapter_analyzer::ChapterAnalyzerCtx<'_> {
+        crate::agents::chapter_analyzer::ChapterAnalyzerCtx {
+            project_root: &self.project_root,
+            builtin_genres_dir: &self.builtin_genres_dir,
+        }
+    }
 }
 
 #[cfg(test)]

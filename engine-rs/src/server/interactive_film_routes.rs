@@ -441,11 +441,10 @@ pub async fn get_project_export(
     (
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "application/gzip"),
+            (header::CONTENT_TYPE, "application/gzip".to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                Box::leak(format!("attachment; filename=\"{filename}.tar.gz\"").into_boxed_str())
-                    as &str,
+                format!("attachment; filename=\"{filename}.tar.gz\""),
             ),
         ],
         gzip,
@@ -527,10 +526,10 @@ fn text_response(body: String, content_type: &str, disposition_filename: &str) -
     (
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, content_type),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                Box::leak(attachment_disposition(disposition_filename).into_boxed_str()) as &str,
+                attachment_disposition(disposition_filename),
             ),
         ],
         body,

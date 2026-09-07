@@ -201,12 +201,12 @@ pub async fn init_book(
     author_intent: Option<&str>,
     current_focus: Option<&str>,
 ) -> Result<(), String> {
-    let architect_chat: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
-    let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let architect_chat =
+        RoutedAgent { router: runtime.effective_router().await, agent: "architect" };
+    let reviewer_chat = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "foundation-reviewer",
-    }));
+    };
     let architect_ctx = ArchitectCtx {
         project_root: runtime.state.project_root(),
         builtin_genres_dir: &runtime.builtin_genres_dir,
@@ -232,8 +232,8 @@ pub async fn init_book(
     // 审核环生成基础设定（maxRetries 默认 2）。
     let foundation = generate_and_review_foundation_multi(
         &architect_ctx,
-        architect_chat,
-        reviewer_chat,
+        &architect_chat,
+        &reviewer_chat,
         book.clone(),
         external_context.map(str::to_string),
         language,
@@ -300,8 +300,8 @@ pub async fn init_book(
 #[allow(clippy::too_many_arguments)]
 async fn generate_and_review_foundation_multi(
     architect_ctx: &ArchitectCtx<'_>,
-    architect_chat: &'static RoutedAgent,
-    reviewer_chat: &'static RoutedAgent,
+    architect_chat: &RoutedAgent,
+    reviewer_chat: &RoutedAgent,
     book: BookConfig,
     external_context: Option<String>,
     language: WritingLanguage,
@@ -352,8 +352,8 @@ async fn generate_and_review_foundation_multi(
 /// multi 环同 reductions）。
 async fn generate_and_review_foundation_import(
     architect_ctx: &ArchitectCtx<'_>,
-    architect_chat: &'static RoutedAgent,
-    reviewer_chat: &'static RoutedAgent,
+    architect_chat: &RoutedAgent,
+    reviewer_chat: &RoutedAgent,
     book: &BookConfig,
     foundation_source: &str,
     language: WritingLanguage,
@@ -628,22 +628,22 @@ pub(crate) async fn import_chapters_chain_with_resume(
     // Step 1：首次导入（start_from == 1）时全量重建；续放跳过（保留既有地基）。
     if start_from == 1 {
         let foundation_source = build_import_foundation_source(chapters);
-        let architect_chat: &'static RoutedAgent =
-            Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "architect" }));
+        let architect_chat =
+            RoutedAgent { router: runtime.effective_router().await, agent: "architect" };
         let architect_ctx = ArchitectCtx {
             project_root: state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
         };
         let foundation = if matches!(import_mode, ImportMode::Series) {
             // series：生成 → 评审 → 带反馈重生成（92 号评审环）。
-            let reviewer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+            let reviewer_chat = RoutedAgent {
                 router: runtime.effective_router().await,
                 agent: "foundation-reviewer",
-            }));
+            };
             generate_and_review_foundation_import(
                 &architect_ctx,
-                architect_chat,
-                reviewer_chat,
+                &architect_chat,
+                &reviewer_chat,
                 &book,
                 &foundation_source,
                 language,
@@ -653,7 +653,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
         } else {
             generate_foundation_from_import(
                 &architect_ctx,
-                architect_chat,
+                &architect_chat,
                 &book,
                 &foundation_source,
                 None,
@@ -681,22 +681,12 @@ pub(crate) async fn import_chapters_chain_with_resume(
     }
 
     // Step 2：逐章回放。
-    let analyzer_chat: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let analyzer_chat = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "chapter-analyzer",
-    }));
-    let analyzer_ctx: &'static crate::agents::chapter_analyzer::ChapterAnalyzerCtx =
-        Box::leak(Box::new(crate::agents::chapter_analyzer::ChapterAnalyzerCtx {
-            project_root: Box::leak(state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-        }));
-    let writer_ctx: &'static crate::agents::writer::WriterCtx =
-        Box::leak(Box::new(crate::agents::writer::WriterCtx {
-            project_root: Box::leak(state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-            prompt_store: Box::leak(Box::new(crate::state::store::FsStateStore)),
-            state_store: Box::leak(Box::new(crate::state::store::FsStateStore)),
-        }));
+    };
+    let analyzer_ports = crate::server::books_routes::AgentCtxPorts::new(runtime);
+    let analyzer_ctx = analyzer_ports.analyzer_ctx();
 
     let mut total_words: u64 = 0;
     let mut imported_count = 0u32;
@@ -725,8 +715,8 @@ pub(crate) async fn import_chapters_chain_with_resume(
         .await
         .map_err(|e| e.to_string())?;
         let output = crate::agents::chapter_analyzer::analyze_chapter(
-            analyzer_chat,
-            analyzer_ctx,
+            &analyzer_chat,
+            &analyzer_ctx,
             &crate::agents::chapter_analyzer::AnalyzeChapterInput {
                 book: &book,
                 book_dir: &book_dir,
@@ -771,7 +761,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
             token_usage: Default::default(),
         };
 
-        crate::agents::writer::save_chapter(writer_ctx, &book_dir, &persisted, gp.numerical_system, language)
+        crate::agents::writer::save_chapter(&analyzer_ports.writer_ctx(), &book_dir, &persisted, gp.numerical_system, language)
             .await
             .map_err(|e| e.to_string())?;
         crate::agents::writer::save_new_truth_files(&book_dir, &persisted, language)
@@ -995,11 +985,10 @@ async fn revise_foundation_inner(
     let old_book_rules = read_or_empty(story_dir.join("book_rules.md")).await;
 
     let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
-    let architect_chat: &'static crate::llm::agent_router::RoutedAgent =
-        Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-            router: runtime.effective_router().await,
-            agent: "architect",
-        }));
+    let architect_chat = crate::llm::agent_router::RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "architect",
+    };
     let architect_ctx = ArchitectCtx {
         project_root: state.project_root(),
         builtin_genres_dir: &runtime.builtin_genres_dir,
@@ -1013,7 +1002,7 @@ async fn revise_foundation_inner(
     );
     let foundation = generate_foundation_inner(
         &architect_ctx,
-        architect_chat,
+        &architect_chat,
         &book,
         None,
         None,
@@ -1024,18 +1013,17 @@ async fn revise_foundation_inner(
 
     // 审核环：失败/未通过仅记录（TS accept rewrite 语义——审核不阻断）。
     {
-        let reviewer_chat: &'static crate::llm::agent_router::RoutedAgent =
-            Box::leak(Box::new(crate::llm::agent_router::RoutedAgent {
-                router: runtime.effective_router().await,
-                agent: "foundation-reviewer",
-            }));
+        let reviewer_chat = crate::llm::agent_router::RoutedAgent {
+            router: runtime.effective_router().await,
+            agent: "foundation-reviewer",
+        };
         let language = if book.language.as_deref() == Some("en") {
             crate::utils::language::WritingLanguage::En
         } else {
             crate::utils::language::WritingLanguage::Zh
         };
         let review = crate::agents::foundation_reviewer::review_foundation(
-            reviewer_chat,
+            &reviewer_chat,
             &crate::agents::foundation_reviewer::ReviewParams {
                 foundation: &foundation,
                 language,
