@@ -212,10 +212,10 @@ async fn run_plan(
     let book_dir = runtime.state.book_dir(book_id);
     let chapter_number = runtime.state.get_next_chapter_number(book_id).await?;
 
-    let planner: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "planner" }));
+    let planner =
+        RoutedAgent { router: runtime.effective_router().await, agent: "planner" };
     let plan = crate::agents::planner::plan_chapter(
-        planner,
+        &planner,
         &crate::agents::planner::PlanChapterInput {
             book_language: book.language.as_deref().unwrap_or("zh"),
             book_dir: &book_dir,
@@ -282,18 +282,12 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
         .map_err(|e| e.to_string())?;
     let book_dir = runtime.state.book_dir(book_id);
 
-    let writer: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "writer" }));
-    let ctx: &'static crate::agents::writer::WriterCtx =
-        Box::leak(Box::new(crate::agents::writer::WriterCtx {
-            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-            prompt_store: Box::leak(Box::new(FsStateStore)),
-            state_store: Box::leak(Box::new(FsStateStore)),
-        }));
+    let writer =
+        RoutedAgent { router: runtime.effective_router().await, agent: "writer" };
+    let ctx_ports = AgentCtxPorts::new(runtime);
     let output = crate::agents::writer::settle_chapter_state(
-        ctx,
-        writer,
+        &ctx_ports.writer_ctx(),
+        &writer,
         &crate::agents::writer::SettleChapterStateInput {
             book: &book,
             book_dir: &book_dir,
@@ -784,17 +778,12 @@ pub(crate) async fn run_revise_chain(
     }
 
     // 修稿（以 pre 合并审计问题驱动）。
-    let reviser: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "reviser" }));
-    let reviser_ctx: &'static crate::agents::reviser::ReviserCtx =
-        Box::leak(Box::new(crate::agents::reviser::ReviserCtx {
-            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-            prompt_store: Box::leak(Box::new(FsStateStore)),
-        }));
+    let reviser =
+        RoutedAgent { router: runtime.effective_router().await, agent: "reviser" };
+    let reviser_ports = AgentCtxPorts::new(runtime);
     let revise_output = revise_chapter(
-        reviser,
-        reviser_ctx,
+        &reviser,
+        &reviser_ports.reviser_ctx(),
         &book_dir,
         &content,
         chapter_number,
@@ -818,16 +807,16 @@ pub(crate) async fn run_revise_chain(
 
     // 131 号合并同步：reviser 契约瘦身（updated_* 标签移除）——修订后的
     // 真相覆盖改由结算器产出（TS reviseDraft 新链：revise → settle → 覆盖审计）。
-    let settler_agent: &'static RoutedAgent =
-        Box::leak(Box::new(RoutedAgent { router: runtime.effective_router().await, agent: "writer" }));
+    let settler_agent =
+        RoutedAgent { router: runtime.effective_router().await, agent: "writer" };
     let settled = crate::agents::writer::settle_chapter_state(
         &crate::agents::writer::WriterCtx {
             project_root: runtime.state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
-            prompt_store: &FsStateStore,
-            state_store: &FsStateStore,
+            prompt_store: &crate::state::store::FS_STATE_STORE,
+            state_store: &crate::state::store::FS_STATE_STORE,
         },
-        settler_agent,
+        &settler_agent,
         &crate::agents::writer::SettleChapterStateInput {
             book: &book,
             book_dir: &book_dir,
@@ -892,18 +881,10 @@ pub(crate) async fn run_revise_chain(
         .await
         .map_err(|e| internal(e.to_string()))?;
     if !state_validation.passed || state_validation.repair_required {
+        let retry_ports = AgentCtxPorts::new(runtime);
         let retry_settler = crate::llm::agent_router::RoutedSettler {
             router: runtime.effective_router().await,
-            ctx: crate::agents::writer::WriterCtx {
-                project_root: Box::leak(
-                    runtime.state.project_root().to_path_buf().into_boxed_path(),
-                ),
-                builtin_genres_dir: Box::leak(
-                    runtime.builtin_genres_dir.clone().into_boxed_path(),
-                ),
-                prompt_store: Box::leak(Box::new(FsStateStore)),
-                state_store: Box::leak(Box::new(FsStateStore)),
-            },
+            ctx: retry_ports.writer_ctx(),
             chapter_number,
         };
         let retry_validator = RoutedValidator {
@@ -1192,12 +1173,12 @@ async fn run_compose(
     {
         Some(plan) if context.map(str::trim).unwrap_or("").is_empty() => plan,
         _ => {
-            let planner: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+            let planner = RoutedAgent {
                 router: runtime.effective_router().await,
                 agent: "planner",
-            }));
+            };
             let plan = crate::agents::planner::plan_chapter(
-                planner,
+                &planner,
                 &crate::agents::planner::PlanChapterInput {
                     book_language: book.language.as_deref().unwrap_or("zh"),
                     book_dir: &book_dir,
@@ -1216,12 +1197,12 @@ async fn run_compose(
     };
 
     // compose（35 号编排；outline 选段走 LLM 端口）。
-    let composer: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let composer = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "composer",
-    }));
-    let selector = crate::agents::composer::LlmOutlineSelector { chat: composer };
-    let compiler = crate::agents::composer::LlmContextCompiler { chat: composer };
+    };
+    let selector = crate::agents::composer::LlmOutlineSelector { chat: &composer };
+    let compiler = crate::agents::composer::LlmContextCompiler { chat: &composer };
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
     let on_context_compression: crate::agents::composer::CompressionCallback =
@@ -1267,11 +1248,11 @@ pub async fn consolidate_endpoint(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     let book_dir = runtime.state.book_dir(&book_id.clone());
-    let consolidator: &'static RoutedAgent = Box::leak(Box::new(RoutedAgent {
+    let consolidator = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "consolidator",
-    }));
-    match run_consolidate(consolidator, &book_dir).await {
+    };
+    match run_consolidate(&consolidator, &book_dir).await {
         Ok(result) => {
             runtime.hub.broadcast(
                 "consolidate:complete",
@@ -1343,15 +1324,12 @@ impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
             router: self.router.clone(),
             agent: "writer",
         };
-        let ctx: &'static crate::agents::writer::WriterCtx =
-            Box::leak(Box::new(crate::agents::writer::WriterCtx {
-                project_root: Box::leak(self.project_root.clone().into_boxed_path()),
-                builtin_genres_dir: Box::leak(self.builtin_genres_dir.clone().into_boxed_path()),
-                prompt_store: Box::leak(Box::new(FsStateStore)),
-                state_store: Box::leak(Box::new(FsStateStore)),
-            }));
+        let ports = AgentCtxPorts {
+            project_root: self.project_root.clone(),
+            builtin_genres_dir: self.builtin_genres_dir.clone(),
+        };
         crate::agents::writer::settle_chapter_state(
-            ctx,
+            &ports.writer_ctx(),
             &writer,
             &crate::agents::writer::SettleChapterStateInput {
                 book: params.book,
@@ -1807,14 +1785,8 @@ async fn run_resync_chain(
     }
 
     // 章节与全量真相落盘（saveChapter + saveNewTruthFiles，对齐 TS 调用序）。
-    let writer_ctx: &'static crate::agents::writer::WriterCtx =
-        Box::leak(Box::new(crate::agents::writer::WriterCtx {
-            project_root: Box::leak(runtime.state.project_root().to_path_buf().into_boxed_path()),
-            builtin_genres_dir: Box::leak(runtime.builtin_genres_dir.clone().into_boxed_path()),
-            prompt_store: Box::leak(Box::new(FsStateStore)),
-            state_store: Box::leak(Box::new(FsStateStore)),
-        }));
-    crate::agents::writer::save_chapter(writer_ctx, &book_dir, &synced_output, parsed_genre.profile.numerical_system, language)
+    let ctx_ports = AgentCtxPorts::new(runtime);
+    crate::agents::writer::save_chapter(&ctx_ports.writer_ctx(), &book_dir, &synced_output, parsed_genre.profile.numerical_system, language)
         .await
         .map_err(|e| e.to_string())?;
     crate::agents::writer::save_new_truth_files(&book_dir, &synced_output, language)
@@ -2144,6 +2116,40 @@ macro_rules! write_next_assembly {
         let $ctx = ports.ctx();
         let _ = (&agent_ports, &ports, &settler);
     };
+}
+
+/// 低频端点 ctx 的 owned 装配持有者（203 号）：路径 owned 持有、store 走
+/// 全局静态（ZST），`writer_ctx()`/`reviser_ctx()` 借用视图随帧 drop——
+/// 取代 plan/revise/resync/repair 等端点的 `Box::leak` 'static 装配。
+pub struct AgentCtxPorts {
+    project_root: std::path::PathBuf,
+    builtin_genres_dir: std::path::PathBuf,
+}
+
+impl AgentCtxPorts {
+    pub fn new(runtime: &BooksRuntime) -> Self {
+        Self {
+            project_root: runtime.state.project_root().to_path_buf(),
+            builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+        }
+    }
+
+    pub fn writer_ctx(&self) -> crate::agents::writer::WriterCtx<'_> {
+        crate::agents::writer::WriterCtx {
+            project_root: &self.project_root,
+            builtin_genres_dir: &self.builtin_genres_dir,
+            prompt_store: &crate::state::store::FS_STATE_STORE,
+            state_store: &crate::state::store::FS_STATE_STORE,
+        }
+    }
+
+    pub fn reviser_ctx(&self) -> crate::agents::reviser::ReviserCtx<'_> {
+        crate::agents::reviser::ReviserCtx {
+            project_root: &self.project_root,
+            builtin_genres_dir: &self.builtin_genres_dir,
+            prompt_store: &crate::state::store::FS_STATE_STORE,
+        }
+    }
 }
 
 #[cfg(test)]

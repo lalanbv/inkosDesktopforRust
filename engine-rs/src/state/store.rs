@@ -50,6 +50,10 @@ pub trait StateStore: Send + Sync {
 /// 路径按原样传递（相对或绝对）；调用方负责拼合 book_dir。
 pub struct FsStateStore;
 
+/// 全局唯一实例（203 号）：ZST 无状态——`&FS_STATE_STORE` 是真 `'static`
+/// 引用（零泄漏零分配），取代端口装配处 `Box::leak(Box::new(FsStateStore))`。
+pub static FS_STATE_STORE: FsStateStore = FsStateStore;
+
 #[async_trait]
 impl StateStore for FsStateStore {
     async fn read_to_string(&self, path: &str) -> Result<Option<String>> {
