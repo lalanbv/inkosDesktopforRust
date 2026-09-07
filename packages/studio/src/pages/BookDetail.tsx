@@ -28,8 +28,11 @@ import {
   Hand,
   Settings2,
   Waypoints,
-  Square
+  Square,
+  AlertTriangle,
+  BookOpen
 } from "lucide-react";
+import { genreLabel } from "../lib/genre-labels";
 
 interface ChapterMeta {
   readonly number: number;
@@ -73,6 +76,16 @@ function translateChapterStatus(status: string, t: TFunction): string {
     "needs-revision": () => t("chapter.needsRevision"),
     "imported": () => t("chapter.imported"),
     "audit-failed": () => t("chapter.auditFailed"),
+    // 207 号：后端 ChapterStatus 全集补齐——此前 fallthrough 显示原始枚举
+    // （state-degraded 以「STATE-DEGRADED」大写暴露）。
+    "state-degraded": () => t("chapter.stateDegraded"),
+    "card-generated": () => t("chapter.cardGenerated"),
+    "drafting": () => t("chapter.drafting"),
+    "auditing": () => t("chapter.auditing"),
+    "audit-passed": () => t("chapter.auditPassed"),
+    "revising": () => t("chapter.revising"),
+    "rejected": () => t("chapter.rejected"),
+    "published": () => t("chapter.published"),
   };
   return map[status]?.() ?? status;
 }
@@ -83,6 +96,10 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = 
   drafted: { color: "text-muted-foreground bg-muted/20", icon: <FileText size={12} /> },
   "needs-revision": { color: "text-destructive bg-destructive/10", icon: <RotateCcw size={12} /> },
   imported: { color: "text-blue-500 bg-blue-500/10", icon: <Download size={12} /> },
+  "state-degraded": { color: "text-orange-500 bg-orange-500/10", icon: <AlertTriangle size={12} /> },
+  "audit-passed": { color: "text-emerald-500 bg-emerald-500/10", icon: <ShieldCheck size={12} /> },
+  rejected: { color: "text-destructive bg-destructive/10", icon: <X size={12} /> },
+  published: { color: "text-violet-500 bg-violet-500/10", icon: <BookOpen size={12} /> },
 };
 
 export function BookDetail({
@@ -535,7 +552,7 @@ export function BookDetail({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground font-medium">
-            <span className="px-2 py-0.5 rounded bg-secondary/50 text-foreground/70 uppercase tracking-wider text-xs">{book.genre}</span>
+            <span className="px-2 py-0.5 rounded bg-secondary/50 text-foreground/70 tracking-wider text-xs">{genreLabel(book.genre, book.language === "en" ? "en" : "zh")}</span>
             <div className="flex items-center gap-1.5">
               <FileText size={14} />
               <span>{chapters.length} {t("dash.chapters")}</span>

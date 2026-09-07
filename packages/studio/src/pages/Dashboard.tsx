@@ -1,4 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { genreLabel } from "../lib/genre-labels";
 import { groupBooksBySeries } from "./dashboard-book-groups";
 import type { BookSeriesInfo } from "../shared/contracts";
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -284,7 +285,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
 
                   <div className="flex flex-wrap items-center gap-y-2 gap-x-4 text-[13px] text-muted-foreground font-medium">
                     <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-secondary/50">
-                      <span className="uppercase tracking-wider">{book.genre}</span>
+                      <span className="tracking-wider">{genreLabel(book.genre, book.language === "en" ? "en" : "zh")}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Clock size={14} />
