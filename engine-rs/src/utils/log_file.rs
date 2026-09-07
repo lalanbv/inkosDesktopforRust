@@ -12,6 +12,11 @@
 
 use std::io::Write;
 
+/// 截头轮转上限（211 号）：超过则保留尾部 [`KEEP_LOG_BYTES`]，防止任务
+/// 级日志无限增长（get_logs 只取尾 100 行，截头零信息损失）。
+const MAX_LOG_BYTES: u64 = 512 * 1024;
+const KEEP_LOG_BYTES: usize = 256 * 1024;
+
 /// 追加一条 JSON 行事件到 `{root}/inkos.log`（目录缺失自动创建）。
 pub fn append_log_event(root: &std::path::Path, level: &str, tag: &str, message: &str) {
     if let Err(e) = append_log_event_checked(root, level, tag, message) {
@@ -30,6 +35,8 @@ pub fn append_log_event_checked(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // 轮转失败不阻断追加（静默继续——最坏情况只是文件继续增长）。
+    let _ = rotate_if_oversized(&path, MAX_LOG_BYTES, KEEP_LOG_BYTES);
     let entry = serde_json::json!({
         "timestamp": crate::utils::utc_time::utc_now_iso(),
         "level": level,
@@ -40,9 +47,66 @@ pub fn append_log_event_checked(
     writeln!(file, "{entry}")
 }
 
+/// 截头轮转：超 `max_bytes` 时按行边界保留尾部 `keep_bytes`，temp+rename
+/// 原子替换（参数化上限供测试注入小值）。
+fn rotate_if_oversized(path: &std::path::Path, max_bytes: u64, keep_bytes: usize) -> std::io::Result<()> {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if meta.len() <= max_bytes {
+        return Ok(());
+    }
+    let content = std::fs::read(path)?;
+    let cut = content.len().saturating_sub(keep_bytes);
+    // 从切点向后找行边界（保 JSON 行完整）。
+    let start = content[cut..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|i| cut + i + 1)
+        .unwrap_or(cut);
+    let tmp = path.with_extension("log.tmp");
+    std::fs::write(&tmp, &content[start..])?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 211 号：截头轮转——超上限保留尾部（按行边界），首部被截、尾部保留。
+    #[test]
+    fn rotates_head_when_oversized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inkos.log");
+        let mk_line = |i: usize| {
+            format!(
+                "{{\"timestamp\":\"t\",\"level\":\"info\",\"tag\":\"t\",\"message\":\"line-{i} padding-padding-padding\"}}"
+            )
+        };
+        // 直接构造超限文件（上限注入 512B / 保留 256B）。
+        let mut content = String::new();
+        for i in 0..40 {
+            content.push_str(&mk_line(i));
+            content.push('\n');
+        }
+        std::fs::write(&path, &content).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(before.len() > 512);
+        rotate_if_oversized(&path, 512, 256).unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.len() <= 300, "轮转后应接近保留窗：{}", after.len());
+        // 首部行被截、尾行保留、所有行仍是完整 JSON。
+        assert!(!after.contains("line-0\""));
+        assert!(after.contains("line-39"));
+        for line in after.trim().split('\n') {
+            assert!(serde_json::from_str::<serde_json::Value>(line).is_ok(), "行边界保持完整：{line}");
+        }
+        // 未超限时不动文件。
+        rotate_if_oversized(&path, 512, 256).unwrap();
+        let again = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(again.len(), after.len());
+    }
 
     #[test]
     fn appends_json_lines_parsable_by_get_logs() {

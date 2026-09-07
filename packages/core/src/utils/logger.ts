@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 // === Types ===
 
@@ -91,18 +91,42 @@ export const nullSink: LogSink = {
  * 零写入方（LogViewer/doctor 日志面空转）。JSON 行追加；失败静默（日志
  * 不阻断业务）。字段形态同 LogEntry（Rust 侧 utils/log_file.rs 对齐）。
  */
-export function createFileSink(path: string): LogSink {
+export function createFileSink(
+  path: string,
+  options?: { readonly maxBytes?: number; readonly keepBytes?: number },
+): LogSink {
+  // 211 号：截头轮转上限（对齐 engine utils/log_file.rs）——超限按行边界
+  // 保留尾部，temp+rename 原子替换；参数化上限供测试注入小值。
+  const maxBytes = options?.maxBytes ?? 512 * 1024;
+  const keepBytes = options?.keepBytes ?? 256 * 1024;
   return {
     write(entry: LogEntry): void {
       try {
         const dir = dirname(path);
         mkdirSync(dir, { recursive: true });
+        rotateIfOversized(path, maxBytes, keepBytes);
         appendFileSync(path, JSON.stringify(entry) + "\n", "utf-8");
       } catch {
         // 静默：日志写失败不得影响业务流
       }
     },
   };
+}
+
+function rotateIfOversized(path: string, maxBytes: number, keepBytes: number): void {
+  try {
+    const { size } = statSync(path);
+    if (size <= maxBytes) return;
+    const content = readFileSync(path);
+    const cut = Math.max(0, content.length - keepBytes);
+    const newline = content.indexOf(10, cut);
+    const start = newline >= 0 ? newline + 1 : cut;
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, content.subarray(start));
+    renameSync(tmp, path);
+  } catch {
+    // 轮转失败静默——最坏情况只是文件继续增长，不得阻断追加。
+  }
 }
 
 // === Factory ===
