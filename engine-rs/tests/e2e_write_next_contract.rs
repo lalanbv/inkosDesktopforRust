@@ -17198,10 +17198,16 @@ mod sub126_e2e {
         let config = books_routes::with_event_broadcasts(
             WriteNextConfig::default(),
             &runtime.hub,
+            &root,
         );
         let on_log = config.on_log.expect("事件化配置应挂 log 回调");
         on_log("info", "阶段：撰写章节草稿");
         let event = subscriber.recv().await.unwrap();
+        // 237 号：阶段日志同步落盘 inkos.log（TS fileSink 三通道对应面）。
+        assert!(
+            root.join("inkos.log").exists(),
+            "阶段日志应落盘 inkos.log"
+        );
         assert_eq!(event.event, "log");
         assert!(event.data.contains("\"level\":\"info\""), "data: {}", event.data);
         assert!(event.data.contains("\"tag\":\"studio\""), "data: {}", event.data);

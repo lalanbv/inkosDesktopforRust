@@ -1979,16 +1979,21 @@ pub async fn write_next_config_with_events(runtime: &BooksRuntime) -> WriteNextC
     with_event_broadcasts(
         WriteNextConfig::from_project(runtime.state.project_root()).await,
         &runtime.hub,
+        runtime.state.project_root(),
     )
 }
 
 /// 事件广播装配（127 号抽出）：任意 hub（write-next 路由运行时 / 测试）可复用。
+/// 237 号：`on_log` 在 SSE 广播之外同步落盘 inkos.log（TS fileSink 三通道
+/// 对应面——此前阶段日志仅广播不落盘，LogViewer 缺常规阶段叙事）。
 pub fn with_event_broadcasts(
     config: WriteNextConfig,
     hub: &crate::server::sse::BroadcastHub,
+    project_root: &std::path::Path,
 ) -> WriteNextConfig {
     let compression_hub = hub.clone();
     let log_hub = hub.clone();
+    let log_root = project_root.to_path_buf();
     WriteNextConfig {
         on_context_compression: Some(std::sync::Arc::new(
             move |event: &crate::models::context_compression::ContextCompressionEvent| {
@@ -2005,6 +2010,7 @@ pub fn with_event_broadcasts(
                 "log",
                 &serde_json::json!({ "level": level, "tag": "studio", "message": message }),
             );
+            crate::utils::log_file::append_log_event(&log_root, level, "studio", message);
         })),
         ..config
     }
