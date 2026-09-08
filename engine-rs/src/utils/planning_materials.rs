@@ -192,6 +192,7 @@ pub async fn gather_planning_materials(
         goal,
         outline_node,
         must_keep,
+        semantic_selector: None,
     })
     .await;
 

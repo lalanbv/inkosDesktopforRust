@@ -1530,6 +1530,8 @@ pub(crate) async fn prepare_write_input(
         book_id: &book.id,
         selector: &reference_selector,
     };
+    // 244 号：记忆语义精简器（TS runner memorySemanticSelector 同款）。
+    let memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
     let composed: ComposeChapterOutput = compose_governed_chapter(&ComposeChapterInput {
         book_language: book.language.as_deref(),
         book_dir,
@@ -1539,6 +1541,7 @@ pub(crate) async fn prepare_write_input(
         compiler: Some(&compiler),
         outline_section_selector: Some(&selector),
         reference_context_provider: Some(&reference_provider),
+        memory_semantic_selector: Some(&memory_selector),
         on_context_compression: config.on_context_compression.clone(),
     })
     .await?;

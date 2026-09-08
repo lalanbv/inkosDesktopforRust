@@ -122,6 +122,8 @@ pub struct ComposeChapterInput<'a> {
     pub outline_section_selector: Option<&'a dyn OutlineSectionSelector>,
     /// 216 号：引用选段注入（TS `referenceContextProvider`——None = 不注入）。
     pub reference_context_provider: Option<&'a dyn crate::references::BookReferenceContextProvider>,
+    /// 244 号：记忆语义精简（TS `memorySemanticSelector`——None = BM25 直通）。
+    pub memory_semantic_selector: Option<&'a dyn crate::utils::memory_retrieval::MemorySemanticSelector>,
     pub on_context_compression: Option<CompressionCallback>,
 }
 
@@ -175,6 +177,7 @@ pub async fn compose_governed_chapter(
         input.plan,
         language,
         input.outline_section_selector,
+        input.memory_semantic_selector,
     )
     .await;
     // 216 号：引用选段注入（TS loadReferenceContext：条目接在基础上下文之后，
@@ -605,6 +608,68 @@ impl crate::references::ReferenceSectionSelector for LlmReferenceSelector<'_> {
     }
 }
 
+/// LLM 记忆语义选择器（ComposerAgent.selectMemoryCandidates 的端口适配，244 号）。
+pub struct LlmMemorySelector<'a> {
+    pub chat: &'a dyn ComposerChat,
+}
+
+#[async_trait]
+impl crate::utils::memory_retrieval::MemorySemanticSelector for LlmMemorySelector<'_> {
+    async fn select(
+        &self,
+        request: &crate::utils::memory_retrieval::MemorySemanticSelectionRequest<'_>,
+    ) -> Result<Vec<String>, String> {
+        let candidates = request
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                [
+                    format!("#{} {}", index + 1, candidate.id),
+                    format!("kind: {}", candidate.kind),
+                    format!("source: {}", candidate.source),
+                    format!("title: {}", candidate.title),
+                    candidate.excerpt.clone(),
+                ]
+                .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let system = [
+            "You are InkOS's semantic story-memory selector.",
+            "Select only candidate memories that materially help the current chapter task. Understand negation, corrections, causal relationships, aliases, and paraphrases; do not rank by keyword overlap.",
+            "Established current-state facts and active hook lifecycle are protected separately by the host, so do not invent ids or retain unrelated candidates just to be safe.",
+            "Return strict JSON only: {\"selectedSources\":[\"candidate-id\"]}.",
+        ]
+        .join("\n");
+        let user = [
+            format!("Chapter: {}", request.chapter_number),
+            "Current task:".to_string(),
+            request.query.to_string(),
+            String::new(),
+            "BM25 candidates:".to_string(),
+            candidates,
+        ]
+        .join("\n");
+        let response = self.chat.chat(
+            vec![
+                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+            ],
+            ComposerChatOptions { temperature: 0.1, max_tokens: Some(2048) },
+        ).await?;
+        let allowed: HashSet<String> = request
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        Ok(parse_selected_sources(&response.content)
+            .into_iter()
+            .filter(|id| allowed.contains(id))
+            .collect())
+    }
+}
+
 /// LLM 可压缩上下文编译器（ComposerAgent.compileCompressibleContext 的端口适配）。
 pub struct LlmContextCompiler<'a> {
     pub chat: &'a dyn ComposerChat,
@@ -826,6 +891,7 @@ async fn collect_selected_context(
     plan: &PlanChapterOutput,
     language: WritingLanguage,
     outline_section_selector: Option<&dyn OutlineSectionSelector>,
+    memory_semantic_selector: Option<&dyn crate::utils::memory_retrieval::MemorySemanticSelector>,
 ) -> Vec<ContextSource> {
     let retrieval_hints = derive_retrieval_hints(plan);
     let memo_body_excerpt = plan.memo.body.trim();
@@ -879,6 +945,7 @@ async fn collect_selected_context(
         goal: &plan.intent.goal,
         outline_node: plan.intent.outline_node.as_deref(),
         must_keep: &retrieval_hints,
+        semantic_selector: memory_semantic_selector,
     })
     .await;
 
@@ -1961,6 +2028,7 @@ mod tests {
             compiler: None,
             outline_section_selector: Some(&selector),
             reference_context_provider: None,
+            memory_semantic_selector: None,
             on_context_compression: None,
         })
         .await
@@ -2081,6 +2149,7 @@ mod tests {
             compiler: None,
             outline_section_selector: None,
             reference_context_provider: Some(&provider),
+            memory_semantic_selector: None,
             on_context_compression: None,
         })
         .await
@@ -2115,6 +2184,7 @@ mod tests {
             compiler: None,
             outline_section_selector: None,
             reference_context_provider: Some(&provider),
+            memory_semantic_selector: None,
             on_context_compression: None,
         })
         .await

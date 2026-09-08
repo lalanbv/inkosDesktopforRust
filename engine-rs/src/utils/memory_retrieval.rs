@@ -65,6 +65,29 @@ pub struct VolumeSummarySelection {
     pub anchor: String,
 }
 
+/// 语义精简候选。对齐 TS `MemorySemanticSelectionRequest.candidates` 元素。
+#[derive(Debug, Clone)]
+pub struct MemoryCandidate {
+    pub id: String,
+    pub kind: String,
+    pub source: String,
+    pub title: String,
+    pub excerpt: String,
+}
+
+/// 语义精简请求。对齐 TS `MemorySemanticSelectionRequest`。
+pub struct MemorySemanticSelectionRequest<'a> {
+    pub chapter_number: u32,
+    pub query: &'a str,
+    pub candidates: &'a [MemoryCandidate],
+}
+
+/// 语义精简器端口（TS `MemorySemanticSelector`——LLM 从 BM25 候选中精选）。
+#[async_trait::async_trait]
+pub trait MemorySemanticSelector: Send + Sync {
+    async fn select(&self, request: &MemorySemanticSelectionRequest<'_>) -> Result<Vec<String>, String>;
+}
+
 /// 检索入参。对齐 TS `retrieveMemorySelection` 的参数对象。
 pub struct RetrieveMemoryParams<'a> {
     pub book_dir: &'a Path,
@@ -72,11 +95,30 @@ pub struct RetrieveMemoryParams<'a> {
     pub goal: &'a str,
     pub outline_node: Option<&'a str>,
     pub must_keep: &'a [String],
+    /// 241/244 号：语义精简层（TS `memorySemanticSelector`）。None/失败/候选
+    /// ≤1 时跳过——BM25 候选直接按确定性优先级使用。
+    pub semantic_selector: Option<&'a dyn MemorySemanticSelector>,
 }
 
 /// 装配 planner 记忆选集：结构化状态优先 → markdown 兜底 → SQLite 加速。
 ///
 /// 副作用（对齐 TS）：bootstrap 结构化状态；memory.db 为空时回填摘要/事实。
+async fn read_file_or_empty(path: &Path) -> String {
+    tokio::fs::read_to_string(path).await.unwrap_or_default()
+}
+
+const STOP_WORDS: &[&str] = &[
+    "bring", "focus", "back", "chapter", "clear", "narrative", "before", "opening",
+    "track", "the", "with", "from", "that", "this", "into", "still", "cannot",
+    "current", "state", "advance", "conflict", "story", "keep", "must", "local",
+    "does", "not", "only", "just", "then", "than",
+];
+
+async fn read_structured_state<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> MemorySelection {
     let story_dir = params.book_dir.join("story");
     let state_dir = story_dir.join("state");
@@ -131,14 +173,20 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
             parse_current_state_facts(&current_state_markdown, i64::from(fallback_chapter))
         });
 
-    let narrative_query_terms =
-        extract_query_terms(params.goal, params.outline_node, &[]);
-    let fact_query_terms =
-        extract_query_terms(params.goal, params.outline_node, params.must_keep);
-    let volume_summaries = select_relevant_volume_summaries(
-        &parse_volume_summaries_markdown(&volume_summaries_markdown),
-        &narrative_query_terms,
-    );
+    // 244 号：语义精简层接线——统一检索链（TS retrieveMemorySelection 对应）：
+    // 候选文档 → 内存 BM25（top-32）→ 语义精选（可选，失败回退）→ rankScores
+    // → 确定性优先级选择。此前 Rust 为词法评分独立实现（无 BM25/语义层）。
+    let narrative_query = [params.goal, params.outline_node.unwrap_or("")]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let retrieval_query = if params.must_keep.is_empty() {
+        narrative_query
+    } else {
+        format!("{}\n{}", narrative_query, params.must_keep.join("\n"))
+    };
 
     // hook 走权威路径（结构化 hooks.json / pending_hooks.md），不走 SQLite——
     // DB 表只存小子集，保不住 promoted/core/dependency 元数据。
@@ -146,115 +194,100 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         .map(|state| state.hooks)
         .unwrap_or_else(|| parse_pending_hooks_markdown(&hooks_markdown));
     let active_hooks = filter_active_hooks(&hooks);
+    // 休眠 architect 种子非活跃债务，但仍是可检索正典（TS searchableHooks）。
+    let searchable_hooks: Vec<HookRecord> = hooks
+        .iter()
+        .filter(|hook| !is_recycle_terminal_status(hook_status_text(hook)))
+        .cloned()
+        .collect();
 
     // Send 纪律：rusqlite Connection 非 Sync——不得跨 await 持有。
     // markdown 预读提前到 DB 打开之前，DB 分支收敛为纯同步段。
     let summaries_markdown =
         read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
 
+    // MemoryDb 副作用（对齐 TS）：空库回填摘要/事实（DB 为可重建投影）。
     if let Ok(memory_db) = MemoryDb::open(params.book_dir) {
-        let selection = assemble_db_selection(
-            &memory_db,
-            params,
-            &active_hooks,
-            &facts,
-            &narrative_query_terms,
-            &fact_query_terms,
-            &structured_summaries,
-            &summaries_markdown,
-            volume_summaries,
-        );
-        let _ = memory_db.close().ok();
-        return selection;
+        if memory_db.get_chapter_count().unwrap_or(0) == 0 {
+            let backfill: Vec<StoredSummary> = if let Some(state) = &structured_summaries {
+                state.rows.iter().map(summary_from_row).collect()
+            } else {
+                parse_chapter_summaries_markdown(&summaries_markdown)
+            };
+            if !backfill.is_empty() {
+                let _ = memory_db.replace_summaries(&backfill);
+            }
+        }
+        if memory_db.get_current_facts().map(|f| f.is_empty()).unwrap_or(true) && !facts.is_empty()
+        {
+            let _ = memory_db.replace_current_facts(&facts);
+        }
+        memory_db.close().ok();
     }
 
     let summaries = structured_summaries
         .map(|state| state.rows.iter().map(summary_from_row).collect())
         .unwrap_or_else(|| parse_chapter_summaries_markdown(&summaries_markdown));
 
-    MemorySelection {
-        summaries: select_relevant_summaries(&summaries, params.chapter_number, &narrative_query_terms),
-        hooks: select_relevant_hooks(&active_hooks, &narrative_query_terms, params.chapter_number),
-        active_hooks: active_hooks.clone(),
-        recyclable_hooks: compute_recyclable_hooks(&active_hooks, params.chapter_number),
-        facts: select_relevant_facts(&facts, &fact_query_terms),
-        volume_summaries,
-        db_path: None,
+    let volume_summaries = parse_volume_summaries_markdown(&volume_summaries_markdown);
+    let documents = build_memory_search_documents(
+        &summaries,
+        &searchable_hooks,
+        &facts,
+        &volume_summaries,
+    );
+    let index = crate::utils::local_search::LocalSearchIndex::new(":memory:").ok();
+    if let Some(index) = &index {
+        let _ = index.replace_scope(STORY_MEMORY_SCOPE, &documents);
     }
-}
-
-/// DB 路径的选集装配：空库回填 + 摘要窗口检索 + dbPath 标注。
-#[allow(clippy::too_many_arguments)]
-fn assemble_db_selection(
-    memory_db: &MemoryDb,
-    params: &RetrieveMemoryParams<'_>,
-    active_hooks: &[HookRecord],
-    facts: &[NewFact],
-    narrative_query_terms: &[String],
-    fact_query_terms: &[String],
-    structured_summaries: &Option<ChapterSummariesState>,
-    summaries_markdown: &str,
-    volume_summaries: Vec<VolumeSummarySelection>,
-) -> MemorySelection {
-    // 空库回填：摘要来自结构化 rows，缺失时用预读 markdown。
-    if memory_db.get_chapter_count().unwrap_or(0) == 0 {
-        let summaries: Vec<StoredSummary> = if let Some(state) = structured_summaries {
-            state.rows.iter().map(summary_from_row).collect()
-        } else {
-            parse_chapter_summaries_markdown(summaries_markdown)
-        };
-        if !summaries.is_empty() {
-            let _ = memory_db.replace_summaries(&summaries);
-        }
-    }
-    if memory_db.get_current_facts().map(|f| f.is_empty()).unwrap_or(true) && !facts.is_empty() {
-        let _ = memory_db.replace_current_facts(facts);
-    }
-
-    // 结构化/markdown hook 状态是权威（元数据完整）；迁移/极简项目里 SQLite
-    // 可能已有可用行而权威路径为空，此时才回退 DB。
-    let effective_active_hooks: Vec<HookRecord> = if active_hooks.is_empty() {
-        let db_hooks = memory_db.get_active_hooks().unwrap_or_default();
-        filter_active_hooks(
-            &db_hooks.iter().map(hook_record_from_db_row).collect::<Vec<_>>(),
-        )
-    } else {
-        active_hooks.to_vec()
+    let hits = match &index {
+        Some(index) => index.search(
+            &retrieval_query,
+            &crate::utils::local_search::SearchOptions {
+                scope: STORY_MEMORY_SCOPE,
+                kinds: &[],
+                limit: 32,
+            },
+        ),
+        None => Vec::new(),
     };
 
-    let db_summaries = memory_db
-        .get_summaries(1, i64::from(params.chapter_number.saturating_sub(1)).max(1))
-        .unwrap_or_default();
-    let db_facts: Vec<NewFact> = memory_db
-        .get_current_facts()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|fact| NewFact {
-            subject: fact.subject,
-            predicate: fact.predicate,
-            object: fact.object,
-            valid_from_chapter: fact.valid_from_chapter,
-            valid_until_chapter: fact.valid_until_chapter,
-            source_chapter: fact.source_chapter,
-        })
-        .collect();
+    // 语义精选：selector 缺失/候选 ≤1/失败 → None（回退 BM25 全量）。
+    let semantic_selected = select_semantic_candidate_ids(
+        params.semantic_selector,
+        params.chapter_number,
+        &retrieval_query,
+        &hits,
+    )
+    .await;
+    let ranked_hits: Vec<crate::utils::local_search::SearchHit> = match &semantic_selected {
+        Some(selected) => {
+            let set: std::collections::HashSet<&String> = selected.iter().collect();
+            hits.into_iter().filter(|hit| set.contains(&hit.id)).collect()
+        }
+        None => hits,
+    };
+    let rank_scores = build_rank_scores(&ranked_hits);
 
     MemorySelection {
-        summaries: select_relevant_summaries(&db_summaries, params.chapter_number, narrative_query_terms),
-        hooks: select_relevant_hooks(&effective_active_hooks, narrative_query_terms, params.chapter_number),
-        active_hooks: effective_active_hooks.clone(),
-        recyclable_hooks: compute_recyclable_hooks(&effective_active_hooks, params.chapter_number),
-        facts: select_relevant_facts(&db_facts, fact_query_terms),
-        volume_summaries,
-        db_path: Some(
-            params.book_dir
-                .join("story")
-                .join("memory.db")
-                .to_string_lossy()
-                .into_owned(),
+        summaries: select_relevant_summaries(&summaries, params.chapter_number, &rank_scores),
+        hooks: select_relevant_hooks(
+            &searchable_hooks,
+            &active_hooks,
+            &rank_scores,
+            params.chapter_number,
         ),
+        active_hooks: active_hooks.clone(),
+        recyclable_hooks: compute_recyclable_hooks(&active_hooks, params.chapter_number),
+        facts: select_relevant_facts(&facts, &rank_scores),
+        volume_summaries: select_relevant_volume_summaries(&volume_summaries, &rank_scores),
+        db_path: index.map(|index| {
+            index.close();
+            format!("{}/story/memory.db", params.book_dir.display())
+        }),
     }
 }
+
 
 // ---- 陈旧 hook 回收判定（纯函数，golden 守门） ----
 
@@ -460,6 +493,190 @@ fn slugify_anchor(value: &str) -> String {
     }
 }
 
+// ---- 语义精简层与 rankScores（244 号，TS memory-retrieval 292-460 对应） ----
+
+const STORY_MEMORY_SCOPE: &str = "story-memory";
+
+fn summary_document_id(chapter: i64) -> String {
+    format!("summary:{chapter}")
+}
+
+fn hook_document_id(hook_id: &str) -> String {
+    format!("hook:{hook_id}")
+}
+
+fn fact_document_id(index: usize) -> String {
+    format!("fact:{index}")
+}
+
+fn volume_summary_document_id(index: usize) -> String {
+    format!("volume-summary:{index}")
+}
+
+fn to_fact_source_anchor(value: &str) -> String {
+    let slug: String = value
+        .trim()
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .collect();
+    if slug.is_empty() {
+        "fact".to_string()
+    } else {
+        slug
+    }
+}
+
+/// TS `buildMemorySearchDocuments`：四类记忆 → 检索文档。
+fn build_memory_search_documents(
+    summaries: &[StoredSummary],
+    hooks: &[HookRecord],
+    facts: &[NewFact],
+    volume_summaries: &[VolumeSummarySelection],
+) -> Vec<crate::utils::local_search::SearchDocument> {
+    let mut documents: Vec<crate::utils::local_search::SearchDocument> = Vec::new();
+
+    for summary in summaries {
+        let body = [
+            summary.characters.as_str(),
+            summary.events.as_str(),
+            summary.state_changes.as_str(),
+            summary.hook_activity.as_str(),
+            summary.mood.as_str(),
+            summary.chapter_type.as_str(),
+        ]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+        documents.push(crate::utils::local_search::SearchDocument {
+            id: summary_document_id(summary.chapter),
+            scope: STORY_MEMORY_SCOPE.to_string(),
+            kind: "chapter-summary".to_string(),
+            source: format!("story/chapter_summaries.md#{}", summary.chapter),
+            title: if summary.title.is_empty() {
+                format!("Chapter {}", summary.chapter)
+            } else {
+                summary.title.clone()
+            },
+            body,
+        });
+    }
+
+    for hook in hooks {
+        let status_text = hook_status_text(hook).to_string();
+        let timing_text = hook
+            .payoff_timing
+            .as_ref()
+            .map(|timing| serde_json::to_value(timing).ok())
+            .and_then(|value| value)
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let body = [
+            status_text.as_str(),
+            hook.expected_payoff.as_str(),
+            timing_text.as_str(),
+            hook.notes.as_str(),
+        ]
+        .iter()
+        .filter(|part| !part.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+        documents.push(crate::utils::local_search::SearchDocument {
+            id: hook_document_id(&hook.hook_id),
+            scope: STORY_MEMORY_SCOPE.to_string(),
+            kind: "hook".to_string(),
+            source: format!("story/pending_hooks.md#{}", hook.hook_id),
+            title: [hook.hook_id.as_str(), hook.hook_type.as_str()]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" "),
+            body,
+        });
+    }
+
+    for (index, fact) in facts.iter().enumerate() {
+        documents.push(crate::utils::local_search::SearchDocument {
+            id: fact_document_id(index),
+            scope: STORY_MEMORY_SCOPE.to_string(),
+            kind: "fact".to_string(),
+            source: format!(
+                "story/current_state.md#{}",
+                to_fact_source_anchor(&fact.predicate)
+            ),
+            title: [fact.subject.as_str(), fact.predicate.as_str()]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" "),
+            body: fact.object.clone(),
+        });
+    }
+
+    for (index, summary) in volume_summaries.iter().enumerate() {
+        documents.push(crate::utils::local_search::SearchDocument {
+            id: volume_summary_document_id(index),
+            scope: STORY_MEMORY_SCOPE.to_string(),
+            kind: "volume-summary".to_string(),
+            source: format!("story/volume_summaries.md#{}", summary.anchor),
+            title: summary.heading.clone(),
+            body: summary.content.clone(),
+        });
+    }
+
+    documents
+}
+
+/// TS `buildRankScores`：命中序位 × 10（越前越高）。
+fn build_rank_scores(hits: &[crate::utils::local_search::SearchHit]) -> std::collections::HashMap<String, i64> {
+    hits.iter()
+        .enumerate()
+        .map(|(index, hit)| (hit.id.clone(), (hits.len() - index) as i64 * 10))
+        .collect()
+}
+
+/// TS `selectSemanticCandidateIds`：selector 缺失/候选 ≤1 → None；selector
+/// 失败 → None（回退 BM25 全量，检索保持可用）。
+async fn select_semantic_candidate_ids(
+    selector: Option<&dyn MemorySemanticSelector>,
+    chapter_number: u32,
+    query: &str,
+    hits: &[crate::utils::local_search::SearchHit],
+) -> Option<Vec<String>> {
+    let selector = selector?;
+    if hits.len() <= 1 {
+        return None;
+    }
+    let candidates: Vec<MemoryCandidate> = hits
+        .iter()
+        .map(|hit| MemoryCandidate {
+            id: hit.id.clone(),
+            kind: hit.kind.clone(),
+            source: hit.source.clone(),
+            title: hit.title.clone(),
+            excerpt: hit.body.clone(),
+        })
+        .collect();
+    let request = MemorySemanticSelectionRequest {
+        chapter_number,
+        query,
+        candidates: &candidates,
+    };
+    let selected = selector.select(&request).await.ok()?;
+    let allowed: std::collections::HashSet<&String> = hits.iter().map(|hit| &hit.id).collect();
+    let mut out: Vec<String> = Vec::new();
+    for id in selected {
+        if allowed.contains(&id) && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Some(out)
+}
+
 // ---- 相关性选择（私有，Rust 单测镜像 TS 行为） ----
 
 fn is_unresolved_hook(status: &str) -> bool {
@@ -469,128 +686,162 @@ fn is_unresolved_hook(status: &str) -> bool {
 fn select_relevant_summaries(
     summaries: &[StoredSummary],
     chapter_number: u32,
-    query_terms: &[String],
+    rank_scores: &std::collections::HashMap<String, i64>,
 ) -> Vec<StoredSummary> {
     let chapter_number = i64::from(chapter_number);
-    let mut ranked: Vec<(StoredSummary, i64, bool)> = summaries
+    let chapter_number_u32 = chapter_number as u32;
+    let ranked: Vec<(StoredSummary, i64, bool)> = summaries
         .iter()
         .filter(|summary| summary.chapter < chapter_number)
         .map(|summary| {
-            let text = summary_text(summary);
+            let age = (chapter_number - summary.chapter).max(0);
+            let retrieval_score =
+                rank_scores.get(&summary_document_id(summary.chapter)).copied().unwrap_or(0);
+            let score = retrieval_score + (12 - age).max(0);
             (
                 summary.clone(),
-                score_summary(summary, chapter_number, query_terms, &text),
-                matches_any(&text, query_terms),
+                score,
+                retrieval_score > 0,
             )
         })
-        .filter(|(summary, _, matched)| *matched || summary.chapter >= chapter_number - 3)
         .collect();
 
-    ranked.sort_by(|left, right| {
-        right
-            .1
-            .cmp(&left.1)
-            .then(right.0.chapter.cmp(&left.0.chapter))
-    });
-    ranked.truncate(4);
-    ranked.sort_by(|left, right| left.0.chapter.cmp(&right.0.chapter));
-    ranked.into_iter().map(|(summary, _, _)| summary).collect()
+    // recent：最近 3 章内 DESC chapter 取 3；recalled：retrieved 最高分取 1。
+    let mut recent: Vec<&(StoredSummary, i64, bool)> = ranked
+        .iter()
+        .filter(|(summary, _, _)| summary.chapter >= chapter_number_u32 as i64 - 3)
+        .collect();
+    recent.sort_by(|left, right| right.0.chapter.cmp(&left.0.chapter));
+    let recent: Vec<StoredSummary> =
+        recent.iter().take(3).map(|(summary, _, _)| summary.clone()).collect();
+
+    let mut recalled_ranked: Vec<&(StoredSummary, i64, bool)> = ranked
+        .iter()
+        .filter(|(_, _, retrieved)| *retrieved)
+        .collect();
+    recalled_ranked
+        .sort_by(|left, right| right.1.cmp(&left.1).then(right.0.chapter.cmp(&left.0.chapter)));
+    let recalled: Vec<StoredSummary> = recalled_ranked
+        .iter()
+        .take(1)
+        .map(|(summary, _, _)| summary.clone())
+        .collect();
+
+    // Map 去重（按 chapter，后者覆盖前者）→ ASC chapter。
+    let mut merged: std::collections::HashMap<i64, StoredSummary> =
+        std::collections::HashMap::new();
+    for summary in recalled.into_iter().chain(recent) {
+        merged.insert(summary.chapter, summary);
+    }
+    let mut out: Vec<StoredSummary> = merged.into_values().collect();
+    out.sort_by_key(|summary| summary.chapter);
+    out
 }
 
 fn select_relevant_hooks(
     hooks: &[HookRecord],
-    query_terms: &[String],
+    active_hooks: &[HookRecord],
+    rank_scores: &std::collections::HashMap<String, i64>,
     chapter_number: u32,
 ) -> Vec<HookRecord> {
-    #[derive(Clone)]
-    struct Ranked {
-        hook: HookRecord,
-        score: i64,
-        matched: bool,
-    }
-
-    let ranked: Vec<Ranked> = hooks
+    let active_hook_ids: std::collections::HashSet<&str> =
+        active_hooks.iter().map(|hook| hook.hook_id.as_str()).collect();
+    let ranked: Vec<(HookRecord, i64, bool)> = hooks
         .iter()
-        .map(|hook| Ranked {
-            score: score_hook(hook, query_terms),
-            matched: matches_any(&hook_text(hook), query_terms),
-            hook: hook.clone(),
+        .map(|hook| {
+            let retrieval_score =
+                rank_scores.get(&hook_document_id(&hook.hook_id)).copied().unwrap_or(0);
+            let score = retrieval_score + (hook.last_advanced_chapter as i64).max(0);
+            (
+                hook.clone(),
+                score,
+                retrieval_score > 0,
+            )
         })
-        .filter(|entry| entry.matched || is_unresolved_hook(hook_status_text(&entry.hook)))
+        .filter(|(hook, _, retrieved)| {
+            *retrieved || active_hook_ids.contains(hook.hook_id.as_str())
+        })
         .collect();
 
-    let mut primary: Vec<Ranked> = ranked
+    let mut primary: Vec<&(HookRecord, i64, bool)> = ranked
         .iter()
-        .filter(|entry| {
-            entry.matched
-                || is_hook_within_chapter_window(&entry.hook, chapter_number, 5, DEFAULT_HOOK_LOOKAHEAD_CHAPTERS)
+        .filter(|(hook, _, retrieved)| {
+            *retrieved
+                || (active_hook_ids.contains(hook.hook_id.as_str())
+                    && is_hook_within_chapter_window(
+                        hook,
+                        chapter_number,
+                        5,
+                        DEFAULT_HOOK_LOOKAHEAD_CHAPTERS,
+                    ))
         })
-        .cloned()
         .collect();
     primary.sort_by(|left, right| {
         right
-            .score
-            .cmp(&left.score)
-            .then(
-                right
-                    .hook
-                    .last_advanced_chapter
-                    .cmp(&left.hook.last_advanced_chapter),
-            )
+            .1
+            .cmp(&left.1)
+            .then(right.0.last_advanced_chapter.cmp(&left.0.last_advanced_chapter))
     });
-    primary.truncate(6);
+    let primary: Vec<HookRecord> =
+        primary.iter().take(6).map(|(hook, _, _)| hook.clone()).collect();
 
-    let selected_ids: HashSet<String> = primary.iter().map(|e| e.hook.hook_id.clone()).collect();
-    let mut stale: Vec<Ranked> = ranked
-        .into_iter()
-        .filter(|entry| {
-            !selected_ids.contains(&entry.hook.hook_id)
-                && !is_future_planned_hook(&entry.hook, chapter_number, DEFAULT_HOOK_LOOKAHEAD_CHAPTERS)
-                && is_unresolved_hook(hook_status_text(&entry.hook))
+    let selected_ids: std::collections::HashSet<&str> =
+        primary.iter().map(|hook| hook.hook_id.as_str()).collect();
+    let mut stale: Vec<&(HookRecord, i64, bool)> = ranked
+        .iter()
+        .filter(|(hook, _, _retrieved)| {
+            !selected_ids.contains(hook.hook_id.as_str())
+                && active_hook_ids.contains(hook.hook_id.as_str())
+                && !is_future_planned_hook(hook, chapter_number, DEFAULT_HOOK_LOOKAHEAD_CHAPTERS)
+                && is_unresolved_hook(hook_status_text(hook))
         })
         .collect();
     stale.sort_by(|left, right| {
-        left.hook
+        left.0
             .last_advanced_chapter
-            .cmp(&right.hook.last_advanced_chapter)
-            .then(right.score.cmp(&left.score))
+            .cmp(&right.0.last_advanced_chapter)
+            .then(right.1.cmp(&left.1))
     });
-    stale.truncate(2);
+    let stale: Vec<HookRecord> =
+        stale.iter().take(2).map(|(hook, _, _)| hook.clone()).collect();
 
-    primary
-        .into_iter()
-        .chain(stale)
-        .map(|entry| entry.hook)
-        .collect()
+    primary.into_iter().chain(stale).collect()
 }
 
-fn select_relevant_facts(facts: &[NewFact], query_terms: &[String]) -> Vec<NewFact> {
+fn select_relevant_facts(
+    facts: &[NewFact],
+    rank_scores: &std::collections::HashMap<String, i64>,
+) -> Vec<NewFact> {
+    let prioritized_predicates: [&[&str]; 6] = [
+        &["当前冲突", "current conflict"],
+        &["当前目标", "current goal"],
+        &["主角状态", "protagonist state"],
+        &["当前限制", "current constraint"],
+        &["当前位置", "current location"],
+        &["当前敌我", "current alliances", "current relationships"],
+    ];
+
     let mut ranked: Vec<(NewFact, i64, bool)> = facts
         .iter()
-        .map(|fact| {
-            let text = format!("{} {} {}", fact.subject, fact.predicate, fact.object);
-            let priority = prioritized_predicate_index(&fact.predicate);
+        .enumerate()
+        .map(|(index, fact)| {
+            let normalized_predicate = fact.predicate.trim().to_lowercase();
+            let priority = prioritized_predicates
+                .iter()
+                .position(|values| values.iter().any(|value| *value == normalized_predicate));
             let base_score = match priority {
-                Some(index) => 20 - 2 * index as i64,
+                Some(priority) => 20 - 2 * priority as i64,
                 None => 5,
             };
-            let term_score: i64 = query_terms
-                .iter()
-                .map(|term| {
-                    if includes_term(&text, term) {
-                        std::cmp::max(8, (term.chars().count() as i64) * 2)
-                    } else {
-                        0
-                    }
-                })
-                .sum();
+            let retrieval_score =
+                rank_scores.get(&fact_document_id(index)).copied().unwrap_or(0);
             (
                 fact.clone(),
-                base_score + term_score,
-                matches_any(&text, query_terms),
+                base_score + retrieval_score,
+                retrieval_score > 0,
             )
         })
-        .filter(|(_, score, matched)| *matched || *score >= 14)
+        .filter(|(_, score, retrieved)| *retrieved || *score >= 14)
         .collect();
 
     ranked.sort_by(|left, right| right.1.cmp(&left.1));
@@ -600,161 +851,33 @@ fn select_relevant_facts(facts: &[NewFact], query_terms: &[String]) -> Vec<NewFa
 
 fn select_relevant_volume_summaries(
     summaries: &[VolumeSummarySelection],
-    query_terms: &[String],
+    rank_scores: &std::collections::HashMap<String, i64>,
 ) -> Vec<VolumeSummarySelection> {
     if summaries.is_empty() {
         return Vec::new();
     }
 
-    #[derive(Clone)]
-    struct Ranked {
-        index: usize,
-        summary: VolumeSummarySelection,
-        score: i64,
-        matched: bool,
-    }
-
-    let ranked: Vec<Ranked> = summaries
+    let ranked: Vec<(usize, VolumeSummarySelection, i64, bool)> = summaries
         .iter()
         .enumerate()
         .map(|(index, summary)| {
-            let text = format!("{} {}", summary.heading, summary.content);
-            let term_score: i64 = query_terms
-                .iter()
-                .map(|term| {
-                    if includes_term(&text, term) {
-                        std::cmp::max(8, (term.chars().count() as i64) * 2)
-                    } else {
-                        0
-                    }
-                })
-                .sum();
-            Ranked {
+            let retrieval_score =
+                rank_scores.get(&volume_summary_document_id(index)).copied().unwrap_or(0);
+            (
                 index,
-                summary: summary.clone(),
-                score: term_score + index as i64,
-                matched: matches_any(&text, query_terms),
-            }
+                summary.clone(),
+                retrieval_score + index as i64,
+                retrieval_score > 0,
+            )
         })
+        .filter(|(index, _, _, retrieved)| *retrieved || *index + 1 == summaries.len())
         .collect();
 
-    let last_index = ranked.len().saturating_sub(1);
-    let mut selected: Vec<Ranked> = ranked
-        .into_iter()
-        .enumerate()
-        .filter(|(position, entry)| entry.matched || *position == last_index)
-        .map(|(_, entry)| entry)
-        .collect();
-    selected.sort_by(|left, right| right.score.cmp(&left.score));
+    let mut selected = ranked;
+    selected.sort_by(|left, right| right.2.cmp(&left.2));
     selected.truncate(2);
-    selected.sort_by(|left, right| left.index.cmp(&right.index));
-    selected.into_iter().map(|entry| entry.summary).collect()
-}
-
-fn prioritized_predicate_index(predicate: &str) -> Option<usize> {
-    const PATTERNS: [&str; 6] = [
-        "当前冲突", "当前目标", "主角状态", "当前限制", "当前位置", "当前敌我",
-    ];
-    let trimmed = predicate.trim();
-    let lower = trimmed.to_lowercase();
-    for (index, canonical) in PATTERNS.iter().enumerate() {
-        if lower == *canonical {
-            return Some(index);
-        }
-    }
-    // 英文别名（TS 正则 ^(current conflict)$ 等，大小写不敏感）
-    const EN_ALIASES: [&str; 6] = [
-        "current conflict",
-        "current goal",
-        "protagonist state",
-        "current constraint",
-        "current location",
-        "",
-    ];
-    for (index, alias) in EN_ALIASES.iter().enumerate() {
-        if !alias.is_empty() && lower == *alias {
-            return Some(index);
-        }
-    }
-    // 当前敌我/盟友（TS：^(当前敌我|current alliances|current relationships)$）
-    if lower == "current alliances" || lower == "current relationships" {
-        return Some(5);
-    }
-    None
-}
-
-fn score_summary(
-    summary: &StoredSummary,
-    chapter_number: i64,
-    query_terms: &[String],
-    text: &str,
-) -> i64 {
-    let age = (chapter_number - summary.chapter).max(0);
-    let recency_score = (12 - age).max(0);
-    let term_score: i64 = query_terms
-        .iter()
-        .map(|term| {
-            if includes_term(text, term) {
-                std::cmp::max(8, (term.chars().count() as i64) * 2)
-            } else {
-                0
-            }
-        })
-        .sum();
-    recency_score + term_score
-}
-
-fn score_hook(hook: &HookRecord, query_terms: &[String]) -> i64 {
-    let text = hook_text(hook);
-    let freshness = i64::from(hook.last_advanced_chapter);
-    let term_score: i64 = query_terms
-        .iter()
-        .map(|term| {
-            if includes_term(&text, term) {
-                std::cmp::max(8, (term.chars().count() as i64) * 2)
-            } else {
-                0
-            }
-        })
-        .sum();
-    term_score + freshness
-}
-
-fn matches_any(text: &str, query_terms: &[String]) -> bool {
-    query_terms
-        .iter()
-        .any(|term| includes_term(text, term))
-}
-
-fn includes_term(text: &str, term: &str) -> bool {
-    text.to_lowercase().contains(&term.to_lowercase())
-}
-
-fn summary_text(summary: &StoredSummary) -> String {
-    [
-        summary.title.as_str(),
-        summary.characters.as_str(),
-        summary.events.as_str(),
-        summary.state_changes.as_str(),
-        summary.hook_activity.as_str(),
-        summary.chapter_type.as_str(),
-    ]
-    .join(" ")
-}
-
-fn hook_text(hook: &HookRecord) -> String {
-    let timing = hook
-        .payoff_timing
-        .map(crate::utils::hook_lifecycle::hook_payoff_timing_canonical)
-        .unwrap_or_default();
-    [
-        hook.hook_id.as_str(),
-        hook.hook_type.as_str(),
-        hook.expected_payoff.as_str(),
-        timing,
-        hook.notes.as_str(),
-    ]
-    .join(" ")
+    selected.sort_by_key(|(index, _, _, _)| *index);
+    selected.into_iter().map(|(_, summary, _, _)| summary).collect()
 }
 
 fn summary_from_row(row: &ChapterSummaryRow) -> StoredSummary {
@@ -769,51 +892,6 @@ fn summary_from_row(row: &ChapterSummaryRow) -> StoredSummary {
         chapter_type: row.chapter_type.clone(),
     }
 }
-
-/// DB 8 列行 → 全量记录（元数据缺省，status 原文入 status_raw）。
-fn hook_record_from_db_row(hook: &crate::state::memory_db::StoredHook) -> HookRecord {
-    HookRecord {
-        hook_id: hook.hook_id.clone(),
-        start_chapter: hook.start_chapter.max(0) as u32,
-        hook_type: hook.r#type.clone(),
-        status: crate::utils::hook_lifecycle::normalize_stored_hook_status(&hook.status),
-        status_raw: hook.status.clone(),
-        last_advanced_chapter: hook.last_advanced_chapter.max(0) as u32,
-        expected_payoff: hook.expected_payoff.clone(),
-        payoff_timing: crate::utils::hook_lifecycle::normalize_hook_payoff_timing(
-            if hook.payoff_timing.is_empty() {
-                None
-            } else {
-                Some(hook.payoff_timing.as_str())
-            },
-        ),
-        notes: hook.notes.clone(),
-        depends_on: None,
-        pays_off_in_arc: None,
-        core_hook: None,
-        half_life_chapters: None,
-        advanced_count: None,
-        promoted: None,
-    }
-}
-
-async fn read_file_or_empty(path: &Path) -> String {
-    tokio::fs::read_to_string(path).await.unwrap_or_default()
-}
-
-async fn read_structured_state<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let raw = tokio::fs::read_to_string(path).await.ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-// ---- 静态正则 / 停用词 ----
-
-const STOP_WORDS: &[&str] = &[
-    "bring", "focus", "back", "chapter", "clear", "narrative", "before", "opening",
-    "track", "the", "with", "from", "that", "this", "into", "still", "cannot",
-    "current", "state", "advance", "conflict", "story", "keep", "must", "local",
-    "does", "not", "only", "just", "then", "than",
-];
 
 fn chapter_ref_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -1018,11 +1096,14 @@ mod tests {
             summary(8, "祖符争夺"),
             summary(9, "日常过渡"),
         ];
-        let terms = vec!["祖符".to_string()];
-        let out = select_relevant_summaries(&summaries, 10, &terms);
-        // 第8章：recency 12-2=10 + 命中 2*2=4 → 最高；第7章次之；
-        // 第9章 recency 高未命中但近 3 章内保留；第1章超出近窗且未命中 → 排除。
+        // 244 号：rankScores 模式（TS selectRelevantSummaries 逐字）——
+        // recent = 最近 3 章 DESC 取 3；recalled = retrieved 最高分取 1。
+        let mut rank_scores = std::collections::HashMap::new();
+        rank_scores.insert("summary:8".to_string(), 30);
+        rank_scores.insert("summary:7".to_string(), 10);
+        let out = select_relevant_summaries(&summaries, 10, &rank_scores);
         let chapters: Vec<i64> = out.iter().map(|s| s.chapter).collect();
+        // recent（8,9,7 DESC 取 3）+ recalled（7）→ 全部去重 ASC。
         assert_eq!(chapters, vec![7, 8, 9]);
     }
 
@@ -1034,10 +1115,16 @@ mod tests {
             h.notes = format!("线索{i}");
             hooks.push(h);
         }
-        let out = select_relevant_hooks(&hooks, &["线索".to_string()], 10);
-        // 主选 ≤6 + 陈旧 ≤2 = 8 条全部保留；排序按分数（freshness）降序。
-        assert_eq!(out.len(), 8);
-        assert_eq!(out[0].hook_id, "H07");
+        // 244 号：rankScores 模式（TS selectRelevantHooks 逐字）——
+        // active（全 open）全量过滤后 primary ≤6 + stale ≤2 = 8 条保留。
+        let mut rank_scores = std::collections::HashMap::new();
+        for i in 0..8 {
+            rank_scores.insert(format!("hook:H{i:02}"), (i + 1) * 10);
+        }
+        let active: Vec<HookRecord> = hooks.clone();
+        let out = select_relevant_hooks(&hooks, &active, &rank_scores, 10);
+        assert_eq!(out.len(), 8, "主选 6 + 陈旧 2");
+        assert_eq!(out[0].hook_id, "H07", "primary 按分数 DESC，freshness 最高在前");
     }
 
     #[test]
@@ -1087,6 +1174,7 @@ mod tests {
             goal: "推进祖符线",
             outline_node: None,
             must_keep: &[],
+            semantic_selector: None,
         })
         .await;
 

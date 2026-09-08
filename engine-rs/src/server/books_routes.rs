@@ -1213,6 +1213,8 @@ async fn run_compose(
         book_id,
         selector: &reference_selector,
     };
+    // 244 号：记忆语义精简器。
+    let memory_selector = crate::agents::composer::LlmMemorySelector { chat: &composer };
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
     let on_context_compression: crate::agents::composer::CompressionCallback =
@@ -1234,6 +1236,7 @@ async fn run_compose(
             compiler: Some(&compiler),
             outline_section_selector: Some(&selector),
             reference_context_provider: Some(&reference_provider),
+            memory_semantic_selector: Some(&memory_selector),
             on_context_compression: Some(on_context_compression),
         },
     )

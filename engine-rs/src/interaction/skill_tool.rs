@@ -415,3 +415,69 @@ mod query_retrieval_tests {
         );
     }
 }
+
+/// 244/241 号：LlmMemorySelector 的 chat 端到端形态验证（mock chat 按
+/// TS selectMemoryCandidates 的 prompt/响应契约）。
+#[cfg(test)]
+mod memory_selector_contract_tests {
+    use crate::agents::composer::{ComposerChatOptions, LlmMemorySelector};
+    use crate::llm::provider::LLMMessage;
+    use crate::utils::memory_retrieval::{MemoryCandidate, MemorySemanticSelectionRequest};
+
+    struct ScriptedChat {
+        response: String,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agents::composer::ComposerChat for ScriptedChat {
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _options: ComposerChatOptions,
+        ) -> Result<crate::agents::continuity::ChatOutcome, String> {
+            // 契约断言：system/user 形态 + 温度/ token 上限。
+            assert_eq!(messages.len(), 2);
+            assert!(messages[0].content.contains("semantic story-memory selector"));
+            assert!(messages[1].content.contains("BM25 candidates:"));
+            Ok(crate::agents::continuity::ChatOutcome {
+                content: self.response.clone(),
+                usage: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn llm_memory_selector_filters_by_allowed_ids() {
+        let chat = ScriptedChat {
+            response: r#"{"selectedSources":["summary:7","fabricated-id"]}"#.into(),
+        };
+        let selector = LlmMemorySelector { chat: &chat };
+        let candidates = vec![
+            MemoryCandidate {
+                id: "summary:7".into(),
+                kind: "chapter-summary".into(),
+                source: "story/chapter_summaries.md#7".into(),
+                title: "第7章".into(),
+                excerpt: "祖符争夺".into(),
+            },
+            MemoryCandidate {
+                id: "hook:H01".into(),
+                kind: "hook".into(),
+                source: "story/pending_hooks.md#H01".into(),
+                title: "H01".into(),
+                excerpt: "祖符压力".into(),
+            },
+        ];
+        let request = MemorySemanticSelectionRequest {
+            chapter_number: 8,
+            query: "推进祖符线",
+            candidates: &candidates,
+        };
+        let selected =
+            crate::utils::memory_retrieval::MemorySemanticSelector::select(&selector, &request)
+                .await
+                .unwrap();
+        // 白名单过滤：编造 id 被剔除。
+        assert_eq!(selected, vec!["summary:7".to_string()]);
+    }
+}

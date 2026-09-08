@@ -156,6 +156,7 @@ pub async fn analyze_chapter(
         goal: &build_memory_goal(input.chapter_title, input.chapter_content),
         outline_node: find_outline_node(&volume_outline, input.chapter_number).as_deref(),
         must_keep: &[],
+        semantic_selector: None,
     })
     .await;
     let chapter_summaries =
