@@ -234,6 +234,13 @@ pub fn save_secrets(project_root: &Path, secrets: &SecretsFile) -> std::io::Resu
     let temp = dir.join(format!("{SECRETS_FILE}.tmp-{}", uuid::Uuid::new_v4()));
     let write = || -> std::io::Result<()> {
         std::fs::write(&temp, format!("{json}\n"))?;
+        // 227 号：0600 权限（对齐 src-tauri secrets M3b）——文件含明文 API
+        // key，默认 0644 同机其他用户可读；rename 前 chmod 消除可读窗口。
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+        }
         std::fs::rename(&temp, &path)
     };
     match write() {
@@ -275,6 +282,24 @@ mod atomicity_tests {
         assert_eq!(count, 1);
         let loaded = load_secrets(root).unwrap();
         assert_eq!(loaded.services.get("svc").map(|s| s.api_key.clone()), Some("k-2".to_string()));
+    }
+
+    /// 227 号：secrets 文件权限 0600（Unix；含明文 API key，不得全局可读）。
+    #[cfg(unix)]
+    #[test]
+    fn save_secrets_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut services = std::collections::HashMap::new();
+        services.insert("svc".to_string(), ServiceSecret { api_key: "k".into() });
+        save_secrets(root, &SecretsFile { services }).unwrap();
+
+        let mode = std::fs::metadata(root.join(SECRETS_DIR).join(SECRETS_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "secrets.json 必须为 0600");
     }
 }
 
