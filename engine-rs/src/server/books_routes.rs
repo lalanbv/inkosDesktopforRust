@@ -1206,6 +1206,13 @@ async fn run_compose(
     };
     let selector = crate::agents::composer::LlmOutlineSelector { chat: &composer };
     let compiler = crate::agents::composer::LlmContextCompiler { chat: &composer };
+    // 216 号：引用选段注入（与 write-next 链同款）。
+    let reference_selector = crate::agents::composer::LlmReferenceSelector { chat: &composer };
+    let reference_provider = crate::references::ProductionReferenceContextProvider {
+        project_root: runtime.state.project_root(),
+        book_id,
+        selector: &reference_selector,
+    };
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
     let on_context_compression: crate::agents::composer::CompressionCallback =
@@ -1226,6 +1233,7 @@ async fn run_compose(
             context_budget: None,
             compiler: Some(&compiler),
             outline_section_selector: Some(&selector),
+            reference_context_provider: Some(&reference_provider),
             on_context_compression: Some(on_context_compression),
         },
     )

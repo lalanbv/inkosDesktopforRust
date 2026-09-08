@@ -120,6 +120,8 @@ pub struct ComposeChapterInput<'a> {
     pub context_budget: Option<ContextBudget>,
     pub compiler: Option<&'a dyn CompressibleContextCompiler>,
     pub outline_section_selector: Option<&'a dyn OutlineSectionSelector>,
+    /// 216 号：引用选段注入（TS `referenceContextProvider`——None = 不注入）。
+    pub reference_context_provider: Option<&'a dyn crate::references::BookReferenceContextProvider>,
     pub on_context_compression: Option<CompressionCallback>,
 }
 
@@ -168,13 +170,29 @@ pub async fn compose_governed_chapter(
     tokio::fs::create_dir_all(&runtime_dir).await?;
 
     let language = lang_from_str(input.book_language);
-    let selected_context = collect_selected_context(
+    let mut selected_context = collect_selected_context(
         &story_dir,
         input.plan,
         language,
         input.outline_section_selector,
     )
     .await;
+    // 216 号：引用选段注入（TS loadReferenceContext：条目接在基础上下文之后，
+    // notes 前置于预算 notes）。
+    let mut reference_notes: Vec<String> = Vec::new();
+    if let Some(provider) = input.reference_context_provider {
+        let lang_str = if language == WritingLanguage::En { "en" } else { "zh" };
+        let task = crate::references::ReferenceSelectionTask {
+            chapter_number: input.chapter_number,
+            goal: &input.plan.intent.goal,
+            outline_node: input.plan.intent.outline_node.as_deref().unwrap_or(""),
+            must_keep: &input.plan.intent.must_keep,
+            language: lang_str,
+        };
+        let reference = provider.select_context(&task).await;
+        reference_notes = reference.notes;
+        selected_context.extend(reference.entries);
+    }
     let initial_context_package = ContextPackage {
         chapter: input.chapter_number,
         selected_context,
@@ -197,12 +215,15 @@ pub async fn compose_governed_chapter(
         &input.plan.intent.style_emphasis,
         input.chapter_number,
     );
+    // TS：notes = [...referenceContext.notes, ...budgeted.notes]。
+    let mut notes = reference_notes;
+    notes.extend(budgeted.notes.iter().cloned());
     let trace = build_governed_trace(&GovernedTraceParams {
         chapter_number: input.chapter_number,
         planner_inputs: &input.plan.planner_inputs,
         composer_inputs: &[input.plan.runtime_path.to_string_lossy().into_owned()],
         context_package: &context_package,
-        notes: &budgeted.notes,
+        notes: &notes,
         prompt_packs: None,
         compression: budgeted.compression,
     });
@@ -550,6 +571,40 @@ impl OutlineSectionSelector for LlmOutlineSelector<'_> {
     }
 }
 
+/// LLM 引用选段器（ComposerAgent.selectReferenceSections 的端口适配，216 号）。
+pub struct LlmReferenceSelector<'a> {
+    pub chat: &'a dyn ComposerChat,
+}
+
+#[async_trait]
+impl crate::references::ReferenceSectionSelector for LlmReferenceSelector<'_> {
+    async fn select(
+        &self,
+        request: crate::references::ReferenceSectionSelectionRequest<'_>,
+    ) -> Result<Vec<String>, String> {
+        let (system, user) = build_reference_selector_messages(&request);
+        let response = self
+            .chat
+            .chat(
+                vec![
+                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
+                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                ],
+                ComposerChatOptions { temperature: 0.1, max_tokens: Some(2048) },
+            )
+            .await?;
+        let allowed: HashSet<String> = request
+            .candidates
+            .iter()
+            .map(|candidate| candidate.source.clone())
+            .collect();
+        Ok(parse_selected_sources(&response.content)
+            .into_iter()
+            .filter(|source| allowed.contains(source))
+            .collect())
+    }
+}
+
 /// LLM 可压缩上下文编译器（ComposerAgent.compileCompressibleContext 的端口适配）。
 pub struct LlmContextCompiler<'a> {
     pub chat: &'a dyn ComposerChat,
@@ -575,6 +630,79 @@ impl CompressibleContextCompiler for LlmContextCompiler<'_> {
             .await?;
         Ok(response.content.trim().to_string())
     }
+}
+
+/// 引用选段器 prompt 装配（zh/en，TS selectReferenceSections 逐字，216 号）。
+pub fn build_reference_selector_messages(
+    request: &crate::references::ReferenceSectionSelectionRequest<'_>,
+) -> (String, String) {
+    let is_en = request.language == "en";
+    let candidates = request
+        .candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let mut lines = vec![
+                format!("#{} {}", index + 1, candidate.source),
+                format!("title: {}", candidate.title),
+                format!("heading: {}", candidate.heading),
+                format!("user-defined uses: {}", candidate.uses.join("; ")),
+            ];
+            if let Some(note) = candidate.note.as_deref() {
+                lines.push(format!("user note: {note}"));
+            }
+            lines.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let system = if is_en {
+        [
+            "You are InkOS's semantic reference-section selector.",
+            "The user explicitly bound these reference assets to this book and described how each may be used.",
+            "Select only sections useful for the current chapter task. References are creative guidance, never canon and never stronger than author intent or established facts.",
+            "Return strict JSON only: {\"selectedSources\":[\"...\"]}. Use exact candidate source ids. An empty list is valid when no section is relevant.",
+        ]
+        .join("\n")
+    } else {
+        [
+            "你是 InkOS 的参考资产语义选段器。",
+            "用户已把这些参考资产绑定到本书，并明确说明每份资料可以借鉴什么。",
+            "只选择当前章节任务真正需要的段落。参考资料只是创作借鉴，不能成为正典，也不能压过作者意图和既成事实。",
+            "只返回严格 JSON：{\"selectedSources\":[\"...\"]}。必须使用候选中的精确 source id；没有相关段落时可以返回空数组。",
+        ]
+        .join("\n")
+    };
+    let user = if is_en {
+        [
+            format!("Chapter: {}", request.chapter_number),
+            format!("Goal: {}", request.goal),
+            format!("Outline node: {}", request.outline_node),
+            format!(
+                "Must keep: {}",
+                if request.must_keep.is_empty() { "(none)".to_string() } else { request.must_keep.join("; ") }
+            ),
+            String::new(),
+            "Candidates (headings only; selected sections will be loaded verbatim by the host):".to_string(),
+            candidates,
+        ]
+        .join("\n")
+    } else {
+        [
+            format!("章节：第{}章", request.chapter_number),
+            format!("目标：{}", request.goal),
+            format!("大纲节点：{}", request.outline_node),
+            format!(
+                "必须保留：{}",
+                if request.must_keep.is_empty() { "（无）".to_string() } else { request.must_keep.join("；") }
+            ),
+            String::new(),
+            "候选段落（这里只给标题；宿主会把选中的段落原文完整载入）：".to_string(),
+            candidates,
+        ]
+        .join("\n")
+    };
+    (system, user)
 }
 
 /// 大纲选择器 prompt 装配（zh/en）。golden 守门。
@@ -1832,6 +1960,7 @@ mod tests {
             context_budget: None,
             compiler: None,
             outline_section_selector: Some(&selector),
+            reference_context_provider: None,
             on_context_compression: None,
         })
         .await
@@ -1856,5 +1985,145 @@ mod tests {
         assert!(out.context_path.exists());
         assert!(out.rule_stack_path.exists());
         assert!(out.trace_path.exists());
+    }
+
+    /// 216 号：引用选段注入——生产 provider + mock 选段器，条目接在基础
+    /// 上下文之后；选段失败记 notes（进 trace.notes）。
+    #[tokio::test]
+    async fn compose_injects_reference_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // 绑定素材 + 绑定清单。
+        let materials = root.join(".inkos").join("materials");
+        std::fs::create_dir_all(&materials).unwrap();
+        std::fs::write(
+            materials.join("mat1.json"),
+            serde_json::json!({
+                "id": "mat1", "title": "开篇参考", "kind": "text", "purpose": "reference",
+                "source": "upload", "mimeType": "text/markdown",
+                "markdownPath": ".inkos/materials/mat1.md",
+                "manifestPath": ".inkos/materials/mat1.json",
+                "charCount": 50, "excerpt": "..."
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            materials.join("mat1.md"),
+            "## Extracted content\n\n## 人物关系\n\n师徒线张力。\n",
+        )
+        .unwrap();
+        let book_dir = root.join("books").join("b1");
+        std::fs::create_dir_all(&book_dir).unwrap();
+        crate::references::bind_book_reference(
+            root,
+            "b1",
+            &crate::references::BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &["人物关系".to_string()],
+                note: None,
+            },
+        )
+        .unwrap();
+
+        // story 目录最小面（基础上下文可空）。
+        let story = book_dir.join("story");
+        tokio::fs::create_dir_all(&story).await.unwrap();
+        tokio::fs::write(story.join("current_focus.md"), "聚焦夺符").await.unwrap();
+
+        let plan = PlanChapterOutput {
+            intent: crate::models::input_governance::ChapterIntent {
+                chapter: 2,
+                goal: "夺回祖符".into(),
+                outline_node: None,
+                arc_context: None,
+                must_keep: vec![],
+                must_avoid: vec![],
+                style_emphasis: vec![],
+            },
+            memo: crate::models::input_governance::ChapterMemo {
+                chapter: 2,
+                goal: "夺回祖符".into(),
+                is_golden_opening: false,
+                body: "## 当前任务\n夺符。".into(),
+                thread_refs: vec![],
+            },
+            intent_markdown: String::new(),
+            planner_inputs: vec![],
+            runtime_path: dir.path().join("story/runtime/chapter-0002.intent.md"),
+        };
+
+        struct ScriptedSelector {
+            result: Result<Vec<String>, String>,
+        }
+        #[async_trait]
+        impl crate::references::ReferenceSectionSelector for ScriptedSelector {
+            async fn select(
+                &self,
+                _request: crate::references::ReferenceSectionSelectionRequest<'_>,
+            ) -> Result<Vec<String>, String> {
+                self.result.clone()
+            }
+        }
+        let selector = ScriptedSelector { result: Ok(vec!["reference/mat1#人物关系".to_string()]) };
+        let provider = crate::references::ProductionReferenceContextProvider {
+            project_root: root,
+            book_id: "b1",
+            selector: &selector,
+        };
+
+        let out = compose_governed_chapter(&ComposeChapterInput {
+            book_language: Some("zh"),
+            book_dir: &book_dir,
+            chapter_number: 2,
+            plan: &plan,
+            context_budget: None,
+            compiler: None,
+            outline_section_selector: None,
+            reference_context_provider: Some(&provider),
+            on_context_compression: None,
+        })
+        .await
+        .unwrap();
+
+        let sources: Vec<&str> = out
+            .context_package
+            .selected_context
+            .iter()
+            .map(|entry| entry.source.as_str())
+            .collect();
+        // 条目接在基础上下文之后（TS [...base, ...reference]）。
+        assert_eq!(sources.last(), Some(&"reference/mat1#人物关系"));
+        let entry = out.context_package.selected_context.last().unwrap();
+        assert_eq!(entry.excerpt.as_deref(), Some("## 人物关系\n\n师徒线张力。"));
+        assert!(entry.reason.contains("User-bound reference \"开篇参考\" for: 人物关系."));
+        assert!(out.trace.notes.is_empty(), "无失败时 notes 为空");
+
+        // 选段失败 → 无条目 + book-reference-selection-failed 进 trace.notes。
+        let failing = ScriptedSelector { result: Err("llm down".to_string()) };
+        let provider = crate::references::ProductionReferenceContextProvider {
+            project_root: root,
+            book_id: "b1",
+            selector: &failing,
+        };
+        let out = compose_governed_chapter(&ComposeChapterInput {
+            book_language: Some("zh"),
+            book_dir: &book_dir,
+            chapter_number: 2,
+            plan: &plan,
+            context_budget: None,
+            compiler: None,
+            outline_section_selector: None,
+            reference_context_provider: Some(&provider),
+            on_context_compression: None,
+        })
+        .await
+        .unwrap();
+        assert!(!out
+            .context_package
+            .selected_context
+            .iter()
+            .any(|entry| entry.source.starts_with("reference/")));
+        assert!(out.trace.notes.contains(&"book-reference-selection-failed".to_string()));
     }
 }

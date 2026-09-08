@@ -59,6 +59,9 @@ async fn mock_llm_chat(
         WRITER_RESPONSE.to_string()
     } else if system.contains("审稿") {
         "PASS\n95".to_string()
+    } else if system.contains("参考资产语义选段器") {
+        // 216 号：引用选段（命中 fixture 绑定素材的人物关系节）。
+        "{\"selectedSources\":[\"reference/mat1#人物关系\"]}".to_string()
     } else {
         // settler / 大纲选段 / 压缩 / 分析 / 校验等次要调用给最小合法输出。
         "PASS".to_string()
@@ -290,6 +293,117 @@ async fn e2e_write_next_contract_matches_node_shape() {
         calls.iter().any(|c| c.contains("创作总编")),
         "planner 应被调用，实际: {calls:?}"
     );
+}
+
+/// 216 号：写路径引用注入 e2e——绑定素材 + 选段 mock → compose 上下文
+/// 含 reference/ 条目（真实 write-next 链，非 compose 单元面）。
+#[tokio::test]
+async fn e2e_write_next_injects_reference_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().to_path_buf();
+    fixture_project(&project);
+
+    // 绑定素材 + 绑定清单（bind 工具同款数据面）。
+    let materials = project.join(".inkos").join("materials");
+    std::fs::create_dir_all(&materials).unwrap();
+    std::fs::write(
+        materials.join("mat1.json"),
+        serde_json::json!({
+            "id": "mat1", "title": "开篇参考", "kind": "text", "purpose": "reference",
+            "source": "upload", "mimeType": "text/markdown",
+            "markdownPath": ".inkos/materials/mat1.md",
+            "manifestPath": ".inkos/materials/mat1.json",
+            "charCount": 60, "excerpt": "..."
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        materials.join("mat1.md"),
+        "## Extracted content\n\n## 人物关系\n\n师徒线张力：玉符来历经不起追问。\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.join("books").join("b1").join("story")).unwrap();
+    let manifest = inkos_engine::references::bind_book_reference(
+        &project,
+        "b1",
+        &inkos_engine::references::BindBookReferenceInput {
+            material_id: "mat1",
+            uses: &["人物关系".to_string()],
+            note: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(manifest.bindings.len(), 1);
+
+    let (llm_url, _llm_calls, _llm) = spawn_mock_llm().await;
+    let state = Arc::new(StateManager::new(project.clone()));
+    let agents = build_agents(&llm_url);
+    let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+    let project_ref: &'static std::path::Path = Box::leak(project.clone().into_boxed_path());
+    let builtin: &'static std::path::Path =
+        Box::leak(project_ref.join("assets").join("genres").into_boxed_path());
+    let ctx = WriteNextCtx {
+        project_root: project_ref,
+        builtin_genres_dir: builtin,
+        prompt_store,
+        state_store: prompt_store,
+        context_budget: None,
+        notify: None,
+        timeline_beats: None,
+    };
+
+    let result = write_next_chapter(
+        &state,
+        &agents,
+        &ctx,
+        &WriteNextConfig::default(),
+        "b1",
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(result.is_ok(), "write-next 链失败: {result:?}");
+
+    // compose 上下文工件含引用条目（reason + 原文 excerpt）。
+    let context_path = project
+        .join("books")
+        .join("b1")
+        .join("story")
+        .join("runtime")
+        .join("chapter-0001.context.json");
+    let context: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&context_path).unwrap()).unwrap();
+    let sources: Vec<&str> = context["selectedContext"]
+        .as_array()
+        .expect("selectedContext")
+        .iter()
+        .map(|entry| entry["source"].as_str().unwrap_or_default())
+        .collect();
+    let reference_entry = context["selectedContext"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["source"] == "reference/mat1#人物关系")
+        .expect("引用条目应注入");
+    assert!(
+        reference_entry["reason"]
+            .as_str()
+            .unwrap()
+            .contains("User-bound reference \"开篇参考\" for: 人物关系."),
+        "{}",
+        reference_entry["reason"]
+    );
+    assert!(
+        reference_entry["excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("师徒线张力"),
+        "{}",
+        reference_entry["excerpt"]
+    );
+    assert!(sources.iter().any(|s| s.starts_with("reference/")));
 }
 
 #[tokio::test]

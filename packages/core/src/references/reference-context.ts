@@ -87,14 +87,16 @@ export async function selectBookReferenceContext(
   };
 }
 
-function extractMaterialContent(markdown: string): string {
+/** Exported for the shared golden vectors test (see golden/references-vectors.json). */
+export function extractMaterialContent(markdown: string): string {
   const marker = /^## Extracted content\s*$/m;
   const match = marker.exec(markdown);
   if (!match || match.index === undefined) return markdown.trim();
   return markdown.slice(match.index + match[0].length).trim();
 }
 
-function splitReferenceSections(input: {
+/** Exported for the shared golden vectors test (see golden/references-vectors.json). */
+export function splitReferenceSections(input: {
   readonly materialId: string;
   readonly title: string;
   readonly uses: ReadonlyArray<string>;
@@ -156,7 +158,8 @@ function renderReason(section: ReferenceSection): string {
   ].filter(Boolean).join(" ");
 }
 
-function slugifyAnchor(value: string): string {
+/** Exported for the shared golden vectors test (see golden/references-vectors.json). */
+export function slugifyAnchor(value: string): string {
   return value
     .trim()
     .toLowerCase()

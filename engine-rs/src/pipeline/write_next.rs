@@ -1523,6 +1523,13 @@ pub(crate) async fn prepare_write_input(
     // composeGovernedChapter。
     let selector = LlmOutlineSelector { chat: agents.composer };
     let compiler = LlmContextCompiler { chat: agents.composer };
+    // 216 号：绑定素材引用选段注入（TS runner referenceContextProvider 同款）。
+    let reference_selector = crate::agents::composer::LlmReferenceSelector { chat: agents.composer };
+    let reference_provider = crate::references::ProductionReferenceContextProvider {
+        project_root: ctx.project_root,
+        book_id: &book.id,
+        selector: &reference_selector,
+    };
     let composed: ComposeChapterOutput = compose_governed_chapter(&ComposeChapterInput {
         book_language: book.language.as_deref(),
         book_dir,
@@ -1531,6 +1538,7 @@ pub(crate) async fn prepare_write_input(
         context_budget: ctx.context_budget,
         compiler: Some(&compiler),
         outline_section_selector: Some(&selector),
+        reference_context_provider: Some(&reference_provider),
         on_context_compression: config.on_context_compression.clone(),
     })
     .await?;

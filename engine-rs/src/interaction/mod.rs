@@ -11,6 +11,7 @@
 
 pub mod agent_loop;
 pub mod book_edit_tools;
+pub mod book_reference_tool;
 pub mod book_session_store;
 pub mod import_chapters_tool;
 pub mod material_tools;

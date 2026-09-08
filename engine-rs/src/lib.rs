@@ -34,6 +34,7 @@ pub mod play_graph;
 pub mod play_parser;
 pub mod play_runner;
 pub mod prompts;
+pub mod references;
 pub mod server;
 pub mod skills;
 pub mod state;

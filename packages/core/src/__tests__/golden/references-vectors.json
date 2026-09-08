@@ -1,0 +1,282 @@
+{
+  "split": [
+    {
+      "name": "headings-split",
+      "input": {
+        "materialId": "mat1",
+        "title": "开篇参考",
+        "uses": [
+          "布局",
+          "人物"
+        ],
+        "note": null,
+        "content": "## 布局机制\n\n正文甲。\n\n## 人物关系\n\n正文乙。\n"
+      },
+      "output": [
+        {
+          "source": "reference/mat1#布局机制",
+          "materialId": "mat1",
+          "title": "开篇参考",
+          "heading": "布局机制",
+          "uses": [
+            "布局",
+            "人物"
+          ],
+          "content": "## 布局机制\n\n正文甲。"
+        },
+        {
+          "source": "reference/mat1#人物关系",
+          "materialId": "mat1",
+          "title": "开篇参考",
+          "heading": "人物关系",
+          "uses": [
+            "布局",
+            "人物"
+          ],
+          "content": "## 人物关系\n\n正文乙。"
+        }
+      ]
+    },
+    {
+      "name": "preamble-titled-and-anchor-dedup",
+      "input": {
+        "materialId": "m",
+        "title": "参考",
+        "uses": [
+          "u"
+        ],
+        "note": "慢读",
+        "content": "前言行。\n\n## 同名\n\n一。\n\n## 同名\n\n二。\n"
+      },
+      "output": [
+        {
+          "source": "reference/m#参考",
+          "materialId": "m",
+          "title": "参考",
+          "heading": "参考",
+          "uses": [
+            "u"
+          ],
+          "note": "慢读",
+          "content": "前言行。"
+        },
+        {
+          "source": "reference/m#同名",
+          "materialId": "m",
+          "title": "参考",
+          "heading": "同名",
+          "uses": [
+            "u"
+          ],
+          "note": "慢读",
+          "content": "## 同名\n\n一。"
+        },
+        {
+          "source": "reference/m#同名-2",
+          "materialId": "m",
+          "title": "参考",
+          "heading": "同名",
+          "uses": [
+            "u"
+          ],
+          "note": "慢读",
+          "content": "## 同名\n\n二。"
+        }
+      ]
+    },
+    {
+      "name": "heading-only-filtered",
+      "input": {
+        "materialId": "m",
+        "title": "T",
+        "uses": [
+          "u"
+        ],
+        "note": null,
+        "content": "## 空节\n\n## 有正文\n\n内容。"
+      },
+      "output": [
+        {
+          "source": "reference/m#有正文",
+          "materialId": "m",
+          "title": "T",
+          "heading": "有正文",
+          "uses": [
+            "u"
+          ],
+          "content": "## 有正文\n\n内容。"
+        }
+      ]
+    },
+    {
+      "name": "latin-and-punctuation-anchors",
+      "input": {
+        "materialId": "ref2",
+        "title": "T",
+        "uses": [
+          "u"
+        ],
+        "note": null,
+        "content": "## The Opening Hook!\n\nHook body.\n\n## 混合 ABC 机制\n\n混合正文。"
+      },
+      "output": [
+        {
+          "source": "reference/ref2#the-opening-hook",
+          "materialId": "ref2",
+          "title": "T",
+          "heading": "The Opening Hook!",
+          "uses": [
+            "u"
+          ],
+          "content": "## The Opening Hook!\n\nHook body."
+        },
+        {
+          "source": "reference/ref2#混合-abc-机制",
+          "materialId": "ref2",
+          "title": "T",
+          "heading": "混合 ABC 机制",
+          "uses": [
+            "u"
+          ],
+          "content": "## 混合 ABC 机制\n\n混合正文。"
+        }
+      ]
+    },
+    {
+      "name": "bare-content-fallback",
+      "input": {
+        "materialId": "m",
+        "title": "T",
+        "uses": [
+          "u"
+        ],
+        "note": null,
+        "content": "裸正文。"
+      },
+      "output": [
+        {
+          "source": "reference/m#t",
+          "materialId": "m",
+          "title": "T",
+          "heading": "T",
+          "uses": [
+            "u"
+          ],
+          "content": "裸正文。"
+        }
+      ]
+    },
+    {
+      "name": "crlf-lines",
+      "input": {
+        "materialId": "m",
+        "title": "T",
+        "uses": [
+          "u"
+        ],
+        "note": null,
+        "content": "## 甲\r\n\r\n甲正文。\r\n\r\n## 乙\r\n\r\n乙正文。"
+      },
+      "output": [
+        {
+          "source": "reference/m#甲",
+          "materialId": "m",
+          "title": "T",
+          "heading": "甲",
+          "uses": [
+            "u"
+          ],
+          "content": "## 甲\n\n甲正文。"
+        },
+        {
+          "source": "reference/m#乙",
+          "materialId": "m",
+          "title": "T",
+          "heading": "乙",
+          "uses": [
+            "u"
+          ],
+          "content": "## 乙\n\n乙正文。"
+        }
+      ]
+    },
+    {
+      "name": "deep-heading-levels",
+      "input": {
+        "materialId": "m",
+        "title": "T",
+        "uses": [
+          "u"
+        ],
+        "note": null,
+        "content": "### 三级标题\n\n三级正文。\n\n###### 六级\n\n六级正文。"
+      },
+      "output": [
+        {
+          "source": "reference/m#三级标题",
+          "materialId": "m",
+          "title": "T",
+          "heading": "三级标题",
+          "uses": [
+            "u"
+          ],
+          "content": "### 三级标题\n\n三级正文。"
+        },
+        {
+          "source": "reference/m#六级",
+          "materialId": "m",
+          "title": "T",
+          "heading": "六级",
+          "uses": [
+            "u"
+          ],
+          "content": "###### 六级\n\n六级正文。"
+        }
+      ]
+    }
+  ],
+  "extract": [
+    {
+      "name": "with-marker",
+      "input": "# 上传：x\n\n## Extracted content\n\n正文A\n\n正文B\n",
+      "output": "正文A\n\n正文B"
+    },
+    {
+      "name": "without-marker",
+      "input": "# 纯正文\n\n段落。\n",
+      "output": "# 纯正文\n\n段落。"
+    },
+    {
+      "name": "marker-not-at-start",
+      "input": "前导说明。\n\n## Extracted content\n\n抽取正文。\n",
+      "output": "抽取正文。"
+    }
+  ],
+  "slug": [
+    {
+      "name": "cjk",
+      "input": "布局机制",
+      "output": "布局机制"
+    },
+    {
+      "name": "latin-punct",
+      "input": "The Opening Hook!",
+      "output": "the-opening-hook"
+    },
+    {
+      "name": "mixed",
+      "input": "  混合 ABC 机制  ",
+      "output": "混合-abc-机制"
+    },
+    {
+      "name": "empty",
+      "input": "!!!",
+      "output": "section"
+    },
+    {
+      "name": "collapse",
+      "input": "a--b",
+      "output": "a-b"
+    }
+  ]
+}

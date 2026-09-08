@@ -742,6 +742,9 @@ pub async fn post_agent(
             // 215 号：resync_chapter_state（TS bookTools 注册面——edit 过滤器
             // 不剔除，book/edit 会话均可用；属生产变更名单，后台生产时剔除）。
             entries.push(crate::interaction::book_edit_tools::resync_chapter_state_schema());
+            // 216 号：manage_book_reference（TS bookTools 注册面——edit 过滤器
+            // 不剔除；绑定清单非生产写入面，不在剔除名单）。
+            entries.push(crate::interaction::book_reference_tool::manage_book_reference_schema());
         }
         if book_session {
             entries.push(crate::interaction::book_edit_tools::generate_cover_schema());
@@ -814,6 +817,7 @@ pub async fn post_agent(
         sub_agent_deps,
         book_edit_deps,
         forecast_deps,
+        reference_book_id: if book_edit_session { agent_book_id.as_deref() } else { None },
         suppress_production: background_task.is_some(),
     };
     // 135 号：回合作用域（TS runWithAgentTrajectory({main}) 包 agent.prompt
@@ -992,6 +996,8 @@ struct ChatToolRouter<'a> {
     sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
     book_edit_deps: Option<crate::interaction::book_edit_tools::BookEditDeps<'a>>,
     forecast_deps: Option<crate::interaction::forecast_tools::ForecastDeps<'a>>,
+    /// 216 号：manage_book_reference 的活动书（book/edit 会话恒有）。
+    reference_book_id: Option<&'a str>,
     /// 215 号：suppressProductionTools——true 时名单内工具在分发面拒绝。
     suppress_production: bool,
 }
@@ -1028,6 +1034,16 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
         if name == "sub_agent" {
             if let Some(deps) = &self.sub_agent_deps {
                 return crate::interaction::sub_agent_tool::tool_sub_agent(deps, args).await;
+            }
+        }
+        if name == "manage_book_reference" {
+            if let Some(book_id) = self.reference_book_id {
+                return crate::interaction::book_reference_tool::tool_manage_book_reference(
+                    self.root,
+                    book_id,
+                    args,
+                )
+                .await;
             }
         }
         if let Some(deps) = &self.book_edit_deps {
