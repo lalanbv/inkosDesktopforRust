@@ -1141,6 +1141,7 @@ fn write_next_error_text(
 /// throwIfOperationAborted 检查点逐位对齐）。
 async fn execute_write_next(
     runtime: &BooksRuntime,
+    session_id: &str,
     book_id: &str,
     chapter_count: u32,
     lang: StudioLang,
@@ -1156,8 +1157,26 @@ async fn execute_write_next(
     }
 
     crate::write_next_assembly!(runtime, agents, ctx);
+    // 238 号：生产任务链的阶段叙事接线（此前无输出通道——既不广播也不落盘）。
+    // SSE log 带 sessionId（TS scopedSseSink 对应面，chat 页按会话归属）+
+    // 同步落盘 inkos.log（237 号同款，失败忽略）。
+    let log_hub = runtime.hub.clone();
+    let log_root = runtime.state.project_root().to_path_buf();
+    let log_session = session_id.to_string();
     let config = WriteNextConfig {
         abort: Some(abort.clone()),
+        on_log: Some(std::sync::Arc::new(move |level: &str, message: &str| {
+            log_hub.broadcast(
+                "log",
+                &serde_json::json!({
+                    "level": level,
+                    "tag": "studio",
+                    "message": message,
+                    "sessionId": log_session,
+                }),
+            );
+            crate::utils::log_file::append_log_event(&log_root, level, "studio", message);
+        })),
         ..WriteNextConfig::from_project(runtime.state.project_root()).await
     };
 
@@ -3121,8 +3140,16 @@ async fn run_confirmed_production_locked(
                 .map(|v| v as u32)
                 .unwrap_or(1);
             let mut on_progress = make_on_progress;
-            execute_write_next(runtime, &book_id, chapter_count, lang, abort, &mut on_progress)
-                .await
+            execute_write_next(
+                runtime,
+                request.session_id,
+                &book_id,
+                chapter_count,
+                lang,
+                abort,
+                &mut on_progress,
+            )
+            .await
         }
         _ => unreachable!("执行器装配已过滤未支持 intent"),
     };

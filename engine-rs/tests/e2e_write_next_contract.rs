@@ -6724,14 +6724,31 @@ mod agent67_e2e {
         assert!(transcript.contains("\"toolExecutions\""), "transcript: {transcript}");
 
         // SSE 顺序：agent:start → tool:start(background) → tool:end → agent:complete。
+        // 238 号：链内新增 log 事件（阶段叙事带 sessionId），按事件名跳过。
         assert_eq!(subscriber.recv().await.unwrap().event, "agent:start");
-        let tool_start = subscriber.recv().await.unwrap();
+        let tool_start = loop {
+            let ev = subscriber.recv().await.unwrap();
+            if ev.event != "log" {
+                break ev;
+            }
+        };
         assert_eq!(tool_start.event, "tool:start");
         assert!(tool_start.data.contains("\"background\":true"), "data: {}", tool_start.data);
-        let tool_end = subscriber.recv().await.unwrap();
+        let tool_end = loop {
+            let ev = subscriber.recv().await.unwrap();
+            if ev.event != "log" {
+                break ev;
+            }
+        };
         assert_eq!(tool_end.event, "tool:end");
         assert!(tool_end.data.contains("\"isError\":false"), "data: {}", tool_end.data);
-        assert_eq!(subscriber.recv().await.unwrap().event, "agent:complete");
+        let agent_complete = loop {
+            let ev = subscriber.recv().await.unwrap();
+            if ev.event != "log" {
+                break ev;
+            }
+        };
+        assert_eq!(agent_complete.event, "agent:complete");
     }
 
     #[tokio::test]
@@ -15273,6 +15290,8 @@ mod sub101_e2e {
             let event = subscriber.recv().await.unwrap();
             match event.event.as_str() {
                 "agent:aborted" => saw_aborted = true,
+                // 238 号：链内新增 log 事件（阶段叙事带 sessionId），跳过。
+                "log" => {}
                 "tool:end" => break event,
                 other => panic!("意外事件 {other}"),
             }
