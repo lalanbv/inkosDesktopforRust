@@ -12702,7 +12702,16 @@ mod sub87_e2e {
                             .collect::<Vec<_>>();
                         *tools_in.lock().unwrap() = names;
                     }
-                    let domain_content: Option<String> = if system.contains("创作总编") {
+                    // 230 号：聊天提示词现在含「审稿」等普通词汇——先判定
+                    // 聊天面（system 为 build_system_prompt 产物），域链分支
+                    // 仅对非聊天提示词生效。
+                    let is_chat_surface = system.contains("创作助手")
+                        || system.contains("写作助手")
+                        || system.contains("普通聊天助手")
+                        || system.contains("Play 助手");
+                    let domain_content: Option<String> = if is_chat_surface {
+                        None
+                    } else if system.contains("创作总编") {
                         Some(PLANNER_RESPONSE.to_string())
                     } else if system.contains("作家") || system.contains("写手") {
                         Some(WRITER_RESPONSE.to_string())
@@ -12718,7 +12727,7 @@ mod sub87_e2e {
                             [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                             format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
                         ));
-                    } else if !system.contains("创作助手") && !system.contains("Play 助手") {
+                    } else if !(system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") || system.contains("Play 助手")) {
                         // settler / 压缩 / 分析 / 校验等次要调用给最小合法输出。
                         let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] });
                         let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
@@ -12952,17 +12961,23 @@ mod sub88_e2e {
                     let messages = body["messages"].as_array().cloned().unwrap_or_default();
                     let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
                     let temperature = body["temperature"].as_f64();
-                    let payload = if system.contains("修稿编辑") {
+                    // 230 号：聊天提示词含「审」字样（写作助手面）——域链
+                    // 分支须排除聊天面。
+                    let is_chat_surface = system.contains("创作助手")
+                        || system.contains("写作助手")
+                        || system.contains("普通聊天助手")
+                        || system.contains("Play 助手");
+                    let payload = if !is_chat_surface && system.contains("修稿编辑") {
                         // 修稿提示含"审稿意见"——须先于审计分支。
                         serde_json::json!({ "choices": [{ "delta": { "content": "=== FIXED_ISSUES ===\n压缩了中段\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——屈辱自今日起讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n" } }] })
-                    } else if system.contains("审") || system.contains("连续") {
+                    } else if !is_chat_surface && (system.contains("审") || system.contains("连续")) {
                         let content = if temperature == Some(0.0) {
                             post_content
                         } else {
                             r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
                         };
                         serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
-                    } else if system.contains("创作助手") {
+                    } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                         let last_user = messages
                             .iter()
                             .rev()
@@ -13178,7 +13193,7 @@ mod sub89_e2e {
                             .collect::<Vec<_>>();
                         *tools_in.lock().unwrap() = names;
                     }
-                    let payload = if system.contains("创作助手") || system.contains("Play 助手") {
+                    let payload = if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") || system.contains("Play 助手") {
                         let last_user = messages
                             .iter()
                             .rev()
@@ -13451,7 +13466,7 @@ mod sub90_e2e {
                     ]}"#;
                     let payload = if system.contains("叙事推演助手") || system.contains("narrative forecast assistant") {
                         serde_json::json!({ "choices": [{ "delta": { "content": forecast_json } }] })
-                    } else if system.contains("创作助手") || system.contains("Play 助手") {
+                    } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") || system.contains("Play 助手") {
                         let last_user = messages
                             .iter()
                             .rev()
@@ -13743,7 +13758,7 @@ mod sub91_e2e {
                 let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
                 let payload = if system.contains("连续性分析") || system.contains("continuity analyst") {
                     serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
-                } else if system.contains("创作助手") {
+                } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                     let last_user = messages
                         .iter()
                         .rev()
@@ -14082,7 +14097,7 @@ name: 林震
                         serde_json::json!({ "choices": [{ "delta": { "content": content } }] })
                     } else if system.contains("连续性分析") || system.contains("continuity analyst") {
                         serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT_92 } }] })
-                    } else if system.contains("创作助手") {
+                    } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                         let last_user = messages
                             .iter()
                             .rev()
@@ -14964,7 +14979,7 @@ mod sub100_e2e {
             axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
                 let messages = body["messages"].as_array().cloned().unwrap_or_default();
                 let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
-                let payload = if system.contains("创作助手") {
+                let payload = if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                     let last_user = messages
                         .iter()
                         .rev()
@@ -15392,7 +15407,7 @@ mod sub102_e2e {
                             tokio::time::sleep(std::time::Duration::from_millis(600)).await;
                         }
                         serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_OUTPUT } }] })
-                    } else if system.contains("创作助手") {
+                    } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                         let last_user = messages
                             .iter()
                             .rev()
@@ -16650,7 +16665,7 @@ mod sub112_e2e {
                 let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
                 let payload = if system.contains("连续性分析") {
                     serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_MIN } }] })
-                } else if system.contains("创作助手") {
+                } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                     let last_user = messages
                         .iter()
                         .rev()
@@ -16815,7 +16830,7 @@ mod sub114_e2e {
                 let system = messages.first().and_then(|m| m["content"].as_str()).unwrap_or("");
                 let payload = if system.contains("连续性分析") {
                     serde_json::json!({ "choices": [{ "delta": { "content": ANALYZER_MIN } }] })
-                } else if system.contains("创作助手") {
+                } else if system.contains("创作助手") || system.contains("写作助手") || system.contains("普通聊天助手") {
                     serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
                         { "index": 0, "id": "call_c114", "function": { "name": "import_chapters", "arguments": "{\"bookId\":\"b114\",\"sourcePath\":\"novel114.txt\",\"resumeFrom\":2}" } },
                     ] } }] })

@@ -700,15 +700,16 @@ pub async fn post_agent(
     let play_world_exists = session_kind == SessionKind::Play
         && crate::interaction::play_tools::session_world_exists(root, session_id).await;
 
+    // 230 号：双语系统提示词（TS buildAgentSystemPrompt 聊天主路径子集：
+    // chat/book/edit 按会话类型与项目语言选择；play 保留 80 号专属提示词）。
+    // 此前为硬编码中文一句话——en 项目用户的 LLM 收到中文系统提示词。
     let mut system_prompt = if play_world_exists {
         crate::interaction::play_tools::play_chat_system_prompt(surface_language == "en")
     } else {
-        format!(
-            "你是 InkOS Studio 的创作助手。可以调用提供的工具查阅项目文件后回答。用与用户提问一致的语言简洁、具体地回答。{}",
-            agent_book_id
-                .as_ref()
-                .map(|book_id| format!("当前活动书籍：{book_id}。回答时结合该书的创作上下文。"))
-                .unwrap_or_default(),
+        crate::interaction::chat_prompts::build_system_prompt(
+            session_kind,
+            agent_book_id.as_deref(),
+            surface_language != "en",
         )
     };
     // 后台生产任务与聊天并行时注入任务状态（TS backgroundTaskContext 软约束）
