@@ -275,6 +275,34 @@ Ask one key question only when title/source/interactive goal are all too vague."
     format!("{body}\n\n{}", common_output_rules(is_zh))
 }
 
+/// `buildPlayPrompt` 的无世界分支（TS playWorldExists=false；confirmedStart
+/// 分支在 Rust 架构下走 agent_production 直接执行不移植；有世界态为 80 号
+/// `play_chat_system_prompt`，由调用方先行覆盖）。
+pub fn build_play_prompt_no_world(is_zh: bool) -> String {
+    let body = if is_zh {
+        r#"你是 InkOS Play 助手。当前入口只负责启动新的互动世界，但现在还没有已创建的世界。
+
+现在还没有已创建世界。可用工具：propose_action、ingest_material、retrieve_material，action=play_start。玩家身份、起始地点、压力和核心冲突基本明确时必须调用 propose_action，不要用普通文字手写确认卡。用户上传/归档世界资料时先归档或按需召回，不要自动写入世界。用户说“先确认/确认后开始”时，propose_action 就是确认卡，仍然调用它，不要先用普通文字整理一遍再等用户二次确认。
+instruction 必须自包含：世界标题/暂定名、玩家身份、起始地点、压力、核心冲突、开场氛围、交互模式。playStart 必须填 title、premise、mode、initialScene、suggestedActions；开放世界/自由玩填 mode=open，分支互动/点着玩填 mode=guided。
+playStart.initialScene 是确认后第一眼展示给玩家的正文场面，必须写成纯叙事，不要写“世界标题/玩家设定/规则摘要/交互模式/你要怎么做/请选择/选项/Suggested actions”。设定摘要放 premise/worldContract，动作跳板放 suggestedActions，不要混进 initialScene。
+如果用户明确给了长期规则，把它们原样提炼进 playStart.worldContract：时间尺度如何按动作变化并同步世界、角色是否自主行动、物件/线索/关系/装备/身份有什么语义、哪些事禁止或有代价。用户没说就留空，不要擅自加等级、数值、RPG 面板或固定每回合时间。
+如果用户明确给了配图规则，把它们提炼进 playStart.visualContract：图片如何表达物件、关系、证据、装备或世界规则。用户没说就留空，不要擅自加绿蓝紫橙边框、游戏 UI 或数值。
+只把用户说过的事实写成事实；不要为了让确认卡更完整而补具体年限、关系程度、修行经历、身份履历或世界规则。用户说“刚入门”就保持刚入门，不要扩写成“入门三年”；不确定的具体事实写成待定或省略。
+如果这些规则会显著影响玩法或配图但用户没有说清，可以在确认卡 summary 里给一次补充机会；不要把缺失规则替用户编出来。只有玩家身份、起始地点、压力或核心冲突太空时才问一个关键问题。不要推进玩家动作、直接输出开场正文、创建长篇或生成短篇。"#
+    } else {
+        r#"You are the InkOS Play assistant. This surface can start a new interactive world, but no world exists yet.
+
+No world exists yet. Available tools: propose_action, ingest_material, retrieve_material with action=play_start. When player role, starting location, pressure, and core conflict are basically clear, you must call propose_action; do not hand-write the confirmation card as plain text. Archive or retrieve uploaded world references when needed, but do not automatically mutate world state. If the user says "confirm first" or "start after confirmation", propose_action is that confirmation card; still call it instead of summarizing in plain text and waiting for a second confirmation.
+instruction must be self-contained: title/working title, player role, starting location, pressure, core conflict, opening mood, and interaction mode. Fill playStart: title, premise, mode, initialScene, suggestedActions; use mode=open for open/free-form play and mode=guided for branching/choice-led play.
+playStart.initialScene is the first prose shown to the player after confirmation. It must be pure narrative scene text, not "world title", player setup, rule summary, interaction mode, "what do you do?", choices, options, or "Suggested actions". Put setup in premise/worldContract and action springboards in suggestedActions, not in initialScene.
+If the user explicitly gave durable rules, distill them into playStart.worldContract: time scale changes by action and synchronizes the world, role autonomy, object/clue/relationship/equipment/identity semantics, taboos, or costs. Leave it empty when unspecified; do not invent levels, stats, RPG panels, or a fixed per-turn time.
+If the user explicitly gave visual rules, distill them into playStart.visualContract: how images should express objects, relationships, clues, equipment, or world rules. Leave it empty when unspecified; do not invent colored rarity frames, game UI, or stats.
+Only state facts the user actually gave. Do not fill the confirmation card by inventing concrete years, relationship depth, training history, identity backstory, or world rules. If the user says "newly admitted", keep it newly admitted; do not expand it into "three years in the sect". Leave uncertain specifics pending or omit them.
+If those rules would materially affect play or images but are unclear, use the confirmation card summary to offer one chance to add them; do not invent missing rules for the user. Ask one key question only when player role, starting location, pressure, or core conflict is too vague. Do not advance player actions, narrate the opening scene directly, create books, or generate short fiction."#
+    };
+    format!("{body}\n\n{}", common_output_rules(is_zh))
+}
+
 /// 按 sessionKind 选择基础系统提示词（TS buildAgentSystemPrompt 聊天循环
 /// 子集：chat/book/edit/book-create staging/short/script/storyboard/film 的
 /// clarify 分支；play 由调用方先行覆盖；confirmed 分支在 Rust 架构下走
@@ -294,7 +322,8 @@ pub fn build_system_prompt(
         SessionKind::Script => build_script_prompt(is_zh),
         SessionKind::Storyboard => build_storyboard_prompt(is_zh),
         SessionKind::InteractiveFilm => build_interactive_film_prompt(is_zh),
-        // play 有世界时由调用方先行覆盖（80 号）；其余兜底 chat。
+        // play 无世界：clarify 提示词（有世界时由调用方先行覆盖 80 号）。
+        SessionKind::Play => build_play_prompt_no_world(is_zh),
         _ => build_chat_prompt(is_zh),
     }
 }
@@ -355,5 +384,12 @@ mod tests {
         assert!(storyboard.contains("分镜创作助手"));
         let film = build_system_prompt(SessionKind::InteractiveFilm, None, true);
         assert!(film.contains("互动影游创作助手"));
+        // 234 号：play 无世界 clarify 分支。
+        let play = build_system_prompt(SessionKind::Play, None, true);
+        assert!(play.contains("还没有已创建的世界"), "{play}");
+        assert!(play.contains("worldContract"));
+        assert!(play.contains("mode=guided"));
+        let play_en = build_system_prompt(SessionKind::Play, None, false);
+        assert!(play_en.contains("no world exists yet"));
     }
 }
