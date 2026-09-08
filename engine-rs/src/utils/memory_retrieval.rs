@@ -44,7 +44,7 @@ use crate::utils::story_markdown::{
 };
 
 /// 检索结果集。对齐 TS `MemorySelection`。
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct MemorySelection {
     pub summaries: Vec<StoredSummary>,
     pub hooks: Vec<HookRecord>,
@@ -55,6 +55,8 @@ pub struct MemorySelection {
     pub facts: Vec<NewFact>,
     pub volume_summaries: Vec<VolumeSummarySelection>,
     pub db_path: Option<String>,
+    /// 244/247 号：BM25 + 语义精选溯源。
+    pub retrieval_trace: Option<MemoryRetrievalTrace>,
 }
 
 /// 卷摘要选段。对齐 TS `VolumeSummarySelection`。
@@ -86,6 +88,26 @@ pub struct MemorySemanticSelectionRequest<'a> {
 #[async_trait::async_trait]
 pub trait MemorySemanticSelector: Send + Sync {
     async fn select(&self, request: &MemorySemanticSelectionRequest<'_>) -> Result<Vec<String>, String>;
+}
+
+/// 检索溯源（TS `MemoryRetrievalTrace` 对应面）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRetrievalCandidate {
+    pub id: String,
+    pub kind: String,
+    pub source: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryRetrievalTrace {
+    pub engine: &'static str,
+    pub query: String,
+    pub candidates: Vec<MemoryRetrievalCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_selected_ids: Option<Vec<String>>,
 }
 
 /// 检索入参。对齐 TS `retrieveMemorySelection` 的参数对象。
@@ -260,6 +282,16 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         &hits,
     )
     .await;
+    // 溯源在 hits 被 ranked_hits 消耗前快照（TS retrievalTrace.candidates 全量候选）。
+    let trace_candidates: Vec<MemoryRetrievalCandidate> = hits
+        .iter()
+        .map(|hit| MemoryRetrievalCandidate {
+            id: hit.id.clone(),
+            kind: hit.kind.clone(),
+            source: hit.source.clone(),
+            score: hit.score,
+        })
+        .collect();
     let ranked_hits: Vec<crate::utils::local_search::SearchHit> = match &semantic_selected {
         Some(selected) => {
             let set: std::collections::HashSet<&String> = selected.iter().collect();
@@ -281,9 +313,15 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         recyclable_hooks: compute_recyclable_hooks(&active_hooks, params.chapter_number),
         facts: select_relevant_facts(&facts, &rank_scores),
         volume_summaries: select_relevant_volume_summaries(&volume_summaries, &rank_scores),
-        db_path: index.map(|index| {
-            index.close();
+        db_path: index.as_ref().map(|index| {
+            let _ = index;
             format!("{}/story/memory.db", params.book_dir.display())
+        }),
+        retrieval_trace: index.as_ref().map(|_| MemoryRetrievalTrace {
+            engine: "sqlite-fts5-bm25",
+            query: retrieval_query.clone(),
+            candidates: trace_candidates,
+            semantic_selected_ids: semantic_selected.clone(),
         }),
     }
 }
