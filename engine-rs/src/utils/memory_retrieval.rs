@@ -597,6 +597,7 @@ fn build_memory_search_documents(
                 summary.title.clone()
             },
             body,
+            metadata: Some(serde_json::json!({ "chapter": summary.chapter })),
         });
     }
 
@@ -632,6 +633,7 @@ fn build_memory_search_documents(
                 .collect::<Vec<_>>()
                 .join(" "),
             body,
+            metadata: Some(serde_json::json!({ "hookId": hook.hook_id })),
         });
     }
 
@@ -651,6 +653,7 @@ fn build_memory_search_documents(
                 .collect::<Vec<_>>()
                 .join(" "),
             body: fact.object.clone(),
+            metadata: Some(serde_json::json!({ "index": index })),
         });
     }
 
@@ -662,6 +665,7 @@ fn build_memory_search_documents(
             source: format!("story/volume_summaries.md#{}", summary.anchor),
             title: summary.heading.clone(),
             body: summary.content.clone(),
+            metadata: Some(serde_json::json!({ "index": index })),
         });
     }
 

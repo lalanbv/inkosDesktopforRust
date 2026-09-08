@@ -206,6 +206,7 @@ async fn retrieve_skill_resources(
                     .collect::<Vec<_>>()
                     .join(" \u{b7} "),
                 body: segment.body,
+                metadata: None,
             });
         }
     }

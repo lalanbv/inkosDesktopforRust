@@ -26,6 +26,8 @@ pub struct SearchDocument {
     pub source: String,
     pub title: String,
     pub body: String,
+    /// 任意元数据（序列化进 metadata_json，命中时随 SearchHit 返回）。
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// 单条命中。对齐 TS `SearchHit`（score = -bm25，越大越相关）。
@@ -37,6 +39,7 @@ pub struct SearchHit {
     pub title: String,
     pub body: String,
     pub score: f64,
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// 检索选项（scope 恒必填；kinds 可选过滤；limit 1..=200 默认 24）。
@@ -222,7 +225,8 @@ impl LocalSearchIndex {
                 d.source,
                 d.title,
                 d.body,
-                bm25(retrieval_documents_fts, 5.0, 1.0) AS rank
+                bm25(retrieval_documents_fts, 5.0, 1.0) AS rank,
+                d.metadata_json AS metadataJson
             FROM retrieval_documents_fts
             JOIN retrieval_documents d ON d.rowid = retrieval_documents_fts.rowid
             WHERE retrieval_documents_fts MATCH ?
@@ -235,7 +239,8 @@ impl LocalSearchIndex {
             Ok(statement) => statement,
             Err(_) => return Vec::new(),
         };
-        let mut bind_params: Vec<String> = vec![match_query, options.scope.to_string()];
+        let mut bind_params: Vec<String> =
+            vec![match_query.clone(), options.scope.to_string()];
         for kind in &kinds {
             bind_params.push((*kind).to_string());
         }
@@ -244,7 +249,26 @@ impl LocalSearchIndex {
             .map(|value| rusqlite::types::Value::Text(value.clone()))
             .collect();
         bind_params.push(rusqlite::types::Value::Integer(limit as i64));
+        #[cfg(test)]
+        if std::env::var("INKOS_LS_DEBUG").is_ok() {
+            println!("SEARCH sql: {sql}");
+            println!("SEARCH params: {bind_params:?}");
+            let cnt: Result<i64, _> = self.conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM retrieval_documents_fts WHERE retrieval_documents_fts MATCH {match_query:?} AND scope = {scope:?}",
+                    match_query = match_query,
+                    scope = options.scope,
+                ),
+                [],
+                |r| r.get(0),
+            );
+            println!("SEARCH direct count: {cnt:?}");
+        }
         let rows = statement.query_map(rusqlite::params_from_iter(bind_params.iter()), |row| {
+            let metadata_json: String = row.get("metadataJson")?;
+            let metadata: Option<serde_json::Value> = serde_json::from_str(&metadata_json)
+                .ok()
+                .filter(|value: &serde_json::Value| !value.is_null());
             Ok(SearchHit {
                 id: row.get("id")?,
                 kind: row.get("kind")?,
@@ -253,11 +277,26 @@ impl LocalSearchIndex {
                 body: row.get("body")?,
                 // SQLite FTS5 bm25() 越小越相关 → 取负为分数。
                 score: -row.get::<_, f64>("rank")?,
+                metadata,
             })
         });
         match rows {
-            Ok(rows) => rows.collect::<Result<Vec<_>, _>>().unwrap_or_default(),
-            Err(_) => Vec::new(),
+            Ok(rows) => {
+                #[allow(clippy::never_loop)]
+                {
+                    match rows.collect::<Result<Vec<_>, _>>() {
+                        Ok(hits) => hits,
+                        Err(e) => {
+                            eprintln!("SEARCH row error: {e}");
+                            Vec::new()
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("SEARCH query_map error: {e}");
+                Vec::new()
+            }
         }
     }
 
@@ -278,7 +317,11 @@ struct NormalizedDocument {
 
 fn normalize_document(document: &SearchDocument, _scope: &str) -> NormalizedDocument {
     use sha2::{Digest, Sha256};
-    let metadata_json = "{}".to_string();
+    let metadata_json = document
+        .metadata
+        .as_ref()
+        .map(|meta| serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string()))
+        .unwrap_or_else(|| "{}".to_string());
     let title_tokens = tokenize_search_text(&document.title).join(" ");
     let body_tokens = tokenize_search_text(&document.body).join(" ");
     let content_hash = {
@@ -313,8 +356,11 @@ fn normalize_document(document: &SearchDocument, _scope: &str) -> NormalizedDocu
 pub fn tokenize_search_text(text: &str) -> Vec<String> {
     use unicode_segmentation::UnicodeSegmentation;
     let normalized: String = text.nfkc().collect::<String>().to_lowercase();
+    // UAX#29 不拆汉字序列——在每个 Han 字符后预插空格，保证单字 token
+    //（TS Intl.Segmenter word 粒度 + bigram 追加的组合语义）。
+    let han_spaced = han_space_re().replace_all(&normalized, "$0 ").to_string();
     let mut tokens: Vec<String> = Vec::new();
-    for part in normalized.split_word_bounds() {
+    for part in han_spaced.split_word_bounds() {
         let token: &str = part.trim();
         if !is_word_like(token) {
             continue;
@@ -336,6 +382,11 @@ pub fn tokenize_search_text(text: &str) -> Vec<String> {
         tokens.push(m.as_str().to_string());
     }
     tokens
+}
+
+fn han_space_re() -> &'static Regex {
+    static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\p{Han}").expect("han regex"))
 }
 
 fn is_word_like(token: &str) -> bool {
@@ -403,15 +454,15 @@ pub fn split_markdown_for_search(markdown: &str) -> Vec<MarkdownSearchSegment> {
     let mut current: Option<(usize, String)> = None;
     for line in markdown.split_inclusive('\n') {
         let is_blank = line.trim().is_empty();
-        let line_text = line.strip_suffix('\n').unwrap_or(line);
         if is_blank {
             if let Some((start, raw)) = current.take() {
                 push_segment(&mut segments, &mut heading, heading_re, start, &raw);
             }
         } else {
             match &mut current {
-                Some((_, raw)) => raw.push_str(line_text),
-                None => current = Some((char_offset, line_text.to_string())),
+                // 块内保留原始行（含换行）——TS 段 body 为行 join。
+                Some((_, raw)) => raw.push_str(line),
+                None => current = Some((char_offset, line.to_string())),
             }
         }
         char_offset += line.chars().count();
@@ -449,7 +500,9 @@ fn push_segment(
 
 fn heading_line_re() -> &'static Regex {
     static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^#{1,6}\s+(.+)$").expect("heading regex"))
+    // TS `body.match(/^#{1,6}\s+(.+)$/,)`（无 m 标志）：多行块的首行标题
+    // 判定失败（$ 需串尾）→ 整块保留为段；仅「纯单行标题块」被跳过。
+    R.get_or_init(|| Regex::new(r"^#{1,6}\s+(.+?)\s*$").expect("heading regex"))
 }
 
 #[cfg(test)]
@@ -464,6 +517,7 @@ mod tests {
             source: format!("{id}.md"),
             title: title.to_string(),
             body: body.to_string(),
+            metadata: None,
         }
     }
 
@@ -523,5 +577,89 @@ mod tests {
         assert!(tokens.contains(&"核心".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"心冲".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"core-hook".to_string()), "{tokens:?}");
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+
+    #[test]
+    fn debug_han_search_chain() {
+        let tokens = tokenize_search_text("关键字出现得很早");
+        println!("query/body tokens: {tokens:?}");
+        let index = LocalSearchIndex::new(":memory:").unwrap();
+        index
+            .replace_scope(
+                "s",
+                &[SearchDocument {
+                    id: "d".into(),
+                    scope: "s".into(),
+                    kind: "k".into(),
+                    source: "x.md".into(),
+                    title: "t".into(),
+                    body: "关键字出现得很早".into(),
+                    metadata: None,
+                }],
+            )
+            .unwrap();
+        let fts_count: i64 = index
+            .conn
+            .query_row("SELECT count(*) FROM retrieval_documents_fts", [], |r| r.get(0))
+            .unwrap();
+        println!("fts rows: {fts_count}");
+        let doc_count: i64 = index
+            .conn
+            .query_row("SELECT count(*) FROM retrieval_documents", [], |r| r.get(0))
+            .unwrap();
+        println!("doc rows: {doc_count}");
+        let probes = ["'\"关\"'", "'\"关键字\"'", "'关 OR 键'"];
+        for probe in probes {
+            let sql = format!(
+                "SELECT count(*) FROM retrieval_documents_fts WHERE retrieval_documents_fts MATCH {probe}"
+            );
+            let r: Result<i64, _> = index.conn.query_row(&sql, [], |r| r.get(0));
+            println!("probe {probe} -> {r:?}");
+        }
+        let full_sql = r#"
+            SELECT d.document_id AS id,
+                   bm25(retrieval_documents_fts, 5.0, 1.0) AS rank
+            FROM retrieval_documents_fts
+            JOIN retrieval_documents d ON d.rowid = retrieval_documents_fts.rowid
+            WHERE retrieval_documents_fts MATCH ?
+              AND d.scope = ?
+            LIMIT ?
+        "#;
+        let matches_query = "\"关\"".to_string();
+        let full: Result<Vec<(String, f64)>, _> = index.conn.prepare(full_sql).and_then(|mut st| {
+            st.query_map(rusqlite::params![matches_query, "s", 4], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            })?
+            .collect()
+        });
+        println!("full sql -> {full:?}");
+        let hits = index.search(
+            "关键字",
+            &SearchOptions { scope: "s", kinds: &[], limit: 4 },
+        );
+        println!("hits: {hits:?}");
+        assert!(!hits.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod debug_heading_tests {
+    use super::*;
+
+    #[test]
+    fn debug_heading_multiline() {
+        let doc = "# 账页资料\n## Metadata\n- kind: text\n- char_count: 11\n## Extracted content\n账页记载着冷库赔偿款。";
+        let caps = heading_line_re().captures(doc);
+        println!("caps: {caps:?}");
+        let segs = split_markdown_for_search(doc);
+        println!("segs: {}", segs.len());
+        for (i, seg) in segs.iter().enumerate() {
+            println!("seg{i}: heading={:?} body={:?}", seg.heading, seg.body.chars().take(30).collect::<String>());
+        }
     }
 }

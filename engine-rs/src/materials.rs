@@ -485,22 +485,20 @@ fn safe_child_path(root: &Path, requested: &str) -> Result<PathBuf, String> {
 
 const DEFAULT_LIMIT: usize = 5;
 const MAX_LIMIT: usize = 12;
-const SNIPPET_RADIUS: usize = 700;
 
 /// `retrieveMaterials`：词项打分召回。
 pub async fn retrieve_materials(
     project_root: &Path,
     input: &RetrieveMaterialsInput,
 ) -> Vec<RetrievedMaterial> {
-    let query_terms = extract_terms(&input.query);
+    // 246 号：对齐 TS retrieveMaterials——markdown 分段 + FTS5 BM25 检索
+    //（.inkos/retrieval.db 持久投影）替代整文件词法评分；purpose 走 kind 过滤，
+    // limit×4 候选去重后截断。
+    const MATERIAL_SCOPE: &str = "archived-materials";
+
     let assets = list_material_assets(project_root).await;
-    let mut results: Vec<RetrievedMaterial> = Vec::new();
-    for asset in assets {
-        if let Some(purpose) = &input.purpose {
-            if &asset.purpose != purpose {
-                continue;
-            }
-        }
+    let mut documents: Vec<crate::utils::local_search::SearchDocument> = Vec::new();
+    for asset in &assets {
         let markdown_path = match safe_child_path(project_root, &asset.markdown_path) {
             Ok(path) => path,
             Err(_) => continue,
@@ -508,33 +506,125 @@ pub async fn retrieve_materials(
         let Ok(markdown) = tokio::fs::read_to_string(&markdown_path).await else {
             continue;
         };
-        let score = score_material(&asset, &markdown, &query_terms);
-        if !query_terms.is_empty() && score <= 0.0 {
-            continue;
+        let normalized_path = asset.markdown_path.replace('\\', "/");
+        let segments = crate::utils::local_search::split_markdown_for_search(&markdown);
+        #[cfg(test)]
+        if std::env::var("INKOS_LS_DEBUG").is_ok() {
+            println!("SEG markdown chars: {}, segments: {}", markdown.chars().count(), segments.len());
         }
-        let snippet = build_snippet(&markdown, &query_terms);
-        results.push(RetrievedMaterial {
-            id: asset.id,
-            title: asset.title,
-            kind: asset.kind,
-            purpose: asset.purpose,
-            source: asset.source,
-            // 旧 Windows 构建写的 manifest 可能含 "\" 分隔符。
-            markdown_path: asset.markdown_path.replace('\\', "/"),
-            score,
-            excerpt: snippet.excerpt,
-            char_start: snippet.char_start,
-            char_end: snippet.char_end,
-        });
+        for (index, segment) in segments.into_iter().enumerate()
+        {
+            documents.push(crate::utils::local_search::SearchDocument {
+                id: format!("material:{}:{}", asset.id, index),
+                scope: MATERIAL_SCOPE.to_string(),
+                kind: format!("material:{}", asset.purpose),
+                source: format!("{}:{}-{}", normalized_path, segment.char_start, segment.char_end),
+                title: [asset.title.as_str(), segment.heading.as_str()]
+                    .iter()
+                    .filter(|part| !part.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" \u{b7} "),
+                body: segment.body,
+                metadata: Some(serde_json::json!({
+                    "assetId": asset.id,
+                    "assetTitle": asset.title,
+                    "assetKind": asset.kind,
+                    "purpose": asset.purpose,
+                    "source": asset.source,
+                    "markdownPath": normalized_path,
+                    "charStart": segment.char_start,
+                    "charEnd": segment.char_end,
+                })),
+            });
+        }
     }
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.title.cmp(&b.title))
-    });
-    results.truncate(normalize_limit(input.limit));
-    results
+
+    let index_path = project_root.join(".inkos").join("retrieval.db");
+    let Ok(index) = crate::utils::local_search::LocalSearchIndex::new(
+        &index_path.to_string_lossy(),
+    ) else {
+        return Vec::new();
+    };
+    let retrieval = (|| -> rusqlite::Result<Vec<RetrievedMaterial>> {
+        #[cfg(test)]
+        std::env::var("INKOS_LS_DEBUG").is_ok().then(|| {
+            println!(
+                "RETRIEVE assets: {}, docs: {}, query: {:?}",
+                assets.len(),
+                documents.len(),
+                input.query
+            )
+        });
+        index.replace_scope(MATERIAL_SCOPE, &documents)?;
+        let limit = normalize_limit(input.limit);
+        let kinds: Vec<String> = input
+            .purpose
+            .as_ref()
+            .map(|purpose| vec![format!("material:{purpose}")])
+            .unwrap_or_default();
+        let hits = index.search(
+            &input.query,
+            &crate::utils::local_search::SearchOptions {
+                scope: MATERIAL_SCOPE,
+                kinds: &kinds,
+                limit: (MAX_LIMIT * 4).min(limit * 4),
+            },
+        );
+        let mut out: Vec<RetrievedMaterial> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for hit in &hits {
+            let meta = hit
+                .metadata
+                .as_ref()
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let field = |name: &str| {
+                meta.get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let asset_id = field("assetId");
+            if asset_id.is_empty() || !seen.insert(asset_id.clone()) {
+                continue;
+            }
+            let char_start = meta
+                .get("charStart")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize;
+            let char_end = meta
+                .get("charEnd")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(hit.body.chars().count() as u64)
+                as usize;
+            out.push(RetrievedMaterial {
+                id: asset_id,
+                title: field("assetTitle"),
+                kind: field("assetKind"),
+                purpose: field("purpose"),
+                source: field("source"),
+                markdown_path: field("markdownPath"),
+                score: hit.score,
+                excerpt: hit.body.clone(),
+                char_start,
+                char_end,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    })();
+    let out = match retrieval {
+        Ok(out) => out,
+        Err(_) => {
+            index.close();
+            return Vec::new();
+        }
+    };
+    index.close();
+    out
 }
 
 async fn list_material_assets(project_root: &Path) -> Vec<MaterialAsset> {
@@ -560,107 +650,11 @@ async fn list_material_assets(project_root: &Path) -> Vec<MaterialAsset> {
     assets
 }
 
-fn score_material(asset: &MaterialAsset, markdown: &str, terms: &[String]) -> f64 {
-    if terms.is_empty() {
-        return 1.0;
-    }
-    let title = asset.title.to_lowercase();
-    let source = asset.source.to_lowercase();
-    let body = markdown.to_lowercase();
-    let mut score = 0.0f64;
-    for term in terms {
-        let normalized = term.to_lowercase();
-        if title.contains(&normalized) {
-            score += 8.0;
-        }
-        if source.contains(&normalized) {
-            score += 4.0;
-        }
-        if let Some(first) = body.find(&normalized) {
-            score += 2.0 + (2.0 - first as f64 / 4000.0).max(0.0);
-        }
-    }
-    score
-}
-
-struct Snippet {
-    excerpt: String,
-    /// UTF-16 码元位置（TS `String.slice` 语义；BMP 内与 JS 一致）。
-    char_start: usize,
-    char_end: usize,
-}
-
-fn build_snippet(markdown: &str, terms: &[String]) -> Snippet {
-    let lower = markdown.to_lowercase();
-    let mut hit: Option<usize> = None;
-    for term in terms {
-        if let Some(index) = lower.find(term.to_lowercase().as_str()) {
-            hit = Some(match hit {
-                Some(existing) if existing <= index => existing,
-                _ => index,
-            });
-        }
-    }
-    let total_utf16 = markdown.encode_utf16().count();
-    let center = hit
-        .map(|byte| lower[..byte].encode_utf16().count())
-        .unwrap_or(total_utf16.min(500));
-    let char_start = center.saturating_sub(SNIPPET_RADIUS);
-    let char_end = (center + SNIPPET_RADIUS).min(total_utf16);
-    Snippet {
-        excerpt: utf16_window(markdown, char_start, char_end).trim().to_string(),
-        char_start,
-        char_end,
-    }
-}
-
-/// UTF-16 码元窗口切片（`String.prototype.slice` 等价）。
-fn utf16_window(value: &str, start: usize, end: usize) -> String {
-    let mut units = 0usize;
-    let mut out = String::new();
-    let mut in_window = false;
-    for ch in value.chars() {
-        let len = ch.len_utf16();
-        if !in_window && units + len > start {
-            in_window = true;
-        }
-        if in_window {
-            out.push(ch);
-        }
-        units += len;
-        if units >= end {
-            break;
-        }
-    }
-    out
-}
-
 fn normalize_limit(limit: Option<f64>) -> usize {
     let Some(limit) = limit.filter(|v| v.is_finite()) else {
         return DEFAULT_LIMIT;
     };
     (limit.floor() as i64).clamp(1, MAX_LIMIT as i64) as usize
-}
-
-fn extract_terms(query: &str) -> Vec<String> {
-    use unicode_normalization::UnicodeNormalization;
-    let raw: String = query.nfkc().collect::<String>().trim().to_lowercase();
-    if raw.is_empty() {
-        return Vec::new();
-    }
-    static TERM_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = TERM_RE.get_or_init(|| regex::Regex::new(r"[\p{L}\p{N}]{2,}").unwrap());
-    let mut terms: Vec<String> = Vec::new();
-    for capture in re.captures_iter(&raw) {
-        let term = capture.get(0).map(|m| m.as_str().to_string()).unwrap_or_default();
-        if !terms.contains(&term) {
-            terms.push(term);
-        }
-        if terms.len() >= 24 {
-            break;
-        }
-    }
-    terms
 }
 
 #[cfg(test)]
@@ -749,24 +743,6 @@ mod tests {
         assert_eq!(normalize_text("a\r\nb\n\n\n\nc  \n"), "a\nb\n\nc");
     }
 
-    #[test]
-    fn terms_and_limit_and_snippet() {
-        let terms = extract_terms("冷库 赔偿款 0607 账页 冷库");
-        assert_eq!(terms, vec!["冷库", "赔偿款", "0607", "账页"]);
-        assert!(extract_terms("  ").is_empty());
-        assert_eq!(normalize_limit(None), 5);
-        assert_eq!(normalize_limit(Some(0.0)), 1);
-        assert_eq!(normalize_limit(Some(99.0)), 12);
-        assert_eq!(normalize_limit(Some(f64::NAN)), 5);
-        let markdown = format!("{}命中{}尾部", "前".repeat(1000), "后".repeat(1000));
-        let snippet = build_snippet(&markdown, &["命中".to_string()]);
-        assert!(snippet.excerpt.contains("命中"));
-        assert_eq!(snippet.char_end - snippet.char_start, 1400, "UTF-16 半径 700×2");
-        // 无命中 → 前 500 为中心。
-        let miss = build_snippet("短文", &["不存在".to_string()]);
-        assert_eq!(miss.char_start, 0);
-        assert_eq!(miss.char_end, 2);
-    }
 
     #[tokio::test]
     async fn ingest_file_then_retrieve_roundtrip() {
@@ -822,7 +798,8 @@ mod tests {
         )
         .await;
         assert_eq!(results.len(), 1);
-        assert!(results[0].score >= 8.0, "{:?}", results[0]);
+        // 246 号 BM25 语义：score = -bm25（正值、量级由语料决定）。
+        assert!(results[0].score > 0.0, "{:?}", results[0]);
         let filtered = retrieve_materials(
             root,
             &RetrieveMaterialsInput {
@@ -964,8 +941,8 @@ mod tests {
         )
         .await;
         assert_eq!(results.len(), 2, "损坏 manifest 不参与且不炸");
-        // 正文首现更早者分高。
-        assert_eq!(results[0].id, "t1", "{results:?}");
+        // 246 号 BM25：短文档关键词密度更高者排序靠前（t2 更短 → 分更高）。
+        assert_eq!(results[0].id, "t2", "{results:?}");
         assert!(results[0].score > results[1].score);
     }
 }
