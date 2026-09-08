@@ -26,3 +26,7 @@ Rust `memory_retrieval.rs`（1.1k 行）**无语义精简层**：`RetrieveMemory
 ## 四、验证
 
 纯核查批次（零代码改动）：全部门禁于 231 号已绿。
+
+## 五、评估更新（242 号补记）
+
+241 号已移植 LocalSearchIndex（FTS5 + BM25 + 分词器）——语义层的候选集基建前提已就位。剩余工作量收敛为：memory_retrieval 的 select 层重写（summaries/hooks/facts/volumeSummaries 四函数改为 rankScores 模式，对齐 TS 394-527 行）+ 语义 selector trait/prompt/装配，估 350-450 行；但涉及 DB/markdown 双路径与既有词法评分测试套重写，仍建议随产品优先级立项后单独成批。
