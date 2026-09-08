@@ -73,9 +73,15 @@ impl PendingCandidate {
 ///
 /// 入参 `hooks` 是当前持久化的全量 hook；`delta` 是本章节增量。返回 resolved delta（
 /// `new_hook_candidates` 清空，所有结果汇入 `hook_ops`）+ 每个候选的决策。
+///
+/// `allow_new_hooks = Some(false)` 时（TS `allowNewHooks === false`，resync 链
+/// 「保持稳定 hook id」语义）所有新候选在准入评估前直接拒绝
+/// （reason = `new_hooks_disabled`）；已知名单内的 upsert 与 mention/resolve/defer
+/// 不受影响。
 pub fn arbitrate_runtime_state_delta_hooks(
     hooks: &[HookRecord],
     delta: &RuntimeStateDelta,
+    allow_new_hooks: Option<bool>,
 ) -> (RuntimeStateDelta, Vec<HookArbiterDecision>) {
     let chapter = delta.chapter;
     // 工作副本：仲裁过程中累积的「最新已知 hooks」（用于准入评估的去重/匹配）。
@@ -112,6 +118,15 @@ pub fn arbitrate_runtime_state_delta_hooks(
         .collect();
 
     for candidate in all_candidates {
+        if allow_new_hooks == Some(false) {
+            decisions.push(HookArbiterDecision {
+                action: HookArbiterAction::Rejected,
+                reason: "new_hooks_disabled".to_string(),
+                hook_id: None,
+                candidate: candidate_to_public(&candidate),
+            });
+            continue;
+        }
         let active_hooks: Vec<HookRecord> = working_hooks
             .iter()
             .filter(|h| h.status != HookStatus::Resolved)
@@ -640,7 +655,7 @@ mod tests {
                 "This chapter adds the address angle to the anonymous source question.",
             )],
         );
-        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d);
+        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert_eq!(resolved.hook_ops.upsert.len(), 1);
         assert_eq!(resolved.hook_ops.upsert[0].hook_id, "anonymous-source-scope");
         assert_eq!(resolved.hook_ops.upsert[0].last_advanced_chapter, 12);
@@ -675,7 +690,7 @@ mod tests {
                 "The mentor debt is still unresolved.",
             )],
         );
-        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d);
+        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert!(resolved.hook_ops.upsert.is_empty());
         assert!(resolved.hook_ops.mention.contains(&"mentor-debt".to_string()));
         assert!(resolved.new_hook_candidates.is_empty());
@@ -693,7 +708,7 @@ mod tests {
                 "A fresh unresolved rule around the seal appears in this chapter.",
             )],
         );
-        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d);
+        let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert_eq!(resolved.hook_ops.upsert.len(), 1);
         let created = &resolved.hook_ops.upsert[0];
         assert_eq!(created.start_chapter, 15);
@@ -707,7 +722,7 @@ mod tests {
     #[test]
     fn rejects_candidate_missing_type() {
         let d = delta(5, vec![candidate("", "Some payoff signal here", "notes")]);
-        let (resolved, decisions) = arbitrate_runtime_state_delta_hooks(&[], &d);
+        let (resolved, decisions) = arbitrate_runtime_state_delta_hooks(&[], &d, None);
         assert!(resolved.hook_ops.upsert.is_empty());
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].action, HookArbiterAction::Rejected);
@@ -724,7 +739,7 @@ mod tests {
             notes: String::new(),
         };
         let d = delta(5, vec![c]);
-        let (resolved, decisions) = arbitrate_runtime_state_delta_hooks(&[], &d);
+        let (resolved, decisions) = arbitrate_runtime_state_delta_hooks(&[], &d, None);
         assert!(resolved.hook_ops.upsert.is_empty());
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].action, HookArbiterAction::Rejected);
@@ -751,9 +766,61 @@ mod tests {
             character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
-        let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d);
+        let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert!(resolved.hook_ops.mention.is_empty());
         assert!(resolved.hook_ops.resolve.contains(&"h1".to_string()));
+    }
+
+    #[test]
+    fn allow_new_hooks_false_rejects_all_new_candidates() {
+        // 对齐 TS allowNewHooks === false：新候选在准入评估前直接拒绝。
+        // 既不影响已知名单内 upsert，也不影响 mention/resolve/defer。
+        let existing = hook("h1", "mystery", "Reveal the old secret");
+        let upsert = HookRecord {
+            hook_id: "h1".to_string(),
+            start_chapter: 1,
+            hook_type: "mystery".to_string(),
+            status: HookStatus::Progressing,
+            status_raw: String::new(),
+            last_advanced_chapter: 9,
+            expected_payoff: "Reveal the updated secret".to_string(),
+            payoff_timing: None,
+            notes: "advanced".to_string(),
+            depends_on: None,
+            pays_off_in_arc: None,
+            core_hook: None,
+            half_life_chapters: None,
+            advanced_count: None,
+            promoted: None,
+        };
+        let d = RuntimeStateDelta {
+            chapter: 9,
+            current_state_patch: None,
+            hook_ops: HookOps {
+                upsert: vec![upsert],
+                mention: Vec::new(),
+                resolve: Vec::new(),
+                defer: Vec::new(),
+            },
+            new_hook_candidates: vec![candidate(
+                "artifact",
+                "Reveal why the seal answers only at midnight.",
+                "A fresh unresolved rule around the seal appears in this chapter.",
+            )],
+            chapter_summary: None,
+            subplot_ops: Vec::new(),
+            emotional_arc_ops: Vec::new(),
+            character_matrix_ops: Vec::new(),
+            notes: Vec::new(),
+        };
+        let (resolved, decisions) =
+            arbitrate_runtime_state_delta_hooks(&[existing], &d, Some(false));
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].action, HookArbiterAction::Rejected);
+        assert_eq!(decisions[0].reason, "new_hooks_disabled");
+        // 已知 id 的 upsert 保留，未被禁用面波及。
+        assert_eq!(resolved.hook_ops.upsert.len(), 1);
+        assert_eq!(resolved.hook_ops.upsert[0].hook_id, "h1");
     }
 
     #[test]
@@ -793,7 +860,7 @@ mod tests {
             character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
-        let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d);
+        let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert_eq!(resolved.hook_ops.upsert.len(), 1);
         assert_eq!(resolved.hook_ops.upsert[0].expected_payoff, "Reveal the updated secret");
     }

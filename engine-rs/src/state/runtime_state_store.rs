@@ -84,10 +84,11 @@ pub async fn build_runtime_state_artifacts(
     delta: &RuntimeStateDelta,
     language: WritingLanguage,
     allow_reapply: Option<bool>,
+    allow_new_hooks: Option<bool>,
 ) -> crate::Result<RuntimeStateArtifacts> {
     let snapshot = load_runtime_state_snapshot(store, book_dir).await?;
     let (resolved_delta, _decisions) =
-        arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta);
+        arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta, allow_new_hooks);
     let next =
         apply_runtime_state_delta(&snapshot, &resolved_delta, allow_reapply).map_err(|e| {
             constraint(format!("reducer: {e}"))
@@ -219,9 +220,10 @@ pub async fn build_runtime_state_artifacts_from_snapshot(
     delta: &RuntimeStateDelta,
     language: WritingLanguage,
     allow_reapply: Option<bool>,
+    allow_new_hooks: Option<bool>,
 ) -> crate::Result<RuntimeStateArtifacts> {
     let (resolved_delta, _decisions) =
-        arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta);
+        arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta, allow_new_hooks);
     let next = apply_runtime_state_delta(snapshot, &resolved_delta, allow_reapply)
         .map_err(|e| constraint(format!("reducer: {e}")))?;
     let resolved_chapter = resolved_delta.chapter;
@@ -404,7 +406,7 @@ mod tests {
             notes: Vec::new(),
         };
         let artifacts =
-            build_runtime_state_artifacts(&store, "book", &delta, WritingLanguage::Zh, None)
+            build_runtime_state_artifacts(&store, "book", &delta, WritingLanguage::Zh, None, None)
                 .await
                 .unwrap();
         // 第 2 章，reducer 推进；投影非空。

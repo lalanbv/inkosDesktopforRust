@@ -431,6 +431,7 @@ impl SettlePort for RoutedSettler<'_> {
             title: params.title,
             content: params.content,
             allow_reapply: Some(params.allow_reapply),
+            allow_new_hooks: params.allow_new_hooks,
             chapter_intent: params.chapter_intent,
             context_package: params.context_package,
             rule_stack: params.rule_stack,

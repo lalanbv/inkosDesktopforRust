@@ -3,7 +3,8 @@
 //! 移植自 `packages/core/src/agent/agent-tools.ts` 的
 //! `createWriteTruthFileTool` / `createRenameEntityTool` /
 //! `createPatchChapterTextTool` / `createReplaceChapterTextTool` /
-//! `createDeleteLatestChapterTool` / `createGenerateCoverTool`：
+//! `createDeleteLatestChapterTool` / `createGenerateCoverTool` /
+//! `createResyncChapterStateTool`（215 号）：
 //! 域链接权——edit-controller 事务（89 号补 entity-rename 与
 //! chapter-local-edit）、chapter-delete 域函数、确认面 generate_cover
 //! 执行器（74/76 号 cover 基础设施）。注册面：book/book-create 全六件，
@@ -15,10 +16,12 @@ use crate::interaction::import_chapters_tool::resolve_tool_book_id;
 use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::server::books_routes::BooksRuntime;
 
-/// 工具依赖：runtime + 活动书（书会话恒有）。
+/// 工具依赖：runtime + 活动书（书会话恒有）+ 会话语言（resync 双语摘要）。
 pub struct BookEditDeps<'a> {
     pub runtime: &'a BooksRuntime,
     pub active_book_id: &'a str,
+    /// "zh" | "en"（TS options.language 对应面）。
+    pub language: &'a str,
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -285,6 +288,153 @@ pub async fn tool_generate_cover(deps: &BookEditDeps<'_>, args: &Value) -> ToolR
     }
 }
 
+/// `resync_chapter_state`：正文不动，从已编辑正文重建状态/摘要/伏笔并重跑
+/// 新审计。TS `resyncChapterStateAndAudit` 对应面（`_resyncChapterArtifactsLocked`
+/// 加 `auditDraft`）。复用 51 号 resync 链与 audit_route 审计流；审计后按
+/// auditDraft 语义回写索引状态与问题、维护漂移指引（仅最新章，resync 链
+/// 本就限定最新章）。
+#[allow(clippy::too_many_lines)]
+pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) -> ToolResult {
+    let book_id = match resolve_tool_book_id("resync_chapter_state", field_str(args, "bookId"), Some(deps.active_book_id)) {
+        Ok(book_id) => book_id,
+        Err(message) => return error_result(message),
+    };
+    let allow_new_hooks = args.get("allowNewHooks").and_then(Value::as_bool);
+    let runtime = deps.runtime;
+    // TS chapterNumber ?? index[last].number：缺省 = 最新章。
+    let chapter_number = match parse_chapter_number(args) {
+        Some(number) => number,
+        None => match runtime.state.load_chapter_index(&book_id).await {
+            Ok(index) => index.iter().map(|m| m.number).max().unwrap_or(0),
+            Err(e) => return error_result(e.to_string()),
+        },
+    };
+    if chapter_number == 0 {
+        return error_result(format!("Book \"{book_id}\" has no persisted chapters to sync."));
+    }
+
+    let resynced = match crate::server::books_routes::run_resync_chain(runtime, &book_id, chapter_number, allow_new_hooks).await {
+        Ok(result) => result,
+        Err(message) => return error_result(message),
+    };
+
+    // 新审计（TS auditDraft：真实 auditor 评估）。
+    let audit_runtime = crate::server::audit_route::AuditRuntime {
+        hub: runtime.hub.clone(),
+        state: runtime.state.clone(),
+        router: runtime.router.clone(),
+        builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+    };
+    let audit = match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None).await {
+        Ok(result) => result,
+        Err(error) => return error_result(format!("audit failed: {error}")),
+    };
+
+    // 索引回写（auditDraft 语义：状态 + "[severity] description" 问题行 + 时间戳）。
+    match runtime.state.load_chapter_index(&book_id).await {
+        Ok(mut index) => {
+            if let Some(slot) = index.iter_mut().find(|m| m.number == chapter_number) {
+                slot.status = if audit.passed {
+                    crate::models::chapter::ChapterStatus::ReadyForReview
+                } else {
+                    crate::models::chapter::ChapterStatus::AuditFailed
+                };
+                slot.audit_issues = audit
+                    .issues
+                    .iter()
+                    .map(|issue| format!("[{}] {}", audit_severity_str(issue.severity), issue.description))
+                    .collect();
+                slot.updated_at = crate::utils::utc_time::utc_now_iso();
+            }
+            if let Err(e) = runtime.state.save_chapter_index(&book_id, &index).await {
+                return error_result(e.to_string());
+            }
+        }
+        Err(e) => return error_result(e.to_string()),
+    }
+
+    // 漂移指引（auditDraft：最新章 + critical/warning；失败不阻断——TS .catch(undefined)）。
+    let language = if deps.language == "en" {
+        crate::utils::language::WritingLanguage::En
+    } else {
+        crate::utils::language::WritingLanguage::Zh
+    };
+    let drift: Vec<crate::agents::continuity::AuditIssue> = audit
+        .issues
+        .iter()
+        .filter(|issue| {
+            matches!(
+                issue.severity,
+                crate::agents::continuity::AuditSeverity::Critical | crate::agents::continuity::AuditSeverity::Warning
+            )
+        })
+        .cloned()
+        .collect();
+    let _ = crate::pipeline::write_next::persist_audit_drift_guidance(
+        &runtime.state.book_dir(&book_id),
+        chapter_number,
+        &drift,
+        language,
+    )
+    .await;
+
+    // 双语摘要（TS 逐字）+ details。
+    let zh = deps.language != "en";
+    let text = if audit.passed {
+        if zh {
+            format!("第 {} 章正文未改动；状态、摘要与伏笔已从上一章快照重建，重新审稿通过。", chapter_number)
+        } else {
+            format!(
+                "Chapter {chapter_number} prose was unchanged; state, summaries, and hooks were rebuilt from the previous snapshot, and the fresh audit passed."
+            )
+        }
+    } else {
+        let mut lines = if zh {
+            format!(
+                "第 {} 章正文未改动；状态、摘要与伏笔已重建，但重新审稿仍有 {} 个问题：",
+                chapter_number,
+                audit.issues.len()
+            )
+        } else {
+            format!(
+                "Chapter {chapter_number} prose was unchanged; state, summaries, and hooks were rebuilt, but the fresh audit still found {} issue(s):",
+                audit.issues.len()
+            )
+        };
+        for issue in &audit.issues {
+            let severity = audit_severity_str(issue.severity);
+            if issue.suggestion.is_empty() {
+                lines.push_str(&format!("\n- [{severity}] {}", issue.description));
+            } else {
+                lines.push_str(&format!("\n- [{severity}] {} ({})", issue.description, issue.suggestion));
+            }
+        }
+        lines
+    };
+
+    text_result(
+        text,
+        Some(json!({
+            "kind": "chapter_state_resynced",
+            "bookId": book_id,
+            "chapterNumber": resynced.chapter_number,
+            "status": if audit.passed { "ready-for-review" } else { "audit-failed" },
+            "auditPassed": audit.passed,
+            "auditIssues": audit.issues,
+            "summary": audit.summary,
+        })),
+    )
+}
+
+/// 审计严重度 → TS 字符串名。
+fn audit_severity_str(severity: crate::agents::continuity::AuditSeverity) -> &'static str {
+    match severity {
+        crate::agents::continuity::AuditSeverity::Critical => "critical",
+        crate::agents::continuity::AuditSeverity::Warning => "warning",
+        crate::agents::continuity::AuditSeverity::Info => "info",
+    }
+}
+
 fn parse_chapter_number(args: &Value) -> Option<u32> {
     args.get("chapterNumber")
         .and_then(Value::as_f64)
@@ -301,6 +451,7 @@ pub async fn execute_book_edit_tool(deps: &BookEditDeps<'_>, name: &str, args: &
         "replace_chapter_text" => Some(tool_replace_chapter_text(deps, args).await),
         "delete_latest_chapter" => Some(tool_delete_latest_chapter(deps, args).await),
         "generate_cover" => Some(tool_generate_cover(deps, args).await),
+        "resync_chapter_state" => Some(tool_resync_chapter_state(deps, args).await),
         _ => None,
     }
 }
@@ -414,6 +565,25 @@ pub fn generate_cover_schema() -> Value {
     })
 }
 
+/// `resync_chapter_state` schema（ResyncChapterStateParams 逐字，215 号）。
+pub fn resync_chapter_state_schema() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "resync_chapter_state",
+            "description": "Keep the persisted chapter body unchanged, rebuild its derived story state, summaries, and hooks from the previous chapter snapshot, then run a fresh audit. Use after an explicit chapter edit or when the user asks to repair/synchronize truth state without rewriting prose. Only the latest chapter is supported.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bookId": { "type": "string", "description": "Book ID. Omit to use the active book." },
+                    "chapterNumber": { "type": "number", "description": "Latest chapter number to rebuild from its persisted body. Omit to use the latest chapter." },
+                    "allowNewHooks": { "type": "boolean", "description": "Whether settlement may create brand-new hook IDs. Set false when the user asks to preserve stable hook IDs, avoid replacement hooks, or only repair existing truth state." },
+                },
+            },
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +614,20 @@ mod tests {
         );
     }
 
+    /// 分发名单面：resync_chapter_state 已入分发（不真跑链）。
+    fn execute_book_edit_tool_dispatches(name: &str) -> bool {
+        matches!(
+            name,
+            "write_truth_file"
+                | "rename_entity"
+                | "patch_chapter_text"
+                | "replace_chapter_text"
+                | "delete_latest_chapter"
+                | "generate_cover"
+                | "resync_chapter_state"
+        )
+    }
+
     #[test]
     fn schemas_shape() {
         let schemas = deterministic_tool_schemas();
@@ -462,6 +646,19 @@ mod tests {
             ]
         );
         assert_eq!(generate_cover_schema()["function"]["name"], "generate_cover");
+        assert_eq!(
+            resync_chapter_state_schema()["function"]["name"],
+            "resync_chapter_state"
+        );
+        assert_eq!(
+            resync_chapter_state_schema()["function"]["parameters"]["properties"]["allowNewHooks"]["type"],
+            "boolean"
+        );
+        // 分发面覆盖（其余分支走真链，单测只验名单面）。
+        assert!(matches!(
+            "resync_chapter_state",
+            n if execute_book_edit_tool_dispatches(n)
+        ));
         assert_eq!(
             schemas[0]["function"]["parameters"]["required"],
             json!(["fileName", "content"])

@@ -20,6 +20,8 @@ use crate::utils::language::WritingLanguage;
 pub struct TruthValidationParams<'a> {
     /// 快照基准章（写新章链为 None——settle 基于当前 story；修订链待接）。
     pub baseline_chapter: Option<u32>,
+    /// TS `allowNewHooks`（resync 链透传）。
+    pub allow_new_hooks: Option<bool>,
     pub writer: &'a dyn SettlePort,
     pub validator: &'a dyn ValidatePort,
     pub book: &'a crate::models::book::BookConfig,
@@ -136,6 +138,7 @@ pub async fn validate_chapter_truth_persistence(
                 book_dir: params.book_dir,
                 chapter_number: params.chapter_number,
                 baseline_chapter: params.baseline_chapter,
+                allow_new_hooks: params.allow_new_hooks,
                 title: params.title,
                 content: params.content,
                 control: params.control.clone(),
@@ -295,6 +298,7 @@ mod tests {
             book_dir: std::path::Path::new("/tmp"),
             chapter_number: 3,
             baseline_chapter: None,
+            allow_new_hooks: None,
             title: "t",
             content: "c",
             persistence_output: base_output(),

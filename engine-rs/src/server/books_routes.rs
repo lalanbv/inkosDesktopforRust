@@ -296,6 +296,7 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
             title: &body.title,
             content: &body.content,
             allow_reapply: body.allow_reapply,
+            allow_new_hooks: None,
             chapter_intent: None,
             context_package: None,
             rule_stack: None,
@@ -825,6 +826,7 @@ pub(crate) async fn run_revise_chain(
             title: &chapter_title,
             content: &revise_output.revised_content,
             allow_reapply: None,
+            allow_new_hooks: None,
             chapter_intent: None,
             context_package: None,
             rule_stack: None,
@@ -898,6 +900,7 @@ pub(crate) async fn run_revise_chain(
                 book_dir: &book_dir,
                 chapter_number,
                 baseline_chapter: Some(baseline),
+                allow_new_hooks: None,
                 title: &chapter_title,
                 content: &revise_output.revised_content,
                 control: None,
@@ -1339,6 +1342,7 @@ impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
                 title: params.title,
                 content: params.content,
                 allow_reapply: Some(params.allow_reapply),
+                allow_new_hooks: params.allow_new_hooks,
                 chapter_intent: params.chapter_intent,
                 context_package: params.context_package,
                 rule_stack: params.rule_stack,
@@ -1474,6 +1478,7 @@ async fn run_repair_state(
             title: &target_meta.title,
             content: &content,
             allow_reapply: true,
+            allow_new_hooks: None,
             baseline_chapter: None,
             chapter_intent: None,
             context_package: None,
@@ -1504,6 +1509,7 @@ async fn run_repair_state(
             book_dir: &book_dir,
             chapter_number: target,
             baseline_chapter: None,
+            allow_new_hooks: None,
             title: &target_meta.title,
             content: &content,
             control: None,
@@ -1628,7 +1634,7 @@ pub async fn resync(
             );
         }
     };
-    match run_resync_chain(&runtime, &book_id, chapter_number).await {
+    match run_resync_chain(&runtime, &book_id, chapter_number, None).await {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
         Err(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1641,10 +1647,11 @@ pub async fn resync(
 /// settle → validate →（失败重试）→ 章节与全量真相落盘 → 快照 → 索引回写。
 /// 与 repair-state 的差异：不限 state-degraded（任意状态可同步）、非降级
 /// 章直接置 ready-for-review、落盘走 saveChapter + saveNewTruthFiles 全量面。
-async fn run_resync_chain(
+pub(crate) async fn run_resync_chain(
     runtime: &BooksRuntime,
     book_id: &str,
     chapter_number: u32,
+    allow_new_hooks: Option<bool>,
 ) -> Result<ResyncResult, String> {
     let book = runtime
         .state
@@ -1727,6 +1734,7 @@ async fn run_resync_chain(
             title: &target_meta.title,
             content: &content,
             allow_reapply: true,
+            allow_new_hooks,
             baseline_chapter: None,
             chapter_intent: None,
             context_package: None,
@@ -1756,6 +1764,7 @@ async fn run_resync_chain(
             book_dir: &book_dir,
             chapter_number,
             baseline_chapter: None,
+            allow_new_hooks,
             title: &target_meta.title,
             content: &content,
             control: None,

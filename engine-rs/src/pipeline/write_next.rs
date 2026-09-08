@@ -1007,6 +1007,7 @@ async fn write_next_chapter_locked(
         book_dir: &book_dir,
         chapter_number,
         baseline_chapter: None,
+        allow_new_hooks: None,
         title: &persistence_output.title,
         content: &final_content,
         persistence_output: persistence_output.clone(),
@@ -1326,7 +1327,7 @@ impl PersistenceHooks for RunnerPersistenceHooks<'_> {
 }
 
 /// 审计漂移指引（audit_drift.md + current_state 剥旧块）。
-async fn persist_audit_drift_guidance(
+pub(crate) async fn persist_audit_drift_guidance(
     book_dir: &Path,
     chapter_number: u32,
     issues: &[AuditIssue],

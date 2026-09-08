@@ -543,15 +543,15 @@ pub async fn post_agent(
                 .unwrap_or_default(),
         )
     };
-    // 后台生产任务与聊天并行时注入任务状态（suppressProductionTools 的硬剔除
-    // 面——read/ls/grep 聊天工具集本就不含生产工具，天然满足）。
-    if let Some(background_task) =
-        agent_production::find_active_running_task(root, session_id).await
-    {
+    // 后台生产任务与聊天并行时注入任务状态（TS backgroundTaskContext 软约束）
+    // + 从工具表硬剔除生产变更工具（TS suppressProductionTools：提示词只是软
+    // 约束，硬剔除防同会话双写——215 号对齐，此前 Rust 仅注入提示块）。
+    let background_task = agent_production::find_active_running_task(root, session_id).await;
+    if let Some(background_task) = &background_task {
         let language = agent_production::current_project_language(root).await;
         system_prompt.push('\n');
         system_prompt.push_str(&agent_production::build_running_task_context_block(
-            &background_task,
+            background_task,
             language,
         ));
     }
@@ -739,6 +739,9 @@ pub async fn post_agent(
         }
         if book_edit_session {
             entries.extend(crate::interaction::book_edit_tools::deterministic_tool_schemas());
+            // 215 号：resync_chapter_state（TS bookTools 注册面——edit 过滤器
+            // 不剔除，book/edit 会话均可用；属生产变更名单，后台生产时剔除）。
+            entries.push(crate::interaction::book_edit_tools::resync_chapter_state_schema());
         }
         if book_session {
             entries.push(crate::interaction::book_edit_tools::generate_cover_schema());
@@ -749,6 +752,14 @@ pub async fn post_agent(
         if play_world_exists {
             entries.extend(crate::interaction::play_tools::play_tool_schemas());
         }
+    }
+    // 215 号：suppressProductionTools 硬剔除——后台生产任务运行时，从工具表
+    // 剔除会修改书籍/产物的生产工具（TS PRODUCTION_MUTATION_TOOL_NAMES；
+    // fanfic_create 等四件在 Rust 不作为 agent 工具注册而走 propose→confirm
+    // 生产链，名单即 TS 全集的可注册子集）。read/ls/grep、material、research、
+    // propose_action、forecast、play 与 TS 一致保留。
+    if background_task.is_some() {
+        strip_production_mutation_tools(&mut tools);
     }
     let play_deps = play_world_exists.then(|| crate::interaction::play_tools::PlayToolDeps {
         project_root: root,
@@ -784,6 +795,7 @@ pub async fn post_agent(
         .then(|| agent_book_id.as_deref().map(|active| crate::interaction::book_edit_tools::BookEditDeps {
             runtime: &runtime,
             active_book_id: active,
+            language: surface_language,
         }))
         .flatten();
     // forecast 三件：仅 book/book-create（TS edit 过滤器剔除 forecast）。
@@ -802,6 +814,7 @@ pub async fn post_agent(
         sub_agent_deps,
         book_edit_deps,
         forecast_deps,
+        suppress_production: background_task.is_some(),
     };
     // 135 号：回合作用域（TS runWithAgentTrajectory({main}) 包 agent.prompt
     // 的对应物）——task-local 通道供 RouterLoopChat（聊天增量）与 sub_agent
@@ -940,6 +953,33 @@ struct ImportDeps<'a> {
     abort: Option<crate::interaction::agent_loop::AbortHandle>,
 }
 
+/// TS `PRODUCTION_MUTATION_TOOL_NAMES`（agent-session.ts）的可注册子集：
+/// 后台生产任务运行时从工具表硬剔除，并在分发面拒绝（防幻觉调用绕过）。
+/// fanfic_create/continuation_import/spinoff_create/imitation_create 在 Rust
+/// 不作为 agent 工具注册（propose→confirm 生产链），无需列入。
+const PRODUCTION_MUTATION_TOOL_NAMES: &[&str] = &[
+    "sub_agent",
+    "generate_cover",
+    "write_truth_file",
+    "rename_entity",
+    "patch_chapter_text",
+    "replace_chapter_text",
+    "resync_chapter_state",
+    "delete_latest_chapter",
+    "import_chapters",
+];
+
+/// suppressProductionTools 硬剔除（对齐 TS agent-session 的 tools filter）。
+fn strip_production_mutation_tools(tools: &mut Value) {
+    if let Some(entries) = tools.as_array_mut() {
+        entries.retain(|entry| {
+            entry["function"]["name"]
+                .as_str()
+                .is_none_or(|name| !PRODUCTION_MUTATION_TOOL_NAMES.contains(&name))
+        });
+    }
+}
+
 /// 聊天回环组合执行器（84/85/87/89 号）：propose_action → research/import
 /// → sub_agent → 书会话编辑工具族 → play 工具 → 项目文件工具（含 material
 /// 双件）。
@@ -952,12 +992,17 @@ struct ChatToolRouter<'a> {
     sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
     book_edit_deps: Option<crate::interaction::book_edit_tools::BookEditDeps<'a>>,
     forecast_deps: Option<crate::interaction::forecast_tools::ForecastDeps<'a>>,
+    /// 215 号：suppressProductionTools——true 时名单内工具在分发面拒绝。
+    suppress_production: bool,
 }
 
 #[async_trait::async_trait]
 impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
     #[allow(clippy::too_many_lines)]
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
+        if self.suppress_production && PRODUCTION_MUTATION_TOOL_NAMES.contains(&name) {
+            return crate::interaction::project_tools::error_result(format!("Unknown tool: {name}"));
+        }
         if name == "propose_action" {
             if let Some(deps) = &self.propose_deps {
                 return crate::interaction::propose_action_tool::tool_propose_action(deps, args).await;
@@ -1539,6 +1584,45 @@ mod attachment_tests {
         assert!(is_text_attachment("a.bin", "text/plain"));
         assert!(!is_text_attachment("a.png", "image/png"));
         assert!(!is_text_attachment("a.pdf", "application/pdf"));
+    }
+
+    #[test]
+    fn strip_production_mutation_tools_keeps_readonly_set() {
+        // 215 号：suppressProductionTools 名单语义——生产变更工具剔除，
+        // read/ls/grep、material、research、propose、forecast、play 保留。
+        let schema = |name: &str| serde_json::json!({
+            "type": "function",
+            "function": { "name": name, "parameters": { "type": "object" } }
+        });
+        let mut tools = serde_json::json!([
+            schema("read"), schema("ls"), schema("grep"),
+            schema("ingest_material"), schema("retrieve_material"),
+            schema("research_web"), schema("propose_action"),
+            schema("create_narrative_forecast"),
+            schema("play_step"),
+            schema("sub_agent"), schema("generate_cover"),
+            schema("write_truth_file"), schema("rename_entity"),
+            schema("patch_chapter_text"), schema("replace_chapter_text"),
+            schema("resync_chapter_state"), schema("delete_latest_chapter"),
+            schema("import_chapters"),
+        ]);
+        strip_production_mutation_tools(&mut tools);
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "read", "ls", "grep",
+                "ingest_material", "retrieve_material",
+                "research_web", "propose_action",
+                "create_narrative_forecast",
+                "play_step",
+            ]
+        );
     }
 
     #[test]

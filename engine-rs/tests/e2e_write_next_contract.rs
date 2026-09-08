@@ -2277,6 +2277,46 @@ mod books51_e2e {
         assert_eq!(parsed["error"], "Chapter 9 not found in \"b1\".");
     }
 
+    /// 215 号：resync_chapter_state agent 工具——工件重建 + 新审计 +
+    /// 索引/漂移指引回写。mock LLM：settle 走 WRITER_RESPONSE，validator
+    /// PASS，审计（temp != 0）返回 1 条 warning → 走 audit-failed 分支。
+    #[tokio::test]
+    async fn resync_tool_rebuilds_artifacts_and_audits() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture51(&root);
+        let llm = spawn_mock51().await;
+        let runtime = rt51(&root, &llm);
+        let deps = inkos_engine::interaction::book_edit_tools::BookEditDeps {
+            runtime: &runtime,
+            active_book_id: "b1",
+            language: "zh",
+        };
+        let result = inkos_engine::interaction::book_edit_tools::tool_resync_chapter_state(
+            &deps,
+            &serde_json::json!({}),
+        )
+        .await;
+        assert!(!result.is_error, "tool failed: {}", result.text);
+        // 双语摘要（zh）：新审计 1 条 warning → audit-failed 分支。
+        assert!(result.text.contains("第 1 章正文未改动"), "{}", result.text);
+        assert!(result.text.contains("仍有 1 个问题"), "{}", result.text);
+        assert!(result.text.contains("[warning] 略缓。"), "{}", result.text);
+        let details = result.details.unwrap();
+        assert_eq!(details["kind"], "chapter_state_resynced");
+        assert_eq!(details["chapterNumber"], 1);
+        assert_eq!(details["status"], "audit-failed");
+        assert_eq!(details["auditPassed"], false);
+        assert_eq!(details["auditIssues"][0]["severity"], "warning");
+        // 索引回写：状态 + "[severity] description" 问题行。
+        let index: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(root.join("books/b1/chapters/index.json")).unwrap()).unwrap();
+        assert_eq!(index[0]["status"], "audit-failed");
+        assert_eq!(index[0]["auditIssues"][0], "[warning] 略缓。");
+        // 漂移指引落盘（warning 命中 critical/warning 过滤）。
+        assert!(root.join("books/b1/story/audit_drift.md").exists());
+    }
+
     #[tokio::test]
     async fn resync_rejects_non_latest_chapter() {
         let dir = tempfile::tempdir().unwrap();

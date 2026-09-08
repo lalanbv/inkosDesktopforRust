@@ -166,6 +166,8 @@ pub struct SettleRequest<'a> {
     pub title: &'a str,
     pub content: &'a str,
     pub allow_reapply: bool,
+    /// TS `allowNewHooks`（resync 链「保持稳定 hook id」）；None = 默认放行。
+    pub allow_new_hooks: Option<bool>,
     /// 132 号：快照基准章（TS retry settle 的 baselineChapter 透传——重试
     /// 结算同样走章前快照重放；None = 当前 story 目录）。
     pub baseline_chapter: Option<u32>,
@@ -213,6 +215,8 @@ pub struct SettlementRetryParams<'a> {
     pub chapter_number: u32,
     /// 快照基准章（TS baselineChapter）。
     pub baseline_chapter: Option<u32>,
+    /// TS `allowNewHooks`（resync 链透传重试结算）。
+    pub allow_new_hooks: Option<bool>,
     pub title: &'a str,
     pub content: &'a str,
     pub control: Option<ControlInput<'a>>,
@@ -255,6 +259,7 @@ pub async fn retry_settlement_after_validation_failure(
             title: params.title,
             content: params.content,
             allow_reapply: true,
+            allow_new_hooks: params.allow_new_hooks,
             baseline_chapter: params.baseline_chapter,
             chapter_intent: params.control.as_ref().map(|control| control.chapter_intent),
             context_package: params.control.as_ref().map(|control| control.context_package),
@@ -530,6 +535,7 @@ mod retry_tests {
             book_dir: std::path::Path::new("/tmp"),
             chapter_number: 3,
             baseline_chapter: None,
+            allow_new_hooks: None,
             title: "t",
             content: "c",
             control: None,

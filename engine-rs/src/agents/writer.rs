@@ -137,6 +137,9 @@ pub struct SettleChapterStateInput<'a> {
     pub title: &'a str,
     pub content: &'a str,
     pub allow_reapply: Option<bool>,
+    /// TS `allowNewHooks`（resync 工具「保持稳定 hook id」语义）：false 时
+    /// 仲裁器拒绝全部新 hook 候选；None = 默认放行。
+    pub allow_new_hooks: Option<bool>,
     pub chapter_intent: Option<&'a str>,
     pub context_package: Option<&'a ContextPackage>,
     pub rule_stack: Option<&'a RuleStack>,
@@ -1404,6 +1407,7 @@ async fn settle(
 
 /// 对齐 TS `buildRuntimeStateArtifactsIfPresent`：无 delta → None；有权威
 /// 章节号先归一再构建。
+#[allow(clippy::too_many_arguments)]
 async fn build_runtime_state_artifacts_if_present(
     state_store: &dyn StateStore,
     book_dir: &str,
@@ -1411,6 +1415,7 @@ async fn build_runtime_state_artifacts_if_present(
     language: WritingLanguage,
     authoritative_chapter_number: Option<u32>,
     allow_reapply: Option<bool>,
+    allow_new_hooks: Option<bool>,
     baseline_chapter: Option<u32>,
 ) -> crate::Result<Option<RuntimeStateArtifacts>> {
     let Some(delta) = delta else {
@@ -1436,12 +1441,13 @@ async fn build_runtime_state_artifacts_if_present(
                 &safe_delta,
                 language,
                 allow_reapply,
+                allow_new_hooks,
             )
             .await
             .map(Some)
         }
         None => {
-            build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, allow_reapply)
+            build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, allow_reapply, allow_new_hooks)
                 .await
                 .map(Some)
         }
@@ -1478,7 +1484,7 @@ async fn resolve_runtime_state_artifacts_for_output(
         }));
     }
 
-    build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, None)
+    build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, None, None)
         .await
         .map(Some)
 }
@@ -1882,6 +1888,7 @@ pub async fn write_chapter(
         Some(chapter_number),
         None,
         None,
+        None,
     )
     .await
     .map_err(WriteChapterError::Engine)?;
@@ -2119,6 +2126,7 @@ pub async fn settle_chapter_state(
         resolved_language,
         Some(input.chapter_number),
         input.allow_reapply,
+        input.allow_new_hooks,
         input.baseline_chapter,
     )
     .await
@@ -2946,6 +2954,7 @@ mod tests {
             title: "旧章",
             content: "正文内容，主角突破。",
             allow_reapply: None,
+            allow_new_hooks: None,
             chapter_intent: None,
             context_package: None,
             rule_stack: None,
