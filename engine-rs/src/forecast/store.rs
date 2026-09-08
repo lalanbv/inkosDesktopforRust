@@ -89,10 +89,10 @@ impl ForecastStore {
         let forecast_json_path = self.forecast_json_path(&forecast.forecast_id)?;
         let comparison_path = self.comparison_path(&forecast.forecast_id)?;
         let json = serde_json::to_string_pretty(forecast).map_err(|e| e.to_string())?;
-        tokio::fs::write(&dir.join("forecast.json"), format!("{json}\n"))
+        crate::utils::atomic_file_set::write_file_atomic(&dir.join("forecast.json"), &format!("{json}\n"))
             .await
             .map_err(|e| e.to_string())?;
-        tokio::fs::write(&dir.join("comparison.md"), format!("{}\n", trim_end(comparison_markdown)))
+        crate::utils::atomic_file_set::write_file_atomic(&dir.join("comparison.md"), &format!("{}\n", trim_end(comparison_markdown)))
             .await
             .map_err(|e| e.to_string())?;
         Ok((forecast_json_path, comparison_path))
@@ -145,7 +145,7 @@ impl ForecastStore {
         validate_narrative_forecast(&stale)?;
         let dir = self.forecast_dir(&stale.forecast_id)?;
         let json = serde_json::to_string_pretty(&stale).map_err(|e| e.to_string())?;
-        tokio::fs::write(dir.join("forecast.json"), format!("{json}\n"))
+        crate::utils::atomic_file_set::write_file_atomic(&dir.join("forecast.json"), &format!("{json}\n"))
             .await
             .map_err(|e| e.to_string())?;
         Ok(stale)
@@ -154,7 +154,7 @@ impl ForecastStore {
     pub async fn write_selected_plan(&self, forecast_id: &str, markdown: &str) -> Result<String, String> {
         let path = self.selected_plan_path(forecast_id)?;
         let dir = self.forecast_dir(forecast_id)?;
-        tokio::fs::write(dir.join("selected-branch-plan.md"), format!("{}\n", trim_end(markdown)))
+        crate::utils::atomic_file_set::write_file_atomic(&dir.join("selected-branch-plan.md"), &format!("{}\n", trim_end(markdown)))
             .await
             .map_err(|e| e.to_string())?;
         Ok(path)

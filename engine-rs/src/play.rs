@@ -388,7 +388,7 @@ pub async fn set_play_image_entry(
         "{}\n",
         serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default()
     );
-    tokio::fs::write(dir.join("manifest.json"), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&dir.join("manifest.json"), &payload)
         .await
         .map_err(|e| e.to_string())
 }
@@ -431,7 +431,7 @@ pub async fn write_play_image_settings(run_dir: &Path, settings: &Value) -> Resu
         }))
         .unwrap_or_default()
     );
-    tokio::fs::write(dir.join("settings.json"), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&dir.join("settings.json"), &payload)
         .await
         .map_err(|e| e.to_string())
 }
@@ -580,7 +580,7 @@ pub async fn create_world(
         .await
         .map_err(|e| e.to_string())?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
-    tokio::fs::write(world_dir.join("world.json"), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&world_dir.join("world.json"), &payload)
         .await
         .map_err(|e| e.to_string())?;
     Ok(world)
@@ -620,7 +620,7 @@ pub async fn update_world(
     );
     let world_dir = world_dir(project_root, world_id)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
-    tokio::fs::write(world_dir.join("world.json"), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&world_dir.join("world.json"), &payload)
         .await
         .map_err(|e| e.to_string())?;
     Ok(world)
@@ -636,7 +636,7 @@ pub async fn save_current_state(
     ensure_run(project_root, world_id, run_id).await?;
     let run = run_dir(project_root, world_id, run_id)?;
     let payload = format!("{}\n", serde_json::to_string_pretty(state).unwrap_or_default());
-    tokio::fs::write(run.join("state").join("current.json"), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&run.join("state").join("current.json"), &payload)
         .await
         .map_err(|e| e.to_string())
 }
@@ -698,7 +698,7 @@ pub async fn write_projection(
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
-    tokio::fs::write(&target, content).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&target, content).await.map_err(|e| e.to_string())
 }
 
 async fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
@@ -770,7 +770,7 @@ async fn write_snapshot_json(run: &Path, relative: &str, snapshot: &PlayRunSnaps
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
     let payload = format!("{}\n", serde_json::to_string_pretty(snapshot).unwrap_or_default());
-    tokio::fs::write(&target, payload).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&target, &payload).await.map_err(|e| e.to_string())
 }
 
 /// `saveCheckpoint`：checkpoints/{id}.json（id 段校验，不安全 → 报错）。
@@ -856,14 +856,17 @@ pub async fn restore_run_snapshot(
     let mut db = crate::play_graph::open_play_graph_db(&run)?;
     db.replace_with_snapshot(&snapshot.graph)?;
     db.flush()?;
-    tokio::fs::write(events_jsonl_path(&run), &snapshot.events_raw)
+    crate::utils::atomic_file_set::write_file_atomic(&events_jsonl_path(&run), &snapshot.events_raw)
         .await
         .map_err(|e| e.to_string())?;
-    tokio::fs::write(transcript_jsonl_path(&run), &snapshot.transcript_raw)
-        .await
-        .map_err(|e| e.to_string())?;
-    tokio::fs::write(
-        safe_run_child_path(&run, "state/current.json")?,
+    crate::utils::atomic_file_set::write_file_atomic(
+        &transcript_jsonl_path(&run),
+        &snapshot.transcript_raw,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &safe_run_child_path(&run, "state/current.json")?,
         &snapshot.current_state_raw,
     )
     .await
