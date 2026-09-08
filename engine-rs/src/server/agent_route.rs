@@ -33,6 +33,11 @@ use crate::server::session_routes::{normalize_api_book_id, normalize_studio_sess
 /// Arc<Mutex<bool>>——68 号连通，置位即在下一轮检查点截断）。
 pub struct AgentSessionHandle {
     pub abort_flag: crate::interaction::agent_loop::AbortHandle,
+    /// 220 号：per-session 串行队列（TS runInAgentSessionQueue 同构）——
+    /// 聊天轮整轮持有 guard，后续同会话请求在此排队；abort 端点只碰
+    /// abort_flag、不碰 queue，无死锁。Arc + lock_owned：guard 不借用
+    /// std Mutex 临界区。
+    pub queue: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// abort 注册表（sessionId → handle；64 号 abort 端点的消费面）。
@@ -155,6 +160,11 @@ async fn append_chat_turn(
     tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
     session_kind: SessionKind,
 ) {
+    // 220 号：删除守卫（TS appendSessionMessagesUnlessDeleted）——轮进行中
+    // 会话被删时跳过追加，防 transcript 复活「已删除」会话。
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+        return;
+    }
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = utc_now_ms();
     append_transcript_events(project_root, session_id, |_events, next_seq| {
@@ -311,6 +321,10 @@ async fn append_failed_chat_turn(
     error: &str,
     session_kind: SessionKind,
 ) {
+    // 同上：删除守卫（失败收尾的持久化同样不得复活已删除会话）。
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+        return;
+    }
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = utc_now_ms();
     append_transcript_events(project_root, session_id, |_events, next_seq| {
@@ -652,8 +666,27 @@ pub async fn post_agent(
     }
 
     // ── agent 循环主路径（66 号：多轮 tool-use + SSE 增量 + abort 截断） ──
+    // 220 号：per-session 串行——同会话并发请求在 queue 上排队（此前无条件
+    // 覆盖注册表句柄：abort 链丢失 + 两轮 LLM 交错烧钱；TS 为 FIFO 排队）。
+    // 排队拿到锁后刷新注册表句柄与全新 abort flag（前一轮的中止不波及新轮；
+    // 轮结束 remove 条目，本轮重插保证 abort 可达）。
+    let handle = {
+        let mut registry = running_agent_sessions().lock().unwrap();
+        registry
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(Mutex::new(AgentSessionHandle {
+                    abort_flag: Arc::new(Mutex::new(false)),
+                    queue: Arc::new(tokio::sync::Mutex::new(())),
+                }))
+            })
+            .clone()
+    };
+    // std guard 不得跨 await（future Send）：先 clone Arc，再取 owned guard。
+    let queue = handle.lock().unwrap().queue.clone();
+    let _queue_guard = queue.lock_owned().await;
     let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
-    let handle = Arc::new(Mutex::new(AgentSessionHandle { abort_flag: abort_flag.clone() }));
+    handle.lock().unwrap().abort_flag = abort_flag.clone();
     running_agent_sessions()
         .lock()
         .unwrap()
@@ -1834,9 +1867,11 @@ mod payload_strict_tests {
     use crate::interaction::session_transcript::TranscriptEvent;
     use crate::llm::provider::LLMRole;
     use serde_json::Value;
+    use std::sync::{Arc, Mutex};
 
     use super::append_chat_turn;
     use super::append_failed_chat_turn;
+    use super::AgentSessionHandle;
 
 
     #[test]
@@ -1966,6 +2001,100 @@ mod payload_strict_tests {
         // kind 轮保留 user 原话）——历史语义已折叠进摘要。
         assert_eq!(restored.len(), 1, "仅摘要: {restored:?}");
         assert!(restored[0].content.contains("[历史状态摘要]"));
+    }
+
+    /// 220 号：删除守卫——会话删除后轮收尾的追加被跳过（不复活）。
+    #[tokio::test]
+    async fn chat_turn_skipped_for_deleted_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        crate::server::session_routes::deleted_session_ids()
+            .lock()
+            .unwrap()
+            .insert("sess-deleted".to_string());
+        append_chat_turn(
+            &root,
+            "sess-deleted",
+            "hi",
+            "hello",
+            &[],
+            SessionKind::Chat,
+        )
+        .await;
+        append_failed_chat_turn(&root, "sess-deleted", "hi", "err", SessionKind::Chat).await;
+        assert!(
+            !crate::interaction::session_transcript::transcript_path(&root, "sess-deleted").exists(),
+            "已删除会话不应被轮收尾复活"
+        );
+        // 同名重建 → 清除标记 → 追加恢复。
+        crate::server::session_routes::deleted_session_ids()
+            .lock()
+            .unwrap()
+            .remove("sess-deleted");
+        append_chat_turn(&root, "sess-deleted", "hi", "hello", &[], SessionKind::Chat).await;
+        assert!(
+            crate::interaction::session_transcript::transcript_path(&root, "sess-deleted").exists()
+        );
+    }
+
+    /// 220 号：per-session 串行队列——第二个请求在前一轮持锁期间排队；
+    /// 排队轮拿锁后刷新 abort flag（前轮中止不波及新轮）。TS
+    /// runInAgentSessionQueue 同构。
+    #[tokio::test]
+    async fn concurrent_requests_serialize_on_session_queue() {
+        let handle = Arc::new(Mutex::new(AgentSessionHandle {
+            abort_flag: Arc::new(Mutex::new(false)),
+            queue: Arc::new(tokio::sync::Mutex::new(())),
+        }));
+        let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let h1 = handle.clone();
+        let o1 = order.clone();
+        let first = tokio::spawn(async move {
+            let guard = h1.lock().unwrap().queue.clone();
+            let _q = guard.lock_owned().await;
+            o1.lock().unwrap().push("first-start");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            o1.lock().unwrap().push("first-end");
+        });
+        // 首轮先拿锁。
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let h2 = handle.clone();
+        let o2 = order.clone();
+        let second = tokio::spawn(async move {
+            let guard = h2.lock().unwrap().queue.clone();
+            let _q = guard.lock_owned().await;
+            o2.lock().unwrap().push("second-start");
+        });
+
+        first.await.unwrap();
+        // 首轮未结束时第二轮不应进入临界区（first-end 先于 second-start）。
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        second.await.unwrap();
+        let sequence = order.lock().unwrap().clone();
+        assert_eq!(
+            sequence,
+            vec!["first-start", "first-end", "second-start"],
+            "串行序: {sequence:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_guard_reset_gives_fresh_abort_flag() {
+        // 排队轮拿锁后创建全新 abort flag：前一轮置位的中止不波及新轮。
+        let handle = Arc::new(Mutex::new(AgentSessionHandle {
+            abort_flag: Arc::new(Mutex::new(true)), // 模拟前轮被中止
+            queue: Arc::new(tokio::sync::Mutex::new(())),
+        }));
+        let queue = handle.lock().unwrap().queue.clone();
+        let _q = queue.lock_owned().await;
+        let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
+        handle.lock().unwrap().abort_flag = abort_flag.clone();
+        assert!(
+            !*abort_flag.lock().unwrap(),
+            "新轮 flag 必须为未中止"
+        );
     }
 
     /// 217 号：失败轮持久化——request_failed + user 消息保留；derive 不含

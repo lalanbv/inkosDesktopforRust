@@ -7198,6 +7198,7 @@ mod agent68_e2e {
             SID_ABORT_CHAT.to_string(),
             Arc::new(Mutex::new(agent_route::AgentSessionHandle {
                 abort_flag: chat_flag.clone(),
+                queue: Arc::new(tokio::sync::Mutex::new(())),
             })),
         );
         let (_status, parsed) = call(
