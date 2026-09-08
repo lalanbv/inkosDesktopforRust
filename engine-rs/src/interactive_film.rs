@@ -517,6 +517,87 @@ pub fn build_upsert_characters_delta(chars: Vec<Character>) -> StoryGraphDelta {
     }
 }
 
+// ---- authoring 上下文（TS film-context.ts 逐字，254 号） ----
+
+/// `summarizeStoryGraph`：剧情图谱 → 面向 LLM 的紧凑摘要。
+pub fn summarize_story_graph(graph: &StoryGraph) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!(
+        "# 互动影游：{}",
+        if graph.title.is_empty() { &graph.project_id } else { &graph.title }
+    ));
+    if let Some(w) = &graph.world_anchor {
+        lines.push(format!(
+            "核心：{} / 主题：{} / 题材：{} / 规则：{} / 时长：{}分",
+            w.story_core, w.theme, w.genre, w.world_rules, format_args!("{}", w.duration_minutes)
+        ));
+    }
+    if !graph.variables.is_empty() {
+        let names: Vec<&str> = graph.variables.iter().map(|v| v.name.as_str()).collect();
+        lines.push(format!("变量：{}", names.join(", ")));
+    }
+    lines.push("节点：".to_string());
+    for n in &graph.nodes {
+        let edges = n
+            .choices
+            .iter()
+            .map(|c| format!("{}→{}", c.text, c.target_node_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let edge_part = if edges.is_empty() { String::new() } else { format!(" -> {edges}") };
+        lines.push(format!("- {}[{}] {}{}", n.id, node_type_text(n), n.title, edge_part));
+    }
+    lines.join("\n")
+}
+
+fn node_type_text(n: &StoryNode) -> &'static str {
+    match n.node_type {
+        NodeType::Start => "start",
+        NodeType::Normal => "normal",
+        NodeType::Branch => "branch",
+        NodeType::Merge => "merge",
+        NodeType::Ending => "ending",
+        NodeType::Explore => "explore",
+    }
+}
+
+/// `buildFilmAuthoringContext`：摘要 + 角色档案（含口吻）。
+pub fn build_film_authoring_context(graph: &StoryGraph) -> String {
+    let mut blocks: Vec<String> = vec![summarize_story_graph(graph)];
+    if !graph.characters.is_empty() {
+        let chars: Vec<String> = graph
+            .characters
+            .iter()
+            .map(|c| {
+                let voice = c
+                    .voice_profile
+                    .as_ref()
+                    .map(|vp| {
+                        [vp.speaking_rhythm.as_str(), vp.vocabulary.as_str()]
+                            .iter()
+                            .filter(|part| !part.is_empty())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_default();
+                let voice_part = if voice.is_empty() {
+                    String::new()
+                } else {
+                    format!(" 口吻：{voice}")
+                };
+                let role_text = serde_json::to_value(c.role)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| "other".to_string());
+                format!("- {}（{}）动机：{}{}", c.name, role_text, c.motivation, voice_part)
+            })
+            .collect();
+        blocks.push(["角色档案:".to_string()].into_iter().chain(chars).collect::<Vec<_>>().join("\n"));
+    }
+    blocks.join("\n\n")
+}
+
 
 fn apply_upsert_remove<T>(
     current: &[T],
@@ -1787,5 +1868,80 @@ mod delta_builder_tests {
 
         let chars_delta = build_upsert_characters_delta(Vec::new());
         assert!(chars_delta.characters.as_ref().unwrap().upsert.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod authoring_context_tests {
+    use super::*;
+
+    fn sample_graph() -> StoryGraph {
+        let mut graph = empty_graph("pf1");
+        graph.title = "雪夜谜案".into();
+        graph.world_anchor = Some(WorldAnchor {
+            story_core: "雪夜谋杀".into(),
+            theme: String::new(),
+            genre: "悬疑".into(),
+            world_rules: String::new(),
+            duration_minutes: 30.0,
+        });
+        graph.variables = vec![Variable {
+            name: "信任度".into(),
+            variable_type: VariableType::Counter,
+            default: serde_json::json!(0),
+            desc: String::new(),
+        }];
+        graph.characters = vec![Character {
+            id: "c1".into(),
+            name: "沈青".into(),
+            role: CharacterRole::Protagonist,
+            motivation: "查明真相".into(),
+            voice_profile: Some(VoiceProfile {
+                speaking_rhythm: "短句".into(),
+                vocabulary: String::new(),
+                sample_lines: Vec::new(),
+            }),
+        }];
+        graph.nodes = vec![StoryNode {
+            id: "n1".into(),
+            title: "开场".into(),
+            node_type: NodeType::Start,
+            scene_desc: String::new(),
+            dialogue: Vec::new(),
+            choices: vec![Choice {
+                id: "ch1".into(),
+                text: "走进书房".into(),
+                target_node_id: "n2".into(),
+                condition: None,
+                effects: Vec::new(),
+                weight: None,
+            }],
+            image_slot: None,
+            act: String::new(),
+            position: None,
+        }];
+        graph
+    }
+
+    #[test]
+    fn summarize_graph_lines_match_ts_shape() {
+        let graph = sample_graph();
+        let summary = summarize_story_graph(&graph);
+        assert!(summary.contains("# 互动影游：雪夜谜案"), "{summary}");
+        assert!(summary.contains("核心：雪夜谋杀 / 主题： / 题材：悬疑 / 规则： / 时长：30分"));
+        assert!(summary.contains("变量：信任度"));
+        assert!(summary.contains("- n1[start] 开场 -> 走进书房→n2"));
+    }
+
+    #[test]
+    fn authoring_context_appends_character_profiles() {
+        let graph = sample_graph();
+        let context = build_film_authoring_context(&graph);
+        assert!(context.contains("角色档案:"), "{context}");
+        assert!(context.contains("- 沈青（protagonist）动机：查明真相 口吻：短句"), "{context}");
+        // 摘要在前、角色档案在后（TS blocks 顺序）。
+        let summary_idx = context.find("# 互动影游").unwrap();
+        let chars_idx = context.find("角色档案:").unwrap();
+        assert!(summary_idx < chars_idx);
     }
 }
