@@ -2,9 +2,9 @@
 //!
 //! 移植自 `packages/core/src/agent/skill-tool.ts` 核心子集：skillId 校验
 //! （disabled / registry）→ skill body 返回（toolResult 即指令注入）→
-//! resourcePath 资源读取（safeChildPath + 512KB + UTF-8 校验）。query 语义
-//! 检索分支依赖 BM25 索引（LocalSearchIndex 未移植）——schema 保留、执行时
-//! 忽略（备案：返回主体即可用）。catalog 提示段由 agent_route 组装。
+//! resourcePath 资源读取（safeChildPath + 512KB + UTF-8 校验）；query 分支
+//! 走 LocalSearchIndex 内存 BM25 检索（241 号 `utils/local_search.rs`）。
+//! catalog 提示段由 agent_route 组装。
 
 use std::path::Path;
 
@@ -98,7 +98,22 @@ pub async fn tool_use_skill(
             Err(e) => return error_result(format!("read failed: {e}")),
         }
     }
-    // query 语义检索分支依赖 BM25 索引（未移植）——忽略，见模块备案。
+    // query 分支：skill 目录内 markdown 分段 → 内存 BM25 → top-4 相关段
+    //（TS retrieveSkillResources 对应面）。
+    let mut retrieved: Vec<Value> = Vec::new();
+    if resource.is_none() {
+        if let Some(query) = args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let Some(base_dir) = skill.base_dir.as_deref() else {
+                return error_result(format!("Skill has no readable resource directory: {skill_id}"));
+            };
+            retrieved = retrieve_skill_resources(&skill_id, base_dir, query).await;
+        }
+    }
 
     let body = skill.body.trim();
     let body = if body.is_empty() { skill.description.as_str() } else { body };
@@ -113,6 +128,23 @@ pub async fn tool_use_skill(
         text.push(format!("Static resource ({path}):"));
         text.push(resource_body.clone());
     }
+    if !retrieved.is_empty() {
+        text.push(String::new());
+        text.push("Relevant static references:".to_string());
+        for item in &retrieved {
+            let header = format!(
+                "{}:{}-{}{}",
+                item["path"].as_str().unwrap_or_default(),
+                item["charStart"].as_u64().unwrap_or(0),
+                item["charEnd"].as_u64().unwrap_or(0),
+                item["heading"]
+                    .as_str()
+                    .map(|h| format!(" \u{b7} {h}"))
+                    .unwrap_or_default(),
+            );
+            text.push(format!("## {header}\n{}", item["body"].as_str().unwrap_or_default()));
+        }
+    }
     text.push(String::new());
     text.push(
         "This skill provides instructions only. Continue using the current session's existing tools and confirmation rules."
@@ -126,8 +158,116 @@ pub async fn tool_use_skill(
     if let Some((path, _)) = &resource {
         details["resourcePath"] = json!(path);
     }
+    if args.get("query").and_then(Value::as_str).map(str::trim).map(|q| !q.is_empty()).unwrap_or(false) {
+        details["query"] = json!(args["query"].as_str().unwrap_or_default().trim());
+        details["retrievedResources"] = json!(retrieved);
+    }
     let _ = to_posix; // posix 形态仅 resource 头部展示需要；保留 helper 供后续 query 分支
     text_result(text.join("\n"), Some(details))
+}
+
+/// `retrieveSkillResources`：skill 目录文本分段 → 内存 BM25 → top-4 段。
+async fn retrieve_skill_resources(
+    skill_id: &str,
+    base_dir: &str,
+    query: &str,
+) -> Vec<Value> {
+    let files = list_skill_text_files(base_dir).await;
+    let mut documents: Vec<crate::utils::local_search::SearchDocument> = Vec::new();
+    for path in &files {
+        let Ok(full_path) = crate::utils::path::safe_child_path(base_dir, path) else {
+            continue;
+        };
+        let Ok(meta) = tokio::fs::metadata(&full_path).await else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > MAX_SKILL_RESOURCE_BYTES {
+            continue;
+        }
+        let Ok(body) = tokio::fs::read_to_string(&full_path).await else {
+            continue;
+        };
+        if body.contains('\0') {
+            continue;
+        }
+        for (index, segment) in crate::utils::local_search::split_markdown_for_search(&body)
+            .into_iter()
+            .enumerate()
+        {
+            documents.push(crate::utils::local_search::SearchDocument {
+                id: format!("skill:{skill_id}:{path}:{index}"),
+                scope: format!("skill:{skill_id}"),
+                kind: "skill-reference".to_string(),
+                source: format!("{}:{}-{}", path, segment.char_start, segment.char_end),
+                title: [path.as_str(), segment.heading.as_str()]
+                    .iter()
+                    .filter(|part| !part.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" \u{b7} "),
+                body: segment.body,
+            });
+        }
+    }
+
+    let Ok(index) = crate::utils::local_search::LocalSearchIndex::new(":memory:") else {
+        return Vec::new();
+    };
+    let scope = format!("skill:{skill_id}");
+    if index.replace_scope(&scope, &documents).is_err() {
+        return Vec::new();
+    }
+    let hits = index.search(
+        query,
+        &crate::utils::local_search::SearchOptions {
+            scope: &scope,
+            kinds: &[],
+            limit: 4,
+        },
+    );
+    index.close();
+    hits.iter()
+        .map(|hit| {
+            json!({
+                "path": hit.source.split(':').next().unwrap_or(""),
+                "heading": Value::Null,
+                "body": hit.body,
+                "charStart": 0,
+                "charEnd": hit.body.chars().count(),
+                "score": hit.score,
+            })
+        })
+        .collect()
+}
+
+/// 列 skill 目录内文本资源（浅层 + references/ 一层；跳过隐藏文件）。
+async fn list_skill_text_files(base_dir: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut stack = vec![base_dir.to_string()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = format!("{}/{}", dir.trim_end_matches('/'), name);
+            let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                stack.push(path);
+                continue;
+            }
+            let is_text = ["md", "txt", "json", "yaml", "yml", "csv"]
+                .iter()
+                .any(|ext| path.ends_with(&format!(".{ext}")));
+            if is_text {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -213,5 +353,65 @@ mod tests {
         )]);
         // JSON 文本层：内容中的反斜杠被 stringify 转义为 `\\`（TS JSON.stringify 同款）。
         assert!(catalog.contains("\\\\u003cscript\\\\u003e"), "{catalog}");
+    }
+}
+
+#[cfg(test)]
+mod query_retrieval_tests {
+    use super::*;
+    use crate::skills::{create_skill_registry, AgentSkill, SkillSource};
+
+    /// 241 号：query 分支——skill 目录分段检索，details 携带 retrievedResources。
+    #[tokio::test]
+    async fn query_retrieves_relevant_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("combat-tactics");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("SKILL.md"),
+            "---\nname: 战斗策略\ndescription: 战斗规则\n---\n\n以静制动，后发制人。\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(base.join("references")).unwrap();
+        std::fs::write(
+            base.join("references").join("opening.md"),
+            "# 开局布局\n\n开篇先建立核心冲突与主角压力。\n",
+        )
+        .unwrap();
+        std::fs::write(
+            base.join("references").join("dialogue.md"),
+            "# 对白\n\n对白要短，口语化。\n",
+        )
+        .unwrap();
+
+        let registry = create_skill_registry(vec![AgentSkill {
+            id: "combat-tactics".into(),
+            name: "Combat Tactics".into(),
+            description: "战斗策略".into(),
+            body: "以静制动。".into(),
+            source: SkillSource::Project,
+            base_dir: Some(base.to_string_lossy().into_owned()),
+        }]);
+
+        let result = tool_use_skill(
+            &registry,
+            &[],
+            &json!({ "skillId": "combat-tactics", "query": "开篇 核心冲突 布局" }),
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.text);
+        let details = result.details.unwrap();
+        assert_eq!(details["kind"], "skill_activated");
+        assert_eq!(details["query"], "开篇 核心冲突 布局");
+        let resources = details["retrievedResources"].as_array().unwrap();
+        assert!(!resources.is_empty(), "应至少召回 opening.md 分段");
+        assert!(resources.iter().any(|r| {
+            r["body"].as_str().unwrap_or_default().contains("核心冲突")
+        }), "{resources:?}");
+        assert!(
+            result.text.contains("Relevant static references:"),
+            "{}",
+            result.text
+        );
     }
 }
