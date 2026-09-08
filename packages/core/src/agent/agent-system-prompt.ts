@@ -604,6 +604,34 @@ ${commonOutputRules(true)}`
 ${commonOutputRules(false)}`;
 }
 
+/** Exported for the shared golden prompts test (engine golden_agent_prompts_diff). */
+export function buildGoldenPromptSnapshot(bookId: string): Record<string, string> {
+  const isZh = false;
+  const capture = (fn: () => string) => fn();
+  return {
+    "chat.zh": capture(() => buildChatPrompt(true)),
+    "chat.en": capture(() => buildChatPrompt(false)),
+    "book.zh": capture(() => buildBookPrompt(bookId, true)),
+    "book.en": capture(() => buildBookPrompt(bookId, false)),
+    "edit.bound.zh": capture(() => buildEditPrompt(bookId, true)),
+    "edit.bound.en": capture(() => buildEditPrompt(bookId, false)),
+    "edit.unbound.zh": capture(() => buildEditPrompt(null, true)),
+    "edit.unbound.en": capture(() => buildEditPrompt(null, false)),
+    "book-create.staging.zh": capture(() => buildBookCreatePrompt(true, false)),
+    "book-create.staging.en": capture(() => buildBookCreatePrompt(false, false)),
+    "short.clarify.zh": capture(() => buildShortPrompt(true, undefined)),
+    "short.clarify.en": capture(() => buildShortPrompt(false, undefined)),
+    "script.clarify.zh": capture(() => buildScriptPrompt(true, false)),
+    "script.clarify.en": capture(() => buildScriptPrompt(false, false)),
+    "storyboard.clarify.zh": capture(() => buildStoryboardPrompt(true, false)),
+    "storyboard.clarify.en": capture(() => buildStoryboardPrompt(false, false)),
+    "film.clarify.zh": capture(() => buildInteractiveFilmPrompt(true, false)),
+    "film.clarify.en": capture(() => buildInteractiveFilmPrompt(false, false)),
+    "play.no-world.zh": capture(() => buildPlayPrompt(true, false, false)),
+    "play.no-world.en": capture(() => buildPlayPrompt(false, false, false)),
+  };
+}
+
 export function buildAgentSystemPrompt(
   bookId: string | null,
   language: string,

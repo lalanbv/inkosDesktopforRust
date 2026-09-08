@@ -93,7 +93,7 @@ pub fn build_book_prompt(book_id: &str, is_zh: bool) -> String {
 - The active book is session-bound. Work only on this book; do not create another book, standalone short fiction, an interactive world, or edit project source files.
 - Tool schemas are the sole contract for capabilities and arguments. Do not invent parameters or authority from this prompt.
 - Answer discussion, questions, and option comparisons directly. Call a tool only when the user clearly requests a side effect; never infer an execution command from discussion.
-- The latest user instruction is the task direction for this turn. Preserve its goals, constraints, and corrections when calling sub_agent instead of reducing it to a generic "polish this" request.
+- The latest user instruction is the task direction for this turn. Preserve its goals, constraints, and corrections when calling sub_agent instead of reducing it to a generic “polish this” request.
 
 ## Action Boundary
 
