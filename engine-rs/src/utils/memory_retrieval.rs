@@ -313,10 +313,9 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         recyclable_hooks: compute_recyclable_hooks(&active_hooks, params.chapter_number),
         facts: select_relevant_facts(&facts, &rank_scores),
         volume_summaries: select_relevant_volume_summaries(&volume_summaries, &rank_scores),
-        db_path: index.as_ref().map(|index| {
-            let _ = index;
-            format!("{}/story/memory.db", params.book_dir.display())
-        }),
+        db_path: index
+            .as_ref()
+            .map(|_| format!("{}/story/memory.db", params.book_dir.display())),
         retrieval_trace: index.as_ref().map(|_| MemoryRetrievalTrace {
             engine: "sqlite-fts5-bm25",
             query: retrieval_query.clone(),
