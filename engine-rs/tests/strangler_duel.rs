@@ -231,9 +231,13 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> String {
     let repo = repo_root();
     let studio = repo.join("packages").join("studio");
     // 跳过 vite 前端自动构建：index.ts 以 dist/index.html 存在性判断。
+    // 252 号：仅在缺失时写占位——覆盖生产构建的 index.html 会让真实引擎
+    // 静态面 serve 出 duel 占位页（浏览器直连白屏）。
     std::fs::create_dir_all(studio.join("dist")).unwrap();
-    std::fs::write(studio.join("dist").join("index.html"), "<!doctype html><title>duel</title>")
-        .unwrap();
+    let index_path = studio.join("dist").join("index.html");
+    if !index_path.exists() {
+        std::fs::write(&index_path, "<!doctype html><title>duel</title>").unwrap();
+    }
     let mut command = std::process::Command::new(studio.join("node_modules").join(".bin").join("tsx"))
         .arg(studio.join("src").join("api").join("index.ts"))
         .arg(root)

@@ -449,6 +449,75 @@ pub struct StoryGraphDelta {
     pub notes: Vec<String>,
 }
 
+// ---- delta builders（TS authoring-tools.ts 逐字，252 号） ----
+
+pub fn build_world_anchor_delta(patch: WorldAnchorDelta) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: Some(patch),
+        characters: None,
+        nodes: None,
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    }
+}
+
+pub fn build_add_variable_delta(v: Variable) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: None,
+        variables: Some(UpsertRemove { upsert: vec![v], remove: Vec::new() }),
+        endings: None,
+        notes: Vec::new(),
+    }
+}
+
+pub fn build_define_ending_delta(e: Ending) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: None,
+        variables: None,
+        endings: Some(UpsertRemove { upsert: vec![e], remove: Vec::new() }),
+        notes: Vec::new(),
+    }
+}
+
+pub fn build_remove_node_delta(node_id: &str) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: Some(UpsertRemove { upsert: Vec::new(), remove: vec![node_id.to_string()] }),
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    }
+}
+
+pub fn build_connect_choice_delta(node: StoryNode) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: None,
+        characters: None,
+        nodes: Some(UpsertRemove { upsert: vec![node], remove: Vec::new() }),
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    }
+}
+
+pub fn build_upsert_characters_delta(chars: Vec<Character>) -> StoryGraphDelta {
+    StoryGraphDelta {
+        world_anchor: None,
+        characters: Some(UpsertRemove { upsert: chars, remove: Vec::new() }),
+        nodes: None,
+        variables: None,
+        endings: None,
+        notes: Vec::new(),
+    }
+}
+
+
 fn apply_upsert_remove<T>(
     current: &[T],
     ops: Option<&UpsertRemove<T>>,
@@ -1650,5 +1719,73 @@ mod tests {
         bad["schemaVersion"] = json!(3);
         tokio::fs::write(&raw, serde_json::to_string(&bad).unwrap()).await.unwrap();
         assert!(load_story_graph(root, "p1").await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod delta_builder_tests {
+    use super::*;
+
+    fn variable() -> Variable {
+        Variable {
+            name: "信任度".into(),
+            variable_type: VariableType::Counter,
+            default: serde_json::json!(0),
+            desc: String::new(),
+        }
+    }
+
+    fn ending() -> Ending {
+        Ending {
+            id: "e1".into(),
+            node_id: "n9".into(),
+            title: "真相大白".into(),
+            ending_type: EndingType::Good,
+            description: String::new(),
+        }
+    }
+
+    fn story_node() -> StoryNode {
+        StoryNode {
+            id: "n1".into(),
+            title: String::new(),
+            node_type: NodeType::Normal,
+            scene_desc: String::new(),
+            dialogue: Vec::new(),
+            choices: Vec::new(),
+            image_slot: None,
+            act: String::new(),
+            position: None,
+        }
+    }
+
+    /// 252 号：六类 delta builder 纯函数（TS authoring-tools.ts 逐字）。
+    #[test]
+    fn delta_builders_produce_single_segment_deltas() {
+        let wa = build_world_anchor_delta(WorldAnchorDelta {
+            story_core: Some("复仇".into()),
+            ..Default::default()
+        });
+        assert!(wa.world_anchor.is_some());
+        assert!(wa.nodes.is_none() && wa.variables.is_none() && wa.characters.is_none() && wa.endings.is_none());
+        assert!(wa.notes.is_empty());
+
+        let var_delta = build_add_variable_delta(variable());
+        assert_eq!(var_delta.variables.as_ref().unwrap().upsert.len(), 1);
+        assert!(var_delta.world_anchor.is_none());
+
+        let end_delta = build_define_ending_delta(ending());
+        assert_eq!(end_delta.endings.as_ref().unwrap().upsert.len(), 1);
+
+        let rm = build_remove_node_delta("n1");
+        assert_eq!(rm.nodes.as_ref().unwrap().remove, vec!["n1"]);
+        assert!(rm.nodes.as_ref().unwrap().upsert.is_empty());
+
+        let node = story_node();
+        let cc = build_connect_choice_delta(node);
+        assert_eq!(cc.nodes.as_ref().unwrap().upsert.len(), 1);
+
+        let chars_delta = build_upsert_characters_delta(Vec::new());
+        assert!(chars_delta.characters.as_ref().unwrap().upsert.is_empty());
     }
 }
