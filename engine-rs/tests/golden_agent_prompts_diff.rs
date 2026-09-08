@@ -37,6 +37,10 @@ fn chat_prompts_match_ts_snapshot() {
             "play.no-world" => {
                 inkos_engine::interaction::chat_prompts::build_play_prompt_no_world(is_zh)
             }
+            "play.world" => {
+                // 80 号：有世界态为专属 play 聊天提示词（自带 Output Rules 段）。
+                inkos_engine::interaction::play_tools::play_chat_system_prompt(!is_zh)
+            }
             other => panic!("未知 golden key: {other}"),
         };
         assert_eq!(got, expected.as_str().unwrap_or(""), "prompt '{key}' 漂移");

@@ -629,6 +629,8 @@ export function buildGoldenPromptSnapshot(bookId: string): Record<string, string
     "film.clarify.en": capture(() => buildInteractiveFilmPrompt(false, false)),
     "play.no-world.zh": capture(() => buildPlayPrompt(true, false, false)),
     "play.no-world.en": capture(() => buildPlayPrompt(false, false, false)),
+    "play.world.zh": capture(() => buildPlayPrompt(true, false, true)),
+    "play.world.en": capture(() => buildPlayPrompt(false, false, true)),
   };
 }
 
