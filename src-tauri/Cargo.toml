@@ -16,6 +16,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 # P2-2：窗口状态记忆（位置/尺寸/最大化，退出保存、启动恢复）。
 tauri-plugin-window-state = "2"
+# 222 号：单实例锁——双开会起第二个引擎对同一 project_root 双写（数据竞争）。
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["blocking", "stream", "json"] }
 tokio-stream = "0.1"

@@ -247,6 +247,16 @@ fn main() {
     };
 
     tauri::Builder::default()
+        // 222 号：单实例锁——必须最先注册。第二实例启动时立即退出，并把
+        // argv/clk 转交本回调（聚焦已有主窗口）；否则双开会起第二个引擎
+        // 对同一 project_root 双写（数据竞争）+ 端口漂移。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         // P2-2：main 窗口状态记忆（退出保存 bounds+maximized，启动恢复）。
