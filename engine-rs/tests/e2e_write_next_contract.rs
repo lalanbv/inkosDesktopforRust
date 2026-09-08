@@ -15507,17 +15507,13 @@ mod sub102_e2e {
         assert_eq!(parsed["aborted"], true, "body: {parsed}");
 
         let (status, parsed) = task.await.unwrap();
-        // 聊天面现行中止契约（66 号）：200 + 空回复占位 + 工具卡。
-        assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert_eq!(parsed["response"], "（无回复内容）");
-        let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
-        assert_eq!(execs.len(), 1);
-        let card = &execs[0];
-        assert_eq!(card["tool"], "import_chapters");
-        assert_eq!(card["status"], "error", "body: {parsed}");
-        assert_eq!(
-            card["error"], "Operation aborted: the user requested to stop this task."
-        );
+        // 217 号中止契约对齐 TS：abort → errorMessage → failure 分支——
+        // 500 AGENT_ERROR、response "aborted"、无工具卡；持久层写
+        // request_failed（中止轮不进会话历史）。
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_ERROR", "body: {parsed}");
+        assert_eq!(parsed["response"], "aborted");
+        assert!(parsed["details"]["toolExecutions"].as_array().map(Vec::is_empty).unwrap_or(true));
 
         // 章粒度安全点：第 1/2 章保留、第 3 章零落盘、索引两章、地基未动。
         assert!(book.join("chapters").join("0001_风起.md").is_file());

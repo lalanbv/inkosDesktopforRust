@@ -142,19 +142,178 @@ async fn maybe_broadcast_session_title(
     }
 }
 
-/// appendManualSessionMessages 等价：request_started → user → assistant →
-/// request_committed 四事件（65 号消费面：直通聊天轮持久化）。
-async fn append_chat_turn(    project_root: &std::path::Path,
+/// appendManualSessionMessages 等价：request_started → user →（工具轮：
+/// assistant(toolCall) + toolResult 逐对）→ assistant → request_committed。
+/// 217 号工具轮落盘——TS persistAgentEvent 逐消息持久化，此前 Rust 仅写
+/// 纯文本两消息，derive 恢复丢全部工具执行卡、历史工具摘要恒空。
+#[allow(clippy::too_many_lines)]
+async fn append_chat_turn(
+    project_root: &std::path::Path,
     session_id: &str,
     instruction: &str,
     response_text: &str,
+    tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
     session_kind: SessionKind,
 ) {
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = utc_now_ms();
     append_transcript_events(project_root, session_id, |_events, next_seq| {
-        let assistant_uuid = uuid::Uuid::new_v4().to_string();
         let user_uuid = uuid::Uuid::new_v4().to_string();
+        let mut seq = next_seq;
+        let mut out = vec![TranscriptEvent::RequestStarted {
+            version: 1,
+            session_id: session_id.to_string(),
+            seq,
+            timestamp: now,
+            request_id: request_id.clone(),
+            session_kind: Some(session_kind),
+            input: instruction.to_string(),
+        }];
+        seq += 1;
+        out.push(TranscriptEvent::Message {
+            version: 1,
+            session_id: session_id.to_string(),
+            request_id: request_id.clone(),
+            uuid: user_uuid.clone(),
+            parent_uuid: None,
+            seq,
+            timestamp: now,
+            role: "user".into(),
+            pi_turn_index: None,
+            tool_call_id: None,
+            source_tool_assistant_uuid: None,
+            legacy_display: None,
+            message: json!({ "role": "user", "content": instruction, "timestamp": now }),
+        });
+        let mut parent_uuid = Some(user_uuid);
+        seq += 1;
+        // 工具轮：每条执行写 assistant(toolCall) + toolResult 一对
+        //（TS pi-agent 消息流的还原兼容形态；derive 的 pending attach 链
+        // 与历史工具摘要都消费这两类消息）。
+        for execution in tool_executions {
+            let call_uuid = uuid::Uuid::new_v4().to_string();
+            let is_error = execution.status == "error";
+            let call_message = json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "toolCall",
+                    "id": execution.id,
+                    "name": execution.tool,
+                    "arguments": execution.args,
+                }],
+                "api": "openai-completions",
+                "provider": "inkos",
+                "model": "studio-agent",
+                "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+                           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
+                "stopReason": "toolUse",
+                "timestamp": execution.started_at,
+            });
+            out.push(TranscriptEvent::Message {
+                version: 1,
+                session_id: session_id.to_string(),
+                request_id: request_id.clone(),
+                uuid: call_uuid.clone(),
+                parent_uuid: parent_uuid.clone(),
+                seq,
+                timestamp: execution.started_at,
+                role: "assistant".into(),
+                pi_turn_index: None,
+                tool_call_id: None,
+                source_tool_assistant_uuid: None,
+                legacy_display: None,
+                message: call_message,
+            });
+            seq += 1;
+            let result_text = if is_error {
+                execution.error.clone().unwrap_or_else(|| "Tool execution failed".to_string())
+            } else {
+                execution.result.clone().unwrap_or_default()
+            };
+            let mut result_payload = json!({
+                "role": "toolResult",
+                "toolCallId": execution.id,
+                "toolName": execution.tool,
+                "content": [{ "type": "text", "text": result_text }],
+                "isError": is_error,
+                "timestamp": execution.completed_at,
+            });
+            if let (Some(details), false) = (&execution.details, is_error) {
+                result_payload
+                    .as_object_mut()
+                    .expect("object")
+                    .insert("details".into(), details.clone());
+            }
+            out.push(TranscriptEvent::Message {
+                version: 1,
+                session_id: session_id.to_string(),
+                request_id: request_id.clone(),
+                uuid: uuid::Uuid::new_v4().to_string(),
+                parent_uuid: Some(call_uuid.clone()),
+                seq,
+                timestamp: execution.completed_at.unwrap_or(execution.started_at),
+                role: "toolResult".into(),
+                pi_turn_index: None,
+                tool_call_id: Some(execution.id.clone()),
+                source_tool_assistant_uuid: Some(call_uuid),
+                legacy_display: None,
+                message: result_payload,
+            });
+            seq += 1;
+            parent_uuid = None;
+        }
+        let assistant_uuid = uuid::Uuid::new_v4().to_string();
+        out.push(TranscriptEvent::Message {
+            version: 1,
+            session_id: session_id.to_string(),
+            request_id: request_id.clone(),
+            uuid: assistant_uuid,
+            parent_uuid,
+            seq,
+            timestamp: now + 1,
+            role: "assistant".into(),
+            pi_turn_index: None,
+            tool_call_id: None,
+            source_tool_assistant_uuid: None,
+            legacy_display: None,
+            message: json!({
+                "role": "assistant",
+                "content": [{ "type": "text", "text": response_text }],
+                "api": "openai-completions",
+                "provider": "inkos",
+                "model": "studio-agent",
+                "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
+                           "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
+                "stopReason": "stop",
+                "timestamp": now + 1,
+            }),
+        });
+        seq += 1;
+        out.push(TranscriptEvent::RequestCommitted {
+            version: 1,
+            session_id: session_id.to_string(),
+            seq,
+            timestamp: now + 1,
+            request_id,
+        });
+        out
+    })
+    .await;
+}
+
+/// 失败轮持久化（217 号）：TS 失败轮写 request_started → user →
+/// request_failed（assistant 错误消息在 derive 还原时空文本被丢弃，此处
+/// 即等价形态）；此前 Rust 失败轮零落盘——刷新后用户消息消失。
+async fn append_failed_chat_turn(
+    project_root: &std::path::Path,
+    session_id: &str,
+    instruction: &str,
+    error: &str,
+    session_kind: SessionKind,
+) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = utc_now_ms();
+    append_transcript_events(project_root, session_id, |_events, next_seq| {
         vec![
             TranscriptEvent::RequestStarted {
                 version: 1,
@@ -169,7 +328,7 @@ async fn append_chat_turn(    project_root: &std::path::Path,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.clone(),
-                uuid: user_uuid.clone(),
+                uuid: uuid::Uuid::new_v4().to_string(),
                 parent_uuid: None,
                 seq: next_seq + 1,
                 timestamp: now,
@@ -180,37 +339,13 @@ async fn append_chat_turn(    project_root: &std::path::Path,
                 legacy_display: None,
                 message: json!({ "role": "user", "content": instruction, "timestamp": now }),
             },
-            TranscriptEvent::Message {
+            TranscriptEvent::RequestFailed {
                 version: 1,
                 session_id: session_id.to_string(),
-                request_id: request_id.clone(),
-                uuid: assistant_uuid,
-                parent_uuid: Some(user_uuid),
                 seq: next_seq + 2,
                 timestamp: now + 1,
-                role: "assistant".into(),
-                pi_turn_index: None,
-                tool_call_id: None,
-                source_tool_assistant_uuid: None,
-                legacy_display: None,
-                message: json!({
-                    "role": "assistant",
-                    "content": [{ "type": "text", "text": response_text }],
-                    "api": "openai-completions",
-                    "provider": "inkos",
-                    "model": "studio-agent",
-                    "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
-                               "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
-                    "stopReason": "stop",
-                    "timestamp": now + 1,
-                }),
-            },
-            TranscriptEvent::RequestCommitted {
-                version: 1,
-                session_id: session_id.to_string(),
-                seq: next_seq + 3,
-                timestamp: now + 1,
                 request_id,
+                error: error.to_string(),
             },
         ]
     })
@@ -842,20 +977,45 @@ pub async fn post_agent(
                 &bridge,
             )
             .await;
-            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions))
+            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted))
         })
         .await;
 
     running_agent_sessions().lock().unwrap().remove(session_id);
 
     match chat_result {
-        Ok((raw_text, tool_executions)) => {
+        Ok((raw_text, tool_executions, aborted)) => {
+            // 217 号：中止轮对齐 TS——request_failed 不进会话历史（此前写
+            // committed + "（无回复内容）" 占位，刷新后出现假回复）。
+            if aborted {
+                append_failed_chat_turn(root, session_id, instruction, "aborted", session_kind).await;
+                runtime.hub.broadcast(
+                    "agent:error",
+                    &json!({
+                        "instruction": instruction,
+                        "activeBookId": agent_book_id,
+                        "sessionId": session_id,
+                        "sessionKind": session_kind.as_str(),
+                        "error": "aborted",
+                    }),
+                );
+                // TS abort 轮：errorMessage → formatAgentFailure → unknown 类
+                // → 500 AGENT_ERROR（persist 面为 request_failed，同上）。
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": { "code": "AGENT_ERROR", "message": "aborted" },
+                        "response": "aborted",
+                    })),
+                )
+                    .into_response();
+            }
             let response_text = if raw_text.is_empty() {
                 "（无回复内容）".to_string()
             } else {
                 raw_text
             };
-            append_chat_turn(root, session_id, instruction, &response_text, session_kind).await;
+            append_chat_turn(root, session_id, instruction, &response_text, &tool_executions, session_kind).await;
             runtime.hub.broadcast(
                 "agent:complete",
                 &json!({
@@ -890,6 +1050,9 @@ pub async fn post_agent(
                 .into_response()
         }
         Err(error) => {
+            // 217 号：失败轮持久化（TS request_failed 语义）——user 消息
+            // 不再因 LLM 错误丢失。
+            append_failed_chat_turn(root, session_id, instruction, &error, session_kind).await;
             runtime.hub.broadcast(
                 "agent:error",
                 &json!({
@@ -1661,6 +1824,15 @@ mod payload_strict_tests {
     use super::validate_action_payload_strict;
     use serde_json::json;
 
+    use crate::interaction::session::SessionKind;
+    use crate::interaction::session_transcript::TranscriptEvent;
+    use crate::llm::provider::LLMRole;
+    use serde_json::Value;
+
+    use super::append_chat_turn;
+    use super::append_failed_chat_turn;
+
+
     #[test]
     fn top_level_strict_and_domain_strict() {
         assert!(validate_action_payload_strict(&json!({})).is_ok());
@@ -1717,5 +1889,104 @@ mod payload_strict_tests {
             "shortRun": { "charsPerChapter": 700 }
         }))
         .is_ok());
+    }
+
+    /// 217 号：聊天轮工具执行落盘 → derive 恢复工具卡 + restore 产生
+    /// 历史工具摘要（修复前：工具消息不落盘，恢复面全空）。
+    #[tokio::test]
+    async fn chat_turn_persists_tool_executions_for_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        append_chat_turn(
+            &root,
+            "sess-tools",
+            "帮我把第三章的「林动」改成「林铜」",
+            "已替换。",
+            &[crate::interaction::agent_loop::LoopToolExecution {
+                id: "call-1".into(),
+                tool: "patch_chapter_text".into(),
+                args: json!({ "chapterNumber": 3, "targetText": "林动", "replacementText": "林铜" }),
+                status: "completed",
+                result: Some("已替换 12 处。".into()),
+                error: None,
+                details: Some(json!({ "kind": "chapter_local_edit" })),
+                started_at: 1_000,
+                completed_at: Some(1_500),
+            }],
+            SessionKind::Book,
+        )
+        .await;
+
+        // derive：工具执行卡挂到 assistant 消息（pending attach 链）。
+        let session = crate::interaction::session_restore::derive_book_session_from_transcript(
+            &root,
+            "sess-tools",
+        )
+        .await
+        .expect("session");
+        let tool_cards: Vec<&Value> = session
+            .messages
+            .iter()
+            .filter(|m| m.get("toolExecutions").map(Value::is_array).unwrap_or(false))
+            .collect();
+        assert_eq!(tool_cards.len(), 1, "messages: {}", serde_json::to_string(&session.messages).unwrap());
+        let card = &tool_cards[0]["toolExecutions"][0];
+        assert_eq!(card["tool"], "patch_chapter_text");
+        assert_eq!(card["status"], "completed");
+        assert_eq!(card["label"], "patch_chapter_text");
+        assert_eq!(card["result"], "已替换 12 处。");
+        assert_eq!(card["args"]["chapterNumber"], 3);
+        // 最终文本消息在后（条目顺序：工具卡消息 → 文本消息）。
+        assert_eq!(session.messages.last().unwrap()["content"], "已替换。");
+
+        // restore：历史工具摘要（最近 8 条格式行）。
+        let restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+            &root,
+            "sess-tools",
+            Some("book"),
+        )
+        .await;
+        let summary = restored
+            .iter()
+            .find(|m| m.role == LLMRole::System)
+            .expect("历史工具摘要");
+        assert!(summary.content.contains("[历史状态摘要]"), "{}", summary.content);
+        assert!(
+            summary.content.contains("- patch_chapter_text completed — 已替换 12 处。"),
+            "{}",
+            summary.content
+        );
+        // 带 kind 的工具活动轮不回放任何原文消息（TS 同构：仅 legacy 无
+        // kind 轮保留 user 原话）——历史语义已折叠进摘要。
+        assert_eq!(restored.len(), 1, "仅摘要: {restored:?}");
+        assert!(restored[0].content.contains("[历史状态摘要]"));
+    }
+
+    /// 217 号：失败轮持久化——request_failed + user 消息保留；derive 不含
+    /// 未提交轮的 assistant 内容（恢复语义与 TS 一致）。
+    #[tokio::test]
+    async fn failed_chat_turn_persists_user_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        append_failed_chat_turn(
+            &root,
+            "sess-fail",
+            "继续写第四章",
+            "LLM unreachable",
+            SessionKind::Chat,
+        )
+        .await;
+
+        let events = crate::interaction::session_transcript::read_transcript_events(&root, "sess-fail").await;
+        assert!(events.iter().any(|e| matches!(e, TranscriptEvent::RequestFailed { error, .. } if error == "LLM unreachable")));
+        let session = crate::interaction::session_restore::derive_book_session_from_transcript(&root, "sess-fail")
+            .await
+            .expect("session");
+        // 未提交轮不产生消息（committedMessageEvents 过滤）。
+        assert!(session.messages.is_empty(), "{}", serde_json::to_string(&session.messages).unwrap());
+        // restore：无 committed 消息 → 空历史（边界消息由调用方追加）。
+        let restored =
+            crate::interaction::session_restore::restore_agent_messages_from_transcript(&root, "sess-fail", None).await;
+        assert!(restored.is_empty());
     }
 }
