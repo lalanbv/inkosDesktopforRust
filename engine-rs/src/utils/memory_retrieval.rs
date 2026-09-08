@@ -1219,6 +1219,18 @@ mod tests {
         // markdown 路径：hooks 来自 pending_hooks.md，resolved 被滤出活跃集；
         // H01 pressured 沉默 7 章 ≥ 5 → 进入回收集。
         assert_eq!(selection.active_hooks.len(), 1);
+        // 247 号：检索溯源可观测（engine/query/候选含 chapter-summary）。
+        let trace = selection.retrieval_trace.as_ref().expect("retrieval_trace");
+        assert_eq!(trace.engine, "sqlite-fts5-bm25");
+        assert!(trace.query.contains("推进祖符线"), "{}", trace.query);
+        assert!(
+            trace
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id == "summary:7"),
+            "{:?}",
+            trace.candidates
+        );
         assert_eq!(selection.active_hooks[0].hook_id, "H01");
         assert_eq!(selection.active_hooks[0].status_raw, "pressured");
         assert_eq!(selection.recyclable_hooks.len(), 1);
