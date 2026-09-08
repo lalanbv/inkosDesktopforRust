@@ -52,9 +52,21 @@ pub(crate) async fn load_raw_config(root: &std::path::Path) -> Option<Value> {
 }
 
 /// 写 inkos.json（2 空格缩进无尾换行，对齐 `JSON.stringify(raw, null, 2)`）。
+/// 221 号：升级原子替换写（同目录 temp + rename，199 号 books 直写面同款）——
+/// 崩溃/掉电不再可能把配置截断成半份 JSON；rename 后 mtime 变化即触发
+/// effective_router 缓存重建（热更新联动不变）。旧文件在写失败时保留。
 pub(crate) async fn save_raw_config(root: &std::path::Path, raw: &Value) -> bool {
     let serialized = serde_json::to_string_pretty(raw).unwrap_or_default();
-    tokio::fs::write(root.join("inkos.json"), serialized).await.is_ok()
+    let path = root.join("inkos.json");
+    let temp = root.join(format!("inkos.json.tmp-{}", uuid::Uuid::new_v4()));
+    if tokio::fs::write(&temp, serialized).await.is_err() {
+        return false;
+    }
+    if tokio::fs::rename(&temp, &path).await.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return false;
+    }
+    true
 }
 
 /// 简化 URL 校验（zod `z.string().url()`）：scheme 字母开头 + `://` + 非空余部。

@@ -228,7 +228,54 @@ pub fn save_secrets(project_root: &Path, secrets: &SecretsFile) -> std::io::Resu
     let dir = project_root.join(SECRETS_DIR);
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(secrets).unwrap_or_else(|_| "{}".into());
-    std::fs::write(dir.join(SECRETS_FILE), format!("{json}\n"))
+    // 221 号：原子替换写（temp + rename）——API key 存储截断的代价是密钥
+    // 丢失，比普通配置更高；与 inkos.json 原子写（同批）一致。
+    let path = dir.join(SECRETS_FILE);
+    let temp = dir.join(format!("{SECRETS_FILE}.tmp-{}", uuid::Uuid::new_v4()));
+    let write = || -> std::io::Result<()> {
+        std::fs::write(&temp, format!("{json}\n"))?;
+        std::fs::rename(&temp, &path)
+    };
+    match write() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod atomicity_tests {
+    use super::*;
+
+    /// 221 号：secrets 原子写——成功后无 temp 残留、往返内容一致；失败
+    /// （目录不存在时的 rename 场景不可注入，改验残留清理路径）时旧文件保留。
+    #[test]
+    fn save_secrets_atomic_no_tmp_leftover() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut services = std::collections::HashMap::new();
+        services.insert("svc".to_string(), ServiceSecret { api_key: "k-1".into() });
+        let mut secrets = SecretsFile { services };
+        save_secrets(root, &secrets).unwrap();
+
+        let secrets_dir = root.join(SECRETS_DIR);
+        let entries: Vec<_> = std::fs::read_dir(&secrets_dir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "仅 secrets.json，无 temp 残留");
+        assert!(entries[0].as_ref().unwrap().file_name().to_string_lossy().ends_with(".json"));
+
+        let loaded = load_secrets(root).unwrap();
+        assert_eq!(loaded.services.get("svc").map(|s| s.api_key.clone()), Some("k-1".to_string()));
+
+        // 二次写（覆盖路径）：仍然原子、无残留。
+        secrets.services.insert("svc".to_string(), ServiceSecret { api_key: "k-2".into() });
+        save_secrets(root, &secrets).unwrap();
+        let count = std::fs::read_dir(&secrets_dir).unwrap().count();
+        assert_eq!(count, 1);
+        let loaded = load_secrets(root).unwrap();
+        assert_eq!(loaded.services.get("svc").map(|s| s.api_key.clone()), Some("k-2".to_string()));
+    }
 }
 
 #[cfg(test)]
