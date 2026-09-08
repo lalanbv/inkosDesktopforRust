@@ -12594,6 +12594,92 @@ mod details86_e2e {
         );
     }
 
+    /// 246 号：book-create staging 会话 + 231 号建书助手提示词 + propose_action
+    /// 注册的组合验证——提示词注入正确（system 含「建书助手」）且确认卡
+    /// targetSessionKind/sameSession 正确（同会话升级为 book-create 生产）。
+    #[tokio::test]
+    async fn book_create_staging_prompt_and_propose_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let system_captured = Arc::new(Mutex::new(Vec::<String>::new()));
+        let system_in = system_captured.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let system_in = system_in.clone();
+                async move {
+                    let messages = body["messages"].as_array().cloned().unwrap_or_default();
+                    if let Some(first) = messages.first() {
+                        let content = first["content"].as_str().unwrap_or("").to_string();
+                        system_in.lock().unwrap().push(content.chars().take(40).collect());
+                    }
+                    let last_user = messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let payload = if last_user.contains("建书") {
+                        serde_json::json!({ "choices": [{ "delta": { "tool_calls": [
+                            { "index": 0, "id": "call_bc1", "function": { "name": "propose_action", "arguments": "{\"action\":\"create_book\",\"instruction\":\"写一本《雪夜谜案》。\",\"title\":\"雪夜谜案\",\"createBook\":{\"title\":\"雪夜谜案\",\"genre\":\"悬疑\",\"platform\":\"tomato\"}}" } },
+                        ] } }] })
+                    } else {
+                        serde_json::json!({ "choices": [{ "delta": { "content": "PASS" } }] })
+                    };
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {payload}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let llm = format!("http://{addr}");
+
+        let session_id = "1783006000002-bcs";
+        let runtime = rt86(&root, &llm);
+        let app = app86(runtime);
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(
+                r#"{{"sessionId":"{session_id}","sessionKind":"book-create"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(
+                r#"{{"instruction":"帮我建书雪夜谜案","sessionId":"{session_id}"}}"#
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // 231 号提示词注入：system 首段含「建书助手」。
+        let systems = system_captured.lock().unwrap().clone();
+        assert!(
+            systems.iter().any(|s| s.contains("建书助手")),
+            "system 应为建书助手提示词: {systems:?}"
+        );
+        // 确认卡：book-create 会话 sameSession=true（TS sessionKind != chat）。
+        let card = &parsed["details"]["toolExecutions"][0];
+        assert_eq!(card["tool"], "propose_action");
+        let details = &card["details"];
+        assert_eq!(details["kind"], "proposed_action");
+        assert_eq!(details["action"], "create_book");
+        assert_eq!(details["targetSessionKind"], "book-create");
+        assert_eq!(details["sameSession"], true);
+    }
+
     #[tokio::test]
     async fn play_step_card_details_surface_graph_and_state() {
         let dir = tempfile::tempdir().unwrap();
