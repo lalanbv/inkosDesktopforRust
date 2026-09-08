@@ -6340,8 +6340,9 @@ mod agent65_e2e {
             )),
         )
         .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "AGENT_SESSION_FAILED");
+        // 218 号：LLM 不可达 → llm 类 → 502 AGENT_LLM_ERROR（TS formatAgentFailure 同构）。
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "AGENT_LLM_ERROR");
         assert!(parsed["response"].is_string());
     }
 }

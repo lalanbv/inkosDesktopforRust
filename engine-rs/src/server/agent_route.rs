@@ -1070,11 +1070,17 @@ pub async fn post_agent(
                 title_before_run.as_deref(),
             )
             .await;
+            // 218 号：错误码面对齐 TS formatAgentFailure——busy → 409
+            // BOOK_BUSY；llm → 502 AGENT_LLM_ERROR；internal → 500
+            // AGENT_INTERNAL_ERROR（改写文案）；unknown → 500 AGENT_ERROR
+            //（此前恒 500 AGENT_SESSION_FAILED）。
+            let (status, code, message) =
+                crate::server::agent_production::format_agent_failure(&error, surface_language);
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                status,
                 Json(json!({
-                    "error": { "code": "AGENT_SESSION_FAILED", "message": error },
-                    "response": "Agent 会话执行失败。",
+                    "error": { "code": code, "message": message },
+                    "response": message,
                 })),
             )
                 .into_response()

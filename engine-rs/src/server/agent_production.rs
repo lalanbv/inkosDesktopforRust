@@ -742,7 +742,7 @@ fn suppress_manual_text_for_tool(tool: &str) -> bool {
     )
 }
 
-// ── 失败分类（classifyAgentFailure / formatAgentActionFailure） ──
+// ── 失败分类（classifyAgentFailure / formatAgentFailure / formatAgentActionFailure） ──
 
 fn agent_failure_busy_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -750,6 +750,67 @@ fn agent_failure_busy_re() -> &'static regex::Regex {
         regex::Regex::new(r"(?i)BookWriteLockError|locked by an active InkOS write|BOOK_BUSY")
             .unwrap()
     })
+}
+
+fn agent_failure_llm_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // TS 正则收录 Node fetch 词汇（fetch failed/ECONNREFUSED 等）；本侧
+        // 传输层为 reqwest，补 205 号 TRANSIENT_TRANSPORT_PHRASES 同款短语
+        //（error sending request 等）——分类意图等价：上游/传输错误 → llm。
+        regex::Regex::new(
+            r"(?i)API\s*返回|上游|upstream|Bad Gateway|temporarily unavailable|rate limit|quota|API Key|unauthorized|forbidden|无法连接到 API|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|LLM returned empty response|Provider finish_reason|reasoning_content|error sending request|operation timed out|connection reset|connection closed|broken pipe|socket hang up",
+        )
+        .unwrap()
+    })
+}
+
+fn agent_failure_internal_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)PlannerParseError|Architect output missing|required sections|missing YAML frontmatter|frontmatter delimiters|parseMemo|Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|RUNTIME_STATE_DELTA|JSON parse|解析失败",
+        )
+        .unwrap()
+    })
+}
+
+/// `classifyAgentFailure`：busy → llm → internal → unknown 顺序判定（逐字正则）。
+pub fn classify_agent_failure(message: &str) -> &'static str {
+    let text = message.trim();
+    if text.is_empty() {
+        return "unknown";
+    }
+    if agent_failure_busy_re().is_match(text) {
+        return "busy";
+    }
+    if agent_failure_llm_re().is_match(text) {
+        return "llm";
+    }
+    if agent_failure_internal_re().is_match(text) {
+        return "internal";
+    }
+    "unknown"
+}
+
+/// `formatAgentFailure`（聊天/全功能面）：busy → 409 BOOK_BUSY；llm →
+/// 502 AGENT_LLM_ERROR；internal → 500 AGENT_INTERNAL_ERROR（文案改写）；
+/// unknown → 500 AGENT_ERROR。
+pub fn format_agent_failure(message: &str, lang: &str) -> (StatusCode, &'static str, String) {
+    let text = message.trim();
+    match classify_agent_failure(text) {
+        "busy" => (StatusCode::CONFLICT, "BOOK_BUSY", message.to_string()),
+        "llm" => (StatusCode::BAD_GATEWAY, "AGENT_LLM_ERROR", message.to_string()),
+        "internal" => {
+            let rewritten = if lang == "en" {
+                format!("InkOS internal pipeline error: {text}")
+            } else {
+                format!("InkOS 内部流程错误：{text}")
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_INTERNAL_ERROR", rewritten)
+        }
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_ERROR", message.to_string()),
+    }
 }
 
 /// `formatAgentActionFailure`：busy → 409 BOOK_BUSY；其余一律 502
@@ -3562,6 +3623,58 @@ mod tests {
         let (status, code, message) = format_agent_action_failure("确认建书缺少书名，请重新生成确认卡。");
         assert_eq!((status, code), (StatusCode::BAD_GATEWAY, "AGENT_ACTION_FAILED"));
         assert_eq!(message, "确认建书缺少书名，请重新生成确认卡。");
+    }
+
+    #[test]
+    fn agent_failure_classification_matches_ts() {
+        // 218 号：classifyAgentFailure 四类逐字正则对照。
+        assert_eq!(classify_agent_failure(""), "unknown");
+        assert_eq!(classify_agent_failure("   "), "unknown");
+        // busy。
+        assert_eq!(classify_agent_failure("BookWriteLockError: locked"), "busy");
+        assert_eq!(classify_agent_failure("书籍被锁定 by an active InkOS write"), "unknown");
+        assert_eq!(classify_agent_failure("当前书籍 BOOK_BUSY"), "busy");
+        // llm（含中文短语与大小写不敏感）。
+        assert_eq!(classify_agent_failure("上游 API 返回 502"), "llm");
+        assert_eq!(classify_agent_failure("LLM returned empty response"), "llm");
+        assert_eq!(classify_agent_failure("request failed: ECONNREFUSED"), "llm");
+        assert_eq!(classify_agent_failure("无法连接到 API：连接超时"), "llm");
+        assert_eq!(classify_agent_failure("provider quota exceeded"), "llm");
+        // Rust 传输层词汇（reqwest）——205 号词表补录。
+        assert_eq!(classify_agent_failure("error sending request for url"), "llm");
+        assert_eq!(classify_agent_failure("operation timed out"), "llm");
+        assert_eq!(classify_agent_failure("missing reasoning_content block"), "llm");
+        // internal。
+        assert_eq!(classify_agent_failure("PlannerParseError: bad yaml"), "internal");
+        assert_eq!(classify_agent_failure("RUNTIME_STATE_DELTA 解析失败"), "internal");
+        assert_eq!(classify_agent_failure("sub_agent: writer failed"), "internal");
+        assert_eq!(classify_agent_failure("工具执行失败：超长"), "internal");
+        // unknown。
+        assert_eq!(classify_agent_failure("something exploded"), "unknown");
+        // 优先级：busy 先于 llm。
+        assert_eq!(classify_agent_failure("BOOK_BUSY rate limit"), "busy");
+    }
+
+    #[test]
+    fn format_agent_failure_maps_status_and_code() {
+        // busy → 409 BOOK_BUSY。
+        let (status, code, message) = format_agent_failure("BookWriteLockError", "zh");
+        assert_eq!((status, code, message.as_str()), (StatusCode::CONFLICT, "BOOK_BUSY", "BookWriteLockError"));
+        // llm → 502 AGENT_LLM_ERROR（消息原文）。
+        let (status, code, message) = format_agent_failure("无法连接到 API", "zh");
+        assert_eq!((status, code), (StatusCode::BAD_GATEWAY, "AGENT_LLM_ERROR"));
+        assert_eq!(message, "无法连接到 API");
+        // internal → 500 AGENT_INTERNAL_ERROR + 双语改写。
+        let (status, code, message) = format_agent_failure("RUNTIME_STATE_DELTA 解析失败", "zh");
+        assert_eq!((status, code), (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_INTERNAL_ERROR"));
+        assert_eq!(message, "InkOS 内部流程错误：RUNTIME_STATE_DELTA 解析失败");
+        let (status, code, message) = format_agent_failure("RUNTIME_STATE_DELTA 解析失败", "en");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(code, "AGENT_INTERNAL_ERROR");
+        assert_eq!(message, "InkOS internal pipeline error: RUNTIME_STATE_DELTA 解析失败");
+        // unknown → 500 AGENT_ERROR。
+        let (status, code, message) = format_agent_failure("something exploded", "en");
+        assert_eq!((status, code, message.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_ERROR", "something exploded"));
     }
 
     #[test]
