@@ -29,4 +29,5 @@ pub mod research_tool;
 pub mod sub_agent_tool;
 pub mod session;
 pub mod session_restore;
+pub mod skill_tool;
 pub mod session_transcript;

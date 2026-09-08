@@ -1,0 +1,217 @@
+//! `use_skill` 运行时工具（240 号）。
+//!
+//! 移植自 `packages/core/src/agent/skill-tool.ts` 核心子集：skillId 校验
+//! （disabled / registry）→ skill body 返回（toolResult 即指令注入）→
+//! resourcePath 资源读取（safeChildPath + 512KB + UTF-8 校验）。query 语义
+//! 检索分支依赖 BM25 索引（LocalSearchIndex 未移植）——schema 保留、执行时
+//! 忽略（备案：返回主体即可用）。catalog 提示段由 agent_route 组装。
+
+use std::path::Path;
+
+use serde_json::{json, Value};
+
+use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::skills::{normalize_skill_id_strict, SkillRegistry};
+
+/// 与 TS `MAX_SKILL_RESOURCE_BYTES` 一致。
+const MAX_SKILL_RESOURCE_BYTES: u64 = 512 * 1024;
+
+/// `use_skill` schema（UseSkillParams 逐字）。
+pub fn use_skill_schema() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": "Load one available professional skill because the current user intent needs it. This only loads instructions and static references; it grants no tools or execution permissions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skillId": { "type": "string", "description": "Exact skill id from the available skill catalog." },
+                    "resourcePath": { "type": "string", "description": "Optional relative text resource inside the skill folder, after the main skill has been activated." },
+                    "query": { "type": "string", "description": "Natural-language query for retrieving relevant sections from this skill's references. Prefer this when the exact resource path is unknown." },
+                },
+                "required": ["skillId"],
+            },
+        },
+    })
+}
+
+/// TS `toPosixPath`。
+fn to_posix(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// 工具执行。`registry` 由装配方按项目加载；`disabled` 为会话禁用集。
+pub async fn tool_use_skill(
+    registry: &dyn SkillRegistry,
+    disabled: &[String],
+    args: &Value,
+) -> ToolResult {
+    let Some(raw_id) = args.get("skillId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else {
+        return error_result("use_skill requires skillId.");
+    };
+    let Ok(skill_id) = normalize_skill_id_strict(raw_id) else {
+        return error_result(format!("Skill is not available: {raw_id}"));
+    };
+    if disabled.iter().any(|d| d.eq_ignore_ascii_case(&skill_id)) {
+        return error_result(format!("Skill is disabled: {skill_id}"));
+    }
+    let Some(skill) = registry.get_skill(&skill_id) else {
+        return error_result(format!("Skill is not available: {skill_id}"));
+    };
+
+    // resourcePath 分支：skill 目录内的静态文本资源。
+    let mut resource: Option<(String, String)> = None;
+    if let Some(resource_path) = args
+        .get("resourcePath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let Some(base_dir) = skill.base_dir.as_deref() else {
+            return error_result(format!("Skill has no readable resource directory: {skill_id}"));
+        };
+        let full_path = match crate::utils::path::safe_child_path(base_dir, resource_path) {
+            Ok(path) => path,
+            Err(message) => return error_result(message),
+        };
+        let Ok(meta) = tokio::fs::metadata(&full_path).await else {
+            return error_result(format!("Skill resource is not a file: {resource_path}"));
+        };
+        if !meta.is_file() {
+            return error_result(format!("Skill resource is not a file: {resource_path}"));
+        }
+        if meta.len() > MAX_SKILL_RESOURCE_BYTES {
+            return error_result(format!(
+                "Skill resource is too large to load: {resource_path}"
+            ));
+        }
+        match tokio::fs::read_to_string(&full_path).await {
+            Ok(body) if !body.contains('\0') => {
+                resource = Some((resource_path.to_string(), body));
+            }
+            Ok(_) => {
+                return error_result(format!(
+                    "Skill resource is not UTF-8 text: {resource_path}"
+                ));
+            }
+            Err(e) => return error_result(format!("read failed: {e}")),
+        }
+    }
+    // query 语义检索分支依赖 BM25 索引（未移植）——忽略，见模块备案。
+
+    let body = skill.body.trim();
+    let body = if body.is_empty() { skill.description.as_str() } else { body };
+    let mut text = vec![
+        format!("Skill activated: {}", skill.id),
+        format!("Purpose: {}", skill.description),
+        String::new(),
+        body.to_string(),
+    ];
+    if let Some((path, resource_body)) = &resource {
+        text.push(String::new());
+        text.push(format!("Static resource ({path}):"));
+        text.push(resource_body.clone());
+    }
+    text.push(String::new());
+    text.push(
+        "This skill provides instructions only. Continue using the current session's existing tools and confirmation rules."
+            .to_string(),
+    );
+
+    let mut details = json!({
+        "kind": "skill_activated",
+        "skillId": skill.id,
+    });
+    if let Some((path, _)) = &resource {
+        details["resourcePath"] = json!(path);
+    }
+    let _ = to_posix; // posix 形态仅 resource 头部展示需要；保留 helper 供后续 query 分支
+    text_result(text.join("\n"), Some(details))
+}
+
+fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
+    ToolResult { text: text.into(), details, is_error: false }
+}
+
+/// TS `serializeSkillCatalog`：目录 JSON（`<`/`>` 转义防提示注入）。
+pub fn serialize_skill_catalog(skills: &[(String, String, String)]) -> String {
+    let entries: Vec<Value> = skills
+        .iter()
+        .map(|(id, name, description)| {
+            json!({
+                "id": id.replace('<', "\\u003c").replace('>', "\\u003e"),
+                "name": name.replace('<', "\\u003c").replace('>', "\\u003e"),
+                "description": description.replace('<', "\\u003c").replace('>', "\\u003e"),
+            })
+        })
+        .collect();
+    serde_json::to_string(&entries).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::{create_skill_registry, AgentSkill, SkillSource};
+
+    fn registry() -> impl SkillRegistry {
+        create_skill_registry(vec![AgentSkill {
+            id: "combat-tactics".into(),
+            name: "Combat Tactics".into(),
+            description: "战斗策略".into(),
+            body: "## 规则\n\n以静制动。".into(),
+            source: SkillSource::Project,
+            base_dir: None,
+        }])
+    }
+
+    #[test]
+    fn schema_shape_matches_ts_params() {
+        let schema = use_skill_schema();
+        assert_eq!(schema["function"]["name"], "use_skill");
+        assert_eq!(
+            schema["function"]["parameters"]["required"],
+            json!(["skillId"])
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_returns_body_and_details() {
+        let registry = registry();
+        let result = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
+        assert!(!result.is_error);
+        assert!(result.text.contains("Skill activated: combat-tactics"), "{}", result.text);
+        assert!(result.text.contains("Purpose: 战斗策略"));
+        assert!(result.text.contains("以静制动"));
+        assert!(result.text.contains("This skill provides instructions only."));
+        assert_eq!(result.details.as_ref().unwrap()["kind"], "skill_activated");
+        assert_eq!(result.details.as_ref().unwrap()["skillId"], "combat-tactics");
+    }
+
+    #[tokio::test]
+    async fn disabled_and_missing_faces() {
+        let registry = registry();
+        let result = tool_use_skill(
+            &registry,
+            &["combat-tactics".to_string()],
+            &json!({ "skillId": "combat-tactics" }),
+        )
+        .await;
+        assert_eq!(result.text, "Skill is disabled: combat-tactics");
+        let result = tool_use_skill(&registry, &[], &json!({ "skillId": "nope" })).await;
+        assert_eq!(result.text, "Skill is not available: nope");
+        let result = tool_use_skill(&registry, &[], &json!({})).await;
+        assert_eq!(result.text, "use_skill requires skillId.");
+    }
+
+    #[test]
+    fn catalog_escapes_angle_brackets() {
+        let catalog = serialize_skill_catalog(&[(
+            "x".into(),
+            "<script>".into(),
+            "desc".into(),
+        )]);
+        // JSON 文本层：内容中的反斜杠被 stringify 转义为 `\\`（TS JSON.stringify 同款）。
+        assert!(catalog.contains("\\\\u003cscript\\\\u003e"), "{catalog}");
+    }
+}
