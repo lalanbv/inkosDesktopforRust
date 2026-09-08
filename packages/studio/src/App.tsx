@@ -487,7 +487,7 @@ export function App() {
             activeSection={activeSection}
             onSelectSection={setActiveNavSection}
             t={t}
-            lang={currentLang}
+            lang={currentLang === "ja" ? "en" : currentLang}
           />
           <SidePanel nav={nav} activePage={activePage} sse={sse} t={t} zone={activeSection} visible={sidePanelVisible} />
         </>
@@ -787,7 +787,7 @@ export function App() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         ctx={commandCtx}
-        lang={currentLang}
+        lang={currentLang === "ja" ? "en" : currentLang}
       />
 
       {/* P2-6 快捷键速查（⌘/）：与快捷键注册表同源生成 */}
@@ -795,7 +795,7 @@ export function App() {
         open={cheatSheetOpen}
         onOpenChange={setCheatSheetOpen}
         defs={HOTKEY_DEFS}
-        lang={currentLang}
+        lang={currentLang === "ja" ? "en" : currentLang}
         isMac={isMacPlatform}
       />
 

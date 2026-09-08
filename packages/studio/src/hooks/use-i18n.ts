@@ -1,6 +1,10 @@
 import { useApi } from "./use-api";
 
-type Lang = "zh" | "en";
+// 219 号：ja 基础设施——Lang 扩展三态，ja 经补充表命中、缺失回退 en。
+// 注意：project.language 在产品语义上兼任「创作语言」（zh/en 驱动引擎写作
+// 与首启选择器）；"ja" 目前仅为界面语言（引擎 WritingLanguage 仍 zh/en，
+// 创作语言 ja 属引擎级工程，见 219 号缺口分析）。
+type Lang = "zh" | "en" | "ja";
 
 const strings = {
   // Header
@@ -515,12 +519,69 @@ const strings = {
 export type StringKey = keyof typeof strings;
 export type TFunction = (key: StringKey) => string;
 
+// ja 补充表（219 号：高频面先行，全量补齐见缺口分析）。缺失 key 回退 en。
+const JA_STRINGS: Partial<Record<StringKey, string>> = {
+  "nav.books": "作品",
+  "nav.newBook": "新しい本",
+  "nav.createSection": "創作を始める",
+  "nav.myBooks": "マイワーク",
+  "nav.config": "モデル設定",
+  "nav.projectSettings": "プロジェクト設定",
+  "nav.connected": "接続済み",
+  "nav.disconnected": "未接続",
+  "nav.system": "システム",
+  "nav.logs": "ログ",
+  "nav.running": "実行中",
+  "nav.tools": "ツール",
+  "nav.history": "セッション履歴",
+  "nav.import": "インポート",
+  "nav.doctor": "環境診断",
+  "common.save": "保存",
+  "common.cancel": "キャンセル",
+  "common.delete": "削除",
+  "common.edit": "編集",
+  "common.error": "エラー",
+  "common.loading": "読み込み中...",
+  "common.refresh": "更新",
+  "dash.title": "作品一覧",
+  "dash.noBooks": "まだ本がありません",
+  "dash.createFirst": "最初の本を作って執筆を始めましょう",
+  "dash.writeNext": "次の章を書く",
+  "book.writeNext": "次の章を書く",
+  "book.stopWriting": "執筆を停止",
+  "book.status": "ステータス",
+  "book.export": "エクスポート",
+  "reader.edit": "編集",
+  "reader.preview": "プレビュー",
+  "timeline.title": "タイムライン",
+  "timeline.save": "保存",
+  "timeline.cancel": "キャンセル",
+  "bread.books": "作品",
+  "bread.home": "ホーム",
+  "bread.chat": "チャット",
+  "logs.title": "ログ",
+  "logs.empty": "ログはまだありません",
+  "settings.title": "プロジェクト設定",
+  "settings.saved": "保存しました",
+  "create.title": "本を作成",
+  "create.submit": "本を作成",
+};
+
+/** 纯函数取值（可测）：ja 补充表命中，否则 ja → en 回退，zh/en 原表。 */
+export function resolveString(key: StringKey, lang: Lang): string {
+  if (lang === "ja") {
+    return JA_STRINGS[key] ?? strings[key].en;
+  }
+  return strings[key][lang];
+}
+
 export function useI18n() {
   const { data } = useApi<{ language: string }>("/project");
-  const lang: Lang = data?.language === "en" ? "en" : "zh";
+  const lang: Lang =
+    data?.language === "en" ? "en" : data?.language === "ja" ? "ja" : "zh";
 
   function t(key: StringKey): string {
-    return strings[key][lang];
+    return resolveString(key, lang);
   }
 
   return { t, lang };

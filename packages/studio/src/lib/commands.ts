@@ -4,6 +4,8 @@ import { recentIdentity } from "@/store/recents";
 import type { RecentEntry } from "@/store/recents";
 
 export type CommandGroup = "recent" | "navigation" | "action";
+// 219 号：ja 面板文案缺失时由调用侧回退（PaletteLang 与 UI Lang 解耦，
+// 本表 zh/en 二态保持；ja 渐进补齐后并入）。
 export type PaletteLang = "zh" | "en";
 
 /** 可启动的创作会话类型（= ChatSessionKind；内联声明避免 lib 层依赖 core 运行时）。 */
