@@ -26,3 +26,4 @@
 ## 四、遗留
 
 无。提示词后续修订的流程：改 TS 源 → `REGEN=1` 重生成 golden → Rust 侧同步（差分测试拦截不同步）。
+245 号补记：play 有世界/无世界两面均纳入 agent-prompts.json golden（22 面）——验证 80 号 play_chat_system_prompt 与 TS buildPlayPrompt(playWorldExists=true) 仍逐字一致（含铁律段/Output Rules），无需修改。
