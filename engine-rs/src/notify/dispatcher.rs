@@ -73,7 +73,7 @@ pub async fn send_webhook(url: &str, secret: Option<&str>, events: &[String], pa
         return Ok(());
     }
     let body = serde_json::to_string(payload).map_err(|e| e.to_string())?;
-    let client = reqwest::Client::new();
+    let client = notify_client();
     let mut request = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -101,8 +101,20 @@ pub fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// 通知发送超时（226 号）：通知是 best-effort（失败不阻断管线），但
+/// `reqwest::Client::new()` 无总超时——上游 webhook 挂起会把 write-next
+/// 收尾路径拖住分钟级。10s 足够外部 IM API 响应。
+const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn notify_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(NOTIFY_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+}
+
 async fn post_and_expect_ok(url: &str, payload: Value, label: &str) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let client = notify_client();
     let response = client
         .post(url)
         .header("Content-Type", "application/json")
