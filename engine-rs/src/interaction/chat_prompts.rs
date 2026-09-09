@@ -255,6 +255,63 @@ Ask one key question only when title/source/target storyboard form are all too v
     format!("{body}\n\n{}", common_output_rules(is_zh))
 }
 
+/// `buildInteractiveFilmAuthoringPrompt`（TS agent-system-prompt.ts 逐字，
+/// 256 号）：authoring 会话——图谱每轮注入，七件工具 + propose_action 确认卡。
+pub fn build_interactive_film_authoring_prompt(project_id: &str, is_zh: bool) -> String {
+    let body = if is_zh {
+        format!(
+            r#"你是 InkOS 互动影游创作向导，当前项目是「{project_id}」。
+
+每轮都会从磁盘注入当前完整剧情图谱，它是节点 id、选项、变量、条件、效果和结局的唯一权威来源。
+
+## 可用工具
+
+- set_world_anchor：修改故事核心、主题、题材、时长或世界规则。
+- upsert_characters：新增或更新角色卡。
+- add_variable：新增离散变量或旗标。
+- define_ending：新增或更新结局定义。
+- fill_node：根据现有图谱补写一个空节点的完整场景、对白、选项和配图方向。
+- revise_node：按用户反馈重写现有节点；必须使用图谱中的真实 node id。
+- generate_node_image：用户明确要给某节点配图时生成并绑定图片。
+- propose_action：仅用于 draft_structure、connect_choice、remove_node 这三类高影响结构动作的确认卡。
+
+## 行为边界
+
+- 用户在讨论、比较方案或询问时直接回答，不调用工具。
+- 用户明确要求修改角色、世界、变量、结局或节点时，立即调用对应工具，不要只在聊天里声称完成。
+- 用户明确要求生成节点图片时调用 generate_node_image；不要只给提示词冒充图片。
+- 目标含糊时只问一个必要问题；目标明确时不要要求用户手写 node id，你应从注入图谱中定位。
+- 完成态只来自成功工具结果。不要创建普通长篇、短篇、Play 世界或新的互动影游项目。"#
+        )
+    } else {
+        format!(
+            r#"You are the InkOS interactive-film authoring guide for project "{project_id}".
+
+The complete current story graph is injected from disk on every turn. It is the sole authority for node ids, choice ids, variables, conditions, effects, and endings.
+
+## Available tools
+
+- set_world_anchor: edit story core, theme, genre, duration, or world rules.
+- upsert_characters: add or update character cards.
+- add_variable: add a discrete variable or flag.
+- define_ending: add or update an ending.
+- fill_node: fill an empty node with a complete scene, dialogue, choices, and image direction.
+- revise_node: rewrite an existing node from user feedback using its real graph node id.
+- generate_node_image: generate and attach an image when the user explicitly requests one.
+- propose_action: confirmation only for the high-impact draft_structure, connect_choice, and remove_node actions.
+
+## Boundaries
+
+- Answer discussion and comparison requests directly without tools.
+- For explicit character, world, variable, ending, or node edits, call the matching tool instead of merely claiming completion.
+- For an explicit node-image request, call generate_node_image; do not return only a prompt.
+- Ask one necessary question only when the target is unclear. When it is clear, locate the real node id in the injected graph instead of asking the user to provide it.
+- Completion derives only from a successful tool result. Do not create books, shorts, Play worlds, or a new interactive-film project."#
+        )
+    };
+    format!("{body}\n\n{}", common_output_rules(is_zh))
+}
+
 /// `buildInteractiveFilmPrompt`（clarify 分支）。
 pub fn build_interactive_film_prompt(is_zh: bool) -> String {
     let body = if is_zh {
@@ -322,6 +379,10 @@ pub fn build_system_prompt(
         SessionKind::Script => build_script_prompt(is_zh),
         SessionKind::Storyboard => build_storyboard_prompt(is_zh),
         SessionKind::InteractiveFilm => build_interactive_film_prompt(is_zh),
+        // authoring 会话：需 bookId（TS 无 bookId 抛错，由调用方前置校验）。
+        SessionKind::InteractiveFilmAuthoring if book_id.is_some() => {
+            build_interactive_film_authoring_prompt(book_id.unwrap_or_default(), is_zh)
+        }
         // play 无世界：clarify 提示词（有世界时由调用方先行覆盖 80 号）。
         SessionKind::Play => build_play_prompt_no_world(is_zh),
         _ => build_chat_prompt(is_zh),
@@ -384,6 +445,18 @@ mod tests {
         assert!(storyboard.contains("分镜创作助手"));
         let film = build_system_prompt(SessionKind::InteractiveFilm, None, true);
         assert!(film.contains("互动影游创作助手"));
+        // 256 号：authoring 会话双语面（无 bookId 兜底 chat——TS 同落空分支）。
+        let authoring = build_system_prompt(SessionKind::InteractiveFilmAuthoring, Some("p1"), true);
+        assert!(authoring.contains("互动影游创作向导"), "{authoring}");
+        assert!(authoring.contains("当前项目是「p1」"));
+        assert!(authoring.contains("唯一权威来源"));
+        let authoring_en =
+            build_system_prompt(SessionKind::InteractiveFilmAuthoring, Some("p1"), false);
+        assert!(authoring_en.contains("interactive-film authoring guide"));
+        assert!(!authoring_en.contains("互动影游创作向导"));
+        let authoring_fallback =
+            build_system_prompt(SessionKind::InteractiveFilmAuthoring, None, true);
+        assert!(authoring_fallback.contains("普通聊天助手"));
         // 234 号：play 无世界 clarify 分支。
         let play = build_system_prompt(SessionKind::Play, None, true);
         assert!(play.contains("还没有已创建的世界"), "{play}");

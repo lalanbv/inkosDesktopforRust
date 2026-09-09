@@ -63,9 +63,12 @@ const SNAPSHOT_KEEP: usize = 20;
 pub struct AuthoringState {
     pub phase: &'static str,
     pub rev: i64,
+    /// TS `phaseRevs`（revertToSnapshot 写入）原样透传——apply 不消费但落盘
+    /// 保留（256 号：此前 Rust 重写 state 时静默丢弃该字段）。
+    pub phase_revs: Option<Value>,
 }
 
-const DEFAULT_STATE: AuthoringState = AuthoringState { phase: "world", rev: 0 };
+const DEFAULT_STATE: AuthoringState = AuthoringState { phase: "world", rev: 0, phase_revs: None };
 const VALID_PHASES: &[&str] = &["world", "scale", "structure", "workshop"];
 
 fn project_dir(project_root: &Path, project_id: &str) -> std::path::PathBuf {
@@ -99,7 +102,8 @@ pub async fn load_authoring_state(project_root: &Path, project_id: &str) -> Auth
         .get("rev")
         .and_then(Value::as_i64)
         .unwrap_or(DEFAULT_STATE.rev);
-    AuthoringState { phase, rev }
+    let phase_revs = parsed.get("phaseRevs").filter(|v| v.is_object()).cloned();
+    AuthoringState { phase, rev, phase_revs }
 }
 
 fn snapshot_dir(project_root: &Path, project_id: &str) -> std::path::PathBuf {
@@ -155,11 +159,14 @@ async fn with_project_lock<T>(
 }
 
 /// `applyGraphDelta`：加载（缺失回空图谱）→ pre-rev 快照 → 应用 → 保存 →
-/// rev+1 落盘 authoring-state。
+/// rev+1 落盘 authoring-state。`phase` 提供时推进创作阶段（TS `params.phase ??
+/// state.phase`；fill/revise→workshop、world 锚→world、draft_structure→
+/// structure），缺省保留现有阶段。
 pub async fn apply_graph_delta(
     project_root: &Path,
     project_id: &str,
     delta: &StoryGraphDelta,
+    phase: Option<&'static str>,
 ) -> Result<(StoryGraph, i64), String> {
     with_project_lock(project_root, project_id, async {
         let current = film::load_story_graph(project_root, project_id)
@@ -172,7 +179,11 @@ pub async fn apply_graph_delta(
         film::save_story_graph(project_root, project_id, &graph).await?;
 
         let next_rev = state.rev + 1;
-        let next_state = json!({ "phase": state.phase, "rev": next_rev });
+        let next_phase = phase.unwrap_or(state.phase);
+        let mut next_state = json!({ "phase": next_phase, "rev": next_rev });
+        if let Some(phase_revs) = state.phase_revs {
+            next_state["phaseRevs"] = phase_revs;
+        }
         let dir = project_dir(project_root, project_id);
         if tokio::fs::create_dir_all(&dir).await.is_err() {
             return Err("failed to create project dir".to_string());
@@ -379,7 +390,7 @@ pub async fn post_story_graph_delta(
         );
     };
     let root = runtime.state.project_root();
-    match apply_graph_delta(root, &id, &delta).await {
+    match apply_graph_delta(root, &id, &delta, None).await {
         Ok((graph, rev)) => {
             let graph_json = serde_json::to_value(&graph).unwrap_or(Value::Null);
             (StatusCode::OK, Json(json!({ "rev": rev, "graph": graph_json }))).into_response()
@@ -688,7 +699,9 @@ pub async fn post_node_image(
                 .into_response()
         }
     };
-    // 尺寸链（TS node-image 逐字）：body.size ?? env INKOS_FILM_IMAGE_SIZE ?? "1024x1536"。
+    // 尺寸链（TS node-image 逐字）：body.size ?? env INKOS_FILM_IMAGE_SIZE ??
+    // "1536x1024"（256 号对齐：上游 d1d6d8ec 已把默认从竖版 1024x1536 翻转为
+    // 横版 1536x1024，74 号移植时对的是旧值）。
     let size: String = body
         .as_ref()
         .and_then(|body| body.size.clone())
@@ -698,7 +711,7 @@ pub async fn post_node_image(
                 .ok()
                 .filter(|s| !s.is_empty())
         })
-        .unwrap_or_else(|| "1024x1536".to_string());
+        .unwrap_or_else(|| "1536x1024".to_string());
     let image = match crate::llm::cover::generate_image_from_prompt(&request, &prompt, &size).await
     {
         Ok(image) => image,
@@ -728,7 +741,7 @@ pub async fn post_node_image(
         Ok(delta) => delta,
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", e.to_string()),
     };
-    match apply_graph_delta(root, &id, &delta).await {
+    match apply_graph_delta(root, &id, &delta, None).await {
         Ok((_, rev)) => (
             StatusCode::OK,
             Json(json!({ "assetRef": asset_ref, "rev": rev })),

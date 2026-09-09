@@ -549,16 +549,20 @@ pub async fn post_agent(
         )
         .await;
     }
-    // 书存在性（loadBookConfig 失败 → 404 BOOK_NOT_FOUND）
+    // 书存在性（loadBookConfig 失败 → 404 BOOK_NOT_FOUND）。256 号对齐 TS：
+    // interactive-film-authoring 会话的 bookId 是影游项目 id（interactive-films/
+    // 下），不指向书——TS 同位校验显式排除该 sessionKind，Rust 此前误拒 404。
     if let Some(book_id) = &agent_book_id {
-        let book_path = root.join("books").join(book_id).join("book.json");
-        if tokio::fs::metadata(&book_path).await.map(|m| !m.is_file()).unwrap_or(true) {
-            return api_error(
-                StatusCode::NOT_FOUND,
-                "BOOK_NOT_FOUND",
-                format!("Book not found: {book_id}"),
-            )
-            .into_response();
+        if session_kind != SessionKind::InteractiveFilmAuthoring {
+            let book_path = root.join("books").join(book_id).join("book.json");
+            if tokio::fs::metadata(&book_path).await.map(|m| !m.is_file()).unwrap_or(true) {
+                return api_error(
+                    StatusCode::NOT_FOUND,
+                    "BOOK_NOT_FOUND",
+                    format!("Book not found: {book_id}"),
+                )
+                .into_response();
+            }
         }
     }
 
@@ -933,26 +937,43 @@ pub async fn post_agent(
     // play 走各自分支（chat 带 book 亦然——TS 按 sessionKind 先返回，
     // bookId 不影响这些分支的工具面）。
     let has_book = agent_book_id.is_some();
+    // 256 号：authoring 会话（TS createFilmAuthoringTools 要求非空 bookId，
+    // 缺失即抛错终止该轮）。
+    if session_kind == SessionKind::InteractiveFilmAuthoring && agent_book_id.is_none() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "BOOK_ID_REQUIRED",
+            "interactive-film-authoring session requires a non-null bookId",
+        )
+        .into_response();
+    }
+    let film_authoring_session = has_book && session_kind == SessionKind::InteractiveFilmAuthoring;
     let book_session =
         has_book && matches!(session_kind, SessionKind::Book | SessionKind::BookCreate);
     let edit_session = has_book && session_kind == SessionKind::Edit;
     let book_edit_session = book_session || edit_session;
-    let propose_registered =
-        !play_world_exists && (session_kind == SessionKind::Chat || !has_book);
+    let propose_registered = !play_world_exists
+        && (session_kind == SessionKind::Chat || !has_book || film_authoring_session);
     let research_registered =
         matches!(session_kind, SessionKind::Chat | SessionKind::BookCreate | SessionKind::Book);
     let import_registered = session_kind == SessionKind::Chat || book_session;
     // 工具面（105 号对齐 TS 矩阵）：文件三件（books/ 作用域 read/ls/grep）
     // 仅 book/edit 会话注册（TS bookTools——chat/play/short 等会话无文件工具）
-    // + material 双工具（全部会话）+ propose_action（无书会话；play 有世界时
-    // 除外）+ research/import（分支矩阵）+ sub_agent（book/book-create）
-    // + 编辑工具族（book/edit）+ play 三工具。
+    // + material 双工具（全部会话；256 号 authoring 会话除外——TS 按
+    // sessionKind 先返回，authoring 面 = 七件作者工具）+ propose_action
+    // （无书会话；play 有世界时除外；256 号 authoring 会话）+ research/import
+    // （分支矩阵）+ sub_agent（book/book-create）+ 编辑工具族（book/edit）
+    // + play 三工具。
     let mut tools = serde_json::json!([]);
     if let Some(entries) = tools.as_array_mut() {
-        if book_edit_session {
-            entries.extend(crate::interaction::project_tools::book_file_tool_schemas());
+        if film_authoring_session {
+            entries.extend(crate::interaction::film_authoring_tools::film_authoring_tool_schemas());
+        } else {
+            if book_edit_session {
+                entries.extend(crate::interaction::project_tools::book_file_tool_schemas());
+            }
+            entries.extend(crate::interaction::material_tools::material_tool_schemas());
         }
-        entries.extend(crate::interaction::material_tools::material_tool_schemas());
         if propose_registered {
             entries.push(crate::interaction::propose_action_tool::propose_action_schema());
         }
@@ -1041,8 +1062,22 @@ pub async fn post_agent(
             active_book_id: active,
         }))
         .flatten();
+    // 256 号：authoring 工具面依赖——LLM 走 AgentRouter "film-authoring"
+    // 角色（TS createAgentContext("film-authoring") 对应物）。
+    let film_llm = crate::interaction::film_authoring_tools::RouterFilmAuthoringLLM(&runtime.router);
+    let film_authoring_deps = film_authoring_session
+        .then(|| agent_book_id.as_deref().map(|project_id| {
+            crate::interaction::film_authoring_tools::FilmAuthoringDeps {
+                root,
+                project_id,
+                language: surface_language,
+                llm: &film_llm,
+            }
+        }))
+        .flatten();
     let tool_executor = ChatToolRouter {
         root,
+        film_authoring_deps,
         play_deps,
         propose_deps,
         research_enabled,
@@ -1058,6 +1093,26 @@ pub async fn post_agent(
             )
         }),
         suppress_production: background_task.is_some(),
+    };
+    // 256 号：authoring 图谱上下文逐轮注入（TS createInteractiveFilmContext
+    // Transform——[injected, ...messages] 对应位：system 之后、历史与本轮指令
+    // 之前；图谱缺失时按 TS null 分支不注入）。
+    let restored = if film_authoring_session {
+        let project_id = agent_book_id.as_deref().unwrap_or_default();
+        match crate::interactive_film::load_story_graph(root, project_id).await {
+            Ok(Some(graph)) => {
+                let mut with_context =
+                    Vec::with_capacity(restored.len() + 1);
+                with_context.push(
+                    crate::interaction::film_authoring_tools::film_graph_context_message(&graph),
+                );
+                with_context.extend(restored);
+                with_context
+            }
+            _ => restored,
+        }
+    } else {
+        restored
     };
     // 135 号：回合作用域（TS runWithAgentTrajectory({main}) 包 agent.prompt
     // 的对应物）——task-local 通道供 RouterLoopChat（聊天增量）与 sub_agent
@@ -1262,6 +1317,8 @@ fn strip_production_mutation_tools(tools: &mut Value) {
 /// 双件）。
 struct ChatToolRouter<'a> {
     root: &'a std::path::Path,
+    /// 256 号：interactive-film-authoring 七件作者工具（该会话独占面）。
+    film_authoring_deps: Option<crate::interaction::film_authoring_tools::FilmAuthoringDeps<'a>>,
     play_deps: Option<crate::interaction::play_tools::PlayToolDeps<'a>>,
     propose_deps: Option<crate::interaction::propose_action_tool::ProposeDeps<'a>>,
     research_enabled: bool,
@@ -1283,6 +1340,13 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
         if self.suppress_production && PRODUCTION_MUTATION_TOOL_NAMES.contains(&name) {
             return crate::interaction::project_tools::error_result(format!("Unknown tool: {name}"));
+        }
+        if let Some(deps) = &self.film_authoring_deps {
+            if let Some(result) =
+                crate::interaction::film_authoring_tools::execute_film_authoring_tool(deps, name, args).await
+            {
+                return result;
+            }
         }
         if name == "propose_action" {
             if let Some(deps) = &self.propose_deps {

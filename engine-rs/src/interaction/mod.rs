@@ -20,6 +20,7 @@ pub mod edit_controller;
 pub mod forecast_tools;
 pub mod events;
 pub mod export_artifact;
+pub mod film_authoring_tools;
 pub mod intents;
 pub mod modes;
 pub mod play_tools;

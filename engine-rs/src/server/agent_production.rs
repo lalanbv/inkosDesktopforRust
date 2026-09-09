@@ -1859,7 +1859,7 @@ async fn execute_connect_choice(
         endings: None,
         notes: Vec::new(),
     };
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None).await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Choices updated on node {} (rev {rev}).", node.id),
@@ -1888,7 +1888,7 @@ async fn execute_remove_node(
         endings: None,
         notes: Vec::new(),
     };
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None).await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Node {node_id} removed (rev {rev})."),
@@ -1977,7 +1977,8 @@ async fn execute_draft_structure(
         endings: None,
         notes: Vec::new(),
     };
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta).await?;
+    // TS createDraftStructureTool：applyGraphDelta phase "structure"（256 号补）。
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, Some("structure")).await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Structure drafted: {node_count} nodes (rev {rev})."),
@@ -1986,7 +1987,7 @@ async fn execute_draft_structure(
 }
 
 /// fence 剥离 + 首 `{` 到末 `}` 子串提取（extractJson 等价）。
-fn extract_json_object(raw: &str) -> Option<Value> {
+pub(crate) fn extract_json_object(raw: &str) -> Option<Value> {
     let trimmed = raw.trim();
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         return Some(value);
