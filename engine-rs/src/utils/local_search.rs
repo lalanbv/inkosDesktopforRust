@@ -249,21 +249,6 @@ impl LocalSearchIndex {
             .map(|value| rusqlite::types::Value::Text(value.clone()))
             .collect();
         bind_params.push(rusqlite::types::Value::Integer(limit as i64));
-        #[cfg(test)]
-        if std::env::var("INKOS_LS_DEBUG").is_ok() {
-            println!("SEARCH sql: {sql}");
-            println!("SEARCH params: {bind_params:?}");
-            let cnt: Result<i64, _> = self.conn.query_row(
-                &format!(
-                    "SELECT count(*) FROM retrieval_documents_fts WHERE retrieval_documents_fts MATCH {match_query:?} AND scope = {scope:?}",
-                    match_query = match_query,
-                    scope = options.scope,
-                ),
-                [],
-                |r| r.get(0),
-            );
-            println!("SEARCH direct count: {cnt:?}");
-        }
         let rows = statement.query_map(rusqlite::params_from_iter(bind_params.iter()), |row| {
             let metadata_json: String = row.get("metadataJson")?;
             let metadata: Option<serde_json::Value> = serde_json::from_str(&metadata_json)
@@ -564,89 +549,5 @@ mod tests {
         assert!(tokens.contains(&"核心".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"心冲".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"core-hook".to_string()), "{tokens:?}");
-    }
-}
-
-#[cfg(test)]
-mod debug_tests {
-    use super::*;
-
-    #[test]
-    fn debug_han_search_chain() {
-        let tokens = tokenize_search_text("关键字出现得很早");
-        println!("query/body tokens: {tokens:?}");
-        let index = LocalSearchIndex::new(":memory:").unwrap();
-        index
-            .replace_scope(
-                "s",
-                &[SearchDocument {
-                    id: "d".into(),
-                    scope: "s".into(),
-                    kind: "k".into(),
-                    source: "x.md".into(),
-                    title: "t".into(),
-                    body: "关键字出现得很早".into(),
-                    metadata: None,
-                }],
-            )
-            .unwrap();
-        let fts_count: i64 = index
-            .conn
-            .query_row("SELECT count(*) FROM retrieval_documents_fts", [], |r| r.get(0))
-            .unwrap();
-        println!("fts rows: {fts_count}");
-        let doc_count: i64 = index
-            .conn
-            .query_row("SELECT count(*) FROM retrieval_documents", [], |r| r.get(0))
-            .unwrap();
-        println!("doc rows: {doc_count}");
-        let probes = ["'\"关\"'", "'\"关键字\"'", "'关 OR 键'"];
-        for probe in probes {
-            let sql = format!(
-                "SELECT count(*) FROM retrieval_documents_fts WHERE retrieval_documents_fts MATCH {probe}"
-            );
-            let r: Result<i64, _> = index.conn.query_row(&sql, [], |r| r.get(0));
-            println!("probe {probe} -> {r:?}");
-        }
-        let full_sql = r#"
-            SELECT d.document_id AS id,
-                   bm25(retrieval_documents_fts, 5.0, 1.0) AS rank
-            FROM retrieval_documents_fts
-            JOIN retrieval_documents d ON d.rowid = retrieval_documents_fts.rowid
-            WHERE retrieval_documents_fts MATCH ?
-              AND d.scope = ?
-            LIMIT ?
-        "#;
-        let matches_query = "\"关\"".to_string();
-        let full: Result<Vec<(String, f64)>, _> = index.conn.prepare(full_sql).and_then(|mut st| {
-            st.query_map(rusqlite::params![matches_query, "s", 4], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-            })?
-            .collect()
-        });
-        println!("full sql -> {full:?}");
-        let hits = index.search(
-            "关键字",
-            &SearchOptions { scope: "s", kinds: &[], limit: 4 },
-        );
-        println!("hits: {hits:?}");
-        assert!(!hits.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod debug_heading_tests {
-    use super::*;
-
-    #[test]
-    fn debug_heading_multiline() {
-        let doc = "# 账页资料\n## Metadata\n- kind: text\n- char_count: 11\n## Extracted content\n账页记载着冷库赔偿款。";
-        let caps = heading_line_re().captures(doc);
-        println!("caps: {caps:?}");
-        let segs = split_markdown_for_search(doc);
-        println!("segs: {}", segs.len());
-        for (i, seg) in segs.iter().enumerate() {
-            println!("seg{i}: heading={:?} body={:?}", seg.heading, seg.body.chars().take(30).collect::<String>());
-        }
     }
 }

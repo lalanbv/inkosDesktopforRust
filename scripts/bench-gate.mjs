@@ -9,6 +9,12 @@
 //   node scripts/bench-gate.mjs --threshold 1.5
 //   node scripts/bench-gate.mjs --list       # 只看基线不跑 bench
 //
+// 负载前置检查（257 号遗留 #2）：criterion 采样对 CPU 竞争极敏感——实测
+// load≈4.6/18 核（约 0.23/核）时满跑门禁即出现 +190%~+520% 的假回退，且每轮
+// 漂移的基准各不相同。故 1 分钟 loadavg 占核数比 > maxLoad（默认 0.20）时拒绝
+// 执行：静默时段重跑，或 --ignore-load 强跑（结果自担）。Windows 无 loadavg
+// （恒 [0,0,0]）自动通过。阈值可 `--max-load 0.3` 或 env BENCH_GATE_MAX_LOAD 调整。
+//
 // 基线是机器相关的（同机对比才有意义）——换机后请 --update 重建。
 // criterion 采样默认较慢（数分钟）；接受它，门禁的意义就在可信均值。
 
@@ -37,6 +43,31 @@ const benchPassThrough = dashIdx >= 0 ? args.slice(dashIdx + 1) : [];
 if (!Number.isFinite(threshold) || threshold <= 1) {
   console.error(`无效阈值：${args[thresholdIdx + 1]}（须 > 1）`);
   process.exit(2);
+}
+
+// 负载前置检查（257 号遗留 #2）：满载下 criterion 均值不可信，拒绝比污染基线好。
+const ignoreLoad = args.includes("--ignore-load");
+const maxLoadIdx = args.indexOf("--max-load");
+const maxLoad = maxLoadIdx >= 0
+  ? Number(args[maxLoadIdx + 1])
+  : Number(process.env.BENCH_GATE_MAX_LOAD ?? 0.2);
+if (!Number.isFinite(maxLoad) || maxLoad <= 0) {
+  console.error(`无效负载阈值：${maxLoadIdx >= 0 ? args[maxLoadIdx + 1] : process.env.BENCH_GATE_MAX_LOAD}（须 > 0）`);
+  process.exit(2);
+}
+
+function checkMachineLoad() {
+  if (ignoreLoad) return;
+  const [load1] = os.loadavg();
+  const cores = os.cpus().length || 1;
+  const ratio = load1 / cores;
+  if (ratio <= maxLoad) return;
+  console.error(
+    `✗ 机器负载过高：1 分钟 loadavg ${load1.toFixed(2)} / ${cores} 核 = ${(ratio * 100).toFixed(0)}%/核，超过阈值 ${(maxLoad * 100).toFixed(0)}%（--max-load）。`,
+  );
+  console.error("  criterion 采样对 CPU 竞争极敏感，满载下会出现假回退/假通过（257 号实测漂移 +190%~+520%）。");
+  console.error("  请在静默时段重跑；确要强跑加 --ignore-load。");
+  process.exit(3);
 }
 
 // criterion 目录名 = bench id 的路径形态（group/function[/value]）；
@@ -94,6 +125,7 @@ try {
     process.exit(0);
   }
 
+  checkMachineLoad();
   console.log("跑 bench：cargo bench --bench hot_paths（engine-rs，criterion 采样需数分钟）…");
   execFileSync("cargo", ["bench", "--bench", "hot_paths", "--", ...benchPassThrough], {
     cwd: engineDir,

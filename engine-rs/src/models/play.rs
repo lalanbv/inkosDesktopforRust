@@ -6,8 +6,8 @@
 //! play.ts 的 zod schema 大量使用 `.catch/.transform/.preprocess` 做 **lenient 归一化**
 //! （normalizePlayMutation / backfillUpsertIds / backfillEdges / buildLabelToId /
 //! normalizeTimeAdvance / edgeIdFromParts / slugifyId 等）——这是 LLM 输出的宽松解析器逻辑，
-//! 非纯类型。本文件移植 **z.infer 类型**（解析后的稳定形状）；归一化函数待独立
-//! `play_parser` 模块移植（需配合 golden 向量，TODO）。
+//! 非纯类型。本文件移植 **z.infer 类型**（解析后的稳定形状）；归一化函数已随
+//! `play_parser` 模块移植（含单测，见 play_parser.rs）。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -189,7 +189,7 @@ pub struct PlayEdgeExpire {
 
 // ── Mutation（解析后形状）────────────────────────────────────────
 // 注：normalizePlayMutation / backfill* / buildLabelToId / normalizeTimeAdvance 等
-// lenient 归一化逻辑待独立 play_parser 模块移植（TODO，需 golden 向量）。
+// lenient 归一化逻辑见 play_parser 模块（已移植，LLM 输出先归一化再反序列化到本文件类型）。
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PlayEntityMutation {
@@ -237,8 +237,3 @@ pub struct PlayMutation {
     pub blocked_reason: String,
     pub notes: Vec<String>,
 }
-
-// TODO(play_parser): 移植 normalizePlayMutation / backfillUpsertIds / backfillEdges /
-// buildLabelToId / normalizeTimeAdvance / edgeIdFromParts / slugifyId / isLowInformationEdgeId +
-// EDGE_KEY_ALIASES。这些是对 LLM 输出的宽松归一化（强制类型/丢坏项/补 id/别名映射），
-// 需配合 golden 向量逐例验证，是独立解析器模块。

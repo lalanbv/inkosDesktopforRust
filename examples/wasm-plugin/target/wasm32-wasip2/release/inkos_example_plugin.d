@@ -1,1 +1,0 @@
-/Users/lalanbv/GitProject/inkosDesktopforRust/examples/wasm-plugin/target/wasm32-wasip2/release/inkos_example_plugin.wasm: /Users/lalanbv/GitProject/inkosDesktopforRust/examples/wasm-plugin/src/lib.rs /Users/lalanbv/GitProject/inkosDesktopforRust/examples/wasm-plugin/wit/inkos.wit

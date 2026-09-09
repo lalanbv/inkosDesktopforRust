@@ -508,12 +508,7 @@ pub async fn retrieve_materials(
         };
         let normalized_path = asset.markdown_path.replace('\\', "/");
         let segments = crate::utils::local_search::split_markdown_for_search(&markdown);
-        #[cfg(test)]
-        if std::env::var("INKOS_LS_DEBUG").is_ok() {
-            println!("SEG markdown chars: {}, segments: {}", markdown.chars().count(), segments.len());
-        }
-        for (index, segment) in segments.into_iter().enumerate()
-        {
+        for (index, segment) in segments.into_iter().enumerate() {
             documents.push(crate::utils::local_search::SearchDocument {
                 id: format!("material:{}:{}", asset.id, index),
                 scope: MATERIAL_SCOPE.to_string(),
@@ -547,15 +542,6 @@ pub async fn retrieve_materials(
         return Vec::new();
     };
     let retrieval = (|| -> rusqlite::Result<Vec<RetrievedMaterial>> {
-        #[cfg(test)]
-        std::env::var("INKOS_LS_DEBUG").is_ok().then(|| {
-            println!(
-                "RETRIEVE assets: {}, docs: {}, query: {:?}",
-                assets.len(),
-                documents.len(),
-                input.query
-            )
-        });
         index.replace_scope(MATERIAL_SCOPE, &documents)?;
         let limit = normalize_limit(input.limit);
         let kinds: Vec<String> = input
