@@ -593,7 +593,7 @@ pub fn build_film_authoring_context(graph: &StoryGraph) -> String {
                 format!("- {}（{}）动机：{}{}", c.name, role_text, c.motivation, voice_part)
             })
             .collect();
-        blocks.push(["角色档案:".to_string()].into_iter().chain(chars).collect::<Vec<_>>().join("\n"));
+        blocks.push(["角色档案：".to_string()].into_iter().chain(chars).collect::<Vec<_>>().join("\n"));
     }
     blocks.join("\n\n")
 }
@@ -1937,11 +1937,11 @@ mod authoring_context_tests {
     fn authoring_context_appends_character_profiles() {
         let graph = sample_graph();
         let context = build_film_authoring_context(&graph);
-        assert!(context.contains("角色档案:"), "{context}");
+        assert!(context.contains("角色档案："), "{context}");
         assert!(context.contains("- 沈青（protagonist）动机：查明真相 口吻：短句"), "{context}");
         // 摘要在前、角色档案在后（TS blocks 顺序）。
         let summary_idx = context.find("# 互动影游").unwrap();
-        let chars_idx = context.find("角色档案:").unwrap();
+        let chars_idx = context.find("角色档案：").unwrap();
         assert!(summary_idx < chars_idx);
     }
 }

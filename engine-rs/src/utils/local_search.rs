@@ -281,22 +281,9 @@ impl LocalSearchIndex {
             })
         });
         match rows {
-            Ok(rows) => {
-                #[allow(clippy::never_loop)]
-                {
-                    match rows.collect::<Result<Vec<_>, _>>() {
-                        Ok(hits) => hits,
-                        Err(e) => {
-                            eprintln!("SEARCH row error: {e}");
-                            Vec::new()
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("SEARCH query_map error: {e}");
-                Vec::new()
-            }
+            // 行级错误与查询级错误都按 TS 语义吞掉返回空集（检索是尽力而为面）。
+            Ok(rows) => rows.collect::<Result<Vec<_>, _>>().unwrap_or_default(),
+            Err(_) => Vec::new(),
         }
     }
 
