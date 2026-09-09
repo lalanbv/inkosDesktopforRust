@@ -75,9 +75,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # M6c：项目扫描器（文件系统遍历）。
 walkdir = "2.5"
 # M7a：WASM 插件运行时（Wasmtime 27+ 稳定 API + Component Model 支持）。
-wasmtime = { version = "27", features = ["component-model", "cranelift"] }
+wasmtime = { version = "36.0.14", features = ["component-model", "cranelift"] }
 # M7a：WASI 环境支持（文件系统、环境变量等）。
-wasmtime-wasi = "27"
+wasmtime-wasi = "36.0.14"
 # Phase 6.1：增量更新——bsdiff 二进制 delta（纯 Rust，safe Rust，无 C 依赖）。
 # 客户端用 patch 应用 delta，配合 sha256 校验，显著减小 engine bundle 更新体积。
 bsdiff = "0.2"

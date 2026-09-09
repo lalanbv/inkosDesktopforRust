@@ -90,13 +90,19 @@ struct PluginState {
 }
 
 impl WasiView for PluginState {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
+    // wasmtime-wasi 36：table 并入 WasiCtxView（trait 只剩 ctx 一个成员）。
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        wasmtime_wasi::WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
+}
 
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
+// wasmtime 36 bindgen：add_to_linker 的 Store 数据类型需声明宿主数据 GAT
+//（Data<'a> = &'a mut Self，配 HasSelf 语义；见 wasmtime has_data.rs）。
+impl wasmtime::component::HasData for PluginState {
+    type Data<'a> = &'a mut PluginState;
 }
 
 // Phase 6.3：实现 bindgen 生成的 Host trait（对应 wit 的 host import interface）。
@@ -191,9 +197,11 @@ impl WasmPlugin {
         // WASI 注册必需：component（wasm32-wasip2 target）默认依赖 wasi:io/poll 等，
         // 不注册会在实例化时报 "imports not found in linker"。
         let mut linker = Linker::<PluginState>::new(&engine);
-        wasmtime_wasi::add_to_linker_sync(&mut linker)
+        // wasmtime-wasi 36：p2 同步注册入口移至 p2 模块。
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| PluginError::ExecutionFailed(format!("注册 WASI 失败: {e}")))?;
-        InkosPlugin::add_to_linker(&mut linker, |state: &mut PluginState| state)
+        // wasmtime 36 bindgen：add_to_linker 增 D 泛型（宿主数据类型），须显式标注。
+        InkosPlugin::add_to_linker::<PluginState, PluginState>(&mut linker, |state: &mut PluginState| state)
             .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
 
         let host_context = HostContext::new(metadata.clone(), work_dir.to_path_buf());
