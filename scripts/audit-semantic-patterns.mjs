@@ -95,6 +95,9 @@ function isLikelySemanticDecision(path, line, windowText) {
   if (line.includes("trimmed.startsWith(\"#\")")) return false;
   if (line.includes("actionSource") && line.includes("startsWith(\"/\")")) return false;
   if (line.includes("startsWith(\"/\")")) return false;
+  // 265 号：CLI TUI 斜杠命令（/^\/xxx/）是用户显式字面命令的字面路由
+  // （entryRoute → actionSource:"slash"），非自由文本语义意图推断，放行。
+  if (path.endsWith("agent-input.ts") && line.includes("/^\\/")) return false;
   if (line.includes("endsWith(") && !hasAny(windowText, ["instruction", "intent"])) return false;
   return true;
 }
