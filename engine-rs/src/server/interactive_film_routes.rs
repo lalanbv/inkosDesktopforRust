@@ -102,7 +102,8 @@ pub async fn load_authoring_state(project_root: &Path, project_id: &str) -> Auth
         .get("rev")
         .and_then(Value::as_i64)
         .unwrap_or(DEFAULT_STATE.rev);
-    let phase_revs = parsed.get("phaseRevs").filter(|v| v.is_object()).cloned();
+    // TS 逐字：`phaseRevs !== undefined` 即保留（不校验形态）。
+    let phase_revs = parsed.get("phaseRevs").cloned();
     AuthoringState { phase, rev, phase_revs }
 }
 

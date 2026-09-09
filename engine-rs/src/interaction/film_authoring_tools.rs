@@ -561,6 +561,19 @@ async fn tool_generate_node_image(deps: &FilmAuthoringDeps<'_>, args: &Value) ->
     let Ok(node_id) = required_str(args, "nodeId") else {
         return error_result("nodeId is required");
     };
+    // TS 参数校验在 execute 之前（TypeBox 边界）——size 枚举非法即拒绝，
+    // 不触达图谱/生图服务。
+    let requested_size = args
+        .get("size")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    if let Some(size) = requested_size {
+        if !matches!(size, "1536x1024" | "1024x1536" | "1024x1024") {
+            return error_result(
+                "generate_node_image: size must be one of 1536x1024/1024x1536/1024x1024",
+            );
+        }
+    }
     let graph = match film::load_story_graph(deps.root, deps.project_id).await {
         Ok(Some(graph)) => graph,
         Ok(None) => {
@@ -586,10 +599,7 @@ async fn tool_generate_node_image(deps: &FilmAuthoringDeps<'_>, args: &Value) ->
         ));
     }
     // TS generateNodeImage：size ?? env INKOS_FILM_IMAGE_SIZE ?? "1536x1024"。
-    let size = args
-        .get("size")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
+    let size = requested_size
         .map(str::to_string)
         .or_else(|| {
             std::env::var("INKOS_FILM_IMAGE_SIZE")
@@ -968,6 +978,17 @@ mod tests {
         let root = temp_root("image");
         let llm = no_llm();
         let deps = deps_for(&root, &llm, "zh");
+
+        // 非法 size 在参数边界拒绝（TS TypeBox 校验位），不触达图谱。
+        let result = execute_film_authoring_tool(
+            &deps,
+            "generate_node_image",
+            &json!({ "nodeId": "n1", "size": "800x600" }),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_error);
+        assert!(result.text.contains("size must be one of"), "text: {}", result.text);
 
         // 图谱缺失。
         let result = execute_film_authoring_tool(
