@@ -3,19 +3,27 @@
 //! 加载 examples/wasm-plugin 编译的真实 .wasm component，经 Component Model
 //! 类型化调用 plugin.invoke，验证完整链路：Linker(Host trait) → 实例化 → invoke。
 //!
-//! 前置：示例 component 已编译（wasm32-wasip2 target）：
-//!   cd examples/wasm-plugin && cargo build --target wasm32-wasip2 --release
-//! 未编译则 skip（不判失败）——本测试需要 wasm 工具链，CI 按需启用。
+//! 组件来源：优先本地新构建产物，缺失则回退 tests/fixtures/ 受跟踪组件
+//! （两者任一存在即跑；本测试不再依赖 wasm 工具链）。
 
 use inkos_desktop::plugin::{PluginMetadata, WasmPlugin};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-/// 示例 WASM component 产物路径（examples/wasm-plugin 独立 crate 的 target）
+/// 示例 WASM component 产物路径：
+/// 优先 examples/wasm-plugin 的新构建产物（本地开发迭代用）；
+/// 缺失则回退 tests/fixtures/ 下的受跟踪组件（66KB）——保证新克隆环境
+/// 不静默跳过，wasmtime 升级始终有行为级验证兜底。
 fn example_wasm() -> PathBuf {
+    let fresh = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../examples/wasm-plugin/target/wasm32-wasip2/release/inkos_example_plugin.wasm",
+    );
+    if fresh.exists() {
+        return fresh;
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../examples/wasm-plugin/target/wasm32-wasip2/release/inkos_example_plugin.wasm")
+        .join("tests/fixtures/inkos_example_plugin.wasm")
 }
 
 fn wasm_available() -> bool {
