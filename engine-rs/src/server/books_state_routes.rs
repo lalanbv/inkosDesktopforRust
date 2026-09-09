@@ -1311,7 +1311,17 @@ fn book_review_mode(raw_book: &Value) -> Option<ChapterReviewModeVal> {
 
 async fn load_raw_book_config(root: &std::path::Path, book_id: &str) -> std::io::Result<Value> {
     let raw = tokio::fs::read_to_string(root.join("books").join(book_id).join("book.json")).await?;
-    Ok(serde_json::from_str(&raw)?)
+    let value: Value = serde_json::from_str(&raw)?;
+    // 非对象根（手编成数组/标量等合法 JSON）同样按「不可解析」处理，让调用方
+    // 落既有 404 分支——此前 as_object_mut().unwrap() 会 panic 打断连接任务
+    //（对齐 project_config_routes 非对象根韧性先例）。
+    if !value.is_object() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "book.json root must be a JSON object",
+        ));
+    }
+    Ok(value)
 }
 
 pub async fn get_review_mode(
@@ -2149,5 +2159,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// 韧性回归：book.json 为合法 JSON 但非对象根（手编成数组/标量）时，
+    /// 配置读写面按「不可解析」落 404，不得 panic 打断连接任务。
+    /// （对齐 project_config_routes 非对象根韧性先例。）
+    #[tokio::test]
+    async fn non_object_book_json_returns_404_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        std::fs::write(dir.path().join("books").join("b1").join("book.json"), "[1,2,3]").unwrap();
+        for (method, uri, body) in [
+            ("GET", "/api/v1/books/b1/chapter-review-mode", None),
+            (
+                "PUT",
+                "/api/v1/books/b1/chapter-review-mode",
+                Some(r#"{ "mode": "manual" }"#),
+            ),
+            ("GET", "/api/v1/books/b1/timeline-auto-beats", None),
+            (
+                "PUT",
+                "/api/v1/books/b1/timeline-auto-beats",
+                Some(r#"{ "enabled": true }"#),
+            ),
+        ] {
+            let response = app(runtime_for(dir.path()))
+                .oneshot(request(method, uri, body))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::NOT_FOUND,
+                "{method} {uri} 应 404 而非 panic"
+            );
+        }
     }
 }
