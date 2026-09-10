@@ -18075,3 +18075,240 @@ mod sub273_upload_caps_e2e {
         format!("http://{addr}")
     }
 }
+
+// ── 303 号：四件创建域 confirm-production 执行器回归 ─────────────────
+mod sub303_creation_domains_e2e {
+    use super::*;
+    use serde_json::json;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_production::{
+        run_confirmed_production, ProductionRequest, RequestedIntent, StudioLang,
+    };
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt303(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn make_request<'a>(
+        session: &'a str,
+        book_id: Option<&'a str>,
+        intent: RequestedIntent,
+        payload: &'a serde_json::Value,
+    ) -> ProductionRequest<'a> {
+        ProductionRequest {
+            instruction: "确认创建",
+            session_id: session,
+            book_id,
+            session_kind: inkos_engine::interaction::session::SessionKind::BookCreate,
+            play_mode: None,
+            intent,
+            action_payload: Some(payload),
+            language: StudioLang::Zh,
+            source_request_id: None,
+            provider_label: "mock".into(),
+            model_label: "lm-mock-model".into(),
+        }
+    }
+
+    /// 四分支共用的分派 mock：同人架构师/总架构师 → 5 段地基；素材分析师 →
+    /// canon 文档；资深编辑 → PASS 审校；创作总编 → planner memo；作家/写手 →
+    /// 章节成文；审稿 → PASS 95；其余 PASS。
+    async fn spawn_mock303() -> String {
+        fn sse(content: &str) -> String {
+            let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+            format!("data: {chunk}\n\ndata: [DONE]\n\n")
+        }
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                let content = if system.contains("同人架构师")
+                    || system.contains("总架构师")
+                    || system.contains("网络小说架构师")
+                {
+                    super::books58_e2e::ARCHITECT_OUTPUT.to_string()
+                } else if system.contains("素材分析师") {
+                    "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: roles ===\n主角林川。".to_string()
+                } else if system.contains("资深小说编辑") {
+                    "=== DIMENSION: 1 ===\n分数：90\n意见：冲突清晰。\n\n=== OVERALL ===\n95".to_string()
+                } else if system.contains("创作总编") {
+                    "# 第 N 章 memo\n\n## 本章目标\n推进。".to_string()
+                } else if system.contains("作家") || system.contains("写手") {
+                    "林动握紧手中长剑，踏入风雪。".to_string()
+                } else if system.contains("审稿") {
+                    "PASS\n95".to_string()
+                } else {
+                    "PASS".to_string()
+                };
+                axum::response::IntoResponse::into_response((
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    sse(&content),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn fanfic_intent_routes_into_production_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xuanhuan.md"),
+            "---\nname: 玄幻\nid: xuanhuan\nchapterTypes: [\"推进章\"]\nfatigueWords: []\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "fanficCreate": {
+                "title": "剑影余音",
+                "sourceText": "林川握紧手中长剑，剑气纵横三千里。城中人人习剑。",
+                "sourceName": "风起云涌",
+                "mode": "canon",
+                "genre": "xuanhuan",
+                "language": "zh",
+                "targetChapters": 3,
+                "chapterWordCount": 3000,
+            }
+        });
+        let request = make_request("s302-fanfic", None, RequestedIntent::FanficInit, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => panic!("fanfic 意图应执行成功：{}", err.message),
+        };
+        assert!(outcome.response_text.contains("同人创作完成"), "{}", outcome.response_text);
+        // 找到新书的 book 目录并验证正典/地基落盘。
+        let mut found_canon = false;
+        for entry in std::fs::read_dir(root.join("books")).unwrap().flatten() {
+            let canon = entry.path().join("story").join("fanfic_canon.md");
+            if canon.exists() {
+                found_canon = true;
+                let doc = std::fs::read_to_string(&canon).unwrap();
+                assert!(doc.contains("同人正典"), "{doc}");
+            }
+        }
+        assert!(found_canon, "fanfic_canon.md 未落盘");
+    }
+
+    #[tokio::test]
+    async fn style_imitation_intent_creates_book_with_style_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        for genre in ["xuanhuan", "other"] {
+            std::fs::write(
+                root.join("assets").join("genres").join(format!("{genre}.md")),
+                "---\nname: 测试题材\nid: test\nchapterTypes: [\"推进章\"]\nfatigueWords: []\nnumericalSystem: true\n---\n正文指导\n",
+            )
+            .unwrap();
+        }
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "imitationCreate": {
+                "title": "镜中剑",
+                "storyIdea": "镜中世界反向修行的原创故事",
+                "referenceText": "林川握紧手中长剑，剑气纵横三千里。",
+                "sourceName": "参考作品",
+            }
+        });
+        let request = make_request("s302-imitation", None, RequestedIntent::StyleImitation, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        let _outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => panic!("仿写意图应执行成功：{}", err.message),
+        };
+        let book_dir = root.join("books").join("镜中剑");
+        assert!(book_dir.join("story").join("style_guide.md").is_file(), "风格指南落盘");
+    }
+
+    #[tokio::test]
+    async fn spinoff_intent_requires_parent_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "spinoffCreate": { "title": "无父番外" }
+        });
+        let request = make_request("s302-spinoff", None, RequestedIntent::SpinoffCreate, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        let err = match outcome {
+            Err(err) => err,
+            Ok(outcome) => panic!("缺 parent 应报错，实际：{:?}", outcome.response_text),
+        };
+        assert!(
+            err.message.contains("正传书籍") || err.message.contains("parent book"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn continuation_import_intent_new_book_and_chapters() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        std::fs::write(
+            root.join("assets").join("genres").join("xuanhuan.md"),
+            "---\nname: 玄幻\nid: xuanhuan\nchapterTypes: [\"推进章\"]\nfatigueWords: []\nnumericalSystem: true\n---\n正文指导\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos").join("uploads")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("uploads").join("cont.txt"),
+            "# 第三章 北境\n\n北境风雪。\n\n# 第四章 归来\n\n林川归来。\n",
+        )
+        .unwrap();
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "continuationImport": {
+                "title": "续写新书",
+                "sourcePath": ".inkos/uploads/cont.txt",
+                "genre": "xuanhuan",
+                "language": "zh",
+            }
+        });
+        let request = make_request("s302-continuation", None, RequestedIntent::ContinuationImport, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        let _outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(err) => panic!("续写导入意图应执行成功：{}", err.message),
+        };
+        // 新书落盘：book.json + 2 章文件。
+        let books = root.join("books");
+        let mut found_book_dir = None;
+        for entry in std::fs::read_dir(&books).unwrap().flatten() {
+            if entry.path().join("book.json").is_file() {
+                found_book_dir = Some(entry.path());
+            }
+        }
+        let book_dir = found_book_dir.expect("新书应已建配置");
+        let index = std::fs::read_to_string(book_dir.join("chapters").join("index.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&index).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2, "{index}");
+        assert!(book_dir.join("chapters").join("0001_北境.md").is_file(), "第一章落盘");
+    }
+}
