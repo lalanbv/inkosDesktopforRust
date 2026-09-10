@@ -27,7 +27,7 @@
 | 组成 | 内容 |
 | --- | --- |
 | `src-tauri/` | **Tauri 2 桌面壳**：窗口 / 托盘保活 / 引擎进程监督 / Keychain 密钥同步 / 原生通知 / 自动更新 / WASM 插件系统 / 多项目管理 |
-| `engine-rs/` | **Rust 全量引擎**：`packages/core` 的完整移植（16 业务域、`/api/v1/*` 107 端点 + SSE + 静态面 + CORS），独立 `inkos-engine-server` 可执行文件 |
+| `engine-rs/` | **Rust 全量引擎**：`packages/core` 的完整移植（16 业务域、`/api/v1/*` 全量 REST 面 + SSE + 静态面 + CORS），独立 `inkos-engine-server` 可执行文件 |
 | `packages/{core,cli,studio}` | 上游 inkos v1.8.0；**桌面 UI 主体在 `packages/studio`**，四期 UI 优化直接在此演进 |
 | `scripts/desktop-*` | 本地构建 / 引擎打包 / 发版脚本（本项目无 CI，全部本地脚本化） |
 

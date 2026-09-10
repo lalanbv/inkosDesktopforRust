@@ -27,7 +27,7 @@
 | 構成 | 内容 |
 | --- | --- |
 | `src-tauri/` | **Tauri 2 デスクトップシェル**：ウィンドウ / トレイ常駐 / エンジンプロセス監督 / Keychain 秘密鍵同期 / ネイティブ通知 / 自動アップデート / WASM プラグインシステム / マルチプロジェクト管理 |
-| `engine-rs/` | **フル Rust エンジン**：`packages/core` の完全移植（16 ビジネスドメイン、`/api/v1/*` 107 エンドポイント + SSE + 静的面 + CORS）。単体の `inkos-engine-server` 実行ファイルとして提供 |
+| `engine-rs/` | **フル Rust エンジン**：`packages/core` の完全移植（16 ビジネスドメイン、`/api/v1/*` フル REST 面 + SSE + 静的面 + CORS）。単体の `inkos-engine-server` 実行ファイルとして提供 |
 | `packages/{core,cli,studio}` | 上流 inkos v1.8.0。**デスクトップ UI の本体は `packages/studio`** にあり、四期 UI 改善はここで直接進化しています |
 | `scripts/desktop-*` | ローカルビルド / エンジンパッケージ / リリーススクリプト（本プロジェクトに CI はなく、すべてローカルスクリプト化） |
 

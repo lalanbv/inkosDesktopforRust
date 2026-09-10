@@ -27,7 +27,7 @@
 | Component | Contents |
 | --- | --- |
 | `src-tauri/` | **Tauri 2 desktop shell**: window / tray keep-alive / engine process supervision / Keychain secret sync / native notifications / auto-update / WASM plugin system / multi-project management |
-| `engine-rs/` | **Full Rust engine**: a complete port of `packages/core` (16 business domains, `/api/v1/*` 107 endpoints + SSE + static assets + CORS), shipped as the standalone `inkos-engine-server` executable |
+| `engine-rs/` | **Full Rust engine**: a complete port of `packages/core` (16 business domains, the full `/api/v1/*` REST surface + SSE + static assets + CORS), shipped as the standalone `inkos-engine-server` executable |
 | `packages/{core,cli,studio}` | Upstream inkos v1.8.0; **the desktop UI lives in `packages/studio`**, where the four-phase UI overhaul evolves directly |
 | `scripts/desktop-*` | Local build / engine packaging / release scripts (this project has no CI; everything is local scripting) |
 

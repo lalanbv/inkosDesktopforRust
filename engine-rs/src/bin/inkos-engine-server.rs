@@ -11,6 +11,7 @@
 //! - `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL`：默认端点
 //! - `INKOS_LLM_MAX_TOKENS`：默认 max_tokens（默认 8192）
 //! - `INKOS_PORT`：监听端口（默认 8787，与 Node sidecar 同位替换时由壳层指定）
+//! - `INKOS_BUILTIN_GENRES_DIR`：内置题材目录（默认 `assets/genres`）
 //! - `INKOS_STATIC_DIR`：静态前端面目录（`/assets/*` + SPA 回退；浏览器直连
 //!   模式 = `packages/studio/dist`；未设为纯 API 服务——TS sidecar 无此开关、
 //!   恒挂 dist，Rust 侧显式化供 Tauri 壳内嵌前端场景）
