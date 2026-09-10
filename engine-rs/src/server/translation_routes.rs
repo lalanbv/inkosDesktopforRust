@@ -3,7 +3,11 @@
 //! 契约来源 `packages/studio/src/api/server.ts` L6521-L6665：
 //! - `GET /translations`（L6521）：目录枚举 + manifest 摘要 + projectId 降序
 //! - `POST /translations/upload`（L6553）：safeUploadFileName + dataUrl 解析 +
-//!   80MB 上限 + `.inkos/uploads/translation/{毫秒}-{name}` 落盘
+//!   80MB 上限 + `.inkos/uploads/translation/{毫秒}-{name}` 落盘。
+//!   274 号起 dataUrl 解析收敛至 upload_common（TS `parseDataUrl` 逐字：
+//!   仅收 base64；解析失败 400 `INVALID_ATTACHMENT_DATA_URL`——此前本地
+//!   实现额外接受非 base64 data URL 且用严格 base64 解码，均与 Node
+//!   宽松语义有偏差）
 //! - `POST /translations/create`（L6563）：MISSING_FILE_PATH / MISSING_LANGUAGES
 //!   400 → createTranslationProjectFromFile → 响应展开 + projectId/title
 //! - `GET /translations/:id`（L6588）：manifest + review 报告 + 章节段级合并
@@ -162,42 +166,6 @@ fn collapse_whitespace(value: &str) -> String {
     out
 }
 
-/// data URL 解析（`data:[mime][;base64],payload` → 字节 + mime）。
-fn parse_upload_data_url(data_url: &str) -> Result<(Vec<u8>, String), Box<Response>> {
-    let invalid = || {
-        api_error(
-            StatusCode::BAD_REQUEST,
-            "INVALID_TRANSLATION_UPLOAD",
-            "Translation upload has an invalid data URL",
-        )
-    };
-    let Some(rest) = data_url.strip_prefix("data:") else {
-        return Err(Box::new(invalid()));
-    };
-    let Some((meta, payload)) = rest.split_once(',') else {
-        return Err(Box::new(invalid()));
-    };
-    let (mime, is_base64) = match meta.strip_suffix(";base64") {
-        Some(mime) => (mime, true),
-        None => (meta, false),
-    };
-    let mime = if mime.is_empty() {
-        "application/octet-stream".to_string()
-    } else {
-        mime.to_string()
-    };
-    let buffer = if is_base64 {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD
-            .decode(payload)
-            .map_err(|_| Box::new(invalid()))?
-    } else {
-        // 非 base64 data URL：UTF-8 百分号解码（TS queryUnescape 语义近似）。
-        payload.as_bytes().to_vec()
-    };
-    Ok((buffer, mime))
-}
-
 pub async fn upload_translation(
     State(runtime): State<BooksRuntime>,
     req: axum::extract::Request,
@@ -225,9 +193,10 @@ pub async fn upload_translation(
             "Translation upload is missing dataUrl",
         );
     };
-    let (buffer, mime_type) = match parse_upload_data_url(data_url) {
+    let (buffer, mime_type) = match crate::server::upload_common::parse_data_url_with_mime(data_url)
+    {
         Ok(parsed) => parsed,
-        Err(response) => return *response,
+        Err((status, body)) => return (status, body).into_response(),
     };
     if buffer.len() > MAX_TRANSLATION_UPLOAD_BYTES {
         return api_error(

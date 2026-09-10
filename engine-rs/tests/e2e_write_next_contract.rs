@@ -8002,6 +8002,17 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_TRANSLATION_UPLOAD");
 
+        // 274 号：解析失败（TS 仅收 base64）→ 400 INVALID_ATTACHMENT_DATA_URL。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/upload",
+            Some(r#"{ "filename": "x.txt", "dataUrl": "data:text/plain,raw" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT_DATA_URL");
+
         // create 缺 filePath / 缺语言 → 400。
         let (status, parsed) = call(
             app.clone(),
