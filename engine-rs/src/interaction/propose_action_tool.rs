@@ -230,6 +230,12 @@ fn proposed_action_payload(args: &Value, language: &str) -> Option<Value> {
         ("storyboard_create", "storyboardCreate", "storyboardCreate"),
         ("interactive_film_create", "interactiveFilmCreate", "interactiveFilmCreate"),
         ("translation_create", "translationCreate", "translationCreate"),
+        // 301 号：四件创建域结构化字段补齐（TS agent-tools.ts L379-424 同名，
+        // 此前 schema 未宣传导致提示词指示的必填字段无处落）。
+        ("fanfic_init", "fanficCreate", "fanficCreate"),
+        ("continuation_import", "continuationImport", "continuationImport"),
+        ("spinoff_create", "spinoffCreate", "spinoffCreate"),
+        ("style_imitation", "imitationCreate", "imitationCreate"),
     ];
     let action = args.get("action").and_then(Value::as_str).unwrap_or_default();
     let (_, arg_key, payload_key) = domains.iter().find(|(act, _, _)| *act == action)?;
@@ -281,6 +287,18 @@ fn assert_executable_proposed_action(action: &str, payload: Option<&Value>) -> R
             require_proposed_text(payload, "/translationCreate/filePath")?;
             require_proposed_text(payload, "/translationCreate/sourceLanguage")?;
             require_proposed_text(payload, "/translationCreate/targetLanguage")
+        }
+        // 301 号：四件创建域必填断言（对齐 TypeBox required：fanfic.title /
+        // continuation.sourcePath / spinoff.title+parentBookId / imitation.title+storyIdea）。
+        "fanfic_init" => require_proposed_text(payload, "/fanficCreate/title"),
+        "continuation_import" => require_proposed_text(payload, "/continuationImport/sourcePath"),
+        "spinoff_create" => {
+            require_proposed_text(payload, "/spinoffCreate/title")?;
+            require_proposed_text(payload, "/spinoffCreate/parentBookId")
+        }
+        "style_imitation" => {
+            require_proposed_text(payload, "/imitationCreate/title")?;
+            require_proposed_text(payload, "/imitationCreate/storyIdea")
         }
         _ => Ok(()),
     }
@@ -493,6 +511,68 @@ pub fn propose_action_schema() -> Value {
                             "targetLanguage": { "type": "string", "description": "Target language as a human-readable name, e.g. Chinese (Simplified), English, Japanese, Korean, Brazilian Portuguese. Do not require ISO abbreviations." },
                             "title": { "type": "string", "description": "Optional translation project title." },
                             "segmentMaxChars": { "type": "number", "description": "Optional long-paragraph split threshold." },
+                        },
+                    },
+                    "fanficCreate": {
+                        "type": "object",
+                        "description": "Structured execution args for action=fanfic_init. This creates the book directly after confirmation.",
+                        "properties": {
+                            "title": { "type": "string", "description": "Confirmed fanfiction book title." },
+                            "sourceText": { "type": "string", "description": "Provided canon/source text. Prefer sourcePath for uploaded or long files." },
+                            "sourcePath": { "type": "string", "description": "Project-relative uploaded canon/source file path." },
+                            "sourceName": { "type": "string", "description": "Human-readable source work name." },
+                            "mode": { "type": "string", "enum": ["canon", "au", "ooc", "cp"], "description": "Confirmed fanfiction mode." },
+                            "genre": { "type": "string", "description": "Confirmed genre." },
+                            "platform": { "type": "string", "enum": ["tomato", "qidian", "feilu", "other"] },
+                            "language": { "type": "string", "enum": ["zh", "en"] },
+                            "targetChapters": { "type": "number", "description": "Confirmed total chapter count." },
+                            "chapterWordCount": { "type": "number", "description": "Confirmed per-chapter length." },
+                        },
+                    },
+                    "continuationImport": {
+                        "type": "object",
+                        "description": "Structured execution args for action=continuation_import. This imports and rebuilds state directly after confirmation.",
+                        "properties": {
+                            "bookId": { "type": "string", "description": "Existing target book id. Omit when creating a new continuation book." },
+                            "title": { "type": "string", "description": "New continuation book title when bookId is omitted." },
+                            "sourcePath": { "type": "string", "description": "Project-relative uploaded novel file or chapter directory." },
+                            "splitPattern": { "type": "string", "description": "Optional custom chapter-heading regex source." },
+                            "resumeFrom": { "type": "number", "description": "Resume interrupted replay from this 1-based chapter number." },
+                            "genre": { "type": "string", "description": "Genre for a newly created continuation book." },
+                            "platform": { "type": "string", "enum": ["tomato", "qidian", "feilu", "other"] },
+                            "language": { "type": "string", "enum": ["zh", "en"] },
+                            "targetChapters": { "type": "number", "description": "Target total chapters for a new book." },
+                            "chapterWordCount": { "type": "number", "description": "Per-chapter length for a new book." },
+                        },
+                    },
+                    "spinoffCreate": {
+                        "type": "object",
+                        "description": "Structured execution args for action=spinoff_create. This creates the side-story directly after confirmation.",
+                        "properties": {
+                            "title": { "type": "string", "description": "Confirmed side-story title." },
+                            "parentBookId": { "type": "string", "description": "Existing InkOS parent book id whose canon is inherited." },
+                            "direction": { "type": "string", "description": "Confirmed standalone side-story direction." },
+                            "genre": { "type": "string", "description": "Optional genre override; defaults to the parent book." },
+                            "platform": { "type": "string", "enum": ["tomato", "qidian", "feilu", "other"] },
+                            "language": { "type": "string", "enum": ["zh", "en"] },
+                            "targetChapters": { "type": "number", "description": "Optional chapter count; defaults to the parent book." },
+                            "chapterWordCount": { "type": "number", "description": "Optional chapter length; defaults to the parent book." },
+                        },
+                    },
+                    "imitationCreate": {
+                        "type": "object",
+                        "description": "Structured execution args for action=style_imitation. This creates an original book and style guide directly after confirmation.",
+                        "properties": {
+                            "title": { "type": "string", "description": "Confirmed original imitation-project title." },
+                            "referenceText": { "type": "string", "description": "Reference prose. Prefer referencePath for uploaded or long files." },
+                            "referencePath": { "type": "string", "description": "Project-relative uploaded reference-work path." },
+                            "storyIdea": { "type": "string", "description": "Confirmed original story idea; do not copy the reference plot." },
+                            "sourceName": { "type": "string", "description": "Human-readable reference work name." },
+                            "genre": { "type": "string", "description": "Confirmed genre." },
+                            "platform": { "type": "string", "enum": ["tomato", "qidian", "feilu", "other"] },
+                            "language": { "type": "string", "enum": ["zh", "en"] },
+                            "targetChapters": { "type": "number", "description": "Confirmed total chapter count." },
+                            "chapterWordCount": { "type": "number", "description": "Confirmed per-chapter length." },
                         },
                     },
                 },
@@ -717,6 +797,11 @@ mod tests {
         let schema = propose_action_schema();
         assert_eq!(schema["function"]["name"], "propose_action");
         assert_eq!(schema["function"]["parameters"]["required"], json!(["action", "instruction"]));
+        // 301 号：12 个结构化子域全宣传（含四件创建域）。
+        let props = &schema["function"]["parameters"]["properties"];
+        for key in ["createBook", "shortRun", "playStart", "generateCover", "scriptCreate", "storyboardCreate", "interactiveFilmCreate", "translationCreate", "fanficCreate", "continuationImport", "spinoffCreate", "imitationCreate"] {
+            assert!(props.get(key).is_some(), "schema 缺 {key}");
+        }
         assert_eq!(
             schema["function"]["parameters"]["properties"]["action"]["enum"].as_array().unwrap().len(),
             15
@@ -727,13 +812,52 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(tool_propose_action(
             &deps,
-            &json!({ "action": "fanfic_init", "instruction": "开同人" }),
+            &json!({
+                "action": "fanfic_init",
+                "instruction": "开同人",
+                "fanficCreate": { "title": "同人书", "sourcePath": ".inkos/uploads/canon/a.txt" }
+            }),
         ));
-        assert!(result.text.starts_with("打开同人创作"));
+        assert!(result.text.starts_with("打开同人创作"), "actual: {}", result.text);
         let details = result.details.unwrap();
         assert_eq!(details["targetRoute"], "import:fanfic");
         assert_eq!(details["sameSession"], true);
         assert_eq!(details["requestedSkills"], json!(["style-a", "Style-A"]));
-        assert!(details.get("actionPayload").is_none(), "无子域时键不出现");
+        assert_eq!(details["actionPayload"]["fanficCreate"]["title"], "同人书");
+
+        // 301 号：四件创建域必填断言。
+        let no_title = runtime.block_on(tool_propose_action(
+            &deps,
+            &json!({ "action": "fanfic_init", "instruction": "开同人" }),
+        ));
+        assert!(no_title.is_error && no_title.text.contains("/fanficCreate/title"), "{}", no_title.text);
+        let no_source = runtime.block_on(tool_propose_action(
+            &deps,
+            &json!({ "action": "continuation_import", "instruction": "续写导入" }),
+        ));
+        assert!(no_source.is_error && no_source.text.contains("/continuationImport/sourcePath"), "{}", no_source.text);
+        let no_parent = runtime.block_on(tool_propose_action(
+            &deps,
+            &json!({ "action": "spinoff_create", "instruction": "开番外", "spinoffCreate": { "title": "番外" } }),
+        ));
+        assert!(no_parent.is_error && no_parent.text.contains("/spinoffCreate/parentBookId"), "{}", no_parent.text);
+        let no_idea = runtime.block_on(tool_propose_action(
+            &deps,
+            &json!({ "action": "style_imitation", "instruction": "仿写", "imitationCreate": { "title": "仿写书", "referenceText": "林动睁开双眼。" } }),
+        ));
+        assert!(no_idea.is_error && no_idea.text.contains("/imitationCreate/storyIdea"), "{}", no_idea.text);
+
+        // 合法 imitation：payload 带结构化子域。
+        let ok_imit = runtime.block_on(tool_propose_action(
+            &deps,
+            &json!({
+                "action": "style_imitation",
+                "instruction": "仿写",
+                "imitationCreate": { "title": "仿写书", "storyIdea": "全新的江湖故事", "referenceText": "林动睁开双眼。" }
+            }),
+        ));
+        assert!(!ok_imit.is_error, "{}", ok_imit.text);
+        let ok_details = ok_imit.details.unwrap();
+        assert_eq!(ok_details["actionPayload"]["imitationCreate"]["storyIdea"], "全新的江湖故事");
     }
 }

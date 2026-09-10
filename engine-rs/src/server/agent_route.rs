@@ -1716,6 +1716,7 @@ enum PayloadField<'a> {
 const PAYLOAD_TOP_LEVEL_KEYS: &[&str] = &[
     "createBook", "writeNext", "shortRun", "playStart", "generateCover",
     "scriptCreate", "storyboardCreate", "interactiveFilmCreate", "translationCreate",
+    "fanficCreate", "continuationImport", "spinoffCreate", "imitationCreate",
     "draftStructure", "connectChoice", "removeNode",
 ];
 
@@ -1786,6 +1787,46 @@ fn payload_schemas() -> Vec<PayloadSchema> {
             ("filePath", StrNonEmpty), ("sourceLanguage", StrNonEmpty),
             ("targetLanguage", StrNonEmpty), ("title", StrNonEmpty),
             ("segmentMaxChars", IntRange { min: Some(1.0), max: None }),
+        ]),
+        // 301 号：四件创建域（action-envelope.ts L173-227 同构，全 .strict()；
+        // fanfic/imitation 的 sourceText||sourcePath、referenceText||referencePath
+        // 跨字段 refine 见 validate_action_payload_strict 尾部）。
+        ("fanficCreate", true, vec![
+            ("title", StrNonEmpty), ("sourceText", StrNonEmpty),
+            ("sourcePath", StrNonEmpty), ("sourceName", StrNonEmpty),
+            ("mode", Enum(&["canon", "au", "ooc", "cp"])),
+            ("genre", StrNonEmpty),
+            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+            ("language", Enum(&["zh", "en"])),
+            ("targetChapters", IntRange { min: Some(1.0), max: None }),
+            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
+        ]),
+        ("continuationImport", true, vec![
+            ("bookId", StrNonEmpty), ("title", StrNonEmpty),
+            ("sourcePath", StrNonEmpty), ("splitPattern", StrNonEmpty),
+            ("resumeFrom", IntRange { min: Some(1.0), max: None }),
+            ("genre", StrNonEmpty),
+            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+            ("language", Enum(&["zh", "en"])),
+            ("targetChapters", IntRange { min: Some(1.0), max: None }),
+            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
+        ]),
+        ("spinoffCreate", true, vec![
+            ("title", StrNonEmpty), ("parentBookId", StrNonEmpty),
+            ("direction", StrNonEmpty), ("genre", StrNonEmpty),
+            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+            ("language", Enum(&["zh", "en"])),
+            ("targetChapters", IntRange { min: Some(1.0), max: None }),
+            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
+        ]),
+        ("imitationCreate", true, vec![
+            ("title", StrNonEmpty), ("referenceText", StrNonEmpty),
+            ("referencePath", StrNonEmpty), ("storyIdea", StrNonEmpty),
+            ("sourceName", StrNonEmpty), ("genre", StrNonEmpty),
+            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+            ("language", Enum(&["zh", "en"])),
+            ("targetChapters", IntRange { min: Some(1.0), max: None }),
+            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
         ]),
         // 以下三个子域 TS 非 strict（无 .strict()）：只做字段形态校验。
         ("draftStructure", false, vec![
@@ -1870,6 +1911,22 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
                     "shortRun.charsPerChapter: charsPerChapter={chars} 超出范围（{min}-{max}）"
                 ));
             }
+        }
+    }
+    // 301 号：fanfic/imitation 的跨字段 refine（action-envelope.ts L184/L224 逐字：
+    // sourceText||sourcePath、referenceText||referencePath 至少其一非空）。
+    let has_non_empty = |obj: &serde_json::Map<String, Value>, keys: &[&str]| -> bool {
+        keys.iter()
+            .any(|k| obj.get(*k).and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()))
+    };
+    if let Some(fanfic) = object.get("fanficCreate").and_then(Value::as_object) {
+        if !has_non_empty(fanfic, &["sourceText", "sourcePath"]) {
+            return Err("fanficCreate requires sourceText or sourcePath".to_string());
+        }
+    }
+    if let Some(imitation) = object.get("imitationCreate").and_then(Value::as_object) {
+        if !has_non_empty(imitation, &["referenceText", "referencePath"]) {
+            return Err("imitationCreate requires referenceText or referencePath".to_string());
         }
     }
     Ok(())
