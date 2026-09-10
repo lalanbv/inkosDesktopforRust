@@ -7606,12 +7606,15 @@ mod films69_e2e {
         assert!(codes.contains(&"DEAD_END"), "codes: {codes:?}");
         assert!(codes.contains(&"NO_PATH_TO_ENDING"), "codes: {codes:?}");
 
-        // analysis：report + arcs + distribution 三段。
+        // analysis：report + arcs + distribution 三段（281 号：arcs 为 TS 包装对象
+        // `{arcs, truncated}`，此前裸数组导致 UI `arcs.arcs.slice` 崩溃）。
         write_graph(&root, "good1", valid_graph("good1", "完好"));
         let (status, parsed) = call(app, "GET", "/api/v1/projects/good1/story-graph/analysis", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["report"]["ok"], true);
-        assert_eq!(parsed["arcs"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["arcs"]["arcs"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["arcs"]["arcs"][0]["endingId"], "e1");
+        assert_eq!(parsed["arcs"]["truncated"], false);
         assert_eq!(parsed["distribution"]["total"], 1);
         assert_eq!(parsed["distribution"]["byEnding"]["e1"], 1);
 

@@ -502,12 +502,14 @@ pub async fn get_story_graph_analysis(
         Ok(graph) => {
             let report = serde_json::to_value(film::review_story_graph(&graph))
                 .unwrap_or(Value::Null);
-            let (arcs, _) = film::analyze_emotional_arcs(&graph);
+            // TS `analyzeEmotionalArcs` 返回包装对象 `{arcs, truncated}`（emotion.ts
+            // L35）——此前裸序列化 arcs 数组，UI `arcs.arcs.slice` 即崩（281 号）。
+            let (arcs, truncated) = film::analyze_emotional_arcs(&graph);
             (
                 StatusCode::OK,
                 Json(json!({
                     "report": report,
-                    "arcs": arcs,
+                    "arcs": { "arcs": arcs, "truncated": truncated },
                     "distribution": film::analyze_path_distribution(&graph),
                 })),
             )
