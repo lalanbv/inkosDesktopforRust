@@ -628,9 +628,13 @@ pub async fn save_radar_scan(root: &Path, result: &Value) -> Result<String, Stri
 pub async fn load_radar_history(root: &Path) -> Result<Vec<Value>, String> {
     let radar_dir = root.join("radar");
     let mut files: Vec<String> = Vec::new();
-    let mut entries = tokio::fs::read_dir(&radar_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    // TS `loadRadarHistory`：目录缺失 catch 后返回空数组（200 {items:[]}）——
+    // 此前 Err 上抛为 500，与 TS 契约偏差（286 号）。
+    let mut entries = match tokio::fs::read_dir(&radar_dir).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
     while let Ok(Some(entry)) = entries.next_entry().await {
         if let Ok(name) = entry.file_name().into_string() {
             files.push(name);
@@ -955,5 +959,14 @@ mod tests {
         let history = load_radar_history(root).await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0]["file"], "scan-2026-08-16T00-00-00-000Z.json");
+    }
+
+    /// 286 号：radar 目录缺失 → 空数组（TS catch 返回 []，200 {items:[]}），
+    /// 此前 Err 上抛为 500 契约偏差。
+    #[tokio::test]
+    async fn radar_history_missing_dir_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = load_radar_history(dir.path()).await.unwrap();
+        assert!(history.is_empty());
     }
 }
