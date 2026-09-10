@@ -18265,6 +18265,52 @@ mod sub303_creation_domains_e2e {
         );
     }
 
+    /// 308 号：已有书带章节、未显式给 resumeFrom → 拒绝（TS 防静默追加语义）。
+    #[tokio::test]
+    async fn continuation_import_existing_book_requires_resume_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        for genre in ["xuanhuan", "other"] {
+            std::fs::write(
+                root.join("assets").join("genres").join(format!("{genre}.md")),
+                "---\nname: 测试题材\nid: test\nchapterTypes: [\"推进章\"]\nfatigueWords: []\nnumericalSystem: true\n---\n正文指导\n",
+            )
+            .unwrap();
+        }
+        std::fs::create_dir_all(root.join("books").join("b1").join("chapters")).unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"正传书","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":20,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("chapters").join("index.json"),
+            r#"[{"number":1,"title":"风起","status":"approved","wordCount":40,"createdAt":"","updatedAt":""}]"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos").join("uploads")).unwrap();
+        std::fs::write(root.join(".inkos").join("uploads").join("cont.txt"), "# 第二章\n续文。\n").unwrap();
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "continuationImport": {
+                "bookId": "b1",
+                "sourcePath": ".inkos/uploads/cont.txt"
+            }
+        });
+        let request = make_request("s308", None, RequestedIntent::ContinuationImport, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        let err = match outcome {
+            Err(err) => err,
+            Ok(outcome) => panic!("应拒绝静默追加：{:?}", outcome.response_text),
+        };
+        assert!(
+            err.message.contains("resumeFrom is required") && err.message.contains("\"b1\""),
+            "{}",
+            err.message
+        );
+    }
+
     #[tokio::test]
     async fn continuation_import_intent_new_book_and_chapters() {
         let dir = tempfile::tempdir().unwrap();

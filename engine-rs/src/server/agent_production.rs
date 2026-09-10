@@ -1104,10 +1104,18 @@ async fn execute_continuation_import(
     let existing_book_id = args.get("bookId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let (book_id, start_from) = match existing_book_id {
         Some(existing) => {
-            // 已有书：续传起点缺省 = 现有章数 + 1（TS 语义）。
+            // TS：已有章节且未显式给 resumeFrom → 拒绝（防静默追加破坏时间线）。
             let count = runtime.state.load_chapter_index(existing).await.map(|index| index.len()).unwrap_or(0);
-            let resume = args.get("resumeFrom").and_then(Value::as_f64).map(|v| v as u32).unwrap_or((count + 1) as u32);
-            (existing.to_string(), resume.max(1))
+            let resume = match args.get("resumeFrom").and_then(Value::as_f64).map(|v| v as u32) {
+                Some(v) => v,
+                None if count > 0 => {
+                    return Err(format!(
+                        "Book \"{existing}\" already has {count} chapter(s); resumeFrom is required."
+                    ));
+                }
+                None => 1,
+            };
+            (existing.to_string(), resume)
         }
         None => {
             let title = field("title");
@@ -1132,6 +1140,13 @@ async fn execute_continuation_import(
                 series: None,
                 writing: None,
             };
+            if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
+                return Err(pick(
+                    lang,
+                    &format!("书籍「{t}」已存在", t = book.id),
+                    &format!("Book \"{t}\" already exists", t = book.id),
+                ));
+            }
             runtime.state.save_book_config(&book.id, &book).await.map_err(|e| e.to_string())?;
             (book.id, 1)
         }
