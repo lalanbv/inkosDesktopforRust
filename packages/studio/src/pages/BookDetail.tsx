@@ -525,8 +525,6 @@ export function BookDetail({
   const currentTargetChapters = settingsTargetChapters ?? book.targetChapters ?? 0;
   const currentStatus = settingsStatus ?? (book.status as BookStatus);
 
-  const exportHref = `/api/v1/books/${bookId}/export?format=${exportFormat}${exportApprovedOnly ? "&approvedOnly=true" : ""}`;
-
   return (
     <div className="space-y-8 fade-in">
       {/* Breadcrumbs */}
