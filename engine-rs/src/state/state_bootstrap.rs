@@ -4,7 +4,7 @@
 //! - **纯逻辑**（已移植）：[`resolve_contiguous_chapter_prefix`] / [`deduplicate_summary_rows`] /
 //!   [`normalize_hook_status`] 等 integer/hook 字段归一
 //! - **async fs 编排**（逐步移植）：本模块已含 [`resolve_durable_story_progress`]（durable 进度，
-//!   首个 [`StateStore`](crate::state::store::StateStore) 消费者）；完整 `bootstrapStructuredStateFromMarkdown`
+//!   首个 StateStore 消费者）；完整 `bootstrapStructuredStateFromMarkdown`
 //!   / `loadOrBootstrap*` 系列待后续阶段
 //!
 //! ## 移植纪律
@@ -400,13 +400,13 @@ pub async fn load_hooks_state_if_valid(
 
 /// 从 `pending_hooks.md` 重建 [`HooksState`]。
 ///
-/// 对齐 TS `parsePendingHooksStateMarkdown`：调用 [`parse_pending_hooks_markdown`]（已含初步 status 归一）
+/// 对齐 TS `parsePendingHooksStateMarkdown`：调用 `[`parse_pending_hooks_markdown`]`（已含初步 status 归一）
 /// → 对每个 hook 的 type 走 [`normalize_hook_type`]。
 ///
 /// **与 TS 的等价性说明**：TS 在此对 status 也走 `normalizeHookStatus`（模糊正则）；Rust 的
-/// [`parse_pending_hooks_markdown`] 已用精确匹配把 status 收敛为 [`HookStatus`] 枚举，
+/// `[`parse_pending_hooks_markdown`]` 已用精确匹配把 status 收敛为 [`HookStatus`] 枚举，
 /// 故此处不再二次 normalize（语义等价——精确匹配是模糊正则的子集命中）。
-/// bullet fallback（无表格时 `- xxx` → notes-only hook）已在 [`parse_pending_hooks_markdown`] 内处理。
+/// bullet fallback（无表格时 `- xxx` → notes-only hook）已在 `[`parse_pending_hooks_markdown`]` 内处理。
 pub fn parse_pending_hooks_state_markdown(
     markdown: &str,
     warnings: &mut Vec<String>,

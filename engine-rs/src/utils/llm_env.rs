@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// env map：key → Option<String>（None 表示该层未设置）。
+/// env map：key → `Option<String>`（None 表示该层未设置）。
 pub type LLMEnvMap = HashMap<String, Option<String>>;
 
 /// 合并多层 env map：后覆盖前，跳过 None（对齐 TS mergeEnvMaps）。

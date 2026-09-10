@@ -2,7 +2,7 @@
 //!
 //! 移植自 `packages/core/src/prompts/`：
 //! - [`PromptPackManifest`] / [`PromptSource`]（types.ts）
-//! - [`BuiltinPrompt`] + [`BUILTIN_PROMPT_PACKS`] / [`BUILTIN_PROMPTS`]（builtin-prompts.ts，3 pack + 12 prompt）
+//! - [`BuiltinPrompt`] + `[`BUILTIN_PROMPT_PACKS`]` / `[`BUILTIN_PROMPTS`]`（builtin-prompts.ts，3 pack + 12 prompt）
 //! - [`get_builtin_prompt`] / [`list_builtin_prompts`] / [`list_builtin_prompt_packs`]（查询）
 //!
 //! ## 待移植（需文件 IO）

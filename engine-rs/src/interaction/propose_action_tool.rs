@@ -4,7 +4,7 @@
 //! `createProposeActionTool`：聊天里把生产意图升格为确认卡——15 种
 //! action、9 个结构化 actionPayload 子域（compact 清洗）、必填字段断言、
 //! targetSessionKind/targetRoute 映射与双语回退文案。
-//! strict 载荷校验复用 [`crate::server::agent_route::validate_action_payload_strict`]
+//! strict 载荷校验复用 `crate::server::agent_route::validate_action_payload_strict`
 //! （75 号 ActionPayloadSchema 逐字）。
 
 use serde_json::{json, Map, Value};

@@ -1532,7 +1532,7 @@ fn safe_asset_segment(value: &str) -> String {
         .replace('*', "%2A")
 }
 
-/// `nodeImageRelPath`：GET /project/files/<this> 可服务的 posix 相对路径。
+/// `nodeImageRelPath`：GET /project/files/&lt;this&gt; 可服务的 posix 相对路径。
 pub fn node_image_rel_path(project_id: &str, node_id: &str, ext: &str) -> String {
     format!(
         "interactive-films/{project_id}/assets/nodes/{}.{}",

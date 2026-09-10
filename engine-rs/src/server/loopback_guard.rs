@@ -8,7 +8,7 @@
 //!
 //! 规则（deny-first，仅拦浏览器形态请求）：
 //! 1. `Origin` 头存在：`scheme://host[:port]` 剥端口后的 host 必须是回环主机
-//!    （localhost / 127.0.0.1 / [::1] / [::]，端口不限——Vite dev 4567 代理与
+//!    （localhost / 127.0.0.1 / `::1` / `::`，端口不限——Vite dev 4567 代理与
 //!    `pick_free_port` 动态端口天然放行），或命中 env 追加白名单；否则 403。
 //!    `tauri://localhost` 等 Tauri origin 因 host 为回环同获放行；`Origin: null`
 //!    （file:// 沙箱页）无 `://` 结构，一律 403。

@@ -5,7 +5,7 @@
 //!
 //! ## 反向引用正则的处理
 //! TS 的排比模式 `/[，。；]([^，。；]{2,6})[，。；]\1/g` 用了反向引用 `\1`——Rust `regex` crate
-//! 不支持反向引用。不为单个模式引入 `fancy-regex` 重依赖，改用 [`count_parallelism`] 手动扫描
+//! 不支持反向引用。不为单个模式引入 `fancy-regex` 重依赖，改用 `count_parallelism` 手动扫描
 //! 等价实现（标点 X + 2-6 非标点 + 标点 + 同一 2-6 串）。其余 11 个正则用 regex crate。
 
 use regex::Regex;

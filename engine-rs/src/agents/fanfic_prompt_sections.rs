@@ -38,7 +38,7 @@ pub fn build_fanfic_canon_section(fanfic_canon: &str, mode: FanficMode) -> Strin
 /// 从 fanfic_canon.md 提取角色表格生成语音参照段。对齐 TS `buildCharacterVoiceProfiles`。
 ///
 /// 提取 `## 角色档案` 节下的 markdown 表格（表头 + 分隔行 + 数据行），
-/// 每行取 [0]=姓名、[3]=口头禅、[4]=说话风格、[5]=典型行为；「（素材未提及）」跳过。
+/// 每行取 `[0]`=姓名、`[3]`=口头禅、`[4]`=说话风格、`[5]`=典型行为；「（素材未提及）」跳过。
 pub fn build_character_voice_profiles(fanfic_canon: &str) -> String {
     static TABLE: OnceLock<Regex> = OnceLock::new();
     let table = TABLE.get_or_init(|| {

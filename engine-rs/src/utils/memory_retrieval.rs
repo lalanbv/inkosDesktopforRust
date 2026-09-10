@@ -9,7 +9,7 @@
 //! 纯函数（golden 差分守门）：
 //! - [`compute_recyclable_hooks`]：陈旧 hook 回收判定（阈值随状态/core 变化）
 //! - [`extract_query_terms`]：goal/outline/mustKeep → 检索词
-//! - [`render_summary_snapshot`] 复用自 [`crate::utils::story_markdown`]
+//! - `render_summary_snapshot` 复用自 `crate::utils::story_markdown`
 //!
 //! ## 移植纪律
 //! - TS `StoredHook.status` 是**原始字符串**（"pressured"/"near_payoff" 等非枚举值

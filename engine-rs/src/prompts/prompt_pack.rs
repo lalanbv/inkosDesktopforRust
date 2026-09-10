@@ -4,7 +4,7 @@
 //! project → user → builtin 三级优先级加载 prompt 内容：项目/用户目录的 `.md` 覆盖文件优先于 builtin。
 //!
 //! ## 架构
-//! fs 经 [`StateStore`](crate::state::store::StateStore) trait 注入（与 state 域 async 编排同基座），
+//! fs 经 `StateStore`（crate::state::store）trait 注入（与 state 域 async 编排同基座），
 //! 可用 [`InMemoryStateStore`](crate::state::store::InMemoryStateStore) 单测。
 
 use crate::prompts::{get_builtin_prompt, PromptSource};

@@ -9,7 +9,7 @@ use ts_rs::TS;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// secrets.json 契约：services[id] = { apiKey }。
+/// secrets.json 契约：services`id` = { apiKey }。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]

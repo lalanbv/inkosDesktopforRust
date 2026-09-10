@@ -1,7 +1,7 @@
 //! 通知域（格式化 + 通道派发）。
 //!
 //! 移植自 `packages/core/src/notify/`：
-//! - [`format`]：stripMarkdownMarks（markdown→纯文本净化）
+//! - `format`：stripMarkdownMarks（markdown→纯文本净化）
 //! - [`NotifyMessage`] 类型（dispatcher 的消息形状）
 //!
 //! 111 号补齐 dispatcher 与四通道发送器（telegram/feishu/wechat-work/webhook

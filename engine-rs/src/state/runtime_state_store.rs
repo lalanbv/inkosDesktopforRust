@@ -3,12 +3,12 @@
 //! 移植自 `packages/core/src/state/runtime-state-store.ts`（164 行）。state 域 I/O 编排层的最顶层——
 //! 对外暴露加载快照 / 应用增量产出投影 / 持久化快照的完整生命周期，消费 state 域全部已移植子模块：
 //!
-//! - [`state_bootstrap`]：从 markdown 引导结构化状态
-//! - [`reducer`]：增量归约（`apply_runtime_state_delta`）
-//! - [`validator`]：快照校验（`validate_runtime_state`）
-//! - [`hook_arbiter`]：hook 操作裁决
-//! - [`projections`]：markdown 投影渲染
-//! - [`store`]：fs 抽象（`StateStore` trait）
+//! - `[`state_bootstrap`]`：从 markdown 引导结构化状态
+//! - `[`reducer`]`：增量归约（`apply_runtime_state_delta`）
+//! - `[`validator`]`：快照校验（`validate_runtime_state`）
+//! - `[`hook_arbiter`]`：hook 操作裁决
+//! - `[`projections`]`：markdown 投影渲染
+//! - `[`store`]`：fs 抽象（`StateStore` trait）
 //!
 //! 全部方法消费 `&dyn StateStore`，可注入 [`InMemoryStateStore`](crate::state::store::InMemoryStateStore) 单测。
 

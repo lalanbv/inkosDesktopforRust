@@ -5,7 +5,7 @@
 //!   提示词逐字）
 //! - SECTION 解析（`=== SECTION: ===` 标记 / `#` 标题双模式 + legacy 段名
 //!   回退）+ `---ROLE---` 角色卡解析
-//! - [`parse_sections_with_repair`]（缺段 LLM 修复环 →
+//! - `parse_sections_with_repair`（缺段 LLM 修复环 →
 //!   [`ArchitectIncompleteFoundationError`〕双语兜底文案）
 //! - [`normalize_pending_hooks_section`]（13 列 Phase 7 规范化 + 种子预晋升
 //!   四规则：core_hook / depends_on / advanced_count / cross_volume）

@@ -319,7 +319,7 @@ pub fn merge_table_markdown_by_key(
 }
 
 /// 角色矩阵 section 合并。对齐 TS `mergeCharacterMatrixMarkdown`：
-/// 按 section 下标配对合并（各 section key 列不同：[0] / [0,1] / [0,3]），
+/// 按 section 下标配对合并（各 section key 列不同：`[0]` / `[0,1]` / `[0,3]`），
 /// 更新多出的 section 原样追加。
 pub fn merge_character_matrix_markdown(original: &str, updated: &str) -> String {
     let original_sections = parse_sections(original);

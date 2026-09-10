@@ -5,7 +5,7 @@
 //! [`arbitrate_runtime_state_delta_hooks`] 把 architect/consolidator 产出的原始 delta
 //! 裁决为可直接归约的 resolved delta：
 //! - 已知 id 的 upsert 直接保留；
-//! - 未知候选经 [`evaluate_hook_admission`](crate::utils::hook_governance::evaluate_hook_admission) 准入；
+//! - 未知候选经 `evaluate_hook_admission`（crate::utils::hook_governance）准入；
 //!   - 准入 → 建规范 hook（canonical id，避免冲突）；
 //!   - 拒绝（duplicate_family）→ 若有新颖内容则**映射**回匹配的既有 hook（mention/merge），
 //!     若是纯重述则降级为 mention；
@@ -13,9 +13,9 @@
 //! - 最终 mention/resolve/defer 互斥过滤（upsert 优先于 mention；mention 优先于 resolve/defer）。
 //!
 //! ## 强类型适配（与 TS 的差异）
-//! - `status` 为 [`HookStatus`](crate::models::runtime_state::HookStatus) 枚举，非字符串。
+//! - `status` 为 `HookStatus`（crate::models::runtime_state）枚举，非字符串。
 //! - `payoff_timing` 为 `Option<HookPayoffTiming>` 枚举；调用
-//!   [`resolve_hook_payoff_timing`](crate::utils::hook_lifecycle::resolve_hook_payoff_timing)
+//!   `resolve_hook_payoff_timing`（crate::utils::hook_lifecycle）
 //!   时，把枚举经 serde 名映射回字符串（与 TS 字符串路径等价，避免有损往返分歧）。
 
 use std::collections::{BTreeSet, HashMap, HashSet};

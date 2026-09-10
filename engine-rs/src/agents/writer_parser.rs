@@ -3,7 +3,7 @@
 //! 移植自 `packages/core/src/agents/writer-parser.ts`（178 行）。把 LLM 的 `=== TAG ===`
 //! 分隔输出解析为结构化章节数据。共享于 WriterAgent（写新章）与 ChapterAnalyzerAgent（分析既有章）。
 //!
-//! 复用 [`crate::agents::settler_parser::extract_tag`]（lookahead 手动扫描等价实现）。
+//! 复用 `crate::agents::settler_parser::extract_tag`（lookahead 手动扫描等价实现）。
 
 use regex::Regex;
 use std::sync::OnceLock;

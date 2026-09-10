@@ -6,7 +6,7 @@
 //! ## 移植要点
 //! - 容错：跨 chunk 的不完整 data 行缓冲（push 可分片调用）
 //! - 跳过非 data 行（event:/comment/空行）
-//! - [DONE] 终止；其余 data 行解析 JSON，取 choices[0].delta.content（含 tool_calls 增量）
+//! - `[DONE]` 终止；其余 data 行解析 JSON，取 choices`[0]`.delta.content（含 tool_calls 增量）
 //!
 //! ## 待移植（需 reqwest + pi-ai）
 //! createLLMClient 的 HTTP 拉取 + piModel 构造 + 多格式（responses/anthropic-messages）。
@@ -34,10 +34,10 @@ pub enum SseEvent {
         completion_tokens: Option<u64>,
         total_tokens: Option<u64>,
     },
-    /// choices[0].finish_reason 非空（终态信号之一；可与 delta 同帧——
+    /// choices`[0]`.finish_reason 非空（终态信号之一；可与 delta 同帧——
     /// TS `stream closed without [DONE]/finish_reason` 守卫的数据源）。
     FinishReason(String),
-    /// 流结束（[DONE]）
+    /// 流结束（`[DONE]`）
     Done,
 }
 

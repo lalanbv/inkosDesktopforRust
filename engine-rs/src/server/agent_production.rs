@@ -272,7 +272,7 @@ pub struct AgentModelOverride {
 
 /// /agent 模型四层解析（TS 4968-5075 逐层）：
 /// 1. 前端显式 service+model——无 key 且非本地端点 → 400 双语（逐字）；
-/// 2. 新配置 defaultModel + services[0]（静默失败下落）；
+/// 2. 新配置 defaultModel + services`[0]`（静默失败下落）；
 /// 3. secrets 首个有 key 服务的首个文本模型（listModels live+bank；静默）；
 /// 4. None → 项目配置端点（现状兜底）。
 ///

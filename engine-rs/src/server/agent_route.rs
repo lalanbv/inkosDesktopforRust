@@ -29,7 +29,7 @@ use crate::server::books_routes::BooksRuntime;
 use crate::server::session_routes::{normalize_api_book_id, normalize_studio_session_kind};
 
 /// 会话聊天轮的运行标记（abort 端点置位；与 agent loop 轮询的是**同一个**
-/// Arc<Mutex<bool>>——68 号连通，置位即在下一轮检查点截断）。
+/// `Arc<Mutex<bool>>`——68 号连通，置位即在下一轮检查点截断）。
 pub struct AgentSessionHandle {
     pub abort_flag: crate::interaction::agent_loop::AbortHandle,
     /// 220 号：per-session 串行队列（TS runInAgentSessionQueue 同构）——
