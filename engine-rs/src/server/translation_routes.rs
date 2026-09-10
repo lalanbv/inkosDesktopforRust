@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
-use crate::interaction::session::{is_safe_book_id, utc_now_ms};
+use crate::interaction::session::is_safe_book_id;
 use crate::server::books_routes::BooksRuntime;
 use crate::translation::run_store::{
     load_translation_chapter, load_translation_manifest, translation_project_dir,
@@ -112,60 +112,6 @@ pub async fn list_translations(
 
 const MAX_TRANSLATION_UPLOAD_BYTES: usize = 80 * 1024 * 1024;
 
-/// `safeUploadFileName`：斜杠/反斜杠/NUL → `_` + 空白折叠 + 非 Unicode 字母
-/// 数字保留集折叠 + 120 上限。
-fn safe_upload_filename(value: &str) -> String {
-    let no_slash: String = value
-        .trim()
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c })
-        .collect();
-    let collapsed = collapse_whitespace(&no_slash);
-    let filtered: String = collapsed
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let mut out = String::new();
-    let mut units = 0usize;
-    for ch in filtered.trim().chars() {
-        let ch_units = ch.len_utf16();
-        if units + ch_units > 120 {
-            break;
-        }
-        out.push(ch);
-        units += ch_units;
-    }
-    let trimmed = out.trim().to_string();
-    if trimmed.is_empty() {
-        "upload".to_string()
-    } else {
-        trimmed
-    }
-}
-
-fn collapse_whitespace(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut in_space = false;
-    for ch in value.chars() {
-        if ch.is_whitespace() {
-            if !in_space {
-                out.push(' ');
-            }
-            in_space = true;
-        } else {
-            out.push(ch);
-            in_space = false;
-        }
-    }
-    out
-}
-
 pub async fn upload_translation(
     State(runtime): State<BooksRuntime>,
     req: axum::extract::Request,
@@ -179,63 +125,32 @@ pub async fn upload_translation(
             return api_error(status, "TRANSLATION_UPLOAD_TOO_LARGE", "Translation upload body too large")
         }
     };
+    // 321 号：落地逻辑收敛到 upload_common::store_project_upload（TS
+    // storeProjectUpload 逐字：文件名清洗/缺 dataUrl 400/解析/80MB 上限/
+    // .inkos/uploads/translation 落盘）。
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
-    let filename = safe_upload_filename(
-        payload
-            .get("filename")
-            .and_then(Value::as_str)
-            .unwrap_or("translation-source"),
-    );
-    let Some(data_url) = payload.get("dataUrl").and_then(Value::as_str) else {
-        return api_error(
-            StatusCode::BAD_REQUEST,
-            "INVALID_TRANSLATION_UPLOAD",
-            "Translation upload is missing dataUrl",
-        );
-    };
-    let (buffer, mime_type) = match crate::server::upload_common::parse_data_url_with_mime(data_url)
-    {
-        Ok(parsed) => parsed,
-        Err((status, body)) => return (status, body).into_response(),
-    };
-    if buffer.len() > MAX_TRANSLATION_UPLOAD_BYTES {
-        return api_error(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "TRANSLATION_UPLOAD_TOO_LARGE",
-            format!("{filename} exceeds {MAX_TRANSLATION_UPLOAD_BYTES} bytes"),
-        );
-    }
-    let upload_dir = root.join(".inkos").join("uploads").join("translation");
-    if tokio::fs::create_dir_all(&upload_dir).await.is_err() {
-        return api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "INTERNAL_ERROR",
-            "failed to create upload directory",
-        );
-    }
-    let stored_name = format!("{}-{filename}", utc_now_ms());
-    let stored_path = upload_dir.join(&stored_name);
-    if tokio::fs::write(&stored_path, &buffer).await.is_err() {
-        return api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "INTERNAL_ERROR",
-            "failed to store upload",
-        );
-    }
-    let stored_rel = stored_path
-        .strip_prefix(root)
-        .unwrap_or(&stored_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    (
-        StatusCode::OK,
-        Json(json!({
-            "storedPath": stored_rel,
-            "size": buffer.len(),
-            "mimeType": mime_type,
-        })),
+    match crate::server::upload_common::store_project_upload(
+        root,
+        payload.get("filename").and_then(Value::as_str),
+        payload.get("dataUrl").and_then(Value::as_str),
+        "translation",
+        "translation-source",
+        MAX_TRANSLATION_UPLOAD_BYTES,
+        "INVALID_TRANSLATION_UPLOAD",
     )
-        .into_response()
+    .await
+    {
+        Ok(outcome) => (
+            StatusCode::OK,
+            Json(json!({
+                "storedPath": outcome.stored_path,
+                "size": outcome.size,
+                "mimeType": outcome.mime_type,
+            })),
+        )
+            .into_response(),
+        Err((status, body)) => (status, body).into_response(),
+    }
 }
 
 // ── POST /translations/create ───────────────────────────────────
