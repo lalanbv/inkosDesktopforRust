@@ -46,7 +46,7 @@ http.createServer((req, res) => {
       } catch {}
       const lastRole = msgs.length ? msgs[msgs.length - 1].role : "user";
       let content;
-      if (sys.includes("网络小说架构师") || sys.includes("总架构师")) content = ARCHITECT;
+      if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) content = ARCHITECT;
       else if (sys.includes("资深小说编辑")) content = REVIEW;
       else if (sys.includes("素材分析师") || sys.includes("同人")) content = CANON;
       else if (sys.includes("创作总编")) content = PLANNER;
