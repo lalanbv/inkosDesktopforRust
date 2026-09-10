@@ -20,7 +20,6 @@
 //! initSpinoffBook（L1037-L1073）：saveBookConfig → importCanon（parent_canon.md）
 //! → spinoffContext → 审核环（original 模式）→ 同尾。
 
-use axum::body::Bytes;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -293,7 +292,13 @@ fn build_spinoff_foundation_context(parent_canon: &str, direction: Option<&str>,
 
 // ── POST /api/v1/fanfic/init ─────────────────────────────────────
 
-pub async fn fanfic_init(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
+pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+    // 273 号：sourceText 可为整本原著——`Bytes` 提取器 2MB 默认上限截断，
+    // 改手工读（TS 无上限；此处 64MB 安全上界）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
@@ -358,8 +363,13 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, body: Bytes) -> im
 pub async fn fanfic_refresh(
     State(runtime): State<BooksRuntime>,
     AxumPath(book_id): AxumPath<String>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
+    // 273 号：同 fanfic_init——sourceText 整本，手工读放宽。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
@@ -407,7 +417,12 @@ pub async fn fanfic_refresh(
 
 // ── POST /api/v1/spinoff/init ────────────────────────────────────
 
-pub async fn spinoff_init(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
+pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+    // 273 号：统一大载荷读取（payload 小，但与 TS 无上限语义对齐，无害）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
@@ -509,7 +524,12 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, body: Bytes) -> i
 
 // ── POST /api/v1/imitation/init ──────────────────────────────────
 
-pub async fn imitation_init(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
+pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+    // 273 号：referenceText 可为整本仿写对象文本，手工读放宽。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };

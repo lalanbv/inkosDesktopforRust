@@ -29,6 +29,7 @@ pub mod service_routes;
 pub mod session_routes;
 pub mod skill_routes;
 pub mod translation_routes;
+pub mod upload_common;
 pub mod sse;
 pub mod static_routes;
 pub mod style_routes;
@@ -57,6 +58,34 @@ use serde::{Deserialize, Serialize};
 pub struct AppState {
     pub version: String,
 }
+
+// ── 大载荷读取上限（273 号）─────────────────────────────────────
+//
+// axum 默认 2MB 请求体上限只约束 `Bytes`/`String`/`Json` 等**提取器**
+//（axum-core：提取器走 limited body）；手工 `to_bytes(req.into_body(), n)`
+// 不受限。TS 端（Hono）对 body 无统一上限、由各端点业务上限兜底——
+// 此处读取上限 = TS 业务上限按 base64 膨胀（×4/3）取整；TS 无上限者给
+// 64MB 安全上界（loopback 守卫已限定本机）。
+/// 整本文本端点（导入/风格/同人 sourceText / agent 会话）——TS 无上限。
+pub(crate) const BODY_CAP_LARGE_TEXT: usize = 64 * 1024 * 1024;
+/// 翻译源上传——TS 解码上限 80MB，base64 膨胀后 ≥107MB。
+pub(crate) const BODY_CAP_TRANSLATION_UPLOAD: usize = 128 * 1024 * 1024;
+/// 正典上传——TS 解码上限 18MB，膨胀后 24MB。
+pub(crate) const BODY_CAP_CANON_UPLOAD: usize = 32 * 1024 * 1024;
+/// Skill 文件夹导入——TS 总限 8MB，膨胀后 ~10.7MB。
+pub(crate) const BODY_CAP_SKILL_IMPORT: usize = 16 * 1024 * 1024;
+
+/// 大载荷端点专用读取：`Bytes` 提取器会被 axum 默认 2MB 截断（413 纯文本），
+/// 改走手工 `to_bytes` + 显式上限。超限返回 413，由调用方按各自错误形态包装。
+pub(crate) async fn read_body_capped(
+    req: axum::extract::Request,
+    max: usize,
+) -> Result<axum::body::Bytes, StatusCode> {
+    axum::body::to_bytes(req.into_body(), max)
+        .await
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)
+}
+
 
 // ── 请求/响应 DTO ───────────────────────────────────────────────
 
@@ -119,8 +148,14 @@ async fn derive_book_id(
 }
 
 async fn count_length(
-    Json(req): Json<CountLengthRequest>,
+    req: axum::extract::Request,
 ) -> Result<Json<CountLengthResponse>, (StatusCode, String)> {
+    // 273 号：`Json` 提取器 2MB 上限会截断整稿统计；改手工读（TS c.req.json() 无上限）。
+    let body = read_body_capped(req, BODY_CAP_LARGE_TEXT)
+        .await
+        .map_err(|s| (s, "request body too large".to_string()))?;
+    let req: CountLengthRequest = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")))?;
     let mode = match req.mode.as_str() {
         "zh_chars" => LengthCountingMode::ZhChars,
         "en_words" => LengthCountingMode::EnWords,
@@ -135,8 +170,13 @@ async fn count_length(
 }
 
 async fn cap_context(
-    Json(req): Json<CapContextRequest>,
+    req: axum::extract::Request,
 ) -> Result<Json<CapContextResponse>, (StatusCode, String)> {
+    let body = read_body_capped(req, BODY_CAP_LARGE_TEXT)
+        .await
+        .map_err(|s| (s, "request body too large".to_string()))?;
+    let req: CapContextRequest = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")))?;
     let opts = ContextCapOptions {
         label: req.label.as_str(),
         max_chars: req.max_chars,
@@ -397,6 +437,15 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/import/chapters",
             post(book_create_routes::import_chapters_endpoint).with_state(books.clone()),
+        )
+        // 273 号：正典上传与 canon-file 导入（UI ImportManager 调用面）。
+        .route(
+            "/api/v1/import/canon/upload",
+            post(style_routes::upload_canon).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/import/canon-file",
+            post(style_routes::import_canon_file).with_state(books.clone()),
         )
         // 59 号：同人/番外/仿写创建域。
         .route("/api/v1/fanfic/init", post(fanfic_routes::fanfic_init).with_state(books.clone()))

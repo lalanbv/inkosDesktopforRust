@@ -17825,3 +17825,239 @@ mod sub141_e2e {
         format!("http://{addr}")
     }
 }
+
+// ── 273 号：大载荷端点放宽 + canon 上传/导入两端点 ────────────────────
+mod sub273_upload_caps_e2e {
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::{book_create_routes, fanfic_routes, style_routes};
+    use inkos_engine::state::manager::StateManager;
+
+    fn rt273(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app273(root: &std::path::Path, llm: &str) -> axum::Router {
+        axum::Router::new()
+            .route(
+                "/api/v1/import/canon/upload",
+                axum::routing::post(style_routes::upload_canon),
+            )
+            .route(
+                "/api/v1/books/:id/import/canon-file",
+                axum::routing::post(style_routes::import_canon_file),
+            )
+            .route(
+                "/api/v1/books/:id/style/import",
+                axum::routing::post(style_routes::style_import),
+            )
+            .route("/api/v1/style/analyze", axum::routing::post(style_routes::style_analyze))
+            .route(
+                "/api/v1/books/:id/import/chapters",
+                axum::routing::post(book_create_routes::import_chapters_endpoint),
+            )
+            .route("/api/v1/fanfic/init", axum::routing::post(fanfic_routes::fanfic_init))
+            .with_state(rt273(root, llm))
+    }
+
+    async fn call273(app: axum::Router, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::util::ServiceExt;
+        let mut builder = axum::http::Request::builder().method("POST").uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 24).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn canon_upload_roundtrip_and_error_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        let app = app273(&root, "http://127.0.0.1:1");
+
+        // 正常上传：dataUrl → .inkos/uploads/canon/，响应 {storedPath,size,mimeType}
+        let (status, parsed) = call273(
+            app.clone(),
+            "/api/v1/import/canon/upload",
+            Some(r#"{"filename":"my 设定.txt","dataUrl":"data:text/plain;base64,aGVsbG8="}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{parsed}");
+        assert_eq!(parsed["mimeType"], "text/plain");
+        assert_eq!(parsed["size"], 5);
+        let stored = parsed["storedPath"].as_str().unwrap();
+        assert!(stored.starts_with(".inkos/uploads/canon/"), "{stored}");
+        assert!(stored.ends_with("-my 设定.txt"), "{stored}");
+        assert_eq!(tokio::fs::read(root.join(stored)).await.unwrap(), b"hello");
+
+        // 缺 dataUrl → 400 INVALID_CANON_UPLOAD（TS ApiError → onError 形态）
+        let (status, parsed) = call273(app.clone(), "/api/v1/import/canon/upload", Some("{}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_CANON_UPLOAD");
+        assert_eq!(parsed["error"]["message"], "Upload is missing dataUrl");
+
+        // 非 JSON body → 按 {} 处理（TS c.req.json().catch(() => ({}))）
+        let (status, parsed) = call273(app.clone(), "/api/v1/import/canon/upload", Some("not-json")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_CANON_UPLOAD");
+
+        // 非法 dataUrl → 400 INVALID_ATTACHMENT_DATA_URL
+        let (status, parsed) = call273(
+            app,
+            "/api/v1/import/canon/upload",
+            Some(r#"{"filename":"a.txt","dataUrl":"data:text/plain,raw"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT_DATA_URL");
+    }
+
+    #[tokio::test]
+    async fn canon_file_chain_ingests_material_and_writes_fanfic_canon() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        // 书 fixture（load_book_config 存在性校验）
+        std::fs::create_dir_all(root.join("books").join("demo")).unwrap();
+        std::fs::write(
+            root.join("books").join("demo").join("book.json"),
+            r#"{"id":"demo","title":"演示","platform":"other","genre":"other","status":"outlining","targetChapters":10,"chapterWordCount":3000,"createdAt":"2026-09-10T00:00:00Z","updatedAt":"2026-09-10T00:00:00Z"}"#,
+        )
+        .unwrap();
+        // 项目内正典源文件（ingest 走 file_path 相对路径）
+        std::fs::create_dir_all(root.join("canon_src")).unwrap();
+        std::fs::write(
+            root.join("canon_src").join("novel.txt"),
+            "第一章 云州少年\n\n林川背着木剑走出云州城。城中人人习剑，剑气纵横三千里。\n",
+        )
+        .unwrap();
+        // mock LLM：正典导入器返回 SECTION 分隔文档（短源不触发预编译调用）
+        let mock = spawn_canon_mock().await;
+        let app = app273(&root, &mock);
+
+        let (status, parsed) = call273(
+            app,
+            "/api/v1/books/demo/import/canon-file",
+            Some(r#"{"filePath":"canon_src/novel.txt","filename":"novel.txt"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{parsed}");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["material"]["title"], "novel");
+        let markdown_path = parsed["material"]["markdownPath"].as_str().unwrap();
+        assert!(markdown_path.starts_with(".inkos/materials/"), "{markdown_path}");
+        assert!(root.join(markdown_path).is_file(), "material markdown 落盘");
+        // 提取自 mock 的 SECTION 文档落进 fanfic_canon.md
+        let canon = std::fs::read_to_string(root.join("books").join("demo").join("story").join("fanfic_canon.md")).unwrap();
+        assert!(canon.contains("世界规则：剑气纵横"), "{canon}");
+
+        // 书缺失 → loadBookConfig 失败 → 500 平铺 error（TS catch 形态）
+        let app = app273(&root, &mock);
+        let (status, parsed) = call273(
+            app,
+            "/api/v1/books/ghost/import/canon-file",
+            Some(r#"{"filePath":"canon_src/novel.txt"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(parsed["error"].is_string(), "{parsed}");
+    }
+
+    /// >2MB 请求体在放宽后的端点上必须被完整读取（旧代码 `Bytes` 提取器
+    /// 在 axum 默认 2MB 处 413 纯文本截断）。
+    #[tokio::test]
+    async fn bodies_over_2mb_are_accepted_on_large_text_endpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        let app = app273(&root, "http://127.0.0.1:1");
+
+        // style/analyze（纯统计，无 LLM）：2.4MB 文本 → 200 StyleProfile
+        let big_text = "字".repeat(800_000);
+        let body = format!(r#"{{"text":"{big_text}","sourceName":"x"}}"#);
+        assert!(body.len() > 2 * 1024 * 1024);
+        let (status, parsed) = call273(app.clone(), "/api/v1/style/analyze", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK, "style/analyze 应接受 >2MB（{parsed}）");
+        assert!(parsed["sourceName"].is_string(), "{parsed}");
+
+        // import/chapters：前导空白垫到 >2MB，payload 校验失败 → 400「text is required」
+        //（证明 body 完整读取并解析——旧代码在读取阶段即 axum 413）
+        let padded = format!("{}{}", " ".repeat(2_500_000), r#"{"text":""}"#);
+        let (status, parsed) = call273(app.clone(), "/api/v1/books/demo/import/chapters", Some(&padded)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
+        assert_eq!(parsed["error"], "text is required");
+
+        // fanfic/init：同垫片 → 400「title and sourceText are required」
+        let padded = format!("{}{}", " ".repeat(2_500_000), r#"{"title":"x"}"#);
+        let (status, parsed) = call273(app, "/api/v1/fanfic/init", Some(&padded)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
+        assert_eq!(parsed["error"], "title and sourceText are required");
+    }
+
+    async fn spawn_canon_mock() -> String {
+        let document = [
+            "=== SECTION: world_rules ===",
+            "世界规则：剑气纵横三千里，凡人不可御空。",
+            "",
+            "=== SECTION: character_profiles ===",
+            "| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |",
+            "|------|------|----------|-------------|----------|----------|----------|----------|",
+            "| 林川 | 云州少年 | 坚韧 | 「剑不离手」 | 简短 | 练剑不辍 | 师父 | 不知身世 |",
+            "",
+            "=== SECTION: key_events ===",
+            "| 序号 | 事件 | 涉及角色 | 对同人写作的约束 |",
+            "|------|------|----------|------------------|",
+            "| 1 | 出城远行 | 林川 | 起点固定 |",
+            "",
+            "=== SECTION: power_system ===",
+            "剑道九品，一品最低。",
+            "",
+            "=== SECTION: writing_style ===",
+            "第三人称有限视角，短句为主。",
+        ]
+        .join("\n");
+        fn sse(content: &str) -> String {
+            let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+            format!("data: {chunk}\n\ndata: [DONE]\n\n")
+        }
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |_payload: axum::Json<serde_json::Value>| {
+                let document = document.clone();
+                async move {
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        sse(&document),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}")
+    }
+}

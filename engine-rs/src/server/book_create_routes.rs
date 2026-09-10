@@ -843,8 +843,14 @@ fn build_import_foundation_source(chapters: &[crate::utils::chapter_splitter::Sp
 pub async fn import_chapters_endpoint(
     State(runtime): State<BooksRuntime>,
     AxumPath(book_id): AxumPath<String>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
+    // 273 号：整本小说导入——`Bytes` 提取器 2MB 默认上限截断，改手工读
+    //（TS 无上限；此处 64MB 安全上界）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };

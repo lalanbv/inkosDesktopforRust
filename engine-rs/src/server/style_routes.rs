@@ -11,10 +11,10 @@
 //!   样本 ≥500 字时顺带风格向导；SSE import:*
 //! - `GET /books/:id/fanfic`（L6300）：读 `story/fanfic_canon.md`（缺 →
 //!   content:null 仍 200）
-//!
-//! 暂缓件：`POST /books/:id/import/chapters`（依赖 architect 域基础设定
-//! 生成）、`POST /fanfic/init` + `/fanfic/refresh`（canon 提取长链）、
-//! `POST /spinoff/init`（依赖 createStatus + architect）。
+//! - `POST /import/canon/upload`（L6333，273 号）：dataUrl 正典源文件上传 →
+//!   `.inkos/uploads/canon/`，18MB 上限；`{storedPath,size,mimeType}`
+//! - `POST /books/:id/import/canon-file`（L6344，273 号）：项目内文件路径 →
+//!   ingestMaterial → fanfic 正典导入链 → fanfic_canon.md；`{ok,material}`
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -29,10 +29,14 @@ use crate::llm::agent_router::AgentRouter;
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::style_profile::StyleProfile;
 use crate::server::books_routes::BooksRuntime;
+use crate::server::upload_common::store_project_upload;
 use crate::state::manager::StateManager;
 use crate::utils::language::WritingLanguage;
 use crate::utils::utc_time::utc_now_iso;
 use crate::utils::writing_methodology::build_writing_methodology_section;
+
+/// TS `MAX_CANON_UPLOAD_BYTES`（server.ts L614）——解码后字节上限。
+const MAX_CANON_UPLOAD_BYTES: usize = 18 * 1024 * 1024;
 
 type ApiError = (StatusCode, Json<Value>);
 
@@ -45,7 +49,14 @@ fn flat_internal(message: impl std::fmt::Display) -> ApiError {
 
 // ── POST /api/v1/style/analyze ───────────────────────────────────
 
-pub async fn style_analyze(body: Bytes) -> impl IntoResponse {
+pub async fn style_analyze(req: axum::extract::Request) -> impl IntoResponse {
+    // 273 号：风格样本可传整本文本——`Bytes` 提取器 2MB 默认上限截断，改手工读。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => {
+            return (status, Json(json!({ "error": "request body too large" })));
+        }
+    };
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(text) = parsed.get("text").and_then(Value::as_str).map(str::trim) else {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
@@ -241,8 +252,14 @@ pub async fn generate_style_guide_for_book(
 pub async fn style_import(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
+    // 273 号：整本文本导入——`Bytes` 提取器 2MB 默认上限截断，改手工读
+    //（TS 无上限；此处 64MB 安全上界）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
+    };
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(text) = parsed.get("text").and_then(Value::as_str).map(str::trim) else {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
@@ -450,4 +467,163 @@ pub async fn fanfic_show(
         StatusCode::OK,
         Json(json!({ "bookId": book_id, "content": content })),
     )
+}
+
+// ── POST /api/v1/import/canon/upload（273 号，TS L6333）──────────
+
+/// 正典源文件上传（dataUrl）→ `.inkos/uploads/canon/`。
+/// TS：`c.req.json().catch(() => ({}))` → 缺 dataUrl 400 → 解析失败
+/// 400 `INVALID_ATTACHMENT_DATA_URL` → 解码超 18MB 413 → `{storedPath,size,mimeType}`。
+pub async fn upload_canon(
+    State(runtime): State<BooksRuntime>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    // 18MB 解码上限 ×4/3 膨胀 → 读取上限 32MB（`Bytes` 提取器 2MB 会先行截断）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_CANON_UPLOAD).await {
+        Ok(body) => body,
+        Err(status) => {
+            return (
+                status,
+                Json(json!({ "error": { "code": "INVALID_CANON_UPLOAD_TOO_LARGE", "message": "canon upload body too large" } })),
+            )
+                .into_response()
+        }
+    };
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    match store_project_upload(
+        root,
+        payload.get("filename").and_then(Value::as_str),
+        payload.get("dataUrl").and_then(Value::as_str),
+        "canon",
+        "canon-source",
+        MAX_CANON_UPLOAD_BYTES,
+        "INVALID_CANON_UPLOAD",
+    )
+    .await
+    {
+        Ok(outcome) => (
+            StatusCode::OK,
+            Json(json!({
+                "storedPath": outcome.stored_path,
+                "size": outcome.size,
+                "mimeType": outcome.mime_type,
+            })),
+        )
+            .into_response(),
+        Err((status, body)) => (status, body).into_response(),
+    }
+}
+
+// ── POST /api/v1/books/:id/import/canon-file（273 号，TS L6344）──
+
+/// TS `body.filename?.replace(/\.[^.]+$/u, "")`——去最后一个扩展名（`.md` → ""）。
+fn strip_last_extension(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((base, ext)) if !ext.is_empty() => base,
+        _ => name,
+    }
+}
+
+/// 项目内文件路径 → ingestMaterial 归一 → fanfic 正典导入链（与
+/// fanfic/refresh 同一 `import_from_text` + `fanfic_canon.md` 落盘；TS
+/// `pipeline.importFanficCanon(id, sourceText, material.title, "canon")`
+/// 的 mode 字面量 "canon"）→ `{ok, material}`；任一步失败 → SSE
+/// `import:error` + 500 平铺 `{error}`。
+pub async fn import_canon_file(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root().to_path_buf();
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => return (status, Json(json!({ "error": "request body too large" }))).into_response(),
+    };
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    let Some(file_path) = payload
+        .get("filePath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "filePath is required" })),
+        )
+            .into_response();
+    };
+
+    runtime
+        .hub
+        .broadcast("import:start", &json!({ "bookId": book_id, "type": "canon-file" }));
+    let result = async {
+        // TS：`await state.loadBookConfig(id)`——结果不消费，纯存在性校验。
+        runtime
+            .state
+            .load_book_config(&book_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let filename = payload.get("filename").and_then(Value::as_str);
+        let title = filename.map(strip_last_extension);
+        let material = crate::materials::ingest_material(
+            &root,
+            &crate::materials::IngestMaterialInput {
+                source_kind: "file",
+                url: None,
+                file_path: Some(file_path),
+                filename,
+                mime_type: None,
+                title,
+                purpose: Some("reference"),
+            },
+        )
+        .await?;
+        let source_text = tokio::fs::read_to_string(root.join(&material.markdown_path))
+            .await
+            .map_err(|e| e.to_string())?;
+        let importer_chat = crate::llm::agent_router::RoutedAgent {
+            router: runtime.effective_router().await,
+            agent: "fanfic-canon-importer",
+        };
+        let canon = crate::agents::fanfic_canon_importer::import_from_text(
+            &importer_chat,
+            &source_text,
+            &material.title,
+            crate::models::book::FanficMode::Canon,
+        )
+        .await?;
+        let story_dir = runtime.state.book_dir(&book_id).join("story");
+        tokio::fs::create_dir_all(&story_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(material)
+    }
+    .await;
+    match result {
+        Ok(material) => {
+            runtime.hub.broadcast(
+                "import:complete",
+                &json!({ "bookId": book_id, "type": "canon-file", "materialId": material.id }),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "material": serde_json::to_value(&material).unwrap_or_default(),
+                })),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            runtime.hub.broadcast(
+                "import:error",
+                &json!({ "bookId": book_id, "type": "canon-file", "error": error }),
+            );
+            flat_internal(error).into_response()
+        }
+    }
 }

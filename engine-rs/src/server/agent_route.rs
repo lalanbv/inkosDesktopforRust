@@ -8,7 +8,6 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -368,8 +367,20 @@ async fn append_failed_chat_turn(
 
 pub async fn post_agent(
     State(runtime): State<BooksRuntime>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
+    // 273 号：聊天消息可携带至多 8×4MB 附件（base64 膨胀后 ~43MB）——
+    // `Bytes` 提取器 2MB 默认上限会先行截断，改手工读（64MB 上界）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(body) => body,
+        Err(status) => {
+            return (
+                status,
+                Json(json!({ "error": "request body too large" })),
+            )
+                .into_response()
+        }
+    };
     let root_owned = runtime.state.project_root().to_path_buf();
     let root: &std::path::Path = &root_owned;
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {

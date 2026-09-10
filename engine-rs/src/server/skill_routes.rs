@@ -329,7 +329,7 @@ pub async fn delete_prompt_pack(
 ///
 /// 逐 6bit 累积、忽略一切非 base64 字符（含 `=`/空白/非法字符），
 /// 每 8bit 产出一字节——与 Node 的宽松解码完全一致。
-fn decode_base64_lenient(input: &str) -> Vec<u8> {
+pub(crate) fn decode_base64_lenient(input: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
@@ -355,21 +355,11 @@ fn decode_base64_lenient(input: &str) -> Vec<u8> {
 /// `parseDataUrl`：`^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$`（dotall）。
 ///
 /// mime 段与参数段都禁止逗号，故 `;base64,` 的匹配点之前不得出现任何逗号；
-/// payload（`(.*)` dotall）可含逗号与换行。
+/// payload（`(.*)` dotall）可含逗号与换行。273 号起委托 upload_common 的
+/// 带 mime 版本（同一实现），本文件只需字节。
 fn parse_data_url(data_url: &str) -> Result<Vec<u8>, ApiErrorResponse> {
-    let invalid = || {
-        bad_request("INVALID_ATTACHMENT_DATA_URL", "Attachment must be a base64 data URL")
-    };
-    let Some(rest) = data_url.strip_prefix("data:") else {
-        return Err(invalid());
-    };
-    let Some(marker) = rest.find(";base64,") else {
-        return Err(invalid());
-    };
-    if rest[..marker].contains(',') {
-        return Err(invalid());
-    }
-    Ok(decode_base64_lenient(&rest[marker + ";base64,".len()..]))
+    crate::server::upload_common::parse_data_url_with_mime(data_url)
+        .map(|(bytes, _)| bytes)
 }
 
 struct SkillImportFile {
@@ -576,9 +566,20 @@ async fn import_studio_skill_folder(
 
 pub async fn import_skill(
     State(runtime): State<BooksRuntime>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root();
+    // 273 号：TS 总限 8MB，base64 膨胀后 JSON body ~10.7MB——axum 默认 2MB
+    // 提取器上限会先行截断，改手工读取（BODY_CAP_SKILL_IMPORT=16MB）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_SKILL_IMPORT).await {
+        Ok(body) => body,
+        Err(status) => {
+            return (
+                status,
+                Json(json!({ "error": { "code": "INVALID_SKILL_IMPORT", "message": "Skill import payload too large" } })),
+            )
+        }
+    };
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
         return bad_request("INVALID_SKILL_IMPORT", "Skill import payload must be JSON");
     };

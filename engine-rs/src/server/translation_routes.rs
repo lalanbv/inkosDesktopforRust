@@ -200,9 +200,17 @@ fn parse_upload_data_url(data_url: &str) -> Result<(Vec<u8>, String), Box<Respon
 
 pub async fn upload_translation(
     State(runtime): State<BooksRuntime>,
-    body: Bytes,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root();
+    // 273 号：TS 解码上限 80MB，base64 膨胀后 body ≥107MB——axum 默认 2MB
+    // 提取器上限先行截断，改手工读取（BODY_CAP_TRANSLATION_UPLOAD=128MB）。
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_TRANSLATION_UPLOAD).await {
+        Ok(body) => body,
+        Err(status) => {
+            return api_error(status, "TRANSLATION_UPLOAD_TOO_LARGE", "Translation upload body too large")
+        }
+    };
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let filename = safe_upload_filename(
         payload
