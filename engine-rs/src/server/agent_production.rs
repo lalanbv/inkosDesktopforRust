@@ -249,6 +249,11 @@ pub fn is_confirmed_production_action(action_source: ActionSource, intent: Reque
             | RequestedIntent::DraftStructure
             | RequestedIntent::ConnectChoice
             | RequestedIntent::RemoveNode
+            // 302 号：四件创建域（对齐 TS CONFIRMED_PRODUCTION_INTENTS 16 项）。
+            | RequestedIntent::FanficInit
+            | RequestedIntent::ContinuationImport
+            | RequestedIntent::SpinoffCreate
+            | RequestedIntent::StyleImitation
     )
 }
 
@@ -493,6 +498,10 @@ const TOOL_LABELS: &[(&str, &str, &str)] = &[
     ("create_narrative_forecast", "剧情多线推演", "Narrative forecast"),
     ("get_narrative_forecast", "核验剧情推演", "Recheck forecast"),
     ("select_narrative_branch", "采用候选分支", "Select candidate branch"),
+    ("fanfic_init", "同人创建", "Fanfic creation"),
+    ("continuation_import", "续写导入", "Continuation import"),
+    ("spinoff_create", "番外创建", "Side-story creation"),
+    ("style_imitation", "仿写项目", "Style imitation"),
 ];
 
 /// 项目语言（TS `currentProjectLanguage`：raw config `language`，默认 zh）。
@@ -1061,6 +1070,292 @@ pub(crate) struct ToolOutcome {
     pub(crate) is_error: bool,
     pub(crate) text: String,
     pub(crate) details: Value,
+}
+
+// ── 302 号：四件创建域执行器（聊天意图 → 既有内部链接线） ─────────
+
+/// `createContinuationImportTool`：已有书 → resume 导入；新书 → 建配置后
+/// 全量导入（91 号 resume 语义）。
+async fn execute_continuation_import(
+    runtime: &BooksRuntime,
+    lang: StudioLang,
+    args: &serde_json::Map<String, Value>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    use crate::agents::architect::ImportMode;
+    let field = |name: &str| {
+        args.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let source_path = field("sourcePath");
+    let text = read_project_source(runtime, &source_path).await?;
+    let split_pattern = args.get("splitPattern").and_then(Value::as_str).map(String::from);
+    let chapters = crate::utils::chapter_splitter::split_chapters(&text, split_pattern.as_deref());
+    if chapters.is_empty() {
+        return Err(pick(
+            lang,
+            "未从源文件中识别出任何章节。",
+            "No chapters were recognized in the source file.",
+        ));
+    }
+    let existing_book_id = args.get("bookId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let (book_id, start_from) = match existing_book_id {
+        Some(existing) => {
+            // 已有书：续传起点缺省 = 现有章数 + 1（TS 语义）。
+            let count = runtime.state.load_chapter_index(existing).await.map(|index| index.len()).unwrap_or(0);
+            let resume = args.get("resumeFrom").and_then(Value::as_f64).map(|v| v as u32).unwrap_or((count + 1) as u32);
+            (existing.to_string(), resume.max(1))
+        }
+        None => {
+            let title = field("title");
+            let now = crate::utils::utc_time::utc_now_iso();
+            let book = crate::models::book::BookConfig {
+                id: crate::server::book_create_routes::derive_book_id_from_title_pub(&title),
+                title: title.clone(),
+                platform: args
+                    .get("platform")
+                    .and_then(Value::as_str)
+                    .map(crate::models::book::normalize_platform_or_other)
+                    .unwrap_or(crate::models::book::Platform::Other),
+                genre: args.get("genre").and_then(Value::as_str).unwrap_or("other").to_string(),
+                status: crate::models::book::BookStatus::Outlining,
+                target_chapters: args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(100),
+                chapter_word_count: args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(3000),
+                language: payload_language(args, lang),
+                created_at: now.clone(),
+                updated_at: now,
+                parent_book_id: None,
+                fanfic_mode: None,
+                series: None,
+                writing: None,
+            };
+            runtime.state.save_book_config(&book.id, &book).await.map_err(|e| e.to_string())?;
+            (book.id, 1)
+        }
+    };
+    on_progress(pick(
+        lang,
+        &format!("开始导入 {} 章（自第 {} 章）", chapters.len(), start_from),
+        &format!("Importing {} chapters from chapter {}", chapters.len(), start_from),
+    ));
+    let result = crate::server::book_create_routes::import_chapters_chain_with_resume(
+        runtime,
+        &book_id,
+        &chapters,
+        start_from,
+        ImportMode::Continuation,
+        None,
+    )
+    .await?;
+    on_progress(pick(lang, "导入回放完成", "Import replay finished"));
+    Ok(ToolOutcome {
+        is_error: false,
+        text: pick(
+            lang,
+            &format!("续写导入完成：已导入 {n} 章到《{t}》", n = result["importedCount"].as_u64().unwrap_or(0), t = book_id),
+            &format!("Continuation import finished: {n} chapters into {t}", n = result["importedCount"].as_u64().unwrap_or(0), t = book_id),
+        ),
+        details: json!({ "kind": "continuation_imported", "bookId": book_id, "result": result }),
+    })
+}
+
+/// `createSpinoffBookTool`：buildStudioBookConfig（字段回退 parent）→
+/// importCanon → spinoff 上下文 → 审核环。
+async fn execute_spinoff_create(
+    runtime: &BooksRuntime,
+    lang: StudioLang,
+    args: &serde_json::Map<String, Value>,
+    fallback_book_id: Option<&str>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    let field = |name: &str| {
+        args.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let title = field("title");
+    let parent_book_id = field("parentBookId");
+    let parent_book_id = if parent_book_id.is_empty() {
+        fallback_book_id.unwrap_or_default().to_string()
+    } else {
+        parent_book_id
+    };
+    let parent = runtime.state.load_book_config(&parent_book_id).await.map_err(|_| {
+        pick(
+            lang,
+            &format!("正传书籍「{parent_book_id}」不存在"),
+            &format!("Parent book \"{parent_book_id}\" not found"),
+        )
+    })?;
+    let language = args.get("language").and_then(Value::as_str).map(String::from).or(parent.language.clone());
+    let now = crate::utils::utc_time::utc_now_iso();
+    let book = crate::server::book_create_routes::build_studio_book_config_pub(
+        &title,
+        args.get("genre").and_then(Value::as_str).unwrap_or(parent.genre.as_str()),
+        language.as_deref(),
+        args.get("platform").and_then(Value::as_str).or(Some(parent.platform.as_str())),
+        args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).or(Some(parent.target_chapters)),
+        args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).or(Some(parent.chapter_word_count)),
+        &now,
+    );
+    if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
+        return Err(pick(
+            lang,
+            &format!("书籍「{title}」已存在"),
+            &format!("Book \"{title}\" already exists"),
+        ));
+    }
+    let direction = args.get("direction").and_then(Value::as_str).map(String::from);
+    on_progress(pick(lang, "导入正典并生成番外地基……", "Importing canon and generating foundation..."));
+    crate::server::fanfic_routes::init_spinoff_book(runtime, &book, &parent_book_id, direction.as_deref()).await?;
+    on_progress(pick(lang, "番外地基已落盘", "Side-story foundation written"));
+    Ok(ToolOutcome {
+        is_error: false,
+        text: pick(lang, &format!("番外创建完成：《{title}》"), &format!("Side story created: {title}")),
+        details: json!({ "kind": "spinoff_book_created", "bookId": book.id, "parentBookId": parent_book_id }),
+    })
+}
+
+/// `createImitationBookTool`：initBook（storyIdea 外部指令）+ 强制风格向导。
+async fn execute_style_imitation(
+    runtime: &BooksRuntime,
+    lang: StudioLang,
+    args: &serde_json::Map<String, Value>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    let field = |name: &str| {
+        args.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let title = field("title");
+    let story_idea = field("storyIdea");
+    let mut reference_text = field("referenceText");
+    let reference_path = field("referencePath");
+    if reference_text.is_empty() && !reference_path.is_empty() {
+        reference_text = read_project_source(runtime, &reference_path).await?;
+    }
+    let source_name = match field("sourceName").is_empty() {
+        true => "reference".to_string(),
+        false => field("sourceName"),
+    };
+    let now = crate::utils::utc_time::utc_now_iso();
+    let book = crate::server::book_create_routes::build_studio_book_config_pub(
+        &title,
+        args.get("genre").and_then(Value::as_str).unwrap_or("other"),
+        payload_language(args, lang).as_deref(),
+        args.get("platform").and_then(Value::as_str),
+        args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32),
+        args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32),
+        &now,
+    );
+    let book_id = book.id.clone();
+    on_progress(pick(lang, "创建仿写书籍与风格指南……", "Creating imitation book and style guide..."));
+    crate::server::book_create_routes::init_book(runtime, &book, Some(&story_idea), None, None).await?;
+    crate::server::style_routes::generate_style_guide_for_book(
+        &runtime.state,
+        &*runtime.effective_router().await,
+        &runtime.builtin_genres_dir,
+        &book_id,
+        reference_text.trim(),
+        Some(&source_name),
+    )
+    .await
+    .map(|_| ())?;
+    on_progress(pick(lang, "风格指南已生成", "Style guide generated"));
+    Ok(ToolOutcome {
+        is_error: false,
+        text: pick(lang, &format!("仿写项目完成：《{t}》", t = title), &format!("Imitation project created: {title}")),
+        details: json!({ "kind": "imitation_book_created", "bookId": book_id }),
+    })
+}
+
+// ── 302 号：四件创建域执行器（聊天意图 → 既有内部链接线） ─────────
+
+/// payload.language ?? 会话语言（TS `language: payload.language ?? lang`）。
+fn payload_language(args: &serde_json::Map<String, Value>, lang: StudioLang) -> Option<String> {
+    match args.get("language").and_then(Value::as_str) {
+        Some("en") => Some("en".to_string()),
+        Some("zh") => Some("zh".to_string()),
+        _ => match lang {
+            StudioLang::En => Some("en".to_string()),
+            StudioLang::Zh => Some("zh".to_string()),
+        },
+    }
+}
+
+async fn read_project_source(
+    runtime: &BooksRuntime,
+    relative: &str,
+) -> Result<String, String> {
+    tokio::fs::read_to_string(runtime.state.project_root().join(relative.trim()))
+        .await
+        .map_err(|e| format!("读取源文件失败：{relative}（{e}）"))
+}
+
+/// `createFanficBookTool`：initFanficBook（canon 导入 + 地基审核环 + 风格向导）。
+async fn execute_fanfic_init(
+    runtime: &BooksRuntime,
+    lang: StudioLang,
+    args: &serde_json::Map<String, Value>,
+    mut on_progress: impl FnMut(String),
+) -> Result<ToolOutcome, String> {
+    on_progress(pick(lang, "导入同人正典并生成地基……", "Importing canon and generating foundation..."));
+    let field = |name: &str| {
+        args.get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let title = field("title");
+    let mut source_text = field("sourceText");
+    let source_path = field("sourcePath");
+    if source_text.is_empty() && !source_path.is_empty() {
+        source_text = read_project_source(runtime, &source_path).await?;
+    }
+    let source_name = match field("sourceName").is_empty() {
+        true => "source".to_string(),
+        false => field("sourceName"),
+    };
+    let language = payload_language(args, lang);
+    let fanfic_mode = crate::server::fanfic_routes::parse_fanfic_mode(args.get("mode").and_then(Value::as_str));
+    let now = crate::utils::utc_time::utc_now_iso();
+    let book = crate::models::book::BookConfig {
+        id: crate::server::book_create_routes::derive_book_id_from_title_pub(&title),
+        title: title.clone(),
+        platform: args
+            .get("platform")
+            .and_then(Value::as_str)
+            .map(crate::models::book::normalize_platform_or_other)
+            .unwrap_or(crate::models::book::Platform::Other),
+        genre: args.get("genre").and_then(Value::as_str).unwrap_or("other").to_string(),
+        status: crate::models::book::BookStatus::Outlining,
+        target_chapters: args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(100),
+        chapter_word_count: args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(3000),
+        language,
+        created_at: now.clone(),
+        updated_at: now,
+        parent_book_id: None,
+        fanfic_mode: Some(fanfic_mode),
+        series: None,
+        writing: None,
+    };
+    crate::server::fanfic_routes::init_fanfic_book(runtime, &book, &source_text, &source_name, fanfic_mode)
+        .await?;
+    on_progress(pick(lang, "同人地基与正典已落盘", "Fanfic canon and foundation written"));
+    Ok(ToolOutcome {
+        is_error: false,
+        text: pick(lang, &format!("同人创作完成：《{title}》"), &format!("Fanfiction created: {title}")),
+        details: json!({ "kind": "fanfic_book_created", "bookId": book.id }),
+    })
 }
 
 /// write_next 错误呈现（101 号：Aborted → 双语逐字（与轮间中止同一文案），
@@ -2569,6 +2864,164 @@ async fn run_confirmed_production_locked(
             }
             agent = None;
         }
+        RequestedIntent::FanficInit => {
+            let payload = request.action_payload.and_then(|p| p.get("fanficCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认创建同人缺少书名。", "The fanfiction confirmation is missing a title."),
+                )
+            })?.to_string();
+            if field("sourceText").is_none() && field("sourcePath").is_none() {
+                return Err(production_exec_error(
+                    lang,
+                    pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."),
+                ));
+            }
+            params.insert("title".into(), json!(title));
+            for name in ["sourceText", "sourcePath", "sourceName", "mode", "genre", "platform", "language"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            for name in ["targetChapters", "chapterWordCount"] {
+                if let Some(count) = payload.and_then(|p| p.get(name)).and_then(Value::as_u64) {
+                    params.insert(name.into(), json!(count));
+                }
+            }
+            agent = None;
+        }
+        RequestedIntent::ContinuationImport => {
+            let payload = request.action_payload.and_then(|p| p.get("continuationImport"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let source_path = field("sourcePath").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "导入续写需要上传文件或章节目录。", "Continuation import requires an uploaded file or chapter directory."),
+                )
+            })?.to_string();
+            let book_id = field("bookId").unwrap_or_default().to_string();
+            let title = field("title").unwrap_or_default();
+            if book_id.is_empty() && title.is_empty() {
+                return Err(production_exec_error(
+                    lang,
+                    pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."),
+                ));
+            }
+            params.insert("sourcePath".into(), json!(source_path));
+            if !book_id.is_empty() {
+                params.insert("bookId".into(), json!(book_id));
+            }
+            if !title.is_empty() {
+                params.insert("title".into(), json!(title));
+            }
+            for name in ["splitPattern", "genre", "platform", "language"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            if let Some(resume) = payload.and_then(|p| p.get("resumeFrom")).and_then(Value::as_u64) {
+                params.insert("resumeFrom".into(), json!(resume));
+            }
+            for name in ["targetChapters", "chapterWordCount"] {
+                if let Some(count) = payload.and_then(|p| p.get(name)).and_then(Value::as_u64) {
+                    params.insert(name.into(), json!(count));
+                }
+            }
+            agent = None;
+        }
+        RequestedIntent::SpinoffCreate => {
+            let payload = request.action_payload.and_then(|p| p.get("spinoffCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."),
+                )
+            })?.to_string();
+            let parent_book_id = field("parentBookId")
+                .map(String::from)
+                .or_else(|| request.book_id.map(String::from))
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."),
+                    )
+                })?;
+            params.insert("title".into(), json!(title));
+            params.insert("parentBookId".into(), json!(parent_book_id));
+            for name in ["direction", "genre", "platform", "language"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            for name in ["targetChapters", "chapterWordCount"] {
+                if let Some(count) = payload.and_then(|p| p.get(name)).and_then(Value::as_u64) {
+                    params.insert(name.into(), json!(count));
+                }
+            }
+            agent = None;
+        }
+        RequestedIntent::StyleImitation => {
+            let payload = request.action_payload.and_then(|p| p.get("imitationCreate"));
+            let field = |name: &str| {
+                payload
+                    .and_then(|p| p.get(name))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            };
+            let title = field("title").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "确认创建仿写缺少书名。", "The imitation confirmation is missing a title."),
+                )
+            })?.to_string();
+            let story_idea = field("storyIdea").ok_or_else(|| {
+                production_exec_error(
+                    lang,
+                    pick(lang, "仿写需要一个原创故事方向。", "Style imitation requires an original story idea."),
+                )
+            })?.to_string();
+            if field("referenceText").is_none() && field("referencePath").is_none() {
+                return Err(production_exec_error(
+                    lang,
+                    pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."),
+                ));
+            }
+            params.insert("title".into(), json!(title));
+            params.insert("storyIdea".into(), json!(story_idea));
+            for name in ["referenceText", "referencePath", "sourceName", "genre", "platform", "language"] {
+                if let Some(value) = field(name) {
+                    params.insert(name.into(), json!(value));
+                }
+            }
+            for name in ["targetChapters", "chapterWordCount"] {
+                if let Some(count) = payload.and_then(|p| p.get(name)).and_then(Value::as_u64) {
+                    params.insert(name.into(), json!(count));
+                }
+            }
+            agent = None;
+        }
         RequestedIntent::ConnectChoice => {
             let payload = request.action_payload.and_then(|p| p.get("connectChoice"));
             let node_value = payload
@@ -2786,6 +3239,10 @@ async fn run_confirmed_production_locked(
         RequestedIntent::InteractiveFilmCreate => "interactive_film_create",
         RequestedIntent::GenerateCover => "generate_cover",
         RequestedIntent::ShortRun => "short_fiction_run",
+        RequestedIntent::FanficInit => "fanfic_init",
+        RequestedIntent::ContinuationImport => "continuation_import",
+        RequestedIntent::SpinoffCreate => "spinoff_create",
+        RequestedIntent::StyleImitation => "style_imitation",
         _ => "sub_agent",
     };
 
@@ -3053,6 +3510,27 @@ async fn run_confirmed_production_locked(
                 &mut on_progress,
             )
             .await
+        }
+        RequestedIntent::FanficInit => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            execute_fanfic_init(runtime, lang, &args, &mut on_progress).await
+        }
+        RequestedIntent::ContinuationImport => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            execute_continuation_import(runtime, lang, &args, &mut on_progress).await
+        }
+        RequestedIntent::SpinoffCreate => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            let book_id = request.book_id.map(String::from);
+            execute_spinoff_create(runtime, lang, &args, book_id.as_deref(), &mut on_progress).await
+        }
+        RequestedIntent::StyleImitation => {
+            let mut on_progress = make_on_progress;
+            let args = exec.args.clone().unwrap_or_default();
+            execute_style_imitation(runtime, lang, &args, &mut on_progress).await
         }
         RequestedIntent::ConnectChoice => {
             let mut on_progress = make_on_progress;
@@ -3560,6 +4038,31 @@ mod tests {
         }
         for miss in ["/write", "继续写两章", "  ", "continue!"] {
             assert!(!is_write_next_instruction(miss), "不应命中：{miss}");
+        }
+    }
+
+    /// 302 号：四件创建域纳入 confirm-production 白名单（button/slash ✓，
+    /// free-text ✗——free-text 仍走聊天循环）。
+    #[test]
+    fn confirmed_production_accepts_four_creation_domains() {
+        for intent in [
+            RequestedIntent::FanficInit,
+            RequestedIntent::ContinuationImport,
+            RequestedIntent::SpinoffCreate,
+            RequestedIntent::StyleImitation,
+        ] {
+            assert!(is_confirmed_production_action(
+                ActionSource::Button,
+                intent
+            ));
+            assert!(is_confirmed_production_action(
+                ActionSource::Slash,
+                intent
+            ));
+            assert!(!is_confirmed_production_action(
+                ActionSource::FreeText,
+                intent
+            ));
         }
     }
 

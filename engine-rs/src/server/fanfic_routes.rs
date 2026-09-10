@@ -54,7 +54,7 @@ fn flat_internal(message: impl std::fmt::Display) -> ApiError {
 }
 
 /// fanficMode 解析（"canon"|"au"|"ooc"|"cp"，缺省/未知回 canon——TS 端点强转）。
-fn parse_fanfic_mode(value: Option<&str>) -> FanficMode {
+pub(crate) fn parse_fanfic_mode(value: Option<&str>) -> FanficMode {
     match value {
         Some("au") => FanficMode::Au,
         Some("ooc") => FanficMode::Ooc,
@@ -119,7 +119,7 @@ async fn review_loop(
 // ── initFanficBook / initSpinoffBook 链 ──────────────────────────
 
 /// 同人书创建链。对齐 runner.ts `initFanficBook`（直接目标目录，非 staging）。
-async fn init_fanfic_book(
+pub(crate) async fn init_fanfic_book(
     runtime: &BooksRuntime,
     book: &BookConfig,
     source_text: &str,
@@ -200,7 +200,7 @@ async fn init_fanfic_book(
 }
 
 /// 番外书创建链。对齐 runner.ts `initSpinoffBook`。
-async fn init_spinoff_book(
+pub(crate) async fn init_spinoff_book(
     runtime: &BooksRuntime,
     book: &BookConfig,
     parent_book_id: &str,
