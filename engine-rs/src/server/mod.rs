@@ -698,6 +698,15 @@ pub fn router_books(
             "/api/v1/radar/scan",
             post(ops_routes::post_radar_scan).with_state(books.clone()),
         )
+        // G14a/335 号：选后再析——免费扫榜 + 勾选范围分析。
+        .route(
+            "/api/v1/radar/rankings",
+            post(ops_routes::post_radar_rankings).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/radar/analyze",
+            post(ops_routes::post_radar_analyze).with_state(books.clone()),
+        )
         .route(
             "/api/v1/radar/history",
             get(ops_routes::get_radar_history).with_state(books.clone()),

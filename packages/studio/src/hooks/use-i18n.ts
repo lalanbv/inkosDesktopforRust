@@ -327,6 +327,19 @@ const strings = {
   "radar.summary": { zh: "市场概要", en: "Market Summary" },
   "radar.emptyHint": { zh: "点击「扫描市场」分析当前趋势和机会", en: "Click \"Scan Market\" to analyze trends and opportunities" },
   "radar.history": { zh: "扫描历史", en: "Scan History" },
+  // G14a/335 号：选后再析——扫榜免费、勾选范围后分析、信号卡。
+  "radar.rankings": { zh: "免费扫榜", en: "Scan Rankings" },
+  "radar.rankingsFree": { zh: "扫榜免费，勾选范围后再分析", en: "Rankings are free — select a scope, then analyze" },
+  "radar.analyzeSelected": { zh: "分析所选范围", en: "Analyze Selection" },
+  "radar.analyzing": { zh: "分析中...", en: "Analyzing..." },
+  "radar.platform": { zh: "平台", en: "Platform" },
+  "radar.category": { zh: "分类", en: "Category" },
+  "radar.crowding": { zh: "拥挤度", en: "Crowding" },
+  "radar.crowding.high": { zh: "拥挤", en: "High" },
+  "radar.crowding.medium": { zh: "中等", en: "Medium" },
+  "radar.crowding.low": { zh: "蓝海", en: "Low" },
+  "radar.differentiation": { zh: "差异化机会", en: "Differentiation" },
+  "radar.selectedHint": { zh: "已选 {n} 个范围；不选则分析全量", en: "{n} scopes selected; empty = analyze all" },
 
   // Doctor
   "doctor.title": { zh: "环境诊断", en: "Environment Check" },

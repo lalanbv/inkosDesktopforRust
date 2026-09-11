@@ -696,6 +696,56 @@ pub async fn post_radar_scan(
     }
 }
 
+/// G14a/335 号"选后再析"第一步：免费扫榜，不调 LLM、不落历史。
+pub async fn post_radar_rankings(
+    State(runtime): State<BooksRuntime>,
+) -> impl IntoResponse {
+    let _ = runtime;
+    let rankings = crate::agents::radar::fetch_rankings().await;
+    Json(json!({ "rankings": rankings })).into_response()
+}
+
+/// G14a/335 号第二步：勾选范围后分析（selection 可省 = 全量）。
+#[derive(Debug, serde::Deserialize)]
+pub struct RadarAnalyzeBody {
+    #[serde(default)]
+    pub selection: Option<crate::agents::radar::RadarSelection>,
+}
+
+pub async fn post_radar_analyze(
+    State(runtime): State<BooksRuntime>,
+    body: Option<Json<RadarAnalyzeBody>>,
+) -> impl IntoResponse {
+    runtime.hub.broadcast("radar:start", &json!({}));
+    let selection = body.and_then(|Json(b)| b.selection);
+    let result = async {
+        let rankings = crate::agents::radar::fetch_rankings().await;
+        crate::agents::radar::run_radar_analyze(
+            &*runtime.effective_router().await,
+            &rankings,
+            selection.as_ref(),
+        )
+        .await
+    }
+    .await;
+    match result {
+        Ok(result) => {
+            let value = serde_json::to_value(&result).unwrap_or(json!({}));
+            if let Err(error) =
+                save_radar_scan(runtime.state.project_root(), &value).await
+            {
+                runtime.hub.broadcast("radar:error", &json!({ "error": error }));
+            }
+            runtime.hub.broadcast("radar:complete", &json!({ "result": value }));
+            (StatusCode::OK, Json(value)).into_response()
+        }
+        Err(message) => {
+            runtime.hub.broadcast("radar:error", &json!({ "error": message }));
+            flat_error(StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+    }
+}
+
 pub async fn get_radar_history(
     State(runtime): State<BooksRuntime>,
 ) -> impl IntoResponse {

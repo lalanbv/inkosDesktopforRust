@@ -6548,6 +6548,33 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Radar Scan ---
 
+  app.post("/api/v1/radar/rankings", async (c) => {
+    // G14a/335 号"选后再析"第一步：免费扫榜，不调 LLM、不落历史。
+    try {
+      const { fetchRankings } = await import("@actalk/inkos-core");
+      const rankings = await fetchRankings();
+      return c.json({ rankings });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/radar/analyze", async (c) => {
+    // G14a/335 号第二步：勾选范围后分析（selection 可省 = 全量）。
+    const body = await c.req.json<{ selection?: { platforms?: string[]; categories?: string[]; titles?: string[] } }>().catch(() => ({ selection: undefined }));
+    broadcast("radar:start", {});
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await pipeline.runRadar({ selection: body?.selection });
+      await saveRadarScan(root, result);
+      broadcast("radar:complete", { result });
+      return c.json(result);
+    } catch (e) {
+      broadcast("radar:error", { error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   app.post("/api/v1/radar/scan", async (c) => {
     broadcast("radar:start", {});
     try {

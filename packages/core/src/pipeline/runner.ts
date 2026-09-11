@@ -754,8 +754,13 @@ export class PipelineRunner {
   // Atomic operations (composable by OpenClaw or agent mode)
   // ---------------------------------------------------------------------------
 
-  async runRadar(): Promise<RadarResult> {
+  async runRadar(options: { selection?: import("../agents/radar.js").RadarSelection } = {}): Promise<RadarResult> {
     const radar = new RadarAgent(this.agentCtxFor("radar"), this.config.radarSources);
+    // G14a/335 号：传 selection 走"选后再析"（免费扫榜在 /radar/rankings 完成）。
+    if (options.selection) {
+      const rankings = await radar.scanRankings();
+      return radar.analyzeRankings(rankings, options.selection);
+    }
     return radar.scan();
   }
 

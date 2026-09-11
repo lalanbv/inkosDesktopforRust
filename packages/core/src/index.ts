@@ -515,7 +515,14 @@ export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type Toke
 export { ContinuityAuditor, type AuditResult, type AuditIssue } from "./agents/continuity.js";
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
 export { PolisherAgent, type PolishChapterInput, type PolishChapterOutput } from "./agents/polisher.js";
-export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
+export {
+  RadarAgent,
+  fetchRankings,
+  filterRankingsBySelection,
+  type RadarResult,
+  type RadarRecommendation,
+  type RadarSelection,
+} from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
 export { readGenreProfile, readBookRules, listAvailableGenres, getBuiltinGenresDir } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt, buildGoldenOpeningDiscipline } from "./agents/writer-prompts.js";
