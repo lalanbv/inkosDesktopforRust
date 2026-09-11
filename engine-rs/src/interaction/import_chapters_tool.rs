@@ -132,7 +132,8 @@ pub async fn tool_import_chapters(
         .saturating_sub(1);
     if existing > 0 && resume_from.is_none() {
         return error_result(format!(
-            "Book \"{book_id}\" already has {existing} chapter(s). Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first."
+            "Book \"{book_id}\" already has {existing} chapter(s). {}. Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first.",
+            crate::utils::resume_advice::format_resume_hint(i64::from(existing), Some("en"))
         ));
     }
     // importMode：continuation（缺省）/ series（地基生成模式直通）。

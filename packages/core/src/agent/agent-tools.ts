@@ -44,6 +44,7 @@ import {
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
 import { searchWeb } from "../utils/web-search.js";
+import { formatResumeHint } from "../utils/resume-advice.js";
 import {
   runAsWorkflowTrajectory,
   runWithAgentTrajectoryRole,
@@ -1665,8 +1666,10 @@ export function createImportChaptersTool(
       const state = new StateManager(projectRoot);
       const existingChapterCount = (await state.getNextChapterNumber(targetBookId)) - 1;
       if (existingChapterCount > 0 && params.resumeFrom === undefined) {
+        // G9/344 号：错误消息带显式续跑建议（从哪继续 + resumeFrom 章号）。
         throw new Error(
           `Book "${targetBookId}" already has ${existingChapterCount} chapter(s). ` +
+          `${formatResumeHint(existingChapterCount, "en")} ` +
           `Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first.`,
         );
       }

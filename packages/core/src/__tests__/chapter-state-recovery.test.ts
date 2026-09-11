@@ -14,6 +14,7 @@ import {
   resolveStateDegradedBaseStatus,
   retrySettlementAfterValidationFailure,
 } from "../pipeline/chapter-state-recovery.js";
+import { resolveResumeAdvice } from "../utils/resume-advice.js";
 
 function createBook(): BookConfig {
   return {
@@ -231,5 +232,27 @@ describe("chapter-state-recovery", () => {
       reviewNote: "{bad json",
       auditIssues: ["[warning] needs review"],
     }))).toBe("ready-for-review");
+  });
+});
+
+describe("resume advice bridge (G9/344)", () => {
+  it("maps state-degraded outcomes to a resync-only resume suggestion", () => {
+    // G9/344 号：状态降级 = 正文已存但状态未回灌 → 只补回灌，不重写正文。
+    const advice = resolveResumeAdvice({ savedChapters: 6, stateBehind: true });
+    expect(advice.action).toBe("resync-only");
+    expect(advice.resumeFrom).toBe(7);
+    expect(advice.detail).toContain("resync_chapter_state");
+  });
+
+  it("maps manual edits to a confirmation gate that blocks auto actions", () => {
+    // 手改优先于一切自动续跑动作（WNW 失败隔离铁律）。
+    const advice = resolveResumeAdvice({
+      savedChapters: 6,
+      contentManuallyEdited: true,
+      stateBehind: true,
+      lastChapterIncomplete: true,
+    });
+    expect(advice.action).toBe("confirm-manual-edit");
+    expect(advice.resumeFrom).toBe(7);
   });
 });

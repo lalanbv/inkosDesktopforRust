@@ -554,6 +554,14 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  formatResumeHint,
+  resolveResumeAdvice,
+  RESUME_ACTIONS,
+  type ResumeAction,
+  type ResumeAdvice,
+  type ResumeAdviceInput,
+} from "./utils/resume-advice.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,

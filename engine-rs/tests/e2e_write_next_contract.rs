@@ -12423,8 +12423,13 @@ name: 林动
             execs[0]["error"]
                 .as_str()
                 .unwrap()
-                .starts_with("Book \"b85\" already has 2 chapter(s). Pass resumeFrom=<n> to resume/append from chapter n, or ask the user to clear the existing chapters first."),
+                .starts_with("Book \"b85\" already has 2 chapter(s). Continue from the next chapter: Prose and state are consistent — continue from chapter 3 (resumeFrom=3)."),
             "body: {parsed}"
+        );
+        // G9/344 号：错误消息携带显式续跑建议（从哪继续 + resumeFrom 章号）。
+        assert!(
+            execs[0]["error"].as_str().unwrap().contains("resumeFrom=3"),
+            "resume advice missing: {parsed}"
         );
 
         // ③ chat 会话无 active book 且未给 bookId → 守卫错误。

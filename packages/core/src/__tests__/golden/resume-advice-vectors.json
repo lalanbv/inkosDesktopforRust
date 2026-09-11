@@ -1,0 +1,26 @@
+{
+  "_header": "续跑建议共享向量（G9/344 号，Phase B 批次三首项）。唯一事实源本文件；TS 断言 src/__tests__/golden-resume-advice.test.ts，Rust 差分 engine-rs/tests/golden_resume_advice_diff.rs。决策表顺序即优先级：1无正文→start-fresh 2正文手改→confirm-manual-edit(永不自动覆盖) 3末章不完整→regenerate-chapter(resumeFrom=本章) 4状态未回灌→resync-only 5其余→continue-next；resumeFrom：regenerate=本章、其余=下一章。",
+  "advice": [
+    { "name": "no-chapters-start-fresh", "input": { "savedChapters": 0, "language": "zh" }, "expected": { "action": "start-fresh", "resumeFrom": null, "title": "全新开始" } },
+    { "name": "manual-edit-confirmed-first", "input": { "savedChapters": 4, "contentManuallyEdited": true, "stateBehind": true, "language": "zh" }, "expected": { "action": "confirm-manual-edit", "resumeFrom": 5, "title": "正文手改需确认" } },
+    { "name": "manual-edit-beats-incomplete", "input": { "savedChapters": 4, "contentManuallyEdited": true, "lastChapterIncomplete": true, "language": "en" }, "expected": { "action": "confirm-manual-edit", "resumeFrom": 5, "title": "Manual edit needs confirmation" },
+    "note": "手改优先于重写：覆盖手改正文比重写半章更危险" },
+    { "name": "incomplete-regenerates-this-chapter", "input": { "savedChapters": 7, "lastChapterIncomplete": true, "language": "zh" }, "expected": { "action": "regenerate-chapter", "resumeFrom": 7, "title": "重写最后一章" } },
+    { "name": "state-behind-resync-only", "input": { "savedChapters": 6, "stateBehind": true, "language": "zh" }, "expected": { "action": "resync-only", "resumeFrom": 7, "title": "只需补回灌" } },
+    { "name": "consistent-continue-next", "input": { "savedChapters": 6, "language": "en" }, "expected": { "action": "continue-next", "resumeFrom": 7, "title": "Continue from the next chapter" } },
+    { "name": "negative-clamped-to-zero", "input": { "savedChapters": -3, "language": "en" }, "expected": { "action": "start-fresh", "resumeFrom": null, "title": "Start fresh" } },
+    { "name": "manual-edit-en-detail-mentions-never-overwrite", "input": { "savedChapters": 2, "contentManuallyEdited": true, "language": "en" }, "expected": { "action": "confirm-manual-edit", "resumeFrom": 3, "title": "Manual edit needs confirmation", "detailContains": "never be overwritten" } },
+    { "name": "resync-detail-mentions-no-rewrite", "input": { "savedChapters": 9, "stateBehind": true, "language": "zh" }, "expected": { "action": "resync-only", "resumeFrom": 10, "title": "只需补回灌", "detailContains": "无需重写正文" } },
+    { "name": "regenerate-detail-mentions-keep-earlier", "input": { "savedChapters": 5, "lastChapterIncomplete": true, "language": "zh" }, "expected": { "action": "regenerate-chapter", "resumeFrom": 5, "title": "重写最后一章", "detailContains": "此前章节保留" } },
+    { "name": "continue-detail-mentions-resume-from", "input": { "savedChapters": 11, "language": "zh" }, "expected": { "action": "continue-next", "resumeFrom": 12, "title": "从下一章继续", "detailContains": "resumeFrom=12" } }
+  ],
+  "hint": [
+    { "name": "hint-en", "input": { "savedChapters": 4, "language": "en" }, "expectedContains": ["Continue from the next chapter:", "resumeFrom=5"] },
+    { "name": "hint-zh", "input": { "savedChapters": 4, "language": "zh" }, "expectedContains": ["从下一章继续：", "resumeFrom=5"] }
+  ],
+  "contract": {
+    "actions": ["start-fresh", "confirm-manual-edit", "regenerate-chapter", "resync-only", "continue-next"],
+    "manualEditPriority": "above-regenerate-and-resync",
+    "neverAutoOverwriteManualEdit": true
+  }
+}

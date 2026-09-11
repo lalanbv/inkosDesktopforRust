@@ -1110,7 +1110,8 @@ async fn execute_continuation_import(
                 Some(v) => v,
                 None if count > 0 => {
                     return Err(format!(
-                        "Book \"{existing}\" already has {count} chapter(s); resumeFrom is required."
+                        "Book \"{existing}\" already has {count} chapter(s); {}. resumeFrom is required.",
+                        crate::utils::resume_advice::format_resume_hint(count as i64, Some("en"))
                     ));
                 }
                 None => 1,

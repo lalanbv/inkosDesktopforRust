@@ -52,6 +52,7 @@ pub mod pov_filter;
 pub mod info_gap_ledger;
 pub mod promise_ledger;
 pub mod style_feature_engine;
+pub mod resume_advice;
 pub mod runtime_writer;
 pub mod story_markdown;
 pub mod truth_dialect;
