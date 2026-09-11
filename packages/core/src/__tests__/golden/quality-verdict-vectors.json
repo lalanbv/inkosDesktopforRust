@@ -1,0 +1,51 @@
+{
+  "_header": "质量债务账本共享向量（G3/336 号，Phase B 批次一）。唯一事实源本文件；TS 断言 src/__tests__/golden-quality-verdict.test.ts，Rust 差分 engine-rs/tests/golden_quality_verdict_diff.rs。verdict 决策表顺序即优先级：1过线+义务缺口→gap 2过线+warning→warning 3过线→accepted 4未过+义务+结构→unmet 5未过+义务→gap 6未过+纯局部→patch 7未过+quality-first→stop 8未过+债务达限→replan 9其余→defer。",
+  "verdict": [
+    { "name": "clean-accept", "input": { "passed": true, "warningCount": 0, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "accepted" },
+    { "name": "pass-with-warning", "input": { "passed": true, "warningCount": 2, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "continue-with-warning" },
+    { "name": "pass-with-unmet", "input": { "passed": true, "warningCount": 0, "localCount": 1, "structuralCount": 0, "unmetObligations": 1, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "patchable-obligation-gap" },
+    { "name": "pass-unmet-beats-warning", "input": { "passed": true, "warningCount": 1, "localCount": 0, "structuralCount": 0, "unmetObligations": 2, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "patchable-obligation-gap" },
+    { "name": "unmet-structural-rewrites", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 2, "unmetObligations": 1, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "draft-obligation-unmet" },
+    { "name": "unmet-local-patchable", "input": { "passed": false, "warningCount": 0, "localCount": 2, "structuralCount": 0, "unmetObligations": 1, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "patchable-obligation-gap" },
+    { "name": "pure-local-patch-plan", "input": { "passed": false, "warningCount": 0, "localCount": 3, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "local-patch-plan" },
+    { "name": "structural-no-unmet-defers", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 1, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "defer-and-continue" },
+    { "name": "quality-first-stops", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 1, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "quality-first", "maxConsecutiveDebts": 3 }, "expected": "stop-for-replan" },
+    { "name": "quality-first-ignores-debt-count", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 2, "unmetObligations": 0, "consecutiveDebts": 5, "policy": "quality-first", "maxConsecutiveDebts": 3 }, "expected": "stop-for-replan" },
+    { "name": "threshold-reached-replans", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 2, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "replan-required" },
+    { "name": "below-threshold-defers", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 1, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "defer-and-continue" },
+    { "name": "custom-threshold-one", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 1 }, "expected": "replan-required" },
+    { "name": "warnings-alone-do-not-patch", "input": { "passed": false, "warningCount": 1, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 2, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "replan-required" },
+    { "name": "mixed-local-structural-defers", "input": { "passed": false, "warningCount": 0, "localCount": 2, "structuralCount": 1, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "defer-and-continue" },
+    { "name": "mixed-quality-first-stops", "input": { "passed": false, "warningCount": 0, "localCount": 2, "structuralCount": 1, "unmetObligations": 0, "consecutiveDebts": 0, "policy": "quality-first", "maxConsecutiveDebts": 3 }, "expected": "stop-for-replan" },
+    { "name": "passed-input-is-authoritative", "input": { "passed": true, "warningCount": 0, "localCount": 5, "structuralCount": 5, "unmetObligations": 0, "consecutiveDebts": 9, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "accepted" },
+    { "name": "pass-unmet-with-warnings", "input": { "passed": true, "warningCount": 3, "localCount": 0, "structuralCount": 0, "unmetObligations": 4, "consecutiveDebts": 0, "policy": "completion-first", "maxConsecutiveDebts": 3 }, "expected": "patchable-obligation-gap" },
+    { "name": "policy-flip-applies-immediately", "input": { "passed": false, "warningCount": 0, "localCount": 0, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 2, "policy": "quality-first", "maxConsecutiveDebts": 3 }, "expected": "stop-for-replan" },
+    { "name": "local-patch-precedes-threshold", "input": { "passed": false, "warningCount": 0, "localCount": 1, "structuralCount": 0, "unmetObligations": 0, "consecutiveDebts": 9, "policy": "completion-first", "maxConsecutiveDebts": 20 }, "expected": "local-patch-plan" }
+  ],
+  "policy": [
+    { "name": "defaults", "input": { "book": null, "project": null }, "expected": { "policy": "completion-first", "maxConsecutiveDebts": 3 } },
+    { "name": "project-quality-first", "input": { "book": null, "project": { "policy": "quality-first" } }, "expected": { "policy": "quality-first", "maxConsecutiveDebts": 3 } },
+    { "name": "book-overrides-project-policy", "input": { "book": { "policy": "completion-first" }, "project": { "policy": "quality-first" } }, "expected": { "policy": "completion-first", "maxConsecutiveDebts": 3 } },
+    { "name": "book-threshold-only", "input": { "book": { "maxConsecutiveDebts": 5 }, "project": null }, "expected": { "policy": "completion-first", "maxConsecutiveDebts": 5 } },
+    { "name": "book-threshold-overrides-project", "input": { "book": { "maxConsecutiveDebts": 2 }, "project": { "maxConsecutiveDebts": 7, "policy": "quality-first" } }, "expected": { "policy": "quality-first", "maxConsecutiveDebts": 2 } },
+    { "name": "project-threshold-inherited", "input": { "book": null, "project": { "maxConsecutiveDebts": 7 } }, "expected": { "policy": "completion-first", "maxConsecutiveDebts": 7 } }
+  ],
+  "transition": [
+    { "name": "open-defer", "current": "open", "action": "defer", "expected": "deferred", "valid": true },
+    { "name": "open-resolve", "current": "open", "action": "resolve", "expected": "resolved", "valid": true },
+    { "name": "open-reopen-invalid", "current": "open", "action": "reopen", "expected": "open", "valid": false },
+    { "name": "deferred-defer-invalid", "current": "deferred", "action": "defer", "expected": "deferred", "valid": false },
+    { "name": "deferred-resolve", "current": "deferred", "action": "resolve", "expected": "resolved", "valid": true },
+    { "name": "deferred-reopen", "current": "deferred", "action": "reopen", "expected": "open", "valid": true },
+    { "name": "resolved-defer-invalid", "current": "resolved", "action": "defer", "expected": "resolved", "valid": false },
+    { "name": "resolved-resolve-invalid", "current": "resolved", "action": "resolve", "expected": "resolved", "valid": false },
+    { "name": "resolved-reopen", "current": "resolved", "action": "reopen", "expected": "open", "valid": true }
+  ],
+  "contract": {
+    "verdicts": ["accepted", "continue-with-warning", "local-patch-plan", "patchable-obligation-gap", "draft-obligation-unmet", "defer-and-continue", "replan-required", "stop-for-replan"],
+    "policies": ["completion-first", "quality-first"],
+    "debtStatuses": ["open", "deferred", "resolved"],
+    "debtActions": ["defer", "resolve", "reopen"],
+    "defaults": { "policy": "completion-first", "maxConsecutiveDebts": 3 }
+  }
+}

@@ -20,6 +20,7 @@ pub mod genre_profile;
 pub mod input_governance;
 pub mod length_governance;
 pub mod project;
+pub mod quality_governance;
 pub mod runtime_state;
 pub mod state;
 pub mod style_profile;
