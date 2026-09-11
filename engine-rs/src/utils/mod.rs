@@ -48,6 +48,7 @@ pub mod path;
 pub mod planning_materials;
 pub mod spot_fix_patches;
 pub mod pov_filter;
+pub mod promise_ledger;
 pub mod runtime_writer;
 pub mod story_markdown;
 pub mod truth_dialect;

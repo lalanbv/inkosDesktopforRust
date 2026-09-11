@@ -716,6 +716,10 @@ pub fn router_books(
             get(ops_routes::get_quality_debts).with_state(books.clone()),
         )
         .route(
+            "/api/v1/books/:id/promises",
+            get(ops_routes::get_promises).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id/foundation/revise",
             post(book_create_routes::revise_foundation).with_state(books),
         )

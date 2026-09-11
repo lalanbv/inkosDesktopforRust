@@ -3025,6 +3025,33 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
+  app.get("/api/v1/books/:id/promises", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ timeline: [], pacingDebts: [], weakRuns: { runs: [], longestRun: 0 }, currentChapter: 0 });
+    }
+    try {
+      const core = await import("@actalk/inkos-core");
+      const { MemoryDB } = core;
+      const memory = new MemoryDB(join(root, "books", id));
+      const hooks = memory.getAllHooks();
+      const summaries = memory.getSummaries(1, 100_000);
+      const currentChapter = summaries.length > 0
+        ? summaries[summaries.length - 1]!.chapter + 1
+        : 1;
+      const timeline = core.buildPromiseTimeline(hooks, currentChapter);
+      const pacingDebts = core.detectPacingDebts({ hooks, currentChapter });
+      const weakRuns = core.detectWeakHookRuns({
+        summaries: summaries.map((s) => ({ chapter: s.chapter, hookActivity: s.hookActivity ?? "" })),
+      });
+      return c.json({ timeline, pacingDebts, weakRuns, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // G3/337 号：质量债务清单（open/deferred/resolved；缺省全量）。
   app.get("/api/v1/books/:id/quality-debts", async (c) => {
     const id = c.req.param("id");

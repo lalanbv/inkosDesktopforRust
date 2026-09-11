@@ -554,6 +554,19 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  buildPromiseTimeline,
+  detectPacingDebts,
+  detectWeakHookRuns,
+  hookActivityStrength,
+  parseExpectedChapter,
+  DEFAULT_CORE_HOOK_STALLED_THRESHOLD,
+  DEFAULT_WEAK_HOOK_MIN_RUN,
+  type PacingDebtAlert,
+  type PromiseTimelineEntry,
+  type WeakHookRun,
+  type WeakHookSummary,
+} from "./utils/promise-ledger.js";
+export {
   buildAuthorReport,
   buildTaskReport,
   classifyEngineIssue,

@@ -407,6 +407,23 @@ export class MemoryDB {
     }
   }
 
+  /** G10/338 号：全量 hook（含已兑付）——承诺时间线数据源。 */
+  getAllHooks(): ReadonlyArray<StoredHook> {
+    return this.db.prepare(
+      `SELECT
+         hook_id AS hookId,
+         start_chapter AS startChapter,
+         type,
+         status,
+         last_advanced_chapter AS lastAdvancedChapter,
+         expected_payoff AS expectedPayoff,
+         payoff_timing AS payoffTiming,
+         notes
+       FROM hooks
+       ORDER BY start_chapter ASC, hook_id ASC`,
+    ).all() as unknown as ReadonlyArray<StoredHook>;
+  }
+
   getActiveHooks(): ReadonlyArray<StoredHook> {
     return this.db.prepare(
       `SELECT

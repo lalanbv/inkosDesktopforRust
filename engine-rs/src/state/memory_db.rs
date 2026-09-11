@@ -556,6 +556,20 @@ impl MemoryDb {
 
     /// 活跃 hooks（排除 resolved/closed/已回收/已解决，大小写不敏感），按
     /// `last_advanced_chapter DESC, start_chapter DESC, hook_id ASC` 排序。对齐 `getActiveHooks`。
+    /// G10/338 号：全量 hook（含已兑付）——承诺时间线数据源。
+    pub fn get_all_hooks(&self) -> Result<Vec<StoredHook>> {
+        let rows = self
+            .conn
+            .prepare(
+                "SELECT hook_id, start_chapter, type, status, last_advanced_chapter, expected_payoff, payoff_timing, notes
+                 FROM hooks
+                 ORDER BY start_chapter ASC, hook_id ASC",
+            )?
+            .query_map([], row_to_hook)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn get_active_hooks(&self) -> Result<Vec<StoredHook>> {
         let rows = self
             .conn

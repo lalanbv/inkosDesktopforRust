@@ -1,6 +1,7 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState } from "react";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
+import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -543,6 +544,9 @@ export function BookDetail({
 
       {/* G3/337 号：质量债务清单（无未决债务时自动隐藏）。 */}
       <QualityDebtsCard bookId={bookId} />
+
+      {/* G10/338 号：承诺账本运营视图（无数据时自动隐藏）。 */}
+      <PromiseTimelineCard bookId={bookId} />
 
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-border/40 pb-8">

@@ -757,6 +757,70 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
+pub async fn get_promises(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let db_path = book_dir.join("story").join("memory.db");
+    if !db_path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "timeline": [],
+                "pacingDebts": [],
+                "weakRuns": { "runs": [], "longestRun": 0 },
+                "currentChapter": 0
+            })),
+        )
+            .into_response();
+    }
+    let result = (|| {
+        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+        let hooks = db.get_all_hooks()?;
+        let summaries = db.get_summaries(1, 100_000)?;
+        let hook_inputs: Vec<crate::utils::promise_ledger::PromiseHookInput> = hooks
+            .iter()
+            .map(|hook| crate::utils::promise_ledger::PromiseHookInput {
+                hook_id: hook.hook_id.clone(),
+                start_chapter: hook.start_chapter,
+                status: hook.status.clone(),
+                last_advanced_chapter: hook.last_advanced_chapter,
+                expected_payoff: hook.expected_payoff.clone(),
+                notes: hook.notes.clone(),
+                core_hook: false,
+            })
+            .collect();
+        let current_chapter = summaries
+            .iter()
+            .map(|summary| summary.chapter)
+            .max()
+            .map(|last| last + 1)
+            .unwrap_or(1);
+        let timeline = crate::utils::promise_ledger::build_promise_timeline(&hook_inputs, current_chapter);
+        let pacing_debts = crate::utils::promise_ledger::detect_pacing_debts(&hook_inputs, current_chapter, None);
+        let weak_rows: Vec<crate::utils::promise_ledger::WeakHookSummaryRow> = summaries
+            .iter()
+            .map(|summary| crate::utils::promise_ledger::WeakHookSummaryRow {
+                chapter: summary.chapter,
+                hook_activity: summary.hook_activity.clone(),
+            })
+            .collect();
+        let weak_runs = crate::utils::promise_ledger::detect_weak_hook_runs(&weak_rows, None);
+        Ok::<_, crate::EngineError>(serde_json::json!({
+            "timeline": timeline,
+            "pacingDebts": pacing_debts,
+            "weakRuns": weak_runs,
+            "currentChapter": current_chapter
+        }))
+    })();
+    match result {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// G3/337 号：质量债务清单（?status=open|deferred|resolved 过滤；缺省全量）。
 pub async fn get_quality_debts(
     State(runtime): State<BooksRuntime>,

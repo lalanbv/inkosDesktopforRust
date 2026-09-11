@@ -1,0 +1,458 @@
+{
+  "_header": "承诺账本运营化共享向量（G10/338 号，Phase B 批次一收尾）。唯一事实源本文件；TS 断言 src/__tests__/golden-promise-ledger.test.ts，Rust 差分 engine-rs/tests/golden_promise_ledger_diff.rs。强度规则：空/无→none，含 hookId 记号或钩子动词→strong，其他→weak；节奏债只盯 coreHook 且未兑付，stalled=current-max(lastAdvanced,start)≥threshold；时间线状态机：resolved→fulfilled，期望章≤current→overdue，有推进→advancing，否则 open；排序 overdue 置顶→open→advancing→fulfilled。",
+  "strength": [
+    {
+      "name": "empty",
+      "input": "",
+      "expected": "none"
+    },
+    {
+      "name": "whitespace",
+      "input": "   ",
+      "expected": "none"
+    },
+    {
+      "name": "zh-none",
+      "input": "无",
+      "expected": "none"
+    },
+    {
+      "name": "en-none",
+      "input": "none",
+      "expected": "none"
+    },
+    {
+      "name": "dash",
+      "input": "—",
+      "expected": "none"
+    },
+    {
+      "name": "hook-id",
+      "input": "H01 推进",
+      "expected": "strong"
+    },
+    {
+      "name": "zh-advance",
+      "input": "神秘符文初现",
+      "expected": "weak"
+    },
+    {
+      "name": "zh-plant",
+      "input": "埋下师门血案线索",
+      "expected": "strong"
+    },
+    {
+      "name": "zh-resolve",
+      "input": "导师欠款回收",
+      "expected": "strong"
+    },
+    {
+      "name": "en-id",
+      "input": "hook-3 resolved",
+      "expected": "strong"
+    },
+    {
+      "name": "plain-prose",
+      "input": "主角吃了一碗面",
+      "expected": "weak"
+    },
+    {
+      "name": "id-token",
+      "input": "fk12",
+      "expected": "strong"
+    }
+  ],
+  "pacing": [
+    {
+      "name": "core-stalled-alerts",
+      "input": {
+        "currentChapter": 12,
+        "threshold": 5,
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 2,
+            "lastAdvancedChapter": 4,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": "第15章"
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 6,
+            "lastAdvancedChapter": 9,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": ""
+          },
+          {
+            "hookId": "H03",
+            "startChapter": 3,
+            "lastAdvancedChapter": 10,
+            "status": "open",
+            "coreHook": false,
+            "expectedPayoff": ""
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "H01",
+          "stalledChapters": 8,
+          "threshold": 5,
+          "expectedPayoff": "第15章"
+        }
+      ]
+    },
+    {
+      "name": "below-threshold-silent",
+      "input": {
+        "currentChapter": 7,
+        "threshold": 5,
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 2,
+            "lastAdvancedChapter": 4,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": ""
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "resolved-never-alerts",
+      "input": {
+        "currentChapter": 40,
+        "threshold": 5,
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 2,
+            "lastAdvancedChapter": 4,
+            "status": "resolved",
+            "coreHook": true,
+            "expectedPayoff": ""
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "stalled-anchored-at-plant-when-never-advanced",
+      "input": {
+        "currentChapter": 9,
+        "threshold": 5,
+        "hooks": [
+          {
+            "hookId": "H02",
+            "startChapter": 4,
+            "lastAdvancedChapter": 0,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": ""
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "H02",
+          "stalledChapters": 5,
+          "threshold": 5,
+          "expectedPayoff": ""
+        }
+      ]
+    },
+    {
+      "name": "sorted-by-stall-desc",
+      "input": {
+        "currentChapter": 30,
+        "threshold": 5,
+        "hooks": [
+          {
+            "hookId": "HA",
+            "startChapter": 20,
+            "lastAdvancedChapter": 20,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": ""
+          },
+          {
+            "hookId": "HB",
+            "startChapter": 5,
+            "lastAdvancedChapter": 5,
+            "status": "open",
+            "coreHook": true,
+            "expectedPayoff": ""
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "HB",
+          "stalledChapters": 25,
+          "threshold": 5,
+          "expectedPayoff": ""
+        },
+        {
+          "hookId": "HA",
+          "stalledChapters": 10,
+          "threshold": 5,
+          "expectedPayoff": ""
+        }
+      ]
+    }
+  ],
+  "weakRuns": [
+    {
+      "name": "one-strong-run",
+      "input": {
+        "minRunLength": 3,
+        "summaries": [
+          {
+            "chapter": 1,
+            "hookActivity": "H01 埋"
+          },
+          {
+            "chapter": 2,
+            "hookActivity": "H01 推进"
+          },
+          {
+            "chapter": 3,
+            "hookActivity": "无"
+          },
+          {
+            "chapter": 4,
+            "hookActivity": ""
+          },
+          {
+            "chapter": 5,
+            "hookActivity": "主角吃面"
+          }
+        ]
+      },
+      "expected": {
+        "longestRun": 3,
+        "runs": [
+          {
+            "fromChapter": 3,
+            "toChapter": 5,
+            "length": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "two-runs-both-reported",
+      "input": {
+        "minRunLength": 2,
+        "summaries": [
+          {
+            "chapter": 1,
+            "hookActivity": "无"
+          },
+          {
+            "chapter": 2,
+            "hookActivity": "none"
+          },
+          {
+            "chapter": 3,
+            "hookActivity": "H02 埋"
+          },
+          {
+            "chapter": 4,
+            "hookActivity": ""
+          },
+          {
+            "chapter": 5,
+            "hookActivity": "平淡过渡"
+          }
+        ]
+      },
+      "expected": {
+        "longestRun": 2,
+        "runs": [
+          {
+            "fromChapter": 1,
+            "toChapter": 2,
+            "length": 2
+          },
+          {
+            "fromChapter": 4,
+            "toChapter": 5,
+            "length": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "short-run-filtered",
+      "input": {
+        "minRunLength": 3,
+        "summaries": [
+          {
+            "chapter": 1,
+            "hookActivity": "无"
+          },
+          {
+            "chapter": 2,
+            "hookActivity": "H01"
+          }
+        ]
+      },
+      "expected": {
+        "longestRun": 0,
+        "runs": []
+      }
+    },
+    {
+      "name": "unsorted-input-normalized",
+      "input": {
+        "minRunLength": 2,
+        "summaries": [
+          {
+            "chapter": 5,
+            "hookActivity": ""
+          },
+          {
+            "chapter": 2,
+            "hookActivity": ""
+          },
+          {
+            "chapter": 4,
+            "hookActivity": ""
+          }
+        ]
+      },
+      "expected": {
+        "longestRun": 2,
+        "runs": [
+          {
+            "fromChapter": 4,
+            "toChapter": 5,
+            "length": 2
+          }
+        ]
+      }
+    }
+  ],
+  "timeline": [
+    {
+      "name": "mixed-states-ordered",
+      "input": {
+        "currentChapter": 20,
+        "hooks": [
+          {
+            "hookId": "H03",
+            "startChapter": 15,
+            "lastAdvancedChapter": 18,
+            "status": "open",
+            "expectedPayoff": "第25章",
+            "notes": "支线：镖局疑云"
+          },
+          {
+            "hookId": "H01",
+            "startChapter": 2,
+            "lastAdvancedChapter": 4,
+            "status": "open",
+            "expectedPayoff": "第15章",
+            "notes": "核心：师门血案"
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 5,
+            "lastAdvancedChapter": 9,
+            "status": "resolved",
+            "expectedPayoff": "第12章",
+            "notes": "导师欠款"
+          },
+          {
+            "hookId": "H04",
+            "startChapter": 11,
+            "lastAdvancedChapter": 0,
+            "status": "open",
+            "expectedPayoff": "",
+            "notes": ""
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "H01",
+          "summary": "核心：师门血案",
+          "openedAt": 2,
+          "lastAdvancedAt": 4,
+          "expectedPayoff": "第15章",
+          "state": "overdue"
+        },
+        {
+          "hookId": "H04",
+          "summary": "",
+          "openedAt": 11,
+          "expectedPayoff": "",
+          "state": "open"
+        },
+        {
+          "hookId": "H03",
+          "summary": "支线：镖局疑云",
+          "openedAt": 15,
+          "lastAdvancedAt": 18,
+          "expectedPayoff": "第25章",
+          "state": "advancing"
+        },
+        {
+          "hookId": "H02",
+          "summary": "导师欠款",
+          "openedAt": 5,
+          "lastAdvancedAt": 9,
+          "expectedPayoff": "第12章",
+          "state": "fulfilled"
+        }
+      ]
+    },
+    {
+      "name": "summary-truncated-at-40",
+      "input": {
+        "currentChapter": 3,
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "lastAdvancedChapter": 0,
+            "status": "open",
+            "expectedPayoff": "",
+            "notes": "非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "H01",
+          "summary": "非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非非…",
+          "openedAt": 1,
+          "expectedPayoff": "",
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "defaults": {
+      "coreHookStalledThreshold": 5,
+      "weakHookMinRun": 3
+    },
+    "strengths": [
+      "strong",
+      "weak",
+      "none"
+    ],
+    "timelineStates": [
+      "open",
+      "advancing",
+      "fulfilled",
+      "overdue"
+    ]
+  }
+}
