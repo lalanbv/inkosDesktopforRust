@@ -196,6 +196,10 @@ pub async fn compose_governed_chapter(
         reference_notes = reference.notes;
         selected_context.extend(reference.entries);
     }
+    // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
+    // 临时），参考资料/更低层永远排在章纲与事实之后。
+    let selected_context =
+        crate::utils::context_source_tier::enforce_context_priority_order(selected_context);
     let initial_context_package = ContextPackage {
         chapter: input.chapter_number,
         selected_context,
@@ -2040,10 +2044,14 @@ mod tests {
             .iter()
             .map(|entry| entry.source.as_str())
             .collect();
-        // 顺序 load-bearing：memo → 焦点 → 大纲（选择器失败回退确定性）→ 事实/摘要…
-        assert_eq!(sources.first(), Some(&"runtime/chapter_memo"));
+        // 顺序 load-bearing（G2/330 号优先级契约）：事实层在前 → 规划层保持
+        // 组装序（memo → 焦点 → 大纲选择器失败回退确定性）→ 记忆/参考资料…
+        assert_eq!(
+            sources.first(),
+            Some(&"story/outline/story_frame.md#世界观铁律")
+        );
+        assert!(sources.contains(&"runtime/chapter_memo"));
         assert!(sources.contains(&"story/current_focus.md"));
-        assert!(sources.contains(&"story/outline/story_frame.md#世界观铁律"));
         // mustAvoid 派生规则栈覆盖。
         assert_eq!(out.rule_stack.active_overrides.len(), 1);
         assert_eq!(out.rule_stack.active_overrides[0].target, "chapter:2/mustAvoid");

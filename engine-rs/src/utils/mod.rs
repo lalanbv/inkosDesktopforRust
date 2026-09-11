@@ -21,6 +21,7 @@ pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
 pub mod context_assembly;
+pub mod context_source_tier;
 pub mod detection_insights;
 pub mod context_filter;
 pub mod governed_context;

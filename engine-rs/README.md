@@ -32,6 +32,12 @@ cargo test --features export-bindings
 2. **golden 差分**：每域移植配 `tests/golden/*.json` 向量，`assert_eq!(rust_out, ts_out)`
 3. **1:1 复刻**：提示词模板、状态机、退避算法逐字搬运，禁「顺手优化」
 4. **零功能丢失**：每域接入前，端点契约测试（同 HTTP 请求打 Rust 与 Node，响应 diff=0）
+5. **上下文来源优先级契约**（G2/330 号）：Selected Context 组装序 == 优先级序
+   （本书事实 100 > 本书规划 80 > 本书记忆 60 > 参考资料 40 > 拆书 30 > 写法 20 > 临时 10），
+   走 `utils::context_source_tier::enforce_context_priority_order` 固化；参考资料及更低层
+   是"仅供参考"，不得覆盖本书事实与章纲。新增 ContextSource 来源必须先在
+   `context_source_tier()`（双端）注册层级，未注册一律 ephemeral 垫底。共享向量：
+   `packages/core/src/__tests__/golden/context-priority-vectors.json`。
 
 ## 接入方式（Phase 1+）
 

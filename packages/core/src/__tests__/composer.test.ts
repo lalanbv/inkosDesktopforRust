@@ -106,14 +106,19 @@ describe("ComposerAgent", () => {
     });
 
     const selectedSources = result.contextPackage.selectedContext.map((entry) => entry.source);
-    expect(selectedSources.slice(0, 4)).toEqual([
+    // G2 优先级契约：事实(100) > 规划(80) > 记忆(60)。事实层在前、
+    // 规划层保持组装序（memo → focus → intent），同层相对顺序不变；
+    // 旧版文件名的章纲段（story_bible#/volume_outline#）随各自语义层归位。
+    expect(selectedSources.slice(0, 8)).toEqual([
+      "story/current_state.md",
+      "story/story_bible.md#story-bible",
+      "story/current_state.md#note-1",
+      "story/pending_hooks.md#hook-1",
       "runtime/chapter_memo",
       "story/current_focus.md",
       "story/author_intent.md",
-      "story/current_state.md",
+      "story/volume_outline.md#chapter-4",
     ]);
-    expect(selectedSources[4]).toMatch(/^story\/story_bible\.md#/);
-    expect(selectedSources[5]).toMatch(/^story\/volume_outline\.md#/);
     // The user's long-term direction must reach the writer's context, not be dropped.
     expect(selectedSources).toContain("story/author_intent.md");
     expect(selectedSources.some((source) => source.startsWith("story/pending_hooks.md"))).toBe(true);

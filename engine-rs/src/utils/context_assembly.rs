@@ -157,7 +157,8 @@ pub fn build_governed_trace(params: &GovernedTraceParams<'_>) -> ChapterTrace {
 }
 
 /// 保护源（不可压缩）：memo / 焦点 / 作者意图 / 漂移指引 / 大纲 / 正典 /
-/// 硬状态 / 活跃 hook 证据 / hook 债简报。
+/// 硬状态 / 活跃 hook 证据 / hook 债简报。旧版文件名章纲段
+/// （story_bible#/volume_outline#，G2/330 号）与新版 outline 段同等保护。
 pub fn is_protected_context_source(source: &str) -> bool {
     source == "runtime/chapter_memo"
         || source == "story/current_focus.md"
@@ -166,9 +167,11 @@ pub fn is_protected_context_source(source: &str) -> bool {
         || source == "story/outline/story_frame.md"
         || source.starts_with("story/outline/story_frame.md#")
         || source == "story/story_bible.md"
+        || source.starts_with("story/story_bible.md#")
         || source == "story/outline/volume_map.md"
         || source.starts_with("story/outline/volume_map.md#")
         || source == "story/volume_outline.md"
+        || source.starts_with("story/volume_outline.md#")
         || source == "story/parent_canon.md"
         || source == "story/fanfic_canon.md"
         || source.starts_with("story/current_state.md")
@@ -229,9 +232,13 @@ mod tests {
         assert!(is_protected_context_source("story/current_state.md#主角"));
         assert!(is_protected_context_source("runtime/hook_debt#H01"));
         assert!(is_protected_context_source("story/pending_hooks.md#H01"));
+        // G2/330 号：旧版文件名章纲段（含锚点）与新版同等保护。
+        assert!(is_protected_context_source("story/story_bible.md#玉印"));
+        assert!(is_protected_context_source("story/volume_outline.md#chapter-4"));
         assert!(!is_protected_context_source("story/chapter_summaries.md#3"));
         assert!(!is_protected_context_source("story/volume_summaries.md#arc"));
         assert!(!is_protected_context_source("story/chapters#recent_endings"));
+        assert!(!is_protected_context_source("reference/mat-01#开场"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ import {
   buildGovernedTrace,
   isProtectedContextSource,
 } from "../utils/context-assembly.js";
+import { enforceContextPriorityOrder } from "../utils/context-source-tier.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -101,7 +102,12 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     input.memorySemanticSelector,
   );
   const referenceContext = await loadReferenceContext(input);
-  const selectedContext = [...baseContext.entries, ...referenceContext.entries];
+  // G2：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 > 临时），
+  // 参考资料/更低层永远排在章纲与事实之后，不得在提示词里抢占比它们更高的权威。
+  const selectedContext = enforceContextPriorityOrder([
+    ...baseContext.entries,
+    ...referenceContext.entries,
+  ]);
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
     selectedContext,
