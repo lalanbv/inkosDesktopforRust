@@ -77,6 +77,8 @@ export const DetectionConfigSchema = z.object({
   enabled: z.boolean().default(false),
   autoRewrite: z.boolean().default(false),
   maxRetries: z.number().int().min(1).max(10).default(3),
+  /** G4/340 号：参考作品专名表——仿写正文泄露检测（长名优先计数）。 */
+  protectedNames: z.array(z.string()).optional(),
 });
 
 export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;

@@ -719,6 +719,23 @@ pub fn router_books(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),
         )
+        // G4/340 号：写法档案池 + 书级绑定。
+        .route(
+            "/api/v1/style-profiles",
+            get(ops_routes::list_style_profiles).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/style-profiles",
+            post(ops_routes::save_style_profile).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/style-binding",
+            get(ops_routes::get_style_binding).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/style-binding",
+            put(ops_routes::save_style_binding).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/foundation/revise",
             post(book_create_routes::revise_foundation).with_state(books),

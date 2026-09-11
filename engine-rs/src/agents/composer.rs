@@ -196,6 +196,10 @@ pub async fn compose_governed_chapter(
         reference_notes = reference.notes;
         selected_context.extend(reference.entries);
     }
+    // G4/340 号：书级写法绑定 → style-asset 条目（垫底参考层）。
+    if let Some(binding_entry) = load_style_binding_entry(input.book_dir) {
+        selected_context.push(binding_entry);
+    }
     // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
     // 临时），参考资料/更低层永远排在章纲与事实之后。
     let selected_context =
@@ -2204,4 +2208,38 @@ mod tests {
             .any(|entry| entry.source.starts_with("reference/")));
         assert!(out.trace.notes.contains(&"book-reference-selection-failed".to_string()));
     }
+}
+
+
+/// G4/340 号：书级写法绑定 → style-asset 条目；任何缺失/解析失败返回 None。
+pub fn load_style_binding_entry(
+    book_dir: &Path,
+) -> Option<crate::models::input_governance::ContextSource> {
+    let binding_raw = std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
+    let binding: crate::utils::style_feature_engine::StyleBinding =
+        serde_json::from_str(&binding_raw).ok()?;
+    if binding.profile_name.is_empty() {
+        return None;
+    }
+    let profile_raw = std::fs::read_to_string(
+        book_dir
+            .join("story")
+            .join("style-profiles")
+            .join(format!("{}.json", binding.profile_name)),
+    )
+    .ok()?;
+    let profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
+    let resolution = crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
+    if resolution.enabled.is_empty() {
+        return None;
+    }
+    let guidance = resolution.guidance_zh;
+    if guidance.is_empty() {
+        return None;
+    }
+    Some(crate::models::input_governance::ContextSource {
+        source: format!("style/{}", binding.profile_name),
+        reason: "Bound style profile (feature pool selection).".to_string(),
+        excerpt: Some(guidance),
+    })
 }

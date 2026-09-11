@@ -22,6 +22,11 @@ import {
   isProtectedContextSource,
 } from "../utils/context-assembly.js";
 import { enforceContextPriorityOrder } from "../utils/context-source-tier.js";
+import {
+  composeStyleGuidance,
+  resolveStyleBinding,
+  type StyleBinding,
+} from "../utils/style-feature-engine.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -104,9 +109,11 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const referenceContext = await loadReferenceContext(input);
   // G2：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 > 临时），
   // 参考资料/更低层永远排在章纲与事实之后，不得在提示词里抢占比它们更高的权威。
+  const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
   const selectedContext = enforceContextPriorityOrder([
     ...baseContext.entries,
     ...referenceContext.entries,
+    ...(styleBindingEntry ? [styleBindingEntry] : []),
   ]);
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
@@ -315,6 +322,37 @@ function renderContextEntries(entries: ContextPackage["selectedContext"]): strin
       entry.excerpt ? entry.excerpt : "(no excerpt)",
     ].join("\n"),
   ).join("\n\n");
+}
+
+/**
+ * G4/340 号：书级写法绑定 → Selected Context 的 style-asset 条目。
+ * 绑定文件缺失/档案缺失/解析失败一律返回 null（零打扰）；
+ * source 前缀 `style/` 在上下文来源分层中即 style-asset（20，垫底参考层）。
+ */
+export async function loadStyleBindingEntry(
+  bookDir: string,
+): Promise<ContextPackage["selectedContext"][number] | null> {
+  try {
+    const raw = await readFile(join(bookDir, "story", "style_binding.json"), "utf-8");
+    const binding = JSON.parse(raw) as StyleBinding;
+    if (!binding?.profileName) return null;
+    const profilesRaw = await readFile(
+      join(bookDir, "story", "style-profiles", `${binding.profileName}.json`),
+      "utf-8",
+    );
+    const profile = JSON.parse(profilesRaw);
+    const resolution = resolveStyleBinding([profile], binding);
+    if (!resolution || resolution.enabled.length === 0) return null;
+    const guidance = composeStyleGuidance(resolution.enabled, "zh", binding.maxGuidanceChars);
+    if (!guidance) return null;
+    return {
+      source: `style/${binding.profileName}`,
+      reason: "Bound style profile (feature pool selection).",
+      excerpt: guidance,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseSelectedSources(raw: string): string[] {

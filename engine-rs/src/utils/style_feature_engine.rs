@@ -155,6 +155,59 @@ pub fn build_trial_write_prompt(
     }
 }
 
+// ── 每书绑定 ──
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleBinding {
+    #[serde(default)]
+    pub profile_name: String,
+    #[serde(default)]
+    pub enabled_ids: Vec<String>,
+    #[serde(default)]
+    pub disabled_ids: Vec<String>,
+    #[serde(default, rename = "maxGuidanceChars")]
+    pub max_guidance_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingResolution {
+    pub profile_name: String,
+    pub pool_size: usize,
+    pub enabled: Vec<StyleFeature>,
+    #[serde(rename = "guidanceZh")]
+    pub guidance_zh: String,
+    #[serde(rename = "guidanceEn")]
+    pub guidance_en: String,
+}
+
+/// 绑定解析：按 sourceName 命中档案 → 池 → 启停 → 双语 guidance；未命中返回 None。
+pub fn resolve_style_binding(
+    profiles: &[StyleProfile],
+    binding: &StyleBinding,
+) -> Option<BindingResolution> {
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.source_name.as_deref() == Some(binding.profile_name.as_str()))?;
+    let pool = derive_feature_pool(profile);
+    let enabled = apply_feature_selection(
+        &pool,
+        Some(&binding.enabled_ids),
+        Some(&binding.disabled_ids),
+    );
+    if enabled.is_empty() {
+        return None;
+    }
+    Some(BindingResolution {
+        profile_name: binding.profile_name.clone(),
+        pool_size: pool.len(),
+        guidance_zh: compose_style_guidance(&enabled, "zh", binding.max_guidance_chars),
+        guidance_en: compose_style_guidance(&enabled, "en", binding.max_guidance_chars),
+        enabled,
+    })
+}
+
 // ── 专名泄露检测（ANWA A9）──
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

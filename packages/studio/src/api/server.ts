@@ -3025,6 +3025,73 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。
+  app.get("/api/v1/style-profiles", async (c) => {
+    const dir = join(root, ".inkos", "style-profiles");
+    try {
+      await mkdir(dir, { recursive: true });
+      const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
+      const items = await Promise.all(files.map(async (file) => {
+        try {
+          const profile = JSON.parse(await readFile(join(dir, file), "utf-8"));
+          return { name: file.replace(/\.json$/, ""), profile };
+        } catch {
+          return null;
+        }
+      }));
+      return c.json({ profiles: items.filter(Boolean) });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/style-profiles", async (c) => {
+    const body = await c.req.json<{ name?: string; profile?: unknown }>();
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name || !body.profile || typeof body.profile !== "object") {
+      return c.json({ error: "name and profile are required" }, 400);
+    }
+    const dir = join(root, ".inkos", "style-profiles");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${name}.json`), JSON.stringify(body.profile, null, 2), "utf-8");
+    return c.json({ ok: true, name });
+  });
+
+  // G4/340 号：书级写法绑定（style_binding.json）。
+  app.get("/api/v1/books/:id/style-binding", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "style_binding.json");
+    try {
+      const binding = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ binding });
+    } catch {
+      return c.json({ binding: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/style-binding", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      profileName?: string;
+      enabledIds?: string[];
+      disabledIds?: string[];
+      maxGuidanceChars?: number;
+    }>();
+    const profileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
+    if (!profileName) return c.json({ error: "profileName is required" }, 400);
+    const profilePath = join(root, ".inkos", "style-profiles", `${profileName}.json`);
+    const profileExists = await access(profilePath).then(() => true).catch(() => false);
+    if (!profileExists) return c.json({ error: "profile not found" }, 404);
+    const binding: Record<string, unknown> = { profileName };
+    if (Array.isArray(body.enabledIds) && body.enabledIds.length > 0) binding.enabledIds = body.enabledIds;
+    if (Array.isArray(body.disabledIds) && body.disabledIds.length > 0) binding.disabledIds = body.disabledIds;
+    if (typeof body.maxGuidanceChars === "number" && body.maxGuidanceChars > 0) binding.maxGuidanceChars = body.maxGuidanceChars;
+    const storyDir = join(root, "books", id, "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(join(storyDir, "style_binding.json"), JSON.stringify(binding, null, 2), "utf-8");
+    return c.json({ ok: true, binding });
+  });
+
   // G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
   app.get("/api/v1/books/:id/promises", async (c) => {
     const id = c.req.param("id");

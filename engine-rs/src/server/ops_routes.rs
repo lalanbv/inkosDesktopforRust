@@ -757,6 +757,134 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G4/340 号：写法档案池列表（项目级 .inkos/style-profiles/）。
+pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut profiles: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(profile) = serde_json::from_str::<Value>(&raw) {
+                    profiles.push(json!({ "name": name, "profile": profile }));
+                }
+            }
+        }
+    }
+    (StatusCode::OK, Json(json!({ "profiles": profiles }))).into_response()
+}
+
+/// G4/340 号：保存写法档案（覆盖写，原子）。
+#[derive(Debug, serde::Deserialize)]
+pub struct SaveStyleProfileBody {
+    pub name: String,
+    pub profile: Value,
+}
+
+pub async fn save_style_profile(
+    State(runtime): State<BooksRuntime>,
+    Json(body): Json<SaveStyleProfileBody>,
+) -> impl IntoResponse {
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("name is required"));
+    }
+    let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{name}.json"));
+    match serde_json::to_string_pretty(&body.profile) {
+        Ok(raw) => match std::fs::write(&path, raw) {
+            Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name }))).into_response(),
+            Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        },
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+/// G4/340 号：读书级写法绑定（缺文件 → binding: null）。
+pub async fn get_style_binding(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let path = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("style_binding.json");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(binding) => (StatusCode::OK, Json(json!({ "binding": binding }))).into_response(),
+            Err(_) => (StatusCode::OK, Json(json!({ "binding": Value::Null }))).into_response(),
+        },
+        Err(_) => (StatusCode::OK, Json(json!({ "binding": Value::Null }))).into_response(),
+    }
+}
+
+/// G4/340 号：保存书级写法绑定（校验档案存在；原子写）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveStyleBindingBody {
+    pub profile_name: String,
+    #[serde(default)]
+    pub enabled_ids: Vec<String>,
+    #[serde(default)]
+    pub disabled_ids: Vec<String>,
+    #[serde(default, rename = "maxGuidanceChars")]
+    pub max_guidance_chars: Option<usize>,
+}
+
+pub async fn save_style_binding(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<SaveStyleBindingBody>,
+) -> impl IntoResponse {
+    let profile_name = body.profile_name.trim().to_string();
+    if profile_name.is_empty() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("profileName is required"));
+    }
+    let profile_path = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("style-profiles")
+        .join(format!("{profile_name}.json"));
+    if !profile_path.exists() {
+        return flat_error(StatusCode::NOT_FOUND, String::from("profile not found"));
+    }
+    let mut binding = json!({ "profileName": profile_name });
+    if !body.enabled_ids.is_empty() {
+        binding["enabledIds"] = json!(body.enabled_ids);
+    }
+    if !body.disabled_ids.is_empty() {
+        binding["disabledIds"] = json!(body.disabled_ids);
+    }
+    if let Some(max) = body.max_guidance_chars {
+        binding["maxGuidanceChars"] = json!(max);
+    }
+    let story_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story");
+    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let path = story_dir.join("style_binding.json");
+    let raw = serde_json::to_string_pretty(&binding).unwrap_or_default();
+    match std::fs::write(&path, raw) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "binding": binding }))).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
 pub async fn get_promises(
     State(runtime): State<BooksRuntime>,

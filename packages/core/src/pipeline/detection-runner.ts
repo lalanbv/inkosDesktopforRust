@@ -8,6 +8,7 @@ import type { DetectionHistoryEntry } from "../models/detection.js";
 import type { AgentContext } from "../agents/base.js";
 import { detectAIContent, type DetectionResult } from "../agents/detector.js";
 import { ReviserAgent } from "../agents/reviser.js";
+import { detectProperNounLeak, type ProperNounLeakHit } from "../utils/style-feature-engine.js";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -15,6 +16,8 @@ export interface DetectChapterResult {
   readonly chapterNumber: number;
   readonly detection: DetectionResult;
   readonly passed: boolean;
+  /** G4/340 号：专名泄露命中（protectedNames 配置时检测；命中即不通过）。 */
+  readonly leaks?: ProperNounLeakHit[];
 }
 
 export interface DetectAndRewriteResult {
@@ -33,10 +36,18 @@ export async function detectChapter(
   chapterNumber: number,
 ): Promise<DetectChapterResult> {
   const detection = await detectAIContent(config, content);
+  let passed = detection.score <= config.threshold;
+  // G4/340 号：专名泄露参与 detect——命中即 fail（泄露无法靠降 AI 味修复）。
+  const leaks = detectProperNounLeak({
+    content,
+    protectedNames: config.protectedNames ?? [],
+  });
+  if (leaks.length > 0) passed = false;
   return {
     chapterNumber,
     detection,
-    passed: detection.score <= config.threshold,
+    passed,
+    ...(leaks.length > 0 ? { leaks } : {}),
   };
 }
 

@@ -20,6 +20,8 @@ pub struct DetectChapterOutcome {
     pub chapter_number: u32,
     pub detection: DetectionResult,
     pub passed: bool,
+    /// G4/340 号：专名泄露命中（protectedNames 配置时；命中即不通过）。
+    pub leaks: Vec<crate::utils::style_feature_engine::ProperNounLeakHit>,
 }
 
 /// 自动改写环结果。对齐 TS `DetectAndRewriteResult`。
@@ -48,8 +50,22 @@ pub async fn detect_chapter(
     let detection = detect_ai_content(client, config, content, &detection_api_key(config), &utc_now_iso())
         .await
         .map_err(|e| e.to_string())?;
-    let passed = detection.score <= config.threshold;
-    Ok(DetectChapterOutcome { chapter_number, detection, passed })
+    let mut passed = detection.score <= config.threshold;
+    // G4/340 号：专名泄露参与 detect——命中即 fail（泄露无法靠降 AI 味修复）。
+    let leaks = crate::utils::style_feature_engine::detect_proper_noun_leak(
+        content,
+        &config.protected_names,
+        1,
+    );
+    if !leaks.is_empty() {
+        passed = false;
+    }
+    Ok(DetectChapterOutcome {
+        chapter_number,
+        detection,
+        passed,
+        leaks,
+    })
 }
 
 /// `detectAndRewrite`：detect → reviser（anti-detect 模式）→ re-detect 循环，

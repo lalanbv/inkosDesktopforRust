@@ -197,6 +197,9 @@ pub struct DetectionConfig {
     pub auto_rewrite: bool,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// G4/340 号：参考作品专名表——仿写正文泄露检测。
+    #[serde(default)]
+    pub protected_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
