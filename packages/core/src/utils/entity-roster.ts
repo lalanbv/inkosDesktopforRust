@@ -226,6 +226,75 @@ function comparePlain(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** 确认动作输入（确认卡三选的落库口径）。 */
+export interface RosterConfirmation {
+  readonly candidate: string;
+  readonly action: RosterCandidateAction;
+  readonly targetName?: string;
+  /** 登记章（new-entity 用；缺省 0）。 */
+  readonly chapter?: number;
+}
+
+export interface RosterConfirmationResult {
+  readonly roster: ReadonlyArray<RosterEntity>;
+  readonly applied:
+    | { readonly kind: "new-entity"; readonly id: string }
+    | { readonly kind: "alias"; readonly targetName: string }
+    | { readonly kind: "typo-ignored" }
+    | { readonly kind: "duplicate-ignored" };
+}
+
+/**
+ * 确认写回（纯函数）：
+ * - new-entity → 追加 entity-N+1（registeredAt = chapter ?? 0）；
+ * - alias → candidate 并入 targetName 实体的 aliases（去重）；
+ * - typo → 不入册（笔误修正属正文修订范畴），kind=typo-ignored；
+ * - 重复确认（实体已存在/别名已存在）→ duplicate-ignored。
+ */
+export function applyRosterConfirmation(
+  roster: ReadonlyArray<RosterEntity>,
+  confirmation: RosterConfirmation,
+): RosterConfirmationResult {
+  const key = confirmation.candidate.toLowerCase();
+  const alreadyKnown = roster.some(
+    (entity) =>
+      entity.name.toLowerCase() === key
+      || entity.aliases.some((alias) => alias.toLowerCase() === key),
+  );
+  if (alreadyKnown) {
+    return { roster, applied: { kind: "duplicate-ignored" } };
+  }
+
+  if (confirmation.action === "new-entity") {
+    let maxIndex = 0;
+    for (const entity of roster) {
+      const match = /^entity-(\d+)$/.exec(entity.id);
+      if (match) maxIndex = Math.max(maxIndex, Number.parseInt(match[1]!, 10));
+    }
+    const entry: RosterEntity = {
+      id: `entity-${maxIndex + 1}`,
+      name: confirmation.candidate,
+      aliases: [],
+      kind: "person",
+      registeredAt: confirmation.chapter ?? 0,
+    };
+    return { roster: [...roster, entry], applied: { kind: "new-entity", id: entry.id } };
+  }
+
+  if (confirmation.action === "alias" && confirmation.targetName) {
+    const target = roster.find((entity) => entity.name === confirmation.targetName);
+    if (!target) return { roster, applied: { kind: "duplicate-ignored" } };
+    const updated = roster.map((entity) =>
+      entity.id === target.id && !entity.aliases.includes(confirmation.candidate)
+        ? { ...entity, aliases: [...entity.aliases, confirmation.candidate] }
+        : entity,
+    );
+    return { roster: updated, applied: { kind: "alias", targetName: target.name } };
+  }
+
+  return { roster, applied: { kind: "typo-ignored" } };
+}
+
 /** 确认卡人话渲染（聊天确认卡/审计注入共用）。 */
 export function renderRosterConfirmationCard(
   cards: ReadonlyArray<RosterCandidateCard>,

@@ -757,6 +757,103 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G7b/343 号：名册候选确认卡（章摘要 characters 比对名册）。
+pub async fn get_roster_candidates(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let db_path = book_dir.join("story").join("memory.db");
+    if !db_path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({ "cards": [], "candidates": [], "rosterExists": false, "currentChapter": 0 })),
+        )
+            .into_response();
+    }
+    let result = (|| {
+        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+        let summaries = db.get_summaries(1, 100_000)?;
+        let current_chapter = summaries.iter().map(|s| s.chapter).max().map(|last| last + 1).unwrap_or(1);
+        let candidates = crate::utils::entity_roster::extract_character_candidates(
+            &summaries
+                .iter()
+                .map(|s| (s.chapter, s.characters.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let roster_path = book_dir.join("story").join("entity_roster.md");
+        let (roster, roster_exists) = match std::fs::read_to_string(&roster_path) {
+            Ok(raw) => (crate::utils::entity_roster::parse_entity_roster(&raw), true),
+            Err(_) => (Vec::new(), false),
+        };
+        let cards = crate::utils::entity_roster::resolve_roster_candidates(&candidates, &roster);
+        Ok::<_, crate::EngineError>(serde_json::json!({
+            "cards": cards,
+            "candidates": candidates,
+            "rosterExists": roster_exists,
+            "currentChapter": current_chapter
+        }))
+    })();
+    match result {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+/// G7b/343 号：确认三选动作 → 写回 story/entity_roster.md。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterConfirmBody {
+    pub candidate: String,
+    pub action: String,
+    #[serde(default)]
+    pub target_name: Option<String>,
+    #[serde(default)]
+    pub chapter: Option<i64>,
+}
+
+pub async fn post_roster_confirm(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<RosterConfirmBody>,
+) -> impl IntoResponse {
+    if body.candidate.trim().is_empty()
+        || !matches!(body.action.as_str(), "new-entity" | "alias" | "typo")
+    {
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("candidate and action (new-entity|alias|typo) are required"),
+        );
+    }
+    let story_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story");
+    let roster_path = story_dir.join("entity_roster.md");
+    let roster = match std::fs::read_to_string(&roster_path) {
+        Ok(raw) => crate::utils::entity_roster::parse_entity_roster(&raw),
+        Err(_) => Vec::new(),
+    };
+    let confirmation = crate::utils::entity_roster::RosterConfirmation {
+        candidate: body.candidate.trim().to_string(),
+        action: body.action.clone(),
+        target_name: body.target_name.clone(),
+        chapter: body.chapter,
+    };
+    let (roster, applied) = crate::utils::entity_roster::apply_roster_confirmation(&roster, &confirmation);
+    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let rendered = crate::utils::entity_roster::render_entity_roster(&roster);
+    if let Err(error) = std::fs::write(&roster_path, rendered) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let applied_value = serde_json::to_value(&applied).unwrap_or(json!(null));
+    (StatusCode::OK, Json(json!({ "ok": true, "applied": applied_value }))).into_response()
+}
+
 /// G4/340 号：写法档案池列表（项目级 .inkos/style-profiles/）。
 pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let dir = runtime.state.project_root().join(".inkos").join("style-profiles");

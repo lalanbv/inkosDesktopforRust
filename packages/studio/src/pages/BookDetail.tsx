@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
 import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import { StyleBindingCard } from "../components/StyleBindingCard";
+import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -551,6 +552,9 @@ export function BookDetail({
 
       {/* G4/340 号：写法绑定管理（档案池选档 → 注入写作链）。 */}
       <StyleBindingCard bookId={bookId} />
+
+      {/* G7b/343 号：新专名确认卡（三选确认写回名册，无候选时隐藏）。 */}
+      <RosterCandidatesCard bookId={bookId} />
 
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-border/40 pb-8">

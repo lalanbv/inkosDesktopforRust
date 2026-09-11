@@ -5,9 +5,9 @@
 //! 六组差分：名册解析、渲染、候选提取、三选比对、确认卡渲染、契约形状。
 
 use inkos_engine::utils::entity_roster::{
-    entity_roster_contract, extract_character_candidates, parse_entity_roster,
-    render_entity_roster, render_roster_confirmation_card, resolve_roster_candidates,
-    RosterEntity,
+    apply_roster_confirmation, entity_roster_contract, extract_character_candidates,
+    parse_entity_roster, render_entity_roster, render_roster_confirmation_card,
+    resolve_roster_candidates, RosterEntity,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -150,6 +150,38 @@ fn card_render_matches_shared_vectors() {
             got,
             vector["expected"].as_str().map(String::from),
             "cardRender vector '{}' drifted",
+            vector["name"].as_str().unwrap()
+        );
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmCase {
+    roster: Vec<RosterEntity>,
+    confirmation: inkos_engine::utils::entity_roster::RosterConfirmation,
+}
+
+#[test]
+fn confirmations_match_shared_vectors() {
+    let vectors: Value = serde_json::from_str(VECTORS).unwrap();
+    for vector in vectors["confirm"].as_array().expect("confirm array") {
+        let case: ConfirmCase = serde_json::from_value(vector["input"].clone()).unwrap();
+        let expected_roster: Vec<RosterEntity> =
+            serde_json::from_value(vector["expectedRoster"].clone()).unwrap();
+        let applied_expected = vector["applied"].clone();
+        let (roster, applied) =
+            apply_roster_confirmation(&case.roster, &case.confirmation);
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            applied_expected,
+            "confirm applied '{}' drifted",
+            vector["name"].as_str().unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&roster).unwrap(),
+            serde_json::to_value(&expected_roster).unwrap(),
+            "confirm roster '{}' drifted",
             vector["name"].as_str().unwrap()
         );
     }

@@ -12,7 +12,9 @@ import {
   parseEntityRoster,
   renderEntityRoster,
   renderRosterConfirmationCard,
+  applyRosterConfirmation,
   resolveRosterCandidates,
+  type RosterCandidateAction,
   type RosterEntity,
 } from "../utils/entity-roster.js";
 
@@ -36,6 +38,12 @@ const vectors = JSON.parse(
     name: string;
     input: { cards: Array<Record<string, unknown>>; language: "zh" | "en" };
     expected: string;
+  }>;
+  confirm: Array<{
+    name: string;
+    input: { roster: RosterEntity[]; confirmation: { candidate: string; action: RosterCandidateAction; targetName?: string; chapter?: number } };
+    applied: Record<string, unknown>;
+    expectedRoster: RosterEntity[];
   }>;
   contract: unknown;
 };
@@ -73,6 +81,14 @@ describe("entity roster (G7b)", () => {
         vector.input.language,
       );
       expect(got, vector.name).toBe(vector.expected);
+    }
+  });
+
+  it("applies confirmations per shared vectors", () => {
+    for (const vector of vectors.confirm) {
+      const got = applyRosterConfirmation(vector.input.roster, vector.input.confirmation);
+      expect(got.roster, vector.name).toEqual(vector.expectedRoster);
+      expect(got.applied, vector.name).toEqual(vector.applied);
     }
   });
 

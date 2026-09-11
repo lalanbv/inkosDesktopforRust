@@ -719,6 +719,15 @@ pub fn router_books(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),
         )
+        // G7b/343 号：名册候选确认卡 + 三选写回。
+        .route(
+            "/api/v1/books/:id/roster-candidates",
+            get(ops_routes::get_roster_candidates).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/roster/confirm",
+            post(ops_routes::post_roster_confirm).with_state(books.clone()),
+        )
         // G4/340 号：写法档案池 + 书级绑定。
         .route(
             "/api/v1/style-profiles",

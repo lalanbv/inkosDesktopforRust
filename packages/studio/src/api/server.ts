@@ -3025,6 +3025,73 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G7b/343 号：名册候选确认卡（章摘要 characters 比对名册）。
+  app.get("/api/v1/books/:id/roster-candidates", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ cards: [], candidates: [], rosterExists: false, currentChapter: 0 });
+    }
+    try {
+      const core = await import("@actalk/inkos-core");
+      const { MemoryDB } = core;
+      const memory = new MemoryDB(join(root, "books", id));
+      const summaries = memory.getSummaries(1, 100_000);
+      const currentChapter = summaries.length > 0
+        ? summaries[summaries.length - 1]!.chapter + 1
+        : 1;
+      const candidates = core.extractCharacterCandidates(
+        summaries.map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" })),
+      );
+      let roster: import("@actalk/inkos-core").RosterEntity[] = [];
+      let rosterExists = false;
+      try {
+        const rosterRaw = await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8");
+        roster = core.parseEntityRoster(rosterRaw);
+        rosterExists = true;
+      } catch {
+        rosterExists = false;
+      }
+      const cards = core.resolveRosterCandidates(candidates, roster);
+      return c.json({ cards, candidates, rosterExists, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // G7b/343 号：确认三选动作 → 写回 story/entity_roster.md。
+  app.post("/api/v1/books/:id/roster/confirm", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      candidate?: string;
+      action?: string;
+      targetName?: string;
+      chapter?: number;
+    }>();
+    const candidate = typeof body.candidate === "string" ? body.candidate.trim() : "";
+    const action = body.action ?? "";
+    if (!candidate || !["new-entity", "alias", "typo"].includes(action)) {
+      return c.json({ error: "candidate and action (new-entity|alias|typo) are required" }, 400);
+    }
+    const rosterPath = join(root, "books", id, "story", "entity_roster.md");
+    const core = await import("@actalk/inkos-core");
+    let roster: import("@actalk/inkos-core").RosterEntity[] = [];
+    try {
+      roster = core.parseEntityRoster(await readFile(rosterPath, "utf-8"));
+    } catch {
+      roster = [];
+    }
+    const result = core.applyRosterConfirmation(roster, {
+      candidate,
+      action: action as "new-entity" | "alias" | "typo",
+      ...(typeof body.targetName === "string" ? { targetName: body.targetName } : {}),
+      ...(typeof body.chapter === "number" ? { chapter: body.chapter } : {}),
+    });
+    await mkdir(join(root, "books", id, "story"), { recursive: true });
+    await writeFile(rosterPath, core.renderEntityRoster(result.roster), "utf-8");
+    return c.json({ ok: true, applied: result.applied });
+  });
+
   // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。
   app.get("/api/v1/style-profiles", async (c) => {
     const dir = join(root, ".inkos", "style-profiles");

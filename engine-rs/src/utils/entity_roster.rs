@@ -294,6 +294,98 @@ pub fn render_roster_confirmation_card(
     Some(lines.join("\n"))
 }
 
+// ── 确认写回 ──
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterConfirmation {
+    pub candidate: String,
+    pub action: String,
+    #[serde(default)]
+    pub target_name: Option<String>,
+    #[serde(default)]
+    pub chapter: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterConfirmationApplied {
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "targetName", skip_serializing_if = "Option::is_none")]
+    pub target_name: Option<String>,
+}
+
+/// 确认写回（纯函数）：new-entity 追加 / alias 并入别名（去重）/ typo 不入册 /
+/// 重复忽略。语义详见 TS applyRosterConfirmation。
+pub fn apply_roster_confirmation(
+    roster: &[RosterEntity],
+    confirmation: &RosterConfirmation,
+) -> (Vec<RosterEntity>, RosterConfirmationApplied) {
+    let key = confirmation.candidate.to_lowercase();
+    let already_known = roster.iter().any(|entity| {
+        entity.name.to_lowercase() == key
+            || entity.aliases.iter().any(|alias| alias.to_lowercase() == key)
+    });
+    if already_known {
+        return (
+            roster.to_vec(),
+            RosterConfirmationApplied { kind: "duplicate-ignored", id: None, target_name: None },
+        );
+    }
+
+    if confirmation.action == "new-entity" {
+        let mut max_index = 0u32;
+        for entity in roster {
+            if let Some(rest) = entity.id.strip_prefix("entity-") {
+                if let Ok(index) = rest.parse::<u32>() {
+                    max_index = max_index.max(index);
+                }
+            }
+        }
+        let entry = RosterEntity {
+            id: format!("entity-{}", max_index + 1),
+            name: confirmation.candidate.clone(),
+            aliases: Vec::new(),
+            kind: "person".into(),
+            registered_at: confirmation.chapter.unwrap_or(0),
+        };
+        let id = entry.id.clone();
+        let mut next = roster.to_vec();
+        next.push(entry);
+        return (
+            next,
+            RosterConfirmationApplied { kind: "new-entity", id: Some(id), target_name: None },
+        );
+    }
+
+    if confirmation.action == "alias" {
+        if let Some(target_name) = &confirmation.target_name {
+            if let Some(index) = roster.iter().position(|entity| &entity.name == target_name) {
+                let mut next = roster.to_vec();
+                let entity = &mut next[index];
+                if !entity.aliases.contains(&confirmation.candidate) {
+                    entity.aliases.push(confirmation.candidate.clone());
+                }
+                return (
+                    next,
+                    RosterConfirmationApplied {
+                        kind: "alias",
+                        id: None,
+                        target_name: Some(target_name.clone()),
+                    },
+                );
+            }
+        }
+    }
+
+    (
+        roster.to_vec(),
+        RosterConfirmationApplied { kind: "typo-ignored", id: None, target_name: None },
+    )
+}
+
 /// 机器可读契约（双端 golden 锁形状）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

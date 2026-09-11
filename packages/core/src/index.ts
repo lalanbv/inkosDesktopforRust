@@ -554,6 +554,7 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,
   parseEntityRoster,

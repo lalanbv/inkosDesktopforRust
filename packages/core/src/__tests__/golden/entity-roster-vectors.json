@@ -269,5 +269,149 @@
     "truthFile": "story/entity_roster.md",
     "typoMaxDistance": 1,
     "containmentMinChars": 2
-  }
+  },
+  "confirm": [
+    {
+      "name": "new-entity-appends",
+      "input": {
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [
+              "林小哥"
+            ],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ],
+        "confirmation": {
+          "candidate": "墨老",
+          "action": "new-entity",
+          "chapter": 4
+        }
+      },
+      "applied": {
+        "kind": "new-entity",
+        "id": "entity-2"
+      },
+      "expectedRoster": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [
+            "林小哥"
+          ],
+          "kind": "person",
+          "registeredAt": 1
+        },
+        {
+          "id": "entity-2",
+          "name": "墨老",
+          "aliases": [],
+          "kind": "person",
+          "registeredAt": 4
+        }
+      ]
+    },
+    {
+      "name": "alias-merges-into-target",
+      "input": {
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [
+              "林小哥"
+            ],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ],
+        "confirmation": {
+          "candidate": "少年林动",
+          "action": "alias",
+          "targetName": "林动"
+        }
+      },
+      "applied": {
+        "kind": "alias",
+        "targetName": "林动"
+      },
+      "expectedRoster": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [
+            "林小哥",
+            "少年林动"
+          ],
+          "kind": "person",
+          "registeredAt": 1
+        }
+      ]
+    },
+    {
+      "name": "typo-ignored",
+      "input": {
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ],
+        "confirmation": {
+          "candidate": "林동",
+          "action": "typo",
+          "targetName": "林动"
+        }
+      },
+      "applied": {
+        "kind": "typo-ignored"
+      },
+      "expectedRoster": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [],
+          "kind": "person",
+          "registeredAt": 1
+        }
+      ]
+    },
+    {
+      "name": "duplicate-ignored",
+      "input": {
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ],
+        "confirmation": {
+          "candidate": "林动",
+          "action": "new-entity",
+          "chapter": 2
+        }
+      },
+      "applied": {
+        "kind": "duplicate-ignored"
+      },
+      "expectedRoster": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [],
+          "kind": "person",
+          "registeredAt": 1
+        }
+      ]
+    }
+  ]
 }
