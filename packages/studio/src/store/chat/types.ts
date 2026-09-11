@@ -53,6 +53,21 @@ export interface Message {
   readonly toolCall?: ToolCall;
   readonly toolExecutions?: ToolExecution[];
   readonly parts?: MessagePart[];              // chronological parts for interleaved rendering
+  readonly usage?: MessageUsage;               // G8a/333 号 AI 实况：本条消息 token
+  readonly timings?: MessageTimings;           // G8a/333 号 AI 实况：本条消息耗时
+}
+
+/** G8a/333 号 AI 实况：消息级 token（上游 usage 权威值）。 */
+export interface MessageUsage {
+  readonly input: number;
+  readonly output: number;
+  readonly totalTokens: number;
+}
+
+/** G8a/333 号 AI 实况：首包/总耗时（毫秒）。 */
+export interface MessageTimings {
+  readonly firstTokenMs: number;
+  readonly totalMs: number;
 }
 
 export interface SessionMessage {
@@ -77,6 +92,9 @@ export interface SessionSummary {
 export interface AgentResponse {
   readonly response?: string;
   readonly error?: string | { code?: string; message?: string };
+  readonly usage?: MessageUsage;
+  readonly thinking?: string;
+  readonly timings?: MessageTimings;
   readonly details?: {
     readonly draftRaw?: string;
     readonly toolCall?: ToolCall;
@@ -211,7 +229,13 @@ export interface MessageActions {
   setInput: (text: string) => void;
   addUserMessage: (sessionId: string, content: string) => void;
   appendStreamChunk: (sessionId: string, text: string, streamTs: number) => void;
-  finalizeStream: (sessionId: string, streamTs: number, content: string, toolCall?: ToolCall) => void;
+  finalizeStream: (
+    sessionId: string,
+    streamTs: number,
+    content: string,
+    toolCall?: ToolCall,
+    live?: { usage?: MessageUsage; timings?: MessageTimings; thinking?: string },
+  ) => void;
   replaceStreamWithError: (sessionId: string, streamTs: number, errorMsg: string) => void;
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;

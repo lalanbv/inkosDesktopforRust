@@ -129,7 +129,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }),
     })),
 
-  finalizeStream: (sessionId, streamTs, content, toolCall) =>
+  finalizeStream: (sessionId, streamTs, content, toolCall, live) =>
     set((state) => ({
       sessions: updateSession(state.sessions, sessionId, (session) => ({
         messages: session.messages.map((message) => {
@@ -141,7 +141,14 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           } else if (content) {
             parts.push({ type: "text", content });
           }
-          return { ...message, content, toolCall, parts };
+          return {
+            ...message,
+            content,
+            toolCall,
+            parts,
+            ...(live?.usage ? { usage: live.usage } : {}),
+            ...(live?.timings ? { timings: live.timings } : {}),
+          };
         }),
       })),
     })),
@@ -631,8 +638,13 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         // 那不算失败，不记录重试。
         if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();
       } else if (finalContent) {
+        // G8a/333 号 AI 实况：消息级 token + 首包/总耗时挂到助手消息。
+        const live = {
+          ...(data.usage ? { usage: data.usage } : {}),
+          ...(data.timings ? { timings: data.timings } : {}),
+        };
         if (hasStream) {
-          get().finalizeStream(sessionId, streamTs, finalContent, toolCall);
+          get().finalizeStream(sessionId, streamTs, finalContent, toolCall, live);
           attachResponseTools();
         } else {
           const message = withToolExecutions({
@@ -640,6 +652,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
             content: finalContent,
             timestamp: Date.now(),
             toolCall,
+            ...live,
           }, responseToolExecutions);
           set((state) => ({
             sessions: updateSession(state.sessions, sessionId, (runtime) => ({

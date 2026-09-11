@@ -20,6 +20,7 @@ import {
   ReasoningContent,
 } from "../components/ai-elements/reasoning";
 import { ChatMessage } from "../components/chat/ChatMessage";
+import { MessageHud } from "../components/chat/MessageHud";
 import { QuickActions } from "../components/chat/QuickActions";
 import { ToolExecutionSteps, type ProposedActionDetails } from "../components/chat/ToolExecutionSteps";
 import {
@@ -917,6 +918,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                         return null;
                       });
                     })()}
+                  {/* G8a/333 号 AI 实况：消息级 token + 首包/总耗时 */}
+                  <MessageHud usage={msg.usage} timings={msg.timings} />
                   </>
                 ) : (
                   /* Assistant message — fallback (no parts, e.g. error messages) */

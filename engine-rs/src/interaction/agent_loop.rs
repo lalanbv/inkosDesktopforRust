@@ -43,18 +43,42 @@ pub struct LoopToolExecution {
     pub completed_at: Option<u64>,
 }
 
+/// G8a/333 号 AI 实况：token 用量（多轮累加，上游 usage 权威值；字段名对齐
+/// TS 响应面 `usage: { input, output, totalTokens }`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LoopUsage {
+    pub input: u64,
+    pub output: u64,
+    #[serde(rename = "totalTokens")]
+    pub total_tokens: u64,
+}
+
+/// G8a/333 号 AI 实况：首包/总耗时（毫秒；首包=起点到首个文本输出）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopTimings {
+    pub first_token_ms: u64,
+    pub total_ms: u64,
+}
+
 /// 循环结果。
 pub struct LoopOutcome {
     pub response_text: String,
     pub tool_executions: Vec<LoopToolExecution>,
     pub aborted: bool,
+    pub usage: LoopUsage,
+    pub timings: LoopTimings,
 }
 
 /// 单轮 LLM 调用的抽象（测试注入 + AgentRouter 适配）。
 #[async_trait::async_trait]
 pub trait LoopChat: Send + Sync {
-    /// 返回 (content, tool_calls[(id, name, arguments_json)])。
-    async fn chat(&self, messages: &[LLMMessage], tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>), String>;
+    /// 返回 (content, tool_calls[(id, name, arguments_json)], usage)。
+    async fn chat(
+        &self,
+        messages: &[LLMMessage],
+        tools: Option<&Value>,
+    ) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String>;
 }
 
 /// 工具执行抽象（80 号：play 聊天工具需要会话/路由上下文，文件工具只需
@@ -96,6 +120,10 @@ pub async fn run_agent_loop(
     messages.extend(initial_history);
     messages.push(LLMMessage { role: LLMRole::User, content: instruction.to_string(), tool_calls: None, tool_call_id: None });
     let mut executions: Vec<LoopToolExecution> = Vec::new();
+    // G8a/333 号：AI 实况——多轮 usage 累加 + 首包（首个文本输出）计时。
+    let started_ms = crate::interaction::session::utc_now_ms() as u64;
+    let mut first_token_ms: u64 = 0;
+    let mut total_usage = LoopUsage::default();
 
     for _round in 0..MAX_ROUNDS {
         if is_aborted() {
@@ -103,10 +131,18 @@ pub async fn run_agent_loop(
                 response_text: String::new(),
                 tool_executions: executions,
                 aborted: true,
+                usage: total_usage,
+                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
             });
         }
-        let (content, tool_calls) = chat.chat(&messages, tools).await?;
+        let (content, tool_calls, usage) = chat.chat(&messages, tools).await?;
+        total_usage.input += usage.input;
+        total_usage.output += usage.output;
+        total_usage.total_tokens += usage.total_tokens;
         if !content.trim().is_empty() {
+            if first_token_ms == 0 {
+                first_token_ms = crate::interaction::session::utc_now_ms() as u64 - started_ms;
+            }
             events.on_delta(content.trim());
         }
         if tool_calls.is_empty() {
@@ -114,6 +150,8 @@ pub async fn run_agent_loop(
                 response_text: content.trim().to_string(),
                 tool_executions: executions,
                 aborted: false,
+                usage: total_usage,
+                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
             });
         }
 
@@ -168,6 +206,8 @@ pub async fn run_agent_loop(
         response_text: String::new(),
         tool_executions: executions,
         aborted: false,
+        usage: total_usage,
+        timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
     })
 }
 
@@ -180,11 +220,11 @@ mod tests {
         calls: Mutex<Vec<usize>>,
     }
 
-    type ScriptedRound = (String, Vec<(String, String, String)>);
+    type ScriptedRound = (String, Vec<(String, String, String)>, LoopUsage);
 
     #[async_trait::async_trait]
     impl LoopChat for ScriptedChat {
-        async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>), String> {
+        async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
             let index = {
                 let mut calls = self.calls.lock().unwrap();
                 let index = calls.len();
@@ -207,8 +247,13 @@ mod tests {
                 (
                     "让我看看文件".into(),
                     vec![("call_1".into(), "read".into(), r#"{"path":"a.md"}"#.into())],
+                    LoopUsage { input: 100, output: 20, total_tokens: 120 },
                 ),
-                ("文件内容是 hello agent。".into(), vec![]),
+                (
+                    "文件内容是 hello agent。".into(),
+                    vec![],
+                    LoopUsage { input: 150, output: 30, total_tokens: 180 },
+                ),
             ],
             calls: Mutex::new(vec![]),
         };
@@ -221,12 +266,15 @@ mod tests {
         assert_eq!(outcome.tool_executions[0].tool, "read");
         assert_eq!(outcome.tool_executions[0].status, "completed");
         assert!(outcome.tool_executions[0].result.as_deref().unwrap().contains("hello agent"));
+        // G8a/333 号：多轮 usage 累加 + 计时非负。
+        assert_eq!(outcome.usage, LoopUsage { input: 250, output: 50, total_tokens: 300 });
+        assert!(outcome.timings.total_ms < u64::MAX);
     }
 
     #[tokio::test]
     async fn abort_stops_before_first_round() {
         let dir = tempfile::tempdir().unwrap();
-        let chat = ScriptedChat { rounds: vec![("x".into(), vec![])], calls: Mutex::new(vec![]) };
+        let chat = ScriptedChat { rounds: vec![("x".into(), vec![], LoopUsage::default())], calls: Mutex::new(vec![]) };
         let abort: AbortHandle = Arc::new(Mutex::new(true));
         let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
         let outcome = run_agent_loop(&chat, &executor, "sys", Vec::new(), "hi", None, Some(&abort), &NoopEvents)
@@ -234,6 +282,7 @@ mod tests {
             .unwrap();
         assert!(outcome.aborted);
         assert!(outcome.response_text.is_empty());
+        assert_eq!(outcome.usage, LoopUsage::default(), "abort 后无 usage 累加");
         assert_eq!(chat.calls.lock().unwrap().len(), 0, "abort 后未发起 LLM 调用");
     }
 
@@ -242,8 +291,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chat = ScriptedChat {
             rounds: vec![
-                ("".into(), vec![("call_1".into(), "nope".into(), "{}".into())]),
-                ("done".into(), vec![]),
+                ("".into(), vec![("call_1".into(), "nope".into(), "{}".into())], LoopUsage::default()),
+                ("done".into(), vec![], LoopUsage::default()),
             ],
             calls: Mutex::new(vec![]),
         };

@@ -5545,6 +5545,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           sessionKind: responseSessionKind,
           ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
         },
+        // G8a/333 号 AI 实况：消息级 token + 首包/总耗时 + 思考流聚合文本。
+        ...(result.usage ? { usage: result.usage } : {}),
+        ...(result.thinking ? { thinking: result.thinking } : {}),
+        timings: result.timings,
       });
     } catch (e) {
       if (e instanceof ApiError) {

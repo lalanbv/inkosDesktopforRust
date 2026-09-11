@@ -154,6 +154,12 @@ export interface AgentSessionResult {
   messages: AgentMessage[];
   /** Upstream model error surfaced by pi-agent-core, if the final assistant turn failed. */
   errorMessage?: string;
+  /** G8a/333 号 AI 实况：最终助手消息的 token 用量（pi usage 权威值）。 */
+  usage?: { input: number; output: number; totalTokens: number };
+  /** G8a/333 号 AI 实况：本轮思考流聚合文本（thinking 块拼接，可为空串）。 */
+  thinking?: string;
+  /** G8a/333 号 AI 实况：首包/总耗时（毫秒；首包=起点到首个模型输出事件）。 */
+  timings: { firstTokenMs: number; totalMs: number };
 }
 
 export interface AgentSessionAttachment {
@@ -1314,12 +1320,19 @@ async function runAgentSessionUnlocked(
   };
 
   // ----- Subscribe to events (transcript persistence + SSE forwarding) -----
+  // G8a/333 号：AI 实况计时——turnStartedAt 起点到首个模型输出事件为"首包"。
+  let turnStartedAt = 0;
+  let firstEventAt = 0;
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
+    if (firstEventAt === 0 && event.type === "message_update") {
+      firstEventAt = Date.now();
+    }
     await persistAgentEvent(event);
     onEvent?.(event);
   });
 
   // ----- Execute the turn -----
+  turnStartedAt = Date.now();
   let finalAssistant: AssistantMessage | undefined;
   let errorMessage: string | undefined;
   const turnMessageStartIndex = agent.state.messages.length;
@@ -1390,9 +1403,24 @@ async function runAgentSessionUnlocked(
   const responseText = finalAssistant ? extractTextFromAssistant(finalAssistant) : "";
   errorMessage ??= assistantErrorMessage(finalAssistant);
 
+  // G8a/333 号：AI 实况——消息级 token 与首包/总耗时（pi usage 为权威值）。
+  const usage = finalAssistant?.usage
+    ? {
+        input: finalAssistant.usage.input ?? 0,
+        output: finalAssistant.usage.output ?? 0,
+        totalTokens: finalAssistant.usage.totalTokens ?? 0,
+      }
+    : undefined;
+  const thinking = finalAssistant ? extractThinkingFromAssistant(finalAssistant) : "";
+  const totalMs = turnStartedAt > 0 ? Date.now() - turnStartedAt : 0;
+  const firstTokenMs = firstEventAt > 0 && turnStartedAt > 0 ? firstEventAt - turnStartedAt : 0;
+
   return {
     responseText,
     messages: allMessages.slice(),
+    ...(usage ? { usage } : {}),
+    ...(thinking ? { thinking } : {}),
+    timings: { firstTokenMs, totalMs },
     ...(errorMessage ? { errorMessage } : {}),
   };
 }

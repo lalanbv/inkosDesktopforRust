@@ -6130,6 +6130,14 @@ mod agent65_e2e {
         assert!(parsed["response"].as_str().unwrap().contains("修仙故事"));
         assert_eq!(parsed["session"]["sessionId"], SESSION_ID);
         assert_eq!(parsed["session"]["sessionKind"], "chat");
+        // G8a/333 号 AI 实况：usage/timings 进响应面（mock 上游带 usage 时
+        // 为其权威值；流式 mock 无 usage 计数字段时为 0）。
+        assert!(parsed["usage"].is_object(), "usage missing: {parsed}");
+        assert!(parsed["usage"]["input"].is_u64());
+        assert!(parsed["usage"]["output"].is_u64());
+        assert!(parsed["usage"]["totalTokens"].is_u64());
+        assert!(parsed["timings"]["firstTokenMs"].is_u64());
+        assert!(parsed["timings"]["totalMs"].is_u64());
 
         // transcript 持久化：user + assistant 消息可从会话详情 derive
         let (status, parsed) = call(

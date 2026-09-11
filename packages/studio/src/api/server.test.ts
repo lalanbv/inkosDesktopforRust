@@ -747,6 +747,10 @@ describe("createStudioServer daemon lifecycle", () => {
     runAgentSessionMock.mockResolvedValue({
       responseText: "Agent response.",
       messages: [],
+      // G8a/333 号 AI 实况：响应透传断言的数据源。
+      usage: { input: 120, output: 45, totalTokens: 165 },
+      thinking: "用户想确认当前状态。",
+      timings: { firstTokenMs: 320, totalMs: 2100 },
     });
     loadSecretsMock.mockResolvedValue({ services: {} });
     saveSecretsMock.mockResolvedValue(undefined);
@@ -3220,6 +3224,10 @@ describe("createStudioServer daemon lifecycle", () => {
           { role: "user", content: "检查当前状态" },
           { role: "assistant", content: "Completed write_next for demo-book." },
         ],
+        // G8a/333 号 AI 实况：响应透传断言的数据源。
+        usage: { input: 120, output: 45, totalTokens: 165 },
+        thinking: "用户想确认当前状态。",
+        timings: { firstTokenMs: 320, totalMs: 2100 },
       };
     });
 
@@ -3238,6 +3246,10 @@ describe("createStudioServer daemon lifecycle", () => {
       session: expect.objectContaining({
         sessionId: "agent-session-1",
       }),
+      // G8a/333 号 AI 实况：usage/timings/thinking 透传到聊天响应面。
+      usage: { input: 120, output: 45, totalTokens: 165 },
+      thinking: "用户想确认当前状态。",
+      timings: { firstTokenMs: 320, totalMs: 2100 },
     });
     expect(runAgentSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -809,6 +809,8 @@ pub async fn post_agent(
         /// delta/end 广播（TS onEvent ame.type 分支对应物；聚合语义——与
         /// draft:delta 每轮聚合同款）。
         thinking: Option<ThinkingBridge>,
+        /// G8a/333 号：思考流聚合文本（响应面 thinking 字段）。
+        thinking_text: std::sync::Arc<std::sync::Mutex<String>>,
     }
 
     /// thinking 事件桥：hub + 会话标记。
@@ -843,7 +845,7 @@ pub async fn post_agent(
             &self,
             messages: &[LLMMessage],
             tools: Option<&Value>,
-        ) -> Result<(String, Vec<(String, String, String)>), String> {
+        ) -> Result<(String, Vec<(String, String, String)>, crate::interaction::agent_loop::LoopUsage), String> {
             let endpoint = self.router.resolve("studio-agent");
             let client = self.router.client_for_public(&endpoint).await;
             let completion = client
@@ -872,12 +874,23 @@ pub async fn post_agent(
             if let Some(thinking) = &self.thinking {
                 thinking.broadcast_round(&completion.reasoning);
             }
+            // G8a/333 号：思考流聚合进响应面。
+            if !completion.reasoning.is_empty() {
+                if let Ok(mut text) = self.thinking_text.lock() {
+                    text.push_str(&completion.reasoning);
+                }
+            }
             let tool_calls = completion
                 .tool_calls
                 .into_iter()
                 .map(|tc| (tc.id, tc.name, tc.arguments))
                 .collect();
-            Ok((completion.content, tool_calls))
+            let usage = crate::interaction::agent_loop::LoopUsage {
+                input: completion.prompt_tokens.unwrap_or(0),
+                output: completion.completion_tokens.unwrap_or(0),
+                total_tokens: completion.total_tokens.unwrap_or(0),
+            };
+            Ok((completion.content, tool_calls, usage))
         }
     }
 
@@ -936,10 +949,12 @@ pub async fn post_agent(
     };
     let instruction: &str = &prompt_instruction;
     let loop_images = attachment_images(&attachments);
+    let thinking_text: std::sync::Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
     let loop_chat = RouterLoopChat {
         router: &runtime.router,
         images: loop_images,
         thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
+        thinking_text: thinking_text.clone(),
     };
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
@@ -1147,14 +1162,14 @@ pub async fn post_agent(
                 &bridge,
             )
             .await;
-            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted))
+            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted, outcome.usage, outcome.timings))
         })
         .await;
 
     running_agent_sessions().lock().unwrap().remove(session_id);
 
     match chat_result {
-        Ok((raw_text, tool_executions, aborted)) => {
+        Ok((raw_text, tool_executions, aborted, loop_usage, loop_timings)) => {
             // 217 号：中止轮对齐 TS——request_failed 不进会话历史（此前写
             // committed + "（无回复内容）" 占位，刷新后出现假回复）。
             if aborted {
@@ -1209,15 +1224,20 @@ pub async fn post_agent(
             if let Some(book_id) = &agent_book_id {
                 session_obj.insert("activeBookId".into(), json!(book_id));
             }
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "response": response_text,
-                    "details": { "toolExecutions": tool_execution_cards(&tool_executions) },
-                    "session": Value::Object(session_obj),
-                })),
-            )
-                .into_response()
+            // G8a/333 号：AI 实况——usage/timings 恒带，thinking 非空才进响应面。
+            let aggregated_thinking =
+                thinking_text.lock().map(|text| text.clone()).unwrap_or_default();
+            let mut payload = json!({
+                "response": response_text,
+                "details": { "toolExecutions": tool_execution_cards(&tool_executions) },
+                "session": Value::Object(session_obj),
+                "usage": loop_usage,
+                "timings": loop_timings,
+            });
+            if !aggregated_thinking.is_empty() {
+                payload["thinking"] = json!(aggregated_thinking);
+            }
+            (StatusCode::OK, Json(payload)).into_response()
         }
         Err(error) => {
             // 217 号：失败轮持久化（TS request_failed 语义）——user 消息
