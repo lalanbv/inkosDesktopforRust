@@ -1,0 +1,304 @@
+{
+  "_header": "信息差账本共享向量（G7a/341 号，Phase B 批次二）。唯一事实源本文件；TS 断言 src/__tests__/golden-info-gap.test.ts，Rust 差分 engine-rs/tests/golden_info_gap_diff.rs。泄密机检：readerKnows=true 跳过、registeredAt>currentChapter 跳过、命中窗口±24字含对白引号则 inDialogue；排序 inDialogue desc→occurrences desc→gapId→keyword；废笔机检只扫 readerKnows=true。",
+  "parse": [
+    {
+      "name": "full-entry",
+      "input": "# 信息差账本（Info Gaps）\n\n## gap-1\n- secret: 主角身世是前朝皇室\n- knows: 林动, 王胖\n- readerKnows: false\n- registeredAt: 3\n- keywords: 皇室, 前朝, 血脉",
+      "expected": [
+        {
+          "id": "gap-1",
+          "secret": "主角身世是前朝皇室",
+          "knows": [
+            "林动",
+            "王胖"
+          ],
+          "readerKnows": false,
+          "registeredAt": 3,
+          "keywords": [
+            "皇室",
+            "前朝",
+            "血脉"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reader-known-and-missing-fields",
+      "input": "## gap-2\n- secret: 导师与血案有关\n- knows:\n- readerKnows: true\n- keywords: 血案",
+      "expected": [
+        {
+          "id": "gap-2",
+          "secret": "导师与血案有关",
+          "knows": [],
+          "readerKnows": true,
+          "registeredAt": 0,
+          "keywords": [
+            "血案"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "invalid-heading-skipped",
+      "input": "## not-a-gap\n- secret: x\n\n## gap-3\n- keywords: 符文",
+      "expected": [
+        {
+          "id": "gap-3",
+          "secret": "",
+          "knows": [],
+          "readerKnows": false,
+          "registeredAt": 0,
+          "keywords": [
+            "符文"
+          ]
+        }
+      ]
+    }
+  ],
+  "render": [
+    {
+      "name": "roundtrip",
+      "input": [
+        {
+          "id": "gap-1",
+          "secret": "主角身世是前朝皇室",
+          "knows": [
+            "林动",
+            "王胖"
+          ],
+          "readerKnows": false,
+          "registeredAt": 3,
+          "keywords": [
+            "皇室",
+            "血脉"
+          ]
+        },
+        {
+          "id": "gap-2",
+          "secret": "导师与血案有关",
+          "knows": [],
+          "readerKnows": true,
+          "registeredAt": 0,
+          "keywords": [
+            "血案"
+          ]
+        }
+      ],
+      "expected": "# 信息差账本（Info Gaps）\n\n## gap-1\n- secret: 主角身世是前朝皇室\n- knows: 林动, 王胖\n- readerKnows: false\n- registeredAt: 3\n- keywords: 皇室, 血脉\n\n## gap-2\n- secret: 导师与血案有关\n- knows: \n- readerKnows: true\n- registeredAt: 0\n- keywords: 血案"
+    }
+  ],
+  "leaks": [
+    {
+      "name": "dialogue-hit-ranks-first",
+      "input": {
+        "currentChapter": 8,
+        "content": "林动低声说：「皇室的秘密我迟早查清。」说完他便转身离开，把那件事彻底压在了心底。窗外，前朝的旧旗仍在风中猎猎作响。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "主角身世",
+            "knows": [
+              "王胖"
+            ],
+            "readerKnows": false,
+            "registeredAt": 3,
+            "keywords": [
+              "皇室",
+              "前朝"
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "gapId": "gap-1",
+          "keyword": "皇室",
+          "occurrences": 1,
+          "inDialogue": true,
+          "knows": [
+            "王胖"
+          ]
+        },
+        {
+          "gapId": "gap-1",
+          "keyword": "前朝",
+          "occurrences": 1,
+          "inDialogue": false,
+          "knows": [
+            "王胖"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reader-known-excluded",
+      "input": {
+        "currentChapter": 8,
+        "content": "皇室旧事人尽皆知。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "身世",
+            "knows": [],
+            "readerKnows": true,
+            "registeredAt": 2,
+            "keywords": [
+              "皇室"
+            ]
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "future-registration-excluded",
+      "input": {
+        "currentChapter": 2,
+        "content": "皇室秘辛浮现。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "身世",
+            "knows": [],
+            "readerKnows": false,
+            "registeredAt": 5,
+            "keywords": [
+              "皇室"
+            ]
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "narrative-hit-not-dialogue",
+      "input": {
+        "currentChapter": 8,
+        "content": "前朝的旧旗仍在城头。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "身世",
+            "knows": [
+              "王胖"
+            ],
+            "readerKnows": false,
+            "registeredAt": 3,
+            "keywords": [
+              "前朝"
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "gapId": "gap-1",
+          "keyword": "前朝",
+          "occurrences": 1,
+          "inDialogue": false,
+          "knows": [
+            "王胖"
+          ]
+        }
+      ]
+    }
+  ],
+  "redundancy": [
+    {
+      "name": "reader-known-flagged",
+      "input": {
+        "content": "他又提起皇室旧事，向读者复述。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "身世",
+            "knows": [],
+            "readerKnows": true,
+            "registeredAt": 2,
+            "keywords": [
+              "皇室"
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "gapId": "gap-1",
+          "keyword": "皇室",
+          "occurrences": 1
+        }
+      ]
+    },
+    {
+      "name": "unknown-secret-not-redundancy",
+      "input": {
+        "content": "皇室旧事再现。",
+        "gaps": [
+          {
+            "id": "gap-1",
+            "secret": "身世",
+            "knows": [],
+            "readerKnows": false,
+            "registeredAt": 1,
+            "keywords": [
+              "皇室"
+            ]
+          }
+        ]
+      },
+      "expected": []
+    }
+  ],
+  "auditNotes": [
+    {
+      "name": "zh-both-sections",
+      "input": {
+        "leaks": [
+          {
+            "gapId": "gap-1",
+            "keyword": "皇室",
+            "occurrences": 2,
+            "inDialogue": true,
+            "knows": [
+              "王胖"
+            ]
+          }
+        ],
+        "redundancies": [
+          {
+            "gapId": "gap-2",
+            "keyword": "血案",
+            "occurrences": 1
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": "泄密机检命中（请核实说话人是否知情）：\n- [gap-1] \"皇室\" ×2（对白内）；知情人：王胖\n废笔机检命中（读者已知，勿复述）：\n- [gap-2] \"血案\" ×1"
+    },
+    {
+      "name": "empty-undefined",
+      "input": {
+        "leaks": [],
+        "redundancies": [],
+        "language": "zh"
+      },
+      "expected": null
+    }
+  ],
+  "contract": {
+    "dimensions": [
+      {
+        "id": 38,
+        "zh": "泄密机检",
+        "en": "Secret Leak Check"
+      },
+      {
+        "id": 39,
+        "zh": "废笔机检",
+        "en": "Reader Redundancy Check"
+      }
+    ],
+    "truthFile": "story/info_gaps.md",
+    "dialogueWindow": 24
+  }
+}

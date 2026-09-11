@@ -83,6 +83,8 @@ const DIMENSION_LABELS: Record<number, { readonly zh: string; readonly en: strin
   35: { zh: "世界规则遵守", en: "World Rule Compliance Check" },
   36: { zh: "关系动态", en: "Relationship Dynamics Check" },
   37: { zh: "正典事件一致性", en: "Canon Event Consistency Check" },
+  38: { zh: "泄密机检", en: "Secret Leak Check" },
+  39: { zh: "废笔机检", en: "Reader Redundancy Check" },
 };
 
 function containsChinese(text: string): boolean {
@@ -296,6 +298,7 @@ function buildDimensionList(
   language: PromptLanguage,
   hasParentCanon = false,
   fanficMode?: FanficMode,
+  hasInfoGaps = false,
 ): ReadonlyArray<{ readonly id: number; readonly name: string; readonly note: string }> {
   const activeIds = new Set(gp.auditDimensions);
 
@@ -332,6 +335,12 @@ function buildDimensionList(
   // Always-active dimensions
   activeIds.add(32); // 读者期待管理 — universal
   activeIds.add(33); // 章节备忘偏离 — universal (replaces legacy volume-outline drift)
+
+  // G7a/341 号：信息差账本存在 → 泄密机检(38)/废笔机检(39) 激活。
+  if (hasInfoGaps) {
+    activeIds.add(38);
+    activeIds.add(39);
+  }
 
   // Conditional overrides
   if (gp.eraResearch || bookRules?.eraConstraints?.enabled) {
@@ -395,7 +404,7 @@ export class ContinuityAuditor extends BaseAgent {
       };
     },
   ): Promise<AuditResult> {
-    const [diskCurrentState, diskLedger, diskHooks, styleGuideRaw, subplotBoard, emotionalArcs, characterMatrix, chapterSummaries, parentCanon, fanficCanon, volumeOutline] =
+    const [diskCurrentState, diskLedger, diskHooks, styleGuideRaw, subplotBoard, emotionalArcs, characterMatrix, chapterSummaries, parentCanon, fanficCanon, volumeOutline, infoGapsRaw] =
       await Promise.all([
         // Phase 5 consolidation: derive initial state from roles + seed hooks
         // when current_state.md is still the architect seed placeholder.
@@ -410,6 +419,7 @@ export class ContinuityAuditor extends BaseAgent {
         this.readFileSafe(join(bookDir, "story/parent_canon.md")),
         this.readFileSafe(join(bookDir, "story/fanfic_canon.md")),
         readVolumeMap(bookDir, "(文件不存在)"),
+        this.readFileSafe(join(bookDir, "story/info_gaps.md")),
       ]);
     const currentState = options?.truthFileOverrides?.currentState ?? diskCurrentState;
     const ledger = options?.truthFileOverrides?.ledger ?? diskLedger;
@@ -443,7 +453,8 @@ export class ContinuityAuditor extends BaseAgent {
     const resolvedLanguage = bookLanguage ?? gp.language;
     const isEnglish = resolvedLanguage === "en";
     const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
-    const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode);
+    const hasInfoGaps = infoGapsRaw !== "(文件不存在)" && infoGapsRaw.trim().length > 0;
+    const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode, hasInfoGaps);
     const dimList = dimensions
       .map((d) => `${d.id}. ${d.name}${d.note ? (isEnglish ? ` (${d.note})` : `（${d.note}）`) : ""}`)
       .join("\n");
@@ -595,6 +606,12 @@ overall_score 评分校准：
         : "");
     const volumeSummariesBlock = governedMemoryBlocks?.volumeSummariesBlock ?? "";
 
+    const infoGapBlock = hasInfoGaps
+      ? isEnglish
+        ? `\n## Info Gap Ledger (secrets: knows / readerKnows / keywords / registered chapter — audit dims 38/39)\n${infoGapsRaw}\n`
+        : `\n## 信息差账本（秘密/知情人/读者已知/关键词/登记章——对应维度 38/39）\n${infoGapsRaw}\n`
+      : "";
+
     const canonBlock = hasParentCanon
       ? isEnglish
         ? `\n## Mainline Canon Reference (for spinoff audit)\n${parentCanon}\n`
@@ -633,7 +650,7 @@ overall_score 评分校准：
 ## Current State Card
 ${currentState}
 ${ledgerBlock}
-${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
+${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${infoGapBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
 
 ## Chapter Content Under Review
 ${chapterContent}`
@@ -642,7 +659,7 @@ ${chapterContent}`
 ## 当前状态卡
 ${currentState}
 ${ledgerBlock}
-${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
+${hooksBlock}${volumeSummariesBlock}${subplotBlock}${emotionalBlock}${matrixBlock}${summariesBlock}${infoGapBlock}${canonBlock}${fanficCanonBlock}${reducedControlBlock}${memoBlock}${prevChapterBlock}${styleGuideBlock}
 
 ## 待审章节内容
 ${chapterContent}`;

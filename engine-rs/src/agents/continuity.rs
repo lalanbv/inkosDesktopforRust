@@ -164,7 +164,7 @@ fn dimension_labels() -> &'static HashMap<u32, DimensionLabel> {
     static M: OnceLock<HashMap<u32, DimensionLabel>> = OnceLock::new();
     M.get_or_init(|| {
         let mut m = HashMap::new();
-        let entries: [(u32, &str, &str); 37] = [
+        let entries: [(u32, &str, &str); 39] = [
             (1, "OOC检查", "OOC Check"),
             (2, "时间线检查", "Timeline Check"),
             (3, "设定冲突", "Lore Conflict Check"),
@@ -202,6 +202,9 @@ fn dimension_labels() -> &'static HashMap<u32, DimensionLabel> {
             (35, "世界规则遵守", "World Rule Compliance Check"),
             (36, "关系动态", "Relationship Dynamics Check"),
             (37, "正典事件一致性", "Canon Event Consistency Check"),
+            // G7a/341 号：信息差账本两维度（story/info_gaps.md 存在时激活）。
+            (38, "泄密机检", "Secret Leak Check"),
+            (39, "废笔机检", "Reader Redundancy Check"),
         ];
         for (id, zh, en) in entries {
             m.insert(id, DimensionLabel { zh, en });
@@ -484,6 +487,7 @@ pub fn build_dimension_list(
     language: WritingLanguage,
     has_parent_canon: bool,
     fanfic_mode: Option<FanficMode>,
+    has_info_gaps: bool,
 ) -> Vec<DimensionEntry> {
     let mut active_ids: Vec<f64> = Vec::new();
     let add = |id: f64, ids: &mut Vec<f64>| {
@@ -521,6 +525,12 @@ pub fn build_dimension_list(
     // 恒激活维度。
     add(32.0, &mut active_ids); // 读者期待管理 — universal
     add(33.0, &mut active_ids); // 章节备忘偏离 — universal（替代 legacy 卷纲偏离）
+
+    // G7a/341 号：信息差账本存在 → 泄密机检(38)/废笔机检(39) 激活。
+    if has_info_gaps {
+        add(38.0, &mut active_ids);
+        add(39.0, &mut active_ids);
+    }
 
     // 条件覆盖。
     if gp.era_research
@@ -962,6 +972,7 @@ pub async fn audit_chapter(
     let summaries_path = story.join("chapter_summaries.md");
     let parent_canon_path = story.join("parent_canon.md");
     let fanfic_canon_path = story.join("fanfic_canon.md");
+    let info_gaps_path = story.join("info_gaps.md");
     let (
         disk_current_state,
         disk_ledger,
@@ -974,6 +985,7 @@ pub async fn audit_chapter(
         parent_canon,
         fanfic_canon,
         volume_outline,
+        info_gaps_raw,
     ) = tokio::join!(
         read_current_state_with_fallback(book_dir, MISSING_FILE),
         read_file_safe(&ledger_path),
@@ -986,6 +998,7 @@ pub async fn audit_chapter(
         read_file_safe(&parent_canon_path),
         read_file_safe(&fanfic_canon_path),
         read_volume_map(book_dir, MISSING_FILE),
+        read_file_safe(&info_gaps_path),
     );
 
     let overrides = options.truth_file_overrides.as_ref();
@@ -1038,12 +1051,15 @@ pub async fn audit_chapter(
     } else {
         None
     };
+    let has_info_gaps_file = info_gaps_raw != MISSING_FILE && !info_gaps_raw.trim().is_empty();
+    let has_info_gaps = has_info_gaps_file;
     let dimensions = build_dimension_list(
         &gp,
         book_rules,
         resolved_language,
         has_parent_canon,
         fanfic_mode,
+        has_info_gaps,
     );
     let dim_list = dimensions
         .iter()
@@ -1191,6 +1207,20 @@ pub async fn audit_chapter(
         .and_then(|b| b.volume_summaries_block.clone())
         .unwrap_or_default();
 
+    let info_gap_block = if has_info_gaps_file {
+        if is_english {
+            format!(
+                "\n## Info Gap Ledger (secrets: knows / readerKnows / keywords / registered chapter — audit dims 38/39)\n{info_gaps_raw}\n"
+            )
+        } else {
+            format!(
+                "\n## 信息差账本（秘密/知情人/读者已知/关键词/登记章——对应维度 38/39）\n{info_gaps_raw}\n"
+            )
+        }
+    } else {
+        String::new()
+    };
+
     let canon_block = if has_parent_canon {
         if is_english {
             format!("\n## Mainline Canon Reference (for spinoff audit)\n{parent_canon}\n")
@@ -1264,11 +1294,11 @@ pub async fn audit_chapter(
 
     let user_prompt = if is_english {
         format!(
-            "Review chapter {chapter_number}.\n\n## Current State Card\n{current_state}\n{ledger_block}\n{hooks_block}{volume_summaries_block}{subplot_block}{emotional_block}{matrix_block}{summaries_block}{canon_block}{fanfic_canon_block}{reduced_control_block}{memo_block}{prev_chapter_block}{style_guide_block}\n\n## Chapter Content Under Review\n{chapter_content}"
+            "Review chapter {chapter_number}.\n\n## Current State Card\n{current_state}\n{ledger_block}\n{hooks_block}{volume_summaries_block}{subplot_block}{emotional_block}{matrix_block}{summaries_block}{info_gap_block}{canon_block}{fanfic_canon_block}{reduced_control_block}{memo_block}{prev_chapter_block}{style_guide_block}\n\n## Chapter Content Under Review\n{chapter_content}"
         )
     } else {
         format!(
-            "请审查第{chapter_number}章。\n\n## 当前状态卡\n{current_state}\n{ledger_block}\n{hooks_block}{volume_summaries_block}{subplot_block}{emotional_block}{matrix_block}{summaries_block}{canon_block}{fanfic_canon_block}{reduced_control_block}{memo_block}{prev_chapter_block}{style_guide_block}\n\n## 待审章节内容\n{chapter_content}"
+            "请审查第{chapter_number}章。\n\n## 当前状态卡\n{current_state}\n{ledger_block}\n{hooks_block}{volume_summaries_block}{subplot_block}{emotional_block}{matrix_block}{summaries_block}{info_gap_block}{canon_block}{fanfic_canon_block}{reduced_control_block}{memo_block}{prev_chapter_block}{style_guide_block}\n\n## 待审章节内容\n{chapter_content}"
         )
     };
 
@@ -1428,13 +1458,14 @@ mod tests {
     }
 
     #[test]
-    fn dimension_name_covers_all_37_in_both_languages() {
-        for id in 1..=37u32 {
+    fn dimension_name_covers_all_39_in_both_languages() {
+        // G7a/341 号：维度表扩至 39（38 泄密机检 / 39 废笔机检）。
+        for id in 1..=39u32 {
             assert!(dimension_name(id, WritingLanguage::Zh).is_some(), "维度 {id} 缺中文");
             assert!(dimension_name(id, WritingLanguage::En).is_some(), "维度 {id} 缺英文");
         }
         assert_eq!(dimension_name(0, WritingLanguage::Zh), None);
-        assert_eq!(dimension_name(38, WritingLanguage::En), None);
+        assert_eq!(dimension_name(40, WritingLanguage::En), None);
     }
 
     #[test]
@@ -1675,7 +1706,7 @@ mod tests {
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert_eq!(ids, vec![1, 4, 5, 6, 10, 27, 32, 33]);
 
@@ -1687,7 +1718,7 @@ mod tests {
     #[test]
     fn dimension_list_always_active_32_33_and_sorted() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         // gp.auditDimensions [1,6,10] + 恒加 [32,33]。
         assert_eq!(ids, vec![1, 6, 10, 32, 33]);
@@ -1697,7 +1728,7 @@ mod tests {
     fn dimension_list_era_research_adds_12() {
         let mut gp = test_gp();
         gp.era_research = true;
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false);
         assert!(dims.iter().any(|d| d.id == 12));
 
         // eraConstraints.enabled 同样触发。
@@ -1710,19 +1741,19 @@ mod tests {
             }),
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
         assert!(dims.iter().any(|d| d.id == 12));
     }
 
     #[test]
     fn dimension_list_parent_canon_adds_spinoff_dims_unless_fanfic() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, None);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, None, false);
         assert!(dims.iter().any(|d| d.id == 28));
         assert!(dims.iter().any(|d| d.id == 31));
 
         // 同人模式下不激活番外维度，改激活同人维度 34-37。
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, Some(FanficMode::Au));
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, Some(FanficMode::Au), false);
         assert!(!dims.iter().any(|d| (28..=31).contains(&d.id)));
         assert!(dims.iter().any(|d| (34..=37).contains(&d.id)));
     }
@@ -1738,7 +1769,7 @@ mod tests {
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert!(ids.contains(&2));
         // "pacing" 小写包含于… TS includes 区分大小写：name "Pacing Check" 不含 "pacing"，
@@ -1750,7 +1781,7 @@ mod tests {
     #[test]
     fn dimension_list_note_rendering_language() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::En, false, None);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::En, false, None, false);
         let d1 = dims.iter().find(|d| d.id == 1).unwrap();
         assert_eq!(d1.name, "OOC Check");
         assert!(d1.note.is_empty()); // 维度 1 无 fanfic → 无注记

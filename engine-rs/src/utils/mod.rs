@@ -48,6 +48,7 @@ pub mod path;
 pub mod planning_materials;
 pub mod spot_fix_patches;
 pub mod pov_filter;
+pub mod info_gap_ledger;
 pub mod promise_ledger;
 pub mod style_feature_engine;
 pub mod runtime_writer;

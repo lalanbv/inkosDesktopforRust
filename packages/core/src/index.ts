@@ -554,6 +554,16 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  detectSecretLeaks,
+  detectReaderRedundancy,
+  parseInfoGapsMarkdown,
+  renderInfoGapAuditNotes,
+  renderInfoGapsMarkdown,
+  type InfoGapEntry,
+  type ReaderRedundancyHit,
+  type SecretLeakHit,
+} from "./utils/info-gap-ledger.js";
+export {
   applyFeatureSelection,
   buildTrialWritePrompt,
   composeStyleGuidance,
