@@ -45,6 +45,18 @@ export interface StoredSummary {
   readonly chapterType: string;
 }
 
+/** G3/337 号：质量债务账本一行（对齐 ANWA A3 质量债务；状态机见 quality-governance.ts）。 */
+export interface StoredQualityDebt {
+  readonly debtId: string;
+  readonly bookId: string;
+  readonly chapter: number;
+  readonly issueCategory: string;
+  readonly severity: "critical" | "warning" | "info";
+  readonly status: "open" | "deferred" | "resolved";
+  readonly createdAt: string;
+  readonly followUpNote?: string;
+}
+
 export interface StoredHook {
   readonly hookId: string;
   readonly startChapter: number;
@@ -119,6 +131,18 @@ export class MemoryDB {
       CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_chapter);
       CREATE INDEX IF NOT EXISTS idx_hooks_status ON hooks(status);
       CREATE INDEX IF NOT EXISTS idx_hooks_last_advanced ON hooks(last_advanced_chapter);
+      CREATE TABLE IF NOT EXISTS quality_debts (
+        debt_id TEXT PRIMARY KEY,
+        book_id TEXT NOT NULL DEFAULT '',
+        chapter INTEGER NOT NULL DEFAULT 0,
+        issue_category TEXT NOT NULL DEFAULT '',
+        severity TEXT NOT NULL DEFAULT 'warning',
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL DEFAULT '',
+        follow_up_note TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
+      CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);
     `);
 
     this.ensureColumn("hooks", "payoff_timing", "TEXT NOT NULL DEFAULT ''");
@@ -323,6 +347,57 @@ export class MemoryDB {
       hook.payoffTiming ?? "",
       hook.notes,
     );
+  }
+
+  /** G3/337 号：记入一条质量债务（INSERT OR REPLACE，幂等）。 */
+  recordDebt(debt: StoredQualityDebt): void {
+    this.db.prepare(
+      `INSERT OR REPLACE INTO quality_debts (debt_id, book_id, chapter, issue_category, severity, status, created_at, follow_up_note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      debt.debtId,
+      debt.bookId,
+      debt.chapter,
+      debt.issueCategory,
+      debt.severity,
+      debt.status,
+      debt.createdAt,
+      debt.followUpNote ?? "",
+    );
+  }
+
+  /** 债务清单：按书/状态过滤（缺省全量），新章在前。 */
+  listDebts(bookId?: string, status?: "open" | "deferred" | "resolved"): ReadonlyArray<StoredQualityDebt> {
+    const where: string[] = [];
+    const params: string[] = [];
+    if (bookId) {
+      where.push("book_id = ?");
+      params.push(bookId);
+    }
+    if (status) {
+      where.push("status = ?");
+      params.push(status);
+    }
+    const rows = this.db.prepare(
+      `SELECT debt_id AS debtId, book_id AS bookId, chapter, issue_category AS issueCategory,
+              severity, status, created_at AS createdAt, follow_up_note AS followUpNote
+       FROM quality_debts ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY chapter DESC, created_at DESC`,
+    ).all(...params) as ReadonlyArray<StoredQualityDebt>;
+    return rows;
+  }
+
+  /** 债务状态流转（defer/resolve/reopen 的落库口；附跟进备注）。 */
+  updateDebtStatus(
+    debtId: string,
+    status: "open" | "deferred" | "resolved",
+    followUpNote?: string,
+  ): boolean {
+    const result = this.db.prepare(
+      `UPDATE quality_debts SET status = ?, follow_up_note = CASE WHEN ? = '' THEN follow_up_note ELSE ? END
+       WHERE debt_id = ?`,
+    ).run(status, followUpNote ?? "", followUpNote ?? "", debtId);
+    return Number(result.changes) > 0;
   }
 
   replaceHooks(hooks: ReadonlyArray<StoredHook>): void {

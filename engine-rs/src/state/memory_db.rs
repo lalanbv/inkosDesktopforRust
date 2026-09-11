@@ -47,6 +47,21 @@ pub struct NewFact {
     pub source_chapter: i64,
 }
 
+/// G3/337 号：质量债务账本一行（对齐 TS StoredQualityDebt）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredQualityDebt {
+    pub debt_id: String,
+    pub book_id: String,
+    pub chapter: i64,
+    pub issue_category: String,
+    pub severity: String,
+    pub status: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub follow_up_note: String,
+}
+
 /// 章节摘要（对应 `chapter_summaries` 表一行）。字段与 TS `StoredSummary` 一一对应。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,7 +171,19 @@ impl MemoryDb {
             CREATE INDEX IF NOT EXISTS idx_facts_valid ON facts(valid_from_chapter, valid_until_chapter);
             CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_chapter);
             CREATE INDEX IF NOT EXISTS idx_hooks_status ON hooks(status);
-            CREATE INDEX IF NOT EXISTS idx_hooks_last_advanced ON hooks(last_advanced_chapter);",
+            CREATE INDEX IF NOT EXISTS idx_hooks_last_advanced ON hooks(last_advanced_chapter);
+            CREATE TABLE IF NOT EXISTS quality_debts (
+                debt_id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL DEFAULT '',
+                chapter INTEGER NOT NULL DEFAULT 0,
+                issue_category TEXT NOT NULL DEFAULT '',
+                severity TEXT NOT NULL DEFAULT 'warning',
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL DEFAULT '',
+                follow_up_note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
+            CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);",
         )?;
 
         // 与 TS ensureColumn("hooks", "payoff_timing", ...) 对齐：新表已含该列，
@@ -318,6 +345,87 @@ impl MemoryDb {
     // ---------------------------------------------------------------------------
     // Chapter summaries
     // ---------------------------------------------------------------------------
+
+    /// G3/337 号：记入一条质量债务（INSERT OR REPLACE，幂等）。
+    pub fn record_debt(&self, debt: &StoredQualityDebt) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO quality_debts (debt_id, book_id, chapter, issue_category, severity, status, created_at, follow_up_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                debt.debt_id,
+                debt.book_id,
+                debt.chapter,
+                debt.issue_category,
+                debt.severity,
+                debt.status,
+                debt.created_at,
+                debt.follow_up_note,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 债务清单：按书/状态过滤（None = 不过滤），新章在前。
+    pub fn list_debts(
+        &self,
+        book_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<StoredQualityDebt>> {
+        let mut sql = String::from(
+            "SELECT debt_id, book_id, chapter, issue_category, severity, status, created_at, follow_up_note \
+             FROM quality_debts",
+        );
+        let mut clauses: Vec<String> = Vec::new();
+        if book_id.is_some() {
+            clauses.push("book_id = ?".into());
+        }
+        if status.is_some() {
+            clauses.push("status = ?".into());
+        }
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        sql.push_str(" ORDER BY chapter DESC, created_at DESC");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(
+                book_id.iter().copied().chain(status.iter().copied()),
+            ),
+            |row| {
+                Ok(StoredQualityDebt {
+                    debt_id: row.get(0)?,
+                    book_id: row.get(1)?,
+                    chapter: row.get(2)?,
+                    issue_category: row.get(3)?,
+                    severity: row.get(4)?,
+                    status: row.get(5)?,
+                    created_at: row.get(6)?,
+                    follow_up_note: row.get(7)?,
+                })
+            },
+        )?;
+        let mut debts = Vec::new();
+        for row in rows {
+            debts.push(row?);
+        }
+        Ok(debts)
+    }
+
+    /// 债务状态流转落库（附跟进备注）；返回是否更新到行。
+    pub fn update_debt_status(
+        &self,
+        debt_id: &str,
+        status: &str,
+        follow_up_note: Option<&str>,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE quality_debts SET status = ?1, follow_up_note = CASE WHEN ?2 = '' THEN follow_up_note ELSE ?2 END
+             WHERE debt_id = ?3",
+            rusqlite::params![status, follow_up_note.unwrap_or(""), debt_id],
+        )?;
+        Ok(changed > 0)
+    }
 
     /// upsert 章节摘要。对齐 `upsertSummary`。
     pub fn upsert_summary(&self, summary: &StoredSummary) -> Result<()> {
@@ -522,6 +630,47 @@ mod tests {
 
     fn db() -> MemoryDb {
         MemoryDb::open_in_memory().expect("open in-memory db")
+    }
+
+    fn sample_debt(id: &str, chapter: i64, status: &str) -> StoredQualityDebt {
+        StoredQualityDebt {
+            debt_id: id.to_string(),
+            book_id: "book-1".to_string(),
+            chapter,
+            issue_category: "continuity".to_string(),
+            severity: "critical".to_string(),
+            status: status.to_string(),
+            created_at: "2026-09-12T00:00:00.000Z".to_string(),
+            follow_up_note: String::new(),
+        }
+    }
+
+    #[test]
+    fn quality_debts_record_list_update_roundtrip() {
+        let db = db();
+        db.record_debt(&sample_debt("d1", 3, "deferred")).unwrap();
+        db.record_debt(&sample_debt("d2", 5, "open")).unwrap();
+        db.record_debt(&sample_debt("d3", 1, "resolved")).unwrap();
+
+        // 全量：新章在前。
+        let all = db.list_debts(None, None).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].debt_id, "d2");
+
+        // 状态过滤。
+        let open: Vec<_> = db.list_debts(None, Some("open")).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].debt_id, "d2");
+
+        // 书过滤 + 状态更新。
+        assert!(db.update_debt_status("d2", "resolved", Some("patched")).unwrap());
+        let resolved: Vec<_> = db.list_debts(Some("book-1"), Some("resolved")).unwrap();
+        assert_eq!(resolved.len(), 2);
+        let d2 = resolved.iter().find(|d| d.debt_id == "d2").unwrap();
+        assert_eq!(d2.follow_up_note, "patched");
+
+        // 不存在的 id → false。
+        assert!(!db.update_debt_status("nope", "open", None).unwrap());
     }
 
     // --- schema / 迁移 ----------------------------------------------------------

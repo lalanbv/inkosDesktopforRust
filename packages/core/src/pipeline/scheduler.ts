@@ -3,7 +3,16 @@ import type { PipelineConfig } from "./runner.js";
 import { StateManager } from "../state/manager.js";
 import type { BookConfig } from "../models/book.js";
 import type { QualityGates, DetectionConfig } from "../models/project.js";
+import type { GovernanceConfig } from "../models/quality-governance.js";
+import {
+  resolveGovernancePolicy,
+  resolveQualityVerdict,
+  verdictContinuesPipeline,
+  verdictCreatesDebt,
+} from "../models/quality-governance.js";
 import { dispatchWebhookEvent } from "../notify/dispatcher.js";
+import { MemoryDB } from "../state/memory-db.js";
+import { join } from "node:path";
 import { detectChapter, detectAndRewrite } from "./detection-runner.js";
 import type { Logger } from "../utils/logger.js";
 
@@ -16,6 +25,8 @@ export interface SchedulerConfig extends PipelineConfig {
   readonly cooldownAfterChapterMs: number;
   readonly maxChaptersPerDay: number;
   readonly qualityGates?: QualityGates;
+  /** G3/337 号：项目级质量治理（book.governance 优先覆盖）。 */
+  readonly governance?: GovernanceConfig;
   readonly detection?: DetectionConfig;
   readonly onChapterComplete?: (bookId: string, chapter: number, status: string) => void;
   readonly onError?: (bookId: string, error: Error) => void;
@@ -246,14 +257,15 @@ export class Scheduler {
         return true;
       }
 
-      // Audit failed — apply quality gates
+      // Audit failed — G3/337 号：八级判定驱动的质量治理（局部问题降债继续 /
+      // 质量优先停边界 / 连续债务达限转重规划），降债继续时本书记债且不中断。
       const issueCategories = result.auditResult.issues.map((i) => i.category);
-      await this.handleAuditFailure(bookId, result.chapterNumber, issueCategories);
+      const deferAndContinue = await this.handleAuditFailure(bookId, result.chapterNumber, issueCategories, bookConfig);
       this.config.onChapterComplete?.(bookId, result.chapterNumber, result.status);
-      return false;
+      return deferAndContinue;
     } catch (e) {
       this.config.onError?.(bookId, e as Error);
-      await this.handleAuditFailure(bookId, 0);
+      await this.handleAuditFailure(bookId, 0, [], bookConfig);
       return false;
     }
   }
@@ -291,9 +303,11 @@ export class Scheduler {
     bookId: string,
     chapterNumber: number,
     issueCategories: ReadonlyArray<string> = [],
-  ): Promise<void> {
+    bookConfig?: BookConfig,
+  ): Promise<boolean> {
     const failures = (this.consecutiveFailures.get(bookId) ?? 0) + 1;
     this.consecutiveFailures.set(bookId, failures);
+    const governance = resolveGovernancePolicy(bookConfig?.governance, this.config.governance);
 
     // Track failure dimensions for clustering
     if (issueCategories.length > 0) {
@@ -316,26 +330,69 @@ export class Scheduler {
 
     if (failures <= gates.maxAuditRetries) {
       this.log?.warn(`${bookId} audit failed (${failures}/${gates.maxAuditRetries}), will retry`);
-      return;
+      return false;
     }
 
-    // Check if we should pause
-    if (failures >= gates.pauseAfterConsecutiveFailures) {
-      this.pausedBooks.add(bookId);
-      const reason = `${failures} consecutive audit failures (threshold: ${gates.pauseAfterConsecutiveFailures})`;
-      this.log?.error(`${bookId} PAUSED: ${reason}`);
-      this.config.onPause?.(bookId, reason);
+    // G3/337 号：八级判定——债务计数已含本轮失败（failures = consecutiveDebts+1 口径）。
+    const verdict = resolveQualityVerdict({
+      passed: false,
+      warningCount: 0,
+      localCount: 0,
+      structuralCount: 0,
+      unmetObligations: 0,
+      consecutiveDebts: failures - 1,
+      policy: governance.policy,
+      maxConsecutiveDebts: governance.maxConsecutiveDebts,
+    });
 
-      if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
-        await dispatchWebhookEvent(this.config.notifyChannels, {
-          event: "pipeline-error",
+    if (verdictCreatesDebt(verdict)) {
+      // 记债入账（局部降级 / 重规划前的最后一根稻草都留痕，便于账本运营）。
+      try {
+        const memory = new MemoryDB(join(this.config.projectRoot, "books", bookId));
+        memory.recordDebt({
+          debtId: `debt-${bookId}-${chapterNumber || failures}-${Date.now().toString(36)}`,
           bookId,
-          chapterNumber: chapterNumber > 0 ? chapterNumber : undefined,
-          timestamp: new Date().toISOString(),
-          data: { reason, consecutiveFailures: failures },
+          chapter: chapterNumber,
+          issueCategory: issueCategories[0] ?? "audit-failure",
+          severity: "critical",
+          status: verdict === "replan-required" ? "open" : "deferred",
+          createdAt: new Date().toISOString(),
+          followUpNote: `verdict=${verdict}; categories=${issueCategories.slice(0, 5).join(",")}`,
         });
+      } catch (debtError) {
+        this.config.onError?.(bookId, debtError as Error);
       }
     }
+
+    if (verdict === "local-patch-plan" || verdict === "patchable-obligation-gap") {
+      // 修复循环口径：沿用既有重试（温度提升）路径。
+      this.log?.warn(`${bookId} verdict=${verdict}, will retry with temperature step`);
+      return false;
+    }
+
+    if (verdictContinuesPipeline(verdict)) {
+      // defer-and-continue：降债继续——清空失败计数，本书写下一章不中断。
+      this.log?.warn(`${bookId} verdict=${verdict}: debt recorded, continuing to next chapter`);
+      this.consecutiveFailures.delete(bookId);
+      return true;
+    }
+
+    // stop-for-replan / replan-required：暂停在已保存章节边界。
+    const verdictReason = `verdict=${verdict}; ${failures} consecutive audit failures (threshold: ${governance.maxConsecutiveDebts})`;
+    this.pausedBooks.add(bookId);
+    this.log?.error(`${bookId} PAUSED: ${verdictReason}`);
+    this.config.onPause?.(bookId, verdictReason);
+
+    if (this.config.notifyChannels && this.config.notifyChannels.length > 0) {
+      await dispatchWebhookEvent(this.config.notifyChannels, {
+        event: "pipeline-error",
+        bookId,
+        chapterNumber: chapterNumber > 0 ? chapterNumber : undefined,
+        timestamp: new Date().toISOString(),
+        data: { reason: verdictReason, consecutiveFailures: failures, verdict },
+      });
+    }
+    return false;
   }
 
   private async runRadarScan(): Promise<void> {

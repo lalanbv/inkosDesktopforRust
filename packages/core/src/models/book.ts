@@ -80,6 +80,11 @@ export const BookConfigSchema = z.object({
     /** 189 号：write-next 落盘后自动为本章沉淀时间线节拍（默认关）。 */
     autoTimelineBeats: z.boolean().optional(),
   }).optional(),
+  /** G3/337 号：每书质量治理方案（缺省回落 completion-first/上限 3）。 */
+  governance: z.object({
+    policy: z.enum(["completion-first", "quality-first"]).optional(),
+    maxConsecutiveDebts: z.number().int().min(1).max(20).optional(),
+  }).optional(),
 });
 
 export type BookConfig = z.infer<typeof BookConfigSchema>;

@@ -757,6 +757,29 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G3/337 号：质量债务清单（?status=open|deferred|resolved 过滤；缺省全量）。
+pub async fn get_quality_debts(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let db_path = book_dir.join("story").join("memory.db");
+    if !db_path.exists() {
+        return (StatusCode::OK, Json(json!({ "debts": [] }))).into_response();
+    }
+    match crate::state::memory_db::MemoryDb::open(&book_dir) {
+        Ok(db) => match db.list_debts(None, params.get("status").map(String::as_str)) {
+            Ok(debts) => {
+                let value = serde_json::to_value(&debts).unwrap_or(json!([]));
+                (StatusCode::OK, Json(json!({ "debts": value }))).into_response()
+            }
+            Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        },
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let global_env = std::env::var("HOME")

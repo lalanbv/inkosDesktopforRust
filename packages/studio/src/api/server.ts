@@ -3025,6 +3025,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G3/337 号：质量债务清单（open/deferred/resolved；缺省全量）。
+  app.get("/api/v1/books/:id/quality-debts", async (c) => {
+    const id = c.req.param("id");
+    const status = c.req.query("status");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ debts: [] });
+    }
+    try {
+      const { MemoryDB } = await import("@actalk/inkos-core");
+      const memory = new MemoryDB(join(root, "books", id));
+      const valid = ["open", "deferred", "resolved"] as const;
+      const statusFilter = valid.find((s) => s === status);
+      const debts = memory.listDebts(undefined, statusFilter);
+      return c.json({ debts });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   app.get("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
     try {
