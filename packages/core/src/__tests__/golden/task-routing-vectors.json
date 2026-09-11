@@ -1,0 +1,362 @@
+{
+  "_header": "按任务模型路由共享向量（G16/345 号，Phase B 批次三末项）。唯一事实源本文件；TS 断言 src/__tests__/golden-task-routing.test.ts，Rust 差分 engine-rs/tests/golden_task_routing_diff.rs（解析一致 duel）。逐字段回退：book.tasks[task] > book.defaults > project.tasks[task] > project.defaults > fallback；sources 每字段标注 task/defaults/fallback；迁移兼容：无 routing 全 fallback。",
+  "fallback": {
+    "model": "global-default",
+    "service": "moonshot",
+    "temperature": 0.7,
+    "maxTokens": 8192
+  },
+  "resolve": [
+    {
+      "name": "legacy-no-routing-all-fallback",
+      "input": {
+        "task": "writing",
+        "bookRouting": null,
+        "projectRouting": null
+      },
+      "expected": {
+        "task": "writing",
+        "model": "global-default",
+        "service": "moonshot",
+        "temperature": 0.7,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "fallback"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "fallback"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "project-task-writing-override",
+      "input": {
+        "task": "writing",
+        "bookRouting": null,
+        "projectRouting": {
+          "tasks": {
+            "writing": {
+              "model": "kimi-k2-0905",
+              "temperature": 0.9
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "writing",
+        "model": "kimi-k2-0905",
+        "service": "moonshot",
+        "temperature": 0.9,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "task"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "task"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "other-task-unaffected-by-writing-override",
+      "input": {
+        "task": "detect",
+        "bookRouting": null,
+        "projectRouting": {
+          "tasks": {
+            "writing": {
+              "model": "kimi-k2-0905",
+              "temperature": 0.9
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "detect",
+        "model": "global-default",
+        "service": "moonshot",
+        "temperature": 0.7,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "fallback"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "fallback"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "project-defaults-under-task-override",
+      "input": {
+        "task": "review",
+        "bookRouting": null,
+        "projectRouting": {
+          "defaults": {
+            "model": "global-default",
+            "temperature": 0.3
+          },
+          "tasks": {
+            "review": {
+              "model": "reviewer-x"
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "review",
+        "model": "reviewer-x",
+        "service": "moonshot",
+        "temperature": 0.3,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "task"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "defaults"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "book-task-overrides-project-task",
+      "input": {
+        "task": "writing",
+        "bookRouting": {
+          "tasks": {
+            "writing": {
+              "model": "book-cheap-model"
+            }
+          }
+        },
+        "projectRouting": {
+          "tasks": {
+            "writing": {
+              "model": "kimi-k2-0905",
+              "maxTokens": 4096
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "writing",
+        "model": "book-cheap-model",
+        "service": "moonshot",
+        "temperature": 0.7,
+        "maxTokens": 4096,
+        "sources": [
+          {
+            "field": "model",
+            "source": "task"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "fallback"
+          },
+          {
+            "field": "maxTokens",
+            "source": "task"
+          }
+        ]
+      }
+    },
+    {
+      "name": "book-defaults-under-book-task",
+      "input": {
+        "task": "repair",
+        "bookRouting": {
+          "defaults": {
+            "model": "book-fast",
+            "temperature": 0.2
+          },
+          "tasks": {
+            "repair": {
+              "temperature": 0.4
+            }
+          }
+        },
+        "projectRouting": null
+      },
+      "expected": {
+        "task": "repair",
+        "model": "book-fast",
+        "service": "moonshot",
+        "temperature": 0.4,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "defaults"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "task"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "book-defaults-beats-project-task",
+      "input": {
+        "task": "analysis",
+        "bookRouting": {
+          "defaults": {
+            "model": "book-fast"
+          }
+        },
+        "projectRouting": {
+          "tasks": {
+            "analysis": {
+              "model": "project-analysis-model"
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "analysis",
+        "model": "book-fast",
+        "service": "moonshot",
+        "temperature": 0.7,
+        "maxTokens": 8192,
+        "sources": [
+          {
+            "field": "model",
+            "source": "defaults"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "fallback"
+          },
+          {
+            "field": "maxTokens",
+            "source": "fallback"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid-temperature-field-ignored",
+      "input": {
+        "task": "detect",
+        "bookRouting": null,
+        "projectRouting": {
+          "tasks": {
+            "detect": {
+              "temperature": 0.5,
+              "maxTokens": 2048
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "detect",
+        "model": "global-default",
+        "service": "moonshot",
+        "temperature": 0.5,
+        "maxTokens": 2048,
+        "sources": [
+          {
+            "field": "model",
+            "source": "fallback"
+          },
+          {
+            "field": "service",
+            "source": "fallback"
+          },
+          {
+            "field": "temperature",
+            "source": "task"
+          },
+          {
+            "field": "maxTokens",
+            "source": "task"
+          }
+        ]
+      }
+    }
+  ],
+  "contract": {
+    "kinds": [
+      "writing",
+      "review",
+      "repair",
+      "detect",
+      "analysis"
+    ],
+    "fields": [
+      "model",
+      "service",
+      "temperature",
+      "maxTokens"
+    ],
+    "levels": [
+      "book-task",
+      "book-defaults",
+      "project-task",
+      "project-defaults",
+      "fallback"
+    ],
+    "migrationCompat": "absent-routing-resolves-to-fallback"
+  }
+}

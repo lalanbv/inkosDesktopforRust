@@ -562,6 +562,15 @@ export {
   type ResumeAdviceInput,
 } from "./utils/resume-advice.js";
 export {
+  mergeTaskRouting,
+  resolveTaskModel,
+  TASK_MODEL_KINDS,
+  type ResolvedTaskModel,
+  type TaskModelKind,
+  type TaskModelOverride,
+  type TaskModelRouting,
+} from "./models/task-routing.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,
