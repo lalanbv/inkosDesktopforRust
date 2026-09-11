@@ -43,7 +43,8 @@ import { useSSE } from "./hooks/use-sse";
 import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme, cycleThemeMode } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
-import { setAppLanguage, tr } from "./lib/app-language";
+import { setAppLanguage, tr, getAppLanguage } from "./lib/app-language";
+import { buildTaskReport } from "@actalk/inkos-core";
 import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon, Monitor, Search } from "lucide-react";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
@@ -278,28 +279,21 @@ export function App() {
 
   useSessionEvents(sse, route, setRoute);
 
-  // P4-3 通知桥：关键 SSE 事件 → 通知中心（write:complete=info；错误类=error）。
-  // 按 seq 游标去重，专注模式同样入列（铃铛徽标可见，弹层非模态不打断）。
+  // P4-3 通知桥：关键 SSE 事件 → 通知中心（G8b/334 号：一律走作者友好报告
+  // 契约——三段式人话 + 异常三分类，禁止裸事件名/traceback；write:complete=
+  // info、完成类 success、错误按分类 error/progress）。按 seq 游标去重，
+  // 专注模式同样入列（铃铛徽标可见，弹层非模态不打断）。
   const lastNotifiedSeqRef = useRef(0);
   const pushNotification = useNotificationsStore((state) => state.pushNotification);
   useEffect(() => {
     const fresh = sse.messages.filter((message) => message.seq > lastNotifiedSeqRef.current);
     if (fresh.length === 0) return;
     lastNotifiedSeqRef.current = fresh[fresh.length - 1].seq;
+    const language = getAppLanguage() === "zh" ? "zh" as const : "en" as const;
     for (const message of fresh) {
-      if (message.event === "write:complete") {
-        const data = message.data as { bookId?: string; chapterNumber?: number } | null;
-        pushNotification({
-          level: "info",
-          title: tr("章节完成", "Chapter complete"),
-          detail: data?.chapterNumber !== undefined ? tr(`第 ${data.chapterNumber} 章已写完`, `Chapter ${data.chapterNumber} finished`) : undefined,
-        });
-      } else if (message.event.endsWith(":error") || message.event === "error") {
-        pushNotification({
-          level: "error",
-          title: tr("任务出错", "Task error"),
-          detail: message.event,
-        });
+      const report = buildTaskReport(message.event, message.data, language);
+      if (report) {
+        pushNotification(report);
       }
     }
   }, [sse.messages, pushNotification]);

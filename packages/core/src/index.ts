@@ -546,6 +546,18 @@ export {
   type ResearchReport,
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
+export {
+  buildAuthorReport,
+  buildTaskReport,
+  classifyEngineIssue,
+  collapseToLine,
+  formatDurationMs,
+  resolveTaskLabel,
+  type AuthorReport,
+  type ReportIssue,
+  type ReportIssueCategory,
+  type TaskNotification,
+} from "./utils/author-report.js";
 export { extractPOVFromOutline, filterMatrixByPOV, filterHooksByPOV } from "./utils/pov-filter.js";
 export { ConsolidatorAgent } from "./agents/consolidator.js";
 export { MemoryDB, type Fact, type StoredSummary } from "./state/memory-db.js";
