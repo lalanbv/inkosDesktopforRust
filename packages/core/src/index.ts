@@ -554,6 +554,16 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  applyFeatureSelection,
+  buildTrialWritePrompt,
+  composeStyleGuidance,
+  deriveFeaturePool,
+  detectProperNounLeak,
+  resolveStyleBinding,
+  type StyleBinding,
+  type StyleFeature,
+} from "./utils/style-feature-engine.js";
+export {
   buildPromiseTimeline,
   detectPacingDebts,
   detectWeakHookRuns,

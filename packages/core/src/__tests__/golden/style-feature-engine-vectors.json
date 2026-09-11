@@ -1,0 +1,103 @@
+{
+  "_header": "写法引擎资产化共享向量（G4/339 号，Phase B 批次二首项）。唯一事实源本文件；TS 断言 src/__tests__/golden-style-feature-engine.test.ts，Rust 差分 engine-rs/tests/golden_style_feature_engine_diff.rs。特征池推导顺序：metric:sentence-length→paragraph-length→vocabulary-diversity→pattern:*→rhetoric:*；启停：白名单优先、黑名单次之、未知 id 忽略；泄露检测长名优先掩码计数。",
+  "profile": {
+    "avgSentenceLength": 18.4,
+    "sentenceLengthStdDev": 6.2,
+    "avgParagraphLength": 88,
+    "paragraphLengthRange": { "min": 40, "max": 160 },
+    "vocabularyDiversity": 0.62,
+    "topPatterns": ["排比", "对仗"],
+    "rhetoricalFeatures": ["隐喻"],
+    "sourceName": "参考A"
+  },
+  "poolIds": [
+    "metric:sentence-length",
+    "metric:paragraph-length",
+    "metric:vocabulary-diversity",
+    "pattern:排比",
+    "pattern:对仗",
+    "rhetoric:隐喻"
+  ],
+  "selection": [
+    { "name": "whitelist-priority", "enabledIds": ["pattern:排比", "unknown:id"], "disabledIds": ["metric:sentence-length"], "expected": ["pattern:排比"] },
+    { "name": "blacklist-filters", "enabledIds": [], "disabledIds": ["metric:vocabulary-diversity", "rhetoric:隐喻"], "expected": ["metric:sentence-length", "metric:paragraph-length", "pattern:排比", "pattern:对仗"] },
+    { "name": "no-selection-full-pool", "enabledIds": [], "disabledIds": [], "expected": ["metric:sentence-length", "metric:paragraph-length", "metric:vocabulary-diversity", "pattern:排比", "pattern:对仗", "rhetoric:隐喻"] },
+    { "name": "blacklist-unknown-ignored", "enabledIds": [], "disabledIds": ["unknown:x"], "expected": ["metric:sentence-length", "metric:paragraph-length", "metric:vocabulary-diversity", "pattern:排比", "pattern:对仗", "rhetoric:隐喻"] }
+  ],
+  "guidance": [
+    {
+      "name": "zh-render",
+      "enabledIds": ["metric:sentence-length", "pattern:排比"],
+      "language": "zh",
+      "expected": "## 写法特征（绑定档案——写作时遵循）\n- 单句平均长度控制在约 18.4 字（允许小幅波动）。\n- 写作时体现句式特征「排比」。"
+    },
+    {
+      "name": "en-render",
+      "enabledIds": ["metric:paragraph-length"],
+      "language": "en",
+      "expected": "## Style features (bound profile — follow while writing)\n- Keep paragraph lengths roughly within 40–160 characters."
+    }
+  ],
+  "trial": [
+    {
+      "name": "zh-trial",
+      "input": {
+        "guidance": "## 写法特征\n- 单句平均长度控制在约 18.4 字。",
+        "premise": "末世废土中的拾荒少年",
+        "sceneBrief": "少年在废弃地铁站发现一枚仍在走动的怀表",
+        "targetChars": 800,
+        "language": "zh"
+      },
+      "expected": "按绑定的写法档案试写一段正文。\n\n## 写法特征\n- 单句平均长度控制在约 18.4 字。\n\n## 前提\n末世废土中的拾荒少年\n\n## 场景简报\n少年在废弃地铁站发现一枚仍在走动的怀表\n\n要求：\n- 正文约 800 字\n- 只输出一个 TRIAL_CONTENT 区块，不要输出其他内容\n- 不要超出场景简报的范围；不要自行新增具名角色"
+    },
+    {
+      "name": "en-trial",
+      "input": {
+        "guidance": "",
+        "premise": "A lighthouse keeper who never sleeps",
+        "sceneBrief": "The lamp fails during a storm",
+        "targetChars": 500,
+        "language": "en"
+      },
+      "expected": "Trial-write a passage under the bound style profile.\n\n(no style features bound)\n\n## Premise\nA lighthouse keeper who never sleeps\n\n## Scene brief\nThe lamp fails during a storm\n\nRequirements:\n- Around 500 characters of prose\n- Output a single TRIAL_CONTENT block and nothing else\n- Do not step outside the scene brief; do not invent named characters beyond it"
+    }
+  ],
+  "leak": [
+    {
+      "name": "multi-count-long-name-first",
+      "input": { "content": "萧炎看着萧家堡。萧炎笑了。", "protectedNames": ["萧炎", "萧家堡"], "minOccurrences": 1 },
+      "expected": [ { "name": "萧炎", "occurrences": 2 }, { "name": "萧家堡", "occurrences": 1 } ]
+    },
+    {
+      "name": "case-insensitive",
+      "input": { "content": "the dark forest calls. DARK FOREST!", "protectedNames": ["Dark Forest"], "minOccurrences": 1 },
+      "expected": [ { "name": "Dark Forest", "occurrences": 2 } ]
+    },
+    {
+      "name": "no-leak",
+      "input": { "content": "林动在青镇醒来。", "protectedNames": ["萧炎"], "minOccurrences": 1 },
+      "expected": []
+    },
+    {
+      "name": "empty-names",
+      "input": { "content": "任意正文", "protectedNames": [], "minOccurrences": 1 },
+      "expected": []
+    },
+    {
+      "name": "min-occurrences-filters",
+      "input": { "content": "斗气大陆一次。斗气大陆两次。", "protectedNames": ["斗气大陆"], "minOccurrences": 2 },
+      "expected": [ { "name": "斗气大陆", "occurrences": 2 } ]
+    },
+    {
+      "name": "empty-content",
+      "input": { "content": "", "protectedNames": ["萧炎"], "minOccurrences": 1 },
+      "expected": []
+    }
+  ],
+  "contract": {
+    "kinds": ["metric", "pattern", "rhetoric"],
+    "metricFeatureIds": ["metric:sentence-length", "metric:paragraph-length", "metric:vocabulary-diversity"],
+    "guidanceItemLimit": 12,
+    "defaults": { "minOccurrences": 1 }
+  }
+}
