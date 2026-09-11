@@ -1,0 +1,126 @@
+{
+  "_header": "防呆写出方言共享向量（G7c/332 号）。唯一事实源本文件；TS 断言 src/__tests__/golden-truth-dialect.test.ts，Rust 差分 engine-rs/tests/golden_truth_dialect_diff.rs。向量随方言演进而更新。",
+  "value": [
+    { "name": "plain-cjk", "input": "林动抵达青镇", "expected": "林动抵达青镇" },
+    { "name": "plain-ascii-space", "input": "stone valley", "expected": "stone valley" },
+    { "name": "leading-dash", "input": "-于起点", "expected": "\"-于起点\"" },
+    { "name": "colon-space", "input": "目标: 觉醒", "expected": "\"目标: 觉醒\"" },
+    { "name": "trailing-colon", "input": "章节:", "expected": "\"章节:\"" },
+    { "name": "hash-mid", "input": "战力 #1 的强者", "expected": "\"战力 #1 的强者\"" },
+    { "name": "hash-start", "input": "#1 强者", "expected": "\"#1 强者\"" },
+    { "name": "double-quote-inner", "input": "他说\"走\"便走", "expected": "\"他说\\\"走\\\"便走\"" },
+    { "name": "backslash", "input": "C:\\去", "expected": "\"C:\\\\去\"" },
+    { "name": "pipe", "input": "A|B", "expected": "\"A|B\"" },
+    { "name": "empty", "input": "", "expected": "\"\"" },
+    { "name": "padded-flatten-trims", "input": "  有空格  ", "expected": "有空格" },
+    { "name": "multiline-flattens", "input": "第一行\n第二行", "expected": "第一行 第二行" },
+    { "name": "multiline-colon-survives", "input": "第一行\n注: 尾", "expected": "\"第一行 注: 尾\"" },
+    { "name": "tab-flattens", "input": "甲\t乙", "expected": "甲 乙" },
+    { "name": "crlf-flattens", "input": "甲\r\n乙", "expected": "甲 乙" },
+    { "name": "numeric-int", "input": "42", "expected": "\"42\"" },
+    { "name": "numeric-float", "input": "3.14", "expected": "\"3.14\"" },
+    { "name": "numeric-signed", "input": "+7", "expected": "\"+7\"" },
+    { "name": "numeric-exponent", "input": "1e5", "expected": "\"1e5\"" },
+    { "name": "boolean-string", "input": "true", "expected": "\"true\"" },
+    { "name": "boolean-no-on", "input": "OFF", "expected": "\"OFF\"" },
+    { "name": "null-tilde", "input": "~", "expected": "\"~\"" },
+    { "name": "cjk-boolean-shape-safe", "input": "是", "expected": "是" },
+    { "name": "bracket-start", "input": "[H01, H02]", "expected": "\"[H01, H02]\"" },
+    { "name": "brace-start", "input": "{核心}", "expected": "\"{核心}\"" },
+    { "name": "gt-start", "input": "> 引用", "expected": "\"> 引用\"" },
+    { "name": "percent-start", "input": "%百分比", "expected": "\"%百分比\"" },
+    { "name": "at-start", "input": "@某人", "expected": "\"@某人\"" },
+    { "name": "asterisk-start", "input": "*强调*", "expected": "\"*强调*\"" },
+    { "name": "ampersand-start", "input": "&amp", "expected": "\"&amp\"" },
+    { "name": "exclaim-start", "input": "!重要", "expected": "\"!重要\"" },
+    { "name": "question-start", "input": "?疑问", "expected": "\"?疑问\"" },
+    { "name": "comma-start", "input": ",逗号", "expected": "\",逗号\"" },
+    { "name": "ideographic-comma-safe", "input": "、并列", "expected": "、并列" },
+    { "name": "backtick-start", "input": "`代码`", "expected": "\"`代码`\"" },
+    { "name": "single-quote-start", "input": "'单引", "expected": "\"'单引\"" },
+    { "name": "iso-timestamp-safe", "input": "2026-09-12T00:00:00.000Z", "expected": "2026-09-12T00:00:00.000Z" },
+    { "name": "dotfile-safe", "input": ".gitignore 样例", "expected": ".gitignore 样例" }
+  ],
+  "meta": [
+    {
+      "name": "parent-canon-production",
+      "input": [
+        ["parentBookId", "book-001"],
+        ["parentTitle", "夜港"],
+        ["generatedAt", "2026-09-12T00:00:00.000Z"]
+      ],
+      "expected": "---\nparentBookId: book-001\nparentTitle: 夜港\ngeneratedAt: 2026-09-12T00:00:00.000Z"
+    },
+    {
+      "name": "parent-title-dangerous-quote",
+      "input": [
+        ["parentBookId", "book-001"],
+        ["parentTitle", "破\"晓\"之战"],
+        ["generatedAt", "2026-09-12T00:00:00.000Z"]
+      ],
+      "expected": "---\nparentBookId: book-001\nparentTitle: \"破\\\"晓\\\"之战\"\ngeneratedAt: 2026-09-12T00:00:00.000Z"
+    },
+    {
+      "name": "fanfic-canon-production",
+      "input": [
+        ["sourceFile", "斗破苍穹.txt"],
+        ["fanficMode", "canon"],
+        ["generatedAt", "2026-09-12T00:00:00.000Z"]
+      ],
+      "expected": "---\nsourceFile: 斗破苍穹.txt\nfanficMode: canon\ngeneratedAt: 2026-09-12T00:00:00.000Z"
+    },
+    {
+      "name": "key-flattened-value-quoted",
+      "input": [["odd\nkey", "值: 含冒号空格"]],
+      "expected": "---\nodd key: \"值: 含冒号空格\""
+    }
+  ],
+  "list": [
+    {
+      "name": "basic",
+      "input": ["伏笔一", "伏笔二"],
+      "emptyMarker": "(无)",
+      "expected": "- 伏笔一\n- 伏笔二"
+    },
+    {
+      "name": "dangerous-quoted",
+      "input": ["- 开头破折号", "普通"],
+      "emptyMarker": "(无)",
+      "expected": "- \"- 开头破折号\"\n- 普通"
+    },
+    {
+      "name": "flatten-in-list",
+      "input": ["第一行\n第二行"],
+      "emptyMarker": "(无)",
+      "expected": "- 第一行 第二行"
+    },
+    {
+      "name": "empty-default-marker",
+      "input": [],
+      "emptyMarker": "(无)",
+      "expected": "(无)"
+    },
+    {
+      "name": "empty-custom-marker",
+      "input": [],
+      "emptyMarker": "(none)",
+      "expected": "(none)"
+    }
+  ],
+  "bom": [
+    { "name": "strips-leading", "input": "\uFEFF正文", "expected": "正文" },
+    { "name": "without-bom-unchanged", "input": "正文", "expected": "正文" },
+    { "name": "bom-only", "input": "\uFEFF", "expected": "" },
+    { "name": "bom-mid-kept", "input": "甲\uFEFF乙", "expected": "甲\uFEFF乙" },
+    { "name": "double-bom-strips-one", "input": "\uFEFF\uFEFF正文", "expected": "\uFEFF正文" }
+  ],  "contract": {
+    "version": 1,
+    "dialect": "inkos-truth-dialect",
+    "rules": [
+      "flat-single-line-scalars-only",
+      "dangerous-values-double-quoted-and-escaped",
+      "block-list-dash-prefix-per-line",
+      "strip-leading-utf8-bom-before-write"
+    ]
+  }
+}

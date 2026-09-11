@@ -62,6 +62,7 @@ import { buildBeatsPrompt, settleTimelineBeatsForChapter } from "./timeline-sett
 import { selectBookReferenceContext } from "../references/reference-context.js";
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { renderFlatMetaBlock, stripUtf8Bom } from "../utils/truth-dialect.js";
 import { toPosixPath } from "../utils/posix-path.js";
 import {
   createProductionRunSnapshot,
@@ -3029,16 +3030,14 @@ ${matrix}`,
       },
     ], this.currentActivatedSkills()), { temperature: 0.3, signal: this.currentAbortSignal() });
 
-    // Append deterministic meta block (LLM may hallucinate timestamps)
-    const metaBlock = [
-      "",
-      "---",
-      "meta:",
-      `  parentBookId: "${parentBookId}"`,
-      `  parentTitle: "${parentBook.title}"`,
-      `  generatedAt: "${new Date().toISOString()}"`,
-    ].join("\n");
-    const canon = response.content + metaBlock;
+    // 确定性 meta 块（LLM 会幻觉时间戳）——G7c/332 号防呆方言：
+    // 平铺 key: value + 危险值转义加引号（书名含引号不再破块），正文剥前导 BOM。
+    const metaBlock = `\n${renderFlatMetaBlock([
+      ["parentBookId", parentBookId],
+      ["parentTitle", parentBook.title],
+      ["generatedAt", new Date().toISOString()],
+    ])}`;
+    const canon = stripUtf8Bom(response.content) + metaBlock;
 
     await writeFile(join(storyDir, "parent_canon.md"), canon, "utf-8");
 

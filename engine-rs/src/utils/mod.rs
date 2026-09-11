@@ -50,6 +50,7 @@ pub mod spot_fix_patches;
 pub mod pov_filter;
 pub mod runtime_writer;
 pub mod story_markdown;
+pub mod truth_dialect;
 pub mod utc_time;
 pub mod writing_methodology;
 

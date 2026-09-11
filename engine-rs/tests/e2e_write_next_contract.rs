@@ -3375,9 +3375,9 @@ mod style55_e2e {
         .unwrap();
         assert!(canon.contains("# 正传正典"));
         assert!(canon.contains("斗气大陆"));
-        assert!(canon.contains("meta:"));
-        assert!(canon.contains("parentBookId: \"parent\""));
-        assert!(canon.contains("parentTitle: \"书parent\""));
+        // G7c/332 号防呆方言：平铺 meta 块，安全值不加引号。
+        assert!(canon.contains("\n---\nparentBookId: parent\n"));
+        assert!(canon.contains("parentTitle: 书parent"));
         // 父书章节样本 ≥500 → 目标书也生成风格指纹。
         assert!(root.join("books").join("target").join("story").join("style_guide.md").exists());
 
@@ -4111,7 +4111,7 @@ name: 萧炎
         let canon = std::fs::read_to_string(book.join("story").join("fanfic_canon.md")).unwrap();
         assert!(canon.contains("# 同人正典（《斗破苍穹》）"));
         assert!(canon.contains("斗气大陆，等级森严。"));
-        assert!(canon.contains("fanficMode: \"canon\""));
+        assert!(canon.contains("fanficMode: canon"));
         // 地基（fanfic 架构师输出）+ 角色卡 + 快照 0 + 空索引。
         assert!(book.join("story").join("outline").join("story_frame.md").exists());
         assert!(book.join("story").join("roles").join("主要角色").join("萧炎.md").exists());
@@ -4168,7 +4168,8 @@ name: 萧炎
         wait_for(book.join("chapters").join("index.json")).await;
         // 正传正典 + 地基（original 模式 + spinoff 上下文）。
         let parent_canon = std::fs::read_to_string(book.join("story").join("parent_canon.md")).unwrap();
-        assert!(parent_canon.contains("meta:"));
+        // G7c/332 号：平铺 meta 块（`---` + 顶层 key: value）。
+        assert!(parent_canon.contains("\n---\nparentBookId: parent\n"));
         assert!(book.join("story").join("outline").join("story_frame.md").exists());
         assert_eq!(subscriber.recv().await.unwrap().event, "spinoff:start");
         // spinoff:complete → book:created 顺序到达。

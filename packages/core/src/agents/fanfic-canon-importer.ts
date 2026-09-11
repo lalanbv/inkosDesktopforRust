@@ -1,5 +1,6 @@
 import { BaseAgent } from "./base.js";
 import type { FanficMode } from "../models/book.js";
+import { renderFlatMetaBlock, stripUtf8Bom } from "../utils/truth-dialect.js";
 
 export interface FanficCanonOutput {
   readonly worldRules: string;
@@ -96,7 +97,7 @@ ${source.compiled ? "\n注意：原作素材较长。下面输入是逐段读取
       { temperature: 0.3 },
     );
 
-    const content = response.content;
+    const content = stripUtf8Bom(response.content);
     const extract = (tag: string): string => {
       const regex = new RegExp(
         `=== SECTION: ${tag} ===\\s*([\\s\\S]*?)(?==== SECTION:|$)`,
@@ -111,13 +112,12 @@ ${source.compiled ? "\n注意：原作素材较长。下面输入是逐段读取
     const powerSystem = extract("power_system");
     const writingStyle = extract("writing_style");
 
-    const meta = [
-      "---",
-      "meta:",
-      `  sourceFile: "${sourceName}"`,
-      `  fanficMode: "${fanficMode}"`,
-      `  generatedAt: "${new Date().toISOString()}"`,
-    ].join("\n");
+    // G7c/332 号防呆方言：平铺 meta 块 + 危险值转义加引号。
+    const meta = renderFlatMetaBlock([
+      ["sourceFile", sourceName],
+      ["fanficMode", fanficMode],
+      ["generatedAt", new Date().toISOString()],
+    ]);
 
     const fullDocument = [
       `# 同人正典（《${sourceName}》）`,

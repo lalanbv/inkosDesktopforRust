@@ -32,6 +32,7 @@ use crate::server::books_routes::BooksRuntime;
 use crate::server::upload_common::store_project_upload;
 use crate::state::manager::StateManager;
 use crate::utils::language::WritingLanguage;
+use crate::utils::truth_dialect::{render_flat_meta_block, strip_utf8_bom};
 use crate::utils::utc_time::utc_now_iso;
 use crate::utils::writing_methodology::build_writing_methodology_section;
 
@@ -395,17 +396,20 @@ pub async fn import_canon(
         )
         .await?;
 
-    // 确定性 meta 块（LLM 会幻觉时间戳）。
-    let meta_block = [
-        "",
-        "---",
-        "meta:",
-        &format!("  parentBookId: \"{parent_book_id}\""),
-        &format!("  parentTitle: \"{}\"", parent_book.title),
-        &format!("  generatedAt: \"{}\"", utc_now_iso()),
-    ]
-    .join("\n");
-    let canon = format!("{content}{meta_block}", content = response.content);
+    // 确定性 meta 块（LLM 会幻觉时间戳）——G7c/332 号防呆方言：
+    // 平铺 key: value + 危险值转义加引号（书名含引号不再破块），正文剥前导 BOM。
+    let meta_block = format!(
+        "\n{}",
+        render_flat_meta_block(&[
+            ("parentBookId", &parent_book_id),
+            ("parentTitle", &parent_book.title),
+            ("generatedAt", &utc_now_iso()),
+        ])
+    );
+    let canon = format!(
+        "{content}{meta_block}",
+        content = strip_utf8_bom(&response.content)
+    );
 
     tokio::fs::write(story_dir.join("parent_canon.md"), &canon)
         .await

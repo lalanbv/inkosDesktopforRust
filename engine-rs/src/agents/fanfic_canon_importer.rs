@@ -8,6 +8,7 @@
 use crate::agents::continuity::ChatOutcome;
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::book::FanficMode;
+use crate::utils::truth_dialect::{render_flat_meta_block, strip_utf8_bom};
 use crate::utils::utc_time::utc_now_iso;
 
 const SOURCE_CHUNK_CHARS: usize = 50_000;
@@ -70,11 +71,12 @@ pub async fn import_from_text(
             0.3,
         )
         .await?;
-    let content = &response.content;
+    // G7c/332 号：正文剥前导 BOM 后再进 SECTION 提取。
+    let content = strip_utf8_bom(&response.content);
 
     let extract = |tag: &str| -> String {
         section_extract_re(tag)
-            .captures(content)
+            .captures(&content)
             .map(|caps| caps[1].trim().to_string())
             .unwrap_or_default()
     };
@@ -84,14 +86,12 @@ pub async fn import_from_text(
     let power_system = extract("power_system");
     let writing_style = extract("writing_style");
 
-    let meta = [
-        "---",
-        "meta:",
-        &format!("  sourceFile: \"{source_name}\""),
-        &format!("  fanficMode: \"{mode}\""),
-        &format!("  generatedAt: \"{}\"", utc_now_iso()),
-    ]
-    .join("\n");
+    // G7c/332 号防呆方言：平铺 meta 块 + 危险值转义加引号。
+    let meta = render_flat_meta_block(&[
+        ("sourceFile", &source_name),
+        ("fanficMode", mode),
+        ("generatedAt", &utc_now_iso()),
+    ]);
 
     let full_document = [
         format!("# 同人正典（《{source_name}》）"),
