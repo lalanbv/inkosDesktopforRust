@@ -1209,7 +1209,7 @@ async fn execute_spinoff_create(
     })?;
     let language = args.get("language").and_then(Value::as_str).map(String::from).or(parent.language.clone());
     let now = crate::utils::utc_time::utc_now_iso();
-    let book = crate::server::book_create_routes::build_studio_book_config_pub(
+    let mut book = crate::server::book_create_routes::build_studio_book_config_pub(
         &title,
         args.get("genre").and_then(Value::as_str).unwrap_or(parent.genre.as_str()),
         language.as_deref(),
@@ -1218,6 +1218,10 @@ async fn execute_spinoff_create(
         args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).or(Some(parent.chapter_word_count)),
         &now,
     );
+    // 对齐 TS createSpinoffBookTool→buildAgentBookConfig：工具路径的番外书
+    // 持久化 parentBookId（HTTP 端点 /spinoff/init 的 buildStudioBookConfig
+    // 不落——TS 双路本就分叉，此处逐路径对齐）。
+    book.parent_book_id = Some(parent_book_id.clone());
     if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
         return Err(pick(
             lang,

@@ -18265,6 +18265,53 @@ mod sub303_creation_domains_e2e {
         );
     }
 
+    /// 328 号：番外意图执行器持久化 parentBookId + 未显式字段继承父书
+    /// （对齐 TS createSpinoffBookTool→buildAgentBookConfig 的 parentBookId 展开）。
+    #[tokio::test]
+    async fn spinoff_intent_persists_parent_book_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+        for genre in ["xuanhuan", "other"] {
+            std::fs::write(
+                root.join("assets").join("genres").join(format!("{genre}.md")),
+                "---\nname: 测试题材\nid: test\nchapterTypes: [\"推进章\"]\nfatigueWords: []\nnumericalSystem: true\n---\n正文指导\n",
+            )
+            .unwrap();
+        }
+        // 父书 fixture：显式 targetChapters/chapterWordCount 供继承断言。
+        std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            r#"{"id":"b1","title":"斗破苍穹","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":24,"chapterWordCount":2500,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        let llm = spawn_mock303().await;
+        let payload = json!({
+            "spinoffCreate": { "title": "药老前传", "parentBookId": "b1", "direction": "药老的早年" }
+        });
+        let request = make_request("s328-spinoff", None, RequestedIntent::SpinoffCreate, &payload);
+        let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
+        match outcome {
+            Ok(outcome) => assert!(outcome.response_text.contains("番外创建完成"), "{}", outcome.response_text),
+            Err(err) => panic!("番外意图应执行成功：{}", err.message),
+        }
+        let config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("books").join("药老前传").join("book.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(config["parentBookId"], "b1", "{config}");
+        // 未显式给的字段继承父书（execute_spinoff_create or(parent.*) 语义）。
+        assert_eq!(config["targetChapters"], 24, "{config}");
+        assert_eq!(config["chapterWordCount"], 2500, "{config}");
+        assert_eq!(config["genre"], "xuanhuan", "{config}");
+        // 正传正典参照落盘（import_canon 产物）。
+        assert!(
+            root.join("books").join("药老前传").join("story").join("parent_canon.md").is_file(),
+            "parent_canon.md 未落盘"
+        );
+    }
+
     /// 308 号：已有书带章节、未显式给 resumeFrom → 拒绝（TS 防静默追加语义）。
     #[tokio::test]
     async fn continuation_import_existing_book_requires_resume_from() {
