@@ -1,0 +1,273 @@
+{
+  "_header": "实体名册+新专名确认卡共享向量（G7b/342 号，Phase B 批次二末项）。唯一事实源本文件；TS 断言 src/__tests__/golden-entity-roster.test.ts，Rust 差分 engine-rs/tests/golden_entity_roster_diff.rs。三选判定顺序：精确命中(大小写不敏感)跳过→编辑距离≤1 且候选≥2字→typo(high)→包含关系(短者≥2字)→alias(medium)→其余 new-entity(low)；卡排序 typo→alias→new，再按 confidence、candidate 码元序。",
+  "parse": [
+    {
+      "name": "full-entry",
+      "input": "# 实体名册（Entity Roster）\n\n## entity-1\n- name: 林动\n- aliases: 林小哥, 少年林动\n- kind: person\n- registeredAt: 1",
+      "expected": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [
+            "林小哥",
+            "少年林动"
+          ],
+          "kind": "person",
+          "registeredAt": 1
+        }
+      ]
+    },
+    {
+      "name": "kind-fallback-and-missing-registered",
+      "input": "## entity-2\n- name: 青镇\n- kind: 神秘类型\n- aliases: 青山镇",
+      "expected": [
+        {
+          "id": "entity-2",
+          "name": "青镇",
+          "aliases": [
+            "青山镇"
+          ],
+          "kind": "other",
+          "registeredAt": 0
+        }
+      ]
+    },
+    {
+      "name": "no-name-skipped",
+      "input": "## entity-3\n- aliases: 孤儿条目\n\n## entity-4\n- name: 神秘怀表\n- kind: item",
+      "expected": [
+        {
+          "id": "entity-4",
+          "name": "神秘怀表",
+          "aliases": [],
+          "kind": "item",
+          "registeredAt": 0
+        }
+      ]
+    }
+  ],
+  "render": [
+    {
+      "name": "roundtrip",
+      "input": [
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [
+            "林小哥"
+          ],
+          "kind": "person",
+          "registeredAt": 1
+        },
+        {
+          "id": "entity-2",
+          "name": "青镇",
+          "aliases": [],
+          "kind": "place",
+          "registeredAt": 2
+        }
+      ],
+      "expected": "# 实体名册（Entity Roster）\n\n## entity-1\n- name: 林动\n- aliases: 林小哥\n- kind: person\n- registeredAt: 1\n\n## entity-2\n- name: 青镇\n- aliases: \n- kind: place\n- registeredAt: 2"
+    }
+  ],
+  "candidates": [
+    {
+      "name": "dedupe-and-stopwords",
+      "input": [
+        {
+          "chapter": 1,
+          "characters": "林动, 王胖, 无"
+        },
+        {
+          "chapter": 2,
+          "characters": "林动、青镇 / 林动"
+        }
+      ],
+      "expected": [
+        "林动",
+        "王胖",
+        "青镇"
+      ]
+    }
+  ],
+  "resolve": [
+    {
+      "name": "mixed-actions-ordered",
+      "input": {
+        "candidates": [
+          "新角色墨老",
+          "林동",
+          "林动",
+          "青镇儿",
+          "王胖"
+        ],
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [
+              "林小哥"
+            ],
+            "kind": "person",
+            "registeredAt": 1
+          },
+          {
+            "id": "entity-2",
+            "name": "青镇",
+            "aliases": [],
+            "kind": "place",
+            "registeredAt": 2
+          },
+          {
+            "id": "entity-3",
+            "name": "王胖",
+            "aliases": [],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ]
+      },
+      "expected": [
+        {
+          "candidate": "林동",
+          "action": "typo",
+          "targetName": "林动",
+          "confidence": "high"
+        },
+        {
+          "candidate": "青镇儿",
+          "action": "alias",
+          "targetName": "青镇",
+          "confidence": "medium"
+        },
+        {
+          "candidate": "新角色墨老",
+          "action": "new-entity",
+          "confidence": "low"
+        }
+      ]
+    },
+    {
+      "name": "exact-and-alias-hit-skip",
+      "input": {
+        "candidates": [
+          "林动",
+          "林小哥",
+          "林小哥儿"
+        ],
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "林动",
+            "aliases": [
+              "林小哥"
+            ],
+            "kind": "person",
+            "registeredAt": 1
+          }
+        ]
+      },
+      "expected": [
+        {
+          "candidate": "林小哥儿",
+          "action": "alias",
+          "targetName": "林动",
+          "confidence": "medium"
+        }
+      ]
+    },
+    {
+      "name": "case-insensitive-exact-hit",
+      "input": {
+        "candidates": [
+          "DARK FOREST"
+        ],
+        "roster": [
+          {
+            "id": "entity-1",
+            "name": "Dark Forest",
+            "aliases": [],
+            "kind": "faction",
+            "registeredAt": 1
+          }
+        ]
+      },
+      "expected": []
+    },
+    {
+      "name": "empty-roster-all-new",
+      "input": {
+        "candidates": [
+          "甲",
+          "乙"
+        ],
+        "roster": []
+      },
+      "expected": [
+        {
+          "candidate": "乙",
+          "action": "new-entity",
+          "confidence": "low"
+        },
+        {
+          "candidate": "甲",
+          "action": "new-entity",
+          "confidence": "low"
+        }
+      ]
+    }
+  ],
+  "cardRender": [
+    {
+      "name": "zh",
+      "input": {
+        "cards": [
+          {
+            "candidate": "林동",
+            "action": "typo",
+            "targetName": "林动",
+            "confidence": "high"
+          },
+          {
+            "candidate": "墨老",
+            "action": "new-entity",
+            "confidence": "low"
+          }
+        ],
+        "language": "zh"
+      },
+      "expected": "本章发现未登记专名（新实体 / 别名 / 笔误）：\n- \"林동\" → 疑似 \"林动\" 的笔误？\n- \"墨老\" → 新实体？"
+    },
+    {
+      "name": "en",
+      "input": {
+        "cards": [
+          {
+            "candidate": "Mo Lao",
+            "action": "new-entity",
+            "confidence": "low"
+          }
+        ],
+        "language": "en"
+      },
+      "expected": "Unregistered proper nouns found in this chapter (new entity / alias / typo):\n- \"Mo Lao\" → new entity?"
+    }
+  ],
+  "contract": {
+    "actions": [
+      "new-entity",
+      "alias",
+      "typo"
+    ],
+    "kinds": [
+      "person",
+      "place",
+      "faction",
+      "item",
+      "other"
+    ],
+    "truthFile": "story/entity_roster.md",
+    "typoMaxDistance": 1,
+    "containmentMinChars": 2
+  }
+}

@@ -554,6 +554,17 @@ export {
 } from "./agents/researcher.js";
 export { filterHooks, filterSummaries, filterSubplots, filterEmotionalArcs, filterCharacterMatrix } from "./utils/context-filter.js";
 export {
+  editDistance,
+  extractCharacterCandidates,
+  parseEntityRoster,
+  renderEntityRoster,
+  renderRosterConfirmationCard,
+  resolveRosterCandidates,
+  type RosterCandidateCard,
+  type RosterCandidateAction,
+  type RosterEntity,
+} from "./utils/entity-roster.js";
+export {
   detectSecretLeaks,
   detectReaderRedundancy,
   parseInfoGapsMarkdown,
