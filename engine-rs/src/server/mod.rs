@@ -742,6 +742,15 @@ pub fn router_books(
             "/api/v1/task-routing",
             put(ops_routes::put_task_routing).with_state(books.clone()),
         )
+        // G6/353 号：导演会话读写（含 G9 续跑建议）。
+        .route(
+            "/api/v1/books/:id/director",
+            get(ops_routes::get_director).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/director",
+            put(ops_routes::put_director).with_state(books.clone()),
+        )
         // G4/340 号：写法档案池 + 书级绑定。
         .route(
             "/api/v1/style-profiles",

@@ -6,6 +6,7 @@ import { StyleBindingCard } from "../components/StyleBindingCard";
 import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import { RecallTestCard } from "../components/RecallTestCard";
 import { DeconstructPanel } from "../components/DeconstructPanel";
+import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -563,6 +564,9 @@ export function BookDetail({
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />
+
+      {/* G6/353 号：导演驾驶舱（灵感卡/运行模式/续跑建议）。 */}
+      <DirectorPanel bookId={bookId} />
 
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-border/40 pb-8">

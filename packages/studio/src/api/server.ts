@@ -3082,6 +3082,53 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  // G6/353 号：导演会话持久化 + G9 续跑建议注入（拉模式闭环）。
+  app.get("/api/v1/books/:id/director", async (c) => {
+    const id = c.req.param("id");
+    const dir = join(root, ".inkos", "director");
+    const path = join(dir, `${id}.json`);
+    let session: Record<string, unknown> | null = null;
+    try {
+      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      session = null;
+    }
+    let savedChapters = 0;
+    try {
+      savedChapters = (await state.loadChapterIndex(id)).length;
+    } catch {
+      savedChapters = 0;
+    }
+    const core = await import("@actalk/inkos-core");
+    const resumeAdvice = core.formatResumeHint(savedChapters, "en");
+    return c.json({ session, savedChapters, resumeAdvice });
+  });
+
+  app.put("/api/v1/books/:id/director", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<Record<string, unknown>>();
+    const runMode = body.runMode;
+    if (runMode !== undefined && !["ready-stop", "range", "full-book"].includes(String(runMode))) {
+      return c.json({ error: "invalid runMode" }, 400);
+    }
+    const dir = join(root, ".inkos", "director");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}.json`);
+    let session: Record<string, unknown> = {};
+    try {
+      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      session = { bookId: id };
+    }
+    for (const key of ["inspiration", "directions", "selectedDirection", "runMode", "stage", "plan"] as const) {
+      if (body[key] !== undefined) session[key] = body[key];
+    }
+    session.updatedAt = new Date().toISOString();
+    if (!session.bookId) session.bookId = id;
+    await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
+    return c.json({ ok: true, session });
+  });
+
   // G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
   app.post("/api/v1/books/:id/hybrid-search", async (c) => {
     const id = c.req.param("id");

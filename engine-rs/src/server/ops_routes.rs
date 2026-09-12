@@ -849,6 +849,85 @@ pub async fn post_deconstruct(
     (StatusCode::OK, Json(payload)).into_response()
 }
 
+/// G6/353 号：导演会话读取（.inkos/director/{bookId}.json；缺省 null）+ 续跑建议。
+pub async fn get_director(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let path = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("director")
+        .join(format!("{book_id}.json"));
+    let session = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    let saved_chapters = runtime
+        .state
+        .load_chapter_index(&book_id)
+        .await
+        .map(|index| index.len() as i64)
+        .unwrap_or(0);
+    let resume_advice = crate::utils::resume_advice::format_resume_hint(saved_chapters, Some("en"));
+    (
+        StatusCode::OK,
+        Json(json!({ "session": session, "savedChapters": saved_chapters, "resumeAdvice": resume_advice })),
+    )
+        .into_response()
+}
+
+/// G6/353 号：保存导演会话（合并写回；runMode 白名单校验）。
+#[derive(Debug, serde::Deserialize)]
+pub struct PutDirectorBody {
+    #[serde(default)]
+    pub patch: Value,
+}
+
+pub async fn put_director(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<PutDirectorBody>,
+) -> impl IntoResponse {
+    const ALLOWED: [&str; 6] = [
+        "inspiration",
+        "directions",
+        "selectedDirection",
+        "runMode",
+        "stage",
+        "plan",
+    ];
+    if let Some(mode) = body.patch.get("runMode").and_then(Value::as_str) {
+        if !["ready-stop", "range", "full-book"].contains(&mode) {
+            return flat_error(StatusCode::BAD_REQUEST, String::from("invalid runMode"));
+        }
+    }
+    let dir = runtime.state.project_root().join(".inkos").join("director");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let path = dir.join(format!("{book_id}.json"));
+    let mut session: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({ "bookId": book_id }));
+    if let (Some(session_obj), Some(patch_obj)) = (session.as_object_mut(), body.patch.as_object()) {
+        for (key, value) in patch_obj {
+            if ALLOWED.contains(&key.as_str()) {
+                session_obj.insert(key.clone(), value.clone());
+            }
+        }
+        session_obj.insert("updatedAt".into(), json!(crate::interaction::session::utc_now_ms()));
+        session_obj
+            .entry("bookId".to_string())
+            .or_insert_with(|| json!(book_id));
+    }
+    if let Err(error) = std::fs::write(&path, serde_json::to_string_pretty(&session).unwrap_or_default()) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    (StatusCode::OK, Json(json!({ "ok": true, "session": session }))).into_response()
+}
+
 /// G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
