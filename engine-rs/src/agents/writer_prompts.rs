@@ -241,7 +241,7 @@ fn build_governed_input_contract(language: WritingLanguage, governed: bool) -> S
 
 // --- 章节备忘对齐 ---------------------------------------------------------------------
 
-fn build_chapter_memo_contract(language: WritingLanguage, governed: bool) -> String {
+pub fn build_chapter_memo_contract(language: WritingLanguage, governed: bool) -> String {
     if !governed {
         return String::new();
     }
@@ -257,6 +257,7 @@ You will receive a chapter_memo composed of 7 markdown sections:
 - ## 日常/过渡承担什么任务 → function map for non-conflict passages ([passage location] → [function])
 - ## 关键抉择过三连问 → three-question check every key character choice must pass
 - ## 章尾必须发生的改变 → 1-3 concrete changes the ending must deliver (info / relation / physical / power)
+- ## 读者体验合同 → the 7-field reader experience contract (previousHandoff / readerQuestion / promisePayoff / protagonistWant / protagonistObstacle / sceneTurn / endingNetChange) + title candidates. The opening must genuinely pick up the action / suspense named by previousHandoff without restarting the scene; the ending must make endingNetChange visible on the page; title candidates are REFERENCE ONLY for CHAPTER_TITLE — take the direction that best serves this chapter's goal and read-through hook, and writing a better one yourself is allowed
 - ## 本章 hook 账 → **hard correspondence rule**: each hook_id listed under advance/resolve MUST have a **concretely locatable payoff scene** in the prose — explicit characters acting on or talking about a specific object/event/piece of information, with observable actions. No "sideways hints" or "deferred to next chapter". Example: if the memo says 'advance: H007 Huzi's IOU → planted → pressured', the prose must contain a scene where Lin Qiu actually touches / sees / picks up that specific IOU and does something. An inner mention like "he remembered the IOU was still in the drawer" does NOT count. Each advance/resolve payoff scene must be at least 60 chars. Entries under defer need no prose. Entries under open only need a natural new-hook seed near the chapter end
 - ## 不要做 → hard prohibitions for this chapter
 
@@ -273,6 +274,7 @@ Address each section in order when drafting the chapter. Every section must leav
 - ## 日常/过渡承担什么任务 → 非冲突段落的功能映射（[段落位置] → [承担功能]）
 - ## 关键抉择过三连问 → 关键人物选择必须过的检查
 - ## 章尾必须发生的改变 → 结尾落地的 1-3 条具体改变（信息/关系/物理/权力）
+- ## 读者体验合同 → 七字段读者体验合同（开头承接/读者问题/承诺兑现/主角欲求/主角障碍/场景转折/章末净变化）+ 章名候选。开头必须真实接住"开头承接"指向的动作/悬念，不重启场景；章末必须让"章末净变化"可见可感；章名候选只作 CHAPTER_TITLE 参考——取最服务本章目标与追读钩子的方向，允许自拟更好的
 - ## 本章 hook 账 → **硬对应规则**：advance/resolve 下面列出的每一个 hook_id 都必须在正文里有一个**具体可定位的兑现段**——写明人物对着什么物件/事件/信息做出什么可观察的动作或交谈。不允许"侧面暗示""留给下章"。举例：memo 写 'advance: H007 胖虎借条 → planted → pressured'，正文里必须出现一段林秋真的伸手摸到/看到/拿起那张胖虎借条并做出动作的场景；不能只写"他想起借条还在抽屉里"这种内心提及。每个 advance/resolve 的 hook 兑现段至少 60 字。defer 下的不用落，open 段只需要在章末附近安排一个自然引出的新悬念即可
 - ## 不要做 → 硬约束红线
 

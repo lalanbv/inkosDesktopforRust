@@ -164,7 +164,7 @@ fn dimension_labels() -> &'static HashMap<u32, DimensionLabel> {
     static M: OnceLock<HashMap<u32, DimensionLabel>> = OnceLock::new();
     M.get_or_init(|| {
         let mut m = HashMap::new();
-        let entries: [(u32, &str, &str); 39] = [
+        let entries: [(u32, &str, &str); 40] = [
             (1, "OOC检查", "OOC Check"),
             (2, "时间线检查", "Timeline Check"),
             (3, "设定冲突", "Lore Conflict Check"),
@@ -205,6 +205,8 @@ fn dimension_labels() -> &'static HashMap<u32, DimensionLabel> {
             // G7a/341 号：信息差账本两维度（story/info_gaps.md 存在时激活）。
             (38, "泄密机检", "Secret Leak Check"),
             (39, "废笔机检", "Reader Redundancy Check"),
+            // R1/357 号：追读承接检查（memo 携带读者体验合同时激活）。
+            (40, "追读承接检查", "Reader Handoff Check"),
         ];
         for (id, zh, en) in entries {
             m.insert(id, DimensionLabel { zh, en });
@@ -424,6 +426,13 @@ pub fn build_dimension_note(
                 "对照随章提供的 chapter_memo。成稿是否兑现了 memo 中的 goal，并在 7 段正文（当前任务 / 该兑现·暂不掀 / 日常过渡功能 / 关键抉择三连问 / 章尾必须发生的改变 / 不要做 等）中留下可见落地痕迹？任何段落缺失或被写反 → critical。提醒：稀疏 memo 合法（喘息章 memo 可以只有 goal + 骨架 body），只检查 memo 实际写出的段落，不能因为 memo 稀疏就判 incomplete。".to_string()
             }
         }
+        40 => {
+            if language == WritingLanguage::En {
+                "Cross-check the memo's Reader Experience Contract (读者体验合同): (1) does the chapter opening genuinely pick up previousHandoff — continuing the prior chapter's final action / suspense / emotion without restarting the scene; (2) does the prose actually tighten readerQuestion — the suspense this chapter promised to push; (3) does the ending land endingNetChange as a visible net change in information / pressure / relationship / goal / risk; (4) does sceneTurn actually occur in the prose. Judge only against fields the contract populates; if the memo carries no contract, skip this dimension entirely.".to_string()
+            } else {
+                "对照 memo 的读者体验合同：①开头是否真实接住「开头承接」——延续上一章结尾的动作/悬念/情绪，不重启场景；②正文是否真的推紧「读者问题」——本章承诺要压紧的那个悬念；③章尾是否让「章末净变化」可见——信息/压力/关系/目标/风险的净变化落在纸面上；④「场景转折」是否真实发生。只按合同实际写出的字段判；memo 未携带合同时跳过本维度。".to_string()
+            }
+        }
         34..=37 => {
             let Some(cfg) = fanfic_config else {
                 return String::new();
@@ -488,6 +497,7 @@ pub fn build_dimension_list(
     has_parent_canon: bool,
     fanfic_mode: Option<FanficMode>,
     has_info_gaps: bool,
+    has_reader_experience: bool,
 ) -> Vec<DimensionEntry> {
     let mut active_ids: Vec<f64> = Vec::new();
     let add = |id: f64, ids: &mut Vec<f64>| {
@@ -530,6 +540,11 @@ pub fn build_dimension_list(
     if has_info_gaps {
         add(38.0, &mut active_ids);
         add(39.0, &mut active_ids);
+    }
+
+    // R1/357 号：memo 携带读者体验合同 → 追读承接检查(40) 激活。
+    if has_reader_experience {
+        add(40.0, &mut active_ids);
     }
 
     // 条件覆盖。
@@ -1053,6 +1068,10 @@ pub async fn audit_chapter(
     };
     let has_info_gaps_file = info_gaps_raw != MISSING_FILE && !info_gaps_raw.trim().is_empty();
     let has_info_gaps = has_info_gaps_file;
+    let has_reader_experience = options
+        .chapter_memo
+        .as_ref()
+        .is_some_and(|memo| memo.reader_experience.is_some());
     let dimensions = build_dimension_list(
         &gp,
         book_rules,
@@ -1060,6 +1079,7 @@ pub async fn audit_chapter(
         has_parent_canon,
         fanfic_mode,
         has_info_gaps,
+        has_reader_experience,
     );
     let dim_list = dimensions
         .iter()
@@ -1458,14 +1478,14 @@ mod tests {
     }
 
     #[test]
-    fn dimension_name_covers_all_39_in_both_languages() {
-        // G7a/341 号：维度表扩至 39（38 泄密机检 / 39 废笔机检）。
-        for id in 1..=39u32 {
+    fn dimension_name_covers_all_40_in_both_languages() {
+        // G7a/341 号：维度表扩至 39；R1/357 号：扩至 40（追读承接检查）。
+        for id in 1..=40u32 {
             assert!(dimension_name(id, WritingLanguage::Zh).is_some(), "维度 {id} 缺中文");
             assert!(dimension_name(id, WritingLanguage::En).is_some(), "维度 {id} 缺英文");
         }
         assert_eq!(dimension_name(0, WritingLanguage::Zh), None);
-        assert_eq!(dimension_name(40, WritingLanguage::En), None);
+        assert_eq!(dimension_name(41, WritingLanguage::En), None);
     }
 
     #[test]
@@ -1706,7 +1726,7 @@ mod tests {
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert_eq!(ids, vec![1, 4, 5, 6, 10, 27, 32, 33]);
 
@@ -1718,7 +1738,7 @@ mod tests {
     #[test]
     fn dimension_list_always_active_32_33_and_sorted() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         // gp.auditDimensions [1,6,10] + 恒加 [32,33]。
         assert_eq!(ids, vec![1, 6, 10, 32, 33]);
@@ -1728,7 +1748,7 @@ mod tests {
     fn dimension_list_era_research_adds_12() {
         let mut gp = test_gp();
         gp.era_research = true;
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, false, None, false, false);
         assert!(dims.iter().any(|d| d.id == 12));
 
         // eraConstraints.enabled 同样触发。
@@ -1741,19 +1761,19 @@ mod tests {
             }),
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
         assert!(dims.iter().any(|d| d.id == 12));
     }
 
     #[test]
     fn dimension_list_parent_canon_adds_spinoff_dims_unless_fanfic() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, None, false);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, None, false, false);
         assert!(dims.iter().any(|d| d.id == 28));
         assert!(dims.iter().any(|d| d.id == 31));
 
         // 同人模式下不激活番外维度，改激活同人维度 34-37。
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, Some(FanficMode::Au), false);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, Some(FanficMode::Au), false, false);
         assert!(!dims.iter().any(|d| (28..=31).contains(&d.id)));
         assert!(dims.iter().any(|d| (34..=37).contains(&d.id)));
     }
@@ -1769,7 +1789,7 @@ mod tests {
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false);
+        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert!(ids.contains(&2));
         // "pacing" 小写包含于… TS includes 区分大小写：name "Pacing Check" 不含 "pacing"，
@@ -1781,7 +1801,7 @@ mod tests {
     #[test]
     fn dimension_list_note_rendering_language() {
         let gp = test_gp();
-        let dims = build_dimension_list(&gp, None, WritingLanguage::En, false, None, false);
+        let dims = build_dimension_list(&gp, None, WritingLanguage::En, false, None, false, false);
         let d1 = dims.iter().find(|d| d.id == 1).unwrap();
         assert_eq!(d1.name, "OOC Check");
         assert!(d1.note.is_empty()); // 维度 1 无 fanfic → 无注记
@@ -2348,6 +2368,7 @@ mod tests {
                 is_golden_opening: false,
                 body: "## 当前任务\n拿下城主之位".to_string(),
                 thread_refs: vec![],
+                reader_experience: None,
             }),
             context_package: Some(ContextPackage::default()),
             rule_stack: Some(RuleStack::default()),

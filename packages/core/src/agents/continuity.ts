@@ -85,6 +85,7 @@ const DIMENSION_LABELS: Record<number, { readonly zh: string; readonly en: strin
   37: { zh: "正典事件一致性", en: "Canon Event Consistency Check" },
   38: { zh: "泄密机检", en: "Secret Leak Check" },
   39: { zh: "废笔机检", en: "Reader Redundancy Check" },
+  40: { zh: "追读承接检查", en: "Reader Handoff Check" },
 };
 
 function containsChinese(text: string): boolean {
@@ -268,6 +269,10 @@ description 中要明确引用 hook_id，并把状态列中 stale / blocked 的�
       return language === "en"
         ? "Cross-check the chapter_memo provided with the chapter. Does the final prose deliver the memo's goal and leave a visible trace for every one of the 7 sections it contains (tasks, pay-offs / held-back cards, daily/transition function map, three-question check, end-of-chapter concrete changes, hard-don'ts)? Missing or contradicted sections -> critical. Note: a sparse memo (breather chapter, goal + skeleton body only) is legitimate — only flag drift against sections that the memo actually populates. Never flag the memo itself for being sparse."
         : "对照随章提供的 chapter_memo。成稿是否兑现了 memo 中的 goal，并在 7 段正文（当前任务 / 该兑现·暂不掀 / 日常过渡功能 / 关键抉择三连问 / 章尾必须发生的改变 / 不要做 等）中留下可见落地痕迹？任何段落缺失或被写反 → critical。提醒：稀疏 memo 合法（喘息章 memo 可以只有 goal + 骨架 body），只检查 memo 实际写出的段落，不能因为 memo 稀疏就判 incomplete。";
+    case 40:
+      return language === "en"
+        ? "Cross-check the memo's Reader Experience Contract (读者体验合同): (1) does the chapter opening genuinely pick up previousHandoff — continuing the prior chapter's final action / suspense / emotion without restarting the scene; (2) does the prose actually tighten readerQuestion — the suspense this chapter promised to push; (3) does the ending land endingNetChange as a visible net change in information / pressure / relationship / goal / risk; (4) does sceneTurn actually occur in the prose. Judge only against fields the contract populates; if the memo carries no contract, skip this dimension entirely."
+        : "对照 memo 的读者体验合同：①开头是否真实接住「开头承接」——延续上一章结尾的动作/悬念/情绪，不重启场景；②正文是否真的推紧「读者问题」——本章承诺要压紧的那个悬念；③章尾是否让「章末净变化」可见——信息/压力/关系/目标/风险的净变化落在纸面上；④「场景转折」是否真实发生。只按合同实际写出的字段判；memo 未携带合同时跳过本维度。";
     case 34:
     case 35:
     case 36:
@@ -292,13 +297,14 @@ description 中要明确引用 hook_id，并把状态列中 stale / blocked 的�
   }
 }
 
-function buildDimensionList(
+export function buildDimensionList(
   gp: GenreProfile,
   bookRules: BookRules | null,
   language: PromptLanguage,
   hasParentCanon = false,
   fanficMode?: FanficMode,
   hasInfoGaps = false,
+  hasReaderExperience = false,
 ): ReadonlyArray<{ readonly id: number; readonly name: string; readonly note: string }> {
   const activeIds = new Set(gp.auditDimensions);
 
@@ -340,6 +346,11 @@ function buildDimensionList(
   if (hasInfoGaps) {
     activeIds.add(38);
     activeIds.add(39);
+  }
+
+  // R1/357 号：memo 携带读者体验合同 → 追读承接检查(40) 激活。
+  if (hasReaderExperience) {
+    activeIds.add(40);
   }
 
   // Conditional overrides
@@ -454,7 +465,8 @@ export class ContinuityAuditor extends BaseAgent {
     const isEnglish = resolvedLanguage === "en";
     const fanficMode = hasFanficCanon ? (bookRules?.fanficMode as FanficMode | undefined) : undefined;
     const hasInfoGaps = infoGapsRaw !== "(文件不存在)" && infoGapsRaw.trim().length > 0;
-    const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode, hasInfoGaps);
+    const hasReaderExperience = Boolean(options?.chapterMemo?.readerExperience);
+    const dimensions = buildDimensionList(gp, bookRules, resolvedLanguage, hasParentCanon, fanficMode, hasInfoGaps, hasReaderExperience);
     const dimList = dimensions
       .map((d) => `${d.id}. ${d.name}${d.note ? (isEnglish ? ` (${d.note})` : `（${d.note}）`) : ""}`)
       .join("\n");

@@ -1,4 +1,4 @@
-import { ChapterMemoSchema, type ChapterMemo } from "../models/input-governance.js";
+import { ChapterMemoSchema, ReaderExperienceSchema, type ChapterMemo, type ReaderExperience } from "../models/input-governance.js";
 
 export class PlannerParseError extends Error {
   constructor(message: string) {
@@ -43,6 +43,113 @@ const REQUIRED_SECTIONS: ReadonlyArray<RequiredSection> = [
 
 const GOAL_HEADINGS = ["## 本章目标", "## Chapter goal"] as const;
 const THREAD_HEADINGS = ["## 关联线索", "## Thread refs", "## Related threads"] as const;
+
+// ---------------------------------------------------------------------------
+// R1 读者体验合同（357 号）——「读者体验合同」节的可选结构化提取。
+//
+// 兼容性策略：该节**不进** REQUIRED_SECTIONS。persisted-governed-plan 会重放
+// 解析存量 intent markdown，旧书 memo 没有这一节，必填化会把历史计划全部判死。
+// 因此节存在且七个叙事字段齐全才产出 readerExperience，否则为 undefined，
+// 审稿维度 40（追读承接）随之跳过。字段值截断到 200 UTF-16 码元后入 schema。
+// ---------------------------------------------------------------------------
+
+const CONTRACT_HEADINGS = ["## 读者体验合同", "## Reader experience contract"] as const;
+
+const CONTRACT_MAX_FIELD_UNITS = 200;
+const CONTRACT_MAX_TITLE_UNITS = 60;
+
+interface ContractFieldSpec {
+  readonly key: keyof Omit<ReaderExperience, "titleCandidates">;
+  readonly zh: string;
+  readonly en: string;
+}
+
+const CONTRACT_FIELDS: ReadonlyArray<ContractFieldSpec> = [
+  { key: "previousHandoff", zh: "开头承接", en: "previousHandoff" },
+  { key: "readerQuestion", zh: "读者问题", en: "readerQuestion" },
+  { key: "promisePayoff", zh: "承诺兑现", en: "promisePayoff" },
+  { key: "protagonistWant", zh: "主角欲求", en: "protagonistWant" },
+  { key: "protagonistObstacle", zh: "主角障碍", en: "protagonistObstacle" },
+  { key: "sceneTurn", zh: "场景转折", en: "sceneTurn" },
+  { key: "endingNetChange", zh: "章末净变化", en: "endingNetChange" },
+];
+
+const CONTRACT_TITLE_LABELS = ["章名候选", "titleCandidates"] as const;
+
+function utf16Truncate(value: string, maxUnits: number): string {
+  let units = 0;
+  let out = "";
+  for (const char of value) {
+    const len = char.length;
+    if (units + len > maxUnits) break;
+    out += char;
+    units += len;
+  }
+  return out.trim();
+}
+
+/** 取合同节的原始行（不折叠空白，与 extractSectionContent 的折叠版不同）。 */
+function extractContractSectionLines(body: string): string[] {
+  for (const heading of CONTRACT_HEADINGS) {
+    const start = body.indexOf(heading);
+    if (start < 0) continue;
+    const after = body.slice(start + heading.length);
+    const next = after.match(/\n##\s/);
+    const raw = next ? after.slice(0, next.index) : after;
+    return raw.split("\n").map((line) => line.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function matchContractField(line: string, labels: ReadonlyArray<string>): string | undefined {
+  const match = line.match(/^(?:-\s*)?(.+?)\s*[：:]\s*(.*)$/);
+  if (!match) return undefined;
+  const label = match[1]!.trim();
+  if (!labels.some((candidate) => label.toLowerCase() === candidate.toLowerCase())) return undefined;
+  return match[2]!.trim();
+}
+
+/**
+ * 从 memo body 提取读者体验合同。七个叙事字段全部命中才产出完整合同，
+ * 缺任一字段返回 undefined（整节视为未携带）。titleCandidates 可选，
+ * 按 ｜ / ｜、/ 分隔，最多取 3 个。
+ */
+function extractReaderExperience(body: string): ReaderExperience | undefined {
+  const lines = extractContractSectionLines(body);
+  if (lines.length === 0) return undefined;
+
+  const values = new Map<string, string>();
+  for (const line of lines) {
+    for (const field of CONTRACT_FIELDS) {
+      if (values.has(field.key)) continue;
+      const value = matchContractField(line, [field.zh, field.en]);
+      if (value !== undefined && value.length > 0) {
+        values.set(field.key, value);
+      }
+    }
+  }
+  if (values.size < CONTRACT_FIELDS.length) return undefined;
+
+  const titleCandidates: string[] = [];
+  for (const line of lines) {
+    const value = matchContractField(line, CONTRACT_TITLE_LABELS);
+    if (value === undefined) continue;
+    for (const part of value.split(/[｜|、／]/)) {
+      const cleaned = part.trim();
+      if (cleaned.length === 0) continue;
+      if (titleCandidates.includes(cleaned)) continue;
+      titleCandidates.push(utf16Truncate(cleaned, CONTRACT_MAX_TITLE_UNITS));
+      if (titleCandidates.length >= 3) break;
+    }
+    break;
+  }
+
+  const record: Record<string, string> = {};
+  for (const field of CONTRACT_FIELDS) {
+    record[field.key] = utf16Truncate(values.get(field.key)!, CONTRACT_MAX_FIELD_UNITS);
+  }
+  return ReaderExperienceSchema.parse({ ...record, titleCandidates });
+}
 
 /**
  * Extract the content between `heading` and the next `## ...` heading (or
@@ -189,11 +296,13 @@ export function parseMemo(
     throw new PlannerParseError(`empty sections: ${detail}`);
   }
 
+  const readerExperience = extractReaderExperience(body);
   return ChapterMemoSchema.parse({
     chapter: expectedChapter,
     goal: displayGoal,
     isGoldenOpening,
     body: prependFullGoalIfNeeded(markdown, body, goal, displayGoal),
     threadRefs,
+    ...(readerExperience ? { readerExperience } : {}),
   });
 }

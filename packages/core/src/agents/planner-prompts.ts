@@ -75,6 +75,17 @@ export const PLANNER_MEMO_SYSTEM_PROMPT = `你是这本小说的创作总编，�
 ## 章尾必须发生的改变
 <1-3 条，从以下维度选：信息改变 / 关系改变 / 物理改变 / 权力改变>
 
+## 读者体验合同
+<8 行，每行一个字段，格式"- 字段：内容"，每个字段 ≤50 字。这是写作/审稿/修稿三端共用的读者体验合同，缺行会导致下游校验不通过：>
+- 开头承接：本章开头如何接住上一章结尾（承接什么动作/悬念/情绪，不重复摘要）
+- 读者问题：本章要推紧的那个读者悬念/期待是什么
+- 承诺兑现：本章对读者承诺兑现/推进了什么（对应 hook 账的 advance/resolve）
+- 主角欲求：主角本章想要什么
+- 主角障碍：阻止他的是什么
+- 场景转折：场景/局面在哪里发生转折
+- 章末净变化：合上这一章时，信息/压力/关系/目标/风险的净变化一句话
+- 章名候选：候选1 ｜ 候选2 ｜ 候选3（章名服务本章目标+追读钩子，≤15字，不用书名号，用"｜"分隔）
+
 ## 本章 hook 账
 **这是本章对活跃伏笔的账本，写手必须按这份账动作。格式如下（每个分类下用 - 列表）：**
 
@@ -103,6 +114,7 @@ defer:
 ## 输出要求
 
 - "## 本章目标" 不超过 50 字
+- "## 读者体验合同" 八行齐全、每行一个字段（七个叙事字段各 ≤50 字）；章名候选 2-3 个、用"｜"分隔
 - "## 关联线索" 用 Markdown 列表写从输入 pending_hooks/subplot_board 中挑出的 id；没有就写"无"
 - "## 场景与篇幅预算" 按 2-5 个真实场景分配篇幅，各场景预算合计应落在输入的章节硬区间内；禁止用总结、重复内心戏或新增支线凑字数
 - 每个二级标题（##）必须出现，内容不能为空
@@ -186,6 +198,17 @@ if this is a pressure / conflict chapter, write "n/a — pressure chapter, no tr
 ## Required end-of-chapter change
 <1-3 items, choose from: information change / relationship change / physical change / power change>
 
+## Reader experience contract
+<8 lines, one field per line, format "- field: content", each field ≤50 words. This contract is shared by the writer / reviewer / reviser ends; a missing line fails downstream validation:>
+- previousHandoff: how the opening picks up the previous chapter's ending (the action / suspense / emotion it continues — no recap)
+- readerQuestion: the reader suspense / expectation this chapter tightens
+- promisePayoff: which reader promise this chapter pays off or advances (matches the hook ledger's advance/resolve)
+- protagonistWant: what the protagonist wants this chapter
+- protagonistObstacle: what stands in the way
+- sceneTurn: where the scene / situation turns
+- endingNetChange: one sentence for the net change in information / pressure / relationship / goal / risk when the chapter closes
+- titleCandidates: candidate1 | candidate2 | candidate3 (titles serve this chapter's goal + read-through hook, ≤15 words each, no book-title marks, separated by " | ")
+
 ## Hook ledger for this chapter
 **The per-chapter accounting of active foreshadows. The writer must act on this ledger. Format (use "-" bullets under each subsection):**
 
@@ -214,6 +237,7 @@ defer:
 ## Output requirements
 
 - "## Chapter goal" is no more than 50 characters
+- "## Reader experience contract" has all 8 lines, one field per line (each of the 7 narrative fields ≤50 words); 2-3 title candidates separated by " | "
 - "## Thread refs" is a Markdown bullet list of ids picked from the input pending_hooks / subplot_board; write "none" if empty
 - "## Scene and length budget" allocates the requested length across 2-5 real scenes. The scene budgets must total within the supplied hard range. Never pad with recap, repeated interiority, or a new subplot.
 - Every level-2 heading (##) must appear; none may be empty

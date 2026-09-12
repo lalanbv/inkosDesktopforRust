@@ -68,6 +68,26 @@ export function renderMemoAsNarrativeBlock(
     sections.push(`## ${isEn ? "Thread Refs" : "关联线索"}\n${threads}`);
   }
 
+  // R1 读者体验合同（357 号）：memo 携带结构化合同时，把它升级为顶层任务块，
+  // writer 照它写、reviser 照它修；不携带时静默跳过（旧 memo / 稀疏 memo）。
+  if (memo.readerExperience) {
+    const re = memo.readerExperience;
+    const fields: ReadonlyArray<readonly [string, string]> = [
+      [isEn ? "previousHandoff" : "开头承接", re.previousHandoff],
+      [isEn ? "readerQuestion" : "读者问题", re.readerQuestion],
+      [isEn ? "promisePayoff" : "承诺兑现", re.promisePayoff],
+      [isEn ? "protagonistWant" : "主角欲求", re.protagonistWant],
+      [isEn ? "protagonistObstacle" : "主角障碍", re.protagonistObstacle],
+      [isEn ? "sceneTurn" : "场景转折", re.sceneTurn],
+      [isEn ? "endingNetChange" : "章末净变化", re.endingNetChange],
+    ];
+    const lines = fields.map(([label, value]) => `- ${label}：${s(value)}`);
+    if (re.titleCandidates.length > 0) {
+      lines.push(`- ${isEn ? "titleCandidates" : "章名候选"}：${re.titleCandidates.join(" ｜ ")}`);
+    }
+    sections.push(`## ${isEn ? "Reader Experience Contract" : "读者体验合同"}\n${lines.join("\n")}`);
+  }
+
   if (memo.isGoldenOpening) {
     sections.push(
       `## ${isEn ? "Golden Opening" : "黄金开场"}\n- ${isEn ? "This is a golden opening chapter — prioritize hook-dense, high-tempo pacing." : "本章是黄金开场章——优先钩子密集、高节奏。"}`,

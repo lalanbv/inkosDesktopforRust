@@ -9,6 +9,26 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
 
+/// R1 读者体验合同（357 号）——memo「读者体验合同」节的结构化提取产物。
+///
+/// 字段契约对齐 TS `ReaderExperienceSchema`：七个叙事字段各 ≤200 UTF-16 码元
+/// （解析器截断后入型，避免 LLM 偶发超长触发重试风暴）；titleCandidates 为
+/// 章名候选（≤3 个，各 ≤60 码元），服务"目标 + 追读钩子"。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderExperience {
+    pub previous_handoff: String,
+    pub reader_question: String,
+    pub promise_payoff: String,
+    pub protagonist_want: String,
+    pub protagonist_obstacle: String,
+    pub scene_turn: String,
+    pub ending_net_change: String,
+    pub title_candidates: Vec<String>,
+}
+
 /// 章节规划备忘录（LLM planner 输出经 [`crate::utils::chapter_memo_parser::parse_memo`] 解析后产物）。
 ///
 /// 字段契约对齐 TS `ChapterMemoSchema`：
@@ -17,6 +37,7 @@ use ts_rs::TS;
 /// - `is_golden_opening`：`z.boolean().default(false)`
 /// - `body`：`z.string().min(1)` → 完整 memo 正文（含完整目标）
 /// - `thread_refs`：`z.array(z.string()).default([])` → 关联线索 ID（去重保序）
+/// - `reader_experience`：`ReaderExperience.optional()` → R1 合同，存量 memo 无此节时为 `None`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
@@ -27,6 +48,8 @@ pub struct ChapterMemo {
     pub is_golden_opening: bool,
     pub body: String,
     pub thread_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_experience: Option<ReaderExperience>,
 }
 
 /// 章节意图。对齐 TS `ChapterIntentSchema`（planner 产物，writer/auditor 消费）。

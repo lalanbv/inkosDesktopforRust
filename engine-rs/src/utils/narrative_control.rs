@@ -102,6 +102,37 @@ pub fn render_memo_as_narrative_block(
         sections.push(format!("## {}\n{}", if is_en { "Thread Refs" } else { "关联线索" }, threads.join("\n")));
     }
 
+    // R1 读者体验合同（357 号）：memo 携带结构化合同时，把它升级为顶层任务块，
+    // writer 照它写、reviser 照它修；不携带时静默跳过（旧 memo / 稀疏 memo）。
+    // 逐字段对齐 TS renderMemoAsNarrativeBlock（标签/全角冒号/分隔符一致）。
+    if let Some(re) = &memo.reader_experience {
+        let fields: [(&str, &str); 7] = [
+            (if is_en { "previousHandoff" } else { "开头承接" }, &re.previous_handoff),
+            (if is_en { "readerQuestion" } else { "读者问题" }, &re.reader_question),
+            (if is_en { "promisePayoff" } else { "承诺兑现" }, &re.promise_payoff),
+            (if is_en { "protagonistWant" } else { "主角欲求" }, &re.protagonist_want),
+            (if is_en { "protagonistObstacle" } else { "主角障碍" }, &re.protagonist_obstacle),
+            (if is_en { "sceneTurn" } else { "场景转折" }, &re.scene_turn),
+            (if is_en { "endingNetChange" } else { "章末净变化" }, &re.ending_net_change),
+        ];
+        let mut lines: Vec<String> = fields
+            .iter()
+            .map(|(label, value)| format!("- {label}：{}", s(value)))
+            .collect();
+        if !re.title_candidates.is_empty() {
+            lines.push(format!(
+                "- {}：{}",
+                if is_en { "titleCandidates" } else { "章名候选" },
+                re.title_candidates.join(" ｜ ")
+            ));
+        }
+        sections.push(format!(
+            "## {}\n{}",
+            if is_en { "Reader Experience Contract" } else { "读者体验合同" },
+            lines.join("\n")
+        ));
+    }
+
     if memo.is_golden_opening {
         sections.push(format!(
             "## {}\n- {}",
@@ -237,6 +268,7 @@ mod tests {
             is_golden_opening: false,
             body: "## 当前任务\n推进 H2".into(),
             thread_refs: vec!["T1".into()],
+            reader_experience: None,
         };
         let out = render_memo_as_narrative_block(&memo, Some("弧线 H3"), WritingLanguage::Zh);
         assert!(out.contains("## 目标"));
@@ -248,7 +280,7 @@ mod tests {
 
     #[test]
     fn render_memo_golden_opening() {
-        let memo = ChapterMemo { chapter: 1, goal: "g".into(), is_golden_opening: true, body: "".into(), thread_refs: vec![] };
+        let memo = ChapterMemo { chapter: 1, goal: "g".into(), is_golden_opening: true, body: "".into(), thread_refs: vec![], reader_experience: None };
         let out = render_memo_as_narrative_block(&memo, None, WritingLanguage::Zh);
         assert!(out.contains("## 黄金开场"));
     }

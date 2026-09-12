@@ -11,7 +11,7 @@
 //! - thread-ref 的 `\b` 用 `(?-u)` 切回 ASCII 语义（对齐 JS 无 /u 标志的 \b）
 //! - `minContentChars` 与 goal 显示截断按 **UTF-16 码元** 计数（对齐 JS `.length`/`slice`）
 
-use crate::models::input_governance::ChapterMemo;
+use crate::models::input_governance::{ChapterMemo, ReaderExperience};
 use crate::utils::language::utf16_len;
 use regex::Regex;
 use std::collections::HashSet;
@@ -176,6 +176,136 @@ fn extract_thread_refs(body: &str) -> Vec<String> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// R1 读者体验合同（357 号）——「读者体验合同」节的可选结构化提取。
+//
+// 兼容性策略与 TS 一致：该节**不进** REQUIRED_SECTIONS（persisted-governed-plan
+// 会重放解析存量 intent markdown，必填化会把旧书历史计划全部判死）。
+// 节存在且七个叙事字段齐全才产出 Some(ReaderExperience)，否则 None。
+// 字段值截断到 200 UTF-16 码元后入型（对齐 TS utf16Truncate）。
+// ---------------------------------------------------------------------------
+
+const CONTRACT_HEADINGS: &[&str] = &["## 读者体验合同", "## Reader experience contract"];
+const CONTRACT_MAX_FIELD_UNITS: usize = 200;
+const CONTRACT_MAX_TITLE_UNITS: usize = 60;
+
+/// 合同叙事字段（key, zh 标签, en 标签）。顺序与 TS CONTRACT_FIELDS 一致。
+const CONTRACT_FIELDS: &[(&str, &str, &str)] = &[
+    ("previousHandoff", "开头承接", "previousHandoff"),
+    ("readerQuestion", "读者问题", "readerQuestion"),
+    ("promisePayoff", "承诺兑现", "promisePayoff"),
+    ("protagonistWant", "主角欲求", "protagonistWant"),
+    ("protagonistObstacle", "主角障碍", "protagonistObstacle"),
+    ("sceneTurn", "场景转折", "sceneTurn"),
+    ("endingNetChange", "章末净变化", "endingNetChange"),
+];
+
+const CONTRACT_TITLE_LABELS: &[&str] = &["章名候选", "titleCandidates"];
+
+fn contract_field_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^(?:-\s*)?(.+?)\s*[：:]\s*(.*)$").unwrap())
+}
+
+/// UTF-16 码元截断 + 首尾去空白（对齐 TS utf16Truncate）。
+fn utf16_truncate(value: &str, max_units: usize) -> String {
+    let taken = utf16_take(value, max_units);
+    taken.trim().to_string()
+}
+
+/// 取合同节的原始行（不折叠空白；与折叠版的 extract_section_content 不同）。
+fn extract_contract_section_lines(body: &str) -> Vec<String> {
+    for heading in CONTRACT_HEADINGS {
+        let Some(start) = body.find(heading) else {
+            continue;
+        };
+        let after = &body[start + heading.len()..];
+        let raw = match next_h2_re().find(after) {
+            Some(m) => &after[..m.start()],
+            None => after,
+        };
+        return raw
+            .split('\n')
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+    }
+    Vec::new()
+}
+
+/// 单行字段匹配：`- 标签：值`（标签不区分大小写，zh/en 双标签皆收）。命中返回值。
+fn match_contract_field(line: &str, labels: &[&str]) -> Option<String> {
+    let caps = contract_field_re().captures(line)?;
+    let label = caps.get(1)?.as_str().trim().to_lowercase();
+    // 对齐 TS：双端 toLowerCase 后比较（en 标签为驼峰，需归一小写）。
+    if !labels.iter().any(|candidate| candidate.to_lowercase() == label) {
+        return None;
+    }
+    Some(caps.get(2)?.as_str().trim().to_string())
+}
+
+/// 从 memo body 提取读者体验合同。七个叙事字段全部命中才产出完整合同，
+/// 缺任一字段返回 None（整节视为未携带）。titleCandidates 可选，按 ｜/|/、/／
+/// 分隔，去重后最多取 3 个。
+fn extract_reader_experience(body: &str) -> Option<ReaderExperience> {
+    let lines = extract_contract_section_lines(body);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut values: Vec<(&str, String)> = Vec::new();
+    for line in &lines {
+        for (key, zh, en) in CONTRACT_FIELDS {
+            if values.iter().any(|(k, _)| *k == *key) {
+                continue;
+            }
+            if let Some(value) = match_contract_field(line, &[*zh, en]) {
+                if !value.is_empty() {
+                    values.push((key, value));
+                }
+            }
+        }
+    }
+    if values.len() < CONTRACT_FIELDS.len() {
+        return None;
+    }
+
+    let mut title_candidates: Vec<String> = Vec::new();
+    for line in &lines {
+        let Some(value) = match_contract_field(line, CONTRACT_TITLE_LABELS) else {
+            continue;
+        };
+        for part in value.split(['｜', '|', '、', '／']) {
+            let cleaned = part.trim();
+            if cleaned.is_empty() || title_candidates.iter().any(|c| c == cleaned) {
+                continue;
+            }
+            title_candidates.push(utf16_truncate(cleaned, CONTRACT_MAX_TITLE_UNITS));
+            if title_candidates.len() >= 3 {
+                break;
+            }
+        }
+        break;
+    }
+
+    let get = |key: &str| -> String {
+        utf16_truncate(
+            values.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str()).unwrap_or(""),
+            CONTRACT_MAX_FIELD_UNITS,
+        )
+    };
+    Some(ReaderExperience {
+        previous_handoff: get("previousHandoff"),
+        reader_question: get("readerQuestion"),
+        promise_payoff: get("promisePayoff"),
+        protagonist_want: get("protagonistWant"),
+        protagonist_obstacle: get("protagonistObstacle"),
+        scene_turn: get("sceneTurn"),
+        ending_net_change: get("endingNetChange"),
+        title_candidates,
+    })
+}
+
 fn extract_memo_body(markdown: &str) -> String {
     let mut min_start: Option<usize> = None;
     for s in REQUIRED_SECTIONS {
@@ -259,12 +389,14 @@ pub fn parse_memo(raw: &str, expected_chapter: u32, is_golden_opening: bool) -> 
     }
 
     let final_body = prepend_full_goal_if_needed(&markdown, &body, &goal, &display_goal);
+    let reader_experience = extract_reader_experience(&body);
     Ok(ChapterMemo {
         chapter: expected_chapter,
         goal: display_goal,
         is_golden_opening,
         body: final_body,
         thread_refs,
+        reader_experience,
     })
 }
 

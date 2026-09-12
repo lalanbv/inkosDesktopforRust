@@ -1,11 +1,32 @@
 import { z } from "zod";
 
+/**
+ * R1 读者体验合同（357 号）——memo「读者体验合同」节的结构化提取产物。
+ *
+ * 每个叙事字段限长 200 UTF-16 码元：解析器截断到该值后才入 schema，避免
+ * LLM 偶发超长触发解析失败→重试风暴；提示词层面的软约束是每字段 ≤50 字。
+ * titleCandidates 为章名候选（≤3 个，各 ≤60 码元），服务"目标 + 追读钩子"。
+ */
+export const ReaderExperienceSchema = z.object({
+  previousHandoff: z.string().min(1).max(200),
+  readerQuestion: z.string().min(1).max(200),
+  promisePayoff: z.string().min(1).max(200),
+  protagonistWant: z.string().min(1).max(200),
+  protagonistObstacle: z.string().min(1).max(200),
+  sceneTurn: z.string().min(1).max(200),
+  endingNetChange: z.string().min(1).max(200),
+  titleCandidates: z.array(z.string().min(1).max(60)).max(3).default([]),
+});
+
+export type ReaderExperience = z.infer<typeof ReaderExperienceSchema>;
+
 export const ChapterMemoSchema = z.object({
   chapter: z.number().int().min(1),
   goal: z.string().min(1).max(50),
   isGoldenOpening: z.boolean().default(false),
   body: z.string().min(1),
   threadRefs: z.array(z.string()).default([]),
+  readerExperience: ReaderExperienceSchema.optional(),
 });
 
 export type ChapterMemo = z.infer<typeof ChapterMemoSchema>;

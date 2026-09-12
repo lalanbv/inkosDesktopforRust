@@ -2610,6 +2610,7 @@ mod tests {
             is_golden_opening: false,
             body: "正文要求".to_string(),
             thread_refs: vec!["H01".to_string()],
+            reader_experience: None,
         };
         let context_package = ContextPackage {
             chapter: 3,
