@@ -664,6 +664,21 @@ export {
   type UrgencyLevel,
 } from "./utils/promise-ledger.js";
 export {
+  composeAntiAiGuidance,
+  mergeExperienceEntries,
+  renderAntiAiFixGuidance,
+  renderExperienceGuidance,
+  scanAntiAiRules,
+  validateAntiAiRule,
+  type AntiAiHit,
+  type AntiAiRule,
+  type AntiAiRuleType,
+  type AntiAiSeverity,
+  type ExperienceEntry,
+  type ExperienceKind,
+  type RuleValidateResult,
+} from "./utils/rule-experience-engine.js";
+export {
   assetContentHash,
   buildAssetLibraryExport,
   GENRE_BASE_SEEDS,

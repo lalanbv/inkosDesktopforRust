@@ -1,0 +1,345 @@
+{
+  "meta": {
+    "contract": "R5/G13（365 号，二轮 P1）——antiAiRules 逐书资产（type/severity/enabled）+ detect 扫描 + fix 提示 + 写作预防块 + 经验条目同管道 guidance",
+    "invariants": [
+      "规则校验：id=snake_case ≤64 / type∈phrase|structure|rhythm|cliche / pattern 1–200（isRegex 时须可编译）/ severity∈critical|warning|info / message 1–200 / enabled",
+      "扫描：仅 enabled；字面 indexOf 计数（重叠跳过按 pattern.length 步进）/ regex matchAll；excerpt=首个命中 ±20 字窗口；排序 severity(critical0/warning1/info2)→count 降序→ruleId 码元序",
+      "修复块：输入序渲染；带 replacement 的命中追加「建议改法」节；无命中 undefined",
+      "预防块：仅 enabled；severity 前缀+replacement（改为：…）；maxChars 截断加 …",
+      "经验合并：同 text(trim) 去重保序（已有条目保留原 id）；渲染：enabled 过滤+章号升序稳定+≤10 条；maxChars 截断"
+    ]
+  },
+  "validate": [
+    {
+      "name": "valid literal rule",
+      "input": {
+        "id": "eye_flash",
+        "type": "phrase",
+        "pattern": "眼中闪过一丝",
+        "isRegex": false,
+        "severity": "warning",
+        "message": "陈词套语",
+        "replacement": "写具体动作",
+        "enabled": true
+      },
+      "valid": true
+    },
+    {
+      "name": "non snake_case id rejected",
+      "input": {
+        "id": "Eye-Flash",
+        "type": "phrase",
+        "pattern": "x",
+        "message": "m"
+      },
+      "valid": false,
+      "errorField": "id"
+    },
+    {
+      "name": "invalid regex rejected",
+      "input": {
+        "id": "bad_re",
+        "type": "phrase",
+        "pattern": "([unclosed",
+        "isRegex": true,
+        "message": "m"
+      },
+      "valid": false,
+      "errorField": "pattern"
+    }
+  ],
+  "scan": [
+    {
+      "name": "literal counts with excerpt window",
+      "text": "他眼中闪过一丝惊讶。她没有说话，只是转过身。老陈眼中闪过一丝忌惮，收起了刀。",
+      "rules": [
+        {
+          "id": "eye_flash",
+          "type": "phrase",
+          "pattern": "眼中闪过一丝",
+          "isRegex": false,
+          "severity": "warning",
+          "message": "陈词套语：眼中闪过一丝",
+          "replacement": "写具体动作或生理反应",
+          "enabled": true
+        }
+      ],
+      "expected": [
+        {
+          "ruleId": "eye_flash",
+          "severity": "warning",
+          "message": "陈词套语：眼中闪过一丝",
+          "excerpt": "他眼中闪过一丝惊讶。她没有说话，只是转过身。老陈眼中闪",
+          "count": 2,
+          "replacement": "写具体动作或生理反应"
+        }
+      ]
+    },
+    {
+      "name": "regex matches with window",
+      "text": "他的眼中忽然闪过一丝笑意。",
+      "rules": [
+        {
+          "id": "he_regex",
+          "type": "structure",
+          "pattern": "他的眼中[^。]{0,6}闪过",
+          "isRegex": true,
+          "severity": "info",
+          "message": "套语结构",
+          "enabled": true
+        }
+      ],
+      "expected": [
+        {
+          "ruleId": "he_regex",
+          "severity": "info",
+          "message": "套语结构",
+          "excerpt": "他的眼中忽然闪过一丝笑意。",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "severity ordering with disabled skipped",
+      "text": "眼中闪过一丝疲惫。他的眼中闪过戒备。",
+      "rules": [
+        {
+          "id": "warn_word",
+          "type": "phrase",
+          "pattern": "疲惫",
+          "isRegex": false,
+          "severity": "warning",
+          "message": "情绪直陈",
+          "enabled": true
+        },
+        {
+          "id": "crit_flash",
+          "type": "cliche",
+          "pattern": "眼中闪过",
+          "isRegex": false,
+          "severity": "critical",
+          "message": "高频套语",
+          "enabled": true
+        },
+        {
+          "id": "off_rule",
+          "type": "phrase",
+          "pattern": "戒备",
+          "isRegex": false,
+          "severity": "info",
+          "message": "禁用词",
+          "enabled": false
+        }
+      ],
+      "expected": [
+        {
+          "ruleId": "crit_flash",
+          "severity": "critical",
+          "message": "高频套语",
+          "excerpt": "眼中闪过一丝疲惫。他的眼中闪过戒备。",
+          "count": 2
+        },
+        {
+          "ruleId": "warn_word",
+          "severity": "warning",
+          "message": "情绪直陈",
+          "excerpt": "眼中闪过一丝疲惫。他的眼中闪过戒备。",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "fixGuidance": [
+    {
+      "name": "zh fix block with replacements",
+      "language": "zh",
+      "hits": [
+        {
+          "ruleId": "eye_flash",
+          "severity": "warning",
+          "message": "陈词套语：眼中闪过一丝",
+          "excerpt": "",
+          "count": 2,
+          "replacement": "写具体动作或生理反应"
+        },
+        {
+          "ruleId": "id_card",
+          "severity": "critical",
+          "message": "现代物品穿帮",
+          "excerpt": "",
+          "count": 1
+        }
+      ],
+      "expected": "## 反AI规则命中（交付前修复）\n- [warning] 陈词套语：眼中闪过一丝（×2）\n- [critical] 现代物品穿帮（×1）\n建议改法：\n- eye_flash → 写具体动作或生理反应"
+    },
+    {
+      "name": "en fix block without replacements",
+      "language": "en",
+      "hits": [
+        {
+          "ruleId": "id_card",
+          "severity": "critical",
+          "message": "anachronism",
+          "excerpt": "",
+          "count": 1
+        }
+      ],
+      "expected": "## Anti-AI violations (fix before delivery)\n- [critical] anachronism（×1）"
+    },
+    {
+      "name": "empty hits yield undefined",
+      "language": "zh",
+      "hits": [],
+      "expected": null
+    }
+  ],
+  "antiAiGuidance": [
+    {
+      "name": "enabled only with replacement notes",
+      "language": "zh",
+      "rules": [
+        {
+          "id": "no_weather",
+          "type": "structure",
+          "pattern": "x",
+          "isRegex": false,
+          "severity": "critical",
+          "message": "严禁开局天气描写",
+          "replacement": "直接进入场景动作",
+          "enabled": true
+        },
+        {
+          "id": "no_summary",
+          "type": "structure",
+          "pattern": "y",
+          "isRegex": false,
+          "severity": "warning",
+          "message": "避免总结式结尾",
+          "enabled": true
+        },
+        {
+          "id": "off",
+          "type": "phrase",
+          "pattern": "z",
+          "isRegex": false,
+          "severity": "info",
+          "message": "已停用",
+          "enabled": false
+        }
+      ],
+      "maxChars": null,
+      "expected": "## 反AI规则（绑定——写作时严禁违反）\n- [critical] 严禁开局天气描写（改为：直接进入场景动作）\n- [warning] 避免总结式结尾"
+    },
+    {
+      "name": "maxChars truncates with ellipsis",
+      "language": "zh",
+      "rules": [
+        {
+          "id": "no_weather",
+          "type": "structure",
+          "pattern": "x",
+          "isRegex": false,
+          "severity": "critical",
+          "message": "严禁开局天气描写",
+          "replacement": "直接进入场景动作",
+          "enabled": true
+        }
+      ],
+      "maxChars": 30,
+      "expected": "## 反AI规则（绑定——写作时严禁违反）\n- [crit…"
+    }
+  ],
+  "experience": [
+    {
+      "name": "merge dedupes by trimmed text keeping existing",
+      "existing": [
+        {
+          "id": "e1",
+          "chapter": 3,
+          "kind": "technique",
+          "text": "用怀表特写切换时间线",
+          "enabled": true,
+          "createdAt": "2026-09-12T00:00:00.000Z"
+        }
+      ],
+      "incoming": [
+        {
+          "id": "e9",
+          "chapter": 6,
+          "kind": "technique",
+          "text": "用怀表特写切换时间线 ",
+          "enabled": true,
+          "createdAt": "2026-09-13T00:00:00.000Z"
+        },
+        {
+          "id": "e2",
+          "chapter": 5,
+          "kind": "hook",
+          "text": "章末用二选一困境收钩",
+          "enabled": true,
+          "createdAt": "2026-09-13T00:00:00.000Z"
+        }
+      ],
+      "expectedIds": [
+        "e1",
+        "e2"
+      ]
+    },
+    {
+      "name": "render filters sorts and caps at ten",
+      "language": "zh",
+      "entries": [
+        {
+          "id": "e3",
+          "chapter": 0,
+          "kind": "pacing",
+          "text": "开局即冲突",
+          "enabled": true,
+          "createdAt": "2026-09-12T00:00:00.000Z"
+        },
+        {
+          "id": "e4",
+          "chapter": 5,
+          "kind": "dialogue",
+          "text": "对白不带称呼显亲密",
+          "enabled": false,
+          "createdAt": "2026-09-12T00:00:00.000Z"
+        },
+        {
+          "id": "e1",
+          "chapter": 3,
+          "kind": "technique",
+          "text": "用怀表特写切换时间线",
+          "enabled": true,
+          "createdAt": "2026-09-12T00:00:00.000Z"
+        },
+        {
+          "id": "e2",
+          "chapter": 5,
+          "kind": "hook",
+          "text": "章末用二选一困境收钩",
+          "enabled": true,
+          "createdAt": "2026-09-13T00:00:00.000Z"
+        }
+      ],
+      "maxChars": null,
+      "expected": "## 本书验证有效的手法（经验记忆——复用）\n- 开局即冲突\n- 用怀表特写切换时间线\n- 章末用二选一困境收钩"
+    },
+    {
+      "name": "render maxChars truncates",
+      "language": "zh",
+      "entries": [
+        {
+          "id": "e3",
+          "chapter": 0,
+          "kind": "pacing",
+          "text": "开局即冲突",
+          "enabled": true,
+          "createdAt": "2026-09-12T00:00:00.000Z"
+        }
+      ],
+      "maxChars": 32,
+      "expected": "## 本书验证有效的手法（经验记忆——复用）\n- 开局即冲突"
+    }
+  ]
+}
