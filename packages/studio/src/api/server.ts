@@ -6528,6 +6528,34 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, bestOfN });
   });
 
+  // R10/376 号：实体卡存储（story/entity_codex.json；GET/PUT 全量）。
+  app.get("/api/v1/books/:id/codex", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "entity_codex.json");
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ cards: Array.isArray(parsed.cards) ? parsed.cards : [] });
+    } catch {
+      return c.json({ cards: [] });
+    }
+  });
+
+  app.put("/api/v1/books/:id/codex", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ cards?: unknown[] }>();
+    if (!Array.isArray(body.cards)) return c.json({ error: "cards array required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const storyDir = join(root, "books", id, "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(
+      join(storyDir, "entity_codex.json"),
+      JSON.stringify({ version: 1, cards: body.cards }, null, 2),
+      "utf-8",
+    );
+    void core;
+    return c.json({ ok: true, cards: body.cards });
+  });
+
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);

@@ -116,6 +116,8 @@ export function contextSourceTier(source: string): ContextSourceTierId {
   if (source === "story/chapters#recent_endings") return "book-memory";
   if (source === "story/chapters#opening_hint") return "book-memory";
   if (source.startsWith("reference/")) return "user-reference";
+  // R10/376 号：实体卡注入与参考资料同层（40，正典事实参考可压缩）。
+  if (source.startsWith("codex/")) return "user-reference";
   if (source.startsWith("deconstruction/")) return "deconstruction";
   if (source.startsWith("style/")) return "style-asset";
   // R5/366 号：反AI规则与经验条目与写法同层（20，写作纪律垫底参考层）。

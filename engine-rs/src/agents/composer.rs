@@ -202,6 +202,13 @@ pub async fn compose_governed_chapter(
     }
     // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
     selected_context.extend(load_rule_experience_entries(input.book_dir));
+    // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）。
+    selected_context.extend(load_codex_entries(
+        input.book_dir,
+        input.plan.intent.chapter,
+        &input.plan.intent.goal,
+        &input.plan.memo.body,
+    ));
     // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
     // 临时），参考资料/更低层永远排在章纲与事实之后。
     // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
@@ -2294,6 +2301,52 @@ mod tests {
     }
 }
 
+
+/// R10/376 号：实体卡场景命中注入。读 story/entity_codex.json（缺失/解析
+/// 失败返回空 Vec 零打扰），以 goal+memo 正文命中卡片渲染注入块。
+pub fn load_codex_entries(
+    book_dir: &Path,
+    chapter_number: u32,
+    goal: &str,
+    memo_body: &str,
+) -> Vec<crate::models::input_governance::ContextSource> {
+    let _ = chapter_number;
+    let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("entity_codex.json")) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    let Some(cards) = parsed.get("cards").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let cards: Vec<crate::utils::entity_codex::EntityCodexCard> = cards
+        .iter()
+        .filter_map(|card| serde_json::from_value(card.clone()).ok())
+        .collect();
+    if cards.is_empty() {
+        return Vec::new();
+    }
+    let scene_text = format!("{goal}\n{memo_body}");
+    let matches = crate::utils::entity_codex::match_codex_cards(&scene_text, &cards);
+    let matches = matches.iter().take(8).cloned().collect::<Vec<_>>();
+    let Some(block) = crate::utils::entity_codex::render_codex_block(
+        &matches,
+        crate::utils::language::WritingLanguage::Zh,
+    ) else {
+        return Vec::new();
+    };
+    let first_name = matches
+        .first()
+        .map(|codex_match| codex_match.card.name.clone())
+        .unwrap_or_default();
+    vec![crate::models::input_governance::ContextSource {
+        source: format!("codex/{first_name}"),
+        reason: "Entity cards detected in this scene (canon facts).".to_string(),
+        excerpt: Some(block),
+        rank: None,
+    }]
+}
 
 /// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
 /// 文件缺失/解析失败一律返回空 Vec（零打扰）；source 前缀 `rules/`、

@@ -480,6 +480,10 @@ pub fn router_books(
                 .put(books_state_routes::put_best_of_n)
                 .with_state(books.clone()),
         )
+        .route(
+            "/api/v1/books/:id/codex",
+            get(books_state_routes::get_codex).put(books_state_routes::put_codex).with_state(books.clone()),
+        )
         // 189 号：时间线节拍自动沉淀开关（书籍级，默认关）。
         .route(
             "/api/v1/books/:id/timeline-auto-beats",

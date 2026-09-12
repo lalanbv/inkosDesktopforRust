@@ -140,6 +140,10 @@ pub fn context_source_tier(source: &str) -> ContextSourceTier {
         if source == "story/chapters#recent_endings" {
         return ContextSourceTier::BookMemory;
     }
+    // R10/376 号：实体卡注入与参考资料同层（40，正典事实参考可压缩）。
+    if source.starts_with("codex/") {
+        return ContextSourceTier::UserReference;
+    }
     if source.starts_with("reference/") {
         return ContextSourceTier::UserReference;
     }

@@ -160,6 +160,11 @@
       "name": "experience-proven",
       "source": "experience/proven",
       "expected": "style-asset"
+    },
+    {
+      "name": "codex-entity-card",
+      "source": "codex/林动",
+      "expected": "user-reference"
     }
   ],
   "order": [

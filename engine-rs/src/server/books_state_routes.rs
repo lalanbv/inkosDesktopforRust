@@ -2287,3 +2287,51 @@ pub async fn put_best_of_n(
         Json(json!({ "ok": true, "bestOfN": read_best_of_n(&raw_book) })),
     )
 }
+
+/// R10/376 号：实体卡存储（story/entity_codex.json；GET/PUT 全量）。
+pub async fn get_codex(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let raw = tokio::fs::read_to_string(
+        runtime.state.project_root().join("books").join(&book_id).join("story").join("entity_codex.json"),
+    )
+    .await
+    .unwrap_or_default();
+    let parsed: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+    let cards = parsed.get("cards").and_then(Value::as_array).cloned().unwrap_or_default();
+    (StatusCode::OK, Json(json!({ "cards": cards })))
+}
+
+pub async fn put_codex(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let Some(cards) = body.get("cards").and_then(Value::as_array) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "cards array required" })));
+    };
+    let story_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story");
+    if std::fs::create_dir_all(&story_dir).is_err() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "io" })));
+    }
+    let payload = json!({ "version": 1, "cards": cards });
+    match std::fs::write(
+        story_dir.join("entity_codex.json"),
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    ) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "cards": cards }))),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "io" }))),
+    }
+}

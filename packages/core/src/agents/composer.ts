@@ -36,6 +36,11 @@ import {
   type AntiAiRule,
   type ExperienceEntry,
 } from "../utils/rule-experience-engine.js";
+import {
+  matchCodexCards,
+  renderCodexBlock,
+  type EntityCodexCard,
+} from "../utils/entity-codex.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -121,6 +126,13 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
   // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
   const ruleExperienceEntries = await loadRuleExperienceEntries(input.bookDir);
+  // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）。
+  const codexEntries = await loadCodexEntries(
+    input.bookDir,
+    input.plan.intent.chapter,
+    input.plan.intent.goal,
+    input.plan.memo.body,
+  );
   // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
   // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
   const selectedContext = rankEntriesForComposition([
@@ -128,6 +140,7 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     ...referenceContext.entries,
     ...(styleBindingEntry ? [styleBindingEntry] : []),
     ...ruleExperienceEntries,
+    ...codexEntries,
   ]).map((ranked) => ranked.entry);
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
@@ -419,6 +432,38 @@ export async function loadRuleExperienceEntries(
     // 零打扰
   }
   return entries;
+}
+
+/**
+ * R10/376 号：实体卡场景命中注入。读 story/entity_codex.json（缺失/解析
+ * 失败返回空数组零打扰），以 goal+memo 正文为场景文本命中卡片，渲染
+ * 「## 实体卡」块（source=codex/<name>，user-reference 层 40）。
+ */
+export async function loadCodexEntries(
+  bookDir: string,
+  chapterNumber: number,
+  goal: string,
+  memoBody?: string,
+): Promise<ContextPackage["selectedContext"]> {
+  try {
+    const raw = await readFile(join(bookDir, "story", "entity_codex.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { cards?: EntityCodexCard[] };
+    if (!Array.isArray(parsed.cards) || parsed.cards.length === 0) return [];
+    void chapterNumber;
+    const sceneText = [goal, memoBody ?? ""].filter(Boolean).join("\n");
+    const matches = matchCodexCards(sceneText, parsed.cards).slice(0, 8);
+    const block = renderCodexBlock(matches, "zh");
+    if (!block) return [];
+    return [
+      {
+        source: `codex/${matches[0]!.card.name}`,
+        reason: "Entity cards detected in this scene (canon facts).",
+        excerpt: block,
+      },
+    ];
+  } catch {
+    return [];
+  }
 }
 
 function parseSelectedSources(raw: string): string[] {
