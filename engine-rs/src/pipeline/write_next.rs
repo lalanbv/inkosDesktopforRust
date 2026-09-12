@@ -1717,6 +1717,7 @@ pub(crate) async fn prepare_write_input(
                     chapter_number,
                     external_context,
                     chapter_word_count: book.chapter_word_count,
+                    book_writing: book.writing.as_ref(),
                 },
             )
             .await?;

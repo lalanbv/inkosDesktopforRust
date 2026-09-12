@@ -56,6 +56,8 @@ pub struct PlanChapterInput<'a> {
     /// 131 号：planner 侧篇幅预算基准（TS input.book.chapterWordCount——
     /// write-next 的 wordCountOverride 不作用于此，writer 面独立计算）。
     pub chapter_word_count: u32,
+    /// R11/379 号：书籍 writing 子配置（sceneBeats 开关读取）。
+    pub book_writing: Option<&'a crate::models::book::BookWritingConfig>,
 }
 
 /// planChapter 出参。对齐 TS `PlanChapterOutput`。
@@ -202,12 +204,68 @@ pub async fn plan_chapter(
         &render_summary_snapshot(&memory_selection.summaries, language),
         active_hook_count,
     );
-    tokio::fs::write(&runtime_path, &intent_markdown).await?;
+    // R11/379 号：场景节拍（writing.sceneBeats 开启时）——二次 LLM 调用产
+    // 节拍并追加到 intent 尾部，writer 按节拍顺序推进。失败/关闭零打扰。
+    let scene_beats_enabled = input
+        .book_writing
+        .as_ref()
+        .and_then(|w| w.scene_beats)
+        .unwrap_or(false);
+    let mut final_intent_markdown = intent_markdown;
+    if scene_beats_enabled {
+        let beats_prompt = crate::utils::scene_beats::build_scene_beats_prompt(
+            &intent.goal,
+            intent.outline_node.as_deref(),
+            3,
+            if language == crate::utils::language::WritingLanguage::En {
+                crate::utils::scene_beats::SceneBeatsLanguage::En
+            } else {
+                crate::utils::scene_beats::SceneBeatsLanguage::Zh
+            },
+        );
+        let beats_messages = vec![
+            crate::llm::provider::LLMMessage {
+                role: crate::llm::provider::LLMRole::System,
+                content: beats_prompt,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            crate::llm::provider::LLMMessage {
+                role: crate::llm::provider::LLMRole::User,
+                content: intent.goal.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+        if let Ok(response) = chat.chat(beats_messages, 0.3).await {
+            if let Some(plan) = crate::utils::scene_beats::parse_scene_beat_plan(
+                &response.content,
+                i64::from(input.chapter_number),
+            ) {
+                let block = crate::utils::scene_beats::build_scene_beats_writer_block(
+                    &plan,
+                    if language == crate::utils::language::WritingLanguage::En {
+                        crate::utils::scene_beats::SceneBeatsLanguage::En
+                    } else {
+                        crate::utils::scene_beats::SceneBeatsLanguage::Zh
+                    },
+                );
+                final_intent_markdown = format!("{final_intent_markdown}\n\n{block}\n");
+                tracing::info!(
+                    "[scene-beats] {} beat(s) for ch{}",
+                    plan.scenes.len(),
+                    input.chapter_number
+                );
+            }
+        }
+    }
+
+    tokio::fs::write(&runtime_path, &final_intent_markdown).await?;
 
     Ok(PlanChapterOutput {
         intent,
         memo,
-        intent_markdown,
+        intent_markdown: final_intent_markdown,
         planner_inputs: materials.planner_inputs,
         runtime_path,
     })
@@ -1455,7 +1513,8 @@ mod tests {
                 chapter_number: 2,
                 external_context: Some("本章加入新导师"),
                     chapter_word_count: 3000,
-            },
+            
+                book_writing: None,},
         )
         .await
         .unwrap();

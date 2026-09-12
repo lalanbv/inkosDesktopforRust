@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { buildSceneBeatsPrompt, buildSceneBeatsWriterBlock, parseSceneBeatPlan } from "../utils/scene-beats.js";
 import { join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
@@ -168,12 +169,40 @@ export class PlannerAgent extends BaseAgent {
       renderSummarySnapshot(memorySelection.summaries, input.book.language ?? "zh"),
       activeHookCount,
     );
-    await writeFile(runtimePath, intentMarkdown, "utf-8");
+    // R11/379 号：场景节拍（writing.sceneBeats 开启时）——二次 LLM 调用产
+    // 节拍并追加到 intent 尾部，writer 按节拍顺序推进。失败/关闭零打扰。
+    let finalIntentMarkdown = intentMarkdown;
+    if (input.book.writing?.sceneBeats) {
+      try {
+        const beatsPrompt = buildSceneBeatsPrompt({
+          goal: intent.goal,
+          outlineNode: intent.outlineNode,
+          sceneCount: 3,
+          language: input.book.language ?? "zh",
+        });
+        const beatsResponse = await this.chat(
+          [
+            { role: "system", content: beatsPrompt },
+            { role: "user", content: goal },
+          ],
+          { temperature: 0.3 },
+        );
+        const plan = parseSceneBeatPlan(beatsResponse.content, input.chapterNumber);
+        if (plan) {
+          finalIntentMarkdown = `${intentMarkdown}\n\n${buildSceneBeatsWriterBlock(plan, input.book.language ?? "zh")}\n`;
+          this.ctx.logger?.info?.(`[scene-beats] ${plan.scenes.length} beat(s) for ch${input.chapterNumber}`);
+        }
+      } catch (error) {
+        this.ctx.logger?.warn?.(`[scene-beats] ${String(error)}`);
+      }
+    }
+
+    await writeFile(runtimePath, finalIntentMarkdown, "utf-8");
 
     return {
       intent,
       memo,
-      intentMarkdown,
+      intentMarkdown: finalIntentMarkdown,
       plannerInputs: materials.plannerInputs,
       runtimePath,
     };

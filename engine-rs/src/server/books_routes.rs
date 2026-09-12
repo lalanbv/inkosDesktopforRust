@@ -229,6 +229,7 @@ async fn run_plan(
             chapter_number,
             external_context: context,
                     chapter_word_count: 3000,
+            book_writing: book.writing.as_ref(),
         },
     )
     .await?;
@@ -1195,6 +1196,7 @@ async fn run_compose(
                     chapter_number,
                     external_context: context,
                     chapter_word_count: 3000,
+                    book_writing: book.writing.as_ref(),
                 },
             )
             .await
