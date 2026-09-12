@@ -667,6 +667,7 @@ export {
   assetContentHash,
   buildAssetLibraryExport,
   GENRE_BASE_SEEDS,
+  PROGRESSION_MODE_SEEDS,
   mergeAssetLibrary,
   parseAssetLibraryImport,
   sortAssets,

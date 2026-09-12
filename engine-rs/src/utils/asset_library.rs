@@ -32,7 +32,7 @@ impl AssetKind {
         }
     }
 
-    fn parse(value: &str) -> Option<AssetKind> {
+    pub fn parse(value: &str) -> Option<AssetKind> {
         match value {
             "genre-base" => Some(AssetKind::GenreBase),
             "progression-mode" => Some(AssetKind::ProgressionMode),
@@ -387,5 +387,259 @@ mod tests {
     fn hash_is_stable_across_calls() {
         let asset = genre_base_seeds().remove(0);
         assert_eq!(asset_content_hash(&asset), asset_content_hash(&asset));
+    }
+}
+
+/// 内置推进模式种子（363 号，双端逐字镜像；空库冷启动随包分发）。
+pub fn progression_mode_seeds() -> Vec<LibraryAsset> {
+    vec![
+        LibraryAsset {
+            id: "hook_cycle".to_string(),
+            kind: AssetKind::ProgressionMode,
+            name: "钩子循环推进".to_string(),
+            body: "章级推进范式：章末强钩 → 下章开头真实承接 → 中段推进该钩并付出一次代价 → 章末再埋新钩。钩子类型轮换（悬念/危机/情感交替），循环以「代价被记账」为闭合标志——读者的期待是被承诺出来的账，每轮必须还一笔再欠一笔。".to_string(),
+            expectations: vec![
+                "章末钩与下章开头必须真实承接，不重置场景也不拖延兑现".to_string(),
+                "钩子类型相邻循环不重复（悬念后接危机或情感）".to_string(),
+                "每个循环内至少一次可感知代价（资源/关系/信息）".to_string(),
+            ],
+            taboos: vec![
+                "同型钩子连用三章以上（读者疲劳点）".to_string(),
+                "章末空抛：钩子内容与正文推进无关".to_string(),
+                "只欠不还：连续多轮循环无任何旧钩兑付".to_string(),
+            ],
+            samples: vec![
+                "她终于打开了那个盒子——里面的东西不是钱，是一张她自己签名的认罪书。日期，是明天。".to_string(),
+            ],
+        },
+        LibraryAsset {
+            id: "escalating_loop".to_string(),
+            kind: AssetKind::ProgressionMode,
+            name: "升级循环推进".to_string(),
+            body: "卷级推进范式：每个循环（约 5–10 章）赌注明确升一级，且代价前置——先付出再收获。升级来自主角的选择与牺牲（用已知信息做更冒险的决定），而非外力送来的新外挂。上一轮的代价在下一轮持续生效成为本轮障碍，形成「债滚债」的推进压力。".to_string(),
+            expectations: vec![
+                "每循环开局一句话能说清本轮赌注比上轮大在哪".to_string(),
+                "上轮代价在本轮至少一次实际阻碍主角".to_string(),
+                "升级决策由主角主动做出并承担可见风险".to_string(),
+            ],
+            taboos: vec![
+                "数值膨胀代替局势升级（敌人只是数字变大了）".to_string(),
+                "危机重复同一形态（换个名字的同一件事）".to_string(),
+                "外力救场：新外挂/新帮手凭空出现解决本轮危机".to_string(),
+            ],
+            samples: vec![
+                "上次他赌上的是右手经脉。这一次，对面坐着全城最不该得罪的人，而他手里的筹码只有半张烧残的地图——和右手的旧伤。".to_string(),
+            ],
+        },
+        LibraryAsset {
+            id: "three_act".to_string(),
+            kind: AssetKind::ProgressionMode,
+            name: "三幕卷结构".to_string(),
+            body: "卷级结构范式：建置（约 25%）→ 对抗（约 50%）→ 解决（约 25%），幕间各放一个转折点。第一转折打破主角的既有策略，中点用假胜利或假失败翻转局势，高潮同时解决主冲突并埋下卷间钩。三幕比例是节奏底线而非装饰——建置超四成必拖。".to_string(),
+            expectations: vec![
+                "第一转折落在卷内 20%–30% 处，且由主角自己的决定触发".to_string(),
+                "中点有一次局势翻转（假胜利或假失败）".to_string(),
+                "高潮解决本卷主冲突，同时开启下一卷的核心悬念".to_string(),
+            ],
+            taboos: vec![
+                "建置超卷长四成（迟迟不进对抗幕）".to_string(),
+                "转折无因果铺垫（纯意外事件砸脸）".to_string(),
+                "解决幕拖尾：高潮后灌水超过卷长一成".to_string(),
+            ],
+            samples: vec![
+                "所有人都以为庆功宴是这一卷的结束——直到主宾的椅子空了，桌上的信封里装着第三具尸体的照片。第一幕，才刚刚收尾。".to_string(),
+            ],
+        },
+    ]
+}
+
+// ── R4/363 号：三库存储层（项目级 .inkos/asset-library/{kind}.json）──
+
+fn seeds_for(kind: AssetKind) -> Vec<LibraryAsset> {
+    match kind {
+        AssetKind::GenreBase => genre_base_seeds(),
+        AssetKind::ProgressionMode => progression_mode_seeds(),
+        AssetKind::WorldSample => Vec::new(),
+    }
+}
+
+pub fn library_file_path(project_root: &std::path::Path, kind: AssetKind) -> std::path::PathBuf {
+    project_root
+        .join(".inkos")
+        .join("asset-library")
+        .join(format!("{}.json", kind.as_str()))
+}
+
+/// 读取库快照：文件缺失/损坏/版本或 kind 不符 → 内置种子兜底（`seeded=true`，
+/// 不自动落盘——用户数据文件只在首次写入时创建）。
+pub fn list_assets(project_root: &std::path::Path, kind: AssetKind) -> std::io::Result<(Vec<LibraryAsset>, bool)> {
+    let path = library_file_path(project_root, kind);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(_) => return Ok((seeds_for(kind), true)),
+    };
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => return Ok((seeds_for(kind), true)),
+    };
+    let version_ok = parsed.get("version").and_then(Value::as_i64) == Some(ASSET_LIBRARY_VERSION);
+    let kind_ok = parsed
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(AssetKind::parse)
+        .is_some_and(|parsed_kind| parsed_kind == kind);
+    let items = parsed.get("assets").and_then(Value::as_array);
+    if !version_ok || !kind_ok || items.is_none() {
+        return Ok((seeds_for(kind), true));
+    }
+    let mut assets: Vec<LibraryAsset> = Vec::new();
+    for item in items.unwrap_or(&Vec::new()) {
+        if let Some(asset) = validate_library_asset(item).asset {
+            assets.push(asset);
+        }
+    }
+    sort_assets(&mut assets);
+    Ok((assets, false))
+}
+
+/// 全量替换落盘（merge 幂等由调用方经 [`merge_asset_library`] 承担）。
+pub fn save_assets(
+    project_root: &std::path::Path,
+    kind: AssetKind,
+    assets: &[LibraryAsset],
+) -> std::io::Result<()> {
+    let path = library_file_path(project_root, kind);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut sorted = assets.to_vec();
+    sort_assets(&mut sorted);
+    let payload = serde_json::json!({
+        "version": ASSET_LIBRARY_VERSION,
+        "kind": kind.as_str(),
+        "assets": sorted,
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetUpsertOutcome {
+    pub kind: AssetKind,
+    pub seeded: bool,
+    pub skipped: usize,
+    pub overwritten: usize,
+    pub added: usize,
+    pub merged: Vec<LibraryAsset>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+/// 单条资产 upsert：validate → merge（幂等）→ 落盘。
+pub fn upsert_asset(
+    project_root: &std::path::Path,
+    kind: AssetKind,
+    raw: &Value,
+) -> AssetUpsertOutcome {
+    let validation = validate_library_asset(raw);
+    let Some(asset) = validation.asset else {
+        return AssetUpsertOutcome {
+            kind,
+            seeded: false,
+            skipped: 0,
+            overwritten: 0,
+            added: 0,
+            merged: Vec::new(),
+            errors: validation.errors,
+        };
+    };
+    let (existing, seeded) = list_assets(project_root, kind).unwrap_or_else(|_| (Vec::new(), false));
+    let merged = merge_asset_library(&existing, &[asset]);
+    let outcome = AssetUpsertOutcome {
+        kind,
+        seeded: false,
+        skipped: merged.skipped,
+        overwritten: merged.overwritten,
+        added: merged.added,
+        merged: merged.merged.clone(),
+        errors: Vec::new(),
+    };
+    match save_assets(project_root, kind, &merged.merged) {
+        Ok(()) => outcome,
+        Err(error) => AssetUpsertOutcome {
+            kind,
+            seeded,
+            skipped: 0,
+            overwritten: 0,
+            added: 0,
+            merged: existing,
+            errors: vec![format!("(io): {error}")],
+        },
+    }
+}
+
+/// 删除资产：只作用于已落盘数据（内置种子不可删）。
+pub fn delete_asset(
+    project_root: &std::path::Path,
+    kind: AssetKind,
+    id: &str,
+) -> Result<(bool, Option<String>, Vec<LibraryAsset>), String> {
+    let (existing, seeded) = list_assets(project_root, kind).map_err(|error| error.to_string())?;
+    if seeded {
+        return Ok((false, Some("builtin seeds cannot be deleted; save the library first".to_string()), existing));
+    }
+    let remaining: Vec<LibraryAsset> = existing
+        .iter()
+        .filter(|asset| asset.id != id)
+        .cloned()
+        .collect();
+    if remaining.len() == existing.len() {
+        return Ok((false, Some(format!("asset not found: {id}")), existing));
+    }
+    save_assets(project_root, kind, &remaining).map_err(|error| error.to_string())?;
+    Ok((true, None, remaining))
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+
+    #[test]
+    fn library_store_roundtrips_with_seed_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // 文件缺失 → 种子兜底。
+        let (assets, seeded) = list_assets(root, AssetKind::GenreBase).unwrap();
+        assert!(seeded);
+        assert_eq!(assets.len(), 3);
+        let (progression, seeded) = list_assets(root, AssetKind::ProgressionMode).unwrap();
+        assert!(seeded);
+        assert_eq!(progression.len(), 3);
+
+        // upsert 覆盖种子（同 id 异内容）→ 落盘。
+        let raw = serde_json::json!({
+            "id": "urban_supernatural", "kind": "genre-base", "name": "都市异能", "body": "修订后的正文。"
+        });
+        let outcome = upsert_asset(root, AssetKind::GenreBase, &raw);
+        assert_eq!(outcome.overwritten, 1, "{outcome:?}");
+        let (assets, seeded) = list_assets(root, AssetKind::GenreBase).unwrap();
+        assert!(!seeded);
+        assert_eq!(assets.iter().find(|a| a.id == "urban_supernatural").unwrap().body, "修订后的正文。");
+
+        // 幂等重放。
+        let outcome = upsert_asset(root, AssetKind::GenreBase, &raw);
+        assert_eq!(outcome.skipped, 1);
+
+        // 删除：种子守卫 + 未找到 + 正常删除。
+        let (ok, reason, _) = delete_asset(root, AssetKind::ProgressionMode, "hook_cycle").unwrap();
+        assert!(!ok);
+        assert!(reason.unwrap().contains("builtin seeds"));
+        let (ok, reason, _) = delete_asset(root, AssetKind::GenreBase, "missing_id").unwrap();
+        assert!(!ok);
+        assert!(reason.unwrap().contains("not found"));
+        let (ok, _, remaining) = delete_asset(root, AssetKind::GenreBase, "urban_supernatural").unwrap();
+        assert!(ok);
+        assert!(!remaining.iter().any(|a| a.id == "urban_supernatural"));
     }
 }

@@ -13,6 +13,7 @@ import {
   assetContentHash,
   buildAssetLibraryExport,
   GENRE_BASE_SEEDS,
+  PROGRESSION_MODE_SEEDS,
   mergeAssetLibrary,
   parseAssetLibraryImport,
   validateLibraryAsset,
@@ -47,6 +48,7 @@ const vectors = JSON.parse(
     importOrder: string[];
   };
   seeds: { ids: string[]; count: number };
+  progressionSeeds: { ids: string[]; count: number };
 };
 
 function asAsset(raw: Record<string, unknown>): LibraryAsset {
@@ -120,6 +122,16 @@ describe("asset library contract (R4)", () => {
     for (const seed of GENRE_BASE_SEEDS) {
       expect(validateLibraryAsset(seed).errors, seed.id).toHaveLength(0);
       expect(seed.kind).toBe("genre-base");
+    }
+  });
+
+  it("ships progression-mode seeds matching the contract", () => {
+    expect(PROGRESSION_MODE_SEEDS).toHaveLength(vectors.progressionSeeds.count);
+    expect(PROGRESSION_MODE_SEEDS.map((asset) => asset.id).sort())
+      .toEqual([...vectors.progressionSeeds.ids].sort());
+    for (const seed of PROGRESSION_MODE_SEEDS) {
+      expect(validateLibraryAsset(seed).errors, seed.id).toHaveLength(0);
+      expect(seed.kind).toBe("progression-mode");
     }
   });
 });

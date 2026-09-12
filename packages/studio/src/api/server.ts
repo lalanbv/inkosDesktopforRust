@@ -5,6 +5,7 @@ import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import { createLoopbackGuardMiddleware, guardOptionsFromEnv, originIsAllowed } from "./loopback-guard.js";
+import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store";
 import {
   StateManager,
   PipelineRunner,
@@ -3297,6 +3298,63 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     await mkdir(join(root, "books", id, "story"), { recursive: true });
     await writeFile(rosterPath, core.renderEntityRoster(result.roster), "utf-8");
     return c.json({ ok: true, applied: result.applied });
+  });
+
+  // R4/363 号：三库资产（项目级 .inkos/asset-library/{kind}.json；种子兜底）。
+  app.get("/api/v1/asset-library/:kind", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const snapshot = await listAssets(root, kind);
+    return c.json(snapshot);
+  });
+
+  app.put("/api/v1/asset-library/:kind/assets", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const body = await c.req.json<{ asset?: unknown }>();
+    const outcome = await upsertAsset(root, kind, body.asset);
+    if (outcome.errors) return c.json({ errors: outcome.errors }, 400);
+    return c.json(outcome.result);
+  });
+
+  app.delete("/api/v1/asset-library/:kind/assets/:id", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const outcome = await deleteAsset(root, kind, c.req.param("id"));
+    if (!outcome.ok) return c.json({ error: outcome.reason }, outcome.reason?.includes("builtin") ? 400 : 404);
+    return c.json({ ok: true, assets: outcome.assets });
+  });
+
+  app.get("/api/v1/asset-library/:kind/export", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const snapshot = await listAssets(root, kind);
+    return c.body(core.buildAssetLibraryExport(snapshot.assets), 200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="asset-library-${kind}.json"`,
+    });
+  });
+
+  app.post("/api/v1/asset-library/:kind/import", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const raw = await c.req.text();
+    const parsed = core.parseAssetLibraryImport(raw);
+    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
+      return c.json({ errors: parsed.errors }, 400);
+    }
+    const snapshot = await listAssets(root, kind);
+    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
+    await saveAssets(root, kind, merged.merged);
+    return c.json({
+      added: merged.added,
+      skipped: merged.skipped,
+      overwritten: merged.overwritten,
+      errors: parsed.errors,
+      assets: merged.merged,
+    });
   });
 
   // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。

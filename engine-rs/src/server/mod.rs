@@ -48,7 +48,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -722,6 +722,27 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/quality-trend",
             get(ops_routes::get_quality_trend).with_state(books.clone()),
+        )
+        // R4/363 号：三库资产（种子兜底 + CRUD + 便携包导入导出）。
+        .route(
+            "/api/v1/asset-library/:kind",
+            get(ops_routes::get_asset_library).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/asset-library/:kind/assets",
+            put(ops_routes::put_asset_library_asset).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/asset-library/:kind/assets/:id",
+            delete(ops_routes::delete_asset_library_asset).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/asset-library/:kind/export",
+            get(ops_routes::export_asset_library).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/asset-library/:kind/import",
+            post(ops_routes::import_asset_library).with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/promises",

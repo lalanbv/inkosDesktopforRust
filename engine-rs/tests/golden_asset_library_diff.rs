@@ -215,3 +215,34 @@ fn seeds_match_shared_vectors() {
     sort_assets(&mut sorted);
     assert_eq!(asset_ids(&sorted), asset_ids(&sorted));
 }
+
+#[test]
+fn progression_seeds_match_shared_vectors() {
+    let vectors: Value = serde_json::from_str(VECTORS).unwrap();
+    let seeds = inkos_engine::utils::asset_library::progression_mode_seeds();
+    let expected_ids: Vec<String> = vectors["progressionSeeds"]["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        seeds.len(),
+        vectors["progressionSeeds"]["count"].as_u64().unwrap() as usize,
+        "progression seeds count drifted"
+    );
+    let mut got_ids: Vec<String> = seeds.iter().map(|asset| asset.id.clone()).collect();
+    got_ids.sort();
+    assert_eq!(got_ids, expected_ids, "progression seeds ids drifted");
+    for seed in &seeds {
+        assert!(
+            validate_library_asset(&serde_json::to_value(seed).unwrap()).asset.is_some(),
+            "progression seed '{}' should be valid",
+            seed.id
+        );
+        assert_eq!(
+            seed.kind,
+            inkos_engine::utils::asset_library::AssetKind::ProgressionMode
+        );
+    }
+}

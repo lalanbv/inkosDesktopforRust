@@ -1887,3 +1887,124 @@ mod tests {
         assert!(history.is_empty());
     }
 }
+
+// ── R4/363 号：三库资产（项目级 .inkos/asset-library/{kind}.json；种子兜底）──
+
+fn parse_library_kind(raw: &str) -> Option<crate::utils::asset_library::AssetKind> {
+    crate::utils::asset_library::AssetKind::parse(raw)
+}
+
+pub async fn get_asset_library(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(kind_raw): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let Some(kind) = parse_library_kind(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+        Ok((assets, seeded)) => (
+            StatusCode::OK,
+            Json(json!({ "kind": kind.as_str(), "assets": assets, "seeded": seeded })),
+        )
+            .into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UpsertAssetBody {
+    pub asset: Value,
+}
+
+pub async fn put_asset_library_asset(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(kind_raw): axum::extract::Path<String>,
+    Json(body): Json<UpsertAssetBody>,
+) -> impl IntoResponse {
+    let Some(kind) = parse_library_kind(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    let outcome = crate::utils::asset_library::upsert_asset(
+        &runtime.state.project_root(),
+        kind,
+        &body.asset,
+    );
+    if !outcome.errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": outcome.errors }))).into_response();
+    }
+    (StatusCode::OK, Json(serde_json::to_value(&outcome).unwrap_or_default())).into_response()
+}
+
+pub async fn delete_asset_library_asset(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path((kind_raw, id)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    let Some(kind) = parse_library_kind(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    match crate::utils::asset_library::delete_asset(&runtime.state.project_root(), kind, &id) {
+        Ok((true, _, assets)) => (StatusCode::OK, Json(json!({ "ok": true, "assets": assets }))).into_response(),
+        Ok((false, Some(reason), _)) => {
+            let status = if reason.contains("builtin seeds") { StatusCode::BAD_REQUEST } else { StatusCode::NOT_FOUND };
+            flat_error(status, reason)
+        }
+        Ok((false, None, _)) => flat_error(StatusCode::NOT_FOUND, String::from("asset not found")),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+pub async fn export_asset_library(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(kind_raw): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let Some(kind) = parse_library_kind(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    let (assets, _) = match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let body = crate::utils::asset_library::build_asset_library_export(&assets);
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Content-Disposition", Box::leak(format!("attachment; filename=\"asset-library-{kind_raw}.json\"").into_boxed_str())),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+pub async fn import_asset_library(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(kind_raw): axum::extract::Path<String>,
+    body: String,
+) -> impl IntoResponse {
+    let Some(kind) = parse_library_kind(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    let parsed = crate::utils::asset_library::parse_asset_library_import(&body);
+    if parsed.assets.is_empty() && !parsed.errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
+    }
+    let (existing, _) = match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
+    if let Err(error) = crate::utils::asset_library::save_assets(&runtime.state.project_root(), kind, &merged.merged) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "added": merged.added,
+            "skipped": merged.skipped,
+            "overwritten": merged.overwritten,
+            "errors": parsed.errors,
+            "assets": merged.merged,
+        })),
+    )
+        .into_response()
+}
