@@ -72,6 +72,8 @@ impl QualityVerdict {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "kebab-case")]
 pub enum GovernancePolicy {
     CompletionFirst,
@@ -135,6 +137,8 @@ pub fn resolve_quality_verdict(input: &QualityVerdictInput) -> QualityVerdict {
 
 /// 每书治理配置（book 级覆盖 project 级）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 pub struct GovernanceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<GovernancePolicy>,

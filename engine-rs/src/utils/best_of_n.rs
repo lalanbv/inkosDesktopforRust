@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub const BEST_OF_N_DEFAULTS: (usize, i64) = (2, 75);
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct BestOfNConfig {
     #[serde(default)]

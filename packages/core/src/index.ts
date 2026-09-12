@@ -953,3 +953,13 @@ export { exportInk } from "./interactive-film/export-ink.js";
 export { buildPlayableHtml } from "./interactive-film/export-html.js";
 export { ingestMaterial, type IngestMaterialInput, type MaterialAsset } from "./materials/ingest.js";
 export { runWorkerAgent, type WorkerAgentOptions } from "./agent/worker-agent.js";
+export {
+  deriveCodexCards,
+  matchCodexCards,
+  renderCodexBlock,
+  reviseCodexCard,
+  CODEX_LIMITS,
+  type CodexMatch,
+  type CodexRelationship,
+  type EntityCodexCard,
+} from "./utils/entity-codex.js";

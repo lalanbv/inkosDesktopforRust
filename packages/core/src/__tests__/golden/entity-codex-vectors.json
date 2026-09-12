@@ -1,0 +1,190 @@
+{
+  "meta": {
+    "contract": "R10 实体卡 Codex 化（375 号，三轮 P0）——名册同源派生卡片视图 + 场景命中 + 注入渲染",
+    "invariants": [
+      "同源：卡片身份字段（name/aliases/kind）以名册为准；派生时 summary/facts/relationships 置空；派生后按 name 码元序排序",
+      "修订：只允许编辑 summary/facts/relationships；summary ≤300 码元；facts ≤10×200；relationships ≤10、note ≤200",
+      "命中：name+aliases 合并计数（重叠按 term 长度步进）；0 命中不返回；命中数降序→name 码元序稳定",
+      "渲染：无命中 undefined；每卡 name(别名) + summary(>400 截断加 …) + 正典事实 + 关系；zh/en 双语"
+    ]
+  },
+  "derive": [
+    {
+      "name": "roster maps to sorted empty cards",
+      "roster": [
+        {
+          "id": "entity-2",
+          "name": "青镇",
+          "aliases": [],
+          "kind": "place",
+          "registeredAt": 3
+        },
+        {
+          "id": "entity-1",
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "registeredAt": 1
+        }
+      ],
+      "expected": [
+        {
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        },
+        {
+          "name": "青镇",
+          "aliases": [],
+          "kind": "place",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        }
+      ]
+    }
+  ],
+  "revise": [
+    {
+      "name": "revision edits extension fields and clamps",
+      "base": {
+        "name": "林动",
+        "aliases": [
+          "少年"
+        ],
+        "kind": "person",
+        "summary": "",
+        "facts": [],
+        "relationships": []
+      },
+      "revision": {
+        "summary": "废墟边缘的拾荒少年，怀表继承自父亲。",
+        "facts": [
+          "怀表停摆三年",
+          "祖符石在手心",
+          "这条超出二百码元会被截断——————"
+        ],
+        "relationships": [
+          {
+            "target": "老陈",
+            "note": "看门人，知情人"
+          }
+        ]
+      },
+      "expected": {
+        "name": "林动",
+        "aliases": [
+          "少年"
+        ],
+        "kind": "person",
+        "summary": "废墟边缘的拾荒少年，怀表继承自父亲。",
+        "facts": [
+          "怀表停摆三年",
+          "祖符石在手心",
+          "这条超出二百码元会被截断——————"
+        ],
+        "relationships": [
+          {
+            "target": "老陈",
+            "note": "看门人，知情人"
+          }
+        ]
+      }
+    }
+  ],
+  "match": [
+    {
+      "name": "alias hits counted and sorted by hits then name",
+      "text": "少年望向青镇的方向。林动攥紧了怀表。青镇的犬吠远了。",
+      "cards": [
+        {
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        },
+        {
+          "name": "青镇",
+          "aliases": [],
+          "kind": "place",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        }
+      ],
+      "expected": [
+        {
+          "name": "林动",
+          "hits": 2
+        },
+        {
+          "name": "青镇",
+          "hits": 2
+        }
+      ]
+    },
+    {
+      "name": "zero-hit cards omitted",
+      "text": "远处只有风声。",
+      "cards": [
+        {
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        }
+      ],
+      "expected": []
+    }
+  ],
+  "render": [
+    {
+      "name": "zh codex block with facts",
+      "language": "zh",
+      "matches": [
+        {
+          "card": {
+            "name": "林动",
+            "aliases": [
+              "少年"
+            ],
+            "kind": "person",
+            "summary": "拾荒少年。",
+            "facts": [
+              "怀表停摆三年"
+            ],
+            "relationships": [
+              {
+                "target": "老陈",
+                "note": "知情人"
+              }
+            ]
+          },
+          "hits": 3
+        }
+      ],
+      "expected": "## 实体卡（本场出场——遵循正典事实）\n### 林动（少年）\n拾荒少年。\n正典事实：\n- 怀表停摆三年\n关系：\n- 老陈: 知情人"
+    },
+    {
+      "name": "empty matches yield undefined",
+      "language": "zh",
+      "matches": [],
+      "expected": null
+    }
+  ]
+}
