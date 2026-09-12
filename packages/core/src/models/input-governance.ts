@@ -47,6 +47,14 @@ export const ContextSourceSchema = z.object({
   source: z.string().min(1),
   reason: z.string().min(1),
   excerpt: z.string().optional(),
+  /** R6/367 号：层内排序特征（缺省=无特征，score 0 保持组装序）。 */
+  rank: z
+    .object({
+      recency: z.number().min(0).max(1).optional(),
+      frequency: z.number().min(0).max(1).optional(),
+      hookBonus: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
 });
 
 export type ContextSource = z.infer<typeof ContextSourceSchema>;
@@ -138,6 +146,10 @@ export const ChapterTraceSchema = z.object({
     protectedTokens: z.number().int().nonnegative().default(0),
     compressibleTokens: z.number().int().nonnegative().default(0),
     budgetTokens: z.number().int().nonnegative().default(0),
+    /** R6/367 号：压缩留痕——压缩前逐源 token 估算（可压缩源）。 */
+    sourceTokens: z
+      .array(z.object({ source: z.string().min(1), tokens: z.number().int().nonnegative() }))
+      .default([]),
   }).optional(),
   retrieval: z.object({
     engine: z.literal("sqlite-fts5-bm25"),

@@ -250,11 +250,13 @@ mod tests {
                     source: "runtime/chapter_memo".into(),
                     reason: "memo".into(),
                     excerpt: Some("goal=推进主线".into()),
+                    rank: None,
                 },
                 ContextSource {
                     source: "story/chapter_summaries.md#3".into(),
                     reason: "episodic".into(),
                     excerpt: Some("第3章摘要内容".into()),
+                    rank: None,
                 },
             ],
         };

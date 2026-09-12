@@ -134,7 +134,10 @@ pub fn context_source_tier(source: &str) -> ContextSourceTier {
     if source.starts_with("story/volume_summaries.md#") {
         return ContextSourceTier::BookMemory;
     }
-    if source == "story/chapters#recent_endings" {
+    if source == "story/chapters#opening_hint" {
+        return ContextSourceTier::BookMemory;
+    }
+        if source == "story/chapters#recent_endings" {
         return ContextSourceTier::BookMemory;
     }
     if source.starts_with("reference/") {

@@ -27,6 +27,8 @@ import {
   resolveStyleBinding,
   type StyleBinding,
 } from "../utils/style-feature-engine.js";
+import { hookActivityStrength } from "../utils/promise-ledger.js";
+import { buildOpeningHint, rankEntriesForComposition } from "../utils/context-ranker.js";
 import {
   composeAntiAiGuidance,
   renderExperienceGuidance,
@@ -119,12 +121,14 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
   // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
   const ruleExperienceEntries = await loadRuleExperienceEntries(input.bookDir);
-  const selectedContext = enforceContextPriorityOrder([
+  // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
+  // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
+  const selectedContext = rankEntriesForComposition([
     ...baseContext.entries,
     ...referenceContext.entries,
     ...(styleBindingEntry ? [styleBindingEntry] : []),
     ...ruleExperienceEntries,
-  ]);
+  ]).map((ranked) => ranked.entry);
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
     selectedContext,
@@ -314,6 +318,11 @@ async function applyContextBudgetIfNeeded(params: {
       protectedTokens,
       compressibleTokens,
       budgetTokens: compileBudget,
+      // R6/367 号：压缩留痕——压缩前逐源 token 估算（可压缩源）。
+      sourceTokens: compressibleEntries.map((entry) => ({
+        source: entry.source,
+        tokens: estimateTextTokens([entry.source, entry.reason, entry.excerpt].filter(Boolean).join("\n")),
+      })),
     },
   };
 }
@@ -775,6 +784,11 @@ async function collectSelectedContext(
       excerpt: [summary.title, summary.events, summary.stateChanges, summary.hookActivity]
         .filter(Boolean)
         .join(" | "),
+      // R6/367 号：层内排序特征——近因（10 章窗口线性衰减）+ 钩子动静加成。
+      rank: {
+        recency: Math.max(0, 1 - (plan.intent.chapter - summary.chapter) / 10),
+        ...(summary.hookActivity ? { hookBonus: hookActivityStrength(summary.hookActivity) === "strong" ? 1 : 0 } : {}),
+      },
     }));
     const factEntries = memorySelection.facts.map((fact) => ({
       source: `story/current_state.md#${toFactAnchor(fact.predicate)}`,
@@ -870,7 +884,38 @@ async function buildRecentChapterTrailEntries(
       });
     }
 
+    // R6/367 号：openingHint——上章结尾承接约束（上一章正文尾部 200 码元）。
+    const openingHint = await buildOpeningHintEntry(storyDir, chapterNumber);
+    if (openingHint) {
+      entries.push({
+        source: "story/chapters#opening_hint",
+        reason: "Hard constraint: the opening must carry over the previous chapter ending.",
+        excerpt: openingHint,
+      });
+    }
+
     return entries;
+}
+
+async function buildOpeningHintEntry(
+  storyDir: string,
+  chapterNumber: number,
+): Promise<string | undefined> {
+  if (chapterNumber <= 1) return undefined;
+  const chaptersDir = join(dirname(storyDir), "chapters");
+  try {
+    const files = await readdir(chaptersDir);
+    const prevFile = files
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => ({ file, num: parseInt(file.slice(0, 4), 10) }))
+      .filter((entry) => Number.isFinite(entry.num) && entry.num === chapterNumber - 1)
+      .sort((a, b) => b.num - a.num)[0];
+    if (!prevFile) return undefined;
+    const content = await readFile(join(chaptersDir, prevFile.file), "utf-8");
+    return buildOpeningHint(content, "zh") ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function buildRecentEndingTrail(

@@ -49,6 +49,9 @@ fn priority_ordering_matches_shared_vectors() {
                 source: entry["source"].as_str().expect("source str").to_string(),
                 reason: entry["reason"].as_str().expect("reason str").to_string(),
                 excerpt: None,
+                rank: entry
+                    .get("rank")
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
             })
             .collect();
         let got: Vec<String> = enforce_context_priority_order(input)

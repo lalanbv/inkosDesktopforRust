@@ -2666,11 +2666,13 @@ mod tests {
                     source: "story/author_intent.md".to_string(),
                     reason: "长期方向".to_string(),
                     excerpt: Some("主角成长".to_string()),
+                    rank: None,
                 },
                 crate::models::input_governance::ContextSource {
                     source: "story/pending_hooks.md#H01".to_string(),
                     reason: "本章回收".to_string(),
                     excerpt: None,
+                    rank: None,
                 },
             ],
         };
@@ -2703,6 +2705,7 @@ mod tests {
                 source: "story/pending_hooks.md#H01".to_string(),
                 reason: "回收".to_string(),
                 excerpt: None,
+                rank: None,
             }],
         };
         let rule_stack = RuleStack::default();

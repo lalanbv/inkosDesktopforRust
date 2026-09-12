@@ -204,8 +204,10 @@ pub async fn compose_governed_chapter(
     selected_context.extend(load_rule_experience_entries(input.book_dir));
     // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
     // 临时），参考资料/更低层永远排在章纲与事实之后。
+    // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
+    // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
     let selected_context =
-        crate::utils::context_source_tier::enforce_context_priority_order(selected_context);
+        crate::utils::context_ranker::rank_context_sources(&selected_context, &crate::utils::context_ranker::DEFAULT_RANKER_WEIGHTS);
     let initial_context_package = ContextPackage {
         chapter: input.chapter_number,
         selected_context,
@@ -437,6 +439,7 @@ async fn apply_context_budget_if_needed(
         source: "runtime/compiled-compressible-context".to_string(),
         reason: "Semantic compilation of lower-priority context after protected context exceeded the input budget.".to_string(),
         excerpt: Some(compiled),
+        rank: None,
     });
 
     Ok(BudgetedPackage {
@@ -452,6 +455,20 @@ async fn apply_context_budget_if_needed(
             protected_tokens,
             compressible_tokens,
             budget_tokens: compile_budget,
+            // R6/367 号：压缩留痕——压缩前逐源 token 估算（可压缩源）。
+            source_tokens: compressible_entries
+                .iter()
+                .map(|entry| {
+                    let mut parts: Vec<&str> = vec![entry.source.as_str(), entry.reason.as_str()];
+                    if let Some(excerpt) = &entry.excerpt {
+                        parts.push(excerpt.as_str());
+                    }
+                    crate::models::input_governance::TraceSourceTokens {
+                        source: entry.source.clone(),
+                        tokens: u64::from(estimate_text_tokens(&parts.join("\n"))),
+                    }
+                })
+                .collect(),
         }),
     })
 }
@@ -922,12 +939,14 @@ async fn collect_selected_context(
                 .collect::<Vec<_>>()
                 .join(" | "),
             ),
+            rank: None,
         }]
     } else {
         vec![ContextSource {
             source: "runtime/chapter_memo".to_string(),
             reason: "Carry the planner's chapter memo into governed writing.".to_string(),
             excerpt: Some(format!("goal={}", plan.memo.goal)),
+            rank: None,
         }]
     };
 
@@ -970,7 +989,7 @@ async fn collect_selected_context(
     let summary_entries = memory_selection
         .summaries
         .iter()
-        .map(summary_entry)
+        .map(|summary| summary_entry(summary, plan.intent.chapter))
         .collect::<Vec<_>>();
     let volume_summary_entries = memory_selection
         .volume_summaries
@@ -1036,6 +1055,7 @@ async fn build_recent_chapter_trail_entries(
             reason: "Keep recent title history visible to avoid repetitive chapter naming."
                 .to_string(),
             excerpt: Some(recent_titles),
+            rank: None,
         });
     }
 
@@ -1057,6 +1077,7 @@ async fn build_recent_chapter_trail_entries(
             source: "story/chapter_summaries.md#recent_mood_type_trail".to_string(),
             reason: "Keep recent mood and chapter-type cadence visible before writing the next chapter.".to_string(),
             excerpt: Some(mood_trail),
+            rank: None,
         });
     }
 
@@ -1065,7 +1086,48 @@ async fn build_recent_chapter_trail_entries(
             source: "story/chapters#recent_endings".to_string(),
             reason: "Show how recent chapters ended so the writer avoids structural repetition (e.g. 3 consecutive collapse endings).".to_string(),
             excerpt: Some(ending_trail),
+            rank: None,
         });
+    }
+
+    // R6/367 号：openingHint——上章结尾承接约束（上一章正文尾部 200 码元）。
+    if chapter_number > 1 {
+        let Some(chapters_dir) = story_dir.parent().map(|parent| parent.join("chapters")) else {
+            return entries;
+        };
+        let mut prev: Option<(String, i64)> = None;
+        if let Ok(mut dir_entries) = tokio::fs::read_dir(&chapters_dir).await {
+            while let Ok(Some(entry)) = dir_entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !name.ends_with(".md") {
+                    continue;
+                }
+                let num = name
+                    .get(0..4)
+                    .and_then(|prefix| prefix.parse::<i64>().ok())
+                    .unwrap_or(-1);
+                if num == i64::from(chapter_number) - 1 {
+                    prev = Some((name, num));
+                    break;
+                }
+            }
+        }
+        if let Some((file, _)) = prev {
+            if let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file)).await {
+                if let Some(hint) = crate::utils::context_ranker::build_opening_hint(
+                    &content,
+                    crate::utils::language::WritingLanguage::Zh,
+                    crate::utils::context_ranker::OPENING_HINT_MAX_CHARS,
+                ) {
+                    entries.push(ContextSource {
+                        source: "story/chapters#opening_hint".to_string(),
+                        reason: "Hard constraint: the opening must carry over the previous chapter ending.".to_string(),
+                        excerpt: Some(hint),
+                        rank: None,
+                    });
+                }
+            }
+        }
     }
 
     entries
@@ -1236,6 +1298,7 @@ async fn build_hook_debt_entries(
                     "含原始种子文本的叙事债务简报。".to_string()
                 },
                 excerpt: Some(excerpt),
+                rank: None,
             })
         })
         .collect()
@@ -1269,6 +1332,7 @@ async fn maybe_context_source(
         source: format!("story/{resolved_file_name}"),
         reason: reason.to_string(),
         excerpt: Some(content.trim().to_string()),
+        rank: None,
     })
 }
 
@@ -1330,6 +1394,7 @@ async fn select_outline_section_entries(
             source: format!("story/{file_name}#document"),
             reason: reason.to_string(),
             excerpt: Some(content.trim().to_string()),
+            rank: None,
         }];
     }
 
@@ -1390,6 +1455,7 @@ async fn select_outline_section_entries(
                     ),
                     reason: reason.to_string(),
                     excerpt: Some(section.raw.trim().to_string()),
+                    rank: None,
                 })
                 .collect();
             if !llm_sections.is_empty() {
@@ -1408,6 +1474,7 @@ async fn select_outline_section_entries(
                 ),
                 reason: reason.to_string(),
                 excerpt: Some(section.raw.trim().to_string()),
+                rank: None,
             })
             .collect(),
     )
@@ -1604,10 +1671,11 @@ fn fact_entry(fact: &NewFact) -> ContextSource {
         reason: "Relevant current-state fact retrieved for the current chapter goal."
             .to_string(),
         excerpt: Some(format!("{} | {}", fact.predicate, fact.object)),
+        rank: None,
     }
 }
 
-fn summary_entry(summary: &StoredSummary) -> ContextSource {
+fn summary_entry(summary: &StoredSummary, current_chapter: u32) -> ContextSource {
     ContextSource {
         source: format!("story/chapter_summaries.md#{}", summary.chapter),
         reason: "Relevant episodic memory retrieved for the current chapter goal.".to_string(),
@@ -1623,6 +1691,14 @@ fn summary_entry(summary: &StoredSummary) -> ContextSource {
             .collect::<Vec<_>>()
             .join(" | "),
         ),
+        // R6/367 号：层内排序特征——近因（10 章窗口线性衰减）+ 钩子动静加成。
+        rank: Some(crate::models::input_governance::ContextSourceRank {
+            recency: Some(
+                (1.0 - (i64::from(current_chapter) - summary.chapter) as f64 / 10.0).clamp(0.0, 1.0),
+            ),
+            frequency: None,
+            hook_bonus: Some(if summary.hook_activity.is_empty() { 0.0 } else { 1.0 }),
+        }),
     }
 }
 
@@ -1632,6 +1708,7 @@ fn volume_summary_entry(summary: &VolumeSummarySelection) -> ContextSource {
         reason: "Carry forward long-span arc memory compressed from earlier volumes."
             .to_string(),
         excerpt: Some(format!("{} | {}", summary.heading, summary.content)),
+        rank: None,
     }
 }
 
@@ -1654,6 +1731,7 @@ fn hook_entry(hook: &HookRecord) -> ContextSource {
             .collect::<Vec<_>>()
             .join(" | "),
         ),
+        rank: None,
     }
 }
 
@@ -1871,11 +1949,13 @@ mod tests {
                     source: "runtime/chapter_memo".into(),
                     reason: "memo".into(),
                     excerpt: Some("goal=保护条目内容".into()),
+                    rank: None,
                 },
                 ContextSource {
                     source: "story/chapter_summaries.md#1".into(),
                     reason: "episodic".into(),
                     excerpt: Some("长".repeat(4000)),
+                    rank: None,
                 },
             ],
         }
@@ -2243,6 +2323,7 @@ pub fn load_rule_experience_entries(
                             source: "rules/anti-ai".to_string(),
                             reason: "Bound anti-AI rules.".to_string(),
                             excerpt: Some(guidance),
+                            rank: None,
                         });
                     }
                 }
@@ -2269,6 +2350,7 @@ pub fn load_rule_experience_entries(
                             source: "experience/proven".to_string(),
                             reason: "Proven techniques learned from this book.".to_string(),
                             excerpt: Some(guidance),
+                            rank: None,
                         });
                     }
                 }
@@ -2308,5 +2390,6 @@ pub fn load_style_binding_entry(
         source: format!("style/{}", binding.profile_name),
         reason: "Bound style profile (feature pool selection).".to_string(),
         excerpt: Some(guidance),
+        rank: None,
     })
 }

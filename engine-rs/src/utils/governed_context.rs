@@ -159,6 +159,7 @@ mod tests {
             source: source.to_string(),
             reason: reason.to_string(),
             excerpt: excerpt.map(|s| s.to_string()),
+            rank: None,
         }
     }
 

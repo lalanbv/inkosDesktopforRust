@@ -1090,6 +1090,7 @@ mod tests {
                 source: "story/current_focus.md".into(),
                 reason: "焦点".into(),
                 excerpt: Some("聚焦夺符".into()),
+                rank: None,
             }],
         };
         let rule_stack = crate::utils::context_assembly::build_governed_rule_stack(

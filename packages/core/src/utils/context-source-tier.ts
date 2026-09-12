@@ -114,6 +114,7 @@ export function contextSourceTier(source: string): ContextSourceTierId {
   if (source.startsWith("story/chapter_summaries.md#")) return "book-memory";
   if (source.startsWith("story/volume_summaries.md#")) return "book-memory";
   if (source === "story/chapters#recent_endings") return "book-memory";
+  if (source === "story/chapters#opening_hint") return "book-memory";
   if (source.startsWith("reference/")) return "user-reference";
   if (source.startsWith("deconstruction/")) return "deconstruction";
   if (source.startsWith("style/")) return "style-asset";

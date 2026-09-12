@@ -1944,11 +1944,13 @@ mod tests {
                     source: "story/pending_hooks.md#H1".to_string(),
                     reason: "主线伏笔".to_string(),
                     excerpt: Some("H1 玉佩悬念".to_string()),
+                    rank: None,
                 },
                 ContextSource {
                     source: "story/chapter_summaries.md".to_string(),
                     reason: "前情".to_string(),
                     excerpt: None,
+                    rank: None,
                 },
             ],
         }
@@ -2321,6 +2323,7 @@ mod tests {
                     source: "story/pending_hooks.md#H1".to_string(),
                     reason: "主线伏笔待回收".to_string(),
                     excerpt: Some("H1 玉佩悬念未解".to_string()),
+                    rank: None,
                 }],
             }),
             ..AuditChapterOptions::default()

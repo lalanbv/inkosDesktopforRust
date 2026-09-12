@@ -595,6 +595,7 @@ mod tests {
                 source: "story/pending_hooks.md#H02".to_string(),
                 reason: "本章回收".to_string(),
                 excerpt: None,
+                rank: None,
             }],
         };
         let input = GovernedHookWorkingSetInput {
@@ -681,6 +682,7 @@ mod tests {
                 source: "story/current_state.md#甲".to_string(),
                 reason: "甲在场".to_string(),
                 excerpt: Some("甲 拔剑".to_string()),
+                rank: None,
             }],
         };
         let input = GovernedMatrixWorkingSetInput {

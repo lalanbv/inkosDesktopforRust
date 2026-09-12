@@ -84,7 +84,7 @@ impl Default for ChapterIntent {
 }
 
 /// 单条入选上下文来源。对齐 TS `ContextSourceSchema`（source/reason 非空由构造方保证）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase")]
@@ -93,10 +93,28 @@ pub struct ContextSource {
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// R6/367 号：层内排序特征（缺省=无特征，score 0 保持组装序）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<ContextSourceRank>,
+}
+
+/// R6/367 号：排序特征（0–1；缺省维度计 0）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSourceRank {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recency: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_bonus: Option<f64>,
 }
 
 /// 上下文包。对齐 TS `ContextPackageSchema`——governed-context / ContinuityAuditor 的输入。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// （R6/367 号起去 Eq：ContextSource.rank 携带 f64 特征。）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase", default)]
@@ -221,6 +239,18 @@ pub struct TraceCompression {
     pub protected_tokens: u64,
     pub compressible_tokens: u64,
     pub budget_tokens: u64,
+    /// R6/367 号：压缩留痕——压缩前逐源 token 估算（可压缩源）。
+    pub source_tokens: Vec<TraceSourceTokens>,
+}
+
+/// R6/367 号：单源压缩前 token 估算。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct TraceSourceTokens {
+    pub source: String,
+    pub tokens: u64,
 }
 
 /// 章节追踪。对齐 TS `ChapterTraceSchema`（pipeline 追踪产物）。
@@ -269,6 +299,7 @@ mod tests {
                 source: "story/pending_hooks.md#h1".into(),
                 reason: "伏笔".into(),
                 excerpt: Some("摘录".into()),
+                rank: None,
             }],
         };
         let json = serde_json::to_value(&pkg).unwrap();

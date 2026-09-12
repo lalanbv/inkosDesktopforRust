@@ -1,0 +1,179 @@
+{
+  "meta": {
+    "contract": "R6 上下文排序器 + openingHint（367 号，二轮 P2）——层内确定性排序（recency×frequency×hookBonus，权重可配）+ 层间 precedence 组合 + 上章结尾承接约束块",
+    "invariants": [
+      "得分 = clamp01(recency)×wR + clamp01(frequency)×wF + clamp01(hookBonus)×wH，4 位小数；缺特征维度计 0；默认权重 0.5/0.3/0.2",
+      "层内排序：score 降序稳定（同分保持输入序，禁 localeCompare）；无特征条目 score=0 沉底保持相对序",
+      "组装入口：contextSourceTier 分层 → 层内 rank → 层间 precedence 升序拼回；无特征时与 330 号 enforceContextPriorityOrder 输出序一致",
+      "openingHint：结尾 trim 后空 → undefined；>200 码元取尾部加 … 前缀；zh/en 双语指令"
+    ]
+  },
+  "rankWithinTier": [
+    {
+      "name": "weighted score ordering",
+      "weights": null,
+      "input": [
+        {
+          "source": "story/chapter_summaries.md#3",
+          "recency": 0.2,
+          "frequency": 0.4,
+          "hookBonus": 0
+        },
+        {
+          "source": "story/chapter_summaries.md#5",
+          "recency": 1.0,
+          "frequency": 0.2,
+          "hookBonus": 1
+        },
+        {
+          "source": "story/chapter_summaries.md#4",
+          "recency": 0.5,
+          "frequency": 0.1,
+          "hookBonus": 0
+        }
+      ],
+      "expected": [
+        {
+          "source": "story/chapter_summaries.md#5",
+          "rankScore": 0.76
+        },
+        {
+          "source": "story/chapter_summaries.md#4",
+          "rankScore": 0.28
+        },
+        {
+          "source": "story/chapter_summaries.md#3",
+          "rankScore": 0.22
+        }
+      ]
+    },
+    {
+      "name": "tie keeps input order",
+      "weights": null,
+      "input": [
+        {
+          "source": "a",
+          "recency": 0.5
+        },
+        {
+          "source": "b",
+          "recency": 0.5,
+          "frequency": 0
+        },
+        {
+          "source": "c"
+        }
+      ],
+      "expected": [
+        {
+          "source": "a",
+          "rankScore": 0.25
+        },
+        {
+          "source": "b",
+          "rankScore": 0.25
+        },
+        {
+          "source": "c",
+          "rankScore": 0.0
+        }
+      ]
+    },
+    {
+      "name": "custom weights reshape order",
+      "weights": {
+        "recency": 0.1,
+        "frequency": 0.1,
+        "hookBonus": 0.8
+      },
+      "input": [
+        {
+          "source": "fresh",
+          "recency": 1,
+          "frequency": 1,
+          "hookBonus": 0
+        },
+        {
+          "source": "hooked",
+          "recency": 0,
+          "frequency": 0,
+          "hookBonus": 1
+        }
+      ],
+      "expected": [
+        {
+          "source": "hooked",
+          "rankScore": 0.8
+        },
+        {
+          "source": "fresh",
+          "rankScore": 0.2
+        }
+      ]
+    }
+  ],
+  "composition": [
+    {
+      "name": "tier precedence with intra-tier ranking",
+      "weights": null,
+      "input": [
+        {
+          "source": "reference/mat-01",
+          "recency": 1,
+          "frequency": 1,
+          "hookBonus": 1
+        },
+        {
+          "source": "story/chapter_summaries.md#3",
+          "recency": 0.1,
+          "frequency": 0,
+          "hookBonus": 0
+        },
+        {
+          "source": "story/current_state.md"
+        },
+        {
+          "source": "story/chapter_summaries.md#5",
+          "recency": 0.9,
+          "frequency": 0.5,
+          "hookBonus": 1
+        }
+      ],
+      "expectedOrder": [
+        "story/current_state.md",
+        "story/chapter_summaries.md#5",
+        "story/chapter_summaries.md#3",
+        "reference/mat-01"
+      ],
+      "expectedScores": [
+        0.0,
+        0.8,
+        0.05,
+        1.0
+      ]
+    }
+  ],
+  "openingHint": [
+    {
+      "name": "zh constraint block with tail clipping",
+      "language": "zh",
+      "previousEnding": "他收起了刀。",
+      "maxChars": 8,
+      "expected": "## 开头承接约束（上章结尾）\n本章开头必须真实接住上一章结尾——同一场景、同一张力，不得重置或跳过。\n上章结尾：\n他收起了刀。"
+    },
+    {
+      "name": "en constraint block",
+      "language": "en",
+      "previousEnding": "The door closed.",
+      "maxChars": 200,
+      "expected": "## Opening constraint (carry over the previous ending)\nThe first paragraphs of this chapter must pick up exactly where the previous chapter ended — same scene, same tension, no reset.\nPrevious ending:\nThe door closed."
+    },
+    {
+      "name": "blank ending yields undefined",
+      "language": "zh",
+      "previousEnding": "   ",
+      "maxChars": 200,
+      "expected": null
+    }
+  ]
+}

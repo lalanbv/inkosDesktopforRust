@@ -521,6 +521,7 @@ pub async fn select_book_reference_context(
             source: section.source.clone(),
             reason: render_reason(&section.title, &section.uses, section.note.as_deref()),
             excerpt: Some(section.content.clone()),
+            rank: None,
         })
         .collect();
     Ok(BookReferenceContextSelection { entries, notes })

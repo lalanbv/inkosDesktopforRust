@@ -76,6 +76,7 @@ mod tests {
                 source: "runtime/chapter_memo".into(),
                 reason: "memo".into(),
                 excerpt: Some("goal=x".into()),
+                rank: None,
             }],
         };
         let rule_stack = RuleStack {
