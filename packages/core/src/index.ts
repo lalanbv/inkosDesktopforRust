@@ -664,6 +664,22 @@ export {
   type UrgencyLevel,
 } from "./utils/promise-ledger.js";
 export {
+  assetContentHash,
+  buildAssetLibraryExport,
+  GENRE_BASE_SEEDS,
+  mergeAssetLibrary,
+  parseAssetLibraryImport,
+  sortAssets,
+  validateLibraryAsset,
+  ASSET_LIBRARY_VERSION,
+  type AssetImportResult,
+  type AssetKind,
+  type AssetLibraryPackage,
+  type AssetMergeResult,
+  type AssetValidateResult,
+  type LibraryAsset,
+} from "./utils/asset-library.js";
+export {
   detectSecretLeaks,
   detectReaderRedundancy,
   parseInfoGapsMarkdown,

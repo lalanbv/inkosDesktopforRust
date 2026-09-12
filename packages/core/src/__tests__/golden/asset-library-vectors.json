@@ -1,0 +1,111 @@
+{
+  "meta": {
+    "contract": "R4 三库资产生态契约层首批（362 号，二轮 P1）——统一 shape + 内容指纹幂等合并 + 便携包导入导出 + 题材基底种子",
+    "invariants": [
+      "shape 校验：id=snake_case slug ≤64 / name ≤80 / body 1–4000 / expectations,taboos ≤20 条各 ≤200 / samples ≤10 段各 ≤600；非法条目报错不抛错",
+      "内容指纹：FNV-1a 64 UTF-8 hex16，canonical=[kind]|[id]|[name]|[body]|[exp\\u001f连]|[taboos \\u001f连]|[samples \\u001f连]",
+      "合并：同 kind+id 同 hash 跳过 / 异 hash 覆盖（incoming 赢）/ 新 id 追加；merged 按 kind+id 码元序稳定",
+      "便携包：version=1；导出/导入产物均按 kind+id 稳定序；导入逐条校验非法跳过不阻断，版本不符整包拒绝",
+      "export 字符串只锁语义（键序+条目序）不锁字节（缩进双端实现各异）"
+    ]
+  },
+  "validate": [
+    {
+      "name": "valid full asset",
+      "input": {
+        "id": "three_act", "kind": "progression-mode", "name": "三幕推进",
+        "body": "循环正文", "expectations": ["期待一", "期待二"], "taboos": ["禁忌一"],
+        "samples": ["样本一", "样本二"]
+      },
+      "valid": true
+    },
+    {
+      "name": "missing body rejected",
+      "input": { "id": "no_body", "kind": "genre-base", "name": "无正文" },
+      "valid": false,
+      "errorField": "body"
+    },
+    {
+      "name": "non snake_case id rejected",
+      "input": { "id": "Urban-X", "kind": "genre-base", "name": "坏id", "body": "正文" },
+      "valid": false,
+      "errorField": "id"
+    }
+  ],
+  "hashes": [
+    {
+      "name": "minimal canonical hash",
+      "input": { "id": "urban_supernatural", "kind": "genre-base", "name": "都市异能", "body": "正文" },
+      "expected": "6e604f9678f5aa93"
+    },
+    {
+      "name": "full canonical hash with array fields",
+      "input": {
+        "id": "three_act", "kind": "progression-mode", "name": "三幕推进", "body": "循环正文",
+        "expectations": ["期待一", "期待二"], "taboos": ["禁忌一"], "samples": ["样本一", "样本二"]
+      },
+      "expected": "0ac5daccc3e9621d"
+    }
+  ],
+  "merge": [
+    {
+      "name": "same id same content skips",
+      "existing": [
+        { "id": "a_one", "kind": "genre-base", "name": "甲", "body": "正文甲", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "incoming": [
+        { "id": "a_one", "kind": "genre-base", "name": "甲", "body": "正文甲", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "expected": { "mergedIds": ["genre-base:a_one"], "skipped": 1, "overwritten": 0, "added": 0 }
+    },
+    {
+      "name": "same id different content overwrites with incoming",
+      "existing": [
+        { "id": "a_one", "kind": "genre-base", "name": "甲", "body": "旧正文", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "incoming": [
+        { "id": "a_one", "kind": "genre-base", "name": "甲", "body": "新正文", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "expected": {
+        "mergedIds": ["genre-base:a_one"],
+        "mergedBodies": ["新正文"],
+        "skipped": 0, "overwritten": 1, "added": 0
+      }
+    },
+    {
+      "name": "new ids append across kinds in stable order",
+      "existing": [
+        { "id": "z_last", "kind": "progression-mode", "name": "尾", "body": "b", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "incoming": [
+        { "id": "a_first", "kind": "world-sample", "name": "头", "body": "b2", "expectations": [], "taboos": [], "samples": [] },
+        { "id": "b_mid", "kind": "genre-base", "name": "中", "body": "b3", "expectations": [], "taboos": [], "samples": [] }
+      ],
+      "expected": {
+        "mergedIds": ["genre-base:b_mid", "progression-mode:z_last", "world-sample:a_first"],
+        "skipped": 0, "overwritten": 0, "added": 2
+      }
+    }
+  ],
+  "package": {
+    "name": "export stable order and tolerant import",
+    "exportInput": [
+      { "id": "z_last", "kind": "progression-mode", "name": "尾", "body": "b", "expectations": [], "taboos": [], "samples": [] },
+      { "id": "a_mid", "kind": "genre-base", "name": "中", "body": "b2", "expectations": ["e"], "taboos": [], "samples": ["s"] }
+    ],
+    "exportOrder": ["genre-base:a_mid", "progression-mode:z_last"],
+    "importAssets": [
+      { "id": "a_mid", "kind": "genre-base", "name": "中", "body": "b2", "expectations": ["e"], "taboos": [], "samples": ["s"] },
+      { "id": "Bad-ID", "kind": "genre-base", "name": "坏", "body": "x" },
+      { "id": "z_last", "kind": "progression-mode", "name": "尾", "body": "b", "expectations": [], "taboos": [], "samples": [] },
+      { "id": "no_body", "kind": "world-sample", "name": "缺正文" }
+    ],
+    "importValidCount": 2,
+    "importInvalidCount": 2,
+    "importOrder": ["genre-base:a_mid", "progression-mode:z_last"]
+  },
+  "seeds": {
+    "ids": ["mystery_investigation", "urban_supernatural", "xuanhuan_cultivation"],
+    "count": 3
+  }
+}

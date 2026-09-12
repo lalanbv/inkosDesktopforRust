@@ -13,6 +13,7 @@
 //! writing-methodology / ...
 
 pub mod analytics;
+pub mod asset_library;
 pub mod atomic_file_set;
 pub mod book_eval;
 pub mod book_id;
