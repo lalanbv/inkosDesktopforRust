@@ -1,0 +1,190 @@
+{
+  "_header": "拆书工作台共享向量（G5/350 号，Phase C 第二大件首批）。唯一事实源本文件；TS 断言 src/__tests__/golden-deconstruction.test.ts，Rust 差分 engine-rs/tests/golden_deconstruction_diff.rs。四档：brief=出场章(证据0条)、standard=证据前3条、deep=+出场率/最长缺席(证据前10)、full=全量证据；出场率=出场章数/跨度(一位小数)；导出含 ## Extracted content 标记（reference-context.extractMaterialContent 消费）。",
+  "chapters": [
+    {
+      "chapter": 1,
+      "characters": [
+        "林动",
+        "王胖"
+      ],
+      "events": "林动觉醒祖符",
+      "chapterType": "开局",
+      "hookActivity": "H01 埋"
+    },
+    {
+      "chapter": 2,
+      "characters": [
+        "林动"
+      ],
+      "events": "林动练成奇门印",
+      "chapterType": "推进",
+      "hookActivity": ""
+    },
+    {
+      "chapter": 3,
+      "characters": [
+        "王胖",
+        "林动",
+        "小炎"
+      ],
+      "events": "王胖引出青镇大比",
+      "chapterType": "推进",
+      "hookActivity": "H02"
+    },
+    {
+      "chapter": 4,
+      "characters": [
+        "林动"
+      ],
+      "events": "大比夺魁",
+      "chapterType": "高潮",
+      "hookActivity": "H01 推进"
+    }
+  ],
+  "index": {
+    "byCharacterKeys": [
+      "林动",
+      "王胖",
+      "小炎"
+    ],
+    "linDongChapters": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "xiaoYanChapters": [
+      3
+    ],
+    "chapterTypeSequence": [
+      "开局",
+      "推进",
+      "推进",
+      "高潮"
+    ]
+  },
+  "dossiers": [
+    {
+      "name": "brief-lin-dong",
+      "depth": "brief",
+      "expected": {
+        "name": "林动",
+        "appearances": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "firstChapter": 1,
+        "lastChapter": 4,
+        "evidence": []
+      }
+    },
+    {
+      "name": "standard-caps-evidence-at-3",
+      "depth": "standard",
+      "expected": {
+        "name": "林动",
+        "appearances": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "firstChapter": 1,
+        "lastChapter": 4,
+        "evidenceCount": 3
+      }
+    },
+    {
+      "name": "deep-adds-frequency-and-absence",
+      "depth": "deep",
+      "expected": {
+        "name": "林动",
+        "appearances": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "firstChapter": 1,
+        "lastChapter": 4,
+        "frequency": 0.8,
+        "longestAbsence": 0,
+        "evidenceCount": 4
+      }
+    },
+    {
+      "name": "full-keeps-all-evidence",
+      "depth": "full",
+      "expected": {
+        "name": "林动",
+        "appearances": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "firstChapter": 1,
+        "lastChapter": 4,
+        "frequency": 0.8,
+        "longestAbsence": 0,
+        "evidenceCount": 4
+      }
+    }
+  ],
+  "pacing": [
+    {
+      "name": "type-counts-and-longest-run",
+      "expected": {
+        "counts": {
+          "开局": 1,
+          "推进": 2,
+          "高潮": 1
+        },
+        "longestRun": {
+          "chapterType": "推进",
+          "length": 2
+        },
+        "strongHookDensity": 0.8
+      }
+    }
+  ],
+  "exportRender": [
+    {
+      "name": "zh-export-has-extracted-content-marker",
+      "language": "zh",
+      "expectedContains": [
+        "# 拆书产物",
+        "## Extracted content",
+        "### 人物档案",
+        "### 节奏：最长连续同型 2 章（推进）；强钩密度 0.8"
+      ]
+    },
+    {
+      "name": "en-export",
+      "language": "en",
+      "expectedContains": [
+        "# Deconstruction Export",
+        "## Extracted content",
+        "### Character dossiers",
+        "strong-hook density 0.8"
+      ]
+    }
+  ],
+  "contract": {
+    "depths": [
+      "brief",
+      "standard",
+      "deep",
+      "full"
+    ],
+    "evidenceCaps": {
+      "brief": 0,
+      "standard": 3,
+      "deep": 10
+    },
+    "exportMarker": "## Extracted content",
+    "consumedBy": "reference-context.extractMaterialContent"
+  }
+}
