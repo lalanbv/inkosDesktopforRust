@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "contract": "R12 sqlite-vec 真向量检索升级（380 号，三轮 P0 末件）——引擎决策表：可用性一票否决 + 规模超阈值切换 + 自动回退内存余弦",
+    "invariants": [
+      "扩展不可用 → memory-cosine（无论规模）",
+      "扩展可用 + chunkCount > threshold → sqlite-vec；≤ threshold → memory-cosine（小规模内存更快）",
+      "threshold 缺省 5000，可覆盖"
+    ]
+  },
+  "resolve": [
+    {
+      "name": "unavailable extension falls back regardless of scale",
+      "input": { "chunkCount": 50000, "vecExtensionAvailable": false },
+      "expected": "memory-cosine"
+    },
+    {
+      "name": "available below threshold stays memory",
+      "input": { "chunkCount": 4999, "vecExtensionAvailable": true },
+      "expected": "memory-cosine"
+    },
+    {
+      "name": "available above threshold switches to sqlite-vec",
+      "input": { "chunkCount": 5001, "vecExtensionAvailable": true },
+      "expected": "sqlite-vec"
+    },
+    {
+      "name": "custom threshold respected",
+      "input": { "chunkCount": 800, "vecExtensionAvailable": true, "threshold": 500 },
+      "expected": "sqlite-vec"
+    },
+    {
+      "name": "boundary equals threshold stays memory",
+      "input": { "chunkCount": 5000, "vecExtensionAvailable": true },
+      "expected": "memory-cosine"
+    }
+  ]
+}

@@ -656,6 +656,13 @@ export {
   type ScoredCandidate,
 } from "./utils/best-of-n.js";
 export {
+  resolveVectorEngine,
+  SQLITE_VEC_DEFAULT_THRESHOLD,
+  SQLITE_VEC_PATH_ENV,
+  type VectorEngine,
+  type VectorEngineContext,
+} from "./utils/vector-engine.js";
+export {
   loadAuthorErrorCatalog,
   nextActionFor,
   resolveAuthorError,

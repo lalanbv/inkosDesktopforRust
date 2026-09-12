@@ -66,6 +66,7 @@ pub mod runtime_writer;
 pub mod semantic_retrieval;
 pub mod story_markdown;
 pub mod tension_curve;
+pub mod vector_engine;
 pub mod truth_dialect;
 pub mod utc_time;
 pub mod writing_methodology;
