@@ -7,6 +7,7 @@ import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { resolveAgentModel } from "../models/task-routing.js";
+import { createHybridMemorySelector } from "../retrieval/hybrid-memory-selector.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import {

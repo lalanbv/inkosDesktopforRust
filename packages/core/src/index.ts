@@ -616,6 +616,11 @@ export {
   type InspirationCard,
 } from "./models/director.js";
 export {
+  createHybridMemorySelector,
+  type HybridSelectorCache,
+  type HybridSelectorOptions,
+} from "./retrieval/hybrid-memory-selector.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,
