@@ -86,6 +86,12 @@ pub struct StoredSummary {
     pub hook_activity: String,
     pub mood: String,
     pub chapter_type: String,
+    /// R2/358 号：张力评分（1–10，settle TENSION_METRICS 节产出）。缺分章为
+    /// `None`；不入 sqlite（真相源在 chapter_summaries.md），与 TS 侧一致。
+    #[serde(default)]
+    pub conflict_level: Option<i64>,
+    #[serde(default)]
+    pub reveal_level: Option<i64>,
 }
 
 /// hook 记录（对应 `hooks` 表一行）。字段与 TS `StoredHook` 的持久化子集一一对应。
@@ -689,9 +695,11 @@ fn row_to_summary(row: &Row) -> rusqlite::Result<StoredSummary> {
         characters: row.get("characters")?,
         events: row.get("events")?,
         state_changes: row.get("state_changes")?,
-        hook_activity: row.get("hook_activity")?,
-        mood: row.get("mood")?,
-        chapter_type: row.get("chapter_type")?,
+            hook_activity: row.get("hook_activity")?,
+            mood: row.get("mood")?,
+            chapter_type: row.get("chapter_type")?,
+            conflict_level: None,
+            reveal_level: None,
     })
 }
 
@@ -1009,6 +1017,8 @@ mod tests {
             hook_activity: String::new(),
             mood: String::new(),
             chapter_type: String::new(),
+            conflict_level: None,
+            reveal_level: None,
         }
     }
 

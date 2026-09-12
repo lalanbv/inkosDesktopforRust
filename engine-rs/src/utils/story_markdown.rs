@@ -212,8 +212,20 @@ pub fn parse_chapter_summaries_markdown(markdown: &str) -> Vec<StoredSummary> {
             hook_activity: row.get(5).cloned().unwrap_or_default(),
             mood: row.get(6).cloned().unwrap_or_default(),
             chapter_type: row.get(7).cloned().unwrap_or_default(),
+            // R2/358 号：8 列旧表（无张力列）→ None；10 列新表解析并 clamp。
+            conflict_level: parse_tension_cell(row.get(8)),
+            reveal_level: parse_tension_cell(row.get(9)),
         })
         .collect()
+}
+
+/// 张力列单元格 → 1–10 分；空/非纯数字 → `None`（对齐 TS `parseTensionCell`）。
+fn parse_tension_cell(cell: Option<&String>) -> Option<i64> {
+    let raw = cell?;
+    if !raw.chars().all(|c| c.is_ascii_digit()) || raw.is_empty() {
+        return None;
+    }
+    Some(raw.parse::<i64>().ok()?.clamp(1, 10))
 }
 
 /// 解析 pending hooks markdown → [`HookRecord`] 列表（含 Phase 7 元数据）。
@@ -327,8 +339,9 @@ fn hook_payoff_timing_str(t: crate::models::runtime_state::HookPayoffTiming) -> 
 
 /// 渲染章节摘要快照表（空表 → `- none`）。
 ///
-/// 对齐 TS `renderSummarySnapshot`：8 列固定表头（zh/en 双语），单元格
-/// `escapeTableCell`（`|` 转义 + trim），无标题行、无尾随空行。
+/// 对齐 TS `renderSummarySnapshot`：10 列固定表头（zh/en 双语，R2/358 号起
+/// 增冲突强度/揭示强度两列），单元格 `escapeTableCell`（`|` 转义 + trim），
+/// 无标题行、无尾随空行。缺分渲染空单元格，保持旧表消费者无感。
 pub fn render_summary_snapshot(
     summaries: &[StoredSummary],
     language: crate::utils::language::WritingLanguage,
@@ -340,13 +353,13 @@ pub fn render_summary_snapshot(
     let en = language == crate::utils::language::WritingLanguage::En;
     let headers: [&str; 2] = if en {
         [
-            "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType | conflict | reveal |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     } else {
         [
-            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     };
 
@@ -361,6 +374,8 @@ pub fn render_summary_snapshot(
             summary.hook_activity.clone(),
             summary.mood.clone(),
             summary.chapter_type.clone(),
+            summary.conflict_level.map(|v| v.to_string()).unwrap_or_default(),
+            summary.reveal_level.map(|v| v.to_string()).unwrap_or_default(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         lines.push(format!("| {} |", escaped.join(" | ")));

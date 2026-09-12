@@ -578,13 +578,13 @@ pub fn render_summary_snapshot(
 
     let header: [&str; 2] = if language == WritingLanguage::En {
         [
-            "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     } else {
         [
-            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     };
 
@@ -599,6 +599,8 @@ pub fn render_summary_snapshot(
             summary.hook_activity.clone(),
             summary.mood.clone(),
             summary.chapter_type.clone(),
+            summary.conflict_level.map(|v| v.to_string()).unwrap_or_default(),
+            summary.reveal_level.map(|v| v.to_string()).unwrap_or_default(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         lines.push(format!("| {} |", escaped.join(" | ")));
@@ -669,6 +671,8 @@ mod tests {
             hook_activity: String::new(),
             mood: String::new(),
             chapter_type: String::new(),
+            conflict_level: None,
+            reveal_level: None,
         }];
         let out = render_summary_snapshot(&summaries, WritingLanguage::Zh);
         assert!(out.starts_with("| 章节 | 标题 |"));

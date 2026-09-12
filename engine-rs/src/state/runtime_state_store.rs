@@ -300,6 +300,8 @@ pub async fn load_narrative_memory_seed(
             hook_activity: r.hook_activity,
             mood: r.mood,
             chapter_type: r.chapter_type,
+            conflict_level: None,
+            reveal_level: None,
         })
         .collect();
     let hooks = snapshot
@@ -458,6 +460,8 @@ mod tests {
             hook_activity: "活动".into(),
             mood: "心情".into(),
             chapter_type: "类型".into(),
+            conflict_level: None,
+            reveal_level: None,
         });
         assert_eq!(seed.hooks.len(), 1);
         assert_eq!(seed.hooks[0].hook_id, "h01");

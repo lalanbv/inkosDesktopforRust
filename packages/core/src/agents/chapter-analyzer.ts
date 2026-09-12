@@ -578,6 +578,8 @@ ${overrides}\n`;
       hookActivity: string;
       mood: string;
       chapterType: string;
+      conflictLevel?: number;
+      revealLevel?: number;
     }>,
     language: "zh" | "en",
   ): string {
@@ -587,12 +589,12 @@ ${overrides}\n`;
 
     const header = language === "en"
       ? [
-          "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
       : [
-          "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-          "| --- | --- | --- | --- | --- | --- | --- | --- |",
+          "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ];
 
     const rows = summaries.map((summary) => [
@@ -604,6 +606,8 @@ ${overrides}\n`;
       summary.hookActivity,
       summary.mood,
       summary.chapterType,
+      typeof summary.conflictLevel === "number" ? String(summary.conflictLevel) : "",
+      typeof summary.revealLevel === "number" ? String(summary.revealLevel) : "",
     ].map((cell) => this.escapeTableCell(String(cell))).join(" | "));
 
     return [

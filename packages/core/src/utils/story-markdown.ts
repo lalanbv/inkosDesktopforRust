@@ -14,12 +14,12 @@ export function renderSummarySnapshot(
 
   const headers = language === "en"
     ? [
-      "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| chapter | title | characters | events | stateChanges | hookActivity | mood | chapterType | conflict | reveal |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
 
   return [
@@ -33,8 +33,15 @@ export function renderSummarySnapshot(
       summary.hookActivity,
       summary.mood,
       summary.chapterType,
+      renderTensionCell(summary.conflictLevel),
+      renderTensionCell(summary.revealLevel),
     ].map(escapeTableCell).join(" | ")).map((row) => `| ${row} |`),
   ].join("\n");
+}
+
+/** 张力列（R2/358 号）：缺分渲染空单元格，保持旧表消费者无感。 */
+function renderTensionCell(value: number | undefined): string {
+  return typeof value === "number" ? String(value) : "";
 }
 
 export function renderHookSnapshot(
@@ -107,7 +114,15 @@ export function parseChapterSummariesMarkdown(markdown: string): StoredSummary[]
     hookActivity: row[5] ?? "",
     mood: row[6] ?? "",
     chapterType: row[7] ?? "",
+    // R2/358 号：8 列旧表（无张力列）→ undefined；10 列新表解析并 clamp。
+    conflictLevel: parseTensionCell(row[8]),
+    revealLevel: parseTensionCell(row[9]),
   }));
+}
+
+function parseTensionCell(cell: string | undefined): number | undefined {
+  if (cell === undefined || !/^\d+$/.test(cell)) return undefined;
+  return Math.min(10, Math.max(1, parseInt(cell, 10)));
 }
 
 export function parsePendingHooksMarkdown(markdown: string): StoredHook[] {

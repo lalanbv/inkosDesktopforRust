@@ -633,6 +633,20 @@ export {
   type RosterEntity,
 } from "./utils/entity-roster.js";
 export {
+  analyzeTensionCurve,
+  buildTensionCurve,
+  detectTensionWarnings,
+  parseTensionMetrics,
+  TENSION_WARNING_DEFAULTS,
+  type TensionCurve,
+  type TensionMetrics,
+  type TensionPoint,
+  type TensionRow,
+  type TensionWarning,
+  type TensionWarningKind,
+  type TensionWarningOptions,
+} from "./utils/tension-curve.js";
+export {
   detectSecretLeaks,
   detectReaderRedundancy,
   parseInfoGapsMarkdown,

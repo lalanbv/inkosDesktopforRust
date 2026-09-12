@@ -931,6 +931,8 @@ fn summary_from_row(row: &ChapterSummaryRow) -> StoredSummary {
         hook_activity: row.hook_activity.clone(),
         mood: row.mood.clone(),
         chapter_type: row.chapter_type.clone(),
+        conflict_level: None,
+        reveal_level: None,
     }
 }
 
@@ -1130,6 +1132,8 @@ mod tests {
             hook_activity: String::new(),
             mood: "高压".into(),
             chapter_type: "高潮".into(),
+            conflict_level: None,
+            reveal_level: None,
         };
         let summaries = vec![
             summary(1, "旧事件"),

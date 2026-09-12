@@ -43,6 +43,9 @@ export interface StoredSummary {
   readonly hookActivity: string;
   readonly mood: string;
   readonly chapterType: string;
+  /** R2/358 号：张力评分（1–10，settle TENSION_METRICS 节产出）。缺分章为 undefined；不入 sqlite（真相源在 chapter_summaries.md）。 */
+  readonly conflictLevel?: number;
+  readonly revealLevel?: number;
 }
 
 /** G3/337 号：质量债务账本一行（对齐 ANWA A3 质量债务；状态机见 quality-governance.ts）。 */
