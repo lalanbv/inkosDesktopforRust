@@ -1,4 +1,5 @@
 import { useApi } from "../hooks/use-api";
+import { nextActionFor, type AuthorErrorSeverity } from "@actalk/inkos-core";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -44,6 +45,13 @@ function issueText(issue: DoctorBookIssue, t: TFunction): string {
     return t("doctor.issueStateDegraded").replace("{chapter}", String(issue.chapter ?? "?"));
   }
   return issue.kind;
+}
+
+/** R7/368 号：书籍级 issue → 错误目录下一步建议（与报告/通知同源）。 */
+function issueNextAction(issue: DoctorBookIssue): string {
+  // R7/368 号：state-degraded 为数据态问题（must-handle），其余预警按需确认。
+  const severity: AuthorErrorSeverity = issue.kind === "state-degraded" ? "must-handle" : "needs-review";
+  return nextActionFor(severity);
 }
 
 export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
@@ -99,6 +107,7 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium">{issue.title}</div>
                     <div className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{issueText(issue, t)}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{issueNextAction(issue)}</div>
                   </div>
                 </div>
               ))

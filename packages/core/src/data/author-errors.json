@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "errors": [
+    {
+      "code": "task-busy-or-aborted",
+      "severity": "auto-handled",
+      "patterns": ["abort", "cancel", "busy", "already processing", "中止", "取消", "忙"],
+      "messageZh": "任务已停止，可随时重试。",
+      "messageEn": "The run was stopped. You can retry at any time.",
+      "nextActionZh": "确认无需等待后重新发起即可。",
+      "nextActionEn": "Re-run whenever you are ready."
+    },
+    {
+      "code": "llm-upstream-unavailable",
+      "severity": "needs-review",
+      "patterns": ["llm", "429", "timeout", "network", "fetch", "econn", "upstream", "服务", "配额", "quota", "rate limit"],
+      "messageZh": "上游模型服务暂时不可用，恢复后重试即可。",
+      "messageEn": "The upstream model service is temporarily unavailable. Retry once it recovers.",
+      "nextActionZh": "检查服务商额度与网络，稍后在任务中心重试。",
+      "nextActionEn": "Check provider quota and network, then retry from the task center."
+    },
+    {
+      "code": "unknown-error",
+      "severity": "must-handle",
+      "patterns": [],
+      "messageZh": "任务失败，需人工介入。",
+      "messageEn": "The run failed and needs manual attention.",
+      "nextActionZh": "查看 Doctor 诊断与日志定位原因，修复后重跑。",
+      "nextActionEn": "Check Doctor diagnostics and logs, fix the cause, then re-run."
+    }
+  ]
+}

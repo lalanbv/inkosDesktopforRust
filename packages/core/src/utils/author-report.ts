@@ -13,6 +13,8 @@ import { z } from "zod";
  * 未知事件返回 null 由调用侧决定忽略）。
  */
 
+import { resolveAuthorError } from "./author-error-catalog.js";
+
 export const REPORT_ISSUE_CATEGORY_SCHEMA = z.enum(["auto-handled", "needs-review", "must-handle"]);
 export type ReportIssueCategory = z.infer<typeof REPORT_ISSUE_CATEGORY_SCHEMA>;
 
@@ -27,6 +29,8 @@ export const REPORT_ISSUE_CATEGORY_LABELS: Readonly<
 export interface ReportIssue {
   readonly category: ReportIssueCategory;
   readonly message: string;
+  /** R7/368 号：目录驱动的下一步建议（author-errors 数据文件）。 */
+  readonly nextAction?: string;
 }
 
 /** 超过该耗时（毫秒）视为"异常耗时"，在报告的问题段标注。 */
@@ -55,20 +59,14 @@ export function formatDurationMs(durationMs: number): string {
  * = 建议确认；其余（数据/状态/未知）= 必须处理。
  */
 export function classifyEngineIssue(event: string, message: string): ReportIssue {
-  const haystack = `${event} ${message}`.toLowerCase();
-  if (/abort|cancel|busy|already processing/.test(haystack)) {
-    return {
-      category: "auto-handled",
-      message: collapseToLine(message) || "任务已停止，可随时重试。",
-    };
-  }
-  if (/llm|429|timeout|network|fetch|econn|upstream|服务|配额/.test(haystack)) {
-    return {
-      category: "needs-review",
-      message: collapseToLine(message) || "上游服务暂时不可用，恢复后重试即可。",
-    };
-  }
-  return { category: "must-handle", message: collapseToLine(message) || "任务失败，需人工介入。" };
+  const collapsed = collapseToLine(message);
+  // R7/368 号：分类/文案/下一步统一走 author-errors 数据目录（三面共用）。
+  const resolved = resolveAuthorError(event, message);
+  return {
+    category: resolved.severity,
+    message: collapsed || resolved.message,
+    nextAction: resolved.nextAction,
+  };
 }
 
 export interface AuthorReportInput {

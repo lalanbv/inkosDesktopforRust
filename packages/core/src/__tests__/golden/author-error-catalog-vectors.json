@@ -1,0 +1,70 @@
+{
+  "meta": {
+    "contract": "R7 结构化错误目录（368 号，二轮 P2）——author-errors 数据文件三面共用：resolve 按目录 patterns 顺序匹配（haystack 小写 includes），无命中走兜底条目 unknown-error（must-handle）",
+    "invariants": [
+      "patterns 匹配大小写不敏感（haystack 与 pattern 均小写）",
+      "目录顺序即优先级：首条命中的条目生效",
+      "message/nextAction 随 language 切换 zh/en",
+      "数据文件 = data/author-errors.json（双端 include 同一文件，条目数与 code 集合锁定）"
+    ]
+  },
+  "resolve": [
+    {
+      "name": "busy abort matches auto-handled",
+      "event": "write:aborted",
+      "message": "Run aborted by user (busy: already processing another task)",
+      "language": "zh",
+      "expected": {
+        "code": "task-busy-or-aborted",
+        "severity": "auto-handled",
+        "message": "任务已停止，可随时重试。",
+        "nextAction": "确认无需等待后重新发起即可。"
+      }
+    },
+    {
+      "name": "llm timeout matches needs-review",
+      "event": "write:error",
+      "message": "LLM upstream timeout after 2 retries (429)",
+      "language": "zh",
+      "expected": {
+        "code": "llm-upstream-unavailable",
+        "severity": "needs-review",
+        "message": "上游模型服务暂时不可用，恢复后重试即可。",
+        "nextAction": "检查服务商额度与网络，稍后在任务中心重试。"
+      }
+    },
+    {
+      "name": "en resolution for upstream",
+      "event": "write:error",
+      "message": "network fetch failed",
+      "language": "en",
+      "expected": {
+        "code": "llm-upstream-unavailable",
+        "severity": "needs-review",
+        "message": "The upstream model service is temporarily unavailable. Retry once it recovers.",
+        "nextAction": "Check provider quota and network, then retry from the task center."
+      }
+    },
+    {
+      "name": "unknown falls back to must-handle",
+      "event": "write:error",
+      "message": "数据库文件校验失败 data corrupted",
+      "language": "zh",
+      "expected": {
+        "code": "unknown-error",
+        "severity": "must-handle",
+        "message": "任务失败，需人工介入。",
+        "nextAction": "查看 Doctor 诊断与日志定位原因，修复后重跑。"
+      }
+    }
+  ],
+  "nextActionFor": [
+    { "severity": "auto-handled", "language": "zh", "expected": "确认无需等待后重新发起即可。" },
+    { "severity": "needs-review", "language": "en", "expected": "Check provider quota and network, then retry from the task center." },
+    { "severity": "must-handle", "language": "zh", "expected": "查看 Doctor 诊断与日志定位原因，修复后重跑。" }
+  ],
+  "catalog": {
+    "codes": ["llm-upstream-unavailable", "task-busy-or-aborted", "unknown-error"],
+    "count": 3
+  }
+}

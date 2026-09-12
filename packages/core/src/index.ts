@@ -648,6 +648,15 @@ export {
 } from "./utils/tension-curve.js";
 export { parseChapterSummariesMarkdown } from "./utils/story-markdown.js";
 export {
+  loadAuthorErrorCatalog,
+  nextActionFor,
+  resolveAuthorError,
+  type AuthorErrorCatalog,
+  type AuthorErrorEntry,
+  type AuthorErrorSeverity,
+  type ResolvedAuthorError,
+} from "./utils/author-error-catalog.js";
+export {
   buildQualityTrend,
   dedupeReplayRows,
   reviewMetricContentHash,
