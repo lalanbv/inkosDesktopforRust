@@ -191,3 +191,85 @@ export function buildPromiseTimeline(
       || a.hookId.localeCompare(b.hookId),
   );
 }
+
+// ---------------------------------------------------------------------------
+// R3/360 号：数值紧迫度（WNW urgency 映射）+ 目标章窗 + 置信度。
+// ---------------------------------------------------------------------------
+
+export type UrgencyLevel = "high" | "medium" | "low";
+export type UrgencyConfidence = "explicit" | "inferred" | "unknown";
+
+export interface PromiseUrgency {
+  readonly hookId: string;
+  /** 0–100：逾期 100 / 剩 1–3 章 80 / 剩 4–10 章 60 / 剩 >10 或推进中无目标 40 / 开启无目标 20 / 已兑付 0。 */
+  readonly urgency: number;
+  readonly level: UrgencyLevel;
+  /** 目标章来源：expectedPayoff 显式提取 / 书末兜底推断 / 无目标。 */
+  readonly confidence: UrgencyConfidence;
+  readonly targetChapter?: number;
+  /** 显式目标 ±2 章缓冲；推断目标 = [当前章, 书末]。 */
+  readonly targetWindow?: { readonly start: number; readonly end: number };
+}
+
+export const URGENCY_LEVEL_HIGH_THRESHOLD = 80;
+export const URGENCY_LEVEL_MEDIUM_THRESHOLD = 40;
+
+/**
+ * 单条承诺的数值紧迫度（纯函数，golden 锚定）：
+ * - 目标章优先级：expectedPayoff 显式提取（explicit）> targetChapters 书末兜底（inferred）> 无（unknown）；
+ * - 分档：remaining ≤0 → 100；1–3 → 80；4–10 → 60；>10 → 40；无目标时
+ *   advancing → 40、open → 20；fulfilled → 0；
+ * - level：≥80 high / ≥40 medium / 其余 low。
+ */
+export function resolvePromiseUrgency(params: {
+  readonly hook: StoredHook;
+  readonly currentChapter: number;
+  readonly targetChapters?: number;
+}): PromiseUrgency {
+  const hook = params.hook;
+  if (isFulfilled(hook)) {
+    return { hookId: hook.hookId, urgency: 0, level: "low", confidence: "unknown" };
+  }
+
+  const explicit = parseExpectedChapter(hook.expectedPayoff ?? "");
+  let target: number | undefined;
+  let confidence: UrgencyConfidence;
+  let targetWindow: PromiseUrgency["targetWindow"];
+  if (explicit !== undefined) {
+    target = explicit;
+    confidence = "explicit";
+    targetWindow = { start: Math.max(1, explicit - 2), end: explicit + 2 };
+  } else if (typeof params.targetChapters === "number" && params.targetChapters > 0) {
+    target = params.targetChapters;
+    confidence = "inferred";
+    targetWindow = { start: Math.max(1, params.currentChapter), end: params.targetChapters };
+  } else {
+    confidence = "unknown";
+  }
+
+  let urgency: number;
+  if (target === undefined) {
+    urgency = hook.lastAdvancedChapter > 0 ? 40 : 20;
+  } else {
+    const remaining = target - params.currentChapter;
+    if (remaining <= 0) urgency = 100;
+    else if (remaining <= 3) urgency = 80;
+    else if (remaining <= 10) urgency = 60;
+    else urgency = 40;
+  }
+
+  const level: UrgencyLevel = urgency >= URGENCY_LEVEL_HIGH_THRESHOLD
+    ? "high"
+    : urgency >= URGENCY_LEVEL_MEDIUM_THRESHOLD
+      ? "medium"
+      : "low";
+
+  return {
+    hookId: hook.hookId,
+    urgency,
+    level,
+    confidence,
+    ...(target !== undefined ? { targetChapter: target } : {}),
+    ...(targetWindow !== undefined ? { targetWindow } : {}),
+  };
+}

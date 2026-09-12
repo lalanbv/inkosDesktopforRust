@@ -1,0 +1,172 @@
+{
+  "meta": {
+    "contract": "R3 质量趋势与回灌幂等（360 号，二轮 P0）——趋势聚合 + FNV 幂等指纹 + 承诺紧迫度（WNW 映射）",
+    "invariants": [
+      "趋势：章号升序稳定排序（禁 localeCompare）；缺分章保留点位不进均值；averageScore 一位小数；issueCount=critical+warning+info",
+      "幂等哈希：FNV-1a 64 UTF-8 hex16，输入 chapter|score|passed|critical|warning|info（缺分 score='-'），不含 recordedAt",
+      "重放：同内容指纹仅首次 fresh（保序），不同 recordedAt 同判",
+      "紧迫度：目标章 expectedPayoff 显式提取(explicit,窗±2) > targetChapters 书末兜底(inferred,窗[当前,书末]) > 无(unknown)；分档 remaining≤0→100/1–3→80/4–10→60/>10→40，无目标 advancing→40、open→20，fulfilled→0；level ≥80 high / ≥40 medium / 其余 low"
+    ]
+  },
+  "trend": [
+    {
+      "name": "mixed scored unscored and failing",
+      "input": [
+        { "chapter": 3, "overallScore": 82, "passed": true, "criticalCount": 0, "warningCount": 2, "infoCount": 1, "recordedAt": "2026-09-12T10:00:00.000Z" },
+        { "chapter": 1, "overallScore": 70, "passed": false, "criticalCount": 1, "warningCount": 1, "infoCount": 0, "recordedAt": "2026-09-12T10:01:00.000Z" },
+        { "chapter": 2, "passed": true, "criticalCount": 0, "warningCount": 1, "infoCount": 0, "recordedAt": "2026-09-12T10:02:00.000Z" },
+        { "chapter": 5, "overallScore": 90, "passed": true, "criticalCount": 0, "warningCount": 0, "infoCount": 0, "recordedAt": "2026-09-12T10:03:00.000Z" }
+      ],
+      "expected": {
+        "points": [
+          { "chapter": 1, "overallScore": 70, "passed": false, "issueCount": 2 },
+          { "chapter": 2, "overallScore": null, "passed": true, "issueCount": 1 },
+          { "chapter": 3, "overallScore": 82, "passed": true, "issueCount": 3 },
+          { "chapter": 5, "overallScore": 90, "passed": true, "issueCount": 0 }
+        ],
+        "scoredChapters": 3,
+        "averageScore": 80.7,
+        "failingChapters": [1]
+      }
+    },
+    {
+      "name": "all unscored yields undefined average",
+      "input": [
+        { "chapter": 2, "passed": true, "criticalCount": 0, "warningCount": 3, "infoCount": 0, "recordedAt": "2026-09-12T10:00:00.000Z" },
+        { "chapter": 1, "passed": true, "criticalCount": 0, "warningCount": 0, "infoCount": 2, "recordedAt": "2026-09-12T10:01:00.000Z" }
+      ],
+      "expected": {
+        "points": [
+          { "chapter": 1, "overallScore": null, "passed": true, "issueCount": 2 },
+          { "chapter": 2, "overallScore": null, "passed": true, "issueCount": 3 }
+        ],
+        "scoredChapters": 0,
+        "averageScore": null,
+        "failingChapters": []
+      }
+    },
+    {
+      "name": "empty rows yield empty trend",
+      "input": [],
+      "expected": {
+        "points": [],
+        "scoredChapters": 0,
+        "averageScore": null,
+        "failingChapters": []
+      }
+    }
+  ],
+  "replay": [
+    {
+      "name": "known fingerprint values",
+      "hashes": [
+        { "input": { "chapter": 7, "overallScore": 82, "passed": true, "criticalCount": 0, "warningCount": 2, "infoCount": 1 }, "expected": "ac5006fd3cad513e" },
+        { "input": { "chapter": 8, "overallScore": 74, "passed": true, "criticalCount": 1, "warningCount": 1, "infoCount": 0 }, "expected": "c57e5e712da53955" },
+        { "input": { "chapter": 7, "overallScore": 65, "passed": false, "criticalCount": 2, "warningCount": 3, "infoCount": 1 }, "expected": "6e29693705ba86df" },
+        { "input": { "chapter": 9, "passed": true, "criticalCount": 0, "warningCount": 0, "infoCount": 0 }, "expected": "3f5c2679e70581a4" }
+      ]
+    },
+    {
+      "name": "same content different timestamps dedupes keeping first",
+      "input": [
+        { "chapter": 7, "overallScore": 82, "passed": true, "criticalCount": 0, "warningCount": 2, "infoCount": 1, "recordedAt": "2026-09-12T10:00:00.000Z" },
+        { "chapter": 7, "overallScore": 82, "passed": true, "criticalCount": 0, "warningCount": 2, "infoCount": 1, "recordedAt": "2026-09-13T09:30:00.000Z" },
+        { "chapter": 8, "overallScore": 74, "passed": true, "criticalCount": 1, "warningCount": 1, "infoCount": 0, "recordedAt": "2026-09-13T09:31:00.000Z" }
+      ],
+      "expected": {
+        "freshChapters": [7, 8],
+        "skipped": 1
+      }
+    },
+    {
+      "name": "same chapter different content stays fresh",
+      "input": [
+        { "chapter": 7, "overallScore": 82, "passed": true, "criticalCount": 0, "warningCount": 2, "infoCount": 1, "recordedAt": "2026-09-12T10:00:00.000Z" },
+        { "chapter": 7, "overallScore": 65, "passed": false, "criticalCount": 2, "warningCount": 3, "infoCount": 1, "recordedAt": "2026-09-12T10:05:00.000Z" }
+      ],
+      "expected": {
+        "freshChapters": [7, 7],
+        "skipped": 0
+      }
+    }
+  ],
+  "urgency": [
+    {
+      "name": "explicit target overdue caps at 100",
+      "currentChapter": 12,
+      "targetChapters": null,
+      "hook": { "hookId": "H01", "startChapter": 4, "type": "mystery", "status": "progressing", "lastAdvancedChapter": 8, "expectedPayoff": "第10章揭开师债真相", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H01", "urgency": 100, "level": "high", "confidence": "explicit",
+        "targetChapter": 10, "targetWindow": { "start": 8, "end": 12 }
+      }
+    },
+    {
+      "name": "explicit target one chapter out rates 80",
+      "currentChapter": 9,
+      "targetChapters": null,
+      "hook": { "hookId": "H01", "startChapter": 4, "type": "mystery", "status": "progressing", "lastAdvancedChapter": 8, "expectedPayoff": "第10章揭开师债真相", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H01", "urgency": 80, "level": "high", "confidence": "explicit",
+        "targetChapter": 10, "targetWindow": { "start": 8, "end": 12 }
+      }
+    },
+    {
+      "name": "explicit target mid range rates 60",
+      "currentChapter": 2,
+      "targetChapters": null,
+      "hook": { "hookId": "H02", "startChapter": 1, "type": "promise", "status": "open", "lastAdvancedChapter": 0, "expectedPayoff": "第8章", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H02", "urgency": 60, "level": "medium", "confidence": "explicit",
+        "targetChapter": 8, "targetWindow": { "start": 6, "end": 10 }
+      }
+    },
+    {
+      "name": "explicit target far range rates 40",
+      "currentChapter": 1,
+      "targetChapters": null,
+      "hook": { "hookId": "H03", "startChapter": 1, "type": "mystery", "status": "open", "lastAdvancedChapter": 0, "expectedPayoff": "第20章", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H03", "urgency": 40, "level": "medium", "confidence": "explicit",
+        "targetChapter": 20, "targetWindow": { "start": 18, "end": 22 }
+      }
+    },
+    {
+      "name": "book-end fallback infers target",
+      "currentChapter": 25,
+      "targetChapters": 30,
+      "hook": { "hookId": "H04", "startChapter": 10, "type": "relationship", "status": "progressing", "lastAdvancedChapter": 20, "expectedPayoff": "", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H04", "urgency": 60, "level": "medium", "confidence": "inferred",
+        "targetChapter": 30, "targetWindow": { "start": 25, "end": 30 }
+      }
+    },
+    {
+      "name": "advancing without target rates 40",
+      "currentChapter": 16,
+      "targetChapters": null,
+      "hook": { "hookId": "H05", "startChapter": 10, "type": "relationship", "status": "progressing", "lastAdvancedChapter": 15, "expectedPayoff": "回头再说", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H05", "urgency": 40, "level": "medium", "confidence": "unknown"
+      }
+    },
+    {
+      "name": "open without target rates 20",
+      "currentChapter": 6,
+      "targetChapters": null,
+      "hook": { "hookId": "H06", "startChapter": 5, "type": "unspecified", "status": "open", "lastAdvancedChapter": 0, "expectedPayoff": "", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H06", "urgency": 20, "level": "low", "confidence": "unknown"
+      }
+    },
+    {
+      "name": "fulfilled short-circuits to zero",
+      "currentChapter": 5,
+      "targetChapters": 30,
+      "hook": { "hookId": "H07", "startChapter": 1, "type": "mystery", "status": "resolved", "lastAdvancedChapter": 4, "expectedPayoff": "第10章", "payoffTiming": "", "notes": "" },
+      "expected": {
+        "hookId": "H07", "urgency": 0, "level": "low", "confidence": "unknown"
+      }
+    }
+  ]
+}

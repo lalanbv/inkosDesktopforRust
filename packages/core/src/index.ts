@@ -648,6 +648,22 @@ export {
 } from "./utils/tension-curve.js";
 export { parseChapterSummariesMarkdown } from "./utils/story-markdown.js";
 export {
+  buildQualityTrend,
+  dedupeReplayRows,
+  reviewMetricContentHash,
+  type QualityTrend,
+  type QualityTrendPoint,
+  type ReviewMetricRow,
+} from "./utils/quality-trend.js";
+export {
+  resolvePromiseUrgency,
+  URGENCY_LEVEL_HIGH_THRESHOLD,
+  URGENCY_LEVEL_MEDIUM_THRESHOLD,
+  type PromiseUrgency,
+  type UrgencyConfidence,
+  type UrgencyLevel,
+} from "./utils/promise-ledger.js";
+export {
   detectSecretLeaks,
   detectReaderRedundancy,
   parseInfoGapsMarkdown,

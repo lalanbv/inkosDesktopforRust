@@ -357,3 +357,133 @@ pub fn promise_ledger_contract() -> PromiseLedgerContract {
         timeline_states: vec!["open", "advancing", "fulfilled", "overdue"],
     }
 }
+
+// ── R3/360 号：数值紧迫度（WNW urgency 映射）+ 目标章窗 + 置信度 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum UrgencyLevel {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum UrgencyConfidence {
+    Explicit,
+    Inferred,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseUrgency {
+    pub hook_id: String,
+    /// 0–100：逾期 100 / 剩 1–3 章 80 / 剩 4–10 章 60 / 剩 >10 或推进中无目标 40 / 开启无目标 20 / 已兑付 0。
+    pub urgency: i64,
+    pub level: UrgencyLevel,
+    /// 目标章来源：expectedPayoff 显式提取 / 书末兜底推断 / 无目标。
+    pub confidence: UrgencyConfidence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_chapter: Option<i64>,
+    /// 显式目标 ±2 章缓冲；推断目标 = [当前章, 书末]。None 丢键（对齐 TS）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_window: Option<TargetWindow>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct TargetWindow {
+    pub start: i64,
+    pub end: i64,
+}
+
+pub const URGENCY_LEVEL_HIGH_THRESHOLD: i64 = 80;
+pub const URGENCY_LEVEL_MEDIUM_THRESHOLD: i64 = 40;
+
+/// 单条承诺的数值紧迫度（纯函数，golden 锚定；决策表见 TS `resolvePromiseUrgency`）：
+/// - 目标章优先级：expectedPayoff 显式提取（explicit）> targetChapters 书末兜底（inferred）> 无（unknown）；
+/// - 分档：remaining ≤0 → 100；1–3 → 80；4–10 → 60；>10 → 40；无目标时
+///   推进中 → 40、未推进 → 20；已兑付 → 0；
+/// - level：≥80 high / ≥40 medium / 其余 low。
+pub fn resolve_promise_urgency(
+    hook: &PromiseHookInput,
+    current_chapter: i64,
+    target_chapters: Option<i64>,
+) -> PromiseUrgency {
+    if is_fulfilled(&hook.status) {
+        return PromiseUrgency {
+            hook_id: hook.hook_id.clone(),
+            urgency: 0,
+            level: UrgencyLevel::Low,
+            confidence: UrgencyConfidence::Unknown,
+            target_chapter: None,
+            target_window: None,
+        };
+    }
+
+    let explicit = parse_expected_chapter(&hook.expected_payoff);
+    let (target, confidence, target_window) = if let Some(explicit) = explicit {
+        (
+            explicit,
+            UrgencyConfidence::Explicit,
+            Some(TargetWindow {
+                start: (explicit - 2).max(1),
+                end: explicit + 2,
+            }),
+        )
+    } else if let Some(book_end) = target_chapters.filter(|value| *value > 0) {
+        (
+            book_end,
+            UrgencyConfidence::Inferred,
+            Some(TargetWindow {
+                start: current_chapter.max(1),
+                end: book_end,
+            }),
+        )
+    } else {
+        (0, UrgencyConfidence::Unknown, None)
+    };
+
+    let has_target = confidence != UrgencyConfidence::Unknown;
+    let urgency = if !has_target {
+        if hook.last_advanced_chapter > 0 { 40 } else { 20 }
+    } else {
+        let remaining = target - current_chapter;
+        if remaining <= 0 {
+            100
+        } else if remaining <= 3 {
+            80
+        } else if remaining <= 10 {
+            60
+        } else {
+            40
+        }
+    };
+
+    let level = if urgency >= URGENCY_LEVEL_HIGH_THRESHOLD {
+        UrgencyLevel::High
+    } else if urgency >= URGENCY_LEVEL_MEDIUM_THRESHOLD {
+        UrgencyLevel::Medium
+    } else {
+        UrgencyLevel::Low
+    };
+
+    PromiseUrgency {
+        hook_id: hook.hook_id.clone(),
+        urgency,
+        level,
+        confidence,
+        target_chapter: if has_target { Some(target) } else { None },
+        target_window,
+    }
+}
