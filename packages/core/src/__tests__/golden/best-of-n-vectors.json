@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "contract": "G11 best-of-N（371 号，择机项启动）——计划解析（启用/分数门槛）+ 候选选优（分数降序稳定，缺分最低）",
+    "invariants": [
+      "计划：未启用→0 追加；candidates clamp 2–3；启用时首版分数 ≥ minScore → 0 追加，分数缺失或 < minScore → candidates-1 追加",
+      "选优：score 降序稳定（同分保持输入序）；缺分排在有分之后；空候选抛错",
+      "配置：BookConfig.governance.bestOfN = { enabled?, candidates?, minScore? }"
+    ]
+  },
+  "plan": [
+    {
+      "name": "disabled yields single candidate",
+      "config": { "enabled": false, "candidates": 3, "minScore": 70 },
+      "firstScore": 40,
+      "expected": { "enabled": false, "extraCandidates": 0, "totalCandidates": 1, "minScore": 70 }
+    },
+    {
+      "name": "enabled with good first score skips extras",
+      "config": { "enabled": true, "candidates": 3, "minScore": 75 },
+      "firstScore": 82,
+      "expected": { "enabled": true, "extraCandidates": 0, "totalCandidates": 3, "minScore": 75 }
+    },
+    {
+      "name": "enabled with low first score expands",
+      "config": { "enabled": true, "candidates": 3, "minScore": 75 },
+      "firstScore": 62,
+      "expected": { "enabled": true, "extraCandidates": 2, "totalCandidates": 3, "minScore": 75 }
+    },
+    {
+      "name": "missing first score conservatively expands",
+      "config": { "enabled": true },
+      "firstScore": null,
+      "expected": { "enabled": true, "extraCandidates": 1, "totalCandidates": 2, "minScore": 75 }
+    },
+    {
+      "name": "candidates clamps into 2-3",
+      "config": { "enabled": true, "candidates": 9, "minScore": 75 },
+      "firstScore": 10,
+      "expected": { "enabled": true, "extraCandidates": 2, "totalCandidates": 3, "minScore": 75 }
+    }
+  ],
+  "select": [
+    {
+      "name": "highest score wins",
+      "candidates": [
+        { "payload": "A", "score": 71 },
+        { "payload": "B", "score": 88 },
+        { "payload": "C", "score": 80 }
+      ],
+      "expected": { "winner": "B", "index": 1, "score": 88 }
+    },
+    {
+      "name": "tie keeps input order",
+      "candidates": [
+        { "payload": "first", "score": 75 },
+        { "payload": "second", "score": 75 }
+      ],
+      "expected": { "winner": "first", "index": 0, "score": 75 }
+    },
+    {
+      "name": "missing score ranks last",
+      "candidates": [
+        { "payload": "unscored" },
+        { "payload": "scored", "score": 50 }
+      ],
+      "expected": { "winner": "scored", "index": 1, "score": 50 }
+    }
+  ]
+}

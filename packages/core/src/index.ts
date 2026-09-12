@@ -648,6 +648,14 @@ export {
 } from "./utils/tension-curve.js";
 export { parseChapterSummariesMarkdown } from "./utils/story-markdown.js";
 export {
+  resolveBestOfNPlan,
+  selectBestCandidate,
+  BEST_OF_N_DEFAULTS,
+  type BestOfNConfig,
+  type BestOfNPlan,
+  type ScoredCandidate,
+} from "./utils/best-of-n.js";
+export {
   loadAuthorErrorCatalog,
   nextActionFor,
   resolveAuthorError,

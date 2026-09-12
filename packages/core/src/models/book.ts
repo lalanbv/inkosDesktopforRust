@@ -84,6 +84,14 @@ export const BookConfigSchema = z.object({
   governance: z.object({
     policy: z.enum(["completion-first", "quality-first"]).optional(),
     maxConsecutiveDebts: z.number().int().min(1).max(20).optional(),
+    /** G11/371 号：多版选优（首版分数低于 minScore 时追加候选重生成）。 */
+    bestOfN: z
+      .object({
+        enabled: z.boolean().optional(),
+        candidates: z.number().int().min(2).max(3).optional(),
+        minScore: z.number().int().min(0).max(100).optional(),
+      })
+      .optional(),
   }).optional(),
 });
 

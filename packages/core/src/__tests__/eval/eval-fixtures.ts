@@ -78,8 +78,8 @@ export const SAMPLE_AUDIT_RESPONSE = JSON.stringify({
 /** 构造最小 AgentCtx（provider 配置 + 测试模型 + 项目根）。 */
 export function makeAgentCtx(projectRoot: string): {
   client: {
-    provider: string;
-    apiFormat: string;
+    provider: "openai";
+    apiFormat: "chat";
     stream: boolean;
     defaults: {
       temperature: number;

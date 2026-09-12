@@ -15,6 +15,7 @@
 pub mod analytics;
 pub mod author_error_catalog;
 pub mod asset_library;
+pub mod best_of_n;
 pub mod atomic_file_set;
 pub mod book_eval;
 pub mod book_id;
