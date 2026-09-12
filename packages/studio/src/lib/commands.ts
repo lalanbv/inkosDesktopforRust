@@ -163,6 +163,8 @@ export function recentToRoute(entry: RecentEntry): HashRoute | null {
       return { page: "chat" };
     case "book-create":
       return { page: "book-create" };
+    case "onboarding":
+      return { page: "onboarding" };
     case "book":
       return entry.bookId ? { page: "book", bookId: entry.bookId } : null;
     case "book-settings":

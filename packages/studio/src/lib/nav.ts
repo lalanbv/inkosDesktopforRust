@@ -18,6 +18,7 @@ export interface Nav {
   toChapter(bookId: string, chapterNumber: number): void;
   toAnalytics(bookId: string): void;
   toServices(): void;
+  toOnboarding(): void;
   toProjectSettings(): void;
   toServiceDetail(id: string): void;
   toTruth(bookId: string): void;
@@ -48,6 +49,7 @@ export function createNav(navigate: (route: HashRoute) => void): Nav {
     toChapter: (bookId, chapterNumber) => navigate({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId) => navigate({ page: "analytics", bookId }),
     toServices: () => navigate({ page: "services" }),
+    toOnboarding: () => navigate({ page: "onboarding" }),
     toProjectSettings: () => navigate({ page: "project-settings" }),
     toServiceDetail: (id) => navigate({ page: "service-detail", serviceId: id }),
     toTruth: (bookId) => navigate({ page: "truth", bookId }),

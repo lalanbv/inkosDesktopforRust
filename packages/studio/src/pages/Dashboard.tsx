@@ -47,6 +47,7 @@ interface Nav {
   toAnalytics: (id: string) => void;
   toBookCreate: () => void;
   toServices: () => void;
+  toOnboarding: () => void;
   toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill") => void;
 }
 
@@ -209,12 +210,21 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
             <div className="text-sm font-medium">还没有配置 AI 模型</div>
             <div className="text-xs text-muted-foreground mt-0.5">配好一个服务商才能开始创作</div>
           </div>
-          <button
-            onClick={nav.toServices}
-            className="px-4 py-2 text-xs rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors shrink-0"
-          >
-            去配置
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* R9/370 号：新手创作向导入口（三步探测放行 AI 功能）。 */}
+            <button
+              onClick={nav.toOnboarding}
+              className="px-4 py-2 text-xs rounded-lg border border-border font-medium hover:bg-primary/10 transition-colors"
+            >
+              新手向导
+            </button>
+            <button
+              onClick={nav.toServices}
+              className="px-4 py-2 text-xs rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors"
+            >
+              去配置
+            </button>
+          </div>
         </div>
       )}
       <div className="flex items-end justify-between border-b border-border/40 pb-8">

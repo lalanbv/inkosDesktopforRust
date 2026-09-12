@@ -22,6 +22,7 @@ import { BookTimeline } from "./pages/BookTimeline";
 import { ChapterReader } from "./pages/ChapterReader";
 import { Analytics } from "./pages/Analytics";
 import { ServiceListPage } from "./pages/ServiceListPage";
+import { OnboardingWizard } from "./pages/OnboardingWizard";
 import { ServiceDetailPage } from "./pages/ServiceDetailPage";
 import { ProjectSettings } from "./pages/ProjectSettings";
 import { TruthFiles } from "./pages/TruthFiles";
@@ -656,6 +657,11 @@ export function App() {
           {view.page === "analytics" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <Analytics bookId={view.bookId} nav={nav} theme={theme} t={t} />
+            </div>
+          )}
+          {view.page === "onboarding" && (
+            <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <OnboardingWizard nav={nav} theme={theme} />
             </div>
           )}
           {view.page === "services" && (

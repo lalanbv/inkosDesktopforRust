@@ -8,6 +8,7 @@ export type HashRoute =
   | { page: "book-timeline"; bookId: string }
   | { page: "book-create" }
   | { page: "services" }
+  | { page: "onboarding" }
   | { page: "project-settings" }
   | { page: "service-detail"; serviceId: string }
   | { page: "chapter"; bookId: string; chapterNumber: number }
@@ -33,6 +34,8 @@ function parseHash(hash: string): HashRoute {
   if (!path || path === "/") return { page: "dashboard" };
   if (path === "chat") return { page: "chat" };
   if (path === "config" || path === "services") return { page: "services" };
+  // R9/370 号：新手创作向导（首跑三步：厂商→Key→能力探测）。
+  if (path === "onboarding") return { page: "onboarding" };
   if (path === "settings") return { page: "project-settings" };
   if (path === "import") return { page: "import" };
   if (path === "translation") return { page: "translation" };
@@ -90,6 +93,7 @@ function routeToHash(route: HashRoute): string {
     case "book-timeline": return `#/book/${encodeURIComponent(route.bookId)}/timeline`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
+    case "onboarding": return "#/onboarding";
     case "project-settings": return "#/settings";
     case "translation": return "#/translation";
     case "import": return route.tab ? `#/import/${route.tab}` : "#/import";
@@ -133,6 +137,7 @@ export function useHashRoute() {
 
   const nav = {
     toServices: () => setRoute({ page: "services" }),
+    toOnboarding: () => setRoute({ page: "onboarding" }),
     toServiceDetail: (id: string) => setRoute({ page: "service-detail", serviceId: id }),
   };
 

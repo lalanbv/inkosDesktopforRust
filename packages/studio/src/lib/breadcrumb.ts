@@ -67,6 +67,8 @@ export function deriveBreadcrumb(
       return [home(), { label: t("daemon.title") }];
     case "logs":
       return [home(), { label: t("logs.title") }];
+    case "onboarding":
+      return [home(), { label: t("nav.onboarding") }];
     case "genres":
       return [home(), { label: t("bread.genres") }];
     case "style":

@@ -504,6 +504,7 @@ const strings = {
   // Breadcrumb extras (P1-7)
   "bread.chat": { zh: "对话", en: "Chat" },
   "bread.genres": { zh: "题材管理", en: "Genre Manager" },
+  "nav.onboarding": { zh: "新手向导", en: "Onboarding" },
   "bread.play": { zh: "互动回放", en: "Story Player" },
   "bread.flow": { zh: "流程图", en: "Flow View" },
   "bread.filmAuthor": { zh: "影游创作", en: "Film Authoring" },
