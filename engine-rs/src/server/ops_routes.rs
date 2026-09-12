@@ -757,6 +757,132 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HybridSearchBody {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub k: Option<usize>,
+    #[serde(default)]
+    pub embedding: Option<crate::utils::semantic_retrieval::EmbeddingConfig>,
+    #[serde(default, rename = "apiKeyEnv")]
+    pub api_key_env: Option<String>,
+}
+
+pub async fn post_hybrid_search(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<HybridSearchBody>,
+) -> impl IntoResponse {
+    let query = body.query.trim().to_string();
+    if query.is_empty() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("query is required"));
+    }
+    let k = body.k.unwrap_or(10).clamp(1, 50);
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let db_path = book_dir.join("story").join("memory.db");
+    if !db_path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({ "fts": [], "semantic": [], "fused": [], "mode": "fts5-fallback" })),
+        )
+            .into_response();
+    }
+
+    let scope = "story-memory".to_string();
+    let index = match crate::utils::local_search::LocalSearchIndex::new(db_path.to_str().unwrap_or("")) {
+        Ok(index) => index,
+        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    let fts_hits = index.search(
+        &query,
+        &crate::utils::local_search::SearchOptions {
+            scope: &scope,
+            kinds: &[],
+            limit: k * 2,
+        },
+    );
+    let fts_ranked: Vec<Value> = fts_hits
+        .iter()
+        .enumerate()
+        .map(|(i, hit)| {
+            json!({ "id": hit.id, "rank": i + 1, "score": hit.score, "source": hit.source, "title": hit.title })
+        })
+        .collect();
+
+    // embedding 可选：请求体带配置 → 语义召回；失败降级 fts5-fallback。
+    let mut semantic_ranked: Vec<Value> = Vec::new();
+    let mut mode = "fts5-fallback";
+    if let Some(embedding) = &body.embedding {
+        let semantic = async {
+            let api_key = body
+                .api_key_env
+                .as_ref()
+                .and_then(|env| std::env::var(env).ok())
+                .unwrap_or_default();
+            let query_vectors =
+                crate::utils::semantic_retrieval::embed_batch(embedding, &[query.clone()], Some(&api_key))
+                    .await?;
+            let query_vector = query_vectors.first().ok_or("empty embedding")?;
+            let db = crate::state::memory_db::MemoryDb::open(&book_dir).map_err(|e| e.to_string())?;
+            let chunks = db.list_chunk_vectors().map_err(|e| e.to_string())?;
+            let chunk_inputs: Vec<crate::utils::semantic_retrieval::ChunkVector> = chunks
+                .iter()
+                .map(|chunk| crate::utils::semantic_retrieval::ChunkVector {
+                    id: chunk.chunk_id.clone(),
+                    vector: chunk.vector.clone(),
+                })
+                .collect();
+            let scored = crate::utils::semantic_retrieval::top_k_by_similarity(
+                query_vector,
+                &chunk_inputs,
+                k * 2,
+            );
+            Ok::<Vec<Value>, String>(scored
+                .iter()
+                .enumerate()
+                .map(|(i, hit)| json!({ "id": hit.id, "rank": i + 1 }))
+                .collect())
+        };
+        match semantic.await {
+            Ok(ranked) => {
+                semantic_ranked = ranked;
+                mode = "semantic";
+            }
+            Err(_) => mode = "fts5-fallback",
+        }
+    }
+
+    let semantic_for_rrf: Vec<crate::utils::semantic_retrieval::RankedHit> = semantic_ranked
+        .iter()
+        .map(|entry| crate::utils::semantic_retrieval::RankedHit {
+            id: entry["id"].as_str().unwrap_or_default().to_string(),
+            rank: entry["rank"].as_i64().unwrap_or(0),
+        })
+        .collect();
+    let fts_for_rrf: Vec<crate::utils::semantic_retrieval::RankedHit> = fts_ranked
+        .iter()
+        .map(|entry| crate::utils::semantic_retrieval::RankedHit {
+            id: entry["id"].as_str().unwrap_or_default().to_string(),
+            rank: entry["rank"].as_i64().unwrap_or(0),
+        })
+        .collect();
+    let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(&fts_for_rrf, &semantic_for_rrf, 60);
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "fts": fts_ranked,
+            "semantic": semantic_ranked,
+            "fused": fused,
+            "mode": mode,
+        })),
+    )
+        .into_response()
+}
+
 /// G16/346 号：读项目级任务路由（.inkos/task-routing.json；缺省 null）。
 pub async fn get_task_routing(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let path = runtime.state.project_root().join(".inkos").join("task-routing.json");
@@ -1122,6 +1248,20 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     });
     let books = runtime.state.list_books().await;
     checks["bookCount"] = json!(books.len());
+    // G1/349 号：检索层健康——embedding 配置存在 → semantic 能力，否则 FTS5 降级。
+    let embedding_configured = std::fs::read_to_string(root.join("inkos.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|config| {
+            config
+                .get("llm")
+                .and_then(|llm| llm.get("embedding").map(|e| e.is_object()))
+        })
+        .unwrap_or(false);
+    checks["retrieval"] = json!({
+        "mode": if embedding_configured { "semantic" } else { "fts5-fallback" },
+        "embeddingConfigured": embedding_configured,
+    });
     // 195 号：书籍级写作阻塞预警——最新章 state-degraded 会让下一章 write-next
     // 直接报错（PendingStateRepair），此前 doctor 不预警，用户只能等写作失败
     // 才知道。detail 文案由客户端按 kind/chapter 组装（双语），服务端只出结构。

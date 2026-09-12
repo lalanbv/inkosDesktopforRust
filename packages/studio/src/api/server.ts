@@ -3025,6 +3025,58 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
+  app.post("/api/v1/books/:id/hybrid-search", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      query?: string;
+      k?: number;
+      embedding?: unknown;
+    }>().catch(() => ({}) as { query?: string; k?: number; embedding?: unknown });
+    const query = typeof body.query === "string" ? body.query : "";
+    if (!query.trim()) return c.json({ error: "query is required" }, 400);
+    const k = Math.max(1, Math.min(50, Math.floor(Number(body.k ?? 10) || 10)));
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ fts: [], semantic: [], fused: [], mode: "fts5-fallback" });
+    }
+    const core = await import("@actalk/inkos-core");
+    const { LocalSearchIndex, MemoryDB, topKBySimilarity, reciprocalRankFusion, createEmbeddingClient } = core;
+    const searchIndex = new LocalSearchIndex(dbPath);
+    try {
+      const fts = searchIndex.search(query, { scope: "story-memory", limit: k * 2 });
+      const ftsRanked = fts.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
+      let semanticRanked: Array<{ id: string; rank: number }> = [];
+      let mode: "semantic" | "fts5-fallback" = "fts5-fallback";
+      const client = createEmbeddingClient(body.embedding ?? null);
+      if (client) {
+        try {
+          const memory = new MemoryDB(dbPath);
+          const chunks = memory.listChunkVectors();
+          const queryVector = (await client.embed([query]))[0] ?? [];
+          const scored = topKBySimilarity(
+            queryVector,
+            chunks.map((chunk) => ({ id: chunk.chunkId, vector: chunk.vector })),
+            k * 2,
+          );
+          semanticRanked = scored.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
+          mode = "semantic";
+        } catch {
+          mode = "fts5-fallback";
+        }
+      }
+      const fused = reciprocalRankFusion(ftsRanked, semanticRanked);
+      return c.json({
+        fts: fts.map((hit) => ({ id: hit.id, score: hit.score, source: hit.source, title: hit.title })),
+        semantic: semanticRanked,
+        fused,
+        mode,
+      });
+    } finally {
+      searchIndex.close?.();
+    }
+  });
+
   // G16/346 号：项目级任务路由读写（.inkos/task-routing.json）。
   app.get("/api/v1/task-routing", async (c) => {
     const path = join(root, ".inkos", "task-routing.json");
@@ -6807,6 +6859,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { existsSync } = await import("node:fs");
     const { GLOBAL_ENV_PATH } = await import("@actalk/inkos-core");
 
+    // G1/349 号：检索层健康——embedding 配置存在 → semantic 能力，否则 FTS5 降级。
+    const inkosRaw = await readFile(join(root, "inkos.json"), "utf-8").catch(() => "{}");
+    let embeddingConfigured = false;
+    try {
+      embeddingConfigured = Boolean(JSON.parse(inkosRaw)?.llm?.embedding);
+    } catch {
+      embeddingConfigured = false;
+    }
     const checks = {
       inkosJson: existsSync(join(root, "inkos.json")),
       projectEnv: existsSync(join(root, ".env")),
@@ -6815,6 +6875,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       llmConnected: false,
       bookCount: 0,
       bookIssues: [] as Array<{ bookId: string; title: string; kind: string; chapter?: number }>,
+      retrieval: {
+        mode: embeddingConfigured ? "semantic" : "fts5-fallback",
+        embeddingConfigured,
+      },
     };
 
     try {

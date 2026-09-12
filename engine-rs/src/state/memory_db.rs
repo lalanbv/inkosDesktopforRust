@@ -62,6 +62,18 @@ pub struct StoredQualityDebt {
     pub follow_up_note: String,
 }
 
+/// G1/349 号：语义检索 chunk 向量一行（vector 为 JSON 数组文本）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredChunkVector {
+    pub chunk_id: String,
+    pub source: String,
+    pub fingerprint: String,
+    pub dim: u32,
+    pub vector: Vec<f64>,
+    pub created_at: String,
+}
+
 /// 章节摘要（对应 `chapter_summaries` 表一行）。字段与 TS `StoredSummary` 一一对应。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,7 +195,16 @@ impl MemoryDb {
                 follow_up_note TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
-            CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);",
+            CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);
+            CREATE TABLE IF NOT EXISTS retrieval_chunks (
+                chunk_id TEXT PRIMARY KEY,
+                source TEXT NOT NULL DEFAULT '',
+                fingerprint TEXT NOT NULL DEFAULT '',
+                dim INTEGER NOT NULL DEFAULT 0,
+                vector TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_chunks_source ON retrieval_chunks(source);",
         )?;
 
         // 与 TS ensureColumn("hooks", "payoff_timing", ...) 对齐：新表已含该列，
@@ -345,6 +366,56 @@ impl MemoryDb {
     // ---------------------------------------------------------------------------
     // Chapter summaries
     // ---------------------------------------------------------------------------
+
+    /// G1/349 号：upsert chunk 向量（幂等）。
+    pub fn upsert_chunk_vector(&self, chunk: &StoredChunkVector) -> Result<()> {
+        let vector_json = serde_json::to_string(&chunk.vector)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO retrieval_chunks (chunk_id, source, fingerprint, dim, vector, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                chunk.chunk_id,
+                chunk.source,
+                chunk.fingerprint,
+                chunk.dim,
+                vector_json,
+                chunk.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// chunk 向量全量（检索侧载入后内存余弦）。坏 JSON 行跳过。
+    pub fn list_chunk_vectors(&self) -> Result<Vec<StoredChunkVector>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT chunk_id, source, fingerprint, dim, vector, created_at FROM retrieval_chunks")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredChunkVector {
+                chunk_id: row.get(0)?,
+                source: row.get(1)?,
+                fingerprint: row.get(2)?,
+                dim: row.get(3)?,
+                vector: serde_json::from_str::<Vec<f64>>(row.get::<_, String>(4)?.as_str())
+                    .unwrap_or_default(),
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            if let Ok(chunk) = row {
+                out.push(chunk);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn chunk_vector_count(&self) -> Result<u32> {
+        let count: u32 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM retrieval_chunks", [], |row| row.get(0))?;
+        Ok(count)
+    }
 
     /// G3/337 号：记入一条质量债务（INSERT OR REPLACE，幂等）。
     pub fn record_debt(&self, debt: &StoredQualityDebt) -> Result<()> {

@@ -57,6 +57,16 @@ export interface StoredQualityDebt {
   readonly followUpNote?: string;
 }
 
+/** G1/349 号：语义检索 chunk 向量一行（vector 为 JSON 数组文本，双端序列化一致）。 */
+export interface StoredChunkVector {
+  readonly chunkId: string;
+  readonly source: string;
+  readonly fingerprint: string;
+  readonly dim: number;
+  readonly vector: ReadonlyArray<number>;
+  readonly createdAt: string;
+}
+
 export interface StoredHook {
   readonly hookId: string;
   readonly startChapter: number;
@@ -143,6 +153,15 @@ export class MemoryDB {
       );
       CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
       CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);
+      CREATE TABLE IF NOT EXISTS retrieval_chunks (
+        chunk_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT '',
+        fingerprint TEXT NOT NULL DEFAULT '',
+        dim INTEGER NOT NULL DEFAULT 0,
+        vector TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_chunks_source ON retrieval_chunks(source);
     `);
 
     this.ensureColumn("hooks", "payoff_timing", "TEXT NOT NULL DEFAULT ''");
@@ -347,6 +366,42 @@ export class MemoryDB {
       hook.payoffTiming ?? "",
       hook.notes,
     );
+  }
+
+  /** G1/349 号：upsert chunk 向量（幂等）。 */
+  upsertChunkVector(chunk: StoredChunkVector): void {
+    this.db.prepare(
+      `INSERT OR REPLACE INTO retrieval_chunks (chunk_id, source, fingerprint, dim, vector, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      chunk.chunkId,
+      chunk.source,
+      chunk.fingerprint,
+      chunk.dim,
+      JSON.stringify(chunk.vector),
+      chunk.createdAt,
+    );
+  }
+
+  /** chunk 向量全量（检索侧载入后内存余弦；单书量级数千，无性能压力）。 */
+  listChunkVectors(): ReadonlyArray<StoredChunkVector> {
+    const rows = this.db.prepare(
+      `SELECT chunk_id AS chunkId, source, fingerprint, dim, vector, created_at AS createdAt
+       FROM retrieval_chunks`,
+    ).all() as ReadonlyArray<{ chunkId: string; source: string; fingerprint: string; dim: number; vector: string; createdAt: string }>;
+    return rows.flatMap((row) => {
+      try {
+        const vector = JSON.parse(row.vector) as number[];
+        return [{ chunkId: row.chunkId, source: row.source, fingerprint: row.fingerprint, dim: row.dim, vector, createdAt: row.createdAt }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  get chunkVectorCount(): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM retrieval_chunks").get() as { n: number };
+    return Number(row.n);
   }
 
   /** G3/337 号：记入一条质量债务（INSERT OR REPLACE，幂等）。 */

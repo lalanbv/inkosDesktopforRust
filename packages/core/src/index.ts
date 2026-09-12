@@ -581,6 +581,7 @@ export {
   selectStaleChunks,
   type EmbeddingChunk,
 } from "./retrieval/semantic-retrieval.js";
+export { LocalSearchIndex } from "./retrieval/local-search.js";
 export {
   buildTaskDrivenQuery,
   cosineSimilarity,
