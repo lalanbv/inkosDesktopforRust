@@ -6532,12 +6532,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/books/:id/codex", async (c) => {
     const id = c.req.param("id");
     const path = join(root, "books", id, "story", "entity_codex.json");
+    // R10/377 号：名册确认自动派生——文件缺失的实体从名册同源派生合并
+    // （文件卡优先，seeded 标注是否含派生卡）。
+    const core = await import("@actalk/inkos-core");
+    let fileCards: import("@actalk/inkos-core").EntityCodexCard[] = [];
     try {
       const parsed = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ cards: Array.isArray(parsed.cards) ? parsed.cards : [] });
+      if (Array.isArray(parsed.cards)) fileCards = parsed.cards;
     } catch {
-      return c.json({ cards: [] });
+      fileCards = [];
     }
+    const known = new Set(fileCards.map((card) => card.name));
+    const derived = core.deriveCodexCards(
+      core.parseEntityRoster(
+        await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8").catch(() => ""),
+      ),
+    ).filter((card) => !known.has(card.name));
+    return c.json({ cards: [...fileCards, ...derived], seeded: derived.length > 0 });
   });
 
   app.put("/api/v1/books/:id/codex", async (c) => {

@@ -9,6 +9,7 @@ import { TensionCurveCard } from "../components/TensionCurveCard";
 import { QualityTrendCard } from "../components/QualityTrendCard";
 import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
+import { CodexPanel } from "../components/CodexPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -603,6 +604,9 @@ export function BookDetail({
 
       {/* R5/366 号：反AI规则与经验记忆（写作禁则+审查扫描+/learn 沉淀）。 */}
       <AntiAiAndExperiencePanel bookId={bookId} />
+
+      {/* R10/377 号：实体卡编辑（名册自动派生+正典事实注入写作）。 */}
+      <CodexPanel bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />
