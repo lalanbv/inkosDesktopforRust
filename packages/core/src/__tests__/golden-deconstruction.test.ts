@@ -12,6 +12,7 @@ import {
   analyzePacingStats,
   buildEvidenceIndex,
   deriveCharacterDossier,
+  buildDeconstructionExport,
   renderDeconstructionExport,
   DECONSTRUCTION_DEPTHS,
   type DeconChapter,
@@ -37,6 +38,11 @@ const vectors = JSON.parse(
   }>;
   pacing: Array<{ name: string; expected: { counts: Record<string, number>; longestRun: { chapterType: string; length: number }; strongHookDensity: number } }>;
   exportRender: Array<{ name: string; language: "zh" | "en"; expectedContains: string[] }>;
+  aggregate: Array<{
+    name: string;
+    input: { depth: DeconstructionDepth; language: "zh" | "en"; topCharacters: number };
+    expected: { dossierNames: string[]; markdownContains: string[] };
+  }>;
   contract: unknown;
 };
 
@@ -112,6 +118,23 @@ describe("deconstruction workbench (G5)", () => {
       const text = renderDeconstructionExport(dossiers, pacing, vector.language);
       for (const fragment of vector.expectedContains) {
         expect(text, `${vector.name}:${fragment}`).toContain(fragment);
+      }
+    }
+  });
+
+  it("aggregates one-shot export per shared vectors", () => {
+    for (const vector of vectors.aggregate) {
+      const got = buildDeconstructionExport({
+        chapters,
+        depth: vector.input.depth,
+        language: vector.input.language,
+        topCharacters: vector.input.topCharacters,
+      });
+      expect(got.dossiers.map((dossier) => dossier.name), vector.name).toEqual(
+        vector.expected.dossierNames,
+      );
+      for (const fragment of vector.expected.markdownContains) {
+        expect(got.markdown, `${vector.name}:${fragment}`).toContain(fragment);
       }
     }
   });

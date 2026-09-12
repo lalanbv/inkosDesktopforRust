@@ -277,3 +277,40 @@ pub fn deconstruction_contract() -> DeconstructionContract {
         consumed_by: "reference-context.extractMaterialContent",
     }
 }
+
+// ── 一括聚合（统一拆书面端点核心）──
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeconstructionResult {
+    pub index: EvidenceIndex,
+    pub dossiers: Vec<CharacterDossier>,
+    pub pacing: PacingStats,
+    pub markdown: String,
+}
+
+/// 一括聚合：按出场证据数取前 top_characters 个角色的 full 档 + 节奏统计
+/// 渲染为可发布 markdown。
+pub fn build_deconstruction_export(
+    chapters: &[DeconChapter],
+    depth: &str,
+    language: &str,
+    top_characters: Option<usize>,
+) -> DeconstructionResult {
+    let index = build_evidence_index(chapters);
+    let pacing = analyze_pacing_stats(chapters);
+    let top = top_characters.unwrap_or(5).max(1);
+    let mut order: Vec<(String, usize)> = index
+        .by_character
+        .iter()
+        .map(|(name, entries)| (name.clone(), entries.len()))
+        .collect();
+    order.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let dossiers: Vec<CharacterDossier> = order
+        .into_iter()
+        .take(top)
+        .map(|(name, _)| derive_character_dossier(&index, &name, "full", None))
+        .collect();
+    let markdown = render_deconstruction_export(&dossiers, &pacing, language);
+    DeconstructionResult { index, dossiers, pacing, markdown }
+}

@@ -3025,6 +3025,63 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G5/351 号：统一拆书面——聚合 + 落盘 story/deconstruction/{name}.md。
+  app.post("/api/v1/books/:id/deconstruct", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      name?: string;
+      depth?: "brief" | "standard" | "deep" | "full";
+      language?: "zh" | "en";
+      topCharacters?: number;
+      chapters?: Array<{ chapter: number; characters: string[]; events: string; chapterType?: string; hookActivity?: string }>;
+      publish?: boolean;
+    }>();
+    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `decon-${Date.now()}`;
+    const chapters = Array.isArray(body.chapters) ? body.chapters : [];
+    if (chapters.length === 0) {
+      return c.json({ error: "chapters is required" }, 400);
+    }
+    const core = await import("@actalk/inkos-core");
+    const result = core.buildDeconstructionExport({
+      chapters,
+      ...(body.depth ? { depth: body.depth } : {}),
+      ...(body.language ? { language: body.language } : {}),
+      ...(typeof body.topCharacters === "number" ? { topCharacters: body.topCharacters } : {}),
+    });
+    const storyDir = join(root, "books", id, "story", "deconstruction");
+    await mkdir(storyDir, { recursive: true });
+    const outPath = join(storyDir, `${name}.md`);
+    await writeFile(outPath, result.markdown, "utf-8");
+
+    // 可选发布：产物写入项目材料池（.inkos/materials/），供参考资料绑定。
+    let publishedMaterialId: string | undefined;
+    if (body.publish) {
+      const materialId = `decon-${id}-${name}`.replace(/[^\w-]/g, "-").slice(0, 64);
+      const materialsDir = join(root, ".inkos", "materials");
+      await mkdir(materialsDir, { recursive: true });
+      await writeFile(join(materialsDir, `${materialId}.md`), result.markdown, "utf-8");
+      const manifest = {
+        id: materialId,
+        title: name,
+        kind: "text",
+        purpose: "reference",
+        source: "deconstruction",
+        mimeType: "text/markdown",
+        markdownPath: `.inkos/materials/${materialId}.md`,
+      };
+      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
+      publishedMaterialId = materialId;
+    }
+
+    return c.json({
+      dossiers: result.dossiers,
+      pacing: result.pacing,
+      markdown: result.markdown,
+      path: `.inkos/../books/${id}/story/deconstruction/${name}.md`,
+      ...(publishedMaterialId ? { publishedMaterialId } : {}),
+    });
+  });
+
   // G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
   app.post("/api/v1/books/:id/hybrid-search", async (c) => {
     const id = c.req.param("id");

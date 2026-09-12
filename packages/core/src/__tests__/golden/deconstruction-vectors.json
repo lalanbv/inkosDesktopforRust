@@ -186,5 +186,27 @@
     },
     "exportMarker": "## Extracted content",
     "consumedBy": "reference-context.extractMaterialContent"
-  }
+  },
+  "aggregate": [
+    {
+      "name": "top2-full-dossiers",
+      "input": {
+        "depth": "full",
+        "language": "zh",
+        "topCharacters": 2
+      },
+      "expected": {
+        "dossierNames": [
+          "林动",
+          "王胖"
+        ],
+        "markdownContains": [
+          "## Extracted content",
+          "### 王胖",
+          "### 林动",
+          "### 节奏：最长连续同型 2 章（推进）；强钩密度 0.8"
+        ]
+      }
+    }
+  ]
 }

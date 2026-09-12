@@ -719,6 +719,11 @@ pub fn router_books(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),
         )
+        // G5/351 号：统一拆书面。
+        .route(
+            "/api/v1/books/:id/deconstruct",
+            post(ops_routes::post_deconstruct).with_state(books.clone()),
+        )
         // G7b/343 号：名册候选确认卡 + 三选写回。
         .route(
             "/api/v1/books/:id/roster-candidates",

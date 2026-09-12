@@ -5,6 +5,7 @@ import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import { StyleBindingCard } from "../components/StyleBindingCard";
 import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import { RecallTestCard } from "../components/RecallTestCard";
+import { DeconstructPanel } from "../components/DeconstructPanel";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
@@ -559,6 +560,9 @@ export function BookDetail({
 
       {/* G1/349 号：召回测试面板（混合检索 FTS5+向量 RRF）。 */}
       <RecallTestCard bookId={bookId} />
+
+      {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
+      <DeconstructPanel bookId={bookId} />
 
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b border-border/40 pb-8">

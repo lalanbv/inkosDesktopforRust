@@ -592,6 +592,17 @@ export {
   type RetrievalMode,
 } from "./retrieval/semantic-retrieval.js";
 export {
+  analyzePacingStats,
+  buildDeconstructionExport,
+  buildEvidenceIndex,
+  deriveCharacterDossier,
+  renderDeconstructionExport,
+  DECONSTRUCTION_DEPTHS,
+  type DeconstructionDepth,
+  type DeconChapter,
+  type PacingStats,
+} from "./utils/deconstruction.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,

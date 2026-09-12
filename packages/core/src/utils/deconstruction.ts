@@ -190,3 +190,36 @@ export function renderDeconstructionExport(
   ];
   return body.join("\n");
 }
+
+/** 聚合产物（一次性产齐：索引 + 档案 + 节奏 + 可发布 markdown）。 */
+export interface DeconstructionResult {
+  readonly index: EvidenceIndex;
+  readonly dossiers: ReadonlyArray<CharacterDossier>;
+  readonly pacing: PacingStats;
+  readonly markdown: string;
+}
+
+/**
+ * 一括聚合（统一拆书面端点的核心调用）：按出场证据数取前 topCharacters
+ * （默认 5）个角色的 full 档，加上节奏统计渲染为可发布 markdown。
+ */
+export function buildDeconstructionExport(params: {
+  readonly chapters: ReadonlyArray<DeconChapter>;
+  readonly depth?: DeconstructionDepth;
+  readonly language?: "zh" | "en";
+  readonly topCharacters?: number;
+}): DeconstructionResult {
+  const index = buildEvidenceIndex(params.chapters);
+  const pacing = analyzePacingStats(params.chapters);
+  const topCharacters = params.topCharacters ?? 5;
+  const dossiers = Object.entries(index.byCharacter)
+    .sort((a, b) => b[1].length - a[1].length || comparePlainDecon(a[0], b[0]))
+    .slice(0, Math.max(1, topCharacters))
+    .map(([name]) => deriveCharacterDossier(index, name, "full", undefined));
+  const markdown = renderDeconstructionExport(dossiers, pacing, params.language ?? "zh");
+  return { index, dossiers, pacing, markdown };
+}
+
+function comparePlainDecon(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}

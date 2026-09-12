@@ -757,6 +757,98 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G5/351 号：统一拆书面——聚合 + 落盘 story/deconstruction/{name}.md。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeconstructBody {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub depth: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub top_characters: Option<usize>,
+    #[serde(default)]
+    pub chapters: Vec<crate::utils::deconstruction::DeconChapter>,
+    #[serde(default)]
+    pub publish: bool,
+}
+
+pub async fn post_deconstruct(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<DeconstructBody>,
+) -> impl IntoResponse {
+    if body.chapters.is_empty() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("chapters is required"));
+    }
+    let name = body
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| format!("decon-{}", crate::interaction::session::utc_now_ms()));
+    let depth = body.depth.clone().unwrap_or_else(|| "full".into());
+    let language = body.language.clone().unwrap_or_else(|| "zh".into());
+
+    let result = crate::utils::deconstruction::build_deconstruction_export(
+        &body.chapters,
+        &depth,
+        &language,
+        body.top_characters,
+    );
+    let story_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("deconstruction");
+    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let out_path = story_dir.join(format!("{name}.md"));
+    if let Err(error) = std::fs::write(&out_path, &result.markdown) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+
+    // 可选发布：产物写入项目材料池（.inkos/materials/），供参考资料绑定。
+    let mut published_material_id: Option<String> = None;
+    if body.publish {
+        let material_id = format!("decon-{book_id}-{name}")
+            .replace(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'), "-");
+        let trimmed: String = material_id.chars().take(64).collect();
+        let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
+        let _ = std::fs::create_dir_all(&materials_dir);
+        let _ = std::fs::write(materials_dir.join(format!("{trimmed}.md")), &result.markdown);
+        let manifest = json!({
+            "id": trimmed,
+            "title": name,
+            "kind": "text",
+            "purpose": "reference",
+            "source": "deconstruction",
+            "mimeType": "text/markdown",
+            "markdownPath": format!(".inkos/materials/{trimmed}.md"),
+        });
+        let _ = std::fs::write(
+            materials_dir.join(format!("{trimmed}.json")),
+            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        );
+        published_material_id = Some(trimmed);
+    }
+
+    let result_value = serde_json::to_value(&result).unwrap_or(json!(null));
+    let mut payload = json!({
+        "result": result_value,
+        "path": format!("books/{book_id}/story/deconstruction/{name}.md"),
+    });
+    payload["publishedMaterialId"] = match &published_material_id {
+        Some(id) => json!(id),
+        None => Value::Null,
+    };
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
 /// G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
