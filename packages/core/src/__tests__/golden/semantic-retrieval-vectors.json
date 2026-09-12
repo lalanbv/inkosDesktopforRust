@@ -1,0 +1,404 @@
+{
+  "_header": "语义检索层共享向量（G1/347 号，Phase C 首项首批）。唯一事实源本文件；TS 断言 src/__tests__/golden-semantic-retrieval.test.ts，Rust 差分 engine-rs/tests/golden_semantic_retrieval_diff.rs。查询构造：goal→outline→mustKeep→threadRefs 顺序、去重（大小写不敏感）、每段截 40 字、总长截 200、上限 8 术语、分隔「；」；RRF k=60，分数降序并列 id 码元序；余弦零向量恒 0。",
+  "query": [
+    {
+      "name": "full-intent",
+      "input": {
+        "goal": "主角在废弃地铁站发现怀表",
+        "outlineNode": "第 12 章：地铁疑云",
+        "mustKeep": [
+          "怀表来历",
+          "不能暴露身份"
+        ],
+        "threadRefs": [
+          "H01",
+          "血案线索"
+        ]
+      },
+      "expected": "主角在废弃地铁站发现怀表；第 12 章：地铁疑云；怀表来历；不能暴露身份；H01；血案线索"
+    },
+    {
+      "name": "goal-only",
+      "input": {
+        "goal": "夺宝大战",
+        "outlineNode": "",
+        "mustKeep": [],
+        "threadRefs": []
+      },
+      "expected": "夺宝大战"
+    },
+    {
+      "name": "dedupe-case-insensitive",
+      "input": {
+        "goal": "Dark Forest",
+        "mustKeep": [
+          "dark forest"
+        ],
+        "threadRefs": []
+      },
+      "expected": "Dark Forest"
+    },
+    {
+      "name": "long-goal-truncated-to-40",
+      "input": {
+        "goal": "这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这",
+        "outlineNode": "",
+        "mustKeep": [],
+        "threadRefs": []
+      },
+      "expected": "这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这这…"
+    },
+    {
+      "name": "empty-everything",
+      "input": {
+        "goal": "",
+        "outlineNode": "",
+        "mustKeep": [],
+        "threadRefs": []
+      },
+      "expected": ""
+    }
+  ],
+  "cosine": [
+    {
+      "name": "identical",
+      "a": [
+        1,
+        2,
+        3
+      ],
+      "b": [
+        1,
+        2,
+        3
+      ],
+      "expected": 1
+    },
+    {
+      "name": "opposite",
+      "a": [
+        1,
+        0
+      ],
+      "b": [
+        -1,
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "name": "orthogonal",
+      "a": [
+        1,
+        0
+      ],
+      "b": [
+        0,
+        1
+      ],
+      "expected": 0
+    },
+    {
+      "name": "zero-vector",
+      "a": [
+        0,
+        0
+      ],
+      "b": [
+        1,
+        2
+      ],
+      "expected": 0
+    },
+    {
+      "name": "dimension-mismatch",
+      "a": [
+        1,
+        2,
+        3
+      ],
+      "b": [
+        1,
+        2
+      ],
+      "expected": 0
+    },
+    {
+      "name": "known-value",
+      "a": [
+        1,
+        2
+      ],
+      "b": [
+        3,
+        4
+      ],
+      "expected": 0.9838699100999074
+    }
+  ],
+  "topK": [
+    {
+      "name": "ranked-and-truncated",
+      "input": {
+        "k": 2,
+        "queryVector": [
+          1,
+          0
+        ],
+        "chunks": [
+          {
+            "id": "c-low",
+            "vector": [
+              0.1,
+              0.9
+            ]
+          },
+          {
+            "id": "c-high",
+            "vector": [
+              1,
+              0.5
+            ]
+          },
+          {
+            "id": "c-zero",
+            "vector": [
+              0,
+              0
+            ]
+          },
+          {
+            "id": "c-mid",
+            "vector": [
+              0.8,
+              0.6
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "id": "c-high",
+          "similarity": 0.8944271909999159
+        },
+        {
+          "id": "c-mid",
+          "similarity": 0.8
+        }
+      ]
+    },
+    {
+      "name": "tie-broken-by-id",
+      "input": {
+        "k": 5,
+        "queryVector": [
+          1,
+          1
+        ],
+        "chunks": [
+          {
+            "id": "b-chunk",
+            "vector": [
+              1,
+              1
+            ]
+          },
+          {
+            "id": "a-chunk",
+            "vector": [
+              1,
+              1
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "id": "a-chunk",
+          "similarity": 1
+        },
+        {
+          "id": "b-chunk",
+          "similarity": 1
+        }
+      ]
+    },
+    {
+      "name": "dimension-mismatch-skipped",
+      "input": {
+        "k": 5,
+        "queryVector": [
+          1,
+          0
+        ],
+        "chunks": [
+          {
+            "id": "bad",
+            "vector": [
+              1,
+              2,
+              3
+            ]
+          },
+          {
+            "id": "good",
+            "vector": [
+              2,
+              0
+            ]
+          }
+        ]
+      },
+      "expected": [
+        {
+          "id": "good",
+          "similarity": 1
+        }
+      ]
+    },
+    {
+      "name": "k-zero-empty",
+      "input": {
+        "k": 0,
+        "queryVector": [
+          1
+        ],
+        "chunks": [
+          {
+            "id": "x",
+            "vector": [
+              1
+            ]
+          }
+        ]
+      },
+      "expected": []
+    }
+  ],
+  "rrf": [
+    {
+      "name": "both-lists-fused",
+      "input": {
+        "k": 60,
+        "semantic": [
+          {
+            "id": "s1",
+            "rank": 1
+          },
+          {
+            "id": "s2",
+            "rank": 2
+          }
+        ],
+        "fts": [
+          {
+            "id": "s2",
+            "rank": 1
+          },
+          {
+            "id": "s3",
+            "rank": 2
+          }
+        ]
+      },
+      "expected": {
+        "order": [
+          "s2",
+          "s1",
+          "s3"
+        ],
+        "sources": {
+          "s1": [
+            "semantic"
+          ],
+          "s2": [
+            "semantic",
+            "fts5"
+          ],
+          "s3": [
+            "fts5"
+          ]
+        }
+      }
+    },
+    {
+      "name": "single-list-passthrough-order",
+      "input": {
+        "k": 60,
+        "semantic": [
+          {
+            "id": "a",
+            "rank": 1
+          },
+          {
+            "id": "b",
+            "rank": 2
+          }
+        ],
+        "fts": []
+      },
+      "expected": {
+        "order": [
+          "a",
+          "b"
+        ],
+        "sources": {
+          "a": [
+            "semantic"
+          ],
+          "b": [
+            "semantic"
+          ]
+        }
+      }
+    },
+    {
+      "name": "both-empty",
+      "input": {
+        "k": 60,
+        "semantic": [],
+        "fts": []
+      },
+      "expected": {
+        "order": [],
+        "sources": {}
+      }
+    }
+  ],
+  "mode": [
+    {
+      "name": "available-semantic",
+      "input": {
+        "embeddingAvailable": true,
+        "embeddingError": false
+      },
+      "expected": "semantic"
+    },
+    {
+      "name": "unavailable-fallback",
+      "input": {
+        "embeddingAvailable": false,
+        "embeddingError": false
+      },
+      "expected": "fts5-fallback"
+    },
+    {
+      "name": "error-fallback",
+      "input": {
+        "embeddingAvailable": true,
+        "embeddingError": true
+      },
+      "expected": "fts5-fallback"
+    }
+  ],
+  "contract": {
+    "modes": [
+      "semantic",
+      "fts5-fallback"
+    ],
+    "rrfK": 60,
+    "queryTermLimit": 8,
+    "queryCharLimit": 200,
+    "dialogueWindowNote": "embedding 服务后续号接入；本号只定确定性契约"
+  }
+}

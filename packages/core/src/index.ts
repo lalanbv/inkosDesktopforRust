@@ -571,6 +571,16 @@ export {
   type TaskModelRouting,
 } from "./models/task-routing.js";
 export {
+  buildTaskDrivenQuery,
+  cosineSimilarity,
+  reciprocalRankFusion,
+  resolveRetrievalMode,
+  topKBySimilarity,
+  RETRIEVAL_MODES,
+  type RetrievalMode,
+  type EmbeddingClient,
+} from "./retrieval/semantic-retrieval.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,
