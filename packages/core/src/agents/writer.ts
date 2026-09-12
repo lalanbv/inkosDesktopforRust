@@ -33,6 +33,7 @@ import {
   mergeTableMarkdownByKey,
 } from "../utils/governed-working-set.js";
 import { parseCreativeOutput } from "./writer-parser.js";
+import { parseTensionMetrics, type TensionMetrics } from "../utils/tension-curve.js";
 import {
   buildRuntimeStateArtifacts,
   buildRuntimeStateArtifactsFromSnapshot,
@@ -114,6 +115,8 @@ export interface WriteChapterOutput {
   readonly updatedCharacterMatrix: string;
   readonly postWriteErrors: ReadonlyArray<PostWriteViolation>;
   readonly postWriteWarnings: ReadonlyArray<PostWriteViolation>;
+  /** R2/359 号：本章张力评分（TENSION_METRICS 节解析产物；缺省=LLM 未产分）。 */
+  readonly tensionMetrics?: TensionMetrics;
   readonly hookHealthIssues?: ReadonlyArray<{
     readonly severity: "critical" | "warning" | "info";
     readonly category: string;
@@ -385,6 +388,7 @@ export class WriterAgent extends BaseAgent {
       postWriteErrors,
       postWriteWarnings,
       hookHealthIssues,
+      tensionMetrics: settlement.tensionMetrics,
       tokenUsage,
     };
   }
@@ -487,6 +491,7 @@ export class WriterAgent extends BaseAgent {
       updatedCharacterMatrix: settlement.updatedCharacterMatrix,
       postWriteErrors: [],
       postWriteWarnings: [],
+      tensionMetrics: settlement.tensionMetrics,
       tokenUsage: settleResult.usage,
     };
   }
@@ -519,6 +524,7 @@ export class WriterAgent extends BaseAgent {
     settlement: ReturnType<typeof parseSettlementOutput> & {
       runtimeStateDelta?: RuntimeStateDelta;
       runtimeStateSnapshot?: RuntimeStateSnapshot;
+      tensionMetrics?: TensionMetrics;
     };
     usage: TokenUsage;
   }> {
@@ -586,12 +592,27 @@ export class WriterAgent extends BaseAgent {
     let mergedSettlement: ReturnType<typeof parseSettlementOutput> & {
       runtimeStateDelta?: RuntimeStateDelta;
       runtimeStateSnapshot?: RuntimeStateSnapshot;
+      tensionMetrics?: TensionMetrics;
     };
+    // R2/359 号：TENSION_METRICS 节一次性解析（delta/fallback 两路共用）；
+    // 分数由代码注入表行，不进 LLM 的 delta JSON 模板。
+    const tensionMetrics = parseTensionMetrics(response.content);
     try {
       const deltaOutput = parseSettlerDeltaOutput(response.content);
+      const runtimeStateDelta = tensionMetrics && deltaOutput.runtimeStateDelta.chapterSummary
+        ? {
+          ...deltaOutput.runtimeStateDelta,
+          chapterSummary: {
+            ...deltaOutput.runtimeStateDelta.chapterSummary,
+            conflictLevel: tensionMetrics.conflictLevel,
+            revealLevel: tensionMetrics.revealLevel,
+          },
+        }
+        : deltaOutput.runtimeStateDelta;
       mergedSettlement = {
         postSettlement: deltaOutput.postSettlement,
-        runtimeStateDelta: deltaOutput.runtimeStateDelta,
+        runtimeStateDelta,
+        tensionMetrics,
         updatedState: "",
         updatedLedger: "",
         updatedHooks: "",
@@ -605,6 +626,7 @@ export class WriterAgent extends BaseAgent {
       mergedSettlement = governedControlBlock
         ? {
             ...settlement,
+            tensionMetrics,
             updatedHooks: mergeTableMarkdownByKey(params.originalHooks, settlement.updatedHooks, [0]),
             updatedSubplots: settlement.updatedSubplots
               ? mergeTableMarkdownByKey(params.originalSubplots, settlement.updatedSubplots, [0])
@@ -616,7 +638,7 @@ export class WriterAgent extends BaseAgent {
               ? mergeCharacterMatrixMarkdown(params.originalCharacterMatrix, settlement.updatedCharacterMatrix)
               : settlement.updatedCharacterMatrix,
           }
-        : settlement;
+        : { ...settlement, tensionMetrics };
     }
 
     return {
@@ -657,7 +679,7 @@ export class WriterAgent extends BaseAgent {
       ?? (!output.runtimeStateDelta && output.updatedChapterSummaries
         ? output.updatedChapterSummaries
         : !output.runtimeStateDelta && output.chapterSummary
-          ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, language)
+          ? await this.renderAppendedChapterSummary(bookDir, output.chapterSummary, language, output.tensionMetrics)
           : undefined);
 
     const writes: AtomicFileWrite[] = [
@@ -1131,6 +1153,7 @@ ${overrides}\n`;
     bookDir: string,
     summary: string,
     language: "zh" | "en",
+    tensionMetrics?: TensionMetrics,
   ): Promise<string | undefined> {
     const summaryPath = join(bookDir, "story", "chapter_summaries.md");
     let existing = "";
@@ -1139,8 +1162,8 @@ ${overrides}\n`;
     } catch {
       // File doesn't exist yet — start with header
       existing = language === "en"
-        ? "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n"
-        : "# 章节摘要\n\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n|------|------|----------|----------|----------|----------|----------|----------|\n";
+        ? "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        : "# 章节摘要\n\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |\n|------|------|----------|----------|----------|----------|----------|----------|--------|--------|\n";
     }
 
     // Extract only the data row(s) from the summary (skip header lines)
@@ -1153,6 +1176,11 @@ ${overrides}\n`;
         && !line.startsWith("|--")
         && !line.startsWith("| ---"),
       )
+      .map((line) => line.trimEnd())
+      // R2/359 号：LLM 表行仍按 8 列产出，张力分由代码在行尾补两列。
+      .map((line) => (tensionMetrics
+        ? `${line.replace(/\s*\|\s*$/, "")} | ${tensionMetrics.conflictLevel} | ${tensionMetrics.revealLevel} |`
+        : line))
       .join("\n");
 
     if (dataRows) {

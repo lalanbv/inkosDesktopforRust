@@ -716,6 +716,10 @@ pub fn router_books(
             get(ops_routes::get_quality_debts).with_state(books.clone()),
         )
         .route(
+            "/api/v1/books/:id/tension-curve",
+            get(ops_routes::get_tension_curve).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),
         )

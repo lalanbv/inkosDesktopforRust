@@ -758,6 +758,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
             post_write_errors: Vec::new(),
             post_write_warnings: Vec::new(),
             hook_health_issues: Vec::new(),
+            tension_metrics: None,
             token_usage: Default::default(),
         };
 

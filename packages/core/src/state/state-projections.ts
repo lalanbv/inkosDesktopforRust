@@ -97,14 +97,15 @@ export function renderChapterSummariesProjection(
   language: "zh" | "en" = "zh",
 ): string {
   const title = language === "en" ? "# Chapter Summaries" : "# 章节摘要";
+  // R2/359 号：末尾增冲突强度/揭示强度两列；缺分（旧章/旧书）渲染空单元格。
   const headers = language === "en"
     ? [
-      "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
 
   const rows = [...state.rows]
@@ -119,10 +120,16 @@ export function renderChapterSummariesProjection(
         summary.hookActivity,
         summary.mood,
         summary.chapterType,
+        renderTensionLevel(summary.conflictLevel),
+        renderTensionLevel(summary.revealLevel),
       ].map(escapeTableCell).join(" | ")
     } |`);
 
   return [title, "", ...headers, ...rows, ""].join("\n");
+}
+
+function renderTensionLevel(value: number | undefined): string {
+  return typeof value === "number" ? String(value) : "";
 }
 
 export function renderCurrentStateProjection(

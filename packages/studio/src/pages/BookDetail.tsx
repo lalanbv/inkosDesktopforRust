@@ -5,6 +5,7 @@ import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import { StyleBindingCard } from "../components/StyleBindingCard";
 import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import { RecallTestCard } from "../components/RecallTestCard";
+import { TensionCurveCard } from "../components/TensionCurveCard";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -561,6 +562,9 @@ export function BookDetail({
 
       {/* G1/349 号：召回测试面板（混合检索 FTS5+向量 RRF）。 */}
       <RecallTestCard bookId={bookId} />
+
+      {/* R2/359 号：张力曲线（冲突/揭示双序列 + 启发式告警）。 */}
+      <TensionCurveCard bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />

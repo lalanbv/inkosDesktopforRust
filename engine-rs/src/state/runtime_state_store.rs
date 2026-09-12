@@ -193,6 +193,8 @@ pub async fn load_runtime_state_snapshot_at_chapter(
             hook_activity: row.hook_activity,
             mood: row.mood,
             chapter_type: row.chapter_type,
+            conflict_level: row.conflict_level.map(|v| v.max(0) as u32),
+            reveal_level: row.reveal_level.map(|v| v.max(0) as u32),
         })
         .collect();
     Ok(RuntimeStateSnapshot {

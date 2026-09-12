@@ -65,6 +65,10 @@ export const ChapterSummaryRowSchema = z.object({
   hookActivity: z.string().default(""),
   mood: z.string().default(""),
   chapterType: z.string().default(""),
+  // R2/359 号：张力评分（1–10）。由 writer 从 settle 输出的 TENSION_METRICS
+  // 节解析后程序化注入——不进 LLM 的 delta JSON 模板，缺省 undefined 不渲染。
+  conflictLevel: z.number().int().min(1).max(10).optional(),
+  revealLevel: z.number().int().min(1).max(10).optional(),
 });
 
 export type ChapterSummaryRow = z.infer<typeof ChapterSummaryRowSchema>;

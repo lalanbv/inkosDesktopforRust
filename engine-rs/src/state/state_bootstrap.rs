@@ -522,6 +522,8 @@ pub async fn load_markdown_summaries_state(
             hook_activity: s.hook_activity,
             mood: s.mood,
             chapter_type: s.chapter_type,
+            conflict_level: s.conflict_level.map(|v| v.max(0) as u32),
+            reveal_level: s.reveal_level.map(|v| v.max(0) as u32),
         })
         .collect();
     let rows = deduplicate_summary_rows(&rows, |r| r.chapter as i64);

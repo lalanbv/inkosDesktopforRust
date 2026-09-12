@@ -193,6 +193,13 @@ pub struct ChapterSummaryRow {
     pub hook_activity: String,
     pub mood: String,
     pub chapter_type: String,
+    /// R2/359 号：张力评分（1–10）。writer 从 settle 输出的 TENSION_METRICS
+    /// 节解析后程序化注入——不进 LLM 的 delta JSON 模板，缺省 None 不渲染
+    /// （skip_serializing_if 对齐 TS undefined 丢键语义）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict_level: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reveal_level: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

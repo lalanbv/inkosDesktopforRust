@@ -164,15 +164,16 @@ pub fn render_chapter_summaries_projection(
 ) -> String {
     let en = language == WritingLanguage::En;
     let title = if en { "# Chapter Summaries" } else { "# 章节摘要" };
+    // R2/359 号：末尾增冲突强度/揭示强度两列；缺分（旧章/旧书）渲染空单元格。
     let headers = if en {
         [
-            "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     } else {
         [
-            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     };
 
@@ -191,6 +192,8 @@ pub fn render_chapter_summaries_projection(
                 s.hook_activity.clone(),
                 s.mood.clone(),
                 s.chapter_type.clone(),
+                s.conflict_level.map(|v| v.to_string()).unwrap_or_default(),
+                s.reveal_level.map(|v| v.to_string()).unwrap_or_default(),
             ];
             let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
             format!("| {} |", escaped.join(" | "))

@@ -920,6 +920,41 @@ async fn write_next_chapter_locked(
             suggestion: issue.suggestion.clone(),
             repair_scope: None,
         }));
+    // R2/359 号：张力曲线启发式告警——只报涉及当前章的告警（区间扩展中），
+    // 避免同一平坦段/弱钩段在连续各章重复入账；无分曲线不产告警。
+    {
+        let summaries_for_tension = tokio::fs::read_to_string(book_dir.join("story/chapter_summaries.md"))
+            .await
+            .unwrap_or_default();
+        let tension_rows =
+            crate::utils::story_markdown::parse_chapter_summaries_markdown(&summaries_for_tension);
+        let tension_rows: Vec<crate::utils::tension_curve::TensionRow> = tension_rows
+            .iter()
+            .map(|row| crate::utils::tension_curve::TensionRow {
+                chapter: row.chapter,
+                conflict_level: row.conflict_level,
+                reveal_level: row.reveal_level,
+            })
+            .collect();
+        let (_, tension_warnings) = crate::utils::tension_curve::analyze_tension_curve(
+            &tension_rows,
+            pipeline_language.into(),
+            &crate::utils::tension_curve::TENSION_WARNING_DEFAULTS,
+        );
+        for warning in tension_warnings
+            .iter()
+            .filter(|warning| warning.chapters.contains(&i64::from(chapter_number)))
+        {
+            tracing::warn!(target: "write-next", "[tension] {}", warning.description);
+            audit_result.issues.push(AuditIssue {
+                severity: AuditSeverity::Warning,
+                category: "tension-curve".to_string(),
+                description: warning.description.clone(),
+                suggestion: warning.suggestion.clone(),
+                repair_scope: None,
+            });
+        }
+    }
     // TS 同款：落盘产物的字数为最终值（环内计数仅为中间量）。
     let final_word_count = persistence_output.word_count;
 

@@ -646,6 +646,7 @@ export {
   type TensionWarningKind,
   type TensionWarningOptions,
 } from "./utils/tension-curve.js";
+export { parseChapterSummariesMarkdown } from "./utils/story-markdown.js";
 export {
   detectSecretLeaks,
   detectReaderRedundancy,

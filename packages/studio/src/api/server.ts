@@ -3393,6 +3393,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // R2/359 号：张力曲线（读 chapter_summaries.md 真相源；缺分章自动跳过，曲线是展示层）。
+  app.get("/api/v1/books/:id/tension-curve", async (c) => {
+    const id = c.req.param("id");
+    const summariesPath = join(root, "books", id, "story", "chapter_summaries.md");
+    if (!(await access(summariesPath).then(() => true).catch(() => false))) {
+      return c.json({ curve: { points: [], scoredChapters: 0, unscoredChapters: 0 }, warnings: [] });
+    }
+    try {
+      const core = await import("@actalk/inkos-core");
+      const markdown = await readFile(summariesPath, "utf-8");
+      const rows = core.parseChapterSummariesMarkdown(markdown);
+      const { curve, warnings } = core.analyzeTensionCurve(rows);
+      return c.json({ curve, warnings });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // G3/337 号：质量债务清单（open/deferred/resolved；缺省全量）。
   app.get("/api/v1/books/:id/quality-debts", async (c) => {
     const id = c.req.param("id");

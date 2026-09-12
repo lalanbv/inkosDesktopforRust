@@ -2210,7 +2210,8 @@ export class PipelineRunner {
     }
     {
       const { rerunPromotionPass } = await import("../utils/hook-promotion.js");
-      const { parsePendingHooksMarkdown, renderHookSnapshot } = await import("../utils/story-markdown.js");
+      const { parsePendingHooksMarkdown, renderHookSnapshot, parseChapterSummariesMarkdown } = await import("../utils/story-markdown.js");
+      const { analyzeTensionCurve } = await import("../utils/tension-curve.js");
       const hooks = parsePendingHooksMarkdown(persistenceOutput.updatedHooks);
       const summaries = persistenceOutput.updatedChapterSummaries
         ?? await readFile(join(bookDir, "story", "chapter_summaries.md"), "utf-8").catch(() => "");
@@ -2228,6 +2229,30 @@ export class PipelineRunner {
           } : {}),
         };
         this.config.logger?.info(`[promotion] ${promotion.flippedCount} hook(s) promoted after chapter ${chapterNumber}`);
+      }
+      // R2/359 号：张力曲线启发式告警——只报涉及当前章的告警（区间扩展中），
+      // 避免同一平坦段/弱钩段在连续各章重复入账；无分曲线不产告警。
+      const { warnings: tensionWarnings } = analyzeTensionCurve(
+        parseChapterSummariesMarkdown(summaries),
+        pipelineLang,
+      );
+      for (const warning of tensionWarnings) {
+        if (!warning.chapters.includes(chapterNumber)) continue;
+        this.config.logger?.warn(`[tension] ${warning.description}`);
+      }
+      const tensionIssues = tensionWarnings
+        .filter((warning) => warning.chapters.includes(chapterNumber))
+        .map((warning) => ({
+          severity: "warning" as const,
+          category: "tension-curve",
+          description: warning.description,
+          suggestion: warning.suggestion,
+        }));
+      if (tensionIssues.length > 0) {
+        auditResult = {
+          ...auditResult,
+          issues: [...auditResult.issues, ...tensionIssues],
+        };
       }
     }
     if (persistenceOutput.title !== output.title) {

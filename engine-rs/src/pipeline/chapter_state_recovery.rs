@@ -507,6 +507,7 @@ mod retry_tests {
             post_write_errors: vec![],
             post_write_warnings: vec![],
             hook_health_issues: vec![],
+            tension_metrics: None,
             token_usage: Default::default(),
         }
     }

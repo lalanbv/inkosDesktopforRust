@@ -193,6 +193,8 @@ pub struct WriteChapterOutput {
     pub post_write_errors: Vec<PostWriteViolation>,
     pub post_write_warnings: Vec<PostWriteViolation>,
     pub hook_health_issues: Vec<HookHealthIssue>,
+    /// R2/359 号：本章张力评分（TENSION_METRICS 节解析产物；缺省=LLM 未产分）。
+    pub tension_metrics: Option<crate::utils::tension_curve::TensionMetrics>,
     pub token_usage: TokenUsage,
 }
 
@@ -1182,6 +1184,8 @@ struct MergedSettlement {
     updated_subplots: String,
     updated_emotional_arcs: String,
     updated_character_matrix: String,
+    /// R2/359 号：本章张力评分（TENSION_METRICS 节解析产物；缺省=LLM 未产分）。
+    tension_metrics: Option<crate::utils::tension_curve::TensionMetrics>,
 }
 
 struct SettleParams<'a> {
@@ -1330,18 +1334,32 @@ async fn settle(
         .map_err(WriteChapterError::Chat)?;
 
     // delta 输出优先；解析失败回退 legacy 全量输出（governed 时表格合并）。
+    // R2/359 号：TENSION_METRICS 节一次性解析（delta/fallback 两路共用）；
+    // 分数由代码注入表行，不进 LLM 的 delta JSON 模板。
+    let tension_metrics = crate::utils::tension_curve::parse_tension_metrics(&response.content);
     let merged: MergedSettlement = match parse_settler_delta_output(&response.content) {
-        Ok(delta_output) => MergedSettlement {
-            post_settlement: delta_output.post_settlement,
-            runtime_state_delta: Some(delta_output.runtime_state_delta),
-            updated_state: String::new(),
-            updated_ledger: String::new(),
-            updated_hooks: String::new(),
-            chapter_summary: String::new(),
-            updated_subplots: String::new(),
-            updated_emotional_arcs: String::new(),
-            updated_character_matrix: String::new(),
-        },
+        Ok(delta_output) => {
+            let mut runtime_state_delta = delta_output.runtime_state_delta;
+            if let (Some(metrics), Some(summary)) = (
+                tension_metrics.as_ref(),
+                runtime_state_delta.chapter_summary.as_mut(),
+            ) {
+                summary.conflict_level = Some(metrics.conflict_level as u32);
+                summary.reveal_level = Some(metrics.reveal_level as u32);
+            }
+            MergedSettlement {
+                post_settlement: delta_output.post_settlement,
+                runtime_state_delta: Some(runtime_state_delta),
+                updated_state: String::new(),
+                updated_ledger: String::new(),
+                updated_hooks: String::new(),
+                chapter_summary: String::new(),
+                updated_subplots: String::new(),
+                updated_emotional_arcs: String::new(),
+                updated_character_matrix: String::new(),
+                tension_metrics,
+            }
+        }
         Err(_) => {
             let settlement: SettlementOutput =
                 parse_settlement_output(&response.content, params.genre_profile);
@@ -1383,6 +1401,7 @@ async fn settle(
                             &settlement.updated_character_matrix,
                         )
                     },
+                    tension_metrics,
                 }
             } else {
                 MergedSettlement {
@@ -1395,6 +1414,7 @@ async fn settle(
                     updated_subplots: settlement.updated_subplots,
                     updated_emotional_arcs: settlement.updated_emotional_arcs,
                     updated_character_matrix: settlement.updated_character_matrix,
+                    tension_metrics,
                 }
             }
         }
@@ -1491,20 +1511,26 @@ async fn resolve_runtime_state_artifacts_for_output(
 
 /// 追加章节摘要行。对齐 TS `appendChapterSummary`：提取数据行 → 按章节号
 /// 去重已有行 → 追加。
-async fn append_chapter_summary(story_dir: &Path, summary: &str, language: WritingLanguage) -> std::io::Result<()> {
+async fn append_chapter_summary(
+    story_dir: &Path,
+    summary: &str,
+    language: WritingLanguage,
+    tension_metrics: Option<&crate::utils::tension_curve::TensionMetrics>,
+) -> std::io::Result<()> {
     let summary_path = story_dir.join("chapter_summaries.md");
     let existing = match tokio::fs::read_to_string(&summary_path).await {
         Ok(existing) => existing,
         Err(_) => {
             if language == WritingLanguage::En {
-                "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n".to_string()
+                "# Chapter Summaries\n\n| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n".to_string()
             } else {
-                "# 章节摘要\n\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n|------|------|----------|----------|----------|----------|----------|----------|\n".to_string()
+                "# 章节摘要\n\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |\n|------|------|----------|----------|----------|----------|----------|----------|--------|--------|\n".to_string()
             }
         }
     };
 
-    let data_rows: Vec<&str> = summary
+    // R2/359 号：LLM 表行仍按 8 列产出，张力分由代码在行尾补两列。
+    let data_rows: Vec<String> = summary
         .split('\n')
         .filter(|line| {
             line.starts_with('|')
@@ -1512,6 +1538,15 @@ async fn append_chapter_summary(story_dir: &Path, summary: &str, language: Writi
                 && !line.starts_with("| Chapter")
                 && !line.starts_with("|--")
                 && !line.starts_with("| ---")
+        })
+        .map(|line| match tension_metrics {
+            Some(metrics) => format!(
+                "{} | {} | {} |",
+                line.trim_end().trim_end_matches('|').trim_end(),
+                metrics.conflict_level,
+                metrics.reveal_level
+            ),
+            None => line.trim_end().to_string(),
         })
         .collect();
 
@@ -2044,6 +2079,7 @@ pub async fn write_chapter(
         post_write_errors,
         post_write_warnings,
         hook_health_issues,
+        tension_metrics: settlement.tension_metrics,
         token_usage,
     })
 }
@@ -2174,6 +2210,7 @@ pub async fn settle_chapter_state(
         post_write_errors: Vec::new(),
         post_write_warnings: Vec::new(),
         hook_health_issues: Vec::new(),
+        tension_metrics: settlement.tension_metrics,
         token_usage: TokenUsage {
             prompt_tokens: settle_usage.prompt_tokens,
             completion_tokens: settle_usage.completion_tokens,
@@ -2331,7 +2368,13 @@ pub async fn save_new_truth_files(
         if let Some(updated) = &output.updated_chapter_summaries {
             tokio::fs::write(story_dir.join("chapter_summaries.md"), updated).await?;
         } else if !output.chapter_summary.is_empty() {
-            append_chapter_summary(&story_dir, &output.chapter_summary, language).await?;
+            append_chapter_summary(
+                &story_dir,
+                &output.chapter_summary,
+                language,
+                output.tension_metrics.as_ref(),
+            )
+            .await?;
         }
     }
 
@@ -2448,6 +2491,8 @@ mod tests {
                 hook_activity: "H01 推进".to_string(),
                 mood: "紧张".to_string(),
                 chapter_type: "推进章".to_string(),
+                conflict_level: None,
+                reveal_level: None,
             }),
             ..RuntimeStateDelta::default()
         };
@@ -2522,6 +2567,8 @@ mod tests {
             hook_activity: String::new(),
             mood: String::new(),
             chapter_type: String::new(),
+            conflict_level: None,
+            reveal_level: None,
         }
     }
 
@@ -2684,6 +2731,7 @@ mod tests {
             story,
             "| 章节 | 标题 |\n|---|---|\n| 2 | 新二 |\n| 3 | 新三 |",
             WritingLanguage::Zh,
+            None,
         )
         .await
         .expect("追加");

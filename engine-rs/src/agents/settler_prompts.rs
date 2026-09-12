@@ -180,6 +180,11 @@ fn build_settler_output_format(gp: &GenreProfile) -> String {
 }}
 ```
 
+=== TENSION_METRICS ===
+（R2 张力曲线：给本章打两个整数分，范围 1–10。conflictLevel=冲突强度（本章正文的冲突/对抗激烈程度），revealLevel=揭示强度（章末钩子/新信息揭示的力度）。只输出下面两行，不要加解释）
+conflictLevel: 7
+revealLevel: 6
+
 规则：
 1. 只输出增量，不要重写完整 truth files
 2. 所有章节号字段都必须是整数，不能写自然语言

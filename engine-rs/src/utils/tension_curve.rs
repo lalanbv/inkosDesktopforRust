@@ -15,6 +15,8 @@ use serde::Deserialize;
 pub const TENSION_METRICS_TAG: &str = "TENSION_METRICS";
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "export-bindings", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct TensionMetrics {
     pub conflict_level: i64,

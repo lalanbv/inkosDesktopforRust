@@ -1389,6 +1389,51 @@ pub async fn save_style_binding(
     }
 }
 
+/// R2/359 号：张力曲线（读 chapter_summaries.md 真相源；缺分章自动跳过，曲线是展示层）。
+pub async fn get_tension_curve(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let summaries_path = book_dir.join("story").join("chapter_summaries.md");
+    if !summaries_path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "curve": { "points": [], "scoredChapters": 0, "unscoredChapters": 0 },
+                "warnings": []
+            })),
+        )
+            .into_response();
+    }
+    let result = (|| {
+        let markdown = std::fs::read_to_string(&summaries_path)
+            .map_err(|e| crate::EngineError::Io(e))?;
+        let summaries = crate::utils::story_markdown::parse_chapter_summaries_markdown(&markdown);
+        let rows: Vec<crate::utils::tension_curve::TensionRow> = summaries
+            .iter()
+            .map(|row| crate::utils::tension_curve::TensionRow {
+                chapter: row.chapter,
+                conflict_level: row.conflict_level,
+                reveal_level: row.reveal_level,
+            })
+            .collect();
+        let (curve, warnings) = crate::utils::tension_curve::analyze_tension_curve(
+            &rows,
+            crate::utils::tension_curve::TensionLanguage::Zh,
+            &crate::utils::tension_curve::TENSION_WARNING_DEFAULTS,
+        );
+        Ok::<_, crate::EngineError>(serde_json::json!({
+            "curve": curve,
+            "warnings": warnings
+        }))
+    })();
+    match result {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
 pub async fn get_promises(
     State(runtime): State<BooksRuntime>,

@@ -77,6 +77,8 @@ pub async fn build_persistence_output(
         post_write_warnings: Vec::new(),
         // hook 健康与用量保留 writer 侧产物。
         hook_health_issues: params.output.hook_health_issues.clone(),
+        // R2/359 号：张力评分同样保留 writer 侧产物（与 hook 健康同语义）。
+        tension_metrics: params.output.tension_metrics.clone(),
         token_usage: params.output.token_usage,
         runtime_state_delta: None,
         runtime_state_snapshot: None,
@@ -166,6 +168,7 @@ mod tests {
                 description: "H01 偏老".into(),
                 suggestion: "尽快推进".into(),
             }],
+            tension_metrics: None,
             token_usage: crate::agents::writer::TokenUsage {
                 prompt_tokens: 10,
                 completion_tokens: 20,
