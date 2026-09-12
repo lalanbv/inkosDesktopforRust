@@ -127,6 +127,12 @@ impl BooksRuntime {
                     // 126 号：流式进度钩子——llm:progress 广播（books 面不带
                     // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
                     let hub = self.hub.clone();
+                    // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
+                    let task_routing = std::fs::read_to_string(
+                        root.join(".inkos").join("task-routing.json")
+                    )
+                    .ok()
+                    .and_then(|raw| serde_json::from_str(&raw).ok());
                     Arc::new(
                         AgentRouter::new(
                             crate::llm::agent_router::LlmEndpointConfig {
@@ -140,6 +146,7 @@ impl BooksRuntime {
                         )
                         .with_api_format(api_format)
                         .with_stream(stream)
+                        .with_task_routing(task_routing)
                         .with_progress_hook({
                             std::sync::Arc::new(
                                 move |progress: &crate::llm::provider::StreamProgress| {

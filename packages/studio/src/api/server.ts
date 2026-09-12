@@ -3025,6 +3025,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
+  // G16/346 号：项目级任务路由读写（.inkos/task-routing.json）。
+  app.get("/api/v1/task-routing", async (c) => {
+    const path = join(root, ".inkos", "task-routing.json");
+    try {
+      const routing = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ routing });
+    } catch {
+      return c.json({ routing: null });
+    }
+  });
+
+  app.put("/api/v1/task-routing", async (c) => {
+    const body = await c.req.json<{ routing?: unknown }>();
+    if (!body.routing || typeof body.routing !== "object" || Array.isArray(body.routing)) {
+      return c.json({ error: "routing must be an object" }, 400);
+    }
+    const dir = join(root, ".inkos");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "task-routing.json"), JSON.stringify(body.routing, null, 2), "utf-8");
+    return c.json({ ok: true, routing: body.routing });
+  });
+
   // G7b/343 号：名册候选确认卡（章摘要 characters 比对名册）。
   app.get("/api/v1/books/:id/roster-candidates", async (c) => {
     const id = c.req.param("id");

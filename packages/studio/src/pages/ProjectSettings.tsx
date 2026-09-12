@@ -5,6 +5,7 @@ import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { TaskRoutingPanel } from "../components/TaskRoutingPanel";
 import {
   buildDetectionConfig,
   buildNotifyChannel,
@@ -478,6 +479,8 @@ export function ProjectSettings({ nav, theme, t }: { nav: Nav; theme: Theme; t: 
             </button>
           </div>
         </div>
+        {/* G16/346 号：按任务模型路由——设置面集中管理。 */}
+        <TaskRoutingPanel />
         <div className="space-y-2">
           {overrideRows.length === 0 && (
             <p className="text-xs text-muted-foreground italic">{t("settings.noOverrides")}</p>

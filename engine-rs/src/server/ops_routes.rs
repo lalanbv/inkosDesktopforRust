@@ -757,6 +757,43 @@ pub async fn get_radar_history(
 
 // ── doctor ──────────────────────────────────────────────────────
 
+/// G16/346 号：读项目级任务路由（.inkos/task-routing.json；缺省 null）。
+pub async fn get_task_routing(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let path = runtime.state.project_root().join(".inkos").join("task-routing.json");
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(routing) => (StatusCode::OK, Json(json!({ "routing": routing }))).into_response(),
+            Err(_) => (StatusCode::OK, Json(json!({ "routing": Value::Null }))).into_response(),
+        },
+        Err(_) => (StatusCode::OK, Json(json!({ "routing": Value::Null }))).into_response(),
+    }
+}
+
+/// G16/346 号：保存项目级任务路由（原子落盘 .inkos/task-routing.json）。
+pub async fn put_task_routing(
+    State(runtime): State<BooksRuntime>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let Some(routing) = body.get("routing") else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("routing is required"));
+    };
+    if !routing.is_object() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("routing must be an object"));
+    }
+    let dir = runtime.state.project_root().join(".inkos");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+    }
+    let raw = match serde_json::to_string_pretty(routing) {
+        Ok(raw) => raw,
+        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    match std::fs::write(dir.join("task-routing.json"), raw) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "routing": routing }))).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// G7b/343 号：名册候选确认卡（章摘要 characters 比对名册）。
 pub async fn get_roster_candidates(
     State(runtime): State<BooksRuntime>,

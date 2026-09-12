@@ -13,6 +13,41 @@ use serde::Serialize;
 
 pub const TASK_MODEL_KINDS: [&str; 5] = ["writing", "review", "repair", "detect", "analysis"];
 
+/// agent 名 → 任务类型（管线接线口径；detect 走外部检测服务不在映射内）。
+pub fn agent_task(agent: &str) -> Option<TaskModelKind> {
+    match agent {
+        "writer" | "planner" | "architect" => Some(TaskModelKind::Writing),
+        "continuity-auditor" | "consolidator" | "state-validator" => Some(TaskModelKind::Review),
+        "reviser" => Some(TaskModelKind::Repair),
+        "radar" | "chapter-analyzer" => Some(TaskModelKind::Analysis),
+        _ => None,
+    }
+}
+
+/// G16/346 号：agent 级便捷解析——路由给出 model 覆盖时返回新 model，否则 None。
+pub fn resolve_agent_model(
+    agent: &str,
+    routing: Option<&TaskModelRouting>,
+    fallback_model: &str,
+) -> Option<String> {
+    let task = agent_task(agent)?;
+    let routing = routing?;
+    let resolved = resolve_task_model(ResolveTaskModelParams {
+        task,
+        book_routing: None,
+        project_routing: Some(routing),
+        fallback_model: fallback_model.to_string(),
+        fallback_service: None,
+        fallback_temperature: None,
+        fallback_max_tokens: None,
+    });
+    if resolved.model != fallback_model {
+        Some(resolved.model)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskModelKind {

@@ -72,6 +72,8 @@ pub struct AgentRouter {
     /// 流式进度钩子（126 号：TS PipelineConfig onStreamProgress → SSE
     /// `llm:progress`；None = 无进度上报）。
     progress_hook: Option<crate::llm::provider::StreamProgressCallback>,
+    /// G16/346 号：按任务模型路由（agent 显式 override 优先于此，全局 default 兜底）。
+    task_routing: Option<crate::models::task_routing::TaskModelRouting>,
 }
 
 impl AgentRouter {
@@ -83,7 +85,17 @@ impl AgentRouter {
             api_format: crate::llm::providers::TransportApiFormat::Chat,
             stream: None,
             progress_hook: None,
+            task_routing: None,
         }
+    }
+
+    /// G16/346 号：注入按任务模型路由（writer/review/repair/analysis 任务覆盖 model）。
+    pub fn with_task_routing(
+        mut self,
+        routing: Option<crate::models::task_routing::TaskModelRouting>,
+    ) -> Self {
+        self.task_routing = routing;
+        self
     }
 
     /// 覆盖传输协议（默认 chat；inkos.json llm.apiFormat / 服务项 apiFormat /
@@ -128,10 +140,16 @@ impl AgentRouter {
     /// 解析 agent 端点（无覆盖 = 默认）。
     pub fn resolve(&self, agent: &str) -> ResolvedEndpoint {
         let Some(override_) = self.overrides.get(agent) else {
+            // G16/346 号：无显式覆盖时按任务路由解析 model（不命中则全局缺省）。
+            let routed_model = crate::models::task_routing::resolve_agent_model(
+                agent,
+                self.task_routing.as_ref(),
+                &self.default.model,
+            );
             return ResolvedEndpoint {
                 base_url: self.default.base_url.clone(),
                 api_key: self.default.api_key.clone(),
-                model: self.default.model.clone(),
+                model: routed_model.unwrap_or_else(|| self.default.model.clone()),
                 max_tokens: self.default.max_tokens,
             };
         };

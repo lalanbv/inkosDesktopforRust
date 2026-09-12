@@ -728,6 +728,15 @@ pub fn router_books(
             "/api/v1/books/:id/roster/confirm",
             post(ops_routes::post_roster_confirm).with_state(books.clone()),
         )
+        // G16/346 号：项目级任务路由读写。
+        .route(
+            "/api/v1/task-routing",
+            get(ops_routes::get_task_routing).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/task-routing",
+            put(ops_routes::put_task_routing).with_state(books.clone()),
+        )
         // G4/340 号：写法档案池 + 书级绑定。
         .route(
             "/api/v1/style-profiles",

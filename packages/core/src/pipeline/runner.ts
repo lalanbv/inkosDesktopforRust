@@ -6,6 +6,7 @@ import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
+import { resolveAgentModel } from "../models/task-routing.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import {
@@ -265,6 +266,8 @@ export interface PipelineConfig {
   readonly radarSources?: ReadonlyArray<RadarSource>;
   readonly externalContext?: string;
   readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
+  /** G16/346 号：按任务模型路由（agent 显式 modelOverrides 优先于此）。 */
+  readonly taskRouting?: import("../models/task-routing.js").TaskModelRouting;
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onContextCompression?: ContextCompressionCallback;
@@ -673,6 +676,16 @@ export class PipelineRunner {
   private resolveOverride(agentName: string): { model: string; client: LLMClient } {
     const override = this.config.modelOverrides?.[agentName];
     if (!override) {
+      // G16/346 号：任务路由——agent 命中五类任务且路由给出 model 覆盖时生效
+      //（显式 modelOverrides 仍优先于此，见上方分支）。
+      const routedModel = resolveAgentModel({
+        agent: agentName,
+        routing: this.config.taskRouting,
+        fallbackModel: this.config.model,
+      });
+      if (routedModel) {
+        return { model: routedModel, client: this.config.client };
+      }
       return { model: this.config.model, client: this.config.client };
     }
     if (typeof override === "string") {

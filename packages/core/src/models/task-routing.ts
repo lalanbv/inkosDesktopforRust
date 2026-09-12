@@ -110,6 +110,23 @@ export function mergeTaskRouting(
   return { defaults: overrideFields(merged.defaults), tasks: merged.tasks } as TaskModelRouting;
 }
 
+/**
+ * agent 名 → 任务类型映射（管线接线口径）：resolveOverride 前置查此表，
+ * 命中且路由配置含该任务覆盖 → 以路由 model 替换全局 model。
+ * detect 走外部检测服务（无 LLM model），不在映射内。
+ */
+export const TASK_AGENT_MAP: Readonly<Record<string, TaskModelKind>> = {
+  writer: "writing",
+  planner: "writing",
+  architect: "writing",
+  "continuity-auditor": "review",
+  reviser: "repair",
+  consolidator: "review",
+  "state-validator": "review",
+  radar: "analysis",
+  "chapter-analyzer": "analysis",
+};
+
 type RoutingField = "model" | "service" | "temperature" | "maxTokens";
 const ROUTING_FIELDS: ReadonlyArray<RoutingField> = ["model", "service", "temperature", "maxTokens"];
 
@@ -186,4 +203,20 @@ export function resolveTaskModel(params: {
     ...(effective.maxTokens !== undefined ? { maxTokens: effective.maxTokens } : {}),
     sources,
   };
+}
+
+/** agent 级便捷解析：命中映射且路由给出 model 覆盖时返回新 model，否则 undefined。 */
+export function resolveAgentModel(params: {
+  readonly agent: string;
+  readonly routing?: TaskModelRouting;
+  readonly fallbackModel: string;
+}): string | undefined {
+  const task = TASK_AGENT_MAP[params.agent];
+  if (!task || !params.routing) return undefined;
+  const resolved = resolveTaskModel({
+    task,
+    projectRouting: params.routing,
+    fallbackModel: params.fallbackModel,
+  });
+  return resolved.model !== params.fallbackModel ? resolved.model : undefined;
 }
