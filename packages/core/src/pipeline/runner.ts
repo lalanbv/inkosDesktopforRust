@@ -2379,6 +2379,42 @@ export class PipelineRunner {
       }
     }
 
+    // R3/361 号：审查指标沉淀（overallScore + severity 计数；contentHash 幂等——
+    // 同章同内容重放跳过，修订后内容更新覆盖）。失败仅告警，不阻断管线。
+    try {
+      const { MemoryDB } = await import("../state/memory-db.js");
+      const { reviewMetricContentHash } = await import("../utils/quality-trend.js");
+      let criticalCount = 0;
+      let warningCount = 0;
+      let infoCount = 0;
+      for (const issue of auditResult.issues) {
+        if (issue.severity === "critical") criticalCount += 1;
+        else if (issue.severity === "info") infoCount += 1;
+        else warningCount += 1;
+      }
+      const content = {
+        chapter: chapterNumber,
+        ...(typeof auditResult.overallScore === "number"
+          ? { overallScore: auditResult.overallScore }
+          : {}),
+        passed: auditResult.passed,
+        criticalCount,
+        warningCount,
+        infoCount,
+      };
+      const memory = new MemoryDB(bookDir);
+      const recorded = memory.recordReviewMetric({
+        ...content,
+        contentHash: reviewMetricContentHash(content),
+        recordedAt: new Date().toISOString(),
+      });
+      if (!recorded) {
+        this.config.logger?.info(`[review-metrics] ch${chapterNumber} 同内容重放，幂等跳过`);
+      }
+    } catch (error) {
+      this.config.logger?.warn(`[review-metrics] ${String(error)}`);
+    }
+
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");
     await persistChapterArtifacts({
       chapterNumber,

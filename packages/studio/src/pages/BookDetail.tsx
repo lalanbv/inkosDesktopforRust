@@ -6,6 +6,7 @@ import { StyleBindingCard } from "../components/StyleBindingCard";
 import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import { RecallTestCard } from "../components/RecallTestCard";
 import { TensionCurveCard } from "../components/TensionCurveCard";
+import { QualityTrendCard } from "../components/QualityTrendCard";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -565,6 +566,9 @@ export function BookDetail({
 
       {/* R2/359 号：张力曲线（冲突/揭示双序列 + 启发式告警）。 */}
       <TensionCurveCard bookId={bookId} />
+
+      {/* R3/361 号：质量趋势（审查分数折线 + 承诺紧迫度汇总）。 */}
+      <QualityTrendCard bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />

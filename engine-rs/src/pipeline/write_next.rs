@@ -1115,6 +1115,51 @@ async fn write_next_chapter_locked(
     .collect();
     audit_result.issues.extend(paragraph_issues);
 
+    // ── R3/361 号：审查指标沉淀（overallScore + severity 计数；contentHash 幂等——
+    // 同章同内容重放跳过，修订后内容更新覆盖）。失败仅告警，不阻断管线。
+    {
+        let mut critical_count: i64 = 0;
+        let mut warning_count: i64 = 0;
+        let mut info_count: i64 = 0;
+        for issue in &audit_result.issues {
+            match issue.severity {
+                AuditSeverity::Critical => critical_count += 1,
+                AuditSeverity::Info => info_count += 1,
+                AuditSeverity::Warning => warning_count += 1,
+            }
+        }
+        let content_hash = {
+            use crate::utils::quality_trend::review_metric_content_hash;
+            review_metric_content_hash(&crate::utils::quality_trend::ReviewMetricRow {
+                chapter: i64::from(chapter_number),
+                overall_score: audit_result.overall_score.map(i64::from),
+                passed: audit_result.passed,
+                critical_count,
+                warning_count,
+                info_count,
+                recorded_at: String::new(),
+            })
+        };
+        let recorded = (|| -> Result<bool, crate::EngineError> {
+            let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+            memory.record_review_metric(&crate::state::memory_db::StoredReviewMetric {
+                chapter: i64::from(chapter_number),
+                overall_score: audit_result.overall_score.map(i64::from),
+                passed: audit_result.passed,
+                critical_count,
+                warning_count,
+                info_count,
+                content_hash,
+                recorded_at: crate::utils::utc_time::utc_now_iso(),
+            })
+        })();
+        match recorded {
+            Ok(false) => tracing::info!(target: "write-next", "[review-metrics] ch{chapter_number} 同内容重放，幂等跳过"),
+            Ok(true) => {}
+            Err(error) => tracing::warn!(target: "write-next", "[review-metrics] {error}"),
+        }
+    }
+
     // ── 5. 落盘 ──
     let status_enum = match chapter_status {
         "state-degraded" => crate::models::chapter::ChapterStatus::StateDegraded,

@@ -3411,6 +3411,44 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // R3/361 号：质量趋势（review_metrics 沉淀 + 承诺紧迫度汇总）。
+  app.get("/api/v1/books/:id/quality-trend", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ trend: { points: [], scoredChapters: 0, failingChapters: [] }, urgency: [], currentChapter: 0 });
+    }
+    try {
+      const core = await import("@actalk/inkos-core");
+      const { MemoryDB } = core;
+      const memory = new MemoryDB(join(root, "books", id));
+      const metrics = memory.listReviewMetrics();
+      const trend = core.buildQualityTrend(metrics);
+      const hooks = memory.getAllHooks();
+      const currentChapter = metrics.length > 0
+        ? metrics[metrics.length - 1]!.chapter + 1
+        : 1;
+      let targetChapters: number | undefined;
+      try {
+        const book = await state.loadBookConfig(id);
+        targetChapters = book?.targetChapters;
+      } catch {
+        targetChapters = undefined;
+      }
+      const urgency = hooks
+        .filter((hook) => !/^(resolved|closed|done|已回收|已解决)$/i.test((hook.status ?? "").trim()))
+        .map((hook) => core.resolvePromiseUrgency({
+          hook,
+          currentChapter,
+          ...(typeof targetChapters === "number" ? { targetChapters } : {}),
+        }))
+        .sort((a, b) => b.urgency - a.urgency || (a.hookId < b.hookId ? -1 : a.hookId > b.hookId ? 1 : 0));
+      return c.json({ trend, urgency, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // G3/337 号：质量债务清单（open/deferred/resolved；缺省全量）。
   app.get("/api/v1/books/:id/quality-debts", async (c) => {
     const id = c.req.param("id");

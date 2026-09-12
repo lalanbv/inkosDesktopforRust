@@ -1389,6 +1389,95 @@ pub async fn save_style_binding(
     }
 }
 
+/// R3/361 号：质量趋势（review_metrics 沉淀 + 承诺紧迫度汇总）。
+pub async fn get_quality_trend(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    let db_path = book_dir.join("story").join("memory.db");
+    if !db_path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "trend": { "points": [], "scoredChapters": 0, "averageScore": null, "failingChapters": [] },
+                "urgency": [],
+                "currentChapter": 0
+            })),
+        )
+            .into_response();
+    }
+    let result = (|| async {
+        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+        let metrics = db.list_review_metrics()?;
+        let rows: Vec<crate::utils::quality_trend::ReviewMetricRow> = metrics
+            .iter()
+            .map(|metric| crate::utils::quality_trend::ReviewMetricRow {
+                chapter: metric.chapter,
+                overall_score: metric.overall_score,
+                passed: metric.passed,
+                critical_count: metric.critical_count,
+                warning_count: metric.warning_count,
+                info_count: metric.info_count,
+                recorded_at: String::new(),
+            })
+            .collect();
+        let trend = crate::utils::quality_trend::build_quality_trend(&rows);
+        let hooks = db.get_all_hooks()?;
+        let current_chapter = metrics
+            .iter()
+            .map(|metric| metric.chapter)
+            .max()
+            .map(|last| last + 1)
+            .unwrap_or(1);
+        let target_chapters = runtime
+            .state
+            .load_book_config(&book_id)
+            .await
+            .ok()
+            .map(|book| i64::from(book.target_chapters));
+        let mut urgency: Vec<crate::utils::promise_ledger::PromiseUrgency> = hooks
+            .iter()
+            .filter(|hook| {
+                !matches!(
+                    hook.status.trim().to_lowercase().as_str(),
+                    "resolved" | "closed" | "done" | "已回收" | "已解决"
+                )
+            })
+            .map(|hook| {
+                crate::utils::promise_ledger::PromiseHookInput {
+                    hook_id: hook.hook_id.clone(),
+                    start_chapter: hook.start_chapter,
+                    status: hook.status.clone(),
+                    last_advanced_chapter: hook.last_advanced_chapter,
+                    expected_payoff: hook.expected_payoff.clone(),
+                    notes: hook.notes.clone(),
+                    core_hook: false,
+                }
+            })
+            .map(|input| {
+                crate::utils::promise_ledger::resolve_promise_urgency(
+                    &input,
+                    current_chapter,
+                    target_chapters,
+                )
+            })
+            .collect();
+        urgency.sort_by(|a, b| {
+            b.urgency.cmp(&a.urgency).then_with(|| a.hook_id.cmp(&b.hook_id))
+        });
+        Ok::<_, crate::EngineError>(serde_json::json!({
+            "trend": trend,
+            "urgency": urgency,
+            "currentChapter": current_chapter
+        }))
+    })();
+    match result.await {
+        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// R2/359 号：张力曲线（读 chapter_summaries.md 真相源；缺分章自动跳过，曲线是展示层）。
 pub async fn get_tension_curve(
     State(runtime): State<BooksRuntime>,

@@ -60,6 +60,18 @@ export interface StoredQualityDebt {
   readonly followUpNote?: string;
 }
 
+/** R3/361 号：章节审查指标一行（对应 `review_metrics` 表；contentHash 幂等重放）。 */
+export interface StoredReviewMetric {
+  readonly chapter: number;
+  readonly overallScore?: number;
+  readonly passed: boolean;
+  readonly criticalCount: number;
+  readonly warningCount: number;
+  readonly infoCount: number;
+  readonly contentHash: string;
+  readonly recordedAt: string;
+}
+
 /** G1/349 号：语义检索 chunk 向量一行（vector 为 JSON 数组文本，双端序列化一致）。 */
 export interface StoredChunkVector {
   readonly chunkId: string;
@@ -156,6 +168,16 @@ export class MemoryDB {
       );
       CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
       CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);
+      CREATE TABLE IF NOT EXISTS review_metrics (
+        chapter INTEGER PRIMARY KEY,
+        overall_score INTEGER,
+        passed INTEGER NOT NULL DEFAULT 1,
+        critical_count INTEGER NOT NULL DEFAULT 0,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        info_count INTEGER NOT NULL DEFAULT 0,
+        content_hash TEXT NOT NULL DEFAULT '',
+        recorded_at TEXT NOT NULL DEFAULT ''
+      );
       CREATE TABLE IF NOT EXISTS retrieval_chunks (
         chunk_id TEXT PRIMARY KEY,
         source TEXT NOT NULL DEFAULT '',
@@ -456,6 +478,47 @@ export class MemoryDB {
        WHERE debt_id = ?`,
     ).run(status, followUpNote ?? "", followUpNote ?? "", debtId);
     return Number(result.changes) > 0;
+  }
+
+  /**
+   * R3/361 号：沉淀章节审查指标（contentHash 幂等——同章同内容重放跳过返回
+   * false；内容更新后修订覆盖返回 true）。
+   */
+  recordReviewMetric(metric: StoredReviewMetric): boolean {
+    const existing = this.db.prepare(
+      "SELECT content_hash FROM review_metrics WHERE chapter = ?",
+    ).get(metric.chapter) as { content_hash: string } | undefined;
+    if (existing && existing.content_hash === metric.contentHash) {
+      return false;
+    }
+    this.db.prepare(
+      `INSERT OR REPLACE INTO review_metrics (chapter, overall_score, passed, critical_count, warning_count, info_count, content_hash, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      metric.chapter,
+      typeof metric.overallScore === "number" ? metric.overallScore : null,
+      metric.passed ? 1 : 0,
+      metric.criticalCount,
+      metric.warningCount,
+      metric.infoCount,
+      metric.contentHash,
+      metric.recordedAt,
+    );
+    return true;
+  }
+
+  /** 审查指标清单（章号升序）——quality-trend 端点数据源。 */
+  listReviewMetrics(): ReadonlyArray<StoredReviewMetric> {
+    return this.db.prepare(
+      `SELECT chapter, overall_score AS overallScore, passed, critical_count AS criticalCount,
+              warning_count AS warningCount, info_count AS infoCount,
+              content_hash AS contentHash, recorded_at AS recordedAt
+       FROM review_metrics ORDER BY chapter`,
+    ).all().map((row: any) => ({
+      ...row,
+      overallScore: typeof row.overallScore === "number" ? row.overallScore : undefined,
+      passed: Number(row.passed) === 1,
+    })) as ReadonlyArray<StoredReviewMetric>;
   }
 
   replaceHooks(hooks: ReadonlyArray<StoredHook>): void {

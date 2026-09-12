@@ -74,6 +74,20 @@ pub struct StoredChunkVector {
     pub created_at: String,
 }
 
+/// R3/361 号：章节审查指标一行（对应 `review_metrics` 表；contentHash 幂等重放）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredReviewMetric {
+    pub chapter: i64,
+    pub overall_score: Option<i64>,
+    pub passed: bool,
+    pub critical_count: i64,
+    pub warning_count: i64,
+    pub info_count: i64,
+    pub content_hash: String,
+    pub recorded_at: String,
+}
+
 /// 章节摘要（对应 `chapter_summaries` 表一行）。字段与 TS `StoredSummary` 一一对应。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +216,16 @@ impl MemoryDb {
             );
             CREATE INDEX IF NOT EXISTS idx_debts_status ON quality_debts(status);
             CREATE INDEX IF NOT EXISTS idx_debts_book ON quality_debts(book_id, chapter);
+            CREATE TABLE IF NOT EXISTS review_metrics (
+                chapter INTEGER PRIMARY KEY,
+                overall_score INTEGER,
+                passed INTEGER NOT NULL DEFAULT 1,
+                critical_count INTEGER NOT NULL DEFAULT 0,
+                warning_count INTEGER NOT NULL DEFAULT 0,
+                info_count INTEGER NOT NULL DEFAULT 0,
+                content_hash TEXT NOT NULL DEFAULT '',
+                recorded_at TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS retrieval_chunks (
                 chunk_id TEXT PRIMARY KEY,
                 source TEXT NOT NULL DEFAULT '',
@@ -424,6 +448,66 @@ impl MemoryDb {
     }
 
     /// G3/337 号：记入一条质量债务（INSERT OR REPLACE，幂等）。
+    /// R3/361 号：沉淀章节审查指标（contentHash 幂等——同章同内容重放跳过返回
+    /// Ok(false)；内容更新后修订覆盖返回 Ok(true)）。
+    pub fn record_review_metric(&self, metric: &StoredReviewMetric) -> Result<bool> {
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT content_hash FROM review_metrics WHERE chapter = ?1",
+                rusqlite::params![metric.chapter],
+                |row| row.get("content_hash"),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        if existing.as_deref() == Some(metric.content_hash.as_str()) {
+            return Ok(false);
+        }
+        self.conn.execute(
+            "INSERT OR REPLACE INTO review_metrics (chapter, overall_score, passed, critical_count, warning_count, info_count, content_hash, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                metric.chapter,
+                metric.overall_score,
+                i32::from(metric.passed),
+                metric.critical_count,
+                metric.warning_count,
+                metric.info_count,
+                metric.content_hash,
+                metric.recorded_at,
+            ],
+        )?;
+        Ok(true)
+    }
+
+    /// 审查指标清单（章号升序）——quality-trend 端点数据源。
+    pub fn list_review_metrics(&self) -> Result<Vec<StoredReviewMetric>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT chapter, overall_score, passed, critical_count, warning_count, info_count, content_hash, recorded_at
+             FROM review_metrics ORDER BY chapter",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredReviewMetric {
+                chapter: row.get("chapter")?,
+                overall_score: row.get("overall_score")?,
+                passed: row.get::<_, i64>("passed")? == 1,
+                critical_count: row.get("critical_count")?,
+                warning_count: row.get("warning_count")?,
+                info_count: row.get("info_count")?,
+                content_hash: row.get("content_hash")?,
+                recorded_at: row.get("recorded_at")?,
+            })
+        })?;
+        let mut metrics: Vec<StoredReviewMetric> = Vec::new();
+        for row in rows {
+            metrics.push(row?);
+        }
+        Ok(metrics)
+    }
+
     pub fn record_debt(&self, debt: &StoredQualityDebt) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO quality_debts (debt_id, book_id, chapter, issue_category, severity, status, created_at, follow_up_note)
@@ -736,6 +820,75 @@ mod tests {
             created_at: "2026-09-12T00:00:00.000Z".to_string(),
             follow_up_note: String::new(),
         }
+    }
+
+    #[test]
+    fn review_metrics_record_idempotent_and_overwrites_on_revision() {
+        let db = db();
+        let metric = |chapter: i64, score: i64, hash: &str| StoredReviewMetric {
+            chapter,
+            overall_score: Some(score),
+            passed: true,
+            critical_count: 0,
+            warning_count: 1,
+            info_count: 0,
+            content_hash: hash.to_string(),
+            recorded_at: "2026-09-12T00:00:00.000Z".to_string(),
+        };
+        assert!(db.record_review_metric(&metric(7, 82, "h1")).unwrap());
+        // 同章同内容（同 hash）重放 → 幂等跳过。
+        assert!(!db.record_review_metric(&metric(7, 82, "h1")).unwrap());
+        // 修订后内容更新（hash 不同）→ 覆盖。
+        assert!(db.record_review_metric(&metric(7, 65, "h2")).unwrap());
+
+        let rows = db.list_review_metrics().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].chapter, 7);
+        assert_eq!(rows[0].overall_score, Some(65));
+    }
+
+    #[test]
+    fn review_metrics_lists_in_chapter_order_with_unscored_kept() {
+        let db = db();
+        let unscored = StoredReviewMetric {
+            chapter: 1,
+            overall_score: None,
+            passed: true,
+            critical_count: 0,
+            warning_count: 0,
+            info_count: 2,
+            content_hash: "u1".to_string(),
+            recorded_at: "2026-09-12T00:00:00.000Z".to_string(),
+        };
+        db.record_review_metric(&unscored).unwrap();
+        db.record_review_metric(&StoredReviewMetric {
+            chapter: 3,
+            overall_score: Some(90),
+            passed: true,
+            critical_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            content_hash: "m3".to_string(),
+            recorded_at: "2026-09-12T00:00:00.000Z".to_string(),
+        })
+        .unwrap();
+        db.record_review_metric(&StoredReviewMetric {
+            chapter: 2,
+            overall_score: Some(75),
+            passed: true,
+            critical_count: 0,
+            warning_count: 0,
+            info_count: 0,
+            content_hash: "m2".to_string(),
+            recorded_at: "2026-09-12T00:00:00.000Z".to_string(),
+        })
+        .unwrap();
+
+        let rows = db.list_review_metrics().unwrap();
+        let chapters: Vec<i64> = rows.iter().map(|row| row.chapter).collect();
+        assert_eq!(chapters, vec![1, 2, 3]);
+        assert_eq!(rows[0].overall_score, None);
+        assert_eq!(rows[1].overall_score, Some(75));
     }
 
     #[test]
