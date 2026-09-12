@@ -1,0 +1,244 @@
+{
+  "_header": "自动导演共享向量（G6/352 号，Phase C 末件首批）。唯一事实源本文件；TS 断言 src/__tests__/golden-director.test.ts，Rust 差分 engine-rs/tests/golden_director_diff.rs。运行模式：ready-stop 生成方向即停；range 跑 [from,to]（to 缺省=targetChapters 并钳制）；full-book 跑到 targetChapters；阶段推进：directions 后 ready-stop→paused 否则 outline；writing 到 toChapter→full-book?done:paused。",
+  "candidates": [
+    {
+      "name": "parse-three-sorted-by-confidence",
+      "input": {
+        "content": "噪音{\"directions\":[{\"id\":\"d1\",\"title\":\"甲\",\"hook\":\"钩1\",\"genre\":\"都市\",\"synopsis\":\"简1\",\"differentiator\":\"差1\",\"confidence\":0.6},{\"id\":\"d2\",\"title\":\"乙\",\"hook\":\"钩2\",\"genre\":\"仙侠\",\"synopsis\":\"简2\",\"differentiator\":\"差2\",\"confidence\":0.9}]}",
+        "excludeTitles": []
+      },
+      "expected": [
+        {
+          "id": "d2",
+          "title": "乙",
+          "hook": "钩2",
+          "genre": "仙侠",
+          "synopsis": "简2",
+          "differentiator": "差2",
+          "confidence": 0.9
+        },
+        {
+          "id": "d1",
+          "title": "甲",
+          "hook": "钩1",
+          "genre": "都市",
+          "synopsis": "简1",
+          "differentiator": "差1",
+          "confidence": 0.6
+        }
+      ]
+    },
+    {
+      "name": "exclude-titles-filtered",
+      "input": {
+        "content": "{\"directions\":[{\"title\":\"甲\",\"confidence\":0.9},{\"title\":\"乙\",\"confidence\":0.8}]}",
+        "excludeTitles": [
+          "甲"
+        ]
+      },
+      "expected": [
+        {
+          "id": "d2",
+          "title": "乙",
+          "hook": "",
+          "genre": "",
+          "synopsis": "",
+          "differentiator": "",
+          "confidence": 0.8
+        }
+      ]
+    },
+    {
+      "name": "no-json-empty",
+      "input": {
+        "content": "没有结构化输出",
+        "excludeTitles": []
+      },
+      "expected": []
+    },
+    {
+      "name": "untitled-row-skipped",
+      "input": {
+        "content": "{\"directions\":[{\"hook\":\"无标题\"},{\"title\":\"丙\"}]}",
+        "excludeTitles": []
+      },
+      "expected": [
+        {
+          "id": "d2",
+          "title": "丙",
+          "hook": "",
+          "genre": "",
+          "synopsis": "",
+          "differentiator": "",
+          "confidence": 0.5
+        }
+      ]
+    }
+  ],
+  "runPlan": [
+    {
+      "name": "ready-stop",
+      "input": {
+        "mode": "ready-stop",
+        "fromChapter": 1,
+        "toChapter": 9,
+        "targetChapters": 200
+      },
+      "expected": {
+        "mode": "ready-stop",
+        "fromChapter": 1,
+        "toChapter": null,
+        "stopAfterDirections": true
+      }
+    },
+    {
+      "name": "range-with-explicit-to",
+      "input": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": 10,
+        "targetChapters": 200
+      },
+      "expected": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": 10,
+        "stopAfterDirections": false
+      }
+    },
+    {
+      "name": "range-to-defaults-to-target",
+      "input": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": null,
+        "targetChapters": 50
+      },
+      "expected": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": 50,
+        "stopAfterDirections": false
+      }
+    },
+    {
+      "name": "range-to-clamped-to-target",
+      "input": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": 999,
+        "targetChapters": 50
+      },
+      "expected": {
+        "mode": "range",
+        "fromChapter": 3,
+        "toChapter": 50,
+        "stopAfterDirections": false
+      }
+    },
+    {
+      "name": "full-book-from-clamped",
+      "input": {
+        "mode": "full-book",
+        "fromChapter": 0,
+        "toChapter": null,
+        "targetChapters": 30
+      },
+      "expected": {
+        "mode": "full-book",
+        "fromChapter": 1,
+        "toChapter": 30,
+        "stopAfterDirections": false
+      }
+    }
+  ],
+  "stages": [
+    {
+      "name": "inspiration-next",
+      "input": {
+        "current": "inspiration",
+        "mode": "ready-stop",
+        "writtenChapters": 0,
+        "toChapter": 0
+      },
+      "expected": "directions"
+    },
+    {
+      "name": "directions-ready-stop-pauses",
+      "input": {
+        "current": "directions",
+        "mode": "ready-stop",
+        "writtenChapters": 0,
+        "toChapter": 0
+      },
+      "expected": "paused"
+    },
+    {
+      "name": "directions-range-proceeds-outline",
+      "input": {
+        "current": "directions",
+        "mode": "range",
+        "writtenChapters": 0,
+        "toChapter": 10
+      },
+      "expected": "outline"
+    },
+    {
+      "name": "outline-next-writing",
+      "input": {
+        "current": "outline",
+        "mode": "full-book",
+        "writtenChapters": 0,
+        "toChapter": 30
+      },
+      "expected": "writing"
+    },
+    {
+      "name": "writing-range-reaches-boundary-pauses",
+      "input": {
+        "current": "writing",
+        "mode": "range",
+        "writtenChapters": 10,
+        "toChapter": 10
+      },
+      "expected": "paused"
+    },
+    {
+      "name": "writing-full-book-reaches-target-done",
+      "input": {
+        "current": "writing",
+        "mode": "full-book",
+        "writtenChapters": 30,
+        "toChapter": 30
+      },
+      "expected": "done"
+    },
+    {
+      "name": "writing-below-boundary-continues",
+      "input": {
+        "current": "writing",
+        "mode": "full-book",
+        "writtenChapters": 12,
+        "toChapter": 30
+      },
+      "expected": "writing"
+    }
+  ],
+  "contract": {
+    "runModes": [
+      "ready-stop",
+      "range",
+      "full-book"
+    ],
+    "stages": [
+      "inspiration",
+      "directions",
+      "outline",
+      "writing",
+      "paused",
+      "done"
+    ],
+    "readyStopStopsAfterDirections": true,
+    "manualEditNeverAutoOverwritten": true
+  }
+}

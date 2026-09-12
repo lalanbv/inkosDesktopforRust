@@ -13,6 +13,7 @@
 
 pub mod book;
 pub mod book_rules;
+pub mod director;
 pub mod chapter;
 pub mod context_compression;
 pub mod detection;

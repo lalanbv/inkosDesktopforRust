@@ -603,6 +603,19 @@ export {
   type PacingStats,
 } from "./utils/deconstruction.js";
 export {
+  buildDirectionCandidatesPrompt,
+  nextDirectorStage,
+  parseDirectionCandidates,
+  resolveDirectorRunPlan,
+  DIRECTOR_CONTRACT,
+  DIRECTOR_RUN_MODES,
+  DIRECTOR_STAGES,
+  type DirectionCandidate,
+  type DirectorRunMode,
+  type DirectorStage,
+  type InspirationCard,
+} from "./models/director.js";
+export {
   applyRosterConfirmation,
   editDistance,
   extractCharacterCandidates,
