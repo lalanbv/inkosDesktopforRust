@@ -17,7 +17,7 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import {
+import { GitBranch,
   ChevronLeft,
   Zap,
   FileText,
@@ -42,7 +42,7 @@ import {
   Square,
   AlertTriangle,
   BookOpen
-} from "lucide-react";
+ } from "lucide-react";
 import { genreLabel } from "../lib/genre-labels";
 
 interface ChapterMeta {
@@ -268,6 +268,32 @@ export function BookDetail({
       });
     } catch {
       setReviewMode(reviewMode); // revert on failure
+    }
+  };
+
+  // G11/373 号：best-of-N 多版选优开关（治理配置，默认关）。
+  const [bestOfN, setBestOfN] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const data = await fetchJson<{ enabled: boolean }>(`/books/${encodeURIComponent(bookId)}/best-of-n`);
+        setBestOfN(Boolean(data.enabled));
+      } catch {
+        // 缺省关闭
+      }
+    })();
+  }, [bookId]);
+  const handleToggleBestOfN = async () => {
+    const next = !bestOfN;
+    setBestOfN(next);
+    try {
+      await fetchJson(`/books/${encodeURIComponent(bookId)}/best-of-n`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+    } catch {
+      setBestOfN(bestOfN); // revert on failure
     }
   };
 
@@ -653,6 +679,19 @@ export function BookDetail({
           </button>
           {/* 189 号：时间线节拍自动沉淀（书籍级开关，默认关）——开启后写完的
               章节会按既有情节线自动补节拍到时间线。 */}
+          {/* G11/373 号：best-of-N 多版选优（书籍级开关，默认关）。 */}
+          <button
+            onClick={handleToggleBestOfN}
+            title="best-of-N：首版审查分数低于门槛时自动多版生成并选优"
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border transition-all ${
+              bestOfN
+                ? "bg-primary/10 text-primary border-primary/30"
+                : "bg-secondary/60 text-muted-foreground border-border/50 hover:bg-secondary"
+            }`}
+          >
+            <GitBranch size={16} />
+            best-of-N
+          </button>
           <button
             onClick={handleToggleAutoBeats}
             title={t("book.autoBeatsHint")}

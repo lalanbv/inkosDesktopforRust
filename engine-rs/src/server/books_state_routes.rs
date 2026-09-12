@@ -2195,3 +2195,95 @@ mod tests {
         }
     }
 }
+
+// ── G11/372 号：书级 best-of-N 配置（governance.bestOfN 读写）──
+
+fn read_best_of_n(raw_book: &Value) -> Value {
+    raw_book
+        .get("governance")
+        .and_then(|g| g.get("bestOfN"))
+        .cloned()
+        .unwrap_or_else(|| json!({ "enabled": false }))
+}
+
+pub async fn get_best_of_n(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let raw_book = match load_raw_book_config(root, &book_id).await {
+        Ok(raw) => raw,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+            )
+        }
+    };
+    (StatusCode::OK, Json(read_best_of_n(&raw_book)))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PutBestOfNBody {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub candidates: Option<u32>,
+    #[serde(default)]
+    pub min_score: Option<u32>,
+}
+
+pub async fn put_best_of_n(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<PutBestOfNBody>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+        );
+    };
+    let mut best_of_n = serde_json::Map::new();
+    best_of_n.insert("enabled".to_string(), json!(body.enabled));
+    if let Some(candidates) = body.candidates {
+        best_of_n.insert("candidates".to_string(), json!(candidates.clamp(2, 3)));
+    }
+    if let Some(min_score) = body.min_score {
+        best_of_n.insert("minScore".to_string(), json!(min_score.clamp(0, 100)));
+    }
+    let mut governance = raw_book
+        .get("governance")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    governance.insert("bestOfN".to_string(), Value::Object(best_of_n));
+    raw_book
+        .as_object_mut()
+        .unwrap()
+        .insert("governance".to_string(), Value::Object(governance));
+
+    let book_path = root.join("books").join(&book_id).join("book.json");
+    let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "failed to write book.json" })),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "bestOfN": read_best_of_n(&raw_book) })),
+    )
+}

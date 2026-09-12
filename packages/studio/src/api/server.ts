@@ -6487,6 +6487,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, mode: next });
   });
 
+  // G11/373 号：书级 best-of-N 配置（governance.bestOfN 读写）。
+  app.get("/api/v1/books/:id/best-of-n", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "book.json");
+    try {
+      const book = JSON.parse(await readFile(path, "utf-8"));
+      return c.json(book?.governance?.bestOfN ?? { enabled: false });
+    } catch {
+      return c.json({ enabled: false });
+    }
+  });
+
+  app.put("/api/v1/books/:id/best-of-n", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      enabled?: boolean;
+      candidates?: number;
+      minScore?: number;
+    }>();
+    const path = join(root, "books", id, "book.json");
+    let book: Record<string, unknown> = {};
+    try {
+      book = JSON.parse(await readFile(path, "utf-8"));
+    } catch {
+      book = {};
+    }
+    const bestOfN: Record<string, unknown> = { enabled: Boolean(body.enabled) };
+    if (typeof body.candidates === "number") {
+      bestOfN.candidates = Math.min(3, Math.max(2, Math.trunc(body.candidates)));
+    }
+    if (typeof body.minScore === "number") {
+      bestOfN.minScore = Math.min(100, Math.max(0, Math.trunc(body.minScore)));
+    }
+    const governance = (book.governance as Record<string, unknown> | undefined) ?? {};
+    governance.bestOfN = bestOfN;
+    book.governance = governance;
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
+    return c.json({ ok: true, bestOfN });
+  });
+
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
