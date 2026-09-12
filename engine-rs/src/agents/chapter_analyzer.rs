@@ -771,6 +771,7 @@ mod tests {
             fanfic_mode: None,
             series: None,
             writing: None,
+            governance: None,
         };
         let gp = crate::models::genre_profile::GenreProfile {
             name: "都市".into(),

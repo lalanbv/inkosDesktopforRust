@@ -432,6 +432,7 @@ mod retry_tests {
             fanfic_mode: None,
             series: None,
             writing: None,
+            governance: None,
         }
     }
     use crate::agents::state_validator::{ValidationResult, ValidationWarning};

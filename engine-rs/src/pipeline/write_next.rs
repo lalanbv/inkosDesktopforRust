@@ -585,6 +585,97 @@ async fn write_next_chapter_locked(
     }
     // 检查点②：草稿落定后（TS 1844——writeChapter 返回即查）。
     check_aborted(config)?;
+
+    // G11/372 号：best-of-N 多版生成选优（治理开启时）。候选仅存内存——
+    // 落盘仍由既有 persist 链承担；quick 评分走环内 auditor 端口。
+    if book
+        .governance
+        .as_ref()
+        .and_then(|g| g.best_of_n.as_ref().map(|c| c.enabled.unwrap_or(false)))
+        .unwrap_or(false)
+    {
+        let quick_score = |audit_result: &crate::agents::continuity::AuditResult| -> Option<i64> {
+            audit_result.overall_score.map(i64::from)
+        };
+        let first_audit = agents
+            .auditor
+            .audit_chapter(&output.content, None, None)
+            .await
+            .ok();
+        let first_score = first_audit.as_ref().and_then(quick_score);
+        let plan = crate::utils::best_of_n::resolve_best_of_n_plan(
+            book.governance.as_ref().and_then(|g| g.best_of_n.as_ref()),
+            first_score,
+        );
+        if plan.extra_candidates > 0 {
+            let mut versions: Vec<crate::agents::writer::WriteChapterOutput> = vec![output.clone()];
+            let mut scores: Vec<Option<i64>> = vec![first_score];
+            for index in 0..plan.extra_candidates {
+                check_aborted(config)?;
+                tracing::info!(target: "write-next", "best-of-N: generating candidate {}", index + 2);
+                let candidate = write_chapter(
+                    &writer_ctx,
+                    agents.writer,
+                    &WriteChapterInput {
+                        book: &book,
+                        book_dir: &book_dir,
+                        chapter_number,
+                        external_context,
+                        chapter_intent: write_input.chapter_intent.as_deref(),
+                        chapter_memo: write_input.chapter_memo.as_ref(),
+                        chapter_intent_data: write_input.chapter_intent_data.as_ref(),
+                        context_package: write_input.context_package.as_ref(),
+                        rule_stack: write_input.rule_stack.as_ref(),
+                        length_spec: Some(length_spec.clone()),
+                        word_count_override: word_count,
+                        temperature_override,
+                    },
+                )
+                .await?;
+                if candidate.content.trim().is_empty() {
+                    scores.push(None);
+                    versions.push(candidate);
+                    continue;
+                }
+                let audit = agents
+                    .auditor
+                    .audit_chapter(&candidate.content, None, None)
+                    .await
+                    .ok();
+                scores.push(audit.as_ref().and_then(quick_score));
+                versions.push(candidate);
+            }
+            let payload: Vec<serde_json::Value> = versions
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    serde_json::json!({ "payload": index, "score": scores.get(index).cloned().flatten() })
+                })
+                .collect();
+            let best = crate::utils::best_of_n::select_best_candidate(&payload);
+            let winner = best.index;
+            tracing::info!(
+                target: "write-next",
+                "best-of-N: {} candidate(s), adopted #{} (score {:?})",
+                versions.len(),
+                winner + 1,
+                scores.get(winner).cloned().flatten()
+            );
+            output = versions.remove(winner);
+            // usage 以各版累加近似（多版成本计入本章）。
+            if let Some(usage) = versions.into_iter().map(|v| v.token_usage).reduce(|mut acc, usage| {
+                acc.prompt_tokens += usage.prompt_tokens;
+                acc.completion_tokens += usage.completion_tokens;
+                acc.total_tokens += usage.total_tokens;
+                acc
+            }) {
+                output.token_usage.prompt_tokens += usage.prompt_tokens;
+                output.token_usage.completion_tokens += usage.completion_tokens;
+                output.token_usage.total_tokens += usage.total_tokens;
+            }
+        }
+    }
+
     let writer_count = count_chapter_length(&output.content, length_spec.counting_mode);
 
     let mut total_usage = output.token_usage;

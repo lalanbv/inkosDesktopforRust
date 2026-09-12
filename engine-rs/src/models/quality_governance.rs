@@ -134,12 +134,15 @@ pub fn resolve_quality_verdict(input: &QualityVerdictInput) -> QualityVerdict {
 }
 
 /// 每书治理配置（book 级覆盖 project 级）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GovernanceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<GovernancePolicy>,
     #[serde(default, rename = "maxConsecutiveDebts", skip_serializing_if = "Option::is_none")]
     pub max_consecutive_debts: Option<u32>,
+    /// G11/371 号：多版选优（首版分数低于 minScore 时追加候选重生成）。
+    #[serde(default, rename = "bestOfN", skip_serializing_if = "Option::is_none")]
+    pub best_of_n: Option<crate::utils::best_of_n::BestOfNConfig>,
 }
 
 /// book 级覆盖 project 级覆盖缺省（completion-first / 上限 3）。

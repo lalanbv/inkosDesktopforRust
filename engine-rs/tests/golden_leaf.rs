@@ -870,6 +870,7 @@ fn settler_book() -> inkos_engine::models::book::BookConfig {
         fanfic_mode: None,
         series: None,
         writing: None,
+        governance: None,
     }
 }
 
@@ -2006,6 +2007,7 @@ fn chapter_analyzer_suite_matches_ts() {
         fanfic_mode: None,
         series: None,
         writing: None,
+        governance: None,
     };
     let profile = |value: &serde_json::Value| GenreProfile {
         name: value["name"].as_str().unwrap().to_string(),

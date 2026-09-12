@@ -142,6 +142,7 @@ fn build_studio_book_config(
         fanfic_mode: None,
         series: None,
         writing: None,
+        governance: None,
     }
 }
 

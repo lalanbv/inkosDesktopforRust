@@ -1083,6 +1083,7 @@ mod tests {
             fanfic_mode: None,
             series: None,
             writing: None,
+            governance: None,
         }
     }
 

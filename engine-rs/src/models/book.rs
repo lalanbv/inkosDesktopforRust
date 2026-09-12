@@ -148,6 +148,9 @@ pub struct BookConfig {
     pub series: Option<BookSeries>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub writing: Option<BookWritingConfig>,
+    /// G3/337 号：每书质量治理方案（对齐 TS `governance`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governance: Option<crate::models::quality_governance::GovernanceConfig>,
 }
 
 fn default_target_chapters() -> u32 {

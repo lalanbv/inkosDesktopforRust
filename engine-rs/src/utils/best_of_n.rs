@@ -7,11 +7,11 @@
 //! 质量优先时的多版选优：首版审查分数（continuity overallScore 0–100）
 //! 低于 minScore 时追加生成候选；分数降序稳定选优（缺分最低、同分保序）。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub const BEST_OF_N_DEFAULTS: (usize, i64) = (2, 75);
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BestOfNConfig {
     #[serde(default)]

@@ -66,6 +66,7 @@ import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { renderFlatMetaBlock, stripUtf8Bom } from "../utils/truth-dialect.js";
 import { toPosixPath } from "../utils/posix-path.js";
+import { resolveBestOfNPlan, selectBestCandidate } from "../utils/best-of-n.js";
 import {
   createProductionRunSnapshot,
   createRangeObservation,
@@ -2082,18 +2083,23 @@ export class PipelineRunner {
     const { readBookRules } = await import("../agents/rules-reader.js");
     const parsedBookRules = (await readBookRules(bookDir))?.rules ?? null;
 
-    // 1. Write chapter
+    // 1. Write chapter（G11/372 号：治理开启 bestOfN 时多版生成审查选优）
     const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
     this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
-    const output = await writer.writeChapter({
-      book,
-      bookDir,
-      chapterNumber,
+    const bestOfNParams = {
+      book, bookDir, chapterNumber,
       ...writeInput,
       lengthSpec,
       ...(wordCount ? { wordCountOverride: wordCount } : {}),
       ...(temperatureOverride ? { temperatureOverride } : {}),
-    });
+    } as const;
+    const { output, scores, winnerIndex } = await this.generateBestOfN(writer, book, bookDir, chapterNumber, bestOfNParams);
+    if (scores.length > 1) {
+      this.logStage(stageLanguage, {
+        zh: `best-of-N：${scores.length} 版候选，采用第 ${winnerIndex + 1} 版（分数 ${scores[winnerIndex] ?? "无"}）`,
+        en: `best-of-N: ${scores.length} candidate(s), adopted #${winnerIndex + 1} (score ${scores[winnerIndex] ?? "n/a"})`,
+      });
+    }
     this.throwIfOperationAborted();
     const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
 
@@ -3731,6 +3737,60 @@ ${matrix}`,
 
   private factKey(fact: Pick<Fact, "subject" | "predicate">): string {
     return `${fact.subject}::${fact.predicate}`;
+  }
+
+  /**
+   * G11/372 号：best-of-N 多版生成选优。治理未开启（或首版分数已达标）
+   * 时等价于单次 writeChapter；开启时首版审查评分低于 minScore 则追加
+   * 生成候选（含一次轻量审查评分），最终按 overallScore 选优采用。
+   * 候选仅存内存——落盘仍由既有 persist 链承担。
+   */
+  private async generateBestOfN(
+    writer: WriterAgent,
+    book: BookConfig,
+    bookDir: string,
+    chapterNumber: number,
+    writeParams: Record<string, unknown>,
+  ): Promise<{
+    output: WriteChapterOutput;
+    scores: ReadonlyArray<number | undefined>;
+    winnerIndex: number;
+  }> {
+    const generate = (): Promise<WriteChapterOutput> =>
+      writer.writeChapter(writeParams as never);
+
+    const first = await generate();
+    const config = book.governance?.bestOfN;
+    if (config?.enabled !== true) {
+      return { output: first, scores: [undefined], winnerIndex: 0 };
+    }
+
+    const quickScore = async (content: string): Promise<number | undefined> => {
+      try {
+        const auditor = new ContinuityAuditor(this.agentCtxFor("auditor", book.id));
+        const result = await auditor.auditChapter(bookDir, content, chapterNumber, book.genre);
+        return typeof result.overallScore === "number" ? result.overallScore : undefined;
+      } catch {
+        return undefined; // 评分失败 = 保守触发追加候选
+      }
+    };
+
+    const firstScore = await quickScore(first.content);
+    const plan = resolveBestOfNPlan(config, firstScore);
+    const candidates: Array<{ payload: WriteChapterOutput; score?: number }> = [
+      { payload: first, score: firstScore },
+    ];
+    for (let i = 0; i < plan.extraCandidates; i++) {
+      this.throwIfOperationAborted();
+      this.logStage(book.language ?? "zh", {
+        zh: `best-of-N：生成第 ${i + 2} 版候选`,
+        en: `best-of-N: generating candidate ${i + 2}`,
+      });
+      const next = await generate();
+      candidates.push({ payload: next, score: await quickScore(next.content) });
+    }
+    const best = selectBestCandidate(candidates);
+    return { output: best.winner, scores: candidates.map((candidate) => candidate.score), winnerIndex: best.index };
   }
 
   private buildLengthWarnings(

@@ -1140,6 +1140,7 @@ async fn execute_continuation_import(
                 fanfic_mode: None,
                 series: None,
                 writing: None,
+                governance: None,
             };
             if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
                 return Err(pick(
@@ -1367,6 +1368,7 @@ async fn execute_fanfic_init(
         fanfic_mode: Some(fanfic_mode),
         series: None,
         writing: None,
+        governance: None,
     };
     crate::server::fanfic_routes::init_fanfic_book(runtime, &book, &source_text, &source_name, fanfic_mode)
         .await?;

@@ -337,6 +337,7 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract
         fanfic_mode: Some(fanfic_mode),
         series: None,
         writing: None,
+        governance: None,
     };
     let book_id = book.id.clone();
     let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("source").to_string();
