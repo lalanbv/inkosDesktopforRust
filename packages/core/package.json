@@ -57,7 +57,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eval": "vitest run src/__tests__/eval"
   },
   "dependencies": {
     "@mariozechner/pi-agent-core": "0.67.1",
