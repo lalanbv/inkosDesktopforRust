@@ -61,6 +61,7 @@ pub mod quality_trend;
 pub mod style_feature_engine;
 pub mod resume_advice;
 pub mod rule_experience_engine;
+pub mod scene_beats;
 pub mod runtime_writer;
 pub mod semantic_retrieval;
 pub mod story_markdown;

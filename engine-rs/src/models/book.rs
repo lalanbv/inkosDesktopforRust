@@ -109,6 +109,9 @@ pub struct BookWritingConfig {
     /// 189 号：write-next 落盘后自动为本章沉淀时间线节拍（默认关）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_timeline_beats: Option<bool>,
+    /// R11/378 号：场景节拍驱动写作（默认关）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_beats: Option<bool>,
 }
 
 /// 系列归属。对齐 TS `BookSeriesSchema`（180 号 C3-a）。
@@ -296,7 +299,7 @@ mod tests {
     fn resolve_review_mode_precedence() {
         // book 覆盖 project
         assert_eq!(
-            resolve_chapter_review_mode(Some(&BookWritingConfig { review_mode: Some(ChapterReviewModeVal::Manual), revision_gate: None, auto_timeline_beats: None }), Some(ChapterReviewModeVal::Auto)),
+            resolve_chapter_review_mode(Some(&BookWritingConfig { review_mode: Some(ChapterReviewModeVal::Manual), revision_gate: None, auto_timeline_beats: None, scene_beats: None }), Some(ChapterReviewModeVal::Auto)),
             ChapterReviewModeVal::Manual
         );
         // book 未设 → project
@@ -311,7 +314,7 @@ mod tests {
     #[test]
     fn resolve_revision_gate_precedence() {
         assert_eq!(
-            resolve_revision_gate(Some(&BookWritingConfig { review_mode: None, revision_gate: Some(RevisionGateVal::Always), auto_timeline_beats: None }), Some(RevisionGateVal::Strict)),
+            resolve_revision_gate(Some(&BookWritingConfig { review_mode: None, revision_gate: Some(RevisionGateVal::Always), auto_timeline_beats: None, scene_beats: None }), Some(RevisionGateVal::Strict)),
             RevisionGateVal::Always
         );
         assert_eq!(resolve_revision_gate(None, None), RevisionGateVal::Strict);

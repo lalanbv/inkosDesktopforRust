@@ -79,6 +79,8 @@ export const BookConfigSchema = z.object({
     revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
     /** 189 号：write-next 落盘后自动为本章沉淀时间线节拍（默认关）。 */
     autoTimelineBeats: z.boolean().optional(),
+    /** R11/378 号：场景节拍驱动写作（planner 产节拍、writer 按拍推进；默认关）。 */
+    sceneBeats: z.boolean().optional(),
   }).optional(),
   /** G3/337 号：每书质量治理方案（缺省回落 completion-first/上限 3）。 */
   governance: z.object({

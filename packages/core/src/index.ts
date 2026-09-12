@@ -954,6 +954,14 @@ export { buildPlayableHtml } from "./interactive-film/export-html.js";
 export { ingestMaterial, type IngestMaterialInput, type MaterialAsset } from "./materials/ingest.js";
 export { runWorkerAgent, type WorkerAgentOptions } from "./agent/worker-agent.js";
 export {
+  buildSceneBeatsPrompt,
+  buildSceneBeatsWriterBlock,
+  parseSceneBeatPlan,
+  SCENE_BEATS_MAX_SCENES,
+  type SceneBeat,
+  type SceneBeatPlan,
+} from "./utils/scene-beats.js";
+export {
   deriveCodexCards,
   matchCodexCards,
   renderCodexBlock,

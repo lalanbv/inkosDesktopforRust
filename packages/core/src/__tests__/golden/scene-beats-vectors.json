@@ -1,0 +1,90 @@
+{
+  "meta": {
+    "contract": "R11 场景节拍驱动写作（378 号契约批，三轮 P0）——SceneBeat 模型 + planner JSON 解析（clamp ≤6 场景）+ planner/writer 提示词构造；开关 book.writing.sceneBeats 默认关",
+    "invariants": [
+      "解析：剥离 ``` 围栏后取首个 JSON 对象；scenes clamp ≤6；title ≤60/description ≤200/exitHook ≤120 截断；title 与 description 均空的行跳过；全部无效 → undefined",
+      "行 id 缺省 s1..sN（按原行序）",
+      "writer 块：节拍顺序清单 + exit 标注 + 「不得跳过或合并节拍」纪律；zh/en 双语",
+      "开关：book.writing.sceneBeats 默认关（关闭时行为与既有链路一致）"
+    ]
+  },
+  "parse": [
+    {
+      "name": "valid plan parses with defaults",
+      "chapter": 12,
+      "input": "```json\n{\"scenes\":[{\"title\":\"边界对峙\",\"description\":\"林动与老陈在废墟边缘对峙，祖符石发烫。\",\"exitHook\":\"迈出边界\"},{\"description\":\"怀表复走，回忆父亲失踪。\"}]}\n```",
+      "expected": {
+        "chapter": 12,
+        "scenes": [
+          { "id": "s1", "title": "边界对峙", "description": "林动与老陈在废墟边缘对峙，祖符石发烫。", "exitHook": "迈出边界" },
+          { "id": "s2", "title": "", "description": "怀表复走，回忆父亲失踪。" }
+        ]
+      }
+    },
+    {
+      "name": "scenes clamp to six and rows beyond dropped",
+      "chapter": 3,
+      "input": "{\"scenes\":[{\"title\":\"1\",\"description\":\"d1\"},{\"title\":\"2\",\"description\":\"d2\"},{\"title\":\"3\",\"description\":\"d3\"},{\"title\":\"4\",\"description\":\"d4\"},{\"title\":\"5\",\"description\":\"d5\"},{\"title\":\"6\",\"description\":\"d6\"},{\"title\":\"7\",\"description\":\"d7\"}]}",
+      "expected": {
+        "chapter": 3,
+        "scenes": [
+          { "id": "s1", "title": "1", "description": "d1" },
+          { "id": "s2", "title": "2", "description": "d2" },
+          { "id": "s3", "title": "3", "description": "d3" },
+          { "id": "s4", "title": "4", "description": "d4" },
+          { "id": "s5", "title": "5", "description": "d5" },
+          { "id": "s6", "title": "6", "description": "d6" }
+        ]
+      }
+    },
+    {
+      "name": "no valid scenes yields undefined",
+      "chapter": 1,
+      "input": "{\"scenes\":[{\"title\":\"\",\"description\":\"\"}]}",
+      "expected": null
+    }
+  ],
+  "prompt": [
+    {
+      "name": "planner prompt zh anchors",
+      "language": "zh",
+      "goal": "林动越界寻父",
+      "outlineNode": "第 12 章：越界",
+      "sceneCount": 4,
+      "expectedContains": ["把本章拆分为 4 个场景节拍", "林动越界寻父", "第 12 章：越界", "\"scenes\""]
+    },
+    {
+      "name": "planner prompt en anchors",
+      "language": "en",
+      "goal": "cross the border",
+      "outlineNode": null,
+      "sceneCount": 3,
+      "expectedContains": ["Break this chapter into 3 scene beats.", "cross the border", "\"scenes\""]
+    }
+  ],
+  "writerBlock": [
+    {
+      "name": "writer block zh with exit hooks",
+      "language": "zh",
+      "plan": {
+        "chapter": 12,
+        "scenes": [
+          { "id": "s1", "title": "边界对峙", "description": "对峙升温。", "exitHook": "迈出边界" },
+          { "id": "s2", "title": "怀表复走", "description": "回忆杀。" }
+        ]
+      },
+      "expected": "## 场景节拍（按此顺序推进）\n- 边界对峙: 对峙升温。\n  出口: 迈出边界\n- 怀表复走: 回忆杀。\n每个节拍必须落实后才进入下一拍；不得跳过或合并节拍。"
+    },
+    {
+      "name": "writer block en",
+      "language": "en",
+      "plan": {
+        "chapter": 5,
+        "scenes": [
+          { "id": "s1", "title": "Standoff", "description": "Tension rises.", "exitHook": "step over" }
+        ]
+      },
+      "expected": "## Scene beats (write in this order)\n- Standoff: Tension rises.\n  exit: step over\nEach beat must land before the next begins; do not skip or merge beats."
+    }
+  ]
+}
