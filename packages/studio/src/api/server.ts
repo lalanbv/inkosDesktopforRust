@@ -3090,10 +3090,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       count?: number;
       excludeTitles?: string[];
       language?: "zh" | "en";
-    }>().catch(() => ({}) as { inspiration?: unknown; count?: number; excludeTitles?: string[]; language?: "zh" | "en" });
+      assetRefs?: Array<{ kind: string; id: string }>;
+    }>().catch(() => ({}) as { inspiration?: unknown; count?: number; excludeTitles?: string[]; language?: "zh" | "en"; assetRefs?: Array<{ kind: string; id: string }> });
     const inspiration = body.inspiration as { premise?: unknown } | undefined;
     if (!inspiration || typeof inspiration.premise !== "string" || !inspiration.premise.trim()) {
       return c.json({ error: "inspiration.premise is required" }, 400);
+    }
+    // R4/364 号：可选挂载三库资产 guidance（refs 命中库资产 → 渲染参考块）。
+    let assetGuidance: string | undefined;
+    if (Array.isArray(body.assetRefs) && body.assetRefs.length > 0) {
+      const core = await import("@actalk/inkos-core");
+      const matched: import("@actalk/inkos-core").LibraryAsset[] = [];
+      for (const ref of body.assetRefs.slice(0, 6)) {
+        if (!isLibraryKind(ref.kind)) continue;
+        const snapshot = await listAssets(root, ref.kind);
+        const hit = snapshot.assets.find((asset) => asset.id === ref.id);
+        if (hit) matched.push(hit);
+      }
+      assetGuidance = core.renderAssetGuidanceBlock(matched, body.language ?? "zh");
     }
     broadcast("director:start", {});
     try {
@@ -3103,6 +3117,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         count: body.count,
         excludeTitles: body.excludeTitles,
         language: body.language,
+        assetGuidance,
       });
       broadcast("director:complete", { count: directions.length });
       return c.json({ directions });
@@ -3355,6 +3370,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       errors: parsed.errors,
       assets: merged.merged,
     });
+  });
+
+  // R4/364 号：库资产两段式采用（通用样本≠本书世界——写入本书材料池，进 G1 召回链）。
+  app.post("/api/v1/books/:id/adopt-library-assets", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      refs?: Array<{ kind: string; id: string }>;
+      language?: "zh" | "en";
+    }>().catch(() => ({}) as { refs?: Array<{ kind: string; id: string }>; language?: "zh" | "en" });
+    const refs = Array.isArray(body.refs) ? body.refs.slice(0, 12) : [];
+    if (refs.length === 0) return c.json({ error: "refs are required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const language = body.language === "en" ? "en" : "zh";
+    const materialsDir = join(root, ".inkos", "materials");
+    await mkdir(materialsDir, { recursive: true });
+    const published: Array<{ materialId: string; kind: string; id: string }> = [];
+    for (const ref of refs) {
+      if (!isLibraryKind(ref.kind)) continue;
+      const snapshot = await listAssets(root, ref.kind);
+      const asset = snapshot.assets.find((item) => item.id === ref.id);
+      if (!asset) continue;
+      const header = core.renderAdoptionHeader(asset, id, language);
+      const samplesBlock = asset.samples.length > 0
+        ? `\n## Samples\n\n${asset.samples.map((sample) => `- ${sample}`).join("\n")}\n`
+        : "";
+      const markdown = `${header}\n${asset.body}\n${samplesBlock}`;
+      const materialId = `lib-${ref.kind}-${asset.id}-${id}`.replace(/[^\w-]/g, "-").slice(0, 80);
+      await writeFile(join(materialsDir, `${materialId}.md`), markdown, "utf-8");
+      const manifest = {
+        id: materialId,
+        title: `${asset.name}（库资产）`,
+        kind: "text",
+        purpose: "reference",
+        source: "library",
+        mimeType: "text/markdown",
+        markdownPath: `.inkos/materials/${materialId}.md`,
+      };
+      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
+      published.push({ materialId, kind: ref.kind, id: asset.id });
+    }
+    return c.json({ published });
   });
 
   // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。

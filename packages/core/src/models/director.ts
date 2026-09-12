@@ -51,6 +51,8 @@ export function buildDirectionCandidatesPrompt(params: {
   readonly count?: number;
   readonly excludeTitles?: ReadonlyArray<string>;
   readonly language?: "zh" | "en";
+  /** R4/364 号：库资产 guidance 块（renderAssetGuidanceBlock 产物，可选挂载）。 */
+  readonly assetGuidance?: string;
 }): string {
   const count = params.count ?? 3;
   const isEn = params.language === "en";
@@ -66,12 +68,12 @@ export function buildDirectionCandidatesPrompt(params: {
 
 ## Inspiration
 - Premise: ${i.premise}${i.genre ? `\n- Genre: ${i.genre}` : ""}${i.platform ? `\n- Platform: ${i.platform}` : ""}${i.tone ? `\n- Tone: ${i.tone}` : ""}${i.keywords.length > 0 ? `\n- Keywords: ${i.keywords.join(", ")}` : ""}${excludeBlock}
-Output JSON: {"directions":[{"id":"d1","title":"...","hook":"one-line hook","genre":"...","synopsis":"2-3 sentences","differentiator":"how it avoids sameness","confidence":0.0-1.0}]}`
+Output JSON: {"directions":[{"id":"d1","title":"...","hook":"one-line hook","genre":"...","synopsis":"2-3 sentences","differentiator":"how it avoids sameness","confidence":0.0-1.0}]}${params.assetGuidance ? `\n\n${params.assetGuidance}` : ""}`
     : `你是故事导演。基于同一份灵感，生成 ${count} 套并列的开书方向。
 
 ## 灵感卡
 - 灵感：${i.premise}${i.genre ? `\n- 题材：${i.genre}` : ""}${i.platform ? `\n- 平台：${i.platform}` : ""}${i.tone ? `\n- 基调：${i.tone}` : ""}${i.keywords.length > 0 ? `\n- 关键词：${i.keywords.join("、")}` : ""}${excludeBlock}
-输出 JSON：{"directions":[{"id":"d1","title":"书名","hook":"一句话钩子","genre":"题材","synopsis":"两三句简介","differentiator":"差异化（如何避开同质化）","confidence":0.0-1.0}]}`
+输出 JSON：{"directions":[{"id":"d1","title":"书名","hook":"一句话钩子","genre":"题材","synopsis":"两三句简介","differentiator":"差异化（如何避开同质化）","confidence":0.0-1.0}]}${params.assetGuidance ? `\n\n${params.assetGuidance}` : ""}`
 }
 
 /**

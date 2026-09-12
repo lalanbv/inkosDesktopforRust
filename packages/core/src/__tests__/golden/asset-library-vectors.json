@@ -288,5 +288,41 @@
       "three_act"
     ],
     "count": 3
+  },
+  "guidance": {
+    "name": "guidance block zh clip and caps",
+    "language": "zh",
+    "assets": [
+      {
+        "id": "a_one",
+        "kind": "genre-base",
+        "name": "甲",
+        "body": "正文甲",
+        "expectations": [
+          "期待一",
+          "期待二",
+          "期待三",
+          "期待四",
+          "期待五",
+          "期待六"
+        ],
+        "taboos": [
+          "禁忌一"
+        ],
+        "samples": [
+          "样本一"
+        ]
+      },
+      {
+        "id": "b_two",
+        "kind": "progression-mode",
+        "name": "乙",
+        "body": "循环正文",
+        "expectations": [],
+        "taboos": [],
+        "samples": []
+      }
+    ],
+    "expected": "## 库资产参考\n以下参考资产规定了方向的读者期待与禁忌。\n\n### 甲 (genre-base/a_one)\n正文甲\n读者期待：\n- 期待一\n- 期待二\n- 期待三\n- 期待四\n- 期待五\n禁忌：\n- 禁忌一\n### 乙 (progression-mode/b_two)\n循环正文"
   }
 }

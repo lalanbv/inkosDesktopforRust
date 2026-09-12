@@ -7,6 +7,7 @@ import { RosterCandidatesCard } from "../components/RosterCandidatesCard";
 import { RecallTestCard } from "../components/RecallTestCard";
 import { TensionCurveCard } from "../components/TensionCurveCard";
 import { QualityTrendCard } from "../components/QualityTrendCard";
+import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -569,6 +570,9 @@ export function BookDetail({
 
       {/* R3/361 号：质量趋势（审查分数折线 + 承诺紧迫度汇总）。 */}
       <QualityTrendCard bookId={bookId} />
+
+      {/* R4/364 号：三库资产管理（列表/新增/导入导出/采用到本书两段式）。 */}
+      <AssetLibraryPanel bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />

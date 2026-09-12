@@ -643,3 +643,85 @@ mod store_tests {
         assert!(!remaining.iter().any(|a| a.id == "urban_supernatural"));
     }
 }
+
+// ── R4/364 号：库资产 guidance 渲染（导演方向候选/建书挂载共用）──
+
+const GUIDANCE_BODY_MAX_CHARS: usize = 600;
+const GUIDANCE_LIST_MAX_ITEMS: usize = 5;
+
+/// 资产 guidance 块（注入导演方向候选 prompt / 建书上下文）：
+/// 每资产一节（name + body 截断 600 码元 + expectations/taboos 各取前 5 条）。
+/// assets 为空返回 None（不产空节）。
+pub fn render_asset_guidance_block(
+    assets: &[LibraryAsset],
+    language: crate::utils::language::WritingLanguage,
+) -> Option<String> {
+    if assets.is_empty() {
+        return None;
+    }
+    let is_en = language == crate::utils::language::WritingLanguage::En;
+    let clip = |text: &str| -> String {
+        if text.chars().count() > GUIDANCE_BODY_MAX_CHARS {
+            let cut: String = text.chars().take(GUIDANCE_BODY_MAX_CHARS - 1).collect();
+            format!("{cut}…")
+        } else {
+            text.to_string()
+        }
+    };
+    let sections: Vec<String> = assets
+        .iter()
+        .map(|asset| {
+            let mut lines = vec![
+                format!("### {} ({}/{})", asset.name, asset.kind.as_str(), asset.id),
+                clip(&asset.body),
+            ];
+            if !asset.expectations.is_empty() {
+                lines.push(if is_en { "Expectations:".to_string() } else { "读者期待：".to_string() });
+                for item in asset.expectations.iter().take(GUIDANCE_LIST_MAX_ITEMS) {
+                    lines.push(format!("- {item}"));
+                }
+            }
+            if !asset.taboos.is_empty() {
+                lines.push(if is_en { "Taboos:".to_string() } else { "禁忌：".to_string() });
+                for item in asset.taboos.iter().take(GUIDANCE_LIST_MAX_ITEMS) {
+                    lines.push(format!("- {item}"));
+                }
+            }
+            lines.join("\n")
+        })
+        .collect();
+    Some(
+        [
+            if is_en { "## Library asset references".to_string() } else { "## 库资产参考".to_string() },
+            if is_en {
+                "The following reference assets set expectations and taboos for the directions below.".to_string()
+            } else {
+                "以下参考资产规定了方向的读者期待与禁忌。".to_string()
+            },
+            String::new(),
+            sections.join("\n"),
+        ]
+        .join("\n"),
+    )
+}
+
+/// 两段式采用材料头注（364 号）：世界样本等库资产「采用到本书」时写入材料池
+/// 的 markdown 前缀——通用样本≠本书世界，采用时须按本书设定改写。
+pub fn render_adoption_header(
+    asset: &LibraryAsset,
+    book_id: &str,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
+    let is_en = language == crate::utils::language::WritingLanguage::En;
+    if is_en {
+        format!(
+            "# Adopted library asset: {}\n\n> Generic sample ≠ this book's world. Rewrite per this book's settings before use.\n> Source: {}/{} · adopted by book `{}`\n",
+            asset.name, asset.kind.as_str(), asset.id, book_id
+        )
+    } else {
+        format!(
+            "# 采用的库资产：{}\n\n> 通用样本≠本书世界：采用时须按本书设定改写。\n> 来源：{}/{} · 采用书：`{}`\n",
+            asset.name, asset.kind.as_str(), asset.id, book_id
+        )
+    }
+}

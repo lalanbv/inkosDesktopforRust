@@ -325,3 +325,67 @@ export const PROGRESSION_MODE_SEEDS: ReadonlyArray<LibraryAsset> = [
     ],
   },
 ];
+
+// ── R4/364 号：库资产 guidance 渲染（导演方向候选/建书挂载共用）──
+
+const GUIDANCE_BODY_MAX_CHARS = 600;
+const GUIDANCE_LIST_MAX_ITEMS = 5;
+
+/**
+ * 资产 guidance 块（注入导演方向候选 prompt / 建书上下文）：
+ * 每资产一节（name + body 截断 600 码元 + expectations/taboos 各取前 5 条）。
+ * assets 为空返回 undefined（不产空节）。
+ */
+export function renderAssetGuidanceBlock(
+  assets: ReadonlyArray<LibraryAsset>,
+  language: "zh" | "en" = "zh",
+): string | undefined {
+  if (assets.length === 0) return undefined;
+  const isEn = language === "en";
+  const clip = (text: string): string =>
+    text.length > GUIDANCE_BODY_MAX_CHARS
+      ? `${text.slice(0, GUIDANCE_BODY_MAX_CHARS - 1)}…`
+      : text;
+  const sections = assets.map((asset) => {
+    const lines = [
+      `### ${asset.name} (${asset.kind}/${asset.id})`,
+      clip(asset.body),
+    ];
+    if (asset.expectations.length > 0) {
+      lines.push(
+        isEn ? "Expectations:" : "读者期待：",
+        ...asset.expectations
+          .slice(0, GUIDANCE_LIST_MAX_ITEMS)
+          .map((item) => `- ${item}`),
+      );
+    }
+    if (asset.taboos.length > 0) {
+      lines.push(
+        isEn ? "Taboos:" : "禁忌：",
+        ...asset.taboos
+          .slice(0, GUIDANCE_LIST_MAX_ITEMS)
+          .map((item) => `- ${item}`),
+      );
+    }
+    return lines.join("\n");
+  });
+  return [
+    isEn ? "## Library asset references" : "## 库资产参考",
+    isEn
+      ? "The following reference assets set expectations and taboos for the directions below."
+      : "以下参考资产规定了方向的读者期待与禁忌。",
+    "",
+    ...sections,
+  ].join("\n");
+}
+
+/**
+ * 两段式采用材料头注（364 号）：世界样本等库资产「采用到本书」时写入材料池
+ * 的 markdown 前缀——通用样本≠本书世界，采用时须按本书设定改写。
+ */
+export function renderAdoptionHeader(asset: LibraryAsset, bookId: string, language: "zh" | "en" = "zh"): string {
+  const isEn = language === "en";
+  return isEn
+    ? `# Adopted library asset: ${asset.name}\n\n> Generic sample ≠ this book's world. Rewrite per this book's settings before use.\n> Source: ${asset.kind}/${asset.id} · adopted by book \`${bookId}\`\n`
+    : `# 采用的库资产：${asset.name}\n\n> 通用样本≠本书世界：采用时须按本书设定改写。\n> 来源：${asset.kind}/${asset.id} · 采用书：\`${bookId}\`\n`;
+}

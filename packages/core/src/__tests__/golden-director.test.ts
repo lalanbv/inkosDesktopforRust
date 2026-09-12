@@ -67,6 +67,19 @@ describe("director (G6)", () => {
     });
     expect(en).toContain("Generate 2 alternative book directions");
     expect(en).not.toContain("Excluded titles");
+    // R4/364 号：assetGuidance 可选挂载——追加节，缺省不出现。
+    const withGuidance = buildDirectionCandidatesPrompt({
+      inspiration: { premise: "x", keywords: [] },
+      count: 2,
+      language: "zh",
+      assetGuidance: "## 库资产参考\n- 期待",
+    });
+    expect(withGuidance).toContain("## 库资产参考\n- 期待");
+    expect(buildDirectionCandidatesPrompt({
+      inspiration: { premise: "x", keywords: [] },
+      count: 2,
+      language: "zh",
+    })).not.toContain("库资产参考");
   });
 
   it("resolves run plans per shared vectors", () => {

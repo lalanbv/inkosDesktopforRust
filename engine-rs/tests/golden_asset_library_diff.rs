@@ -246,3 +246,27 @@ fn progression_seeds_match_shared_vectors() {
         );
     }
 }
+
+#[test]
+fn guidance_block_matches_shared_vectors() {
+    let vectors: Value = serde_json::from_str(VECTORS).unwrap();
+    let vector = &vectors["guidance"];
+    let assets: Vec<LibraryAsset> = vector["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(as_asset)
+        .collect();
+    let language = match vector["language"].as_str().unwrap() {
+        "en" => inkos_engine::utils::language::WritingLanguage::En,
+        _ => inkos_engine::utils::language::WritingLanguage::Zh,
+    };
+    let got = inkos_engine::utils::asset_library::render_asset_guidance_block(&assets, language);
+    assert_eq!(
+        got.as_deref(),
+        vector["expected"].as_str(),
+        "guidance vector '{}' drifted",
+        vector["name"].as_str().unwrap()
+    );
+    assert!(inkos_engine::utils::asset_library::render_asset_guidance_block(&[], language).is_none());
+}

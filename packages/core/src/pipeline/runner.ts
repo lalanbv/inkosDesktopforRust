@@ -774,6 +774,7 @@ export class PipelineRunner {
     readonly count?: number;
     readonly excludeTitles?: ReadonlyArray<string>;
     readonly language?: "zh" | "en";
+    readonly assetGuidance?: string;
   }): Promise<import("../models/director.js").DirectionCandidate[]> {
     const director = new (await import("../agents/director-agent.js")).DirectorAgent(
       this.agentCtxFor("director"),

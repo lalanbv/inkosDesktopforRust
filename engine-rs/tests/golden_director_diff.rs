@@ -80,6 +80,7 @@ fn director_prompt_contains_inspiration_and_exclusions() {
         3,
         &["旧书".to_string()],
         Some("zh"),
+        None,
     );
     assert!(zh.contains("生成 3 套并列的开书方向"));
     assert!(zh.contains("末世废土拾荒少年"));
@@ -89,9 +90,27 @@ fn director_prompt_contains_inspiration_and_exclusions() {
         2,
         &[],
         Some("en"),
+        None,
     );
     assert!(en.contains("Generate 2 alternative book directions"));
     assert!(!en.contains("Excluded titles"));
+    // R4/364 号：assetGuidance 可选挂载——追加节，缺省不出现。
+    let with_guidance = inkos_engine::models::director::build_direction_candidates_prompt(
+        &inspiration,
+        2,
+        &[],
+        Some("zh"),
+        Some("## 库资产参考\n- 期待"),
+    );
+    assert!(with_guidance.contains("## 库资产参考\n- 期待"));
+    let without = inkos_engine::models::director::build_direction_candidates_prompt(
+        &inspiration,
+        2,
+        &[],
+        Some("zh"),
+        None,
+    );
+    assert!(!without.contains("库资产参考"));
 }
 
 #[test]

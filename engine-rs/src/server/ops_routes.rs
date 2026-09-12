@@ -860,6 +860,16 @@ pub struct DirectionCandidatesBody {
     pub exclude_titles: Vec<String>,
     #[serde(default)]
     pub language: Option<String>,
+    #[serde(default)]
+    pub asset_refs: Vec<AssetRef>,
+}
+
+/// R4/364 号：库资产引用（kind+id）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRef {
+    pub kind: String,
+    pub id: String,
 }
 
 pub async fn post_direction_candidates(
@@ -868,11 +878,27 @@ pub async fn post_direction_candidates(
 ) -> impl IntoResponse {
     runtime.hub.broadcast("director:start", &json!({}));
     let count = body.count.unwrap_or(3).clamp(2, 5);
+    // R4/364 号：可选挂载三库资产 guidance（refs 命中库资产 → 渲染参考块）。
+    let mut asset_guidance: Option<String> = None;
+    if !body.asset_refs.is_empty() {
+        let language = crate::utils::language::infer_language(body.language.as_deref());
+        let mut matched: Vec<crate::utils::asset_library::LibraryAsset> = Vec::new();
+        for reference in body.asset_refs.iter().take(6) {
+            let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
+            let (assets, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+                .unwrap_or_else(|_| (Vec::new(), false));
+            if let Some(hit) = assets.iter().find(|asset| asset.id == reference.id) {
+                matched.push(hit.clone());
+            }
+        }
+        asset_guidance = crate::utils::asset_library::render_asset_guidance_block(&matched, language);
+    }
     let prompt = crate::models::director::build_direction_candidates_prompt(
         &body.inspiration,
         count,
         &body.exclude_titles,
         body.language.as_deref(),
+        asset_guidance.as_deref(),
     );
     let system = if body.language.as_deref() == Some("en") {
         "You are the story director."
@@ -2007,4 +2033,68 @@ pub async fn import_asset_library(
         })),
     )
         .into_response()
+}
+
+/// R4/364 号：库资产两段式采用（通用样本≠本书世界——写入本书材料池，进 G1 召回链）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptLibraryAssetsBody {
+    #[serde(default)]
+    pub refs: Vec<AssetRef>,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+pub async fn adopt_library_assets(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<AdoptLibraryAssetsBody>,
+) -> impl IntoResponse {
+    if body.refs.is_empty() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("refs are required"));
+    }
+    let language = crate::utils::language::infer_language(body.language.as_deref());
+    let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
+    let _ = std::fs::create_dir_all(&materials_dir);
+    let mut published: Vec<Value> = Vec::new();
+    for reference in body.refs.iter().take(12) {
+        let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
+        let (assets, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+            .unwrap_or_else(|_| (Vec::new(), false));
+        let Some(asset) = assets.iter().find(|asset| asset.id == reference.id) else { continue };
+        let header = crate::utils::asset_library::render_adoption_header(asset, &book_id, language);
+        let samples_block = if asset.samples.is_empty() {
+            String::new()
+        } else {
+            let items: Vec<String> = asset.samples.iter().map(|sample| format!("- {sample}")).collect();
+            format!("\n## Samples\n\n{}\n", items.join("\n"))
+        };
+        let markdown = format!("{header}\n{}\n{samples_block}", asset.body);
+        let safe: String = format!("lib-{}-{}-{}", reference.kind, asset.id, book_id)
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .take(80)
+            .collect();
+        let material_id = safe;
+        if let Err(error) = std::fs::write(materials_dir.join(format!("{material_id}.md")), &markdown) {
+            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+        }
+        let manifest = json!({
+            "id": material_id,
+            "title": format!("{}（库资产）", asset.name),
+            "kind": "text",
+            "purpose": "reference",
+            "source": "library",
+            "mimeType": "text/markdown",
+            "markdownPath": format!(".inkos/materials/{material_id}.md"),
+        });
+        if let Err(error) = std::fs::write(
+            materials_dir.join(format!("{material_id}.json")),
+            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        ) {
+            return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
+        }
+        published.push(json!({ "materialId": material_id, "kind": reference.kind, "id": asset.id }));
+    }
+    (StatusCode::OK, Json(json!({ "published": published }))).into_response()
 }

@@ -14,6 +14,7 @@ import {
   buildAssetLibraryExport,
   GENRE_BASE_SEEDS,
   PROGRESSION_MODE_SEEDS,
+  renderAssetGuidanceBlock,
   mergeAssetLibrary,
   parseAssetLibraryImport,
   validateLibraryAsset,
@@ -49,6 +50,12 @@ const vectors = JSON.parse(
   };
   seeds: { ids: string[]; count: number };
   progressionSeeds: { ids: string[]; count: number };
+  guidance: {
+    name: string;
+    language: "zh" | "en";
+    assets: Array<Record<string, unknown>>;
+    expected: string;
+  };
 };
 
 function asAsset(raw: Record<string, unknown>): LibraryAsset {
@@ -123,6 +130,13 @@ describe("asset library contract (R4)", () => {
       expect(validateLibraryAsset(seed).errors, seed.id).toHaveLength(0);
       expect(seed.kind).toBe("genre-base");
     }
+  });
+
+  it("renders guidance blocks per shared vectors", () => {
+    const vector = vectors.guidance;
+    const assets = vector.assets.map(asAsset);
+    expect(renderAssetGuidanceBlock(assets, vector.language), vector.name).toBe(vector.expected);
+    expect(renderAssetGuidanceBlock([], vector.language)).toBeUndefined();
   });
 
   it("ships progression-mode seeds matching the contract", () => {

@@ -95,6 +95,8 @@ pub fn build_direction_candidates_prompt(
     count: usize,
     exclude_titles: &[String],
     language: Option<&str>,
+    // R4/364 号：库资产 guidance 块（render_asset_guidance_block 产物，可选挂载）。
+    asset_guidance: Option<&str>,
 ) -> String {
     let is_en = language == Some("en");
     let i = inspiration;
@@ -136,14 +138,18 @@ pub fn build_direction_candidates_prompt(
     } else {
         String::new()
     };
+    let asset_guidance_suffix = asset_guidance
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n\n{value}"))
+        .unwrap_or_default();
     if is_en {
         format!(
-            "You are the story director. Generate {count} alternative book directions from the same inspiration.\n\n## Inspiration\n- Premise: {}{optional}{exclude_block}\nOutput JSON: {{\"directions\":[{{\"id\":\"d1\",\"title\":\"...\",\"hook\":\"one-line hook\",\"genre\":\"...\",\"synopsis\":\"2-3 sentences\",\"differentiator\":\"how it avoids sameness\",\"confidence\":0.0-1.0}}]}}",
+            "You are the story director. Generate {count} alternative book directions from the same inspiration.\n\n## Inspiration\n- Premise: {}{optional}{exclude_block}\nOutput JSON: {{\"directions\":[{{\"id\":\"d1\",\"title\":\"...\",\"hook\":\"one-line hook\",\"genre\":\"...\",\"synopsis\":\"2-3 sentences\",\"differentiator\":\"how it avoids sameness\",\"confidence\":0.0-1.0}}]}}{asset_guidance_suffix}",
             i.premise
         )
     } else {
         format!(
-            "你是故事导演。基于同一份灵感，生成 {count} 套并列的开书方向。\n\n## 灵感卡\n- 灵感：{}{optional}{exclude_block}\n输出 JSON：{{\"directions\":[{{\"id\":\"d1\",\"title\":\"书名\",\"hook\":\"一句话钩子\",\"genre\":\"题材\",\"synopsis\":\"两三句简介\",\"differentiator\":\"差异化（如何避开同质化）\",\"confidence\":0.0-1.0}}]}}",
+            "你是故事导演。基于同一份灵感，生成 {count} 套并列的开书方向。\n\n## 灵感卡\n- 灵感：{}{optional}{exclude_block}\n输出 JSON：{{\"directions\":[{{\"id\":\"d1\",\"title\":\"书名\",\"hook\":\"一句话钩子\",\"genre\":\"题材\",\"synopsis\":\"两三句简介\",\"differentiator\":\"差异化（如何避开同质化）\",\"confidence\":0.0-1.0}}]}}{asset_guidance_suffix}",
             i.premise
         )
     }

@@ -670,6 +670,8 @@ export {
   PROGRESSION_MODE_SEEDS,
   mergeAssetLibrary,
   parseAssetLibraryImport,
+  renderAdoptionHeader,
+  renderAssetGuidanceBlock,
   sortAssets,
   validateLibraryAsset,
   ASSET_LIBRARY_VERSION,

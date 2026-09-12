@@ -20,6 +20,7 @@ export class DirectorAgent extends BaseAgent {
     readonly count?: number;
     readonly excludeTitles?: ReadonlyArray<string>;
     readonly language?: "zh" | "en";
+    readonly assetGuidance?: string;
   }): Promise<DirectionCandidate[]> {
     const count = params.count ?? 3;
     const language = params.language ?? "zh";
@@ -28,6 +29,7 @@ export class DirectorAgent extends BaseAgent {
       count,
       excludeTitles: params.excludeTitles,
       language,
+      assetGuidance: params.assetGuidance,
     });
     const system =
       language === "en" ? "You are the story director." : "你是故事导演。";
