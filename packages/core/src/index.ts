@@ -571,6 +571,17 @@ export {
   type TaskModelRouting,
 } from "./models/task-routing.js";
 export {
+  createEmbeddingClient,
+  EmbeddingConfigSchema,
+  type EmbeddingConfig,
+} from "./retrieval/embedding-client.js";
+export type { EmbeddingClient } from "./retrieval/semantic-retrieval.js";
+export {
+  chunkFingerprint,
+  selectStaleChunks,
+  type EmbeddingChunk,
+} from "./retrieval/semantic-retrieval.js";
+export {
   buildTaskDrivenQuery,
   cosineSimilarity,
   reciprocalRankFusion,
@@ -578,7 +589,6 @@ export {
   topKBySimilarity,
   RETRIEVAL_MODES,
   type RetrievalMode,
-  type EmbeddingClient,
 } from "./retrieval/semantic-retrieval.js";
 export {
   applyRosterConfirmation,

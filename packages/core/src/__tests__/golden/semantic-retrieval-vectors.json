@@ -400,5 +400,95 @@
     "queryTermLimit": 8,
     "queryCharLimit": 200,
     "dialogueWindowNote": "embedding 服务后续号接入；本号只定确定性契约"
-  }
+  },
+  "fingerprint": [
+    {
+      "name": "empty",
+      "input": "",
+      "expected": "cbf29ce484222325"
+    },
+    {
+      "name": "single-char",
+      "input": "a",
+      "expected": "af63dc4c8601ec8c"
+    },
+    {
+      "name": "hello",
+      "input": "hello",
+      "expected": "a430d84680aabd0b"
+    },
+    {
+      "name": "cjk",
+      "input": "林动",
+      "expected": "86585442e5529c03"
+    }
+  ],
+  "stale": [
+    {
+      "name": "no-cache-all-stale",
+      "input": {
+        "chunks": [
+          {
+            "id": "c1",
+            "text": "甲"
+          },
+          {
+            "id": "c2",
+            "text": "乙"
+          }
+        ],
+        "cached": {}
+      },
+      "expected": [
+        {
+          "id": "c1",
+          "text": "甲"
+        },
+        {
+          "id": "c2",
+          "text": "乙"
+        }
+      ]
+    },
+    {
+      "name": "unchanged-skipped-changed-selected",
+      "input": {
+        "chunks": [
+          {
+            "id": "c1",
+            "text": "甲"
+          },
+          {
+            "id": "c2",
+            "text": "乙改"
+          }
+        ],
+        "cached": {
+          "c1": "27b2971b6d06418c",
+          "c2": "b39cc70d616fe7d7"
+        }
+      },
+      "expected": [
+        {
+          "id": "c2",
+          "text": "乙改"
+        }
+      ]
+    },
+    {
+      "name": "all-cached-empty",
+      "input": {
+        "chunks": [
+          {
+            "id": "c1",
+            "text": "甲"
+          }
+        ],
+        "cached": {
+          "c1": "27b2971b6d06418c"
+        }
+      },
+      "expected": []
+    }
+  ]
 }

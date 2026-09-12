@@ -6,8 +6,9 @@
 //! RRF 混合融合、降级模式、契约形状。
 
 use inkos_engine::utils::semantic_retrieval::{
-    build_task_driven_query, cosine_similarity, reciprocal_rank_fusion, resolve_retrieval_mode,
-    semantic_retrieval_contract, top_k_by_similarity, ChunkVector, RankedHit, TaskQueryInput,
+    build_task_driven_query, chunk_fingerprint, cosine_similarity, reciprocal_rank_fusion,
+    resolve_retrieval_mode, semantic_retrieval_contract, select_stale_chunks, top_k_by_similarity,
+    ChunkVector, EmbeddingChunk, RankedHit, TaskQueryInput,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -140,4 +141,39 @@ fn contract_shape_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     let got = serde_json::to_value(semantic_retrieval_contract()).expect("serialize contract");
     assert_eq!(got, vectors["contract"], "contract shape drifted");
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StaleCase {
+    chunks: Vec<EmbeddingChunk>,
+    cached: std::collections::HashMap<String, String>,
+}
+
+#[test]
+fn fingerprints_match_shared_vectors() {
+    let vectors: Value = serde_json::from_str(VECTORS).unwrap();
+    for vector in vectors["fingerprint"].as_array().expect("fingerprint array") {
+        assert_eq!(
+            chunk_fingerprint(vector["input"].as_str().unwrap()),
+            vector["expected"].as_str().unwrap(),
+            "fingerprint vector '{}' drifted",
+            vector["name"].as_str().unwrap()
+        );
+    }
+}
+
+#[test]
+fn stale_selection_matches_shared_vectors() {
+    let vectors: Value = serde_json::from_str(VECTORS).unwrap();
+    for vector in vectors["stale"].as_array().expect("stale array") {
+        let case: StaleCase = serde_json::from_value(vector["input"].clone()).unwrap();
+        let got = select_stale_chunks(&case.chunks, &case.cached);
+        let expected = serde_json::to_value(&got).unwrap();
+        assert_eq!(
+            expected, vector["expected"],
+            "stale vector '{}' drifted",
+            vector["name"].as_str().unwrap()
+        );
+    }
 }

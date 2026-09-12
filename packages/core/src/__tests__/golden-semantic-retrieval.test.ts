@@ -9,7 +9,9 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  chunkFingerprint,
   RETRIEVAL_MODES,
+  selectStaleChunks,
   buildTaskDrivenQuery,
   cosineSimilarity,
   reciprocalRankFusion,
@@ -38,6 +40,12 @@ const vectors = JSON.parse(
     expected: { order: string[]; sources: Record<string, string[]> };
   }>;
   mode: Array<{ name: string; input: { embeddingAvailable: boolean; embeddingError: boolean }; expected: string }>;
+  fingerprint: Array<{ name: string; input: string; expected: string }>;
+  stale: Array<{
+    name: string;
+    input: { chunks: Array<{ id: string; text: string }>; cached: Record<string, string> };
+    expected: Array<{ id: string; text: string }>;
+  }>;
   contract: unknown;
 };
 
@@ -89,6 +97,20 @@ describe("semantic retrieval contract (G1)", () => {
       expect(resolveRetrievalMode(vector.input), vector.name).toBe(vector.expected);
     }
     expect(RETRIEVAL_MODES).toEqual(["semantic", "fts5-fallback"]);
+  });
+
+  it("computes FNV-1a fingerprints per shared vectors", () => {
+    for (const vector of vectors.fingerprint) {
+      expect(chunkFingerprint(vector.input), vector.name).toBe(vector.expected);
+    }
+  });
+
+  it("selects stale chunks per shared vectors", () => {
+    for (const vector of vectors.stale) {
+      const cached = new Map(Object.entries(vector.input.cached));
+      const got = selectStaleChunks(vector.input.chunks, cached);
+      expect(got, vector.name).toEqual(vector.expected);
+    }
   });
 
   it("freezes the machine-readable contract shape", () => {

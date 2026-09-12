@@ -158,3 +158,36 @@ export function resolveRetrievalMode(params: {
 function comparePlain(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+
+// ── chunk 指纹与增量向量化选择（G1/348 号）──
+
+const FNV_OFFSET = 0xcbf29ce484222325n;
+const FNV_PRIME = 0x100000001b3n;
+const FNV_MASK = 0xffffffffffffffffn;
+
+/** FNV-1a 64 位内容指纹（UTF-8 字节序，hex 16 位小写；双端一致的确定性锚）。 */
+export function chunkFingerprint(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let hash = FNV_OFFSET;
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = (hash * FNV_PRIME) & FNV_MASK;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+export interface EmbeddingChunk {
+  readonly id: string;
+  readonly text: string;
+}
+
+/**
+ * 增量向量化选择：cached 为已缓存指纹（chunkId → fingerprint）。
+ * 无缓存或指纹变化（内容已改）的 chunk 需要重新嵌入；指纹一致跳过。
+ */
+export function selectStaleChunks(
+  chunks: ReadonlyArray<EmbeddingChunk>,
+  cached: ReadonlyMap<string, string>,
+): EmbeddingChunk[] {
+  return chunks.filter((chunk) => cached.get(chunk.id) !== chunkFingerprint(chunk.text));
+}

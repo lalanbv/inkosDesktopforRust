@@ -8,6 +8,7 @@
 //! 语义详见 TS 模块 doc。
 
 use serde::Deserialize;
+use serde_json::Value;
 use serde::Serialize;
 
 pub const RETRIEVAL_MODES: [&str; 2] = ["semantic", "fts5-fallback"];
@@ -217,4 +218,133 @@ pub fn semantic_retrieval_contract() -> SemanticRetrievalContract {
         query_char_limit: QUERY_CHAR_LIMIT,
         dialogue_window_note: "embedding 服务后续号接入；本号只定确定性契约",
     }
+}
+
+// ── chunk 指纹与增量向量化选择（G1/348 号）──
+
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+/// FNV-1a 64 位内容指纹（UTF-8 字节序，hex 16 位小写；双端一致的确定性锚）。
+pub fn chunk_fingerprint(text: &str) -> String {
+    let mut hash: u64 = FNV_OFFSET;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingChunk {
+    pub id: String,
+    pub text: String,
+}
+
+/// 增量向量化选择：指纹与缓存不一致（含无缓存）的 chunk 需要重新嵌入。
+pub fn select_stale_chunks(
+    chunks: &[EmbeddingChunk],
+    cached: &std::collections::HashMap<String, String>,
+) -> Vec<EmbeddingChunk> {
+    chunks
+        .iter()
+        .filter(|chunk| cached.get(&chunk.id).map(|f| f.as_str()) != Some(chunk_fingerprint(&chunk.text).as_str()))
+        .cloned()
+        .collect()
+}
+
+// ── embedding 配置与双协议客户端（G1/348 号）──
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmbeddingProvider {
+    OpenAICompatible,
+    Ollama,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingConfig {
+    pub provider: EmbeddingProvider,
+    pub base_url: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "timeoutMs")]
+    pub timeout_ms: Option<u64>,
+}
+
+pub const DEFAULT_EMBEDDING_TIMEOUT_MS: u64 = 30_000;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBatch {
+    pub vectors: Vec<Vec<f64>>,
+}
+
+/// 双协议批量嵌入（OpenAI 兼容 /embeddings + Bearer；ollama /api/embed 免 key）。
+/// 网络失败向上抛错，由调用方按降级契约回退 FTS5。
+pub async fn embed_batch(
+    config: &EmbeddingConfig,
+    texts: &[String],
+    api_key: Option<&str>,
+) -> Result<Vec<Vec<f64>>, String> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::Client::new();
+    let timeout = std::time::Duration::from_millis(
+        config.timeout_ms.unwrap_or(DEFAULT_EMBEDDING_TIMEOUT_MS),
+    );
+    let url = match config.provider {
+        EmbeddingProvider::OpenAICompatible => {
+            format!("{}/embeddings", config.base_url.trim_end_matches('/'))
+        }
+        EmbeddingProvider::Ollama => {
+            format!("{}/api/embed", config.base_url.trim_end_matches('/'))
+        }
+    };
+    let mut request = client
+        .post(&url)
+        .timeout(timeout)
+        .header("Content-Type", "application/json");
+    if config.provider == EmbeddingProvider::OpenAICompatible {
+        if let Some(key) = api_key.filter(|key| !key.is_empty()) {
+            request = request.bearer_auth(key);
+        }
+    }
+    let body = match config.provider {
+        EmbeddingProvider::OpenAICompatible => {
+            serde_json::json!({ "model": config.model, "input": texts })
+        }
+        EmbeddingProvider::Ollama => {
+            serde_json::json!({ "model": config.model, "input": texts })
+        }
+    };
+    let response = request.json(&body).send().await.map_err(|e| e.to_string())?;
+    let json: Value = response.json().await.map_err(|e| e.to_string())?;
+    if let Some(data) = json.get("data").and_then(Value::as_array) {
+        let vectors: Vec<Vec<f64>> = data
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .get("embedding")
+                    .and_then(Value::as_array)
+                    .map(|nums| nums.iter().filter_map(Value::as_f64).collect())
+            })
+            .collect();
+        return Ok(vectors);
+    }
+    if let Some(embeddings) = json.get("embeddings").and_then(Value::as_array) {
+        let vectors: Vec<Vec<f64>> = embeddings
+            .iter()
+            .map(|nums| {
+                nums.as_array()
+                    .map(|items| items.iter().filter_map(Value::as_f64).collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        return Ok(vectors);
+    }
+    Err("embedding response missing vectors".to_string())
 }
