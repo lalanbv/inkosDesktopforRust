@@ -744,6 +744,24 @@ export function BookCreate({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
         throw new Error(projectLang === "zh" ? "创建请求没有返回书籍 ID。" : "Create request did not return a book id.");
       }
       await waitForBookReady(data.bookId);
+      // G6/354 号：创建成功即写导演灵感卡（驾驶舱与建书打通）。
+      try {
+        await fetchJson(`/books/${encodeURIComponent(data.bookId)}/director`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            patch: {
+              stage: "directions",
+              inspiration: {
+                premise: form.brief.trim(),
+                keywords: [],
+              },
+            },
+          }),
+        });
+      } catch {
+        // 灵感卡落盘失败不阻断建书流程。
+      }
       nav.toBook(data.bookId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

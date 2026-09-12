@@ -849,6 +849,79 @@ pub async fn post_deconstruct(
     (StatusCode::OK, Json(payload)).into_response()
 }
 
+/// G6/354 号：方向候选批量生成（灵感卡 → LLM → 候选数组）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectionCandidatesBody {
+    pub inspiration: crate::models::director::InspirationCard,
+    #[serde(default)]
+    pub count: Option<usize>,
+    #[serde(default)]
+    pub exclude_titles: Vec<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+pub async fn post_direction_candidates(
+    State(runtime): State<BooksRuntime>,
+    Json(body): Json<DirectionCandidatesBody>,
+) -> impl IntoResponse {
+    runtime.hub.broadcast("director:start", &json!({}));
+    let count = body.count.unwrap_or(3).clamp(2, 5);
+    let prompt = crate::models::director::build_direction_candidates_prompt(
+        &body.inspiration,
+        count,
+        &body.exclude_titles,
+        body.language.as_deref(),
+    );
+    let system = if body.language.as_deref() == Some("en") {
+        "You are the story director."
+    } else {
+        "你是故事导演。"
+    };
+    let response = runtime
+        .effective_router()
+        .await
+        .chat(
+            "director",
+            vec![
+                crate::llm::provider::LLMMessage {
+                    role: crate::llm::provider::LLMRole::System,
+                    content: system.to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                crate::llm::provider::LLMMessage {
+                    role: crate::llm::provider::LLMRole::User,
+                    content: prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            ],
+            0.8,
+            None,
+        )
+        .await;
+    match response {
+        Ok(completion) => {
+            let directions = crate::models::director::parse_direction_candidates(
+                &completion.content,
+                &body.exclude_titles,
+            );
+            runtime
+                .hub
+                .broadcast("director:complete", &json!({ "count": directions.len() }));
+            (StatusCode::OK, Json(json!({ "directions": directions }))).into_response()
+        }
+        Err(error) => {
+            runtime
+                .hub
+                .broadcast("director:error", &json!({ "error": error }));
+            flat_error(StatusCode::INTERNAL_SERVER_ERROR, error)
+        }
+    }
+}
+
 /// G6/353 号：导演会话读取（.inkos/director/{bookId}.json；缺省 null）+ 续跑建议。
 pub async fn get_director(
     State(runtime): State<BooksRuntime>,

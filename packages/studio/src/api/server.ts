@@ -3082,6 +3082,35 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  // G6/354 号：方向候选批量生成（灵感卡 → LLM → 候选数组）。
+  app.post("/api/v1/director/directions", async (c) => {
+    const body = await c.req.json<{
+      inspiration?: unknown;
+      count?: number;
+      excludeTitles?: string[];
+      language?: "zh" | "en";
+    }>().catch(() => ({}) as { inspiration?: unknown; count?: number; excludeTitles?: string[]; language?: "zh" | "en" });
+    const inspiration = body.inspiration as { premise?: unknown } | undefined;
+    if (!inspiration || typeof inspiration.premise !== "string" || !inspiration.premise.trim()) {
+      return c.json({ error: "inspiration.premise is required" }, 400);
+    }
+    broadcast("director:start", {});
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const directions = await pipeline.generateDirections({
+        inspiration: inspiration as never,
+        count: body.count,
+        excludeTitles: body.excludeTitles,
+        language: body.language,
+      });
+      broadcast("director:complete", { count: directions.length });
+      return c.json({ directions });
+    } catch (e) {
+      broadcast("director:error", { error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // G6/353 号：导演会话持久化 + G9 续跑建议注入（拉模式闭环）。
   app.get("/api/v1/books/:id/director", async (c) => {
     const id = c.req.param("id");

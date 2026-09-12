@@ -767,6 +767,19 @@ export class PipelineRunner {
   // Atomic operations (composable by OpenClaw or agent mode)
   // ---------------------------------------------------------------------------
 
+  /** G6/354 号：方向候选批量生成（导演层，灵感卡 → LLM → 三选候选）。 */
+  async generateDirections(params: {
+    readonly inspiration: import("../models/director.js").InspirationCard;
+    readonly count?: number;
+    readonly excludeTitles?: ReadonlyArray<string>;
+    readonly language?: "zh" | "en";
+  }): Promise<import("../models/director.js").DirectionCandidate[]> {
+    const director = new (await import("../agents/director-agent.js")).DirectorAgent(
+      this.agentCtxFor("director"),
+    );
+    return director.generateDirections(params);
+  }
+
   async runRadar(options: { selection?: import("../agents/radar.js").RadarSelection } = {}): Promise<RadarResult> {
     const radar = new RadarAgent(this.agentCtxFor("radar"), this.config.radarSources);
     // G14a/335 号：传 selection 走"选后再析"（免费扫榜在 /radar/rankings 完成）。
