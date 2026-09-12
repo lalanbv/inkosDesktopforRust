@@ -2098,3 +2098,159 @@ pub async fn adopt_library_assets(
     }
     (StatusCode::OK, Json(json!({ "published": published }))).into_response()
 }
+
+// ── R5/366 号：书级反AI规则 + G13 经验条目 ──
+
+fn read_rules_file(book_dir: &Path, file: &str, key: &str) -> Value {
+    let raw = std::fs::read_to_string(book_dir.join("story").join(file)).unwrap_or_default();
+    let parsed: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+    let items = parsed.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut map = serde_json::Map::new();
+    map.insert(key.to_string(), Value::Array(items));
+    Value::Object(map)
+}
+
+pub async fn get_anti_ai_rules(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    (StatusCode::OK, Json(read_rules_file(&book_dir, "anti_ai_rules.json", "rules"))).into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PutRulesBody {
+    pub rules: Vec<Value>,
+}
+
+pub async fn put_anti_ai_rules(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<PutRulesBody>,
+) -> impl IntoResponse {
+    let mut valid: Vec<Value> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for (index, raw) in body.rules.iter().enumerate() {
+        let result = crate::utils::rule_experience_engine::validate_anti_ai_rule(raw);
+        match result.rule {
+            Some(rule) => valid.push(serde_json::to_value(&rule).unwrap_or_default()),
+            None => {
+                for message in result.errors {
+                    errors.push(format!("rules[{index}] {message}"));
+                }
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))).into_response();
+    }
+    let story_dir = runtime.state.project_root().join("books").join(&book_id).join("story");
+    let _ = std::fs::create_dir_all(&story_dir);
+    match std::fs::write(
+        story_dir.join("anti_ai_rules.json"),
+        serde_json::to_string_pretty(&json!({ "version": 1, "rules": valid })).unwrap_or_default(),
+    ) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "rules": valid }))).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+pub async fn get_experience_entries(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.project_root().join("books").join(&book_id);
+    (StatusCode::OK, Json(read_rules_file(&book_dir, "experience.json", "entries"))).into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PutExperienceBody {
+    pub entries: Vec<crate::utils::rule_experience_engine::ExperienceEntry>,
+}
+
+pub async fn put_experience_entries(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(book_id): axum::extract::Path<String>,
+    Json(body): Json<PutExperienceBody>,
+) -> impl IntoResponse {
+    let path = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("experience.json");
+    let existing: Vec<crate::utils::rule_experience_engine::ExperienceEntry> =
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|parsed| {
+                parsed
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                            .collect()
+                    })
+            })
+            .unwrap_or_default();
+    let merged = crate::utils::rule_experience_engine::merge_experience_entries(&existing, &body.entries);
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+    match std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({ "version": 1, "entries": merged.merged })).unwrap_or_default(),
+    ) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "entries": merged.merged, "added": merged.added })),
+        )
+            .into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+pub async fn delete_experience_entry(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path((book_id, entry_id)): axum::extract::Path<(String, String)>,
+) -> impl IntoResponse {
+    let path = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("experience.json");
+    let entries: Vec<crate::utils::rule_experience_engine::ExperienceEntry> =
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .and_then(|parsed| {
+                parsed
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                            .collect()
+                    })
+            })
+            .unwrap_or_default();
+    let remaining: Vec<crate::utils::rule_experience_engine::ExperienceEntry> = entries
+        .iter()
+        .filter(|entry| entry.id != entry_id)
+        .cloned()
+        .collect();
+    if remaining.len() == entries.len() {
+        return flat_error(StatusCode::NOT_FOUND, format!("entry not found: {entry_id}"));
+    }
+    match std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({ "version": 1, "entries": remaining })).unwrap_or_default(),
+    ) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": remaining }))).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}

@@ -200,6 +200,8 @@ pub async fn compose_governed_chapter(
     if let Some(binding_entry) = load_style_binding_entry(input.book_dir) {
         selected_context.push(binding_entry);
     }
+    // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
+    selected_context.extend(load_rule_experience_entries(input.book_dir));
     // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
     // 临时），参考资料/更低层永远排在章纲与事实之后。
     let selected_context =
@@ -2212,6 +2214,69 @@ mod tests {
     }
 }
 
+
+/// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
+/// 文件缺失/解析失败一律返回空 Vec（零打扰）；source 前缀 `rules/`、
+/// `experience/` 在上下文来源分层中与写法同层（style-asset=20）。
+pub fn load_rule_experience_entries(
+    book_dir: &Path,
+) -> Vec<crate::models::input_governance::ContextSource> {
+    let mut entries: Vec<crate::models::input_governance::ContextSource> = Vec::new();
+    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("anti_ai_rules.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(rules) = parsed.get("rules").and_then(serde_json::Value::as_array) {
+                let valid: Vec<crate::utils::rule_experience_engine::AntiAiRule> = rules
+                    .iter()
+                    .filter_map(|rule| {
+                        crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
+                    })
+                    .collect();
+                if !valid.is_empty() {
+                    if let Some(guidance) =
+                        crate::utils::rule_experience_engine::compose_anti_ai_guidance(
+                            &valid,
+                            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
+                            None,
+                        )
+                    {
+                        entries.push(crate::models::input_governance::ContextSource {
+                            source: "rules/anti-ai".to_string(),
+                            reason: "Bound anti-AI rules.".to_string(),
+                            excerpt: Some(guidance),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("experience.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(items) = parsed.get("entries").and_then(serde_json::Value::as_array) {
+                let entries_list: Vec<crate::utils::rule_experience_engine::ExperienceEntry> =
+                    items
+                        .iter()
+                        .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                        .collect();
+                if !entries_list.is_empty() {
+                    if let Some(guidance) =
+                        crate::utils::rule_experience_engine::render_experience_guidance(
+                            &entries_list,
+                            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
+                            None,
+                        )
+                    {
+                        entries.push(crate::models::input_governance::ContextSource {
+                            source: "experience/proven".to_string(),
+                            reason: "Proven techniques learned from this book.".to_string(),
+                            excerpt: Some(guidance),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    entries
+}
 
 /// G4/340 号：书级写法绑定 → style-asset 条目；任何缺失/解析失败返回 None。
 pub fn load_style_binding_entry(

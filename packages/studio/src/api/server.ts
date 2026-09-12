@@ -3413,6 +3413,85 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ published });
   });
 
+  // R5/366 号：书级反AI规则（GET/PUT 全量表；PUT 校验非法 400）。
+  app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "anti_ai_rules.json");
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ rules: Array.isArray(parsed.rules) ? parsed.rules : [] });
+    } catch {
+      return c.json({ rules: [] });
+    }
+  });
+
+  app.put("/api/v1/books/:id/anti-ai-rules", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ rules?: unknown[] }>();
+    if (!Array.isArray(body.rules)) return c.json({ error: "rules array required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const errors: string[] = [];
+    const valid: unknown[] = [];
+    body.rules.forEach((raw, index) => {
+      const result = core.validateAntiAiRule(raw);
+      if (result.rule) valid.push(result.rule);
+      else errors.push(...result.errors.map((message: string) => `rules[${index}] ${message}`));
+    });
+    if (errors.length > 0) return c.json({ errors }, 400);
+    const storyDir = join(root, "books", id, "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(join(storyDir, "anti_ai_rules.json"), JSON.stringify({ version: 1, rules: valid }, null, 2), "utf-8");
+    return c.json({ ok: true, rules: valid });
+  });
+
+  // R5/366 号：G13 经验条目（GET / PUT merge / DELETE 单条）。
+  app.get("/api/v1/books/:id/experience", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "experience.json");
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ entries: Array.isArray(parsed.entries) ? parsed.entries : [] });
+    } catch {
+      return c.json({ entries: [] });
+    }
+  });
+
+  app.put("/api/v1/books/:id/experience", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ entries?: unknown[] }>();
+    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const path = join(root, "books", id, "story", "experience.json");
+    let existing: unknown[] = [];
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      if (Array.isArray(parsed.entries)) existing = parsed.entries;
+    } catch {
+      existing = [];
+    }
+    const merged = core.mergeExperienceEntries(existing as never, body.entries as never);
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, JSON.stringify({ version: 1, entries: merged }, null, 2), "utf-8");
+    return c.json({ ok: true, entries: merged });
+  });
+
+  app.delete("/api/v1/books/:id/experience/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+    const path = join(root, "books", id, "story", "experience.json");
+    let entries: Array<Record<string, unknown>> = [];
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      if (Array.isArray(parsed.entries)) entries = parsed.entries;
+    } catch {
+      entries = [];
+    }
+    const remaining = entries.filter((entry) => entry.id !== entryId);
+    if (remaining.length === entries.length) return c.json({ error: `entry not found: ${entryId}` }, 404);
+    await writeFile(path, JSON.stringify({ version: 1, entries: remaining }, null, 2), "utf-8");
+    return c.json({ ok: true, entries: remaining });
+  });
+
   // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。
   app.get("/api/v1/style-profiles", async (c) => {
     const dir = join(root, ".inkos", "style-profiles");

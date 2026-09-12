@@ -748,6 +748,27 @@ pub fn router_books(
             "/api/v1/books/:id/adopt-library-assets",
             post(ops_routes::adopt_library_assets).with_state(books.clone()),
         )
+        // R5/366 号：书级反AI规则 + G13 经验条目。
+        .route(
+            "/api/v1/books/:id/anti-ai-rules",
+            get(ops_routes::get_anti_ai_rules).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/anti-ai-rules",
+            put(ops_routes::put_anti_ai_rules).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/experience",
+            get(ops_routes::get_experience_entries).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/experience",
+            put(ops_routes::put_experience_entries).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/experience/:entryId",
+            delete(ops_routes::delete_experience_entry).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),

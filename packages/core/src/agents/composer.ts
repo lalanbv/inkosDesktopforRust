@@ -27,6 +27,13 @@ import {
   resolveStyleBinding,
   type StyleBinding,
 } from "../utils/style-feature-engine.js";
+import {
+  composeAntiAiGuidance,
+  renderExperienceGuidance,
+  validateAntiAiRule,
+  type AntiAiRule,
+  type ExperienceEntry,
+} from "../utils/rule-experience-engine.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -110,10 +117,13 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   // G2：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 > 临时），
   // 参考资料/更低层永远排在章纲与事实之后，不得在提示词里抢占比它们更高的权威。
   const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
+  // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
+  const ruleExperienceEntries = await loadRuleExperienceEntries(input.bookDir);
   const selectedContext = enforceContextPriorityOrder([
     ...baseContext.entries,
     ...referenceContext.entries,
     ...(styleBindingEntry ? [styleBindingEntry] : []),
+    ...ruleExperienceEntries,
   ]);
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
@@ -353,6 +363,53 @@ export async function loadStyleBindingEntry(
   } catch {
     return null;
   }
+}
+
+/**
+ * R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
+ * 文件缺失/解析失败一律返回空数组（零打扰）；source 前缀 `rules/`、
+ * `experience/` 在上下文来源分层中与写法同层（style-asset=20）。
+ */
+export async function loadRuleExperienceEntries(
+  bookDir: string,
+): Promise<ContextPackage["selectedContext"]> {
+  const entries: ContextPackage["selectedContext"] = [];
+  try {
+    const raw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { rules?: AntiAiRule[] };
+    if (Array.isArray(parsed.rules) && parsed.rules.length > 0) {
+      const valid = parsed.rules
+        .map((rule) => validateAntiAiRule(rule).rule)
+        .filter((rule): rule is AntiAiRule => Boolean(rule));
+      const guidance = composeAntiAiGuidance(valid, "zh");
+      if (guidance) {
+        entries.push({
+          source: "rules/anti-ai",
+          reason: "Bound anti-AI rules.",
+          excerpt: guidance,
+        });
+      }
+    }
+  } catch {
+    // 零打扰
+  }
+  try {
+    const raw = await readFile(join(bookDir, "story", "experience.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { entries?: ExperienceEntry[] };
+    if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+      const guidance = renderExperienceGuidance(parsed.entries, "zh");
+      if (guidance) {
+        entries.push({
+          source: "experience/proven",
+          reason: "Proven techniques learned from this book.",
+          excerpt: guidance,
+        });
+      }
+    }
+  } catch {
+    // 零打扰
+  }
+  return entries;
 }
 
 function parseSelectedSources(raw: string): string[] {

@@ -2416,6 +2416,38 @@ export class PipelineRunner {
       this.config.logger?.warn(`[review-metrics] ${String(error)}`);
     }
 
+    // R5/366 号：反AI规则扫描（detect 消费）——命中并入审计问题（reviser 按
+    // issue.suggestion=replacement 修复）。规则缺失/解析失败零打扰。
+    try {
+      const rulesRaw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
+      const parsed = JSON.parse(rulesRaw) as { rules?: unknown[] };
+      if (Array.isArray(parsed.rules) && parsed.rules.length > 0) {
+        const { validateAntiAiRule, scanAntiAiRules } = await import("../utils/rule-experience-engine.js");
+        const valid = parsed.rules
+          .map((rule) => validateAntiAiRule(rule).rule)
+          .filter((rule): rule is NonNullable<typeof rule> => Boolean(rule));
+        const hits = scanAntiAiRules(finalContent, valid);
+        if (hits.length > 0) {
+          const severityMap = { critical: "critical", warning: "warning", info: "info" } as const;
+          auditResult = {
+            ...auditResult,
+            issues: [
+              ...auditResult.issues,
+              ...hits.map((hit) => ({
+                severity: severityMap[hit.severity],
+                category: "anti-ai-rule",
+                description: `${hit.message}（×${hit.count}）`,
+                suggestion: hit.replacement ?? "按本书反AI规则改写",
+              })),
+            ],
+          };
+          this.config.logger?.warn(`[anti-ai] ${hits.length} hit(s) in ch${chapterNumber}`);
+        }
+      }
+    } catch (error) {
+      this.config.logger?.warn(`[anti-ai] ${String(error)}`);
+    }
+
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");
     await persistChapterArtifacts({
       chapterNumber,

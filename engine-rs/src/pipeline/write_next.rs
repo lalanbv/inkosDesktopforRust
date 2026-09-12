@@ -1160,6 +1160,40 @@ async fn write_next_chapter_locked(
         }
     }
 
+    // ── R5/366 号：反AI规则扫描（detect 消费）——命中并入审计问题（reviser 按
+    // issue.suggestion=replacement 修复）。规则缺失/解析失败零打扰。
+    {
+        if let Ok(rules_raw) = tokio::fs::read_to_string(book_dir.join("story/anti_ai_rules.json")).await {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&rules_raw) {
+                if let Some(rules) = parsed.get("rules").and_then(serde_json::Value::as_array) {
+                    let valid: Vec<crate::utils::rule_experience_engine::AntiAiRule> = rules
+                        .iter()
+                        .filter_map(|rule| crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule)
+                        .collect();
+                    if !valid.is_empty() {
+                        let hits = crate::utils::rule_experience_engine::scan_anti_ai_rules(&final_content, &valid);
+                        if !hits.is_empty() {
+                            tracing::warn!(target: "write-next", "[anti-ai] {} hit(s) in ch{chapter_number}", hits.len());
+                            for hit in hits {
+                                audit_result.issues.push(AuditIssue {
+                                    severity: match hit.severity {
+                                        crate::utils::rule_experience_engine::AntiAiSeverity::Critical => AuditSeverity::Critical,
+                                        crate::utils::rule_experience_engine::AntiAiSeverity::Warning => AuditSeverity::Warning,
+                                        crate::utils::rule_experience_engine::AntiAiSeverity::Info => AuditSeverity::Info,
+                                    },
+                                    category: "anti-ai-rule".to_string(),
+                                    description: format!("{}（×{}）", hit.message, hit.count),
+                                    suggestion: hit.replacement.unwrap_or_else(|| "按本书反AI规则改写".to_string()),
+                                    repair_scope: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── 5. 落盘 ──
     let status_enum = match chapter_status {
         "state-degraded" => crate::models::chapter::ChapterStatus::StateDegraded,

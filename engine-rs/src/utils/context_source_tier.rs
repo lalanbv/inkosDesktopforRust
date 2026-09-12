@@ -143,6 +143,10 @@ pub fn context_source_tier(source: &str) -> ContextSourceTier {
     if source.starts_with("deconstruction/") {
         return ContextSourceTier::Deconstruction;
     }
+    // R5/366 号：反AI规则与经验条目与写法同层（20，写作纪律垫底参考层）。
+    if source.starts_with("rules/") || source.starts_with("experience/") {
+        return ContextSourceTier::StyleAsset;
+    }
     if source.starts_with("style/") {
         return ContextSourceTier::StyleAsset;
     }

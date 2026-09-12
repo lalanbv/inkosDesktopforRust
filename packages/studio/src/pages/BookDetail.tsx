@@ -8,6 +8,7 @@ import { RecallTestCard } from "../components/RecallTestCard";
 import { TensionCurveCard } from "../components/TensionCurveCard";
 import { QualityTrendCard } from "../components/QualityTrendCard";
 import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
+import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -573,6 +574,9 @@ export function BookDetail({
 
       {/* R4/364 号：三库资产管理（列表/新增/导入导出/采用到本书两段式）。 */}
       <AssetLibraryPanel bookId={bookId} />
+
+      {/* R5/366 号：反AI规则与经验记忆（写作禁则+审查扫描+/learn 沉淀）。 */}
+      <AntiAiAndExperiencePanel bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />

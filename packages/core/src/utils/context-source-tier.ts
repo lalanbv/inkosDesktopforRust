@@ -117,6 +117,9 @@ export function contextSourceTier(source: string): ContextSourceTierId {
   if (source.startsWith("reference/")) return "user-reference";
   if (source.startsWith("deconstruction/")) return "deconstruction";
   if (source.startsWith("style/")) return "style-asset";
+  // R5/366 号：反AI规则与经验条目与写法同层（20，写作纪律垫底参考层）。
+  if (source.startsWith("rules/")) return "style-asset";
+  if (source.startsWith("experience/")) return "style-asset";
   return "ephemeral";
 }
 

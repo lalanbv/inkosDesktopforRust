@@ -1,46 +1,191 @@
 {
   "_header": "上下文来源优先级契约共享向量（G2/330 号）。唯一事实源本文件；TS 断言 src/__tests__/golden-context-priority.test.ts，Rust 差分 engine-rs/tests/golden_context_priority_diff.rs。向量随契约演进而更新。",
   "tier": [
-    { "name": "fact-state-bare", "source": "story/current_state.md", "expected": "book-fact" },
-    { "name": "fact-state-anchor", "source": "story/current_state.md#主角", "expected": "book-fact" },
-    { "name": "fact-story-frame-bare", "source": "story/outline/story_frame.md", "expected": "book-fact" },
-    { "name": "fact-story-frame-anchor", "source": "story/outline/story_frame.md#力量体系", "expected": "book-fact" },
-    { "name": "fact-story-bible-legacy", "source": "story/story_bible.md", "expected": "book-fact" },
-    { "name": "fact-story-bible-legacy-anchor", "source": "story/story_bible.md#玉印", "expected": "book-fact" },
-    { "name": "fact-parent-canon", "source": "story/parent_canon.md", "expected": "book-fact" },
-    { "name": "fact-fanfic-canon", "source": "story/fanfic_canon.md", "expected": "book-fact" },
-    { "name": "fact-hook", "source": "story/pending_hooks.md#H01", "expected": "book-fact" },
-    { "name": "fact-hook-debt", "source": "runtime/hook_debt#H01", "expected": "book-fact" },
-    { "name": "planning-author-intent", "source": "story/author_intent.md", "expected": "book-planning" },
-    { "name": "planning-current-focus", "source": "story/current_focus.md", "expected": "book-planning" },
-    { "name": "planning-audit-drift", "source": "story/audit_drift.md", "expected": "book-planning" },
-    { "name": "planning-volume-map-bare", "source": "story/outline/volume_map.md", "expected": "book-planning" },
-    { "name": "planning-volume-map-anchor", "source": "story/outline/volume_map.md#卷一", "expected": "book-planning" },
-    { "name": "planning-volume-outline-legacy", "source": "story/volume_outline.md", "expected": "book-planning" },
-    { "name": "planning-volume-outline-legacy-anchor", "source": "story/volume_outline.md#卷一", "expected": "book-planning" },
-    { "name": "planning-chapter-memo", "source": "runtime/chapter_memo", "expected": "book-planning" },
-    { "name": "memory-summary-chapter", "source": "story/chapter_summaries.md#3", "expected": "book-memory" },
-    { "name": "memory-recent-titles", "source": "story/chapter_summaries.md#recent_titles", "expected": "book-memory" },
-    { "name": "memory-volume-summary", "source": "story/volume_summaries.md#卷一", "expected": "book-memory" },
-    { "name": "memory-recent-endings", "source": "story/chapters#recent_endings", "expected": "book-memory" },
-    { "name": "reference-section", "source": "reference/mat-01#开场", "expected": "user-reference" },
-    { "name": "reference-root", "source": "reference/mat-01", "expected": "user-reference" },
-    { "name": "deconstruction-reserved", "source": "deconstruction/book-01#角色", "expected": "deconstruction" },
-    { "name": "style-asset-reserved", "source": "style/profile-01", "expected": "style-asset" },
-    { "name": "ephemeral-compiled", "source": "runtime/compiled-compressible-context", "expected": "ephemeral" },
-    { "name": "unknown-unregistered-story-file", "source": "story/some_new_file.md", "expected": "ephemeral" },
-    { "name": "unknown-chat-tool-snippet", "source": "materials/文明.txt:0-120", "expected": "ephemeral" },
-    { "name": "unknown-empty", "source": "", "expected": "ephemeral" }
+    {
+      "name": "fact-state-bare",
+      "source": "story/current_state.md",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-state-anchor",
+      "source": "story/current_state.md#主角",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-story-frame-bare",
+      "source": "story/outline/story_frame.md",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-story-frame-anchor",
+      "source": "story/outline/story_frame.md#力量体系",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-story-bible-legacy",
+      "source": "story/story_bible.md",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-story-bible-legacy-anchor",
+      "source": "story/story_bible.md#玉印",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-parent-canon",
+      "source": "story/parent_canon.md",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-fanfic-canon",
+      "source": "story/fanfic_canon.md",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-hook",
+      "source": "story/pending_hooks.md#H01",
+      "expected": "book-fact"
+    },
+    {
+      "name": "fact-hook-debt",
+      "source": "runtime/hook_debt#H01",
+      "expected": "book-fact"
+    },
+    {
+      "name": "planning-author-intent",
+      "source": "story/author_intent.md",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-current-focus",
+      "source": "story/current_focus.md",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-audit-drift",
+      "source": "story/audit_drift.md",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-volume-map-bare",
+      "source": "story/outline/volume_map.md",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-volume-map-anchor",
+      "source": "story/outline/volume_map.md#卷一",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-volume-outline-legacy",
+      "source": "story/volume_outline.md",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-volume-outline-legacy-anchor",
+      "source": "story/volume_outline.md#卷一",
+      "expected": "book-planning"
+    },
+    {
+      "name": "planning-chapter-memo",
+      "source": "runtime/chapter_memo",
+      "expected": "book-planning"
+    },
+    {
+      "name": "memory-summary-chapter",
+      "source": "story/chapter_summaries.md#3",
+      "expected": "book-memory"
+    },
+    {
+      "name": "memory-recent-titles",
+      "source": "story/chapter_summaries.md#recent_titles",
+      "expected": "book-memory"
+    },
+    {
+      "name": "memory-volume-summary",
+      "source": "story/volume_summaries.md#卷一",
+      "expected": "book-memory"
+    },
+    {
+      "name": "memory-recent-endings",
+      "source": "story/chapters#recent_endings",
+      "expected": "book-memory"
+    },
+    {
+      "name": "reference-section",
+      "source": "reference/mat-01#开场",
+      "expected": "user-reference"
+    },
+    {
+      "name": "reference-root",
+      "source": "reference/mat-01",
+      "expected": "user-reference"
+    },
+    {
+      "name": "deconstruction-reserved",
+      "source": "deconstruction/book-01#角色",
+      "expected": "deconstruction"
+    },
+    {
+      "name": "style-asset-reserved",
+      "source": "style/profile-01",
+      "expected": "style-asset"
+    },
+    {
+      "name": "ephemeral-compiled",
+      "source": "runtime/compiled-compressible-context",
+      "expected": "ephemeral"
+    },
+    {
+      "name": "unknown-unregistered-story-file",
+      "source": "story/some_new_file.md",
+      "expected": "ephemeral"
+    },
+    {
+      "name": "unknown-chat-tool-snippet",
+      "source": "materials/文明.txt:0-120",
+      "expected": "ephemeral"
+    },
+    {
+      "name": "unknown-empty",
+      "source": "",
+      "expected": "ephemeral"
+    },
+    {
+      "name": "anti-ai-rules-bound",
+      "source": "rules/anti-ai",
+      "expected": "style-asset"
+    },
+    {
+      "name": "experience-proven",
+      "source": "experience/proven",
+      "expected": "style-asset"
+    }
   ],
   "order": [
     {
       "name": "reference-cannot-override-outline",
       "input": [
-        { "source": "reference/mat-01#开场", "reason": "User-bound reference" },
-        { "source": "story/outline/volume_map.md", "reason": "Anchor the default planning node" },
-        { "source": "story/current_state.md", "reason": "Preserve hard state facts" },
-        { "source": "runtime/compiled-compressible-context", "reason": "Semantic compilation" },
-        { "source": "story/chapter_summaries.md#3", "reason": "Episodic memory" }
+        {
+          "source": "reference/mat-01#开场",
+          "reason": "User-bound reference"
+        },
+        {
+          "source": "story/outline/volume_map.md",
+          "reason": "Anchor the default planning node"
+        },
+        {
+          "source": "story/current_state.md",
+          "reason": "Preserve hard state facts"
+        },
+        {
+          "source": "runtime/compiled-compressible-context",
+          "reason": "Semantic compilation"
+        },
+        {
+          "source": "story/chapter_summaries.md#3",
+          "reason": "Episodic memory"
+        }
       ],
       "expected": [
         "story/current_state.md",
@@ -53,22 +198,70 @@
     {
       "name": "full-assembly-fact-first",
       "input": [
-        { "source": "runtime/chapter_memo", "reason": "memo" },
-        { "source": "story/current_focus.md", "reason": "focus" },
-        { "source": "story/author_intent.md", "reason": "intent" },
-        { "source": "story/audit_drift.md", "reason": "drift" },
-        { "source": "story/current_state.md", "reason": "state" },
-        { "source": "story/outline/story_frame.md", "reason": "frame" },
-        { "source": "story/outline/volume_map.md", "reason": "vmap" },
-        { "source": "story/parent_canon.md", "reason": "canon" },
-        { "source": "story/fanfic_canon.md", "reason": "fanfic" },
-        { "source": "story/chapters#recent_endings", "reason": "endings" },
-        { "source": "runtime/hook_debt#H01", "reason": "debt" },
-        { "source": "story/current_state.md#灵石", "reason": "fact" },
-        { "source": "story/chapter_summaries.md#3", "reason": "summary" },
-        { "source": "story/volume_summaries.md#卷一", "reason": "volsum" },
-        { "source": "story/pending_hooks.md#H01", "reason": "hook" },
-        { "source": "reference/mat-01#开场", "reason": "reference" }
+        {
+          "source": "runtime/chapter_memo",
+          "reason": "memo"
+        },
+        {
+          "source": "story/current_focus.md",
+          "reason": "focus"
+        },
+        {
+          "source": "story/author_intent.md",
+          "reason": "intent"
+        },
+        {
+          "source": "story/audit_drift.md",
+          "reason": "drift"
+        },
+        {
+          "source": "story/current_state.md",
+          "reason": "state"
+        },
+        {
+          "source": "story/outline/story_frame.md",
+          "reason": "frame"
+        },
+        {
+          "source": "story/outline/volume_map.md",
+          "reason": "vmap"
+        },
+        {
+          "source": "story/parent_canon.md",
+          "reason": "canon"
+        },
+        {
+          "source": "story/fanfic_canon.md",
+          "reason": "fanfic"
+        },
+        {
+          "source": "story/chapters#recent_endings",
+          "reason": "endings"
+        },
+        {
+          "source": "runtime/hook_debt#H01",
+          "reason": "debt"
+        },
+        {
+          "source": "story/current_state.md#灵石",
+          "reason": "fact"
+        },
+        {
+          "source": "story/chapter_summaries.md#3",
+          "reason": "summary"
+        },
+        {
+          "source": "story/volume_summaries.md#卷一",
+          "reason": "volsum"
+        },
+        {
+          "source": "story/pending_hooks.md#H01",
+          "reason": "hook"
+        },
+        {
+          "source": "reference/mat-01#开场",
+          "reason": "reference"
+        }
       ],
       "expected": [
         "story/current_state.md",
@@ -92,11 +285,26 @@
     {
       "name": "planning-tier-preserves-assembly-order",
       "input": [
-        { "source": "runtime/chapter_memo", "reason": "memo" },
-        { "source": "story/current_focus.md", "reason": "focus" },
-        { "source": "story/author_intent.md", "reason": "intent" },
-        { "source": "story/audit_drift.md", "reason": "drift" },
-        { "source": "story/outline/volume_map.md", "reason": "vmap" }
+        {
+          "source": "runtime/chapter_memo",
+          "reason": "memo"
+        },
+        {
+          "source": "story/current_focus.md",
+          "reason": "focus"
+        },
+        {
+          "source": "story/author_intent.md",
+          "reason": "intent"
+        },
+        {
+          "source": "story/audit_drift.md",
+          "reason": "drift"
+        },
+        {
+          "source": "story/outline/volume_map.md",
+          "reason": "vmap"
+        }
       ],
       "expected": [
         "runtime/chapter_memo",
@@ -109,18 +317,40 @@
     {
       "name": "stable-within-tier",
       "input": [
-        { "source": "reference/b#1", "reason": "b" },
-        { "source": "reference/a#2", "reason": "a" },
-        { "source": "reference/c#3", "reason": "c" }
+        {
+          "source": "reference/b#1",
+          "reason": "b"
+        },
+        {
+          "source": "reference/a#2",
+          "reason": "a"
+        },
+        {
+          "source": "reference/c#3",
+          "reason": "c"
+        }
       ],
-      "expected": ["reference/b#1", "reference/a#2", "reference/c#3"]
+      "expected": [
+        "reference/b#1",
+        "reference/a#2",
+        "reference/c#3"
+      ]
     },
     {
       "name": "unknown-sorts-last",
       "input": [
-        { "source": "story/some_new_file.md", "reason": "unregistered" },
-        { "source": "story/current_state.md", "reason": "state" },
-        { "source": "reference/mat-01#开场", "reason": "reference" }
+        {
+          "source": "story/some_new_file.md",
+          "reason": "unregistered"
+        },
+        {
+          "source": "story/current_state.md",
+          "reason": "state"
+        },
+        {
+          "source": "reference/mat-01#开场",
+          "reason": "reference"
+        }
       ],
       "expected": [
         "story/current_state.md",
@@ -133,13 +363,55 @@
     "version": 1,
     "rule": "higherPrecedenceNumberIsHigherPriority",
     "layers": [
-      { "id": "book-fact", "precedence": 100, "protected": true, "labelZh": "本书事实", "labelEn": "Book facts" },
-      { "id": "book-planning", "precedence": 80, "protected": true, "labelZh": "本书规划", "labelEn": "Book planning" },
-      { "id": "book-memory", "precedence": 60, "protected": false, "labelZh": "本书时序记忆", "labelEn": "Book memory" },
-      { "id": "user-reference", "precedence": 40, "protected": false, "labelZh": "参考资料", "labelEn": "User references" },
-      { "id": "deconstruction", "precedence": 30, "protected": false, "labelZh": "拆书结论", "labelEn": "Deconstruction" },
-      { "id": "style-asset", "precedence": 20, "protected": false, "labelZh": "写法资产", "labelEn": "Style assets" },
-      { "id": "ephemeral", "precedence": 10, "protected": false, "labelZh": "临时/未注册", "labelEn": "Ephemeral" }
+      {
+        "id": "book-fact",
+        "precedence": 100,
+        "protected": true,
+        "labelZh": "本书事实",
+        "labelEn": "Book facts"
+      },
+      {
+        "id": "book-planning",
+        "precedence": 80,
+        "protected": true,
+        "labelZh": "本书规划",
+        "labelEn": "Book planning"
+      },
+      {
+        "id": "book-memory",
+        "precedence": 60,
+        "protected": false,
+        "labelZh": "本书时序记忆",
+        "labelEn": "Book memory"
+      },
+      {
+        "id": "user-reference",
+        "precedence": 40,
+        "protected": false,
+        "labelZh": "参考资料",
+        "labelEn": "User references"
+      },
+      {
+        "id": "deconstruction",
+        "precedence": 30,
+        "protected": false,
+        "labelZh": "拆书结论",
+        "labelEn": "Deconstruction"
+      },
+      {
+        "id": "style-asset",
+        "precedence": 20,
+        "protected": false,
+        "labelZh": "写法资产",
+        "labelEn": "Style assets"
+      },
+      {
+        "id": "ephemeral",
+        "precedence": 10,
+        "protected": false,
+        "labelZh": "临时/未注册",
+        "labelEn": "Ephemeral"
+      }
     ],
     "overrideRules": [
       "reference-and-below-cannot-override-fact-or-planning",
