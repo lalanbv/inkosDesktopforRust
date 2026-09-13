@@ -36,7 +36,7 @@ use std::collections::HashMap;
 pub fn resolve_server_bin(
     app_data: Option<&Path>,
     resource_dir: Option<&Path>,
-    dev_repo_root: &Path,
+    _dev_repo_root: &Path,
 ) -> Option<PathBuf> {
     // 1. app_data 运行态副本（updater 落点）。
     if let Some(ad) = app_data {
@@ -55,7 +55,7 @@ pub fn resolve_server_bin(
     // 3. dev：engine-rs/target 构建产物（release 优先，debug 兜底）。
     #[cfg(debug_assertions)]
     {
-        let target = dev_repo_root.join("engine-rs").join("target");
+        let target = _dev_repo_root.join("engine-rs").join("target");
         for profile in ["release", "debug"] {
             let candidate = target.join(profile).join(RUST_SERVER_BIN_NAME);
             if candidate.is_file() {
@@ -75,7 +75,7 @@ pub fn resolve_server_bin(
 /// 导航 `/` 会 404——dev 未构建前端时的预期形态，调用方告警提示）。
 pub fn resolve_static_dir(
     resource_dir: Option<&Path>,
-    dev_repo_root: &Path,
+    _dev_repo_root: &Path,
 ) -> Option<PathBuf> {
     if let Some(rd) = resource_dir {
         let candidate = rd.join(RUST_ENGINE_DIR_NAME).join(RUST_STATIC_DIR_NAME);
@@ -85,7 +85,7 @@ pub fn resolve_static_dir(
     }
     #[cfg(debug_assertions)]
     {
-        let candidate = dev_repo_root.join("packages").join("studio").join("dist");
+        let candidate = _dev_repo_root.join("packages").join("studio").join("dist");
         if candidate.is_dir() {
             return Some(candidate);
         }
