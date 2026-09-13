@@ -6,7 +6,8 @@
       "扫描：仅 enabled；字面 indexOf 计数（重叠跳过按 pattern.length 步进）/ regex matchAll；excerpt=首个命中 ±20 字窗口；排序 severity(critical0/warning1/info2)→count 降序→ruleId 码元序",
       "修复块：输入序渲染；带 replacement 的命中追加「建议改法」节；无命中 undefined",
       "预防块：仅 enabled；severity 前缀+replacement（改为：…）；maxChars 截断加 …",
-      "经验合并：同 text(trim) 去重保序（已有条目保留原 id）；渲染：enabled 过滤+章号升序稳定+≤10 条；maxChars 截断"
+      "经验合并：同 text(trim) 去重保序（已有条目保留原 id）；渲染：enabled 过滤+章号升序稳定+≤10 条；maxChars 截断",
+      "种子包（392 号）：9 条字面规则覆盖全四类型；packHash=FNV-1a hex16(逐条 canonical 以 \\n 连接)；兜底=文件缺失/损坏→种子内存态不落盘，文件存在但空规则=用户显式清空不回填"
     ]
   },
   "validate": [
@@ -340,6 +341,81 @@
       ],
       "maxChars": 32,
       "expected": "## 本书验证有效的手法（经验记忆——复用）\n- 开局即冲突"
+    }
+  ],
+  "seeds": {
+    "count": 9,
+    "ids": [
+      "eye_glint_stock",
+      "essay_connective",
+      "mouth_smirk_stock",
+      "air_freeze_cliche",
+      "deep_breath_buffer",
+      "discourse_hedge",
+      "pupil_contraction",
+      "vague_time_transition",
+      "as_if_whisper_cliche"
+    ],
+    "typesCovered": [
+      "cliche",
+      "phrase",
+      "rhythm",
+      "structure"
+    ],
+    "packHash": "32ba0a295a7dc436"
+  },
+  "seedCanonical": [
+    {
+      "name": "seed eye_glint_stock canonical form",
+      "ruleId": "eye_glint_stock",
+      "expected": "eye_glint_stock|phrase|眼中闪过一丝|0|critical|「眼中闪过一丝X」是最高频的 AI 神态套语——抽象神态报告没有画面。|改写成可看见的动作：捏紧的指节、挪开的视线、喉结滚动。|1"
+    },
+    {
+      "name": "seed without replacement canonical form",
+      "ruleId": "essay_connective",
+      "expected": "essay_connective|structure|值得注意的是|0|critical|论文式连接词，AI 论述腔直接漏进叙事——删除，让事实自己说话。||1"
+    }
+  ],
+  "seedHash": [
+    {
+      "name": "seed content hash eye_glint_stock",
+      "ruleId": "eye_glint_stock",
+      "expected": "69aef5cdced35e6b"
+    },
+    {
+      "name": "seed content hash essay_connective",
+      "ruleId": "essay_connective",
+      "expected": "fcdf32c910079afe"
+    }
+  ],
+  "seedFallback": [
+    {
+      "name": "missing rules file falls back to seed pack",
+      "parsed": null,
+      "seeded": true,
+      "ruleCount": 9
+    },
+    {
+      "name": "explicit empty rules stay empty",
+      "parsed": [],
+      "seeded": false,
+      "ruleCount": 0
+    },
+    {
+      "name": "custom rules pass through untouched",
+      "parsed": [
+        {
+          "id": "custom_rule",
+          "type": "rhythm",
+          "pattern": "深吸一口气",
+          "isRegex": false,
+          "severity": "info",
+          "message": "高频缓冲动作、节奏拖延——每章至多一次，情绪转折处用更具体的身体反应。",
+          "enabled": true
+        }
+      ],
+      "seeded": false,
+      "ruleCount": 1
     }
   ]
 }

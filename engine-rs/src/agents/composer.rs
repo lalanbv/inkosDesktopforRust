@@ -2321,10 +2321,17 @@ mod tests {
             .map(|entry| entry.source.as_str())
             .collect();
         // 条目接在基础上下文之后（TS [...base, ...reference]）。
-        assert_eq!(sources.last(), Some(&"reference/mat1#人物关系"));
-        let entry = out.context_package.selected_context.last().unwrap();
-        assert_eq!(entry.excerpt.as_deref(), Some("## 人物关系\n\n师徒线张力。"));
-        assert!(entry.reason.contains("User-bound reference \"开篇参考\" for: 人物关系."));
+        // R22/392 号起：种子兜底使无规则文件的书也带 rules/anti-ai 条目
+        // （style-asset=20 垫底），G2 排序后参考条目（40）在其之前。
+        assert_eq!(sources.last(), Some(&"rules/anti-ai"));
+        let reference_entry = out
+            .context_package
+            .selected_context
+            .iter()
+            .find(|entry| entry.source == "reference/mat1#人物关系")
+            .expect("reference entry present");
+        assert_eq!(reference_entry.excerpt.as_deref(), Some("## 人物关系\n\n师徒线张力。"));
+        assert!(reference_entry.reason.contains("User-bound reference \"开篇参考\" for: 人物关系."));
         assert!(out.trace.notes.is_empty(), "无失败时 notes 为空");
 
         // 选段失败 → 无条目 + book-reference-selection-failed 进 trace.notes。
@@ -2355,6 +2362,34 @@ mod tests {
             .iter()
             .any(|entry| entry.source.starts_with("reference/")));
         assert!(out.trace.notes.contains(&"book-reference-selection-failed".to_string()));
+    }
+
+    /// R22/392 号：种子兜底语义——文件缺失 → 内置种子条目（seeded reason）；
+    /// 显式空规则 = 用户关闭防线，无条目。
+    #[test]
+    fn rule_entries_fall_back_to_seeds_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path();
+
+        let entries = load_rule_experience_entries(book_dir);
+        let rules_entry = entries
+            .iter()
+            .find(|entry| entry.source == "rules/anti-ai")
+            .expect("missing rules file must yield seeded baseline entry");
+        assert_eq!(rules_entry.reason, "Built-in anti-AI baseline rules (seeded).");
+
+        let story = book_dir.join("story");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::write(
+            story.join("anti_ai_rules.json"),
+            r#"{"version":1,"rules":[]}"#,
+        )
+        .unwrap();
+        let entries = load_rule_experience_entries(book_dir);
+        assert!(
+            entries.iter().all(|entry| entry.source != "rules/anti-ai"),
+            "explicit empty rules must disable the baseline"
+        );
     }
 }
 
@@ -2445,38 +2480,47 @@ pub fn load_codex_entries(
 }
 
 /// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
-/// 文件缺失/解析失败一律返回空 Vec（零打扰）；source 前缀 `rules/`、
-/// `experience/` 在上下文来源分层中与写法同层（style-asset=20）。
+/// source 前缀 `rules/`、`experience/` 在上下文来源分层中与写法同层
+/// （style-asset=20）。R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失
+/// → 内置种子（内存态不落盘）；文件可解析 → 用户规则空间（显式空规则=
+/// 关闭防线，不回填）。
 pub fn load_rule_experience_entries(
     book_dir: &Path,
 ) -> Vec<crate::models::input_governance::ContextSource> {
     let mut entries: Vec<crate::models::input_governance::ContextSource> = Vec::new();
-    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("anti_ai_rules.json")) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(rules) = parsed.get("rules").and_then(serde_json::Value::as_array) {
-                let valid: Vec<crate::utils::rule_experience_engine::AntiAiRule> = rules
-                    .iter()
-                    .filter_map(|rule| {
-                        crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
-                    })
-                    .collect();
-                if !valid.is_empty() {
-                    if let Some(guidance) =
-                        crate::utils::rule_experience_engine::compose_anti_ai_guidance(
-                            &valid,
-                            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
-                            None,
-                        )
-                    {
-                        entries.push(crate::models::input_governance::ContextSource {
-                            source: "rules/anti-ai".to_string(),
-                            reason: "Bound anti-AI rules.".to_string(),
-                            excerpt: Some(guidance),
-                            rank: None,
-                        });
-                    }
-                }
-            }
+    let user_rules: Option<Vec<crate::utils::rule_experience_engine::AntiAiRule>> = std::fs::read_to_string(
+        book_dir.join("story").join("anti_ai_rules.json"),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|parsed| {
+        let rules = parsed.get("rules")?.as_array()?;
+        Some(
+            rules
+                .iter()
+                .filter_map(|rule| {
+                    crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
+                })
+                .collect(),
+        )
+    });
+    let resolved = crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
+    if !resolved.rules.is_empty() {
+        if let Some(guidance) = crate::utils::rule_experience_engine::compose_anti_ai_guidance(
+            &resolved.rules,
+            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
+            None,
+        ) {
+            entries.push(crate::models::input_governance::ContextSource {
+                source: "rules/anti-ai".to_string(),
+                reason: if resolved.seeded {
+                    "Built-in anti-AI baseline rules (seeded).".to_string()
+                } else {
+                    "Bound anti-AI rules.".to_string()
+                },
+                excerpt: Some(guidance),
+                rank: None,
+            });
         }
     }
     if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("experience.json")) {

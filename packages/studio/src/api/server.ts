@@ -3416,14 +3416,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   // R5/366 号：书级反AI规则（GET/PUT 全量表；PUT 校验非法 400）。
+  // R22/392 号：GET 种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子
+  // （seeded=true，内存态不落盘）；显式空规则 = 用户选择，不回填。
   app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
     const id = c.req.param("id");
     const path = join(root, "books", id, "story", "anti_ai_rules.json");
+    const core = await import("@actalk/inkos-core");
     try {
       const parsed = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ rules: Array.isArray(parsed.rules) ? parsed.rules : [] });
+      if (Array.isArray(parsed.rules)) return c.json({ rules: parsed.rules, seeded: false });
+      return c.json({ rules: core.ANTI_AI_RULE_SEEDS, seeded: true });
     } catch {
-      return c.json({ rules: [] });
+      return c.json({ rules: core.ANTI_AI_RULE_SEEDS, seeded: true });
     }
   });
 

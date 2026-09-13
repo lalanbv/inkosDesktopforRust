@@ -4,6 +4,7 @@ import { createLLMClient, chatCompletion } from "../llm/provider.js";
 import { runWorkerAgent } from "../agent/worker-agent.js";
 import type { Logger } from "../utils/logger.js";
 import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
+import type { AntiAiRule } from "../utils/rule-experience-engine.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { resolveAgentModel } from "../models/task-routing.js";
@@ -2423,35 +2424,42 @@ export class PipelineRunner {
     }
 
     // R5/366 号：反AI规则扫描（detect 消费）——命中并入审计问题（reviser 按
-    // issue.suggestion=replacement 修复）。规则缺失/解析失败零打扰。
-    try {
-      const rulesRaw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
-      const parsed = JSON.parse(rulesRaw) as { rules?: unknown[] };
-      if (Array.isArray(parsed.rules) && parsed.rules.length > 0) {
-        const { validateAntiAiRule, scanAntiAiRules } = await import("../utils/rule-experience-engine.js");
-        const valid = parsed.rules
-          .map((rule) => validateAntiAiRule(rule).rule)
-          .filter((rule): rule is NonNullable<typeof rule> => Boolean(rule));
-        const hits = scanAntiAiRules(finalContent, valid);
-        if (hits.length > 0) {
-          const severityMap = { critical: "critical", warning: "warning", info: "info" } as const;
-          auditResult = {
-            ...auditResult,
-            issues: [
-              ...auditResult.issues,
-              ...hits.map((hit) => ({
-                severity: severityMap[hit.severity],
-                category: "anti-ai-rule",
-                description: `${hit.message}（×${hit.count}）`,
-                suggestion: hit.replacement ?? "按本书反AI规则改写",
-              })),
-            ],
-          };
-          this.config.logger?.warn(`[anti-ai] ${hits.length} hit(s) in ch${chapterNumber}`);
+    // issue.suggestion=replacement 修复）。
+    // R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子内存态
+    // 兜底；文件可解析 → 用户规则空间（显式空规则=关闭防线，不回填）。
+    {
+      let userRules: AntiAiRule[] | undefined;
+      try {
+        const rulesRaw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
+        const parsed = JSON.parse(rulesRaw) as { rules?: unknown[] };
+        if (Array.isArray(parsed.rules)) {
+          const { validateAntiAiRule: validateRule } = await import("../utils/rule-experience-engine.js");
+          userRules = parsed.rules
+            .map((rule) => validateRule(rule).rule)
+            .filter((rule): rule is NonNullable<typeof rule> => Boolean(rule));
         }
+      } catch {
+        userRules = undefined;
       }
-    } catch (error) {
-      this.config.logger?.warn(`[anti-ai] ${String(error)}`);
+      const { resolveAntiAiRulesWithSeeds, scanAntiAiRules } = await import("../utils/rule-experience-engine.js");
+      const resolved = resolveAntiAiRulesWithSeeds(userRules);
+      const hits = scanAntiAiRules(finalContent, resolved.rules);
+      if (hits.length > 0) {
+        const severityMap = { critical: "critical", warning: "warning", info: "info" } as const;
+        auditResult = {
+          ...auditResult,
+          issues: [
+            ...auditResult.issues,
+            ...hits.map((hit) => ({
+              severity: severityMap[hit.severity],
+              category: "anti-ai-rule",
+              description: `${hit.message}（×${hit.count}）`,
+              suggestion: hit.replacement ?? "按本书反AI规则改写",
+            })),
+          ],
+        };
+        this.config.logger?.warn(`[anti-ai] ${hits.length} hit(s) in ch${chapterNumber}`);
+      }
     }
 
     const resolvedStatus = chapterStatus ?? (auditResult.passed ? "ready-for-review" : "audit-failed");

@@ -441,6 +441,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     buildContextLens: actual.buildContextLens,
     ContextPackageSchema: actual.ContextPackageSchema,
     ChapterTraceSchema: actual.ChapterTraceSchema,
+    // R22/392 号：反AI规则 GET 种子兜底——mock 透传种子常量与校验器。
+    ANTI_AI_RULE_SEEDS: actual.ANTI_AI_RULE_SEEDS,
+    validateAntiAiRule: actual.validateAntiAiRule,
   };
 });
 
@@ -6613,6 +6616,50 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(missing.status).toBe(404);
     const bad = await app.request("http://localhost/api/v1/books/demo-book/context-lens/abc");
     expect(bad.status).toBe(400);
+  });
+
+  it("anti-ai-rules GET falls back to built-in seeds when file missing (392号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const { createStudioServer } = await import("./server.js");
+    const core = await import("@actalk/inkos-core");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const rulesPath = join(root, "books", "demo-book", "story", "anti_ai_rules.json");
+
+    // 文件缺失 → 种子兜底（seeded=true，不落盘）。
+    const seeded = await app.request("http://localhost/api/v1/books/demo-book/anti-ai-rules");
+    const seededBody = await seeded.json();
+    expect(seededBody.seeded).toBe(true);
+    expect(seededBody.rules).toHaveLength(9);
+    expect(seededBody.rules).toEqual(core.ANTI_AI_RULE_SEEDS);
+    await expect(readFile(rulesPath, "utf-8")).rejects.toThrow();
+
+    // 显式空规则 = 用户关闭防线，不回填种子。
+    await mkdir(join(root, "books", "demo-book", "story"), { recursive: true });
+    await writeFile(rulesPath, JSON.stringify({ version: 1, rules: [] }), "utf-8");
+    const explicitEmpty = await app.request("http://localhost/api/v1/books/demo-book/anti-ai-rules");
+    await expect(explicitEmpty.json()).resolves.toEqual({ rules: [], seeded: false });
+
+    // 自定义规则透传（seeded=false）。
+    await writeFile(
+      rulesPath,
+      JSON.stringify({ version: 1, rules: [{ id: "mine", type: "phrase", pattern: "测试", isRegex: false, severity: "info", message: "测试", enabled: true }] }),
+      "utf-8",
+    );
+    const custom = await app.request("http://localhost/api/v1/books/demo-book/anti-ai-rules");
+    const customBody = await custom.json();
+    expect(customBody.seeded).toBe(false);
+    expect(customBody.rules).toHaveLength(1);
+    expect(customBody.rules[0].id).toBe("mine");
+
+    // PUT 任意规则后落盘（种子随保存固化）。
+    const put = await app.request("http://localhost/api/v1/books/demo-book/anti-ai-rules", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rules: core.ANTI_AI_RULE_SEEDS }),
+    });
+    expect(put.status).toBe(200);
+    const persisted = JSON.parse(await readFile(rulesPath, "utf-8"));
+    expect(persisted.rules).toHaveLength(9);
   });
 
   it("timeline-auto-beats defaults to off and round-trips the book-level flag (189号)", async () => {

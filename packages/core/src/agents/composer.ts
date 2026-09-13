@@ -32,6 +32,7 @@ import { buildOpeningHint, rankEntriesForComposition } from "../utils/context-ra
 import {
   composeAntiAiGuidance,
   renderExperienceGuidance,
+  resolveAntiAiRulesWithSeeds,
   validateAntiAiRule,
   type AntiAiRule,
   type ExperienceEntry,
@@ -405,24 +406,32 @@ export async function loadRuleExperienceEntries(
   bookDir: string,
 ): Promise<ContextPackage["selectedContext"]> {
   const entries: ContextPackage["selectedContext"] = [];
+  // R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子（内存态
+  // 不落盘）；文件可解析 → 用户规则空间（显式空规则=关闭防线，不回填）。
+  let userRules: AntiAiRule[] | undefined;
   try {
     const raw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
     const parsed = JSON.parse(raw) as { rules?: AntiAiRule[] };
-    if (Array.isArray(parsed.rules) && parsed.rules.length > 0) {
-      const valid = parsed.rules
+    if (Array.isArray(parsed.rules)) {
+      userRules = parsed.rules
         .map((rule) => validateAntiAiRule(rule).rule)
         .filter((rule): rule is AntiAiRule => Boolean(rule));
-      const guidance = composeAntiAiGuidance(valid, "zh");
-      if (guidance) {
-        entries.push({
-          source: "rules/anti-ai",
-          reason: "Bound anti-AI rules.",
-          excerpt: guidance,
-        });
-      }
     }
   } catch {
-    // 零打扰
+    userRules = undefined;
+  }
+  const resolvedRules = resolveAntiAiRulesWithSeeds(userRules);
+  if (resolvedRules.rules.length > 0) {
+    const guidance = composeAntiAiGuidance(resolvedRules.rules, "zh");
+    if (guidance) {
+      entries.push({
+        source: "rules/anti-ai",
+        reason: resolvedRules.seeded
+          ? "Built-in anti-AI baseline rules (seeded)."
+          : "Bound anti-AI rules.",
+        excerpt: guidance,
+      });
+    }
   }
   try {
     const raw = await readFile(join(bookDir, "story", "experience.json"), "utf-8");

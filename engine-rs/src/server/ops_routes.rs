@@ -2119,7 +2119,27 @@ pub async fn get_anti_ai_rules(
     axum::extract::Path(book_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let book_dir = runtime.state.project_root().join("books").join(&book_id);
-    (StatusCode::OK, Json(read_rules_file(&book_dir, "anti_ai_rules.json", "rules"))).into_response()
+    // R22/392 号：GET 种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子
+    // （seeded=true，内存态不落盘）；显式空规则 = 用户选择，不回填。
+    let rules_array = std::fs::read_to_string(book_dir.join("story").join("anti_ai_rules.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|parsed| parsed.get("rules").and_then(Value::as_array).cloned());
+    match rules_array {
+        Some(rules) => (
+            StatusCode::OK,
+            Json(json!({ "rules": rules, "seeded": false })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::OK,
+            Json(json!({
+                "rules": crate::utils::rule_experience_engine::anti_ai_rule_seeds(),
+                "seeded": true,
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]

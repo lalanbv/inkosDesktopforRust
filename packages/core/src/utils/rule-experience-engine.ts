@@ -249,3 +249,157 @@ export function renderExperienceGuidance(
   }
   return text;
 }
+
+// ── R22/392 号：反AI规则内容指纹 + 内置种子包（四轮 P1；363 号种子兜底先例）──
+
+/** 规则内容指纹的 canonical 形式（双端逐字一致；与 362 assetCanonicalForm 同编码约定）。 */
+export function antiAiRuleCanonicalForm(rule: AntiAiRule): string {
+  return [
+    rule.id,
+    rule.type,
+    rule.pattern,
+    rule.isRegex ? "1" : "0",
+    rule.severity,
+    rule.message,
+    rule.replacement ?? "",
+    rule.enabled ? "1" : "0",
+  ].join("|");
+}
+
+const FNV_OFFSET = 0xcbf29ce484222325n;
+const FNV_PRIME = 0x100000001b3n;
+const FNV_MASK = 0xffffffffffffffffn;
+
+function fnv1aHex16(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let hash = FNV_OFFSET;
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = (hash * FNV_PRIME) & FNV_MASK;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+/** 规则内容指纹（同内容必同指纹——种子幂等合并依据，对齐 362/360 hash 语义）。 */
+export function antiAiRuleContentHash(rule: AntiAiRule): string {
+  return fnv1aHex16(antiAiRuleCanonicalForm(rule));
+}
+
+/** 规则组指纹：逐条 canonical 以 \n 连接后的 FNV 指纹（种子包完整性锚点）。 */
+export function antiAiRulePackHash(rules: ReadonlyArray<AntiAiRule>): string {
+  return fnv1aHex16(rules.map((rule) => antiAiRuleCanonicalForm(rule)).join("\n"));
+}
+
+/**
+ * 内置反AI规则种子包（392 号，双端逐字镜像；随包分发的冷启动底线防线）。
+ * 取精弃糟：只收 9 条最高频、可机检、有明确改法的 AI 腔（对标「模板数量
+ * 战」的糟粕刻意做小）；覆盖全部四类型（phrase/structure/rhythm/cliche）；
+ * 全部字面匹配（isRegex=false）——正则种子留用户自建，误伤面不可控。
+ */
+export const ANTI_AI_RULE_SEEDS: ReadonlyArray<AntiAiRule> = [
+  {
+    id: "eye_glint_stock",
+    type: "phrase",
+    pattern: "眼中闪过一丝",
+    isRegex: false,
+    severity: "critical",
+    message: "「眼中闪过一丝X」是最高频的 AI 神态套语——抽象神态报告没有画面。",
+    replacement: "改写成可看见的动作：捏紧的指节、挪开的视线、喉结滚动。",
+    enabled: true,
+  },
+  {
+    id: "essay_connective",
+    type: "structure",
+    pattern: "值得注意的是",
+    isRegex: false,
+    severity: "critical",
+    message: "论文式连接词，AI 论述腔直接漏进叙事——删除，让事实自己说话。",
+    enabled: true,
+  },
+  {
+    id: "mouth_smirk_stock",
+    type: "phrase",
+    pattern: "嘴角勾起一抹",
+    isRegex: false,
+    severity: "warning",
+    message: "「嘴角勾起一抹X」是 AI 高频表情模板——肌肉报告不等于情绪。",
+    replacement: "写对面的人看见了什么、感到了什么。",
+    enabled: true,
+  },
+  {
+    id: "air_freeze_cliche",
+    type: "cliche",
+    pattern: "空气仿佛凝固",
+    isRegex: false,
+    severity: "warning",
+    message: "张力陈词——气氛凝固是报告不是体验。",
+    replacement: "让在场者的某个小动作失灵：端着的杯子停在半空。",
+    enabled: true,
+  },
+  {
+    id: "deep_breath_buffer",
+    type: "rhythm",
+    pattern: "深吸一口气",
+    isRegex: false,
+    severity: "warning",
+    message: "高频缓冲动作、节奏拖延——每章至多一次，情绪转折处用更具体的身体反应。",
+    enabled: true,
+  },
+  {
+    id: "discourse_hedge",
+    type: "structure",
+    pattern: "从某种意义上",
+    isRegex: false,
+    severity: "warning",
+    message: "对冲式论断削弱叙事权威——角色可以有立场，叙事者不骑墙。",
+    replacement: "改成明确判断，或删掉整个从句。",
+    enabled: true,
+  },
+  {
+    id: "pupil_contraction",
+    type: "phrase",
+    pattern: "瞳孔骤缩",
+    isRegex: false,
+    severity: "warning",
+    message: "高频惊吓神态模板——惊惧写失控的后果：后退半步、手里的东西掉了。",
+    enabled: true,
+  },
+  {
+    id: "vague_time_transition",
+    type: "rhythm",
+    pattern: "不知过了多久",
+    isRegex: false,
+    severity: "info",
+    message: "时间过渡含糊——用环境或动作标记流逝：灯换了颜色、茶凉透了。",
+    enabled: true,
+  },
+  {
+    id: "as_if_whisper_cliche",
+    type: "cliche",
+    pattern: "仿佛在诉说",
+    isRegex: false,
+    severity: "info",
+    message: "「仿佛在诉说X」把情绪结论塞给读者——删掉，写让人产生此感的画面。",
+    enabled: true,
+  },
+];
+
+export interface AntiAiRulesWithSeeds {
+  readonly rules: ReadonlyArray<AntiAiRule>;
+  /** true = 规则来自内置种子（文件缺失/损坏的内存态兜底，不自动落盘）。 */
+  readonly seeded: boolean;
+}
+
+/**
+ * 种子兜底解析（363 号先例）：文件缺失/损坏（undefined）→ 内置种子
+ * （seeded=true，内存态不落盘）；**文件存在但规则为空 = 用户显式清空的
+ * 选择，不回填种子**（否则用户永远无法关掉防线）。
+ */
+export function resolveAntiAiRulesWithSeeds(
+  parsed: ReadonlyArray<AntiAiRule> | undefined,
+): AntiAiRulesWithSeeds {
+  if (parsed === undefined) {
+    return { rules: ANTI_AI_RULE_SEEDS, seeded: true };
+  }
+  return { rules: parsed, seeded: false };
+}

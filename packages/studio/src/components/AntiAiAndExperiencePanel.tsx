@@ -35,6 +35,7 @@ const severityClass: Record<AntiAiRule["severity"], string> = {
  */
 export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
   const [rules, setRules] = useState<AntiAiRule[]>([]);
+  const [seeded, setSeeded] = useState(false);
   const [entries, setEntries] = useState<ExperienceEntry[]>([]);
   const [notice, setNotice] = useState("");
   const [ruleForm, setRuleForm] = useState<{ pattern: string; message: string; replacement: string; severity: AntiAiRule["severity"]; isRegex: boolean }>({
@@ -46,10 +47,11 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
     void (async () => {
       try {
         const [ruleData, entryData] = await Promise.all([
-          fetchJson<{ rules: AntiAiRule[] }>(`/books/${encodeURIComponent(bookId)}/anti-ai-rules`),
+          fetchJson<{ rules: AntiAiRule[]; seeded?: boolean }>(`/books/${encodeURIComponent(bookId)}/anti-ai-rules`),
           fetchJson<{ entries: ExperienceEntry[] }>(`/books/${encodeURIComponent(bookId)}/experience`),
         ]);
         setRules(ruleData.rules);
+        setSeeded(ruleData.seeded ?? false);
         setEntries(entryData.entries);
       } catch {
         // 面板静默
@@ -80,6 +82,7 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
         body: JSON.stringify({ rules: merged }),
       });
       setRules(result.rules);
+      setSeeded(false);
       setRuleForm({ pattern: "", message: "", replacement: "", severity: "warning", isRegex: false });
       setNotice(tr("规则已保存", "Rule saved"));
     } catch {
@@ -96,6 +99,7 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
         body: JSON.stringify({ rules: merged }),
       });
       setRules(result.rules);
+      setSeeded(false);
     } catch {
       setNotice(tr("更新失败", "Update failed"));
     }
@@ -147,7 +151,14 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
       {notice && <p className="text-[11px] text-emerald-600">{notice}</p>}
 
       <div className="space-y-1">
-        <p className="text-[11px] font-bold text-muted-foreground">{tr("反AI规则（写作禁则 + 审查扫描）", "Anti-AI rules (writing bans + audit scan)")}</p>
+        <p className="text-[11px] font-bold text-muted-foreground">
+          {tr("反AI规则（写作禁则 + 审查扫描）", "Anti-AI rules (writing bans + audit scan)")}
+          {seeded && (
+            <span className="ml-2 px-1.5 py-0.5 rounded bg-sky-600/15 text-sky-700 dark:text-sky-400 font-normal">
+              {tr("内置种子（未落盘，保存后生效为本书规则）", "Built-in seeds (not persisted — save to make them yours)")}
+            </span>
+          )}
+        </p>
         {rules.map((rule) => (
           <div key={rule.id} className={`flex items-center gap-2 text-xs rounded-md border px-2 py-1.5 ${severityClass[rule.severity]}`}>
             <span className="font-mono font-bold">{rule.pattern}</span>

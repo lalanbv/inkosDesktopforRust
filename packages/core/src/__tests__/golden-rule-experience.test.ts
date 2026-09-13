@@ -10,10 +10,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  ANTI_AI_RULE_SEEDS,
+  antiAiRuleCanonicalForm,
+  antiAiRuleContentHash,
+  antiAiRulePackHash,
   composeAntiAiGuidance,
   mergeExperienceEntries,
   renderAntiAiFixGuidance,
   renderExperienceGuidance,
+  resolveAntiAiRulesWithSeeds,
   scanAntiAiRules,
   validateAntiAiRule,
   type AntiAiHit,
@@ -60,6 +65,15 @@ const vectors = JSON.parse(
       expected: string;
     }
   >;
+  seeds: { count: number; ids: string[]; typesCovered: string[]; packHash: string };
+  seedCanonical: Array<{ name: string; ruleId: string; expected: string }>;
+  seedHash: Array<{ name: string; ruleId: string; expected: string }>;
+  seedFallback: Array<{
+    name: string;
+    parsed: Array<Record<string, unknown>> | null;
+    seeded: boolean;
+    ruleCount: number;
+  }>;
 };
 
 function asRule(raw: Record<string, unknown>): AntiAiRule {
@@ -130,6 +144,54 @@ describe("anti-AI rules and experience contract (R5/G13)", () => {
         vector.maxChars ?? undefined,
       );
       expect(got, vector.name).toEqual(vector.expected);
+    }
+  });
+});
+
+describe("anti-AI rule seeds contract (R22)", () => {
+  const seedById = new Map(ANTI_AI_RULE_SEEDS.map((rule) => [rule.id, rule]));
+
+  it("ships the seed pack matching the shared contract", () => {
+    expect(ANTI_AI_RULE_SEEDS).toHaveLength(vectors.seeds.count);
+    expect(ANTI_AI_RULE_SEEDS.map((rule) => rule.id)).toEqual(vectors.seeds.ids);
+    expect([...new Set(ANTI_AI_RULE_SEEDS.map((rule) => rule.type))].sort()).toEqual(
+      vectors.seeds.typesCovered,
+    );
+    // 每条种子都必须通过自家校验器（种子即合法规则）。
+    for (const rule of ANTI_AI_RULE_SEEDS) {
+      expect(validateAntiAiRule(rule).errors, rule.id).toEqual([]);
+    }
+    // 种子包完整性锚点：逐条 canonical 以 \n 连接后的 FNV 指纹（Python 独立计算）。
+    expect(antiAiRulePackHash(ANTI_AI_RULE_SEEDS), "pack hash").toBe(vectors.seeds.packHash);
+  });
+
+  it("locks seed canonical forms per shared vectors", () => {
+    for (const vector of vectors.seedCanonical) {
+      const seed = seedById.get(vector.ruleId);
+      expect(seed, vector.name).toBeDefined();
+      expect(antiAiRuleCanonicalForm(seed!), vector.name).toBe(vector.expected);
+    }
+  });
+
+  it("locks seed content hashes per shared vectors", () => {
+    for (const vector of vectors.seedHash) {
+      const seed = seedById.get(vector.ruleId);
+      expect(seed, vector.name).toBeDefined();
+      expect(antiAiRuleContentHash(seed!), vector.name).toBe(vector.expected);
+    }
+  });
+
+  it("resolves seed fallback per shared vectors", () => {
+    for (const vector of vectors.seedFallback) {
+      const parsed = vector.parsed === null ? undefined : vector.parsed.map(asRule);
+      const got = resolveAntiAiRulesWithSeeds(parsed);
+      expect(got.seeded, vector.name).toBe(vector.seeded);
+      expect(got.rules, vector.name).toHaveLength(vector.ruleCount);
+      if (vector.parsed === null) {
+        expect(got.rules, vector.name).toEqual(ANTI_AI_RULE_SEEDS);
+      } else {
+        expect(got.rules, vector.name).toEqual(parsed);
+      }
     }
   });
 });
