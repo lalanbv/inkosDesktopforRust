@@ -466,6 +466,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     // R26/403 号：run-log 端点——全局缓冲与投影透传真实现（真单例，追加型）。
     globalRunLog: actual.globalRunLog,
     projectRunLog: actual.projectRunLog,
+    // R29/404 号：原子写收敛到 core writeTextAtomic——透传真实现。
+    writeTextAtomic: actual.writeTextAtomic,
   };
 });
 

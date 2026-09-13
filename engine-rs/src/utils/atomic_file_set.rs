@@ -215,10 +215,54 @@ pub async fn commit_atomic_file_set(input: &AtomicFileSet<'_>) -> Result<(), Ato
     Ok(())
 }
 
+/// rename 失败后的最大重试次数（首次尝试 + 3 = 至多 4 次）。
+/// 对齐 TS `ATOMIC_WRITE_MAX_RETRIES`（R29/404 号）。
+pub const ATOMIC_WRITE_MAX_RETRIES: u32 = 3;
+/// 重试基础退避（线性：attempt × delayMs，毫秒）。
+pub const ATOMIC_WRITE_RETRY_DELAY_MS: u64 = 50;
+
+/// 重试决策（纯函数，golden 锁；`error_kind` 由 [`atomic_write_error_kind`]
+/// 归一）：错误码在重试集合内且重试预算未用尽 → 重试。`attempt` 从 0 计。
+pub fn atomic_write_retry_decision(
+    error_kind: Option<&str>,
+    attempt: u32,
+    max_retries: u32,
+) -> bool {
+    let Some(kind) = error_kind else {
+        return false;
+    };
+    if !matches!(kind, "EPERM" | "EBUSY") {
+        return false;
+    }
+    attempt < max_retries
+}
+
+/// `std::io::Error` → 重试决策用的错误码（文件锁语义；无码 → None）。
+/// pub 供差分测试（tests/golden_atomic_write_diff.rs）锁定码值映射。
+pub fn atomic_write_error_kind(error: &std::io::Error) -> Option<&'static str> {
+    match error.raw_os_error() {
+        // EPERM（unix=1，Windows 经 PermissionDenied 呈现）。
+        Some(1) => Some("EPERM"),
+        // EBUSY（unix=16；Windows ERROR_SHARING_VIOLATION/LOCK_VIOLATION
+        // 在 Rust 里也常映射为 EBUSY 语义）。
+        Some(16) => Some("EBUSY"),
+        _ => {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                Some("EPERM")
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 单文件原子替换（199 号稳定性审计）：先写同目录唯一临时文件，再
 /// `rename` 就位（同文件系统内 rename 对观察者原子）。进程在写入中途崩溃
 /// 只会留下孤儿临时文件，目标文件要么是旧内容、要么是完整新内容——
 /// 不再有「截断的 book.json 让整本书不可加载」的失败形态。
+///
+/// R29/404 号：rename 目标被占用（Windows 文件锁 EPERM/EBUSY）时线性退避
+/// 重试（WNW v6.2.1 的 atomic_write_json 思路），放弃时清理临时文件。
 ///
 /// 适用于配置/索引类小文件（book.json / index.json / timeline.json）；
 /// 多文件事务仍走 [`commit_atomic_file_set`]。
@@ -234,11 +278,22 @@ pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = dir.join(format!(".{}.tmp-{}-{}", file_name, std::process::id(), seq));
     tokio::fs::write(&tmp, content).await?;
-    match tokio::fs::rename(&tmp, path).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            Err(error)
+    let mut attempt: u32 = 0;
+    loop {
+        match tokio::fs::rename(&tmp, path).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let kind = atomic_write_error_kind(&error);
+                if !atomic_write_retry_decision(kind, attempt, ATOMIC_WRITE_MAX_RETRIES) {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    return Err(error);
+                }
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    ATOMIC_WRITE_RETRY_DELAY_MS * u64::from(attempt),
+                ))
+                .await;
+            }
         }
     }
 }

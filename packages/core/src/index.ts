@@ -666,6 +666,15 @@ export {
   type RunLogSnapshot,
 } from "./utils/run-log.js";
 export {
+  ATOMIC_WRITE_MAX_RETRIES,
+  ATOMIC_WRITE_RETRY_DELAY_MS,
+  ATOMIC_WRITE_RETRYABLE_CODES,
+  atomicWriteErrorCode,
+  atomicWriteRetryDecision,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./utils/atomic-write.js";
+export {
   resolveBestOfNPlan,
   selectBestCandidate,
   BEST_OF_N_DEFAULTS,

@@ -2917,18 +2917,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   // 199 号：单文件原子替换（temp + rename）——截断的 book.json/timeline.json
-  // 会让整本书不可加载或时间线静默丢失，写面统一走此helper。
+  // 会让整本书不可加载或时间线静默丢失，写面统一走此 helper。
+  // R29/404 号：委托 core writeTextAtomic——新增 Windows 文件锁（EPERM/EBUSY）
+  // 线性退避重试（WNW v6.2.1 思路），与 Rust write_file_atomic 同构。
   const writeFileAtomic = async (path: string, content: string): Promise<void> => {
-    const { randomUUID } = await import("node:crypto");
-    const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(tmp, content, "utf-8");
-    try {
-      const { rename: renameFile } = await import("node:fs/promises");
-      await renameFile(tmp, path);
-    } catch (error) {
-      await rm(tmp, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    const { writeTextAtomic } = await import("@actalk/inkos-core");
+    return writeTextAtomic(path, content);
   };
 
   app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {

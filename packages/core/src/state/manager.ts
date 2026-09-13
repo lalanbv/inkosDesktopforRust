@@ -4,27 +4,17 @@ import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 /**
  * 单文件原子替换（199 号稳定性审计，与 Rust utils/atomic_file_set.rs 的
  * write_file_atomic 对齐）：先写同目录唯一临时文件，再 rename 就位——
  * 进程中途崩溃只留孤儿临时文件，目标文件要么旧内容、要么完整新内容。
  * 适用于配置/索引类小文件（book.json / index.json）。
+ * R29/404 号：委托 core writeTextAtomic——新增文件锁（EPERM/EBUSY）重试。
  */
 async function writeFileAtomic(path: string, content: string): Promise<void> {
-  const { dirname, basename, join: joinPath } = await import("node:path");
-  const tmp = joinPath(
-    dirname(path),
-    `.${basename(path)}.tmp-${process.pid}-${randomUUID()}`,
-  );
-  await writeFile(tmp, content, "utf-8");
-  try {
-    const { rename } = await import("node:fs/promises");
-    await rename(tmp, path);
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  return writeTextAtomic(path, content);
 }
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;

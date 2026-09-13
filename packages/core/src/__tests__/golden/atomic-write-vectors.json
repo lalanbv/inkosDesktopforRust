@@ -1,0 +1,101 @@
+{
+  "_header": "R29 持久层原子写共享向量（404 号，v5 五轮规划 P2）。唯一事实源本文件；TS 断言 src/__tests__/golden-atomic-write.test.ts，Rust 差分 engine-rs/tests/golden_atomic_write_diff.rs。重试决策：错误码 ∈ {EPERM, EBUSY}（Windows 文件锁）且 attempt < maxRetries（缺省 3）→ 重试；attempt 从 0 计（首次失败后的决策）。rename 目标被占用时线性退避（attempt × 50ms），放弃时清理临时文件。",
+  "contract": {
+    "maxRetries": 3,
+    "retryDelayMs": 50,
+    "retryableCodes": [
+      "EPERM",
+      "EBUSY"
+    ]
+  },
+  "retryDecision": [
+    {
+      "name": "EPERM-attempt0",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": 0
+      },
+      "expected": true
+    },
+    {
+      "name": "EPERM-attempt1",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": 1
+      },
+      "expected": true
+    },
+    {
+      "name": "EPERM-attempt2",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": 2
+      },
+      "expected": true
+    },
+    {
+      "name": "EPERM-attempt3",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": 3
+      },
+      "expected": false
+    },
+    {
+      "name": "EPERM-attempt5",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": 5
+      },
+      "expected": false
+    },
+    {
+      "name": "EBUSY-attempt0",
+      "input": {
+        "errorCode": "EBUSY",
+        "attempt": 0
+      },
+      "expected": true
+    },
+    {
+      "name": "EBUSY-attempt3",
+      "input": {
+        "errorCode": "EBUSY",
+        "attempt": 3
+      },
+      "expected": false
+    },
+    {
+      "name": "ENOSPC-attempt0",
+      "input": {
+        "errorCode": "ENOSPC",
+        "attempt": 0
+      },
+      "expected": false
+    },
+    {
+      "name": "EACCES-attempt0",
+      "input": {
+        "errorCode": "EACCES",
+        "attempt": 0
+      },
+      "expected": false
+    },
+    {
+      "name": "none-attempt0",
+      "input": {
+        "errorCode": null,
+        "attempt": 0
+      },
+      "expected": false
+    },
+    {
+      "name": "EPERM-attempt-1",
+      "input": {
+        "errorCode": "EPERM",
+        "attempt": -1
+      },
+      "expected": false
+    }
+  ]
+}
