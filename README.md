@@ -131,6 +131,22 @@ cd src-tauri && cargo run
 
 安装后默认使用包内 Rust 引擎，**无需安装 Node.js**；仅在回退 Node 后端时首启下载 Node bootstrap。
 
+### 引擎环境变量（常用）
+
+`inkos-engine-server` 的配置来源（与 Node sidecar env 约定对齐；完整清单见 `engine-rs/src/bin/inkos-engine-server.rs` 头注）：
+
+| 分组 | 变量 | 说明 |
+| --- | --- | --- |
+| 运行 | `INKOS_PROJECT_ROOT` / `INKOS_PORT` | 项目根（默认 CWD）/ 监听端口（默认 8787） |
+| 运行 | `INKOS_STATIC_DIR` | 静态前端面目录（浏览器直连 = `packages/studio/dist`；未设为纯 API） |
+| 运行 | `INKOS_BUILTIN_GENRES_DIR` / `INKOS_BUILTIN_SKILLS_DIR` / `INKOS_SKILL_DIRS` | 内置题材 / 技能目录 |
+| LLM 默认端点 | `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL` / `INKOS_LLM_MAX_TOKENS` | inkos.json 服务项 + secrets 优先，配置不可用回退此组 |
+| LLM 行为 | `INKOS_LLM_TRANSIENT_RETRY`（0=关）/ `INKOS_LLM_STREAM` / `INKOS_LLM_STREAM_IDLE_TIMEOUT_MS` / `INKOS_LLM_FIRST_EVENT_TIMEOUT_MS` | 瞬态重试与流式超时 |
+| 专项 | `INKOS_COVER_*` / `INKOS_FILM_IMAGE_SIZE` | 封面生成端点与尺寸 |
+| 专项 | `INKOS_ENGINE_LOOPBACK_GUARD` / `INKOS_ENGINE_ALLOWED_ORIGINS` | loopback 加固与 CORS 白名单 |
+| 专项 | `INKOS_RUNTIME_RETENTION_CHAPTERS`（默认 20，0=关）/ `INKOS_REVISION_GATE` / `INKOS_PLAN_MEMO_START\|END` | 运行工件保留 / 修订门 / memo 标记 |
+| agent 覆盖 | `INKOS_AGENT_<NAME>_MODEL` | 按 agent 覆盖模型（完整 model-overrides 走配置端点） |
+
 ## 构建与发布（本地脚本，无 CI）
 
 ```bash
