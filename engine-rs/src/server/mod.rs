@@ -816,6 +816,11 @@ pub fn router_books(
             "/api/v1/books/:id/promises",
             get(ops_routes::get_promises).with_state(books.clone()),
         )
+        // G1/412 号补注册：混合召回（召回测试面板消费；函数已在 349 号实现但路由漏挂）。
+        .route(
+            "/api/v1/books/:id/hybrid-search",
+            post(ops_routes::post_hybrid_search).with_state(books.clone()),
+        )
         // G5/351 号：统一拆书面。
         .route(
             "/api/v1/books/:id/deconstruct",
