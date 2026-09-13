@@ -755,6 +755,10 @@ pub fn router_books(
             post(ops_routes::import_asset_library).with_state(books.clone()),
         )
         .route(
+            "/api/v1/asset-library/:kind/import-preview",
+            post(ops_routes::preview_asset_library_import).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id/adopt-library-assets",
             post(ops_routes::adopt_library_assets).with_state(books.clone()),
         )

@@ -725,3 +725,25 @@ pub fn render_adoption_header(
         )
     }
 }
+
+/// R15/384 号：导入预览（零落盘）——解析包并对照现有库给出
+/// 新增/覆盖/跳过预估，供「预览 → 确认」两段式导入 UI。
+pub fn preview_asset_library_import(
+    existing: &[LibraryAsset],
+    json: &str,
+) -> Value {
+    let parsed = parse_asset_library_import(json);
+    let merged = merge_asset_library(existing, &parsed.assets);
+    let samples: Vec<&LibraryAsset> = parsed.assets.iter().collect();
+    serde_json::json!({
+        "added": merged.added,
+        "overwritten": merged.overwritten,
+        "skipped": merged.skipped,
+        "errors": parsed.errors,
+        "samples": samples.iter().map(|asset| serde_json::json!({
+            "id": asset.id,
+            "name": asset.name,
+            "kind": asset.kind.as_str(),
+        })).collect::<Vec<_>>(),
+    })
+}

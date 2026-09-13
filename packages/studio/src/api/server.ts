@@ -3492,6 +3492,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, entries: remaining });
   });
 
+  // R15/384 号：市场包导入预览（零落盘——解析+预估新增/覆盖/跳过）。
+  app.post("/api/v1/asset-library/:kind/import-preview", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const raw = await c.req.text();
+    const parsed = core.parseAssetLibraryImport(raw);
+    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
+      return c.json({ errors: parsed.errors }, 400);
+    }
+    const snapshot = await listAssets(root, kind);
+    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
+    return c.json({
+      added: merged.added,
+      overwritten: merged.overwritten,
+      skipped: merged.skipped,
+      errors: parsed.errors,
+      samples: parsed.assets.map((asset) => ({ id: asset.id, name: asset.name, kind: asset.kind })),
+    });
+  });
+
   // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。
   app.get("/api/v1/style-profiles", async (c) => {
     const dir = join(root, ".inkos", "style-profiles");

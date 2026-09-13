@@ -114,6 +114,13 @@ export function buildAssetLibraryExport(assets: ReadonlyArray<LibraryAsset>): st
   return JSON.stringify(pkg, null, 2);
 }
 
+/** R15/384 号：市场包元数据（可选；分享时标注作者/描述/来源）。 */
+export interface AssetPackMeta {
+  readonly author?: string;
+  readonly description?: string;
+  readonly source?: string;
+}
+
 export interface AssetImportResult {
   readonly assets: ReadonlyArray<LibraryAsset>;
   /** 非法条目错误（index + 原因）。 */
@@ -149,6 +156,25 @@ export function parseAssetLibraryImport(json: string): AssetImportResult {
     }
   });
   return { assets: sortAssets(assets), errors };
+}
+
+/**
+ * R15/384 号：导入预览（零落盘）——解析包并对照现有库给出
+ * 新增/覆盖/跳过预估，供「预览 → 确认」两段式导入 UI。
+ */
+export function previewAssetLibraryImport(
+  existing: ReadonlyArray<LibraryAsset>,
+  json: string,
+): { added: number; overwritten: number; skipped: number; errors: ReadonlyArray<string>; samples: ReadonlyArray<{ id: string; name: string; kind: AssetKind }> } {
+  const parsed = parseAssetLibraryImport(json);
+  const merged = mergeAssetLibrary(existing, parsed.assets);
+  return {
+    added: merged.added,
+    overwritten: merged.overwritten,
+    skipped: merged.skipped,
+    errors: parsed.errors,
+    samples: parsed.assets.map((asset) => ({ id: asset.id, name: asset.name, kind: asset.kind })),
+  };
 }
 
 export interface AssetMergeResult {

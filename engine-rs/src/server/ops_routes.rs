@@ -2285,3 +2285,37 @@ pub async fn get_writing_stats(State(runtime): State<BooksRuntime>) -> impl Into
     // TS 端点形状对齐：单行简报（聚合在客户端由同一 writing-stats 纯函数完成）。
     (StatusCode::OK, Json(json!({ "rows": rows }))).into_response()
 }
+
+/// R15/384 号：市场包导入预览（零落盘——解析+预估新增/覆盖/跳过）。
+pub async fn preview_asset_library_import(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(kind_raw): axum::extract::Path<String>,
+    body: String,
+) -> impl IntoResponse {
+    let Some(kind) = crate::utils::asset_library::AssetKind::parse(&kind_raw) else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
+    };
+    let parsed = crate::utils::asset_library::parse_asset_library_import(&body);
+    if parsed.assets.is_empty() && !parsed.errors.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
+    }
+    let (existing, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+        .unwrap_or_else(|_| (Vec::new(), false));
+    let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
+    let samples: Vec<serde_json::Value> = parsed
+        .assets
+        .iter()
+        .map(|asset| json!({ "id": asset.id, "name": asset.name, "kind": asset.kind.as_str() }))
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "added": merged.added,
+            "overwritten": merged.overwritten,
+            "skipped": merged.skipped,
+            "errors": parsed.errors,
+            "samples": samples,
+        })),
+    )
+        .into_response()
+}
