@@ -5,6 +5,7 @@ import type { BookSeriesInfo } from "../shared/contracts";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
 import { WritingStatsCard } from "../components/WritingStatsCard";
+import { BackupPanel } from "../components/BackupPanel";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -230,6 +231,9 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
       )}
       {/* R13/382 号：写作数据面板（产出节奏/通过率/token）。 */}
       <WritingStatsCard />
+
+      {/* R18/386 号：备份与恢复（全量 tar.gz 导出 + 两段式导入恢复）。 */}
+      <BackupPanel />
 
       <div className="flex items-end justify-between border-b border-border/40 pb-8">
         <div>

@@ -137,7 +137,7 @@ import {
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
-import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
@@ -6613,6 +6613,134 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     );
     void core;
     return c.json({ ok: true, cards: body.cards });
+  });
+
+  // R18/386 号：云备份主链——全量 tar.gz 导出 + 两段式导入恢复（恢复前自动快照）。
+  // 范围：books/ + inkos.json + .inkos/（secrets 默认排除，includeSecrets=1 显式含）+ prompt/；
+  // sessions/ 默认排除。备份为本地 UI 面，Rust 端点书面决策仅 TS 承担（386 备忘 §4）。
+  const BACKUP_ROOT_ENTRIES = ["books", "inkos.json", ".inkos", "prompt"] as const;
+
+  app.get("/api/v1/backup/export", async (c) => {
+    const includeSecrets = c.req.query("includeSecrets") === "1";
+    const includeSessions = c.req.query("includeSessions") === "1";
+    const staging = join(root, ".inkos-backup-staging");
+    await rm(staging, { recursive: true, force: true });
+    await mkdir(staging, { recursive: true });
+    // 复制范围内条目（.inkos 排除 secrets.json 除非显式含）。
+    for (const entry of BACKUP_ROOT_ENTRIES) {
+      const source = join(root, entry);
+      if (!(await stat(source).then(() => true).catch(() => false))) continue;
+      if (entry !== ".inkos") {
+        await cp(source, join(staging, entry), { recursive: true });
+        continue;
+      }
+      const inkosDir = join(staging, ".inkos");
+      await mkdir(inkosDir, { recursive: true });
+      for (const child of await readdir(source)) {
+        if (child === "secrets.json" && !includeSecrets) continue;
+        await cp(join(source, child), join(inkosDir, child), { recursive: true });
+      }
+    }
+    let fileCount = 0;
+    let totalBytes = 0;
+    for (const file of await listArchiveFiles(staging)) {
+      fileCount += 1;
+      totalBytes += (await stat(join(staging, file))).size;
+    }
+    await writeFile(
+      join(staging, "backup-manifest.json"),
+      JSON.stringify({
+        version: 1,
+        createdAt: new Date().toISOString(),
+        generator: "inkos-desktop",
+        scope: { includeSecrets, includeSessions },
+        fileCount,
+        totalBytes,
+      }, null, 2),
+      "utf-8",
+    );
+    const archive = gzipSync(await buildTarArchive(staging, "inkos-backup"));
+    await rm(staging, { recursive: true, force: true });
+    return new Response(archive as unknown as BodyInit, {
+      headers: {
+        "Content-Type": "application/gzip",
+        "Content-Disposition": 'attachment; filename="inkos-backup.tar.gz"',
+      },
+    });
+  });
+
+  app.post("/api/v1/backup/import", async (c) => {
+    const confirm = c.req.query("confirm") === "1";
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    const { untar } = await import("../lib/tar-read");
+    let entries: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
+    let rejected: ReadonlyArray<string>;
+    try {
+      const result = untar(bytes);
+      entries = result.entries;
+      rejected = result.rejected;
+    } catch (error) {
+      return c.json({ error: String(error) }, 400);
+    }
+    if (rejected.length > 0) {
+      return c.json({ error: `unsafe entries rejected: ${rejected.join(", ")}` }, 400);
+    }
+    const manifestEntry = entries.find((entry) => entry.name === "backup-manifest.json");
+    if (!manifestEntry) return c.json({ error: "backup-manifest.json missing" }, 400);
+    try {
+      const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
+      if (manifest.version !== 1 || typeof manifest.generator !== "string"
+        || !manifest.generator.startsWith("inkos-desktop")) {
+        return c.json({ error: "unsupported backup generator/version" }, 400);
+      }
+    } catch {
+      return c.json({ error: "backup-manifest.json unreadable" }, 400);
+    }
+
+    // 将覆盖项 = root 下已存在的同名文件。
+    const overwriting: string[] = [];
+    for (const entry of entries) {
+      if (await stat(join(root, entry.name)).then(() => true).catch(() => false)) {
+        overwriting.push(entry.name);
+      }
+    }
+    if (!confirm) {
+      return c.json({
+        preview: { fileCount: entries.length, overwriting, newFiles: entries.length - overwriting.length },
+      });
+    }
+
+    // 恢复前自动快照：将覆盖的现有文件打包留存（回滚保险）。
+    if (overwriting.length > 0) {
+      const snapshotFiles: Array<{ name: string; bytes: Uint8Array }> = [];
+      for (const name of overwriting) {
+        const data = await readFile(join(root, name)).catch(() => null);
+        if (data) snapshotFiles.push({ name, bytes: new Uint8Array(data) });
+      }
+      const backupsDir = join(root, "backups");
+      await mkdir(backupsDir, { recursive: true });
+      const chunks: Buffer[] = [];
+      for (const file of snapshotFiles) {
+        const header = Buffer.alloc(512, 0);
+        Buffer.from(file.name, "utf-8").copy(header, 0);
+        header.write(file.bytes.length.toString(8).padStart(11, "0"), 124);
+        header.write("0", 156);
+        chunks.push(header, Buffer.from(file.bytes));
+        const padding = (512 - (file.bytes.length % 512)) % 512;
+        if (padding > 0) chunks.push(Buffer.alloc(padding));
+      }
+      chunks.push(Buffer.alloc(1024));
+      const snapshotName = `pre-restore-${Date.now()}.tar`;
+      await writeFile(join(backupsDir, snapshotName), Buffer.concat(chunks), "utf-8");
+    }
+
+    // 写回（快照已兜底）。
+    for (const entry of entries) {
+      const target = join(root, entry.name);
+      await mkdir(join(target, ".."), { recursive: true });
+      await writeFile(target, entry.bytes);
+    }
+    return c.json({ ok: true, restored: entries.length, snapshot: overwriting.length > 0 });
   });
 
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
