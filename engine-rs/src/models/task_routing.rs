@@ -7,6 +7,10 @@
 //! 五类任务（writing/review/repair/detect/analysis）逐字段三层回退：
 //! book.tasks[task] > book.defaults > project.tasks[task] > project.defaults
 //! > fallback（现有全局解析产物）。迁移兼容：routing 缺省全 fallback。
+//!
+//! R25/397 号失败接管链：override 增可选 retryCount（1–5）与 backupModels
+//! （≤3）；[`resolve_task_model_chain`] 产出去重封顶（总长 ≤4）的尝试链，
+//! service 只随 primary。零配置 → [primary] + retryCount=1（现行为）。
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -81,6 +85,12 @@ pub struct TaskModelOverride {
     pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxTokens")]
     pub max_tokens: Option<u32>,
+    /// R25：当前模型单次尝试内重试次数（1–5；缺省 1 = 不重试）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
+    /// R25：备用模型按序接管（≤3；与主模型同端点，链条目仅以 model 标识）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_models: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -199,6 +209,16 @@ fn compose_task_override(
         if let Some(t) = layer.max_tokens {
             merged.max_tokens = Some(t);
         }
+        if let Some(t) = layer.retry_count.filter(|t| *t >= 1) {
+            merged.retry_count = Some(t);
+        }
+        if let Some(models) = layer.backup_models.as_ref() {
+            let models: Vec<String> =
+                models.iter().filter(|m| !m.is_empty()).cloned().collect();
+            if !models.is_empty() {
+                merged.backup_models = Some(models);
+            }
+        }
     }
     (merged, sources)
 }
@@ -241,6 +261,77 @@ pub fn resolve_task_model(params: ResolveTaskModelParams<'_>) -> ResolvedTaskMod
     }
 }
 
+/// 尝试链总长封顶：1 个 primary + 至多 3 个备用（与 backupModels 上限一致）。
+pub const TASK_MODEL_CHAIN_MAX_ATTEMPTS: u32 = 4;
+/// retryCount 缺省：零配置 = 单次尝试（现行为）。
+pub const TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT: u32 = 1;
+
+/// 链条目（R25）：primary 含生效 service；备用仅 model（同端点运行）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskModelAttempt {
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+}
+
+/// [`resolve_task_model_chain`] 产物（R25）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedTaskModelChain {
+    pub task: &'static str,
+    pub attempts: Vec<TaskModelAttempt>,
+    #[serde(rename = "retryCount")]
+    pub retry_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "maxTokens")]
+    pub max_tokens: Option<u32>,
+}
+
+/// 任务模型**尝试链**解析（R25）：primary 走 [`resolve_task_model`] 同款逐字段
+/// 回退；override 的 backupModels 按序追加——与链中已有 model 精确重复者剔除，
+/// 总长封顶 [`TASK_MODEL_CHAIN_MAX_ATTEMPTS`]。零配置 → [primary] + 1。
+pub fn resolve_task_model_chain(params: ResolveTaskModelParams<'_>) -> ResolvedTaskModelChain {
+    let resolved = resolve_task_model(ResolveTaskModelParams {
+        task: params.task,
+        book_routing: params.book_routing,
+        project_routing: params.project_routing,
+        fallback_model: params.fallback_model.clone(),
+        fallback_service: params.fallback_service.clone(),
+        fallback_temperature: params.fallback_temperature,
+        fallback_max_tokens: params.fallback_max_tokens,
+    });
+    let mut attempts = vec![TaskModelAttempt {
+        model: resolved.model.clone(),
+        service: resolved.service.clone(),
+    }];
+    let mut seen: Vec<&str> = vec![resolved.model.as_str()];
+    let (override_value, _) = compose_task_override(params.book_routing, params.project_routing, params.task);
+    for backup in override_value.backup_models.iter().flatten() {
+        if attempts.len() as u32 >= TASK_MODEL_CHAIN_MAX_ATTEMPTS {
+            break;
+        }
+        if seen.contains(&backup.as_str()) {
+            continue;
+        }
+        seen.push(backup.as_str());
+        attempts.push(TaskModelAttempt {
+            model: backup.clone(),
+            service: None,
+        });
+    }
+    ResolvedTaskModelChain {
+        task: params.task.as_str(),
+        attempts,
+        retry_count: override_value
+            .retry_count
+            .unwrap_or(TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT),
+        temperature: resolved.temperature,
+        max_tokens: resolved.max_tokens,
+    }
+}
+
 /// 机器可读契约（双端 golden 锁形状）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +341,19 @@ pub struct TaskRoutingContract {
     pub levels: Vec<&'static str>,
     #[serde(rename = "migrationCompat")]
     pub migration_compat: &'static str,
+    pub chain: TaskChainContract,
+}
+
+/// R25：接管链契约面。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskChainContract {
+    pub chain_fields: Vec<&'static str>,
+    pub max_attempts: u32,
+    pub max_backup_models: u32,
+    pub retry_count_range: Vec<u32>,
+    pub default_retry_count: u32,
+    pub dedupe: &'static str,
 }
 
 pub fn task_routing_contract() -> TaskRoutingContract {
@@ -264,5 +368,13 @@ pub fn task_routing_contract() -> TaskRoutingContract {
             "fallback",
         ],
         migration_compat: "absent-routing-resolves-to-fallback",
+        chain: TaskChainContract {
+            chain_fields: vec!["retryCount", "backupModels"],
+            max_attempts: TASK_MODEL_CHAIN_MAX_ATTEMPTS,
+            max_backup_models: 3,
+            retry_count_range: vec![1, 5],
+            default_retry_count: TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT,
+            dedupe: "exact-match-against-existing-attempts",
+        },
     }
 }

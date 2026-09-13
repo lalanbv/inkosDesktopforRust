@@ -13,7 +13,12 @@ import { z } from "zod";
  *
  * **配置迁移兼容**：旧 inkos.json / book.json 无 routing 字段 → 全字段回退
  * fallback，现有行为逐字节不变（迁移测锁定）。
-
+ *
+ * **R25 失败接管链**：override 增可选 `retryCount`（1–5）与 `backupModels`
+ * （≤3）——调用失败时当前模型重试 retryCount 次后按序切备用模型（接线批）。
+ * `resolveTaskModelChain` 产出去重封顶（总长 ≤4）的尝试链；零配置时链 =
+ * [primary]、retryCount=1，行为与现版本逐字节一致。
+ *
  * 双端：`engine-rs/src/models/task_routing.rs` 1:1 镜像；共享向量
  * `src/__tests__/golden/task-routing-vectors.json`（解析一致 duel）。
  */
@@ -30,6 +35,8 @@ export const TaskModelOverrideSchema = z
     service: z.string().min(1).optional(),
     temperature: z.number().optional(),
     maxTokens: z.number().int().positive().optional(),
+    retryCount: z.number().int().min(1).max(5).optional(),
+    backupModels: z.array(z.string().min(1)).max(3).optional(),
   })
   .strict();
 
@@ -67,6 +74,13 @@ function overrideFields(override: PartialOverride | undefined): PartialOverride 
   }
   if (typeof override.maxTokens === "number" && Number.isInteger(override.maxTokens) && override.maxTokens > 0) {
     out.maxTokens = override.maxTokens;
+  }
+  if (typeof override.retryCount === "number" && Number.isInteger(override.retryCount) && override.retryCount >= 1) {
+    out.retryCount = override.retryCount;
+  }
+  if (Array.isArray(override.backupModels)) {
+    const models = override.backupModels.filter((m): m is string => typeof m === "string" && m.length > 0);
+    if (models.length > 0) out.backupModels = models;
   }
   return out;
 }
@@ -219,4 +233,61 @@ export function resolveAgentModel(params: {
     fallbackModel: params.fallbackModel,
   });
   return resolved.model !== params.fallbackModel ? resolved.model : undefined;
+}
+
+/** 尝试链总长封顶：1 个 primary + 至多 3 个备用（与 backupModels 上限一致）。 */
+export const TASK_MODEL_CHAIN_MAX_ATTEMPTS = 4;
+/** retryCount 缺省：零配置 = 单次尝试（现行为）。 */
+export const TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT = 1;
+
+export interface TaskModelAttempt {
+  readonly model: string;
+  readonly service?: string;
+}
+
+export interface ResolvedTaskModelChain {
+  readonly task: TaskModelKind;
+  /** 按序尝试链：attempts[0] = primary（含生效 service），其后为去重后的备用。 */
+  readonly attempts: ReadonlyArray<TaskModelAttempt>;
+  /** 当前模型单次尝试内的重试次数（1 = 不重试，现行为）。 */
+  readonly retryCount: number;
+  readonly temperature?: number;
+  readonly maxTokens?: number;
+}
+
+/**
+ * 任务模型**尝试链**解析（R25）：primary 走 [`resolveTaskModel`] 同款逐字段
+ * 回退；override 的 `backupModels` 按序追加——与链中已有 model 精确重复者
+ * 剔除，总长封顶 [`TASK_MODEL_CHAIN_MAX_ATTEMPTS`]。`retryCount`/`backupModels`
+ * 同样走 book > project 层级合并（overrideFields 承载）。零配置 → [primary] + 1。
+ * service 只随 primary（备用模型与主模型同端点运行，链条目仅以 model 标识）。
+ */
+export function resolveTaskModelChain(params: {
+  readonly task: TaskModelKind;
+  readonly bookRouting?: TaskModelRouting;
+  readonly projectRouting?: TaskModelRouting;
+  readonly fallbackModel: string;
+  readonly fallbackService?: string;
+  readonly fallbackTemperature?: number;
+  readonly fallbackMaxTokens?: number;
+}): ResolvedTaskModelChain {
+  const resolved = resolveTaskModel(params);
+  const attempts: TaskModelAttempt[] = [
+    resolved.service ? { model: resolved.model, service: resolved.service } : { model: resolved.model },
+  ];
+  const seen = new Set<string>([resolved.model]);
+  const chain = composeTaskOverride(params.bookRouting, params.projectRouting, params.task).override;
+  for (const backup of chain.backupModels ?? []) {
+    if (attempts.length >= TASK_MODEL_CHAIN_MAX_ATTEMPTS) break;
+    if (seen.has(backup)) continue;
+    seen.add(backup);
+    attempts.push({ model: backup });
+  }
+  return {
+    task: params.task,
+    attempts,
+    retryCount: chain.retryCount ?? TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT,
+    ...(resolved.temperature !== undefined ? { temperature: resolved.temperature } : {}),
+    ...(resolved.maxTokens !== undefined ? { maxTokens: resolved.maxTokens } : {}),
+  };
 }

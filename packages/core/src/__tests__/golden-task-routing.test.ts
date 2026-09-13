@@ -11,6 +11,10 @@ import { fileURLToPath } from "node:url";
 import {
   TASK_MODEL_KINDS,
   resolveTaskModel,
+  resolveTaskModelChain,
+  TASK_MODEL_CHAIN_MAX_ATTEMPTS,
+  TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT,
+  type TaskModelAttempt,
   type TaskModelKind,
   type TaskModelRouting,
 } from "../models/task-routing.js";
@@ -36,7 +40,33 @@ const vectors = JSON.parse(
       sources: Array<{ field: string; source: string }>;
     };
   }>;
-  contract: unknown;
+  chain: Array<{
+    name: string;
+    input: {
+      task: TaskModelKind;
+      bookRouting: TaskModelRouting | null;
+      projectRouting: TaskModelRouting | null;
+    };
+    expected: {
+      task: string;
+      attempts: TaskModelAttempt[];
+      retryCount: number;
+    };
+  }>;
+  contract: {
+    kinds: string[];
+    fields: string[];
+    levels: string[];
+    migrationCompat: string;
+    chain: {
+      chainFields: string[];
+      maxAttempts: number;
+      maxBackupModels: number;
+      retryCountRange: number[];
+      defaultRetryCount: number;
+      dedupe: string;
+    };
+  };
 };
 
 const F = vectors.fallback;
@@ -99,12 +129,43 @@ describe("task model routing (G16)", () => {
     }
   });
 
+  it("resolves every failover chain per shared chain vectors (R25)", () => {
+    for (const vector of vectors.chain) {
+      const got = resolveTaskModelChain({
+        task: vector.input.task,
+        ...(vector.input.bookRouting ? { bookRouting: vector.input.bookRouting } : {}),
+        ...(vector.input.projectRouting ? { projectRouting: vector.input.projectRouting } : {}),
+        fallbackModel: F.model,
+        fallbackService: F.service,
+        fallbackTemperature: F.temperature,
+        fallbackMaxTokens: F.maxTokens,
+      });
+      expect(
+        { task: got.task, attempts: got.attempts, retryCount: got.retryCount },
+        vector.name,
+      ).toEqual(vector.expected);
+    }
+  });
+
+  it("keeps chain caps coherent with the shared contract", () => {
+    expect(TASK_MODEL_CHAIN_MAX_ATTEMPTS).toBe(vectors.contract.chain.maxAttempts);
+    expect(TASK_MODEL_CHAIN_DEFAULT_RETRY_COUNT).toBe(vectors.contract.chain.defaultRetryCount);
+  });
+
   it("freezes the machine-readable contract shape", () => {
     expect(vectors.contract).toEqual({
       kinds: [...TASK_MODEL_KINDS],
       fields: ["model", "service", "temperature", "maxTokens"],
       levels: ["book-task", "book-defaults", "project-task", "project-defaults", "fallback"],
       migrationCompat: "absent-routing-resolves-to-fallback",
+      chain: {
+        chainFields: ["retryCount", "backupModels"],
+        maxAttempts: 4,
+        maxBackupModels: 3,
+        retryCountRange: [1, 5],
+        defaultRetryCount: 1,
+        dedupe: "exact-match-against-existing-attempts",
+      },
     });
   });
 });

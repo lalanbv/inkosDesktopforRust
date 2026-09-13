@@ -1,5 +1,5 @@
 {
-  "_header": "按任务模型路由共享向量（G16/345 号，Phase B 批次三末项）。唯一事实源本文件；TS 断言 src/__tests__/golden-task-routing.test.ts，Rust 差分 engine-rs/tests/golden_task_routing_diff.rs（解析一致 duel）。逐字段回退：book.tasks[task] > book.defaults > project.tasks[task] > project.defaults > fallback；sources 每字段标注 task/defaults/fallback；迁移兼容：无 routing 全 fallback。",
+  "_header": "按任务模型路由共享向量（G16/345 号 + R25/397 号接管链）。唯一事实源本文件；TS 断言 src/__tests__/golden-task-routing.test.ts，Rust 差分 engine-rs/tests/golden_task_routing_diff.rs（解析一致 duel）。逐字段回退：book.tasks[task] > book.defaults > project.tasks[task] > project.defaults > fallback；sources 每字段标注 task/defaults/fallback；迁移兼容：无 routing 全 fallback。chain 组（R25）：primary + backupModels 按序追加、与链中已有 model 精确重复者剔除、总长封顶 4；retryCount 缺省 1=现行为。",
   "fallback": {
     "model": "global-default",
     "service": "moonshot",
@@ -357,6 +357,177 @@
       "project-defaults",
       "fallback"
     ],
-    "migrationCompat": "absent-routing-resolves-to-fallback"
-  }
+    "migrationCompat": "absent-routing-resolves-to-fallback",
+    "chain": {
+      "chainFields": [
+        "retryCount",
+        "backupModels"
+      ],
+      "maxAttempts": 4,
+      "maxBackupModels": 3,
+      "retryCountRange": [
+        1,
+        5
+      ],
+      "defaultRetryCount": 1,
+      "dedupe": "exact-match-against-existing-attempts"
+    }
+  },
+  "chain": [
+    {
+      "name": "chain-full-with-dedupe",
+      "input": {
+        "task": "writing",
+        "bookRouting": {
+          "tasks": {
+            "writing": {
+              "model": "writer-x",
+              "retryCount": 2,
+              "backupModels": [
+                "writer-y",
+                "writer-x",
+                "writer-z"
+              ]
+            }
+          }
+        },
+        "projectRouting": null
+      },
+      "expected": {
+        "task": "writing",
+        "attempts": [
+          {
+            "model": "writer-x",
+            "service": "moonshot"
+          },
+          {
+            "model": "writer-y"
+          },
+          {
+            "model": "writer-z"
+          }
+        ],
+        "retryCount": 2
+      }
+    },
+    {
+      "name": "chain-project-defaults-backup-inherit",
+      "input": {
+        "task": "review",
+        "bookRouting": {
+          "tasks": {
+            "review": {
+              "model": "review-x"
+            }
+          }
+        },
+        "projectRouting": {
+          "defaults": {
+            "backupModels": [
+              "generic-b"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "task": "review",
+        "attempts": [
+          {
+            "model": "review-x",
+            "service": "moonshot"
+          },
+          {
+            "model": "generic-b"
+          }
+        ],
+        "retryCount": 1
+      }
+    },
+    {
+      "name": "chain-legacy-absent-all-fallback",
+      "input": {
+        "task": "writing",
+        "bookRouting": null,
+        "projectRouting": null
+      },
+      "expected": {
+        "task": "writing",
+        "attempts": [
+          {
+            "model": "global-default",
+            "service": "moonshot"
+          }
+        ],
+        "retryCount": 1
+      }
+    },
+    {
+      "name": "chain-backup-dup-primary-dropped",
+      "input": {
+        "task": "repair",
+        "bookRouting": null,
+        "projectRouting": {
+          "tasks": {
+            "repair": {
+              "backupModels": [
+                "global-default",
+                "repair-b"
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "repair",
+        "attempts": [
+          {
+            "model": "global-default",
+            "service": "moonshot"
+          },
+          {
+            "model": "repair-b"
+          }
+        ],
+        "retryCount": 1
+      }
+    },
+    {
+      "name": "chain-cap-four-attempts",
+      "input": {
+        "task": "analysis",
+        "bookRouting": null,
+        "projectRouting": {
+          "tasks": {
+            "analysis": {
+              "model": "an-a",
+              "backupModels": [
+                "an-b",
+                "an-c",
+                "an-d"
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "task": "analysis",
+        "attempts": [
+          {
+            "model": "an-a",
+            "service": "moonshot"
+          },
+          {
+            "model": "an-b"
+          },
+          {
+            "model": "an-c"
+          },
+          {
+            "model": "an-d"
+          }
+        ],
+        "retryCount": 1
+      }
+    }
+  ]
 }
