@@ -30,7 +30,6 @@ const registered = new Set(
 // 已人工核实的白名单（413 号）：非漏挂（内部工具函数误匹配 / 备用 API）。
 const ALLOWLIST = new Set([
   "effective_router",   // books_routes 内部缓存辅助（正则误匹配）
-  "get_writing_stats",  // 清理候选：tuple 序列化不符前端期望；411 rows 版为正确链路
   "save_radar_scan",    // 备用 API（组合 scan 入口的内部包装）
   "peek_create_status", // 备用 API（建书状态轮询，前端走 SSE/session）
 ]);
