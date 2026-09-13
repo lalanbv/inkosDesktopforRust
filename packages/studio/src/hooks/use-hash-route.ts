@@ -38,6 +38,8 @@ function parseHash(hash: string): HashRoute {
   if (path === "onboarding") return { page: "onboarding" };
   if (path === "settings") return { page: "project-settings" };
   if (path === "import") return { page: "import" };
+  // 405 号走查修复：#/radar 直达/刷新此前回落 Dashboard（深链失效）。
+  if (path === "radar") return { page: "radar" };
   if (path === "translation") return { page: "translation" };
   const importMatch = path.match(/^import\/(chapters|canon|fanfic|spinoff|imitation|backfill)$/);
   if (importMatch) return { page: "import", tab: importMatch[1] as "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill" };
@@ -103,6 +105,7 @@ function routeToHash(route: HashRoute): string {
     case "flow": return `#/flow/${encodeURIComponent(route.projectId)}`;
     case "film-author": return `#/film-author/${encodeURIComponent(route.projectId)}`;
     case "film-studio": return `#/studio/film/${encodeURIComponent(route.projectId)}`;
+    case "radar": return "#/radar";
     default: return "";
   }
 }
