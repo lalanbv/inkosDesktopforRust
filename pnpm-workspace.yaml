@@ -20,3 +20,11 @@ overrides:
   "ws@8": ^8.21.0
   "fast-uri@3": ^3.1.6
   "vite@7.3.1": 7.3.5
+  # 429 号：audit 剩余条目精确钉修复版（brace-expansion ReDoS / picomatch ReDoS /
+  # browserslist 数据 / basic-ftp DoS / fast-xml-builder / ip-address）。
+  "brace-expansion@2.0.2": ^2.1.4
+  "picomatch@4.0.3": ^4.0.7
+  "browserslist@4.28.1": ^4.28.8
+  "basic-ftp@5.2.2": ^5.3.1
+  "fast-xml-builder@1.1.4": ^1.1.7
+  "ip-address@10.1.0": ^10.7.0
