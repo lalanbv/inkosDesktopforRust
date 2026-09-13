@@ -3,7 +3,8 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { fetchJson } from "../hooks/use-api";
-import { TrendingUp, Loader2, Target, Clock, ListChecks, Lightbulb } from "lucide-react";
+import { buildBookCreatePrefill } from "../lib/radar-prefill";
+import { TrendingUp, Loader2, Target, Clock, ListChecks, Lightbulb, BookPlus } from "lucide-react";
 
 interface Recommendation {
   readonly confidence: number;
@@ -43,6 +44,14 @@ interface RadarHistoryItem {
 
 interface Nav { toDashboard: () => void }
 
+interface RadarViewProps {
+  nav: Nav;
+  theme: Theme;
+  t: TFunction;
+  /** R27/402 号：雷达→一键开书——App 层负责预填 chat 输入并跳 book-create。 */
+  onCreateBook?: (prefill: string) => void;
+}
+
 /** 收集榜单里可选的分类（去重，取前 12 防勾选面板爆炸）。 */
 function collectCategories(rankings: ReadonlyArray<PlatformRankings>): string[] {
   const seen = new Set<string>();
@@ -55,8 +64,10 @@ function collectCategories(rankings: ReadonlyArray<PlatformRankings>): string[] 
   return [...seen].slice(0, 12);
 }
 
-export function RadarView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunction }) {
+export function RadarView({ nav, theme, t, onCreateBook }: RadarViewProps) {
   const c = useColors(theme);
+  // 预填草稿语言跟界面语言（ChatPage 同款判定：中文 key 命中即 zh）。
+  const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
   const [result, setResult] = useState<RadarResult | null>(null);
   const [history, setHistory] = useState<ReadonlyArray<RadarHistoryItem>>([]);
   const [error, setError] = useState("");
@@ -269,6 +280,17 @@ export function RadarView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunct
                     <Lightbulb size={13} className="mt-0.5 shrink-0" aria-hidden />
                     <span>{t("radar.differentiation")}：{rec.differentiation}</span>
                   </p>
+                )}
+                {onCreateBook && (
+                  <button
+                    type="button"
+                    onClick={() => onCreateBook(buildBookCreatePrefill(rec, isZh))}
+                    title={t("radar.createBookHint")}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-border hover:bg-muted/30 flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <BookPlus size={13} />
+                    {t("radar.createBook")}
+                  </button>
                 )}
                 {rec.benchmarkTitles.length > 0 && (
                   <div className="flex gap-2 flex-wrap">

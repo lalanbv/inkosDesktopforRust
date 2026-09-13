@@ -716,7 +716,17 @@ export function App() {
           )}
           {view.page === "radar" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <RadarView nav={nav} theme={theme} t={t} />
+              <RadarView
+                nav={nav}
+                theme={theme}
+                t={t}
+                onCreateBook={(prefill) => {
+                  // R27/402 号：预填建书对话流输入框——复用 commands.openBookCreate
+                  // 同款语义（清输入 → 跳 book-create），只是输入换成雷达草稿。
+                  setInput(prefill);
+                  nav.toBookCreate();
+                }}
+              />
             </div>
           )}
           {view.page === "doctor" && (

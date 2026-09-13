@@ -340,6 +340,8 @@ const strings = {
   "radar.crowding.low": { zh: "蓝海", en: "Low" },
   "radar.differentiation": { zh: "差异化机会", en: "Differentiation" },
   "radar.selectedHint": { zh: "已选 {n} 个范围；不选则分析全量", en: "{n} scopes selected; empty = analyze all" },
+  "radar.createBook": { zh: "从该选题开书", en: "Start a book from this" },
+  "radar.createBookHint": { zh: "预填建书草稿，可修改后再发送", en: "Prefills the book-creation draft; edit before sending" },
 
   // Doctor
   "doctor.title": { zh: "环境诊断", en: "Environment Check" },
