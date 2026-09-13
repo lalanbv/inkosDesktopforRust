@@ -7,7 +7,7 @@ import type { BookConfig, FanficMode, RevisionGate } from "../models/book.js";
 import type { AntiAiRule } from "../utils/rule-experience-engine.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
-import { resolveAgentModel } from "../models/task-routing.js";
+import { TASK_AGENT_MAP, resolveAgentModel, resolveTaskModelChain, type ResolvedTaskModelChain } from "../models/task-routing.js";
 import { createHybridMemorySelector } from "../retrieval/hybrid-memory-selector.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
@@ -734,11 +734,30 @@ export class PipelineRunner {
     return { model: override.model, client };
   }
 
+  /**
+   * R25：任务路由尝试链——路由解析出 primary 且（或）配置了备用时随 ctx 下发；
+   * 显式 modelOverrides 钉死（用户指定端点/模型）不接管；无路由/任务不映射
+   * 返回 undefined（零行为变更）。
+   */
+  private resolveModelChain(agent: string): ResolvedTaskModelChain | undefined {
+    if (this.config.modelOverrides?.[agent]) return undefined;
+    const routing = this.config.taskRouting;
+    if (!routing) return undefined;
+    const task = TASK_AGENT_MAP[agent];
+    if (!task) return undefined;
+    return resolveTaskModelChain({
+      task,
+      projectRouting: routing,
+      fallbackModel: this.config.model,
+    });
+  }
+
   private agentCtxFor(agent: string, bookId?: string): AgentContext {
     const { model, client } = this.resolveOverride(agent);
     return {
       client,
       model,
+      modelChain: this.resolveModelChain(agent),
       projectRoot: this.config.projectRoot,
       bookId,
       logger: this.config.logger?.child(agent),

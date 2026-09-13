@@ -1,5 +1,7 @@
 import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
+import { runWithModelChain } from "../llm/model-chain.js";
+import type { ResolvedTaskModelChain } from "../models/task-routing.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
 import { searchWeb, fetchUrl } from "../utils/web-search.js";
@@ -12,6 +14,8 @@ import {
 export interface AgentContext {
   readonly client: LLMClient;
   readonly model: string;
+  /** R25：任务路由尝试链（runner 按路由解析；显式 modelOverrides 钉死时不带）。 */
+  readonly modelChain?: ResolvedTaskModelChain;
   readonly projectRoot: string;
   readonly bookId?: string;
   readonly logger?: Logger;
@@ -35,11 +39,22 @@ export abstract class BaseAgent {
     messages: ReadonlyArray<LLMMessage>,
     options?: { readonly temperature?: number; readonly maxTokens?: number },
   ): Promise<LLMResponse> {
-    return runWorkerAgent(this.ctx.client, this.ctx.model, await this.appendTaskSkillGuidance(messages), {
-      ...options,
-      onStreamProgress: this.ctx.onStreamProgress,
-      signal: this.ctx.signal,
-    });
+    const hydrated = await this.appendTaskSkillGuidance(messages);
+    return runWithModelChain(
+      (model) =>
+        runWorkerAgent(this.ctx.client, model, hydrated, {
+          ...options,
+          onStreamProgress: this.ctx.onStreamProgress,
+          signal: this.ctx.signal,
+        }),
+      {
+        chain: this.ctx.modelChain,
+        primaryModel: this.ctx.model,
+        label: this.name,
+        signal: this.ctx.signal,
+        onEvent: (event) => this.logModelChainEvent(event),
+      },
+    );
   }
 
   protected async submitStructured<TParameters extends TSchema>(
@@ -47,15 +62,40 @@ export abstract class BaseAgent {
     resultTool: WorkerResultTool<TParameters>,
     options?: { readonly temperature?: number; readonly maxTokens?: number },
   ): Promise<Static<TParameters>> {
-    return runWorkerAgentTool(
-      this.ctx.client,
-      this.ctx.model,
-      await this.appendTaskSkillGuidance(messages),
-      resultTool,
+    const hydrated = await this.appendTaskSkillGuidance(messages);
+    return runWithModelChain(
+      (model) =>
+        runWorkerAgentTool(this.ctx.client, model, hydrated, resultTool, {
+          ...options,
+          signal: this.ctx.signal,
+        }),
       {
-        ...options,
+        chain: this.ctx.modelChain,
+        primaryModel: this.ctx.model,
+        label: this.name,
         signal: this.ctx.signal,
+        onEvent: (event) => this.logModelChainEvent(event),
       },
+    );
+  }
+
+  /** R25：接管事件 logger 留痕（fail=切换/重试中，success=非 primary 轮成功）。 */
+  private logModelChainEvent(event: {
+    event: "fail" | "success";
+    model: string;
+    attemptIndex: number;
+    round: number;
+    error?: unknown;
+  }): void {
+    if (event.event === "fail") {
+      const message = event.error instanceof Error ? event.error.message : String(event.error);
+      this.log?.warn(
+        `[model-chain] ${this.name}: ${event.model} 第 ${event.round} 轮失败（${message.slice(0, 160)}），重试/切换备用`,
+      );
+      return;
+    }
+    this.log?.warn(
+      `[model-chain] ${this.name}: ${event.model} 接管成功（模型 #${event.attemptIndex + 1} 第 ${event.round} 轮）`,
     );
   }
 

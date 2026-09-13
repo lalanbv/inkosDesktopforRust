@@ -194,14 +194,19 @@ impl AgentRouter {
         client
     }
 
-    /// chat（agent 路由 + 流式收集 + 瞬时错误重试）。
+    /// chat（agent 路由 + 流式收集 + 瞬时错误重试 + R25 接管链）。
     ///
     /// 205 号：对齐 TS `chatCompletion` 的 `withTransientLLMRetry`——429/
     /// 5xx/限流短语/传输层瞬时/流不活动超时线性退避重试 2 次（800ms/
     /// 1600ms），重试完整重新生成；`INKOS_LLM_TRANSIENT_RETRY=0` 关闭
-    /// （诊断快测面）。无 UI 文本增量面（progress_hook 是进度事件，对齐
-    /// TS onStreamProgress 不禁重试的语义）；用户中止在阶段边界生效
-    /// （175 号），与本重试不冲突。
+    /// （诊断快测面，关的是**同模型重试**，不影响跨模型接管）。无 UI 文本
+    /// 增量面（progress_hook 是进度事件，对齐 TS onStreamProgress 不禁重试
+    /// 的语义）；用户中止在阶段边界生效（175 号），与本重试不冲突。
+    ///
+    /// R25/399 号：链目顺序取 [`Self::resolve_chain`]（primary 在前）——每
+    /// 模型跑 retryCount 轮、每轮走上述瞬态环；瞬态耗尽切下一模型，非瞬态
+    /// （中止/鉴权/上下文超限/模型不存在）立即失败不切换。零配置 → 单模型
+    /// 单轮，行为与现版本一致。
     pub async fn chat(
         &self,
         agent: &str,
@@ -218,30 +223,112 @@ impl AgentRouter {
                 crate::agents::append_activated_skill_guidance(&mut messages, &skills);
             }
         }
+        let (models, retry_count) = self.resolve_chain(agent);
+        let mut last_err: Option<String> = None;
+        for (chain_idx, model) in models.iter().enumerate() {
+            for round in 1..=retry_count {
+                match self
+                    .chat_transient(agent, model, messages.clone(), temperature, max_tokens)
+                    .await
+                {
+                    Ok(outcome) => {
+                        if chain_idx > 0 || round > 1 {
+                            tracing::warn!(
+                                agent,
+                                model,
+                                chain_idx,
+                                round,
+                                "R25 接管链：模型接管成功"
+                            );
+                        }
+                        return Ok(outcome);
+                    }
+                    Err(ChainFailure::Fatal(text)) => return Err(text),
+                    Err(ChainFailure::Transient(text)) => {
+                        last_err = Some(text.clone());
+                        tracing::warn!(
+                            agent,
+                            model,
+                            chain_idx,
+                            round,
+                            "R25 接管链：模型失败，重试/切换备用：{text}"
+                        );
+                    }
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| "LLM 调用失败".to_string()))
+    }
+
+    /// R25：agent 的尝试链（primary 在前）与每模型轮数。
+    ///
+    /// 显式 override 钉死 → 单元素单轮（用户指定端点/模型不接管）；无任务
+    /// 映射/无路由 → [默认模型] 单轮；有任务路由 → `resolve_task_model_chain`
+    /// （备用与主模型同端点，仅 model 序列；retryCount clamp 1–5）。
+    fn resolve_chain(&self, agent: &str) -> (Vec<String>, usize) {
+        let fallback = || (vec![self.default.model.clone()], 1usize);
+        if self.overrides.contains_key(agent) {
+            return (vec![self.resolve(agent).model], 1);
+        }
+        let Some(task) = crate::models::task_routing::agent_task(agent) else {
+            return fallback();
+        };
+        let Some(routing) = self.task_routing.as_ref() else {
+            return fallback();
+        };
+        let chain = crate::models::task_routing::resolve_task_model_chain(
+            crate::models::task_routing::ResolveTaskModelParams {
+                task,
+                book_routing: None,
+                project_routing: Some(routing),
+                fallback_model: self.default.model.clone(),
+                fallback_service: None,
+                fallback_temperature: None,
+                fallback_max_tokens: None,
+            },
+        );
+        (
+            chain.attempts.iter().map(|a| a.model.clone()).collect(),
+            chain.retry_count.clamp(1, 5) as usize,
+        )
+    }
+
+    /// 单模型瞬态重试环（205 号语义保持：2 次预算 + 线性退避）。返回值区分
+    /// **非瞬态（立即失败，不切换）**与**瞬态耗尽（R25 可重试轮/切换备用）**。
+    async fn chat_transient(
+        &self,
+        agent: &str,
+        model: &str,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+        max_tokens: Option<u32>,
+    ) -> Result<ChatOutcome, ChainFailure> {
         const TRANSIENT_RETRIES: usize = 2;
         let mut attempt: usize = 0;
         loop {
-            match self.chat_once(agent, messages.clone(), temperature, max_tokens).await {
+            match self.chat_once(agent, model, messages.clone(), temperature, max_tokens).await {
                 Ok(outcome) => return Ok(outcome),
                 Err(text) => {
-                    if attempt >= TRANSIENT_RETRIES
-                        || !transient_retry_enabled()
-                        || !crate::llm::provider::is_retryable_llm_error(&text)
-                    {
-                        return Err(text);
+                    if !crate::llm::provider::is_retryable_llm_error(&text) {
+                        return Err(ChainFailure::Fatal(text));
+                    }
+                    if !transient_retry_enabled() || attempt >= TRANSIENT_RETRIES {
+                        return Err(ChainFailure::Transient(text));
                     }
                     attempt += 1;
-                    tracing::warn!(agent, attempt, "LLM 瞬时错误，退避后重试：{text}");
+                    tracing::warn!(agent, attempt, model, "LLM 瞬时错误，退避后重试：{text}");
                     tokio::time::sleep(std::time::Duration::from_millis(800 * attempt as u64)).await;
                 }
             }
         }
     }
 
-    /// 单次 chat 尝试（无重试——由 [`Self::chat`] 包裹）。
+    /// 单次 chat 尝试（无重试——由 [`Self::chat_transient`] 包裹；model 由
+    /// R25 链目给定，端点仍按 agent 解析——备用与主模型同端点）。
     async fn chat_once(
         &self,
         agent: &str,
+        model: &str,
         messages: Vec<LLMMessage>,
         temperature: f64,
         max_tokens: Option<u32>,
@@ -250,7 +337,7 @@ impl AgentRouter {
         let client = self.client_for(&endpoint).await;
         let completion = client
             .stream_chat(&ChatCompletionParams {
-                model: &endpoint.model,
+                model,
                 messages: &messages,
                 temperature,
                 max_tokens: max_tokens.unwrap_or(endpoint.max_tokens),
@@ -283,6 +370,13 @@ impl AgentRouter {
             }),
         })
     }
+}
+
+/// R25：链内失败分类——`Fatal` = 非瞬态（中止/鉴权/上下文超限/模型不存在）
+/// 立即失败不切换；`Transient` = 瞬态预算耗尽（可重试轮/切换备用）。
+enum ChainFailure {
+    Fatal(String),
+    Transient(String),
 }
 
 /// 瞬时重试开关（205 号）：默认开；`INKOS_LLM_TRANSIENT_RETRY=0|false|off`
@@ -687,6 +781,216 @@ mod tests {
         let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
         assert!(err.contains("500") || err.contains("model_not_available"), "{err}");
         assert_eq!(hits.load(Ordering::SeqCst), 1, "非瞬时直接失败");
+    }
+
+    // --- R25 接管链（399 号） ---
+
+    use crate::models::task_routing::{TaskModelOverride, TaskModelRouting};
+
+    /// R25：按模型分流 flaky mock——每模型自带失败预算（命中 ≤ 预算返 status
+    /// 错误，预算外返 OK）；返回 (base, 按模型命中计数)。
+    async fn spawn_chain_llm(
+        fail_budget: Vec<(String, usize)>,
+        status: u16,
+        err_body: &str,
+    ) -> (
+        String,
+        HashMap<String, std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let err_body = err_body.to_string();
+        let counters: HashMap<String, std::sync::Arc<AtomicUsize>> = ["primary-m", "backup-m"]
+            .iter()
+            .map(|m| (m.to_string(), std::sync::Arc::new(AtomicUsize::new(0))))
+            .collect();
+        let handler_counters = counters.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(req): axum::Json<serde_json::Value>| {
+                let counters = handler_counters.clone();
+                let fail_budget = fail_budget.clone();
+                let err_body = err_body.clone();
+                async move {
+                    let model = req["model"].as_str().unwrap_or("?").to_string();
+                    let hits = counters
+                        .get(&model)
+                        .map(|c| c.fetch_add(1, Ordering::SeqCst))
+                        .unwrap_or(0);
+                    let budget = fail_budget
+                        .iter()
+                        .find(|(m, _)| *m == model)
+                        .map(|(_, n)| *n)
+                        .unwrap_or(0);
+                    if hits < budget {
+                        return axum::response::IntoResponse::into_response((
+                            axum::http::StatusCode::from_u16(status).unwrap(),
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            err_body,
+                        ));
+                    }
+                    if req["stream"].as_bool().unwrap_or(false) {
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                        return axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ));
+                    }
+                    axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
+                        "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                        "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                    })))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), counters)
+    }
+
+    /// 写作任务路由（primary/backup/retryCount 面向 mock 模型名）。
+    fn writing_routing(
+        model: Option<&str>,
+        backup: Vec<&str>,
+        retry: Option<u32>,
+    ) -> TaskModelRouting {
+        TaskModelRouting {
+            defaults: None,
+            tasks: Some(
+                [(
+                    "writing".to_string(),
+                    TaskModelOverride {
+                        model: model.map(|s| s.to_string()),
+                        service: None,
+                        temperature: None,
+                        max_tokens: None,
+                        retry_count: retry,
+                        backup_models: (!backup.is_empty())
+                            .then(|| backup.iter().map(|s| s.to_string()).collect()),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        }
+    }
+
+    fn routing_router_at(base: &str, routing: TaskModelRouting) -> AgentRouter {
+        AgentRouter::new(
+            LlmEndpointConfig {
+                base_url: base.into(),
+                api_key: "k".into(),
+                model: "primary-m".into(),
+                max_tokens: 64,
+                extra_headers: HashMap::new(),
+            },
+            HashMap::new(),
+        )
+        .with_task_routing(Some(routing))
+    }
+
+    /// 链解析：去重保序 + retryCount；显式 override 钉死单元素；无路由回默认。
+    #[test]
+    fn resolve_chain_orders_pins_and_falls_back() {
+        let router = routing_router_at(
+            "http://localhost:1",
+            writing_routing(Some("primary-m"), vec!["primary-m", "backup-m", "second-m"], Some(2)),
+        );
+        let (models, retry) = router.resolve_chain("writer");
+        assert_eq!(models, vec!["primary-m", "backup-m", "second-m"], "与主模型重复者剔除，按序封顶");
+        assert_eq!(retry, 2);
+
+        let pinned = AgentRouter::new(
+            LlmEndpointConfig {
+                base_url: "http://localhost:1".into(),
+                api_key: "k".into(),
+                model: "default-model".into(),
+                max_tokens: 64,
+                extra_headers: HashMap::new(),
+            },
+            HashMap::from([(
+                "writer".to_string(),
+                AgentOverride {
+                    model: Some("pinned-m".into()),
+                    base_url: None,
+                    api_key: None,
+                    max_tokens: None,
+                },
+            )]),
+        );
+        let (models, retry) = pinned.resolve_chain("writer");
+        assert_eq!(models, vec!["pinned-m"], "显式钉死不接管");
+        assert_eq!(retry, 1);
+
+        let (models, retry) = router_with(HashMap::new()).resolve_chain("writer");
+        assert_eq!(models, vec!["default-model"], "无路由回默认模型");
+        assert_eq!(retry, 1);
+    }
+
+    /// R25：primary 恒 429（瞬态耗尽）→ backup 接管成功。
+    #[tokio::test]
+    async fn chain_fails_over_to_backup_on_transient() {
+        use std::sync::atomic::Ordering;
+        let (base, counters) = spawn_chain_llm(
+            vec![("primary-m".to_string(), usize::MAX)],
+            429,
+            r#"{"error":"rate limit"}"#,
+        )
+        .await;
+        let router =
+            routing_router_at(&base, writing_routing(Some("primary-m"), vec!["backup-m"], None));
+        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        assert_eq!(outcome.content, "OK");
+        assert_eq!(
+            counters["primary-m"].load(Ordering::SeqCst),
+            3,
+            "primary 1 次原始 + 2 次瞬态重试"
+        );
+        assert_eq!(counters["backup-m"].load(Ordering::SeqCst), 1, "backup 接管 1 次");
+    }
+
+    /// R25：非瞬态（model_not_available）立即失败，不重试不切换。
+    #[tokio::test]
+    async fn chain_does_not_switch_on_fatal_error() {
+        use std::sync::atomic::Ordering;
+        let (base, counters) = spawn_chain_llm(
+            vec![("primary-m".to_string(), usize::MAX)],
+            500,
+            r#"{"error":{"code":"model_not_available"}}"#,
+        )
+        .await;
+        let router =
+            routing_router_at(&base, writing_routing(Some("primary-m"), vec!["backup-m"], None));
+        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
+        assert!(err.contains("500") || err.contains("model_not_available"), "{err}");
+        assert_eq!(counters["primary-m"].load(Ordering::SeqCst), 1, "非瞬态 1 次即失败");
+        assert_eq!(counters["backup-m"].load(Ordering::SeqCst), 0, "不切换备用");
+    }
+
+    /// R25：retryCount=2 → primary 两轮（每轮 1+2 瞬态）共 6 次内第 6 次成功，
+    /// 不必动用 backup。
+    #[tokio::test]
+    async fn chain_retry_count_runs_extra_rounds_per_model() {
+        use std::sync::atomic::Ordering;
+        let (base, counters) = spawn_chain_llm(
+            vec![("primary-m".to_string(), 5)],
+            429,
+            r#"{"error":"rate limit"}"#,
+        )
+        .await;
+        let router = routing_router_at(
+            &base,
+            writing_routing(Some("primary-m"), vec!["backup-m"], Some(2)),
+        );
+        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        assert_eq!(outcome.content, "OK");
+        assert_eq!(
+            counters["primary-m"].load(Ordering::SeqCst),
+            6,
+            "两轮 ×（1+2 瞬态）= 第 6 次成功"
+        );
+        assert_eq!(counters["backup-m"].load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

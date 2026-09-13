@@ -751,7 +751,7 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
     || text.includes("llm returned empty response");
 }
 
-function isRetryableLLMError(error: unknown): boolean {
+export function isRetryableLLMError(error: unknown): boolean {
   // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
   // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
   return error instanceof PartialResponseError
