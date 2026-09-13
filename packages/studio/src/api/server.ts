@@ -6512,12 +6512,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/writing-stats", async (c) => {
     try {
       const books = await state.listBooks();
-      const rows: Array<{ updatedAt: string; wordCount: number; status: string; totalTokens?: number }> = [];
+      const rows: Array<{ bookId: string; updatedAt: string; wordCount: number; status: string; totalTokens?: number }> = [];
       for (const bookId of books) {
         try {
           const index = await state.loadChapterIndex(bookId);
           for (const meta of index) {
             rows.push({
+              bookId,
               updatedAt: meta.updatedAt,
               wordCount: meta.wordCount,
               status: meta.status,
@@ -6528,8 +6529,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           // 单书索引缺失跳过
         }
       }
-      const { aggregateWritingStats } = await import("../lib/writing-stats");
-      return c.json(aggregateWritingStats(rows, new Date().toISOString()));
+      const stats = await import("../lib/writing-stats");
+      const aggregate = stats.aggregateWritingStats(rows, new Date().toISOString());
+      // R16/387 号：分书 quality-first 跑通率（G12 重评触发判定读数）。
+      const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
+      return c.json({ ...aggregate, passRateByBook: perBook });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }

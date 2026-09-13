@@ -55,3 +55,26 @@ describe("writing stats (R13)", () => {
     expect(stats.totalTokens).toBe(123);
   });
 });
+
+describe("pass rate by book (R16 前置)", () => {
+  it("computes per-book pass rates within window", async () => {
+    const { passRateByBook } = await import("./writing-stats");
+    const NOW2 = "2026-09-13T12:00:00.000Z";
+    const mk = (bookId: string, daysAgo: number, status: string) => ({
+      bookId,
+      updatedAt: new Date(new Date(`${NOW2.slice(0, 10)}T00:00:00Z`).getTime() - daysAgo * 86_400_000).toISOString(),
+      wordCount: 100,
+      status,
+    });
+    const rows = [
+      mk("b1", 1, "audit-passed"),
+      mk("b1", 2, "audit-failed"),
+      mk("b2", 3, "ready-for-review"),
+      mk("b2", 45, "audit-passed"), // 窗外
+    ];
+    const got = passRateByBook(rows, 30, NOW2);
+    expect(got.map((entry) => entry.bookId)).toEqual(["b1", "b2"]);
+    expect(got[0]!.passRate).toBe(50);
+    expect(got[1]!.total).toBe(1);
+  });
+});

@@ -8,6 +8,8 @@
  */
 
 export interface ChapterStatRow {
+  /** 所属书 id（R16/387 号：分书通过率统计维度）。 */
+  readonly bookId?: string;
   /** ISO 更新时间（含日期部分即可）。 */
   readonly updatedAt: string;
   readonly wordCount: number;
@@ -90,4 +92,48 @@ export function aggregateWritingStats(
     totalTokens,
     totalChapters: rows.length,
   };
+}
+
+// ── R16 前置准备（387 号）：分书 quality-first 跑通率度量 ──
+
+export interface BookPassRate {
+  readonly bookId: string;
+  readonly passed: number;
+  readonly total: number;
+  /** 百分比一位小数（0–100）。 */
+  readonly passRate: number;
+}
+
+/**
+ * 按书统计审查通过率（近 windowDays 章内），供 G12/R16 触发判定自动读数：
+ * 某书 quality-first 跑通率 >60% 即满足 R16 重评前置。
+ */
+export function passRateByBook(
+  rows: ReadonlyArray<ChapterStatRow & { readonly bookId: string }>,
+  windowDays = 30,
+  nowIso = new Date().toISOString(),
+): ReadonlyArray<BookPassRate> {
+  const today = dateOf(nowIso);
+  const windowStart = new Date(new Date(`${today}T00:00:00Z`).getTime() - (windowDays - 1) * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  const byBook = new Map<string, { passed: number; total: number }>();
+  for (const row of rows) {
+    const bookId = row.bookId ?? "";
+    if (!bookId) continue;
+    const date = dateOf(row.updatedAt);
+    if (date < windowStart || date > today) continue;
+    const bucket = byBook.get(bookId) ?? { passed: 0, total: 0 };
+    bucket.total += 1;
+    if (PASSING.has(row.status)) bucket.passed += 1;
+    byBook.set(bookId, bucket);
+  }
+  return [...byBook.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([bookId, bucket]) => ({
+      bookId,
+      passed: bucket.passed,
+      total: bucket.total,
+      passRate: bucket.total > 0 ? Math.round((bucket.passed / bucket.total) * 1000) / 10 : 0,
+    }));
 }
