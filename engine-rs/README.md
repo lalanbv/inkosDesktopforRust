@@ -38,6 +38,17 @@ cargo test --features export-bindings
    是"仅供参考"，不得覆盖本书事实与章纲。新增 ContextSource 来源必须先在
    `context_source_tier()`（双端）注册层级，未注册一律 ephemeral 垫底。共享向量：
    `packages/core/src/__tests__/golden/context-priority-vectors.json`。
+6. **新端点必须挂路由**（411/412 号教训）：`ops_routes/books_routes` 等模块
+   新增 handler 后，必须在 `server/mod.rs` 注册路由——连续三例「函数已实现
+   未挂路由」（writing-stats-rows / hybrid-search / radar 深链）。验收门禁：
+   `node scripts/check-routes.mjs`（注册数 vs 处理函数数机械对照，孤儿=1 退出）。
+7. **core 子路径三处同步**（408/423 号）：新增 `@actalk/inkos-core/<子路径>`
+   消费时，三处必须同步：core `package.json` exports、studio
+   `vitest.config.ts` alias、（类型重导出在子路径模块内）。缺一即 tsc
+   TS2724 或测试套件 Cannot find module。
+8. **golden 差分骨架**（406 号定型）：Rust 差分测试先写 input 层级断言
+   （`vector["input"]["字段"]`，TS 真源嵌套层级常致误读）；浮点期望值
+   golden 生成必须与 Rust 同算法（floor vs round 逐字对齐）。
 
 ## 接入方式（Phase 1+）
 
