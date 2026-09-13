@@ -738,6 +738,11 @@ pub fn router_books(
         )
         // R26/403 号：调用级运行遥测（进程内环形缓冲纯读投影）。
         .route("/api/v1/run-log", get(ops_routes::get_run_log))
+        // R13/411 号：写作数据行面（前端 aggregateWritingStats 聚合）。
+        .route(
+            "/api/v1/writing-stats-rows",
+            get(ops_routes::get_writing_stats_rows).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/quality-debts",
             get(ops_routes::get_quality_debts).with_state(books.clone()),

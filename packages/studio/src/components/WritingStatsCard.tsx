@@ -18,7 +18,13 @@ export function WritingStatsCard() {
         // TS 端点直接返回聚合结果。
         setStats(data as ReturnType<typeof aggregateWritingStats>);
       } catch {
-        setStats(null);
+        // R13/411 号：Rust 引擎无聚合端点——回退 rows 行面，前端同一纯函数聚合。
+        try {
+          const payload = await fetchJson<{ rows: ReadonlyArray<ChapterStatRow> }>("/writing-stats-rows");
+          setStats(aggregateWritingStats(payload.rows ?? [], new Date().toISOString()));
+        } catch {
+          setStats(null);
+        }
       }
     })();
   }, []);

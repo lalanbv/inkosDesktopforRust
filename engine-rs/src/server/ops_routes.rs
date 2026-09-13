@@ -2425,3 +2425,31 @@ pub async fn put_series_canon(
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
+
+/// R13/411 号：写作数据行面（GET /api/v1/writing-stats-rows，全局遍历各书
+/// chapter index）。对齐 382 号双端异构声明——TS /writing-stats 服务端聚合，
+/// Rust 返回 rows 行数据由前端同一纯函数（aggregateWritingStats）聚合。
+/// 单书索引缺失跳过（对齐 TS catch 语义）。
+pub async fn get_writing_stats_rows(
+    State(runtime): State<BooksRuntime>,
+) -> impl IntoResponse {
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let book_ids = runtime.state.list_books().await;
+    for book_id in book_ids {
+        let index = match runtime.state.load_chapter_index(&book_id).await {
+            Ok(index) => index,
+            Err(_) => continue,
+        };
+        for meta in index {
+            rows.push(serde_json::json!({
+                "bookId": book_id,
+                "updatedAt": meta.updated_at,
+                "wordCount": meta.word_count,
+                // serde rename 值即 TS status 字面（"audit-passed" 等）。
+                "status": meta.status,
+                "totalTokens": meta.token_usage.map(|t| t.total_tokens),
+            }));
+        }
+    }
+    (StatusCode::OK, Json(json!({ "rows": rows }))).into_response()
+}
