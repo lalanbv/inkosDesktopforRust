@@ -2838,6 +2838,7 @@ mod tests {
             tokio::fs::write(&path, content).await.expect("写书文件");
         }
         let config = BookConfig {
+            series_id: None,
             id: "test-book".to_string(),
             title: "测试书".to_string(),
             platform: crate::models::book::Platform::Other,

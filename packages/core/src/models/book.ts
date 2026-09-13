@@ -72,6 +72,11 @@ export const BookConfigSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   parentBookId: z.string().optional(),
+  /** R20/390 号：系列正典共享键（snake_case slug，指向 .inkos/series/{seriesId}.json）。 */
+  seriesId: z
+    .string()
+    .refine((value) => /^[a-z0-9_]{1,64}$/.test(value), "seriesId must be a snake_case slug (≤64 chars)")
+    .optional(),
   fanficMode: FanficModeSchema.optional(),
   series: BookSeriesSchema.optional(),
   writing: z.object({

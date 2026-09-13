@@ -1738,6 +1738,13 @@ pub(crate) async fn prepare_write_input(
     };
     // 244 号：记忆语义精简器（TS runner memorySemanticSelector 同款）。
     let memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
+    // R20/390 号：书挂 series_id 时解析系列正典文件（缺失零打扰）。
+    let series_canon_file = book.series_id.as_ref().map(|series_id| {
+        ctx.project_root
+            .join(".inkos")
+            .join("series")
+            .join(format!("{series_id}.json"))
+    });
     let composed: ComposeChapterOutput = compose_governed_chapter(&ComposeChapterInput {
         book_language: book.language.as_deref(),
         book_dir,
@@ -1749,6 +1756,7 @@ pub(crate) async fn prepare_write_input(
         reference_context_provider: Some(&reference_provider),
         memory_semantic_selector: Some(&memory_selector),
         on_context_compression: config.on_context_compression.clone(),
+        series_canon_file: series_canon_file.as_deref(),
     })
     .await?;
 

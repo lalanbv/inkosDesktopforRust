@@ -125,6 +125,8 @@ pub struct ComposeChapterInput<'a> {
     /// 244 号：记忆语义精简（TS `memorySemanticSelector`——None = BM25 直通）。
     pub memory_semantic_selector: Option<&'a dyn crate::utils::memory_retrieval::MemorySemanticSelector>,
     pub on_context_compression: Option<CompressionCallback>,
+    /// R20/390 号：系列正典文件路径（book.series_id 存在时由调用方解析，None 不注入）。
+    pub series_canon_file: Option<&'a std::path::Path>,
 }
 
 /// compose 出参。对齐 TS `ComposeChapterOutput`。
@@ -202,12 +204,14 @@ pub async fn compose_governed_chapter(
     }
     // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
     selected_context.extend(load_rule_experience_entries(input.book_dir));
-    // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）。
+    // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）；
+    // R20/390 号：系列正典双层注入（source=codex-series/<name>，同名 book 覆盖）。
     selected_context.extend(load_codex_entries(
         input.book_dir,
         input.plan.intent.chapter,
         &input.plan.intent.goal,
         &input.plan.memo.body,
+        input.series_canon_file,
     ));
     // G2/330 号：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 >
     // 临时），参考资料/更低层永远排在章纲与事实之后。
@@ -1847,6 +1851,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn load_codex_entries_dual_layer_with_override() {
+        // R20/390 号：系列正典双层注入——同名 book 卡覆盖 series 卡（覆盖即省略）。
+        let dir = std::env::temp_dir().join(format!("inkos_series_codex_{}", std::process::id()));
+        let book_dir = dir.join("books").join("b1");
+        std::fs::create_dir_all(book_dir.join("story")).unwrap();
+        std::fs::write(
+            book_dir.join("story").join("entity_codex.json"),
+            serde_json::json!({
+                "version": 1,
+                "cards": [
+                    { "name": "林动", "aliases": [], "kind": "person", "summary": "书内卡。", "facts": [], "relationships": [] }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let series_file = dir.join(".inkos").join("series").join("wu_dong.json");
+        std::fs::create_dir_all(series_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &series_file,
+            serde_json::json!({
+                "version": 1,
+                "seriesId": "wu_dong",
+                "entries": [
+                    { "name": "林动", "aliases": [], "kind": "person", "summary": "系列卡同名被覆盖。", "facts": [], "relationships": [] },
+                    { "name": "祖符石", "aliases": ["符石"], "kind": "item", "summary": "跨书信物。", "facts": ["可吸收源气"], "relationships": [] }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let entries = load_codex_entries(
+            &book_dir,
+            7,
+            "林动摩挲祖符石。",
+            "",
+            Some(&series_file),
+        );
+        let sources: Vec<&str> = entries.iter().map(|entry| entry.source.as_str()).collect();
+        assert_eq!(sources, vec!["codex/林动", "codex-series/祖符石"]);
+        let book_block = entries[0].excerpt.as_deref().unwrap();
+        assert!(book_block.contains("书内卡。"));
+        assert!(!book_block.contains("系列实体卡"));
+        let series_block = entries[1].excerpt.as_deref().unwrap();
+        assert!(series_block.contains("系列实体卡"));
+        assert!(!series_block.contains("同名被覆盖"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn parse_selected_sources_handles_fences_and_junk() {
         assert_eq!(
             parse_selected_sources("```json\n{\"selectedSources\":[\"a#1\",\" b \"]}\n```"),
@@ -2128,6 +2182,7 @@ mod tests {
             reference_context_provider: None,
             memory_semantic_selector: None,
             on_context_compression: None,
+            series_canon_file: None,
         })
         .await
         .unwrap();
@@ -2254,6 +2309,7 @@ mod tests {
             reference_context_provider: Some(&provider),
             memory_semantic_selector: None,
             on_context_compression: None,
+            series_canon_file: None,
         })
         .await
         .unwrap();
@@ -2289,6 +2345,7 @@ mod tests {
             reference_context_provider: Some(&provider),
             memory_semantic_selector: None,
             on_context_compression: None,
+            series_canon_file: None,
         })
         .await
         .unwrap();
@@ -2302,50 +2359,89 @@ mod tests {
 }
 
 
-/// R10/376 号：实体卡场景命中注入。读 story/entity_codex.json（缺失/解析
-/// 失败返回空 Vec 零打扰），以 goal+memo 正文命中卡片渲染注入块。
+/// R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
+/// 读 story/entity_codex.json 与（series_canon_file 提供时）.inkos/series/
+/// {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文命中卡片：
+/// book 卡渲染「## 实体卡」（source=codex/<name>）；series 幸存条目
+/// （book 同名覆盖后）渲染「## 系列实体卡」（source=codex-series/<name>）。
 pub fn load_codex_entries(
     book_dir: &Path,
     chapter_number: u32,
     goal: &str,
     memo_body: &str,
+    series_canon_file: Option<&Path>,
 ) -> Vec<crate::models::input_governance::ContextSource> {
     let _ = chapter_number;
-    let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("entity_codex.json")) else {
-        return Vec::new();
-    };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return Vec::new();
-    };
-    let Some(cards) = parsed.get("cards").and_then(serde_json::Value::as_array) else {
-        return Vec::new();
-    };
-    let cards: Vec<crate::utils::entity_codex::EntityCodexCard> = cards
-        .iter()
-        .filter_map(|card| serde_json::from_value(card.clone()).ok())
-        .collect();
-    if cards.is_empty() {
-        return Vec::new();
-    }
+    let mut entries = Vec::new();
     let scene_text = format!("{goal}\n{memo_body}");
-    let matches = crate::utils::entity_codex::match_codex_cards(&scene_text, &cards);
-    let matches = matches.iter().take(8).cloned().collect::<Vec<_>>();
-    let Some(block) = crate::utils::entity_codex::render_codex_block(
-        &matches,
-        crate::utils::language::WritingLanguage::Zh,
-    ) else {
-        return Vec::new();
-    };
-    let first_name = matches
-        .first()
-        .map(|codex_match| codex_match.card.name.clone())
-        .unwrap_or_default();
-    vec![crate::models::input_governance::ContextSource {
-        source: format!("codex/{first_name}"),
-        reason: "Entity cards detected in this scene (canon facts).".to_string(),
-        excerpt: Some(block),
-        rank: None,
-    }]
+    let mut book_cards: Vec<crate::utils::entity_codex::EntityCodexCard> = Vec::new();
+    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("entity_codex.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(cards) = parsed.get("cards").and_then(serde_json::Value::as_array) {
+                book_cards = cards
+                    .iter()
+                    .filter_map(|card| serde_json::from_value(card.clone()).ok())
+                    .collect();
+            }
+        }
+    }
+    if !book_cards.is_empty() {
+        let matches = crate::utils::entity_codex::match_codex_cards(&scene_text, &book_cards);
+        let matches = matches.iter().take(8).cloned().collect::<Vec<_>>();
+        if let Some(block) = crate::utils::entity_codex::render_codex_block(
+            &matches,
+            crate::utils::language::WritingLanguage::Zh,
+        ) {
+            let first_name = matches
+                .first()
+                .map(|codex_match| codex_match.card.name.clone())
+                .unwrap_or_default();
+            entries.push(crate::models::input_governance::ContextSource {
+                source: format!("codex/{first_name}"),
+                reason: "Entity cards detected in this scene (canon facts).".to_string(),
+                excerpt: Some(block),
+                rank: None,
+            });
+        }
+    }
+    if let Some(series_path) = series_canon_file {
+        if let Ok(raw) = std::fs::read_to_string(series_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
+                if let Some(parsed) =
+                    crate::utils::series_canon::parse_series_canon_file(&value)
+                {
+                    if !parsed.entries.is_empty() {
+                        let merged = crate::utils::series_canon::merge_codex_layers(
+                            &book_cards,
+                            &parsed.entries,
+                        );
+                        let series_matches =
+                            crate::utils::entity_codex::match_codex_cards(&scene_text, &merged.series);
+                        let series_matches =
+                            series_matches.iter().take(8).cloned().collect::<Vec<_>>();
+                        if let Some(series_block) = crate::utils::series_canon::render_series_codex_block(
+                            &series_matches,
+                            crate::utils::language::WritingLanguage::Zh,
+                        ) {
+                            let first_name = series_matches
+                                .first()
+                                .map(|codex_match| codex_match.card.name.clone())
+                                .unwrap_or_default();
+                            entries.push(crate::models::input_governance::ContextSource {
+                                source: format!("codex-series/{first_name}"),
+                                reason: "Series canon cards detected in this scene (cross-book canon facts)."
+                                    .to_string(),
+                                excerpt: Some(series_block),
+                                rank: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    entries
 }
 
 /// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。

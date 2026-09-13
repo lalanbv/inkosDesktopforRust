@@ -324,6 +324,7 @@ mod tests {
 
     fn book() -> BookConfig {
         BookConfig {
+            series_id: None,
             id: "b1".to_string(),
             title: "测试之书".to_string(),
             platform: Platform::Tomato,

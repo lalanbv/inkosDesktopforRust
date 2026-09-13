@@ -858,6 +858,7 @@ fn build_fanfic_canon_section_matches_ts() {
 fn settler_book() -> inkos_engine::models::book::BookConfig {
     use inkos_engine::models::book::{BookConfig, BookStatus, Platform};
     BookConfig {
+        series_id: None,
         id: "golden".into(),
         title: "黄金之书".into(),
         platform: Platform::Tomato,
@@ -1995,6 +1996,7 @@ fn chapter_analyzer_suite_matches_ts() {
         }
     };
     let book = BookConfig {
+        series_id: None,
         id: "b".to_string(),
         title: "测试书".to_string(),
         platform: Platform::Other,

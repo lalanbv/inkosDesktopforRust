@@ -583,6 +583,7 @@ mod tests {
 
     fn book_config(id: &str) -> BookConfig {
         BookConfig {
+            series_id: None,
             id: id.to_string(),
             title: "书".to_string(),
             platform: crate::models::book::Platform::Other,

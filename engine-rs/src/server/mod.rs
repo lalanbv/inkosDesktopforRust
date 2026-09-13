@@ -481,6 +481,12 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         .route(
+            "/api/v1/books/:id/series-id",
+            get(books_state_routes::get_series_id)
+                .put(books_state_routes::put_series_id)
+                .with_state(books.clone()),
+        )
+        .route(
             "/api/v1/books/:id/codex",
             get(books_state_routes::get_codex).put(books_state_routes::put_codex).with_state(books.clone()),
         )
@@ -761,6 +767,13 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/adopt-library-assets",
             post(ops_routes::adopt_library_assets).with_state(books.clone()),
+        )
+        // R20/390 号：系列正典共享（.inkos/series/{seriesId}.json）。
+        .route(
+            "/api/v1/series/:seriesId/canon",
+            get(ops_routes::get_series_canon)
+                .put(ops_routes::put_series_canon)
+                .with_state(books.clone()),
         )
         // R5/366 号：书级反AI规则 + G13 经验条目。
         .route(

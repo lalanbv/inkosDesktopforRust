@@ -144,6 +144,10 @@ pub fn context_source_tier(source: &str) -> ContextSourceTier {
     if source.starts_with("codex/") {
         return ContextSourceTier::UserReference;
     }
+    // R20/390 号：系列正典卡与实体卡同层（40，跨书正典事实参考可压缩）。
+    if source.starts_with("codex-series/") {
+        return ContextSourceTier::UserReference;
+    }
     if source.starts_with("reference/") {
         return ContextSourceTier::UserReference;
     }

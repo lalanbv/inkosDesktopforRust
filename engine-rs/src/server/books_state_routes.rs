@@ -2288,6 +2288,90 @@ pub async fn put_best_of_n(
     )
 }
 
+// R20/390 号：书级系列绑定（book.json seriesId 读写；null/缺省=解绑）。
+pub async fn get_series_id(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let raw_book = match load_raw_book_config(root, &book_id).await {
+        Ok(raw) => raw,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+            )
+        }
+    };
+    let series_id = raw_book
+        .get("seriesId")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string());
+    (StatusCode::OK, Json(json!({ "seriesId": series_id })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PutSeriesIdBody {
+    #[serde(default)]
+    pub series_id: Option<String>,
+}
+
+pub async fn put_series_id(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<PutSeriesIdBody>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let root = runtime.state.project_root();
+    let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
+        );
+    };
+    let series_id = body.series_id;
+    if let Some(value) = &series_id {
+        if !crate::utils::series_canon::is_valid_series_id(value) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid series id" })),
+            );
+        }
+    }
+    if let Some(value) = &series_id {
+        raw_book
+            .as_object_mut()
+            .unwrap()
+            .insert("seriesId".to_string(), json!(value));
+    } else {
+        raw_book
+            .as_object_mut()
+            .unwrap()
+            .remove("seriesId");
+    }
+    let book_path = root.join("books").join(&book_id).join("book.json");
+    let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "failed to write book.json" })),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "seriesId": series_id })),
+    )
+}
+
 /// R10/376 号：实体卡存储（story/entity_codex.json；GET/PUT 全量）。
 pub async fn get_codex(
     State(runtime): State<BooksRuntime>,

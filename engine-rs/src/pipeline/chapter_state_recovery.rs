@@ -418,6 +418,7 @@ mod retry_tests {
 
     fn test_book() -> crate::models::book::BookConfig {
         crate::models::book::BookConfig {
+            series_id: None,
             id: "b".to_string(),
             title: "t".to_string(),
             platform: crate::models::book::Platform::Other,

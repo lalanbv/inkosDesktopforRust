@@ -165,6 +165,7 @@ mod tests {
 
     fn test_book() -> BookConfig {
         BookConfig {
+            series_id: None,
             id: "b1".to_string(),
             title: "t".to_string(),
             platform: Platform::Other,

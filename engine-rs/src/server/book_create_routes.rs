@@ -139,6 +139,7 @@ fn build_studio_book_config(
         created_at: now.to_string(),
         updated_at: now.to_string(),
         parent_book_id: None,
+        series_id: None,
         fanfic_mode: None,
         series: None,
         writing: None,

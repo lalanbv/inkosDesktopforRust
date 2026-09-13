@@ -4053,6 +4053,10 @@ ${matrix}`,
         (selectionRequest) => composer.selectReferenceSections(selectionRequest),
       ),
       onContextCompression: this.config.onContextCompression,
+      // R20/390 号：书挂 seriesId 时解析系列正典文件（缺失零打扰）。
+      seriesCanonFile: book.seriesId
+        ? join(this.config.projectRoot, ".inkos", "series", `${book.seriesId}.json`)
+        : undefined,
     });
 
     return { plan, composed };

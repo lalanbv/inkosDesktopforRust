@@ -757,6 +757,7 @@ mod tests {
     #[test]
     fn system_prompt_bilingual_skeleton() {
         let book = BookConfig {
+            series_id: None,
             id: "test-book".to_string(),
             title: "测试书".to_string(),
             platform: crate::models::book::Platform::Other,

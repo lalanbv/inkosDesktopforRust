@@ -118,6 +118,8 @@ export function contextSourceTier(source: string): ContextSourceTierId {
   if (source.startsWith("reference/")) return "user-reference";
   // R10/376 号：实体卡注入与参考资料同层（40，正典事实参考可压缩）。
   if (source.startsWith("codex/")) return "user-reference";
+  // R20/390 号：系列正典卡与实体卡同层（40，跨书正典事实参考可压缩）。
+  if (source.startsWith("codex-series/")) return "user-reference";
   if (source.startsWith("deconstruction/")) return "deconstruction";
   if (source.startsWith("style/")) return "style-asset";
   // R5/366 号：反AI规则与经验条目与写法同层（20，写作纪律垫底参考层）。

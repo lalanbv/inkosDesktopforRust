@@ -41,6 +41,11 @@ import {
   renderCodexBlock,
   type EntityCodexCard,
 } from "../utils/entity-codex.js";
+import {
+  mergeCodexLayers,
+  parseSeriesCanonFile,
+  renderSeriesCodexBlock,
+} from "../utils/series-canon.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -61,6 +66,8 @@ export interface ComposeChapterInput {
   readonly referenceContextProvider?: BookReferenceContextProvider;
   readonly memorySemanticSelector?: MemorySemanticSelector;
   readonly onContextCompression?: ContextCompressionCallback;
+  /** R20/390 号：系列正典文件路径（book.seriesId 存在时由调用方解析，缺省不注入）。 */
+  readonly seriesCanonFile?: string;
 }
 
 export type BookReferenceContextProvider = (
@@ -126,12 +133,14 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
   const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
   // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
   const ruleExperienceEntries = await loadRuleExperienceEntries(input.bookDir);
-  // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）。
+  // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）；
+  // R20/390 号：系列正典双层注入（source=codex-series/<name>，同名 book 覆盖）。
   const codexEntries = await loadCodexEntries(
     input.bookDir,
     input.plan.intent.chapter,
     input.plan.intent.goal,
     input.plan.memo.body,
+    input.seriesCanonFile,
   );
   // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
   // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
@@ -435,35 +444,64 @@ export async function loadRuleExperienceEntries(
 }
 
 /**
- * R10/376 号：实体卡场景命中注入。读 story/entity_codex.json（缺失/解析
- * 失败返回空数组零打扰），以 goal+memo 正文为场景文本命中卡片，渲染
- * 「## 实体卡」块（source=codex/<name>，user-reference 层 40）。
+ * R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
+ * 读 story/entity_codex.json 与（seriesCanonFile 提供时）.inkos/series/
+ * {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文为场景文本
+ * 命中卡片：book 卡渲染「## 实体卡」（source=codex/<name>）；series 幸存
+ * 条目（book 同名覆盖后）渲染「## 系列实体卡」（source=codex-series/<name>，
+ * user-reference 层 40）。
  */
 export async function loadCodexEntries(
   bookDir: string,
   chapterNumber: number,
   goal: string,
   memoBody?: string,
+  seriesCanonFile?: string,
 ): Promise<ContextPackage["selectedContext"]> {
+  const entries: ContextPackage["selectedContext"] = [];
+  void chapterNumber;
+  const sceneText = [goal, memoBody ?? ""].filter(Boolean).join("\n");
+  let bookCards: EntityCodexCard[] = [];
   try {
     const raw = await readFile(join(bookDir, "story", "entity_codex.json"), "utf-8");
     const parsed = JSON.parse(raw) as { cards?: EntityCodexCard[] };
-    if (!Array.isArray(parsed.cards) || parsed.cards.length === 0) return [];
-    void chapterNumber;
-    const sceneText = [goal, memoBody ?? ""].filter(Boolean).join("\n");
-    const matches = matchCodexCards(sceneText, parsed.cards).slice(0, 8);
+    if (Array.isArray(parsed.cards)) bookCards = parsed.cards;
+  } catch {
+    // 零打扰
+  }
+  if (bookCards.length > 0) {
+    const matches = matchCodexCards(sceneText, bookCards).slice(0, 8);
     const block = renderCodexBlock(matches, "zh");
-    if (!block) return [];
-    return [
-      {
+    if (block) {
+      entries.push({
         source: `codex/${matches[0]!.card.name}`,
         reason: "Entity cards detected in this scene (canon facts).",
         excerpt: block,
-      },
-    ];
-  } catch {
-    return [];
+      });
+    }
   }
+  if (seriesCanonFile) {
+    try {
+      const raw = await readFile(seriesCanonFile, "utf-8");
+      const parsed = parseSeriesCanonFile(JSON.parse(raw));
+      if (parsed && parsed.entries.length > 0) {
+        // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
+        const { series } = mergeCodexLayers(bookCards, [...parsed.entries]);
+        const seriesMatches = matchCodexCards(sceneText, series).slice(0, 8);
+        const seriesBlock = renderSeriesCodexBlock(seriesMatches, "zh");
+        if (seriesBlock) {
+          entries.push({
+            source: `codex-series/${seriesMatches[0]!.card.name}`,
+            reason: "Series canon cards detected in this scene (cross-book canon facts).",
+            excerpt: seriesBlock,
+          });
+        }
+      }
+    } catch {
+      // 零打扰
+    }
+  }
+  return entries;
 }
 
 function parseSelectedSources(raw: string): string[] {

@@ -10,6 +10,7 @@ import { QualityTrendCard } from "../components/QualityTrendCard";
 import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
 import { CodexPanel } from "../components/CodexPanel";
+import { SeriesCanonPanel } from "../components/SeriesCanonPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -607,6 +608,9 @@ export function BookDetail({
 
       {/* R10/377 号：实体卡编辑（名册自动派生+正典事实注入写作）。 */}
       <CodexPanel bookId={bookId} />
+
+      {/* R20/390 号：系列正典共享（跨书条目一次编写、逐书命中注入）。 */}
+      <SeriesCanonPanel bookId={bookId} />
 
       {/* G5/351 号：拆书工作台（逐章证据 → 档案/节奏/可发布产物）。 */}
       <DeconstructPanel bookId={bookId} />

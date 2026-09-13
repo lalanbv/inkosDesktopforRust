@@ -125,6 +125,7 @@ mod tests {
 
     fn book() -> BookConfig {
         BookConfig {
+            series_id: None,
             id: "b".to_string(),
             title: "书".to_string(),
             platform: crate::models::book::Platform::Other,

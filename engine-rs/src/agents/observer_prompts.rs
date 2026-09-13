@@ -169,6 +169,7 @@ mod tests {
 
     fn book() -> BookConfig {
         BookConfig {
+            series_id: None,
             id: "b1".to_string(),
             title: "无关紧要（observer 未用）".to_string(),
             platform: Platform::Tomato,

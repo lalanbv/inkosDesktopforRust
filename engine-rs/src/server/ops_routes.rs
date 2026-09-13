@@ -2319,3 +2319,56 @@ pub async fn preview_asset_library_import(
     )
         .into_response()
 }
+
+// ── R20/390 号：系列正典共享（项目级 .inkos/series/{seriesId}.json；全局级不带 bookId）──
+
+pub async fn get_series_canon(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(series_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if !crate::utils::series_canon::is_valid_series_id(&series_id) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series id"));
+    }
+    let file = crate::utils::series_canon::load_series_canon(&runtime.state.project_root(), &series_id)
+        .unwrap_or(crate::utils::series_canon::SeriesCanonFile {
+            version: crate::utils::series_canon::SERIES_CANON_VERSION,
+            series_id: series_id.clone(),
+            entries: Vec::new(),
+        });
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&file).unwrap_or_default()),
+    )
+        .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PutSeriesCanonBody {
+    pub entries: Value,
+}
+
+pub async fn put_series_canon(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Path(series_id): axum::extract::Path<String>,
+    Json(body): Json<PutSeriesCanonBody>,
+) -> impl IntoResponse {
+    if !crate::utils::series_canon::is_valid_series_id(&series_id) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series id"));
+    }
+    if !body.entries.is_array() {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("entries array required"));
+    }
+    let parsed = crate::utils::series_canon::parse_series_canon_file(&json!({
+        "version": crate::utils::series_canon::SERIES_CANON_VERSION,
+        "seriesId": series_id,
+        "entries": body.entries,
+    }));
+    let Some(parsed) = parsed else {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series canon payload"));
+    };
+    let entry_count = parsed.entries.len();
+    match crate::utils::series_canon::save_series_canon(&runtime.state.project_root(), &parsed) {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": entry_count }))).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}

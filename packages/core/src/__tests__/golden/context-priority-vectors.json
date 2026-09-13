@@ -165,6 +165,11 @@
       "name": "codex-entity-card",
       "source": "codex/林动",
       "expected": "user-reference"
+    },
+    {
+      "name": "codex-series-entity-card",
+      "source": "codex-series/祖符石",
+      "expected": "user-reference"
     }
   ],
   "order": [

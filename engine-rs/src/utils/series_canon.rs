@@ -242,3 +242,31 @@ pub fn render_series_codex_block(
     parts.extend(sections);
     Some(parts.join("\n"))
 }
+
+/// 读系列正典文件（缺失/解析失败 → None，调用方兜底空文件）。
+pub fn load_series_canon(project_root: &std::path::Path, series_id: &str) -> Option<SeriesCanonFile> {
+    let raw = std::fs::read_to_string(
+        project_root
+            .join(".inkos")
+            .join("series")
+            .join(format!("{series_id}.json")),
+    )
+    .ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    parse_series_canon_file(&value)
+}
+
+/// 写系列正典文件（目录自动创建；temp+rename 原子替换，对齐 221 号纪律）。
+pub fn save_series_canon(
+    project_root: &std::path::Path,
+    file: &SeriesCanonFile,
+) -> std::io::Result<()> {
+    let dir = project_root.join(".inkos").join("series");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.json", file.series_id));
+    let body = serde_json::to_string_pretty(file)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, &path)
+}

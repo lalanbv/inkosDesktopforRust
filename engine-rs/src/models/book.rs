@@ -145,6 +145,9 @@ pub struct BookConfig {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_book_id: Option<String>,
+    /// R20/390 号：系列正典共享键（snake_case slug，指向 .inkos/series/{seriesId}.json）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fanfic_mode: Option<FanficMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

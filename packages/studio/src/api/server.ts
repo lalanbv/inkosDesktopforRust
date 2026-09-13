@@ -134,6 +134,8 @@ import {
   type SessionKind,
   type AgentSessionAttachment,
   createFileSink,
+  isValidSeriesId as core_isValidSeriesId,
+  parseSeriesCanonFile as core_parseSeriesCanonFile,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -6617,6 +6619,71 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     );
     void core;
     return c.json({ ok: true, cards: body.cards });
+  });
+
+  // R20/390 号：系列正典共享存储（.inkos/series/{seriesId}.json；全局级不带 bookId）。
+  app.get("/api/v1/series/:seriesId/canon", async (c) => {
+    const seriesId = c.req.param("seriesId");
+    if (!core_isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
+    const path = join(root, ".inkos", "series", `${seriesId}.json`);
+    try {
+      const parsed = core_parseSeriesCanonFile(JSON.parse(await readFile(path, "utf-8")));
+      return c.json(parsed ?? { version: 1, seriesId, entries: [] });
+    } catch {
+      return c.json({ version: 1, seriesId, entries: [] });
+    }
+  });
+
+  app.put("/api/v1/series/:seriesId/canon", async (c) => {
+    const seriesId = c.req.param("seriesId");
+    if (!core_isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
+    const body = await c.req.json<{ entries?: unknown[] }>();
+    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
+    const parsed = core_parseSeriesCanonFile({ version: 1, seriesId, entries: body.entries });
+    if (!parsed) return c.json({ error: "Invalid series canon payload" }, 400);
+    const dir = join(root, ".inkos", "series");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `${seriesId}.json`),
+      JSON.stringify(parsed, null, 2),
+      "utf-8",
+    );
+    return c.json({ ok: true, entries: parsed.entries.length });
+  });
+
+  // R20/390 号：书级系列绑定（book.json seriesId 读写；null/缺省=解绑）。
+  app.get("/api/v1/books/:id/series-id", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "book.json");
+    try {
+      const book = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ seriesId: typeof book?.seriesId === "string" ? book.seriesId : null });
+    } catch {
+      return c.json({ seriesId: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/series-id", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ seriesId?: string | null }>();
+    const path = join(root, "books", id, "book.json");
+    let book: Record<string, unknown> = {};
+    try {
+      book = JSON.parse(await readFile(path, "utf-8"));
+    } catch {
+      return c.json({ error: "Book not found" }, 404);
+    }
+    const raw = body.seriesId ?? null;
+    if (raw !== null) {
+      if (typeof raw !== "string" || !core_isValidSeriesId(raw)) {
+        return c.json({ error: "Invalid series id" }, 400);
+      }
+      book.seriesId = raw;
+    } else {
+      delete book.seriesId;
+    }
+    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
+    return c.json({ ok: true, seriesId: raw });
   });
 
   // R18/386 号：云备份主链——全量 tar.gz 导出 + 两段式导入恢复（恢复前自动快照）。

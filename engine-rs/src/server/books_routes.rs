@@ -1224,6 +1224,15 @@ async fn run_compose(
     };
     // 244 号：记忆语义精简器。
     let memory_selector = crate::agents::composer::LlmMemorySelector { chat: &composer };
+    // R20/390 号：书挂 series_id 时解析系列正典文件（缺失零打扰）。
+    let series_canon_file = book.series_id.as_ref().map(|series_id| {
+        runtime
+            .state
+            .project_root()
+            .join(".inkos")
+            .join("series")
+            .join(format!("{series_id}.json"))
+    });
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
     let on_context_compression: crate::agents::composer::CompressionCallback =
@@ -1247,6 +1256,7 @@ async fn run_compose(
             reference_context_provider: Some(&reference_provider),
             memory_semantic_selector: Some(&memory_selector),
             on_context_compression: Some(on_context_compression),
+            series_canon_file: series_canon_file.as_deref(),
         },
     )
     .await
