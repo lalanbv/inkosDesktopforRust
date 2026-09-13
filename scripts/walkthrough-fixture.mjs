@@ -210,10 +210,10 @@ if (!runLogOk) {
   failed = true;
 }
 if (failed) process.exit(1);
-// 已知缺陷（407 候选备案）：settle 落盘台账被重写为 13 列（kind 列丢失），
-// 导致 promises 的 kind 补齐无源——timeline 条数断言不受影响，kind 缺失降级为警告。
+// 回归哨兵（407 号已修）：settle 落盘投影 render_hooks_projection 现输出
+// 第 14 列分类；若 kinds 再缺失即投影/落盘链回归。
 if (!kindsOk) {
-  console.warn(`[fixture] ⚠ promises kind 不全（${[...kinds].join(",") || "无"}）——已知缺陷：settle 落盘台账丢分类列（407 候选），不影响条数与状态投影`);
+  console.warn(`[fixture] ⚠ promises kind 不全（${[...kinds].join(",") || "无"}）——投影/落盘链回归，请检查 render_hooks_projection 与台账写入面`);
 }
 
 console.log(`[fixture] ✓ 数据就绪。浏览器打开 ${base} 走查：`);

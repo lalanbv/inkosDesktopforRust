@@ -31,15 +31,17 @@ pub fn render_hooks_projection(
 ) -> String {
     let en = language == WritingLanguage::En;
     let title = if en { "# Pending Hooks" } else { "# 伏笔池" };
+    // R23/407 号：第 14 列 kind——406 号走查发现 settle 落盘投影丢分类列
+    // （TS 落盘走 renderHookSnapshot 已含第 14 列），补齐双端一致。
     let headers = if en {
         [
-            "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     } else {
         [
-            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     };
 
@@ -94,6 +96,11 @@ pub fn render_hooks_projection(
             render_half_life_cell(hook.half_life_chapters).to_string(),
             render_promoted_cell(hook.promoted, language).to_string(),
             hook.notes.clone(),
+            // R23/407 号：第 14 列 kind（规范 id，无 kind 空单元格）。
+            hook.kind
+                .map(crate::utils::hook_kind::hook_kind_id)
+                .unwrap_or_default()
+                .to_string(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         rows.push(format!("| {} |", escaped.join(" | ")));
@@ -366,6 +373,25 @@ mod tests {
         assert!(md.contains("# 伏笔池"));
         assert!(md.contains("| 起始章节 |"));
         assert!(md.contains("h1"));
+    }
+
+    #[test]
+    fn hooks_projection_emits_kind_column() {
+        // R23/407 号：settle 落盘投影必须保住第 14 列分类（此前 13 列丢 kind）。
+        use crate::models::runtime_state::HookKind;
+        let mut seeded = hook("H01");
+        seeded.kind = Some(HookKind::Suspense);
+        let md = render_hooks_projection(&HooksState { hooks: vec![seeded] }, WritingLanguage::Zh, None);
+        assert!(md.contains("| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |"));
+        assert!(md.contains("| H01 | 1 | plot | open | 0 | soon | 近期 | 无 |  | 否 |  |  |  | suspense |"));
+        // 无 kind：第 14 列输出空单元格（列数保持 14）。
+        let bare = render_hooks_projection(
+            &HooksState { hooks: vec![hook("h2")] },
+            WritingLanguage::Zh,
+            None,
+        );
+        let row = bare.lines().find(|l| l.contains("h2")).unwrap();
+        assert_eq!(row.split('|').count(), 16); // 14 cells + 首尾空段
     }
 
     #[test]
