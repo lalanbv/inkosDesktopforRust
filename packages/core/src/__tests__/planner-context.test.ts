@@ -5,6 +5,7 @@ import {
   extractCollaboratorRows,
   extractOpponentRows,
   extractProtagonistRow,
+  formatRecyclableHooks,
   formatRelevantThreads,
 } from "../agents/planner-context.js";
 
@@ -136,5 +137,63 @@ describe("formatRelevantThreads", () => {
     expect(threads).toContain("本章明确激活的休眠种子");
     expect(threads).toContain("S001");
     expect(threads).not.toContain("S007");
+  });
+
+  it("prefixes the canonical kind when the hook carries one (R23/396)", () => {
+    const hooks = [
+      {
+        hookId: "H002",
+        startChapter: 0,
+        type: "单元案",
+        status: "deferred",
+        lastAdvancedChapter: 0,
+        expectedPayoff: "卷内回收",
+        notes: "本章明确激活的休眠种子",
+      },
+      {
+        hookId: "H003",
+        startChapter: 1,
+        type: "主线伏笔",
+        status: "open",
+        lastAdvancedChapter: 2,
+        expectedPayoff: "第三卷",
+        notes: "带分类的活跃伏笔",
+        kind: "suspense",
+      },
+    ] as never[];
+    const threads = formatRelevantThreads(hooks, "");
+    expect(threads).toContain("H003: kind=suspense | 主线伏笔 | open");
+    // 无 kind 的 hook 保持原样，不臆造标签。
+    expect(threads).not.toContain("H002: kind=");
+  });
+});
+
+describe("formatRecyclableHooks", () => {
+  it("tags stale hooks with the canonical kind and keeps untyped hooks clean (R23/396)", () => {
+    const hooks = [
+      {
+        hookId: "H001",
+        startChapter: 2,
+        status: "open",
+        lastAdvancedChapter: 4,
+        expectedPayoff: "师债真相",
+        notes: "",
+        kind: "suspense",
+      },
+      {
+        hookId: "H002",
+        startChapter: 3,
+        status: "open",
+        lastAdvancedChapter: 5,
+        expectedPayoff: "借条下落",
+        notes: "",
+        coreHook: true,
+      },
+    ] as never[];
+    const rendered = formatRecyclableHooks(hooks, 10);
+    expect(rendered).toContain("- H001 \"师债真相\" — 状态=open，已沉默 6 章 [kind=suspense]");
+    // 无 kind：只有核心标签，不出现空 kind 标记。
+    expect(rendered).toContain("已沉默 5 章 [核心]");
+    expect(rendered).not.toContain("H002 ... [kind=");
   });
 });

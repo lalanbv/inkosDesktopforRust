@@ -47,7 +47,6 @@ pub fn parse_settler_delta_output(content: &str) -> crate::Result<SettlerDeltaOu
 /// R23/394 号：upsert 条目与候选的 kind 值经别名表归一；不可归一的删除。
 /// 对齐 TS `sanitizeHookKinds`。
 fn sanitize_hook_kinds(mut parsed: serde_json::Value) -> serde_json::Value {
-    use crate::utils::hook_kind::normalize_hook_kind;
     if let Some(upsert) = parsed
         .get_mut("hookOps")
         .and_then(|ops| ops.get_mut("upsert"))

@@ -436,6 +436,84 @@
           "state": "open"
         }
       ]
+    },
+    {
+      "name": "kind-passthrough-mixed",
+      "input": {
+        "currentChapter": 12,
+        "hooks": [
+          {
+            "hookId": "H01",
+            "startChapter": 1,
+            "lastAdvancedChapter": 3,
+            "status": "open",
+            "expectedPayoff": "",
+            "notes": "承诺：师妹婚约",
+            "kind": "promise"
+          },
+          {
+            "hookId": "H02",
+            "startChapter": 2,
+            "lastAdvancedChapter": 0,
+            "status": "open",
+            "expectedPayoff": "第10章",
+            "notes": "悬念：黑衣人身份",
+            "kind": "suspense"
+          },
+          {
+            "hookId": "H03",
+            "startChapter": 3,
+            "lastAdvancedChapter": 5,
+            "status": "resolved",
+            "expectedPayoff": "",
+            "notes": "已回收"
+          },
+          {
+            "hookId": "H04",
+            "startChapter": 4,
+            "lastAdvancedChapter": 0,
+            "status": "open",
+            "expectedPayoff": "",
+            "notes": "危机：粮道被断",
+            "kind": "crisis"
+          }
+        ]
+      },
+      "expected": [
+        {
+          "hookId": "H02",
+          "summary": "悬念：黑衣人身份",
+          "openedAt": 2,
+          "expectedPayoff": "第10章",
+          "state": "overdue",
+          "kind": "suspense"
+        },
+        {
+          "hookId": "H04",
+          "summary": "危机：粮道被断",
+          "openedAt": 4,
+          "expectedPayoff": "",
+          "state": "open",
+          "kind": "crisis"
+        },
+        {
+          "hookId": "H01",
+          "summary": "承诺：师妹婚约",
+          "openedAt": 1,
+          "lastAdvancedAt": 3,
+          "expectedPayoff": "",
+          "state": "advancing",
+          "kind": "promise"
+        },
+        {
+          "hookId": "H03",
+          "summary": "已回收",
+          "openedAt": 3,
+          "lastAdvancedAt": 5,
+          "expectedPayoff": "",
+          "state": "fulfilled"
+        }
+      ]
     }
   ],
   "contract": {

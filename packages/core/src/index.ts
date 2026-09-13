@@ -655,7 +655,7 @@ export {
   type TensionWarningKind,
   type TensionWarningOptions,
 } from "./utils/tension-curve.js";
-export { parseChapterSummariesMarkdown } from "./utils/story-markdown.js";
+export { parseChapterSummariesMarkdown, parsePendingHooksMarkdown } from "./utils/story-markdown.js";
 export {
   resolveBestOfNPlan,
   selectBestCandidate,

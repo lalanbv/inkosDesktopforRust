@@ -41,6 +41,7 @@ use crate::utils::context_assembly::{
     build_governed_rule_stack, build_governed_trace, is_protected_context_source,
     GovernedTraceParams,
 };
+use crate::utils::hook_kind::hook_kind_id;
 use crate::utils::hook_lifecycle::{hook_payoff_timing_canonical, hook_status_text};
 use crate::utils::language::WritingLanguage;
 use crate::utils::memory_retrieval::{
@@ -1251,6 +1252,17 @@ async fn build_hook_debt_entries(
                 false,
             );
             let role = if en { "memo-referenced debt" } else { "备忘引用旧债" };
+            // R23/396 号：类型标注随行（英文 id；无 kind 省略段）。
+            let kind_text = hook
+                .kind
+                .map(|kind| {
+                    if en {
+                        format!(", kind={}", hook_kind_id(kind))
+                    } else {
+                        format!("，kind={}", hook_kind_id(kind))
+                    }
+                })
+                .unwrap_or_default();
             let promise = if hook.expected_payoff.is_empty() {
                 if en { "(unspecified)" } else { "（未写明）" }
             } else {
@@ -1278,7 +1290,7 @@ async fn build_hook_debt_entries(
 
             let excerpt = if en {
                 [
-                    Some(format!("{} ({}, {}, open {} chapters)", hook.hook_id, hook.hook_type, role, age)),
+                    Some(format!("{} ({}{}, {}, open {} chapters)", hook.hook_id, hook.hook_type, kind_text, role, age)),
                     Some(format!("reader promise: {promise}")),
                     Some(format!("original seed (ch{}): {}", hook.start_chapter, seed_beat)),
                     latest_beat.map(|beat| format!("latest turn (ch{}): {}", hook.last_advanced_chapter, beat)),
@@ -1289,7 +1301,7 @@ async fn build_hook_debt_entries(
                 .join(" | ")
             } else {
                 [
-                    Some(format!("{}（{}，{}，已开{}章）", hook.hook_id, hook.hook_type, role, age)),
+                    Some(format!("{}（{}{}，{}，已开{}章）", hook.hook_id, hook.hook_type, kind_text, role, age)),
                     Some(format!("读者承诺：{promise}")),
                     Some(format!("种于第{}章：{}", hook.start_chapter, seed_beat)),
                     latest_beat.map(|beat| format!("推进于第{}章：{}", hook.last_advanced_chapter, beat)),
@@ -1724,11 +1736,17 @@ fn volume_summary_entry(summary: &VolumeSummarySelection) -> ContextSource {
 }
 
 fn hook_entry(hook: &HookRecord) -> ContextSource {
+    // R23/396 号：规范分类随行（英文 id；无 kind 空串被 filter 剔除，与 TS 一致）。
+    let kind_cell = hook
+        .kind
+        .map(|kind| format!("kind={}", hook_kind_id(kind)))
+        .unwrap_or_default();
     ContextSource {
         source: format!("story/pending_hooks.md#{}", hook.hook_id),
         reason: "Carry forward unresolved hooks that match the chapter focus.".to_string(),
         excerpt: Some(
             [
+                kind_cell.as_str(),
                 hook.hook_type.as_str(),
                 hook_status_text(hook),
                 hook.expected_payoff.as_str(),

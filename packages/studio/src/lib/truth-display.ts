@@ -199,9 +199,12 @@ export function hasTableRows(md: string): boolean {
 
 // --- pending_hooks.md ----------------------------------------------------
 
+import { normalizeHookKind, type HookKind } from "@actalk/inkos-core";
+
 export interface PendingHook {
   readonly id: string;
   readonly type: string; // 类型 — 主线伏笔 / 角色前置 / 情感线伏笔 …
+  readonly kind?: HookKind; // 分类 — R23 规范分类（词表外不臆测，缺省 undefined）
   readonly content: string; // 备注 — the actual foreshadow / setup text
   readonly payoff: string; // 回收卷 — where it pays off
   readonly core: boolean; // 核心 — load-bearing hook
@@ -212,7 +215,8 @@ function splitTableRow(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
 
-// pending_hooks.md is a 13-column tracking table. Only a few columns are
+// pending_hooks.md is a 14-column tracking table (R23/394 号 added 分类/kind;
+// legacy 13-column rows parse identically). Only a few columns are
 // reader-facing; parse the table by header name (robust to column reordering)
 // and keep the meaningful ones so the UI can render browsable cards instead of
 // an unreadable wide table.
@@ -223,6 +227,7 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
   const colOf = (...names: string[]) => header.findIndex((h) => names.includes(h));
   const idIdx = colOf("hook_id", "id");
   const typeIdx = colOf("类型");
+  const kindIdx = colOf("分类", "kind"); // R23/394 号：第 14 列（存量 13 列无此列）
   const payoffIdx = colOf("回收卷");
   const coreIdx = colOf("核心");
   const promotedIdx = colOf("升级", "promoted");
@@ -236,6 +241,7 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
     .map((cells) => ({
       id: idIdx >= 0 ? cells[idIdx] : "",
       type: typeIdx >= 0 ? cells[typeIdx] : "",
+      kind: kindIdx >= 0 ? normalizeHookKind((cells[kindIdx] ?? "").trim()) : undefined,
       content: contentIdx >= 0 ? cells[contentIdx] : "",
       payoff: payoffIdx >= 0 ? cells[payoffIdx] : "",
       core: coreIdx >= 0 && cells[coreIdx] === "是",

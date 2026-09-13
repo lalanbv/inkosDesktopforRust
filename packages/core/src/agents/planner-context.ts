@@ -239,6 +239,8 @@ export function formatRelevantThreads(
   language: "zh" | "en" = "zh",
 ): string {
   const hookRows = hooks.map((hook) => `- ${hook.hookId}: ${[
+    // R23/396 号：规范分类随行——规划侧词表意识与 settler 一致（英文 id，双端同字面）。
+    hook.kind ? `kind=${hook.kind}` : "",
     hook.type,
     hook.status,
     hook.expectedPayoff,
@@ -277,10 +279,12 @@ export function formatRecyclableHooks(
     const lastTouch = Math.max(hook.startChapter, hook.lastAdvancedChapter);
     const silence = lastTouch <= 0 ? chapterNumber : Math.max(0, chapterNumber - lastTouch);
     const payoff = hook.expectedPayoff?.trim() || hook.notes?.trim() || "";
+    // R23/396 号：回收提示带规范分类（英文 id，双端同字面；无 kind 省略）。
+    const kindTag = hook.kind ? ` [kind=${hook.kind}]` : "";
     const core = hook.coreHook === true ? (language === "en" ? " [core]" : " [核心]") : "";
     return language === "en"
-      ? `- ${hook.hookId} "${payoff}" — status=${hook.status}, silent ${silence} ch${core}`
-      : `- ${hook.hookId} "${payoff}" — 状态=${hook.status}，已沉默 ${silence} 章${core}`;
+      ? `- ${hook.hookId} "${payoff}" — status=${hook.status}, silent ${silence} ch${kindTag}${core}`
+      : `- ${hook.hookId} "${payoff}" — 状态=${hook.status}，已沉默 ${silence} 章${kindTag}${core}`;
   });
 
   const header = language === "en"

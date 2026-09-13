@@ -203,6 +203,21 @@ describe("parsePendingHooks", () => {
     expect(hooks[1]).toMatchObject({ id: "H004", promoted: false });
   });
 
+  it("parses the R23 kind column with alias normalization and drops out-of-vocabulary values (R23/396)", () => {
+    const phase8 = [
+      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| H001 | 0 | 主线伏笔 | open | 0 | 200 | slow-burn | 无 | 第五卷 | 是 | 10 | 是 | 父亲专利的黑箱。 | 悬念 |",
+      "| H002 | 0 | 情感线伏笔 | open | 0 | 70 | near-term | 无 | 第二卷 | 否 | 10 | 否 | 师妹婚约。 | emotion |",
+      "| H003 | 0 | 次要伏笔 | open | 0 | 70 | near-term | 无 | 第二卷 | 否 | 10 | 否 | 词表外不臆测。 | 玄幻 |",
+    ].join("\n");
+
+    const hooks = parsePendingHooks(phase8);
+    expect(hooks[0].kind).toBe("suspense"); // zh 别名归一
+    expect(hooks[1].kind).toBe("emotion"); // 规范 id 透传
+    expect(hooks[2].kind).toBeUndefined(); // 词表外 → undefined
+  });
+
   it("is robust to column reordering (parses by header name)", () => {
     const reordered = [
       "| 备注 | 类型 | hook_id | 核心 |",

@@ -1,4 +1,5 @@
 import type { StoredHook } from "../state/memory-db.js";
+import type { HookKind } from "../models/runtime-state.js";
 
 /**
  * 承诺账本运营化（G10/338 号，Phase B 批次一收尾；WNW W7 承诺统一账本思想的采纳）。
@@ -144,6 +145,8 @@ export interface PromiseTimelineEntry {
   readonly lastAdvancedAt?: number;
   readonly expectedPayoff: string;
   readonly state: "open" | "advancing" | "fulfilled" | "overdue";
+  /** R23/396 号：规范类型分类透传（存量无 kind 不出键）。 */
+  readonly kind?: HookKind;
 }
 
 const SUMMARY_MAX_CHARS = 40;
@@ -175,6 +178,7 @@ export function buildPromiseTimeline(
       lastAdvancedAt,
       expectedPayoff: hook.expectedPayoff ?? "",
       state,
+      ...(hook.kind ? { kind: hook.kind } : {}),
     };
   });
 

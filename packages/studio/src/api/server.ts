@@ -3598,12 +3598,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const { MemoryDB } = core;
       const memory = new MemoryDB(join(root, "books", id));
       const hooks = memory.getAllHooks();
+      // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
+      // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
+      const hooksMarkdown = await readFile(
+        join(root, "books", id, "story", "pending_hooks.md"),
+        "utf-8",
+      ).catch(() => "");
+      const kindById = new Map(
+        core
+          .parsePendingHooksMarkdown(hooksMarkdown)
+          .filter((hook) => hook.kind)
+          .map((hook) => [hook.hookId, hook.kind]),
+      );
+      const enrichedHooks = hooks.map((hook) => {
+        const kind = kindById.get(hook.hookId);
+        return kind ? { ...hook, kind } : hook;
+      });
       const summaries = memory.getSummaries(1, 100_000);
       const currentChapter = summaries.length > 0
         ? summaries[summaries.length - 1]!.chapter + 1
         : 1;
-      const timeline = core.buildPromiseTimeline(hooks, currentChapter);
-      const pacingDebts = core.detectPacingDebts({ hooks, currentChapter });
+      const timeline = core.buildPromiseTimeline(enrichedHooks, currentChapter);
+      const pacingDebts = core.detectPacingDebts({ hooks: enrichedHooks, currentChapter });
       const weakRuns = core.detectWeakHookRuns({
         summaries: summaries.map((s) => ({ chapter: s.chapter, hookActivity: s.hookActivity ?? "" })),
       });

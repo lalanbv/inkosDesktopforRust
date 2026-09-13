@@ -1479,6 +1479,8 @@ pub async fn get_quality_trend(
                     expected_payoff: hook.expected_payoff.clone(),
                     notes: hook.notes.clone(),
                     core_hook: false,
+                    // 紧迫度投影无 kind 字段（R23/396 号仅 timeline 透传）。
+                    kind: None,
                 }
             })
             .map(|input| {
@@ -1571,6 +1573,17 @@ pub async fn get_promises(
     let result = (|| {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let hooks = db.get_all_hooks()?;
+        // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
+        // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
+        let hooks_markdown = std::fs::read_to_string(book_dir.join("story").join("pending_hooks.md"))
+            .unwrap_or_default();
+        let mut kind_by_id: std::collections::HashMap<String, crate::models::runtime_state::HookKind> =
+            std::collections::HashMap::new();
+        for hook in crate::utils::story_markdown::parse_pending_hooks_markdown(&hooks_markdown) {
+            if let Some(kind) = hook.kind {
+                kind_by_id.insert(hook.hook_id.clone(), kind);
+            }
+        }
         let summaries = db.get_summaries(1, 100_000)?;
         let hook_inputs: Vec<crate::utils::promise_ledger::PromiseHookInput> = hooks
             .iter()
@@ -1582,6 +1595,7 @@ pub async fn get_promises(
                 expected_payoff: hook.expected_payoff.clone(),
                 notes: hook.notes.clone(),
                 core_hook: false,
+                kind: kind_by_id.get(&hook.hook_id).copied(),
             })
             .collect();
         let current_chapter = summaries

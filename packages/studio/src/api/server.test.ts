@@ -41,6 +41,9 @@ const abortAgentSessionMock = vi.fn();
 const playRunnerStepMock = vi.fn();
 const playRunnerCtorArgs: unknown[] = [];
 const generatePlayImageMock = vi.fn();
+// R23/396 号：promises 端点——sqlite 投影 mock 面（kind 由台账解析补齐）。
+const memoryDbHooksMock = vi.fn(() => [] as Array<Record<string, unknown>>);
+const memoryDbSummariesMock = vi.fn(() => [] as Array<Record<string, unknown>>);
 const createAndPersistBookSessionMock = vi.fn();
 const loadBookSessionMock = vi.fn();
 const persistBookSessionMock = vi.fn();
@@ -317,6 +320,16 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     }
   }
 
+  class MockMemoryDB {
+    constructor(_root: string) {}
+    getAllHooks() {
+      return memoryDbHooksMock();
+    }
+    getSummaries(_from: number, _to: number) {
+      return memoryDbSummariesMock();
+    }
+  }
+
   return {
     StateManager: MockStateManager,
     PipelineRunner: MockPipelineRunner,
@@ -444,6 +457,12 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     // R22/392 号：反AI规则 GET 种子兜底——mock 透传种子常量与校验器。
     ANTI_AI_RULE_SEEDS: actual.ANTI_AI_RULE_SEEDS,
     validateAntiAiRule: actual.validateAntiAiRule,
+    // R23/396 号：promises 端点——台账解析与时间线投影透传真实现。
+    MemoryDB: MockMemoryDB,
+    parsePendingHooksMarkdown: actual.parsePendingHooksMarkdown,
+    buildPromiseTimeline: actual.buildPromiseTimeline,
+    detectPacingDebts: actual.detectPacingDebts,
+    detectWeakHookRuns: actual.detectWeakHookRuns,
   };
 });
 
@@ -6616,6 +6635,59 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(missing.status).toBe(404);
     const bad = await app.request("http://localhost/api/v1/books/demo-book/context-lens/abc");
     expect(bad.status).toBe(400);
+  });
+
+  it("promises timeline enriches entries with ledger kinds (R23/396号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // sqlite 投影不含 kind（358 号真相源单点）——mock DB 只回投影子集。
+    const story = join(root, "books", "demo-book", "story");
+    await writeFile(join(story, "memory.db"), "", "utf-8");
+    memoryDbHooksMock.mockReturnValue([
+      {
+        hookId: "H001",
+        startChapter: 2,
+        status: "open",
+        lastAdvancedChapter: 4,
+        expectedPayoff: "第10章",
+        notes: "黑衣人身份",
+      },
+      {
+        hookId: "H002",
+        startChapter: 3,
+        status: "open",
+        lastAdvancedChapter: 0,
+        expectedPayoff: "",
+        notes: "师妹婚约",
+      },
+    ] as never);
+    memoryDbSummariesMock.mockReturnValue([{ chapter: 11, hookActivity: "" }] as never);
+
+    // 台账 14 列真相源带分类列（H002 无分类）。
+    await writeFile(
+      join(story, "pending_hooks.md"),
+      [
+        "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| H001 | 2 | 主线伏笔 | open | 4 | 第10章 | slow-burn | 无 | | 否 | | 是 | 黑衣人身份 | 悬念 |",
+        "| H002 | 3 | 情感线伏笔 | open | 0 | | | 无 | | 否 | | 是 | 师妹婚约 | |",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/promises");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.currentChapter).toBe(12);
+    const h001 = body.timeline.find((entry: { hookId: string }) => entry.hookId === "H001");
+    const h002 = body.timeline.find((entry: { hookId: string }) => entry.hookId === "H002");
+    expect(h001.kind).toBe("suspense"); // 台账分类补齐
+    expect(h002.kind).toBeUndefined(); // 无分类不出键
+
+    memoryDbHooksMock.mockReset();
+    memoryDbSummariesMock.mockReset();
   });
 
   it("anti-ai-rules GET falls back to built-in seeds when file missing (392号)", async () => {

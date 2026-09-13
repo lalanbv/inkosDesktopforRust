@@ -16,6 +16,7 @@ import {
   hookActivityStrength,
   parseExpectedChapter,
 } from "../utils/promise-ledger.js";
+import { normalizeHookKind } from "../utils/hook-kind.js";
 import type { StoredHook } from "../state/memory-db.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -42,16 +43,20 @@ const vectors = JSON.parse(
 };
 
 const asHooks = (rows: Array<Record<string, unknown>>): StoredHook[] =>
-  rows.map((row) => ({
-    hookId: String(row.hookId ?? ""),
-    startChapter: Number(row.startChapter ?? 0),
-    type: "",
-    status: String(row.status ?? "open"),
-    lastAdvancedChapter: Number(row.lastAdvancedChapter ?? 0),
-    expectedPayoff: String(row.expectedPayoff ?? ""),
-    notes: String(row.notes ?? ""),
-    coreHook: row.coreHook === true,
-  })) as StoredHook[];
+  rows.map((row) => {
+    const kind = normalizeHookKind(typeof row.kind === "string" ? row.kind : "");
+    return {
+      hookId: String(row.hookId ?? ""),
+      startChapter: Number(row.startChapter ?? 0),
+      type: "",
+      status: String(row.status ?? "open"),
+      lastAdvancedChapter: Number(row.lastAdvancedChapter ?? 0),
+      expectedPayoff: String(row.expectedPayoff ?? ""),
+      notes: String(row.notes ?? ""),
+      coreHook: row.coreHook === true,
+      ...(kind ? { kind } : {}),
+    };
+  }) as StoredHook[];
 
 describe("promise ledger (G10)", () => {
   it("classifies hook activity strength per shared vectors", () => {

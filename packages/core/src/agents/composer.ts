@@ -2,6 +2,7 @@ import { readFile, readdir, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
+import type { HookKind } from "../models/runtime-state.js";
 import {
   ContextPackageSchema,
   type ChapterTrace,
@@ -890,7 +891,7 @@ async function collectSelectedContext(
     const hookEntries = memorySelection.hooks.map((hook) => ({
       source: `story/pending_hooks.md#${hook.hookId}`,
       reason: "Carry forward unresolved hooks that match the chapter focus.",
-      excerpt: [hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
+      excerpt: [hook.kind ? `kind=${hook.kind}` : "", hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
         .filter(Boolean)
         .join(" | "),
     }));
@@ -1054,6 +1055,7 @@ async function buildHookDebtEntries(
       readonly hookId: string;
       readonly startChapter: number;
       readonly type: string;
+      readonly kind?: HookKind;
       readonly status: string;
       readonly lastAdvancedChapter: number;
       readonly expectedPayoff: string;
@@ -1080,6 +1082,10 @@ async function buildHookDebtEntries(
       const seedSummary = findHookSummary(summaries, hook.hookId, hook.startChapter, "seed");
       const latestSummary = findHookSummary(summaries, hook.hookId, hook.lastAdvancedChapter, "latest");
       const role = language === "en" ? "memo-referenced debt" : "备忘引用旧债";
+      // R23/396 号：类型标注随行（英文 id；无 kind 省略段）。
+      const kindText = hook.kind
+        ? (language === "en" ? `, kind=${hook.kind}` : `，kind=${hook.kind}`)
+        : "";
       const promise = hook.expectedPayoff || (language === "en" ? "(unspecified)" : "（未写明）");
       const seedBeat = seedSummary
         ? renderHookDebtBeat(seedSummary)
@@ -1096,13 +1102,13 @@ async function buildHookDebtEntries(
           : "含原始种子文本的叙事债务简报。",
         excerpt: language === "en"
           ? [
-              `${hook.hookId} (${hook.type}, ${role}, open ${age} chapters)`,
+              `${hook.hookId} (${hook.type}${kindText}, ${role}, open ${age} chapters)`,
               `reader promise: ${promise}`,
               `original seed (ch${hook.startChapter}): ${seedBeat}`,
               latestBeat ? `latest turn (ch${hook.lastAdvancedChapter}): ${latestBeat}` : undefined,
             ].filter(Boolean).join(" | ")
           : [
-              `${hook.hookId}（${hook.type}，${role}，已开${age}章）`,
+              `${hook.hookId}（${hook.type}${kindText}，${role}，已开${age}章）`,
               `读者承诺：${promise}`,
               `种于第${hook.startChapter}章：${seedBeat}`,
               latestBeat ? `推进于第${hook.lastAdvancedChapter}章：${latestBeat}` : undefined,

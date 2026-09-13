@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 
 use crate::agents::rules_reader::read_book_rules;
 use crate::models::runtime_state::HookRecord;
+use crate::utils::hook_kind::{hook_kind_id, normalize_hook_kind};
 use crate::utils::hook_lifecycle::hook_status_text;
 use crate::utils::language::WritingLanguage;
 use crate::utils::outline_paths::read_character_context;
@@ -323,7 +324,20 @@ pub fn extract_relevant_threads(pending_hooks_raw: &str, subplot_board_raw: &str
         })
         .filter(|row| row.iter().any(|cell| thread_relevant_re().is_match(cell)))
         .filter(|row| !row.iter().any(|cell| thread_stale_re().is_match(cell)))
-        .map(|row| format!("- {}: {}", row[0], join_non_empty_cells(&row[1..])));
+        .map(|row| {
+            // R23/396 号：第 14 列 kind 显式化为 `kind=<id> | ` 前缀，
+            // 与 TS 字段拼接形态对齐；无 kind（存量 13 列）保持原样。
+            let kind_cell = if row.len() >= 14 {
+                normalize_hook_kind(row[13].trim())
+            } else {
+                None
+            };
+            let base_len = row.len().min(13);
+            let kind_prefix = kind_cell
+                .map(|kind| format!("kind={} | ", hook_kind_id(kind)))
+                .unwrap_or_default();
+            format!("- {}: {}{}", row[0], kind_prefix, join_non_empty_cells(&row[1..base_len]))
+        });
 
     let subplot_rows = parse_markdown_table_rows(subplot_board_raw)
         .into_iter()
@@ -379,15 +393,20 @@ pub fn format_recyclable_hooks(
             } else {
                 ""
             };
+            // R23/396 号：回收提示带规范分类（英文 id，双端同字面；无 kind 省略）。
+            let kind_tag = hook
+                .kind
+                .map(|kind| format!(" [kind={}]", hook_kind_id(kind)))
+                .unwrap_or_default();
             if language == WritingLanguage::En {
                 format!(
-                    "- {} \"{}\" — status={}, silent {} ch{}",
-                    hook.hook_id, payoff, hook_status_text(hook), silence, core
+                    "- {} \"{}\" — status={}, silent {} ch{}{}",
+                    hook.hook_id, payoff, hook_status_text(hook), silence, kind_tag, core
                 )
             } else {
                 format!(
-                    "- {} \"{}\" — 状态={}，已沉默 {} 章{}",
-                    hook.hook_id, payoff, hook_status_text(hook), silence, core
+                    "- {} \"{}\" — 状态={}，已沉默 {} 章{}{}",
+                    hook.hook_id, payoff, hook_status_text(hook), silence, kind_tag, core
                 )
             }
         })
@@ -592,5 +611,45 @@ mod tests {
             format_recyclable_hooks(&[], 9, WritingLanguage::Zh),
             "（暂无陈旧 hook——账本干净）"
         );
+    }
+
+    #[test]
+    fn extract_relevant_threads_prefixes_canonical_kind_from_column_14() {
+        // R23/396 号：台账 14 列形态——kind 单元格显式化为 `kind=<id>` 前缀。
+        let hooks = "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |\n\
+                     | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n\
+                     | H01 | 1 | 主线 | progressing | 2 | 第10章 | slow | 无 | 卷 | 否 | 10 | 是 | 备注 | 悬念 |\n\
+                     | H02 | 2 | 次要 | progressing | 2 | 第12章 | slow | 无 | 卷 | 否 | 10 | 是 | 备注 | 玄幻 |\n";
+        let out = extract_relevant_threads(hooks, "");
+        assert!(out.contains("- H01: kind=suspense | 1 | 主线 | progressing"));
+        // 词表外（玄幻）→ 不臆测，原样留在行尾、无前缀。
+        assert!(out.contains("- H02: 2 | 次要 | progressing"));
+        assert!(!out.contains("kind=玄") && !out.contains("- H02: kind="));
+    }
+
+    #[test]
+    fn format_recyclable_hooks_tags_canonical_kind() {
+        use crate::models::runtime_state::{HookKind, HookStatus};
+        let hook = HookRecord {
+            kind: Some(HookKind::Suspense),
+            hook_id: "H01".into(),
+            start_chapter: 1,
+            hook_type: "plot".into(),
+            status: HookStatus::Open,
+            status_raw: "open".into(),
+            last_advanced_chapter: 2,
+            expected_payoff: "第10章兑现".into(),
+            payoff_timing: None,
+            notes: "备注".into(),
+            depends_on: None,
+            pays_off_in_arc: None,
+            core_hook: Some(true),
+            half_life_chapters: None,
+            advanced_count: None,
+            promoted: None,
+        };
+        let zh = format_recyclable_hooks(&[hook], 9, WritingLanguage::Zh);
+        // kind 标签在核心标签之前（与 TS kindTag+core 拼接序一致）。
+        assert!(zh.contains("已沉默 7 章 [kind=suspense] [核心]"));
     }
 }

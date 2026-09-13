@@ -138,6 +138,9 @@ pub struct PromiseHookInput {
     pub notes: String,
     #[serde(default)]
     pub core_hook: bool,
+    /// R23/396 号：规范类型分类透传（存量无 kind 不出键）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::models::runtime_state::HookKind>,
 }
 
 // ── 节奏债告警 ──
@@ -263,6 +266,9 @@ pub struct PromiseTimelineEntry {
     pub last_advanced_at: Option<i64>,
     pub expected_payoff: String,
     pub state: &'static str,
+    /// R23/396 号：规范类型分类透传（存量无 kind 不出键）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::models::runtime_state::HookKind>,
 }
 
 const SUMMARY_MAX_CHARS: usize = 40;
@@ -319,6 +325,7 @@ pub fn build_promise_timeline(
                 last_advanced_at,
                 expected_payoff: hook.expected_payoff.clone(),
                 state,
+                kind: hook.kind.clone(),
             }
         })
         .collect();
