@@ -979,3 +979,12 @@ export {
   type CodexRelationship,
   type EntityCodexCard,
 } from "./utils/entity-codex.js";
+export {
+  isValidSeriesId,
+  mergeCodexLayers,
+  parseSeriesCanonFile,
+  renderSeriesCodexBlock,
+  SERIES_CANON_VERSION,
+  type CodexLayerMerge,
+  type SeriesCanonFile,
+} from "./utils/series-canon.js";

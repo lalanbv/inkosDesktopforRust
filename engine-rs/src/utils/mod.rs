@@ -30,6 +30,7 @@ pub mod deconstruction;
 pub mod detection_insights;
 pub mod entity_roster;
 pub mod entity_codex;
+pub mod series_canon;
 pub mod context_filter;
 pub mod governed_context;
 pub mod governed_working_set;

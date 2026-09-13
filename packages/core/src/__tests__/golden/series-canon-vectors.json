@@ -1,0 +1,508 @@
+{
+  "meta": {
+    "contract": "R20 系列正典共享（389 号，四轮 P0）——跨书正典解析 + 双层合并 + 注入渲染",
+    "invariants": [
+      "seriesId：snake_case slug（^[a-z0-9_]{1,64}$），禁空格/连字符/大写/路径段",
+      "解析：version!==1 或 seriesId 非法或 entries 非数组 → 整包 undefined；坏条目跳过；kind 非法兜底 other；name ≤80/aliases ≤10×60/summary ≤300/facts ≤10×200/relationships ≤10、note ≤200；产物按 name 码元序",
+      "合并：book 同名条目覆盖 series 条目（覆盖即省略，精确 name 匹配）；幸存 series 按 name 码元序；book 原样返回",
+      "渲染：无命中 undefined；头「## 系列实体卡（跨书正典——遵循正典事实）」/en Series entity cards；体例与实体卡一致（summary >400 截断加 …）"
+    ]
+  },
+  "seriesId": [
+    {
+      "name": "snake_case slug valid",
+      "seriesId": "wu_dong_qian_kun",
+      "expected": true
+    },
+    {
+      "name": "hyphen and space rejected",
+      "seriesId": "wu-dong qiankun",
+      "expected": false
+    },
+    {
+      "name": "uppercase rejected",
+      "seriesId": "Series1",
+      "expected": false
+    },
+    {
+      "name": "empty rejected",
+      "seriesId": "",
+      "expected": false
+    },
+    {
+      "name": "over 64 rejected",
+      "seriesId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": false
+    },
+    {
+      "name": "exactly 64 accepted",
+      "seriesId": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+      "expected": true
+    }
+  ],
+  "parse": [
+    {
+      "name": "valid file sanitizes skips and sorts",
+      "raw": {
+        "version": 1,
+        "seriesId": "wu_dong_qian_kun",
+        "entries": [
+          {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          },
+          {
+            "name": "  ",
+            "aliases": [],
+            "kind": "person",
+            "summary": "",
+            "facts": [],
+            "relationships": []
+          },
+          {
+            "name": "异魔皇",
+            "aliases": [
+              "  ",
+              "魔主"
+            ],
+            "kind": "notakind",
+            "summary": "跨书反派摘要超出三百码元限制——长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长",
+            "facts": [
+              "跨书共享事实超出二百码元——长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长"
+            ],
+            "relationships": [
+              {
+                "target": "",
+                "note": "无目标跳过"
+              },
+              {
+                "target": "武祖",
+                "note": "宿敌"
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "version": 1,
+        "seriesId": "wu_dong_qian_kun",
+        "entries": [
+          {
+            "name": "异魔皇",
+            "aliases": [
+              "魔主"
+            ],
+            "kind": "other",
+            "summary": "跨书反派摘要超出三百码元限制——长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长",
+            "facts": [
+              "跨书共享事实超出二百码元——长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长"
+            ],
+            "relationships": [
+              {
+                "target": "武祖",
+                "note": "宿敌"
+              }
+            ]
+          },
+          {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "version mismatch rejected",
+      "raw": {
+        "version": 2,
+        "seriesId": "wu_dong",
+        "entries": []
+      },
+      "expected": null
+    },
+    {
+      "name": "invalid seriesId rejected",
+      "raw": {
+        "version": 1,
+        "seriesId": "Wu-Dong",
+        "entries": []
+      },
+      "expected": null
+    },
+    {
+      "name": "entries missing rejected",
+      "raw": {
+        "version": 1,
+        "seriesId": "wu_dong"
+      },
+      "expected": null
+    },
+    {
+      "name": "non-object raw rejected",
+      "raw": [
+        1,
+        2
+      ],
+      "expected": null
+    }
+  ],
+  "merge": [
+    {
+      "name": "book overrides series by exact name",
+      "book": [
+        {
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "summary": "拾荒少年。",
+          "facts": [
+            "怀表停摆三年"
+          ],
+          "relationships": [
+            {
+              "target": "老陈",
+              "note": "看门人"
+            }
+          ]
+        }
+      ],
+      "series": [
+        {
+          "name": "异魔皇",
+          "aliases": [
+            "魔主"
+          ],
+          "kind": "person",
+          "summary": "跨书反派。",
+          "facts": [
+            "被封印于远古"
+          ],
+          "relationships": [
+            {
+              "target": "武祖",
+              "note": "宿敌"
+            }
+          ]
+        },
+        {
+          "name": "林动",
+          "aliases": [
+            "少年"
+          ],
+          "kind": "person",
+          "summary": "拾荒少年。",
+          "facts": [
+            "怀表停摆三年"
+          ],
+          "relationships": [
+            {
+              "target": "老陈",
+              "note": "看门人"
+            }
+          ]
+        },
+        {
+          "name": "祖符石",
+          "aliases": [
+            "符石"
+          ],
+          "kind": "item",
+          "summary": "贯穿全系列的传承信物。",
+          "facts": [
+            "可吸收源气",
+            "三代同携"
+          ],
+          "relationships": [
+            {
+              "target": "林动",
+              "note": "历代持有"
+            }
+          ],
+          "firstChapter": 1
+        }
+      ],
+      "expected": {
+        "bookNames": [
+          "林动"
+        ],
+        "series": [
+          {
+            "name": "异魔皇",
+            "aliases": [
+              "魔主"
+            ],
+            "kind": "person",
+            "summary": "跨书反派。",
+            "facts": [
+              "被封印于远古"
+            ],
+            "relationships": [
+              {
+                "target": "武祖",
+                "note": "宿敌"
+              }
+            ]
+          },
+          {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "no collision keeps all series sorted",
+      "book": [
+        {
+          "name": "青镇",
+          "aliases": [],
+          "kind": "place",
+          "summary": "",
+          "facts": [],
+          "relationships": []
+        }
+      ],
+      "series": [
+        {
+          "name": "祖符石",
+          "aliases": [
+            "符石"
+          ],
+          "kind": "item",
+          "summary": "贯穿全系列的传承信物。",
+          "facts": [
+            "可吸收源气",
+            "三代同携"
+          ],
+          "relationships": [
+            {
+              "target": "林动",
+              "note": "历代持有"
+            }
+          ],
+          "firstChapter": 1
+        },
+        {
+          "name": "异魔皇",
+          "aliases": [
+            "魔主"
+          ],
+          "kind": "person",
+          "summary": "跨书反派。",
+          "facts": [
+            "被封印于远古"
+          ],
+          "relationships": [
+            {
+              "target": "武祖",
+              "note": "宿敌"
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "bookNames": [
+          "青镇"
+        ],
+        "series": [
+          {
+            "name": "异魔皇",
+            "aliases": [
+              "魔主"
+            ],
+            "kind": "person",
+            "summary": "跨书反派。",
+            "facts": [
+              "被封印于远古"
+            ],
+            "relationships": [
+              {
+                "target": "武祖",
+                "note": "宿敌"
+              }
+            ]
+          },
+          {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty book keeps all series",
+      "book": [],
+      "series": [
+        {
+          "name": "祖符石",
+          "aliases": [
+            "符石"
+          ],
+          "kind": "item",
+          "summary": "贯穿全系列的传承信物。",
+          "facts": [
+            "可吸收源气",
+            "三代同携"
+          ],
+          "relationships": [
+            {
+              "target": "林动",
+              "note": "历代持有"
+            }
+          ],
+          "firstChapter": 1
+        }
+      ],
+      "expected": {
+        "bookNames": [],
+        "series": [
+          {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          }
+        ]
+      }
+    }
+  ],
+  "render": [
+    {
+      "name": "zh series block with facts and relations",
+      "language": "zh",
+      "matches": [
+        {
+          "card": {
+            "name": "祖符石",
+            "aliases": [
+              "符石"
+            ],
+            "kind": "item",
+            "summary": "贯穿全系列的传承信物。",
+            "facts": [
+              "可吸收源气",
+              "三代同携"
+            ],
+            "relationships": [
+              {
+                "target": "林动",
+                "note": "历代持有"
+              }
+            ],
+            "firstChapter": 1
+          },
+          "hits": 2
+        }
+      ],
+      "expected": "## 系列实体卡（跨书正典——遵循正典事实）\n### 祖符石（符石）\n贯穿全系列的传承信物。\n正典事实：\n- 可吸收源气\n- 三代同携\n关系：\n- 林动: 历代持有"
+    },
+    {
+      "name": "en series block",
+      "language": "en",
+      "matches": [
+        {
+          "card": {
+            "name": "异魔皇",
+            "aliases": [
+              "魔主"
+            ],
+            "kind": "person",
+            "summary": "跨书反派。",
+            "facts": [
+              "被封印于远古"
+            ],
+            "relationships": [
+              {
+                "target": "武祖",
+                "note": "宿敌"
+              }
+            ]
+          },
+          "hits": 1
+        }
+      ],
+      "expected": "## Series entity cards (cross-book canon — follow canon facts)\n### 异魔皇（魔主）\n跨书反派。\nCanon facts:\n- 被封印于远古\nRelationships:\n- 武祖: 宿敌"
+    },
+    {
+      "name": "empty matches yield undefined",
+      "language": "zh",
+      "matches": [],
+      "expected": null
+    }
+  ]
+}
