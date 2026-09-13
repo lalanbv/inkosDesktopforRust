@@ -2539,6 +2539,7 @@ mod tests {
 
     fn test_hook_record() -> crate::models::runtime_state::HookRecord {
         crate::models::runtime_state::HookRecord {
+            kind: None,
             hook_id: String::new(),
             start_chapter: 0,
             hook_type: "main".to_string(),

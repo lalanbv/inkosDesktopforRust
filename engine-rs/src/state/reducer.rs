@@ -189,6 +189,7 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
     );
 
     HookRecord {
+        kind: None,
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter.min(incoming.start_chapter),
         hook_type: prefer_richer_text(&existing.hook_type, &incoming.hook_type),
@@ -376,6 +377,7 @@ mod tests {
 
     fn hook(id: &str, start: u32, last_adv: u32) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: start,
             hook_type: "plot".into(),

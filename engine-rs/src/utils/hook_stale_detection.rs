@@ -124,6 +124,7 @@ mod tests {
 
     fn hook(id: &str, start: u32, status: HookStatus, depends: Option<Vec<&str>>) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: start,
             hook_type: "plot".into(),

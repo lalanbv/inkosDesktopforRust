@@ -340,6 +340,7 @@ mod tests {
 
     fn hook(id: &str) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: 1,
             hook_type: "plot".into(),

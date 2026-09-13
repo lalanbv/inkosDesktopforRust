@@ -252,6 +252,7 @@ pub fn parse_pending_hooks_markdown(markdown: &str) -> Vec<HookRecord> {
         .filter(|line| !line.is_empty())
         .enumerate()
         .map(|(index, notes)| HookRecord {
+            kind: None,
             hook_id: format!("hook-{}", index + 1),
             start_chapter: 0,
             hook_type: "unspecified".to_string(),
@@ -583,6 +584,7 @@ fn parse_pending_hook_row(row: &[String]) -> HookRecord {
     let status = parse_hook_status(status_cell.clone());
 
     let mut record = HookRecord {
+        kind: None,
         hook_id: normalize_hook_id(row.first().map(|s| s.as_str())),
         start_chapter: parse_strict_chapter_integer(row.get(1).map(|s| s.as_str())),
         hook_type: cell(2),

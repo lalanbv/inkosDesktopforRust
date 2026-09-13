@@ -559,6 +559,7 @@ mod tests {
     fn format_recyclable_hooks_renders_zh_and_en() {
         use crate::models::runtime_state::HookStatus;
         let mut hook = HookRecord {
+            kind: None,
             hook_id: "H01".into(),
             start_chapter: 1,
             hook_type: "plot".into(),

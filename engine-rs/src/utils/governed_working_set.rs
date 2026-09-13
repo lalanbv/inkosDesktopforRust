@@ -553,6 +553,7 @@ mod tests {
 
     fn hook_record(id: &str, start: u32, last_advanced: u32) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.to_string(),
             start_chapter: start,
             hook_type: "main".to_string(),

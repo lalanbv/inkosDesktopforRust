@@ -61,6 +61,23 @@ pub enum HookPayoffTiming {
     Endgame,
 }
 
+/// R23/393 号：伏笔类型规范分类（≤7 类不做数量战，对标蛙趣 8 类伏笔
+/// 生命周期的取精版）。可选字段——存量 hook 无 kind 完全兼容（零迁移）；
+/// 新 hook 由 settler/architect 产出到 `hook_kind.rs` 别名表归一化。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum HookKind {
+    Promise,
+    Suspense,
+    Crisis,
+    Artifact,
+    Information,
+    Emotion,
+    Worldview,
+}
+
 /// 伏笔记录（持久化行）。
 ///
 /// `Deserialize` 为手写实现：status 原文（"pressured" 等非枚举值）归一化进枚举的
@@ -75,6 +92,9 @@ pub struct HookRecord {
     #[serde(rename = "type")]
     pub hook_type: String,
     pub status: HookStatus,
+    /// R23/393 号：规范类型分类（可选；存量无 kind 兼容，零迁移）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<HookKind>,
     /// 原始状态串（markdown/DB 单元格里的原文，如 "pressured"、"near_payoff"）。
     ///
     /// TS `StoredHook.status` 是 string，`recycleThreshold` / `isRecycleTerminalStatus`
@@ -118,6 +138,8 @@ impl<'de> Deserialize<'de> for HookRecord {
             hook_type: String,
             status: String,
             #[serde(default)]
+            kind: Option<HookKind>,
+            #[serde(default)]
             status_raw: Option<String>,
             last_advanced_chapter: u32,
             #[serde(default)]
@@ -156,6 +178,7 @@ impl<'de> Deserialize<'de> for HookRecord {
             start_chapter: raw.start_chapter,
             hook_type: raw.hook_type,
             status,
+            kind: raw.kind,
             status_raw,
             last_advanced_chapter: raw.last_advanced_chapter,
             expected_payoff: raw.expected_payoff,

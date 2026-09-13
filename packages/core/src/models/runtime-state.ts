@@ -25,11 +25,29 @@ export const HookPayoffTimingSchema = z.enum([
 ]);
 export type HookPayoffTiming = z.infer<typeof HookPayoffTimingSchema>;
 
+/**
+ * R23/393 号：伏笔类型规范分类（≤7 类不做数量战，对标蛙趣 8 类伏笔生命
+ * 周期的取精版）。可选字段——存量 hook 无 kind 完全兼容（零迁移）；新
+ * hook 由 settler/architect 产出到 `hook-kind.ts` 的别名表归一化。
+ */
+export const HookKindSchema = z.enum([
+  "promise",
+  "suspense",
+  "crisis",
+  "artifact",
+  "information",
+  "emotion",
+  "worldview",
+]);
+export type HookKind = z.infer<typeof HookKindSchema>;
+
 export const HookRecordSchema = z.object({
   hookId: z.string().min(1),
   startChapter: z.number().int().min(0),
   type: z.string().min(1),
   status: HookStatusSchema,
+  /** R23/393 号：规范类型分类（可选；存量无 kind 兼容，零迁移）。 */
+  kind: HookKindSchema.optional(),
   lastAdvancedChapter: z.number().int().min(0),
   expectedPayoff: z.string().default(""),
   payoffTiming: HookPayoffTimingSchema.optional(),

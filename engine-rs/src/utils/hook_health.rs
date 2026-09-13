@@ -271,6 +271,7 @@ mod tests {
 
     fn hook(id: &str, start: u32, last_adv: u32, timing: Option<HookPayoffTiming>) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: start,
             hook_type: "mystery".into(),

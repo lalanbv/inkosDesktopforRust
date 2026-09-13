@@ -254,6 +254,7 @@ mod tests {
 
     fn hook(id: &str, start: u32, last: u32, status: HookStatus) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: start,
             hook_type: "plot".into(),

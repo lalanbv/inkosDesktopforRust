@@ -24,6 +24,7 @@ export {
   type RuntimeStateLanguage,
   type StateManifest,
   type HookStatus,
+  type HookKind,
   type HookRecord,
   type HooksState,
   type ChapterSummaryRow,
@@ -37,6 +38,7 @@ export {
   RuntimeStateLanguageSchema,
   StateManifestSchema,
   HookStatusSchema,
+  HookKindSchema,
   HookRecordSchema,
   HooksStateSchema,
   ChapterSummaryRowSchema,
@@ -48,6 +50,13 @@ export {
   NewHookCandidateSchema,
   RuntimeStateDeltaSchema,
 } from "./models/runtime-state.js";
+// R23/393 号：伏笔类型规范分类（≤7 类）——别名归一化 + 双语标签。
+export {
+  HOOK_KIND_IDS,
+  hookKindLabel,
+  normalizeHookKind,
+  type HookKindId,
+} from "./utils/hook-kind.js";
 export {
   type PlayActionKind,
   type PlayActionIntentInput,

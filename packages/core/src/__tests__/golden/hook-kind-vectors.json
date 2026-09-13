@@ -1,0 +1,355 @@
+{
+  "meta": {
+    "contract": "R23 伏笔类型标注（393 号，四轮 P1）——HookKind ≤7 类规范分类",
+    "invariants": [
+      "规范 7 类：promise/suspense/crisis/artifact/information/emotion/worldview；不做数量战",
+      "normalize：trim+小写化后别名表精确匹配；未知返回 undefined/null 绝不臆测",
+      "labels：zh 承诺/悬念/危机/物品/信息/情感/世界观；en Promise/Suspense/Crisis/Artifact/Information/Emotion/Worldview",
+      "HookRecord.kind 可选：存量无 kind 零迁移；非法 kind 值整记录拒收（zod 严格枚举语义）"
+    ]
+  },
+  "normalize": [
+    {
+      "name": "en alias case-insensitive",
+      "raw": "  Mystery ",
+      "expected": "suspense"
+    },
+    {
+      "name": "alias promise:promise",
+      "raw": "promise",
+      "expected": "promise"
+    },
+    {
+      "name": "alias promise:承诺",
+      "raw": "承诺",
+      "expected": "promise"
+    },
+    {
+      "name": "alias promise:约定",
+      "raw": "约定",
+      "expected": "promise"
+    },
+    {
+      "name": "alias promise:誓言",
+      "raw": "誓言",
+      "expected": "promise"
+    },
+    {
+      "name": "alias suspense:suspense",
+      "raw": "suspense",
+      "expected": "suspense"
+    },
+    {
+      "name": "alias suspense:mystery",
+      "raw": "mystery",
+      "expected": "suspense"
+    },
+    {
+      "name": "alias suspense:悬念",
+      "raw": "悬念",
+      "expected": "suspense"
+    },
+    {
+      "name": "alias suspense:谜团",
+      "raw": "谜团",
+      "expected": "suspense"
+    },
+    {
+      "name": "alias crisis:crisis",
+      "raw": "crisis",
+      "expected": "crisis"
+    },
+    {
+      "name": "alias crisis:危机",
+      "raw": "危机",
+      "expected": "crisis"
+    },
+    {
+      "name": "alias crisis:险局",
+      "raw": "险局",
+      "expected": "crisis"
+    },
+    {
+      "name": "alias crisis:威胁",
+      "raw": "威胁",
+      "expected": "crisis"
+    },
+    {
+      "name": "alias artifact:artifact",
+      "raw": "artifact",
+      "expected": "artifact"
+    },
+    {
+      "name": "alias artifact:relic",
+      "raw": "relic",
+      "expected": "artifact"
+    },
+    {
+      "name": "alias artifact:物品",
+      "raw": "物品",
+      "expected": "artifact"
+    },
+    {
+      "name": "alias artifact:信物",
+      "raw": "信物",
+      "expected": "artifact"
+    },
+    {
+      "name": "alias artifact:道具",
+      "raw": "道具",
+      "expected": "artifact"
+    },
+    {
+      "name": "alias information:information",
+      "raw": "information",
+      "expected": "information"
+    },
+    {
+      "name": "alias information:info",
+      "raw": "info",
+      "expected": "information"
+    },
+    {
+      "name": "alias information:secret",
+      "raw": "secret",
+      "expected": "information"
+    },
+    {
+      "name": "alias information:信息",
+      "raw": "信息",
+      "expected": "information"
+    },
+    {
+      "name": "alias information:情报",
+      "raw": "情报",
+      "expected": "information"
+    },
+    {
+      "name": "alias information:秘密",
+      "raw": "秘密",
+      "expected": "information"
+    },
+    {
+      "name": "alias emotion:emotion",
+      "raw": "emotion",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias emotion:relationship",
+      "raw": "relationship",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias emotion:romance",
+      "raw": "romance",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias emotion:情感",
+      "raw": "情感",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias emotion:感情",
+      "raw": "感情",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias emotion:关系",
+      "raw": "关系",
+      "expected": "emotion"
+    },
+    {
+      "name": "alias worldview:worldview",
+      "raw": "worldview",
+      "expected": "worldview"
+    },
+    {
+      "name": "alias worldview:lore",
+      "raw": "lore",
+      "expected": "worldview"
+    },
+    {
+      "name": "alias worldview:世界观",
+      "raw": "世界观",
+      "expected": "worldview"
+    },
+    {
+      "name": "alias worldview:设定",
+      "raw": "设定",
+      "expected": "worldview"
+    },
+    {
+      "name": "unknown 'relationship-type' -> null",
+      "raw": "relationship-type",
+      "expected": null
+    },
+    {
+      "name": "unknown 'plot' -> null",
+      "raw": "plot",
+      "expected": null
+    },
+    {
+      "name": "unknown 'source-risk' -> null",
+      "raw": "source-risk",
+      "expected": null
+    },
+    {
+      "name": "unknown '伏笔' -> null",
+      "raw": "伏笔",
+      "expected": null
+    },
+    {
+      "name": "unknown '主题' -> null",
+      "raw": "主题",
+      "expected": null
+    },
+    {
+      "name": "unknown '' -> null",
+      "raw": "",
+      "expected": null
+    },
+    {
+      "name": "unknown 'PROMISES' -> null",
+      "raw": "PROMISES",
+      "expected": null
+    },
+    {
+      "name": "unknown '未注册类型' -> null",
+      "raw": "未注册类型",
+      "expected": null
+    }
+  ],
+  "labels": [
+    {
+      "name": "label promise:zh",
+      "kind": "promise",
+      "language": "zh",
+      "expected": "承诺"
+    },
+    {
+      "name": "label promise:en",
+      "kind": "promise",
+      "language": "en",
+      "expected": "Promise"
+    },
+    {
+      "name": "label suspense:zh",
+      "kind": "suspense",
+      "language": "zh",
+      "expected": "悬念"
+    },
+    {
+      "name": "label suspense:en",
+      "kind": "suspense",
+      "language": "en",
+      "expected": "Suspense"
+    },
+    {
+      "name": "label crisis:zh",
+      "kind": "crisis",
+      "language": "zh",
+      "expected": "危机"
+    },
+    {
+      "name": "label crisis:en",
+      "kind": "crisis",
+      "language": "en",
+      "expected": "Crisis"
+    },
+    {
+      "name": "label artifact:zh",
+      "kind": "artifact",
+      "language": "zh",
+      "expected": "物品"
+    },
+    {
+      "name": "label artifact:en",
+      "kind": "artifact",
+      "language": "en",
+      "expected": "Artifact"
+    },
+    {
+      "name": "label information:zh",
+      "kind": "information",
+      "language": "zh",
+      "expected": "信息"
+    },
+    {
+      "name": "label information:en",
+      "kind": "information",
+      "language": "en",
+      "expected": "Information"
+    },
+    {
+      "name": "label emotion:zh",
+      "kind": "emotion",
+      "language": "zh",
+      "expected": "情感"
+    },
+    {
+      "name": "label emotion:en",
+      "kind": "emotion",
+      "language": "en",
+      "expected": "Emotion"
+    },
+    {
+      "name": "label worldview:zh",
+      "kind": "worldview",
+      "language": "zh",
+      "expected": "世界观"
+    },
+    {
+      "name": "label worldview:en",
+      "kind": "worldview",
+      "language": "en",
+      "expected": "Worldview"
+    }
+  ],
+  "recordRoundtrip": [
+    {
+      "name": "record without kind parses (legacy zero-migration)",
+      "input": {
+        "hookId": "mentor-oath",
+        "startChapter": 8,
+        "type": "relationship",
+        "status": "progressing",
+        "lastAdvancedChapter": 12,
+        "expectedPayoff": "揭开师债真相",
+        "notes": ""
+      },
+      "parses": true,
+      "kind": null
+    },
+    {
+      "name": "record with canonical kind roundtrips",
+      "input": {
+        "hookId": "mentor-oath",
+        "startChapter": 8,
+        "type": "relationship",
+        "status": "progressing",
+        "lastAdvancedChapter": 12,
+        "expectedPayoff": "揭开师债真相",
+        "notes": "",
+        "kind": "emotion"
+      },
+      "parses": true,
+      "kind": "emotion"
+    },
+    {
+      "name": "record with non-canonical kind is rejected",
+      "input": {
+        "hookId": "mentor-oath",
+        "startChapter": 8,
+        "type": "relationship",
+        "status": "progressing",
+        "lastAdvancedChapter": 12,
+        "expectedPayoff": "揭开师债真相",
+        "notes": "",
+        "kind": "plot"
+      },
+      "parses": false,
+      "kind": null
+    }
+  ]
+}

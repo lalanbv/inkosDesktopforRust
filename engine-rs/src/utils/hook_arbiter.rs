@@ -278,6 +278,7 @@ fn merge_candidate_into_existing_hook(
         Some(&notes),
     );
     HookRecord {
+        kind: None,
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter,
         hook_type: prefer_richer_text(&existing.hook_type, &candidate.hook_type),
@@ -308,6 +309,7 @@ fn create_canonical_hook(candidate: &PendingCandidate, chapter: u32, existing_id
         Some(candidate.notes.trim()),
     );
     HookRecord {
+        kind: None,
         hook_id: build_canonical_hook_id(candidate, existing_ids),
         start_chapter: chapter,
         hook_type: candidate.hook_type.trim().to_string(),
@@ -585,6 +587,7 @@ mod tests {
 
     fn hook(id: &str, hook_type: &str, expected: &str) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.to_string(),
             start_chapter: 1,
             hook_type: hook_type.to_string(),
@@ -630,6 +633,7 @@ mod tests {
     fn maps_duplicate_family_candidate_with_novelty_onto_existing() {
         // 对齐 TS 第 1 个测试：候选与既有同族但有新内容 → 映射回既有 id，lastAdvanced=chapter。
         let existing = HookRecord {
+            kind: None,
             hook_id: "anonymous-source-scope".to_string(),
             start_chapter: 3,
             hook_type: "source-risk".to_string(),
@@ -666,6 +670,7 @@ mod tests {
     fn downgrades_pure_restatement_to_mention() {
         // 对齐 TS 第 2 个测试：候选与既有完全相同 → 降级为 mention。
         let existing = HookRecord {
+            kind: None,
             hook_id: "mentor-debt".to_string(),
             start_chapter: 1,
             hook_type: "relationship".to_string(),
@@ -777,6 +782,7 @@ mod tests {
         // 既不影响已知名单内 upsert，也不影响 mention/resolve/defer。
         let existing = hook("h1", "mystery", "Reveal the old secret");
         let upsert = HookRecord {
+            kind: None,
             hook_id: "h1".to_string(),
             start_chapter: 1,
             hook_type: "mystery".to_string(),
@@ -828,6 +834,7 @@ mod tests {
         // delta upsert 一个已知 id → 直接保留，不经准入。
         let existing = hook("h1", "mystery", "Reveal the old secret");
         let upsert = HookRecord {
+            kind: None,
             hook_id: "h1".to_string(),
             start_chapter: 1,
             hook_type: "mystery".to_string(),

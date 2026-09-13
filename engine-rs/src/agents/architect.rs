@@ -823,6 +823,7 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
 
             let status_cell = cell(3);
             HookRecord {
+                kind: None,
                 hook_id: {
                     let id = cell(0);
                     if id.is_empty() { format!("hook-{}", index + 1) } else { id }

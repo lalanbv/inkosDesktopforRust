@@ -186,6 +186,7 @@ mod promotion_tests {
 
     fn hook(id: &str, advanced: Option<u32>, promoted: Option<bool>) -> HookRecord {
         HookRecord {
+            kind: None,
             hook_id: id.into(),
             start_chapter: 1,
             hook_type: "plot".into(),
