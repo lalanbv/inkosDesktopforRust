@@ -1665,6 +1665,10 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     checks["retrieval"] = json!({
         "mode": if embedding_configured { "semantic" } else { "fts5-fallback" },
         "embeddingConfigured": embedding_configured,
+        // R12/381 号：向量引擎标注——rusqlite 未启用 load_extension feature，
+        // 探测恒不可用 → memory-cosine（380 号决策表安全回退路径）。
+        "vectorEngine": "memory-cosine",
+        "vecExtensionAvailable": false,
     });
     // 195 号：书籍级写作阻塞预警——最新章 state-degraded 会让下一章 write-next
     // 直接报错（PendingStateRepair），此前 doctor 不预警，用户只能等写作失败

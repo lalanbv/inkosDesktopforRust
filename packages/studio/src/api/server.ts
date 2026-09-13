@@ -7340,12 +7340,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       retrieval: {
         mode: embeddingConfigured ? "semantic" : "fts5-fallback",
         embeddingConfigured,
+        // R12/381 号：向量引擎标注（决策表 380 号；探测封装见下）。
+        vectorEngine: "memory-cosine",
+        vecExtensionAvailable: false,
+        chunkCount: 0,
       },
     };
 
     try {
       const books = await state.listBooks();
       checks.bookCount = books.length;
+      // R12/381 号：chunk 总量聚合（vectorEngine 决策输入；380 号阈值 5000）。
+      try {
+        const { MemoryDB } = await import("@actalk/inkos-core");
+        let chunkTotal = 0;
+        for (const bookIdItem of books) {
+          try {
+            chunkTotal += new MemoryDB(join(root, "books", bookIdItem)).chunkVectorCount;
+          } catch {
+            // 单书库损坏跳过
+          }
+        }
+        checks.retrieval.chunkCount = chunkTotal;
+      } catch {
+        // 聚合失败保留 0
+      }
       // 195 号：书籍级写作阻塞预警——与 Rust get_doctor 对齐：最新章
       // state-degraded 会让下一章 write-next 直接报错，doctor 需前置提示。
       for (const bookId of books) {
