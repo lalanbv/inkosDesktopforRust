@@ -47,6 +47,44 @@ pub const PLANNER_NAME: &str = "planner";
 /// memo 解析重试上限。对齐 TS `MEMO_RETRY_LIMIT`。
 pub const MEMO_RETRY_LIMIT: usize = 3;
 
+/// R28/399 号：复读门对照文本——近 GOAL_REPEAT_WINDOW 章摘要的
+/// 「章名。事件前 120 字」。仅取当前章之前的章（含上一章）。
+fn build_goal_repeat_references(
+    chapter_summaries_raw: &str,
+    chapter_number: u32,
+) -> Vec<String> {
+    let mut rows: Vec<crate::state::memory_db::StoredSummary> =
+        crate::utils::story_markdown::parse_chapter_summaries_markdown(chapter_summaries_raw)
+            .into_iter()
+            .filter(|row| row.chapter > 0 && row.chapter < i64::from(chapter_number))
+            .collect();
+    rows.sort_by_key(|row| row.chapter);
+    if rows.len() > crate::utils::goal_repeat_gate::GOAL_REPEAT_WINDOW {
+        let drop = rows.len() - crate::utils::goal_repeat_gate::GOAL_REPEAT_WINDOW;
+        rows.drain(..drop);
+    }
+    rows.into_iter()
+        .map(|row| {
+            let events_head: String = row.events.chars().take(120).collect();
+            format!("{}。{events_head}", row.title)
+        })
+        .collect()
+}
+
+/// 复读门重规划反馈块（双语；相似度留给作者排障面，写作链内只警示）。
+fn goal_repeat_feedback(en: bool, similarity: f64) -> String {
+    let pct = format!("{}%", (similarity * 100.0).round() as i64);
+    if en {
+        format!(
+            "## Goal repeat gate\nThe chapter goal above echoes a recent chapter summary (similarity {pct}). It must advance the story: state what NEW change this chapter achieves — new information, pressure, relationship, objective or risk — instead of restating an already-written chapter."
+        )
+    } else {
+        format!(
+            "## 本章目标复读门\n上面的本章目标与近章摘要高度重合（相似度 {pct}）。目标必须推进故事：写明本章要发生的**新变化**——新的信息、压力、关系、目标或风险——而不是复述已经写过的章节。"
+        )
+    }
+}
+
 /// planChapter 入参。对齐 TS `PlanChapterInput`。
 pub struct PlanChapterInput<'a> {
     pub book_language: &'a str,
@@ -381,6 +419,12 @@ pub async fn plan_chapter_memo(
 
     let mut current_user_message = user_message.clone();
     let mut last_error: Option<PlannerParseError> = None;
+    // R28/399 号：复读门只重规划一次（v5 风险表——防误杀合法回环章节）。
+    let mut goal_repeat_retried = false;
+    let recent_goal_references = build_goal_repeat_references(
+        input.chapter_summaries_raw,
+        input.chapter_number,
+    );
 
     for attempt in 0..MEMO_RETRY_LIMIT {
         let response = chat
@@ -403,7 +447,36 @@ pub async fn plan_chapter_memo(
             .map_err(PlanChapterError::Chat)?;
 
         match parse_memo(&response.content, input.chapter_number, input.is_golden_opening) {
-            Ok(memo) => return Ok(memo),
+            Ok(memo) => {
+                // R28/399 号：目标防复读门——goal 与近 N 章摘要（章名+事件）重合时
+                // 带反馈重规划一次；仍犯降级告警保留 memo（不阻断、不进 fallback）。
+                let verdict = crate::utils::goal_repeat_gate::evaluate_goal_repeat(
+                    &memo.goal,
+                    &recent_goal_references,
+                    None,
+                );
+                if verdict.repeat {
+                    if goal_repeat_retried {
+                        tracing::warn!(
+                            "[planner] goal repeat gate: re-planned goal still echoes recent summaries (similarity {}); keeping memo with warning",
+                            verdict.max_similarity
+                        );
+                        return Ok(memo);
+                    }
+                    goal_repeat_retried = true;
+                    tracing::warn!(
+                        "[planner] goal repeat gate: chapter {} goal echoes recent summaries (similarity {}); re-planning once",
+                        input.chapter_number,
+                        verdict.max_similarity
+                    );
+                    current_user_message = format!(
+                        "{user_message}\n\n{}\n{retry_feedback_trailer}",
+                        goal_repeat_feedback(en, verdict.max_similarity)
+                    );
+                    continue;
+                }
+                return Ok(memo);
+            }
             Err(error) => {
                 tracing::warn!(
                     "[planner] memo parse failed (attempt {}/{}): {}",
@@ -1631,6 +1704,86 @@ mod tests {
         // 兜底 goal 51 字，超 50 上限 → make_display_goal 截 47 码元 + "..."。
         assert_eq!(memo_en.goal, "Continue chapter 1 according to the current out...");
         assert!(memo_en.body.contains("The model failed to produce a valid chapter memo"));
+    }
+
+    fn memo_with_goal(chapter: u32, goal: &str) -> String {
+        valid_memo(chapter).replace("推进主线，兑现玉符第一步", goal)
+    }
+
+    const SUMMARY_WITH_GATE_TARGET: &str = "| 章 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\
+| --- | --- | --- | --- | --- | --- | --- | --- |\n\
+| 4 | 追查七号门异常 | 阿泽 |  |  |  | 紧绷 | 调查 |";
+
+    #[tokio::test]
+    async fn goal_repeat_gate_replans_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let story = dir.path().join("story");
+        tokio::fs::create_dir_all(&story).await.unwrap();
+
+        // 第一次 goal 与近章摘要标题同文（exact），反馈后第二次给新目标。
+        let chat = MockChat::new(vec![
+            memo_with_goal(5, "追查七号门异常"),
+            memo_with_goal(5, "潜入厂主办公室拍下账本内页"),
+        ]);
+        let memo = plan_chapter_memo(
+            &chat,
+            &PlanChapterMemoInput {
+                story_dir: &story,
+                book_dir: dir.path(),
+                chapter_number: 5,
+                is_golden_opening: false,
+                fallback_goal: "兜底目标",
+                chapter_summaries_raw: SUMMARY_WITH_GATE_TARGET,
+                previous_ending_excerpt: None,
+                brief: None,
+                chapter_context: None,
+                recyclable_hooks: &[],
+                language: WritingLanguage::Zh,
+                chapter_word_count: 3000,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(memo.goal, "潜入厂主办公室拍下账本内页");
+        let calls = chat.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[1].0[1].content.contains("本章目标复读门"));
+    }
+
+    #[tokio::test]
+    async fn goal_repeat_gate_degrades_after_one_replan() {
+        let dir = tempfile::tempdir().unwrap();
+        let story = dir.path().join("story");
+        tokio::fs::create_dir_all(&story).await.unwrap();
+
+        // 两次都复读：只重规划一次，第二次仍犯直接保留（降级不阻断）。
+        let chat = MockChat::new(vec![
+            memo_with_goal(5, "追查七号门异常"),
+            memo_with_goal(5, "追查七号门异常"),
+        ]);
+        let memo = plan_chapter_memo(
+            &chat,
+            &PlanChapterMemoInput {
+                story_dir: &story,
+                book_dir: dir.path(),
+                chapter_number: 5,
+                is_golden_opening: false,
+                fallback_goal: "兜底目标",
+                chapter_summaries_raw: SUMMARY_WITH_GATE_TARGET,
+                previous_ending_excerpt: None,
+                brief: None,
+                chapter_context: None,
+                recyclable_hooks: &[],
+                language: WritingLanguage::Zh,
+                chapter_word_count: 3000,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(memo.goal, "追查七号门异常");
+        assert_eq!(chat.calls.lock().unwrap().len(), 2);
     }
 
     #[test]

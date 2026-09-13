@@ -1,0 +1,186 @@
+{
+  "_header": "R28 章节目标防复读门共享向量（399 号，v5 五轮规划 P1）。唯一事实源本文件；TS 断言 src/__tests__/golden-goal-repeat.test.ts，Rust 差分 engine-rs/tests/golden_goal_repeat_diff.rs。归一化=ASCII 小写+保留字母/数字/汉字；相似度=字符 bigram 集合 Dice，4 位小数向下截断；判定=exactMatch 或 maxSimilarity≥阈值（缺省 0.8）；空对照/空 goal 恒 false。",
+  "normalize": [
+    {
+      "name": "zh-punct-and-whitespace",
+      "input": "林秋 真正拿到账本，并当众揭穿厂主！",
+      "expected": "林秋真正拿到账本并当众揭穿厂主"
+    },
+    {
+      "name": "ascii-case-folds",
+      "input": "Recover The STASH",
+      "expected": "recoverthestash"
+    },
+    {
+      "name": "fullwidth-latin-dropped",
+      "input": "ｄｅｍｏ 目标",
+      "expected": "目标"
+    },
+    {
+      "name": "digits-kept",
+      "input": "第 3 次谈判！",
+      "expected": "第3次谈判"
+    },
+    {
+      "name": "kana-not-kept",
+      "input": "目標ダ",
+      "expected": "目標"
+    },
+    {
+      "name": "empty",
+      "input": "。！ 　",
+      "expected": ""
+    }
+  ],
+  "similarity": [
+    {
+      "name": "identical",
+      "input": {
+        "a": "拿到账本并揭穿厂主",
+        "b": "拿到账本并揭穿厂主"
+      },
+      "expected": 1.0
+    },
+    {
+      "name": "near-duplicate-goal-vs-summary",
+      "input": {
+        "a": "林秋拿到账本并当众揭穿厂主",
+        "b": "林秋拿到账本，并当众揭穿了厂主"
+      },
+      "expected": 0.88
+    },
+    {
+      "name": "unrelated",
+      "input": {
+        "a": "运送军火进城",
+        "b": "师门血案真相浮现"
+      },
+      "expected": 0.0
+    },
+    {
+      "name": "partial-overlap",
+      "input": {
+        "a": "账本",
+        "b": "账本下落"
+      },
+      "expected": 0.5
+    },
+    {
+      "name": "short-degenerate-equal",
+      "input": {
+        "a": "账",
+        "b": "账"
+      },
+      "expected": 1.0
+    },
+    {
+      "name": "short-degenerate-diff",
+      "input": {
+        "a": "账",
+        "b": "刀"
+      },
+      "expected": 0.0
+    },
+    {
+      "name": "empty-a",
+      "input": {
+        "a": "！",
+        "b": "拿到账本"
+      },
+      "expected": 0.0
+    }
+  ],
+  "evaluate": [
+    {
+      "name": "repeat-exact-goal-echoes-summary",
+      "input": {
+        "goal": "林秋拿到账本",
+        "references": [
+          "林秋拿到账本",
+          "别的线"
+        ],
+        "threshold": null
+      },
+      "expected": {
+        "repeat": true,
+        "maxSimilarity": 1.0,
+        "exactMatch": true
+      }
+    },
+    {
+      "name": "repeat-high-similarity",
+      "input": {
+        "goal": "林秋拿到账本并当众揭穿厂主",
+        "references": [
+          "上章：林秋拿到账本，并当众揭穿了厂主",
+          "支线推进"
+        ],
+        "threshold": null
+      },
+      "expected": {
+        "repeat": true,
+        "maxSimilarity": 0.8148,
+        "exactMatch": false
+      }
+    },
+    {
+      "name": "clean-new-goal",
+      "input": {
+        "goal": "护送账本出城并甩开追兵",
+        "references": [
+          "林秋拿到账本，当众揭穿厂主",
+          "师门血案浮出水面"
+        ],
+        "threshold": null
+      },
+      "expected": {
+        "repeat": false,
+        "maxSimilarity": 0.0952,
+        "exactMatch": false
+      }
+    },
+    {
+      "name": "empty-references-first-chapter",
+      "input": {
+        "goal": "拿到账本",
+        "references": [],
+        "threshold": null
+      },
+      "expected": {
+        "repeat": false,
+        "maxSimilarity": 0.0,
+        "exactMatch": false
+      }
+    },
+    {
+      "name": "custom-threshold-lowers-gate",
+      "input": {
+        "goal": "运送军火进城",
+        "references": [
+          "运送军火进城关"
+        ],
+        "threshold": 0.7
+      },
+      "expected": {
+        "repeat": true,
+        "maxSimilarity": 0.909,
+        "exactMatch": false
+      }
+    },
+    {
+      "name": "threshold-boundary-just-below",
+      "input": {
+        "goal": "拿到账本并揭穿",
+        "references": [
+          "拿到账本去揭穿"
+        ],
+        "threshold": 0.8
+      },
+      "expected": {
+        "repeat": false,
+        "maxSimilarity": 0.6666,
+        "exactMatch": false
+      }
+    }
+  ]
+}

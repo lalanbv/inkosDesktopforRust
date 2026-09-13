@@ -12,6 +12,10 @@ export default defineConfig({
       "@actalk/inkos-core/interactive-film/evaluator": resolve(__dirname, "../core/src/interactive-film/evaluator.ts"),
       "@actalk/inkos-core/interactive-film/graph-schema": resolve(__dirname, "../core/src/interactive-film/graph-schema.ts"),
       "@actalk/inkos-core/forecast/schema": resolve(__dirname, "../core/src/forecast/schema.ts"),
+      // 399 号：core exports 新增的三个子路径（hook-kind 由 R23 引入）。
+      "@actalk/inkos-core/utils/hook-kind": resolve(__dirname, "../core/src/utils/hook-kind.ts"),
+      "@actalk/inkos-core/utils/author-report": resolve(__dirname, "../core/src/utils/author-report.ts"),
+      "@actalk/inkos-core/utils/author-error-catalog": resolve(__dirname, "../core/src/utils/author-error-catalog.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

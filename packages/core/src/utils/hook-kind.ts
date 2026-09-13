@@ -22,6 +22,9 @@ export const HOOK_KIND_IDS = [
 ] as const;
 
 export type HookKindId = (typeof HOOK_KIND_IDS)[number];
+// 规范类型随本模块对外暴露（子路径消费者 `import { type HookKind }`）；
+// Rust 侧 hook_kind.rs 同样 re-export HookKind，双端同构。
+export type { HookKind } from "../models/runtime-state.js";
 
 /** 别名表：小写化后精确匹配（zh 别名原样；en 大小写不敏感）。 */
 const KIND_ALIASES: Readonly<Record<string, HookKind>> = {

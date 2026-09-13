@@ -135,7 +135,7 @@ function buildChapterMemoContract(language: "zh" | "en", governed: boolean): str
 
 You will receive a chapter_memo composed of 7 markdown sections:
 
-- ## 当前任务 → the concrete action this chapter must complete; stay aligned with it throughout
+- ## 当前任务 → the concrete action this chapter must complete; stay aligned with it throughout. The goal must NOT restate a recent chapter summary or repeat an already-written chapter — this chapter must advance something NEW (information / pressure / relationship / objective / risk)
 - ## 读者此刻在等什么 → controls how emotional gaps are created / delayed / paid off
 - ## 该兑现的 / 暂不掀的 → payoffs that must land this chapter + cards you must NOT reveal
 - ## 日常/过渡承担什么任务 → function map for non-conflict passages ([passage location] → [function])
@@ -152,7 +152,7 @@ Address each section in order when drafting the chapter. Every section must leav
 
 你将收到本章的 chapter_memo，由 7 段 markdown 组成：
 
-- ## 当前任务 → 本章必须完成的具体动作，写作时始终对齐这条
+- ## 当前任务 → 本章必须完成的具体动作，写作时始终对齐这条。目标不得复述近章摘要或重复已经写过的章节——本章必须推进**新的变化**（信息/压力/关系/目标/风险）
 - ## 读者此刻在等什么 → 控制情绪缺口的制造/延迟/兑现程度
 - ## 该兑现的 / 暂不掀的 → 本章必须兑现的伏笔清单 + 必须压住不掀的底牌
 - ## 日常/过渡承担什么任务 → 非冲突段落的功能映射（[段落位置] → [承担功能]）

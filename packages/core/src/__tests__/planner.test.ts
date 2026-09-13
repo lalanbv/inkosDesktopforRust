@@ -391,4 +391,76 @@ ${VALID_EN_BODY}
     expect(result.intent.mustAvoid).toContain("禁止主角降智");
     expect(result.intent.mustAvoid).toContain("禁止神化反派");
   });
+
+  it("re-plans once when the memo goal echoes a recent summary (R28/399)", async () => {
+    const storyDir = join(bookDir, "story");
+    // 近章摘要：title 与重复目标完全同文（events 留空锁 exact-match 分支）。
+    await writeFile(
+      join(storyDir, "chapter_summaries.md"),
+      [
+        "| 章 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 4 | 追查七号门异常 | 阿泽 |  |  |  | 紧绷 | 调查 |",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const repeatGoal = "追查七号门异常";
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion")
+      .mockResolvedValueOnce({
+        content: validMemoRawWithGoal(5, repeatGoal),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>)
+      .mockResolvedValueOnce({
+        content: validMemoRawWithGoal(5, "潜入厂主办公室拍下账本内页"),
+        usage: ZERO_USAGE,
+      } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 5,
+    });
+
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+    // 第二次调用带复读门反馈块（chatCompletion(client, model, messages, …)）。
+    const secondMessages = chatSpy.mock.calls[1]![2] as Array<{ role: string; content: string }>;
+    expect(secondMessages.at(-1)?.content).toContain("本章目标复读门");
+    expect(result.memo.goal).toBe("潜入厂主办公室拍下账本内页");
+  });
+
+  it("keeps a still-repeating goal with a degraded pass instead of failing (R28/399)", async () => {
+    const storyDir = join(bookDir, "story");
+    await writeFile(
+      join(storyDir, "chapter_summaries.md"),
+      [
+        "| 章 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 4 | 追查七号门异常 | 阿泽 |  |  |  | 紧绷 | 调查 |",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const chatSpy = vi.spyOn(llmProvider, "chatCompletion").mockResolvedValue({
+      content: validMemoRawWithGoal(5, "追查七号门异常"),
+      usage: ZERO_USAGE,
+    } as unknown as Awaited<ReturnType<typeof llmProvider.chatCompletion>>);
+
+    const result = await makePlanner().planChapter({
+      book: makeBook(),
+      bookDir,
+      chapterNumber: 5,
+    });
+
+    // 第一次 gate 重规划 + 第二次仍犯直接保留（不再重试）——共 2 次调用。
+    expect(chatSpy).toHaveBeenCalledTimes(2);
+    expect(result.memo.goal).toBe("追查七号门异常");
+  });
 });
+
+function validMemoRawWithGoal(chapter: number, goal: string): string {
+  return validMemoRaw(chapter).replace(
+    "把七号门被动过手脚钉成现场实证",
+    goal,
+  );
+}

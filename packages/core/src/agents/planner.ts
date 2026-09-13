@@ -21,6 +21,11 @@ import {
 } from "../utils/planning-materials.js";
 import { parseMemo, PlannerParseError } from "../utils/chapter-memo-parser.js";
 import {
+  GOAL_REPEAT_WINDOW,
+  evaluateGoalRepeat,
+} from "../utils/goal-repeat-gate.js";
+import { parseChapterSummariesMarkdown } from "../utils/story-markdown.js";
+import {
   buildPlannerUserMessage,
   getPlannerMemoSystemPrompt,
 } from "./planner-prompts.js";
@@ -55,6 +60,28 @@ export interface PlanChapterOutput {
 }
 
 const MEMO_RETRY_LIMIT = 3;
+
+/**
+ * R28/399 号：复读门对照文本——近 GOAL_REPEAT_WINDOW 章摘要的
+ * 「章名。事件前 120 字」。仅取当前章之前的章（含上一章）。
+ */
+function buildGoalRepeatReferences(
+  chapterSummariesRaw: string,
+  chapterNumber: number,
+): string[] {
+  const summaries = parseChapterSummariesMarkdown(chapterSummariesRaw)
+    .filter((row) => row.chapter > 0 && row.chapter < chapterNumber)
+    .slice(-GOAL_REPEAT_WINDOW);
+  return summaries.map((row) => `${row.title}。${(row.events ?? "").slice(0, 120)}`);
+}
+
+/** 复读门重规划反馈块（双语；相似度留给作者排障面，写作链内只警示）。 */
+function goalRepeatFeedback(language: "zh" | "en", similarity: number): string {
+  const pct = `${Math.round(similarity * 100)}%`;
+  return language === "en"
+    ? `## Goal repeat gate\nThe chapter goal above echoes a recent chapter summary (similarity ${pct}). It must advance the story: state what NEW change this chapter achieves — new information, pressure, relationship, objective or risk — instead of restating an already-written chapter.`
+    : `## 本章目标复读门\n上面的本章目标与近章摘要高度重合（相似度 ${pct}）。目标必须推进故事：写明本章要发生的**新变化**——新的信息、压力、关系、目标或风险——而不是复述已经写过的章节。`;
+}
 
 /**
  * Phase 3 planner.
@@ -284,6 +311,12 @@ export class PlannerAgent extends BaseAgent {
 
     let currentUserMessage = userMessage;
     let lastError: PlannerParseError | undefined;
+    // R28/399 号：复读门只重规划一次（v5 风险表——防误杀合法回环章节）。
+    let goalRepeatRetried = false;
+    const recentGoalReferences = buildGoalRepeatReferences(
+      input.chapterSummariesRaw,
+      input.chapterNumber,
+    );
 
     for (let attempt = 0; attempt < MEMO_RETRY_LIMIT; attempt += 1) {
       const response = await this.chat(
@@ -295,7 +328,25 @@ export class PlannerAgent extends BaseAgent {
       );
 
       try {
-        return parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
+        const memo = parseMemo(response.content, input.chapterNumber, input.isGoldenOpening);
+        // R28/399 号：目标防复读门——goal 与近 N 章摘要（章名+事件）重合时
+        // 带反馈重规划一次；仍犯降级告警保留 memo（不阻断、不进 fallback）。
+        const verdict = evaluateGoalRepeat(memo.goal, recentGoalReferences);
+        if (verdict.repeat) {
+          if (goalRepeatRetried) {
+            this.log?.warn(
+              `[planner] goal repeat gate: re-planned goal still echoes recent summaries (similarity ${verdict.maxSimilarity}); keeping memo with warning`,
+            );
+            return memo;
+          }
+          goalRepeatRetried = true;
+          this.log?.warn(
+            `[planner] goal repeat gate: chapter ${input.chapterNumber} goal echoes recent summaries (similarity ${verdict.maxSimilarity}); re-planning once`,
+          );
+          currentUserMessage = `${userMessage}\n\n${goalRepeatFeedback(language, verdict.maxSimilarity)}\n${retryFeedbackTrailer}`;
+          continue;
+        }
+        return memo;
       } catch (error) {
         if (!(error instanceof PlannerParseError)) {
           throw error;
