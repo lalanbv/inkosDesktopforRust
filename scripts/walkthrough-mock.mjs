@@ -24,7 +24,26 @@ const REVIEW = "=== DIMENSION: 1 ===\n分数：90\n意见：冲突清晰。\n\n=
 const PLANNER = "# 第 1 章 memo\n\n## 本章目标\n主角初次交锋夺得玉符\n\n## 关联线索\n- H01\n\n## 场景与篇幅预算\n- 场景 1：坊市对峙夺回玉符｜约 700 字\n- 场景 2：玉符异象初次显现｜约 1200 字\n- 场景 3：章尾真相一角｜约 900 字\n\n## 当前任务\n林动在坊市与人对峙，夺回被夺的玉符。\n\n## 读者此刻在等什么\n期待玉符来历揭开。\n本章部分兑现。\n\n## 该兑现的 / 暂不掀的\n- 该兑现：玉符第一步。\n\n## 日常/过渡承担什么任务\n不适用 - 本章无日常过渡。\n\n## 关键抉择过三连问\n- 主角：为什么？利益？人设？\n\n## 章尾必须发生的改变\n信息改变：玉符一角真相。\n\n## 本章 hook 账\nadvance:\n- H01 \"祖符\" → 推进（planted → pressured）\n\n## 不要做\n- 不要降智。\n\n";
 const WRITER = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n林动睁开双眼，灵气顺着经脉游走。他握紧拳头，多年屈辱自今日起一笔一笔讨回来。远处钟声响起，少年迈步而出，踏入坊市的喧嚣之中。\n\n=== POST_SETTLEMENT ===\n结算完成。\n\n=== RUNTIME_STATE_DELTA ===\n```json\n{\"chapter\": 1, \"chapterSummary\": {\"chapter\": 1, \"title\": \"风起\", \"characters\": \"林动\", \"events\": \"醒来\", \"stateChanges\": \"无\", \"hookActivity\": \"H01 推进\", \"mood\": \"紧张\", \"chapterType\": \"推进章\"}}\n```\n";
 const CANON = "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: character_profiles ===\n| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |\n|------|------|----------|-------------|----------|----------|----------|----------|\n| 林川 | 云州少年 | 坚韧 | 剑不离手 | 简短 | 练剑不辍 | 师父 | 不知身世 |\n=== SECTION: key_events ===\n| 序号 | 事件 | 涉及角色 | 约束 |\n|------|------|----------|------|\n| 1 | 出城 | 林川 | 起点 |\n=== SECTION: power_system ===\n剑道九品。\n=== SECTION: writing_style ===\n短句。";
-const SETTLER = "=== RUNTIME_STATE_DELTA ===\n```json\n{\"chapter\": 1, \"chapterSummary\": {\"chapter\": 1, \"title\": \"\u955c\u4e2d\u9192\u6765\", \"characters\": \"\u82cf\u6a80\", \"events\": \"\u5760\u5165\u955c\u754c\u901a\u8fc7\u8bd5\u70bc\", \"stateChanges\": \"\u5165\u5b97\u4e3a\u5916\u95e8\u5f1f\u5b50\", \"hookActivity\": \"H01 \u63a8\u8fdb\", \"mood\": \"\u7d27\u5f20\", \"chapterType\": \"\u63a8\u8fdb\u7ae0\", \"conflictLevel\": 6, \"revealLevel\": 4}, \"hookOps\": {\"upsert\": [{\"hookId\": \"H01\", \"startChapter\": 1, \"type\": \"\u8eab\u4e16\", \"status\": \"progressing\", \"lastAdvancedChapter\": 1, \"expectedPayoff\": \"\u7b2c10\u7ae0\", \"notes\": \"\u955c\u4e2d\u4e16\u754c\u6765\u5386\u521d\u73b0\u7aef\u502a\u3002\", \"kind\": \"suspense\"}, {\"hookId\": \"H02\", \"startChapter\": 2, \"type\": \"\u60c5\u611f\u7ebf\", \"status\": \"open\", \"lastAdvancedChapter\": 0, \"expectedPayoff\": \"\u7b2c8\u7ae0\", \"notes\": \"\u4e0e\u955c\u7075\u7684\u5a5a\u7ea6\u8a93\u8a00\u5f85\u542f\u3002\", \"kind\": \"emotion\"}, {\"hookId\": \"H03\", \"startChapter\": 2, \"type\": \"\u4fe1\u7269\", \"status\": \"open\", \"lastAdvancedChapter\": 0, \"expectedPayoff\": \"\u7b2c6\u7ae0\", \"notes\": \"\u788e\u955c\u591c\u534a\u53d1\u5149\u4e4b\u8c1c\u3002\", \"kind\": \"artifact\"}]}}\n```\n";
+const SETTLER_TEMPLATE = {
+  chapter: 1,
+  chapterSummary: { chapter: 1, title: "镜中醒来", characters: "苏檀", events: "坠入镜界通过试炼", stateChanges: "入宗为外门弟子", hookActivity: "H01 推进", mood: "紧张", chapterType: "推进章", conflictLevel: 6, revealLevel: 4 },
+  hookOps: { upsert: [
+    { hookId: "H01", startChapter: 1, type: "身世", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "第10章", notes: "镜中世界来历初现端倪。", kind: "suspense" },
+    { hookId: "H02", startChapter: 2, type: "情感线", status: "open", lastAdvancedChapter: 0, expectedPayoff: "第8章", notes: "与镜灵的婚约誓言待启。", kind: "emotion" },
+    { hookId: "H03", startChapter: 2, type: "信物", status: "open", lastAdvancedChapter: 0, expectedPayoff: "第6章", notes: "碎镜夜半发光之谜。", kind: "artifact" },
+  ] },
+};
+
+// settler 分派：从消息里抽「第 N 章」动态对齐 delta.chapter（写第 2 章时固定 1 会被 reducer 拒绝）。
+function settlerDelta(msgs) {
+  const text = msgs.map((m) => m?.content ?? "").join("\n");
+  const match = text.match(/第\s*(\d+)\s*章/);
+  const n = match ? Number(match[1]) : 1;
+  const delta = JSON.parse(JSON.stringify(SETTLER_TEMPLATE));
+  delta.chapter = n;
+  delta.chapterSummary.chapter = n;
+  return "=== RUNTIME_STATE_DELTA ===\n```json\n" + JSON.stringify(delta) + "\n```\n";
+}
 const ARGS = "{\"action\": \"create_book\", \"instruction\": \"创建玄幻小说《镜花水月》，主角苏檀。世界观：镜中世界反向修行。核心冲突：镜像侵蚀现实。\", \"createBook\": {\"title\": \"镜花水月\", \"genre\": \"xuanhuan\", \"platform\": \"qidian\", \"targetChapters\": 12, \"chapterWordCount\": 3000, \"language\": \"zh\"}}";
 const PORT = Number(process.argv[2] ?? 1234);
 
@@ -53,7 +72,7 @@ http.createServer((req, res) => {
       else if (sys.includes("创作总编")) content = PLANNER;
       else if (sys.includes("作家") || sys.includes("写手")) content = WRITER;
       else if (sys.includes("审稿")) content = "PASS\n95";
-      else if (sys.includes("状态追踪分析师")) content = SETTLER;
+      else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
       else if (sys.includes("continuity validator")) content = "PASS";
       else if (lastRole === "user") {
         // propose_action 工具调用（231 号协议：action 必填 + createBook 结构化）。

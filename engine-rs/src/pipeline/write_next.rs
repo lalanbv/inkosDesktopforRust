@@ -1251,6 +1251,34 @@ async fn write_next_chapter_locked(
         }
     }
 
+    // ── R26/406 号：叙事记忆投影重建（对齐 TS syncNarrativeMemoryIndex →
+    // rebuildNarrativeMemoryIndex）——settle 落盘的结构化 state（hooks.json /
+    // chapter_summaries.json）重读进 memory.db 的 hooks/summaries 表；
+    // promises / quality-trend 等 sqlite 消费端依赖此投影。失败仅 warn 不阻断。
+    {
+        let seed_result = crate::state::runtime_state_store::load_narrative_memory_seed(
+            &crate::state::store::FS_STATE_STORE,
+            &book_dir.to_string_lossy(),
+        )
+        .await;
+        match seed_result {
+            Ok(seed) => {
+                let projected = (|| -> Result<(), crate::EngineError> {
+                    let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+                    memory.replace_summaries(&seed.summaries)?;
+                    memory.replace_hooks(&seed.hooks)?;
+                    Ok(())
+                })();
+                if let Err(error) = projected {
+                    tracing::warn!(target: "write-next", "[narrative-memory] {error}");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(target: "write-next", "[narrative-memory] 结构化 state 读取失败：{error}")
+            }
+        }
+    }
+
     // ── R5/366 号：反AI规则扫描（detect 消费）——命中并入审计问题（reviser 按
     // issue.suggestion=replacement 修复）。
     // R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子内存态
