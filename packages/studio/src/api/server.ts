@@ -3629,6 +3629,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // R26/403 号：调用级运行遥测（进程内环形缓冲纯读投影；只记元数据，
+  // 不含 prompt/正文/错误原文）。?limit=N 取最近 N 条，缺省全量（上限 200）。
+  app.get("/api/v1/run-log", async (c) => {
+    try {
+      const core = await import("@actalk/inkos-core");
+      const limitRaw = Number(c.req.query("limit") ?? "");
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.trunc(limitRaw) : undefined;
+      const projection = core.projectRunLog(core.globalRunLog.snapshot(), limit);
+      return c.json(projection);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // R2/359 号：张力曲线（读 chapter_summaries.md 真相源；缺分章自动跳过，曲线是展示层）。
   app.get("/api/v1/books/:id/tension-curve", async (c) => {
     const id = c.req.param("id");

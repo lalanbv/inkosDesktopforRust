@@ -6,7 +6,9 @@ import { BaseAgent, type AgentContext } from "../agents/base.js";
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../llm/provider.js", () => ({
+// R26/403 号：model-chain 新增引用 isRetryableLLMError——mock 需透传真实现。
+vi.mock("../llm/provider.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../llm/provider.js")>(),
   chatCompletion: chatCompletionMock,
 }));
 

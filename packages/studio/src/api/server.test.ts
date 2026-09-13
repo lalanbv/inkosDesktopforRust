@@ -463,6 +463,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     buildPromiseTimeline: actual.buildPromiseTimeline,
     detectPacingDebts: actual.detectPacingDebts,
     detectWeakHookRuns: actual.detectWeakHookRuns,
+    // R26/403 号：run-log 端点——全局缓冲与投影透传真实现（真单例，追加型）。
+    globalRunLog: actual.globalRunLog,
+    projectRunLog: actual.projectRunLog,
   };
 });
 
@@ -6688,6 +6691,36 @@ describe("createStudioServer daemon lifecycle", () => {
 
     memoryDbHooksMock.mockReset();
     memoryDbSummariesMock.mockReset();
+  });
+
+  it("run-log endpoint projects the in-process ring buffer (R26/403号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const { createStudioServer } = await import("./server.js");
+    const core = await import("@actalk/inkos-core");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // 真单例（追加型）：记下追加前总量，断言只看本次追加的增量。
+    const before = core.globalRunLog.snapshot().totalAppended;
+    core.globalRunLog.append({
+      ts: "2026-09-14T02:00:01.000Z", agent: "writer", model: "glm-4.7",
+      durationMs: 1200, ok: true, attemptIndex: 0, round: 1, tookOver: false, errorKind: null,
+    });
+    core.globalRunLog.append({
+      ts: "2026-09-14T02:01:10.000Z", agent: "writer", model: "glm-air",
+      durationMs: 700, ok: true, attemptIndex: 1, round: 1, tookOver: true, errorKind: null,
+    });
+
+    const response = await app.request("http://localhost/api/v1/run-log?limit=1");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.total).toBe(before + 2);
+    expect(body.kept).toBe(before + 2);
+    // limit=1 → 只有最新一条；本轮追加的恰好是接管成功记录。
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]).toMatchObject({
+      agent: "writer", model: "glm-air", tookOver: true, ok: true,
+    });
+    expect(body.tookOverCount).toBeGreaterThanOrEqual(1);
   });
 
   it("anti-ai-rules GET falls back to built-in seeds when file missing (392号)", async () => {

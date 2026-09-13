@@ -1627,6 +1627,25 @@ pub async fn get_promises(
     }
 }
 
+/// R26/403 号：调用级运行遥测（进程内环形缓冲纯读投影；只记元数据，
+/// 不含 prompt/正文/错误原文）。?limit=N 取最近 N 条，缺省全量（上限 200）。
+pub async fn get_run_log(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let limit = params.get("limit").and_then(|value| value.parse::<i64>().ok());
+    let snapshot = {
+        match crate::utils::run_log::global_run_log().lock() {
+            Ok(buffer) => buffer.snapshot(),
+            Err(_) => crate::utils::run_log::RunLogSnapshot { entries: Vec::new(), total_appended: 0 },
+        }
+    };
+    let projection = crate::utils::run_log::project_run_log(&snapshot, limit);
+    match serde_json::to_value(&projection) {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
 /// G3/337 号：质量债务清单（?status=open|deferred|resolved 过滤；缺省全量）。
 pub async fn get_quality_debts(
     State(runtime): State<BooksRuntime>,

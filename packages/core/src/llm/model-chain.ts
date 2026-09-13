@@ -1,5 +1,6 @@
 import { isRetryableLLMError } from "./provider.js";
 import type { ResolvedTaskModelChain } from "../models/task-routing.js";
+import { globalRunLog } from "../utils/run-log.js";
 
 /**
  * R25/399 号：模型尝试链执行器——`resolveTaskModelChain` 的调用缝侧。
@@ -35,13 +36,57 @@ export interface ModelChainRunOptions {
   readonly onEvent?: (event: ModelChainEvent) => void;
 }
 
+/**
+ * R26/403 号：链内一轮的执行 + 运行遥测记录（只记元数据，不含 prompt/正文/
+ * 错误原文）。零配置直通分支同样记录——tookOver 与 R25 接管成功日志同口径
+ * （attemptIndex > 0 || round > 1）。
+ */
+async function runAndRecord<T>(
+  run: (model: string) => Promise<T>,
+  model: string,
+  attemptIndex: number,
+  round: number,
+  label: string,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    const result = await run(model);
+    globalRunLog.append({
+      ts: new Date().toISOString(),
+      agent: label,
+      model,
+      durationMs: Date.now() - startedAt,
+      ok: true,
+      attemptIndex,
+      round,
+      tookOver: attemptIndex > 0 || round > 1,
+      errorKind: null,
+    });
+    return result;
+  } catch (error) {
+    globalRunLog.append({
+      ts: new Date().toISOString(),
+      agent: label,
+      model,
+      durationMs: Date.now() - startedAt,
+      ok: false,
+      attemptIndex,
+      round,
+      tookOver: attemptIndex > 0 || round > 1,
+      errorKind: isRetryableLLMError(error) ? "transient" : "fatal",
+    });
+    throw error;
+  }
+}
+
 export async function runWithModelChain<T>(
   run: (model: string) => Promise<T>,
   options: ModelChainRunOptions,
 ): Promise<T> {
   const chain = options.chain;
+  const label = options.label ?? "unknown";
   if (!chain || (chain.attempts.length <= 1 && chain.retryCount <= 1)) {
-    return run(options.primaryModel);
+    return runAndRecord(run, options.primaryModel, 0, 1, label);
   }
   let lastError: unknown;
   for (let attemptIndex = 0; attemptIndex < chain.attempts.length; attemptIndex++) {
@@ -49,7 +94,7 @@ export async function runWithModelChain<T>(
     for (let round = 1; round <= chain.retryCount; round++) {
       options.signal?.throwIfAborted();
       try {
-        const result = await run(model);
+        const result = await runAndRecord(run, model, attemptIndex, round, label);
         if (attemptIndex > 0 || round > 1) {
           options.onEvent?.({ event: "success", model, attemptIndex, round });
         }

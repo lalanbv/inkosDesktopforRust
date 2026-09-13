@@ -1,0 +1,598 @@
+{
+  "_header": "R26 调用级运行遥测共享向量（403 号，v5 五轮规划 P0）。唯一事实源本文件；TS 断言 src/__tests__/golden-run-log.test.ts，Rust 差分 engine-rs/tests/golden_run_log_diff.rs。环形缓冲 append 超限逐出最旧；投影聚合 total(累计含逐出)/kept/tookOverCount/failureCount + limit 截尾（取最近 limit 条，时间升序）。只记元数据（ts/agent/model/durationMs/ok/attemptIndex/round/tookOver/errorKind），无 prompt/正文。",
+  "capacity": {
+    "default": 200,
+    "evictCase": {
+      "capacity": 3,
+      "appended": [
+        {
+          "ts": "2026-09-14T02:00:01.000Z",
+          "agent": "writer",
+          "model": "glm-4.7",
+          "durationMs": 1200,
+          "ok": true,
+          "attemptIndex": 0,
+          "round": 1,
+          "tookOver": false,
+          "errorKind": null
+        },
+        {
+          "ts": "2026-09-14T02:00:30.000Z",
+          "agent": "writer",
+          "model": "glm-4.7",
+          "durationMs": 800,
+          "ok": false,
+          "attemptIndex": 0,
+          "round": 1,
+          "tookOver": false,
+          "errorKind": "transient"
+        },
+        {
+          "ts": "2026-09-14T02:00:45.000Z",
+          "agent": "writer",
+          "model": "glm-4.7",
+          "durationMs": 900,
+          "ok": false,
+          "attemptIndex": 0,
+          "round": 2,
+          "tookOver": false,
+          "errorKind": "transient"
+        },
+        {
+          "ts": "2026-09-14T02:01:10.000Z",
+          "agent": "writer",
+          "model": "glm-air",
+          "durationMs": 700,
+          "ok": true,
+          "attemptIndex": 1,
+          "round": 1,
+          "tookOver": true,
+          "errorKind": null
+        },
+        {
+          "ts": "2026-09-14T02:02:00.000Z",
+          "agent": "planner",
+          "model": "glm-4.7",
+          "durationMs": 500,
+          "ok": true,
+          "attemptIndex": 0,
+          "round": 1,
+          "tookOver": false,
+          "errorKind": null
+        }
+      ],
+      "expected": {
+        "entries": [
+          {
+            "ts": "2026-09-14T02:00:45.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 900,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 2,
+            "tookOver": false,
+            "errorKind": "transient"
+          },
+          {
+            "ts": "2026-09-14T02:01:10.000Z",
+            "agent": "writer",
+            "model": "glm-air",
+            "durationMs": 700,
+            "ok": true,
+            "attemptIndex": 1,
+            "round": 1,
+            "tookOver": true,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:02:00.000Z",
+            "agent": "planner",
+            "model": "glm-4.7",
+            "durationMs": 500,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          }
+        ],
+        "totalAppended": 5
+      }
+    }
+  },
+  "project": [
+    {
+      "name": "full-aggregates",
+      "input": {
+        "snapshot": {
+          "entries": [
+            {
+              "ts": "2026-09-14T02:00:01.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 1200,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:00:30.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 800,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:00:45.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 900,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 2,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:01:10.000Z",
+              "agent": "writer",
+              "model": "glm-air",
+              "durationMs": 700,
+              "ok": true,
+              "attemptIndex": 1,
+              "round": 1,
+              "tookOver": true,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:02:00.000Z",
+              "agent": "planner",
+              "model": "glm-4.7",
+              "durationMs": 500,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:03:00.000Z",
+              "agent": "settler",
+              "model": "glm-4.7",
+              "durationMs": 300,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "fatal"
+            },
+            {
+              "ts": "2026-09-14T02:04:00.000Z",
+              "agent": "review",
+              "model": "glm-air",
+              "durationMs": 450,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            }
+          ],
+          "totalAppended": 9
+        },
+        "limit": null
+      },
+      "expected": {
+        "total": 9,
+        "kept": 7,
+        "tookOverCount": 1,
+        "failureCount": 3,
+        "entries": [
+          {
+            "ts": "2026-09-14T02:00:01.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 1200,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:00:30.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 800,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": "transient"
+          },
+          {
+            "ts": "2026-09-14T02:00:45.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 900,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 2,
+            "tookOver": false,
+            "errorKind": "transient"
+          },
+          {
+            "ts": "2026-09-14T02:01:10.000Z",
+            "agent": "writer",
+            "model": "glm-air",
+            "durationMs": 700,
+            "ok": true,
+            "attemptIndex": 1,
+            "round": 1,
+            "tookOver": true,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:02:00.000Z",
+            "agent": "planner",
+            "model": "glm-4.7",
+            "durationMs": 500,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:03:00.000Z",
+            "agent": "settler",
+            "model": "glm-4.7",
+            "durationMs": 300,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": "fatal"
+          },
+          {
+            "ts": "2026-09-14T02:04:00.000Z",
+            "agent": "review",
+            "model": "glm-air",
+            "durationMs": 450,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "limit-3-tail",
+      "input": {
+        "snapshot": {
+          "entries": [
+            {
+              "ts": "2026-09-14T02:00:01.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 1200,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:00:30.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 800,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:00:45.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 900,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 2,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:01:10.000Z",
+              "agent": "writer",
+              "model": "glm-air",
+              "durationMs": 700,
+              "ok": true,
+              "attemptIndex": 1,
+              "round": 1,
+              "tookOver": true,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:02:00.000Z",
+              "agent": "planner",
+              "model": "glm-4.7",
+              "durationMs": 500,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:03:00.000Z",
+              "agent": "settler",
+              "model": "glm-4.7",
+              "durationMs": 300,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "fatal"
+            },
+            {
+              "ts": "2026-09-14T02:04:00.000Z",
+              "agent": "review",
+              "model": "glm-air",
+              "durationMs": 450,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            }
+          ],
+          "totalAppended": 9
+        },
+        "limit": 3
+      },
+      "expected": {
+        "total": 9,
+        "kept": 7,
+        "tookOverCount": 1,
+        "failureCount": 3,
+        "entries": [
+          {
+            "ts": "2026-09-14T02:02:00.000Z",
+            "agent": "planner",
+            "model": "glm-4.7",
+            "durationMs": 500,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:03:00.000Z",
+            "agent": "settler",
+            "model": "glm-4.7",
+            "durationMs": 300,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": "fatal"
+          },
+          {
+            "ts": "2026-09-14T02:04:00.000Z",
+            "agent": "review",
+            "model": "glm-air",
+            "durationMs": 450,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty-snapshot",
+      "input": {
+        "snapshot": {
+          "entries": [],
+          "totalAppended": 0
+        },
+        "limit": null
+      },
+      "expected": {
+        "total": 0,
+        "kept": 0,
+        "tookOverCount": 0,
+        "failureCount": 0,
+        "entries": []
+      }
+    },
+    {
+      "name": "limit-zero-means-full",
+      "input": {
+        "snapshot": {
+          "entries": [
+            {
+              "ts": "2026-09-14T02:00:01.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 1200,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:00:30.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 800,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:00:45.000Z",
+              "agent": "writer",
+              "model": "glm-4.7",
+              "durationMs": 900,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 2,
+              "tookOver": false,
+              "errorKind": "transient"
+            },
+            {
+              "ts": "2026-09-14T02:01:10.000Z",
+              "agent": "writer",
+              "model": "glm-air",
+              "durationMs": 700,
+              "ok": true,
+              "attemptIndex": 1,
+              "round": 1,
+              "tookOver": true,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:02:00.000Z",
+              "agent": "planner",
+              "model": "glm-4.7",
+              "durationMs": 500,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            },
+            {
+              "ts": "2026-09-14T02:03:00.000Z",
+              "agent": "settler",
+              "model": "glm-4.7",
+              "durationMs": 300,
+              "ok": false,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": "fatal"
+            },
+            {
+              "ts": "2026-09-14T02:04:00.000Z",
+              "agent": "review",
+              "model": "glm-air",
+              "durationMs": 450,
+              "ok": true,
+              "attemptIndex": 0,
+              "round": 1,
+              "tookOver": false,
+              "errorKind": null
+            }
+          ],
+          "totalAppended": 9
+        },
+        "limit": 0
+      },
+      "expected": {
+        "total": 9,
+        "kept": 7,
+        "tookOverCount": 1,
+        "failureCount": 3,
+        "entries": [
+          {
+            "ts": "2026-09-14T02:00:01.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 1200,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:00:30.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 800,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": "transient"
+          },
+          {
+            "ts": "2026-09-14T02:00:45.000Z",
+            "agent": "writer",
+            "model": "glm-4.7",
+            "durationMs": 900,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 2,
+            "tookOver": false,
+            "errorKind": "transient"
+          },
+          {
+            "ts": "2026-09-14T02:01:10.000Z",
+            "agent": "writer",
+            "model": "glm-air",
+            "durationMs": 700,
+            "ok": true,
+            "attemptIndex": 1,
+            "round": 1,
+            "tookOver": true,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:02:00.000Z",
+            "agent": "planner",
+            "model": "glm-4.7",
+            "durationMs": 500,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          },
+          {
+            "ts": "2026-09-14T02:03:00.000Z",
+            "agent": "settler",
+            "model": "glm-4.7",
+            "durationMs": 300,
+            "ok": false,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": "fatal"
+          },
+          {
+            "ts": "2026-09-14T02:04:00.000Z",
+            "agent": "review",
+            "model": "glm-air",
+            "durationMs": 450,
+            "ok": true,
+            "attemptIndex": 0,
+            "round": 1,
+            "tookOver": false,
+            "errorKind": null
+          }
+        ]
+      }
+    }
+  ]
+}

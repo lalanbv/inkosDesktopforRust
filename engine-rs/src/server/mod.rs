@@ -736,6 +736,8 @@ pub fn router_books(
             "/api/v1/radar/history",
             get(ops_routes::get_radar_history).with_state(books.clone()),
         )
+        // R26/403 号：调用级运行遥测（进程内环形缓冲纯读投影）。
+        .route("/api/v1/run-log", get(ops_routes::get_run_log))
         .route(
             "/api/v1/books/:id/quality-debts",
             get(ops_routes::get_quality_debts).with_state(books.clone()),

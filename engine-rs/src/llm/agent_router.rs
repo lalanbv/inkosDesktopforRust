@@ -227,12 +227,16 @@ impl AgentRouter {
         let mut last_err: Option<String> = None;
         for (chain_idx, model) in models.iter().enumerate() {
             for round in 1..=retry_count {
+                // R26/403 号：每次调用（链内一轮）记录元数据——只记 agent/model/
+                // 耗时/成败/链序号/轮次/接管/错误类，不记 prompt/正文/错误原文。
+                let started = std::time::Instant::now();
                 match self
                     .chat_transient(agent, model, messages.clone(), temperature, max_tokens)
                     .await
                 {
                     Ok(outcome) => {
-                        if chain_idx > 0 || round > 1 {
+                        let took_over = chain_idx > 0 || round > 1;
+                        if took_over {
                             tracing::warn!(
                                 agent,
                                 model,
@@ -241,10 +245,45 @@ impl AgentRouter {
                                 "R25 接管链：模型接管成功"
                             );
                         }
+                        crate::utils::run_log::record_run_log(crate::utils::run_log::RunLogEntry {
+                            ts: crate::utils::utc_time::utc_now_iso(),
+                            agent: agent.to_string(),
+                            model: model.clone(),
+                            duration_ms: started.elapsed().as_millis() as i64,
+                            ok: true,
+                            attempt_index: chain_idx as i64,
+                            round: round as i64,
+                            took_over,
+                            error_kind: None,
+                        });
                         return Ok(outcome);
                     }
-                    Err(ChainFailure::Fatal(text)) => return Err(text),
+                    Err(ChainFailure::Fatal(text)) => {
+                        crate::utils::run_log::record_run_log(crate::utils::run_log::RunLogEntry {
+                            ts: crate::utils::utc_time::utc_now_iso(),
+                            agent: agent.to_string(),
+                            model: model.clone(),
+                            duration_ms: started.elapsed().as_millis() as i64,
+                            ok: false,
+                            attempt_index: chain_idx as i64,
+                            round: round as i64,
+                            took_over: false,
+                            error_kind: Some("fatal".to_string()),
+                        });
+                        return Err(text);
+                    }
                     Err(ChainFailure::Transient(text)) => {
+                        crate::utils::run_log::record_run_log(crate::utils::run_log::RunLogEntry {
+                            ts: crate::utils::utc_time::utc_now_iso(),
+                            agent: agent.to_string(),
+                            model: model.clone(),
+                            duration_ms: started.elapsed().as_millis() as i64,
+                            ok: false,
+                            attempt_index: chain_idx as i64,
+                            round: round as i64,
+                            took_over: false,
+                            error_kind: Some("transient".to_string()),
+                        });
                         last_err = Some(text.clone());
                         tracing::warn!(
                             agent,

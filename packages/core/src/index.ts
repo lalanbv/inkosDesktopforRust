@@ -657,6 +657,15 @@ export {
 } from "./utils/tension-curve.js";
 export { parseChapterSummariesMarkdown, parsePendingHooksMarkdown } from "./utils/story-markdown.js";
 export {
+  DEFAULT_RUN_LOG_CAPACITY,
+  RunLogBuffer,
+  globalRunLog,
+  projectRunLog,
+  type RunLogEntry,
+  type RunLogProjection,
+  type RunLogSnapshot,
+} from "./utils/run-log.js";
+export {
   resolveBestOfNPlan,
   selectBestCandidate,
   BEST_OF_N_DEFAULTS,
