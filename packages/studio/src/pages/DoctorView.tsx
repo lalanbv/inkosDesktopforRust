@@ -1,5 +1,5 @@
 import { useApi } from "../hooks/use-api";
-import { nextActionFor, type AuthorErrorSeverity } from "@actalk/inkos-core";
+import { nextActionFor, type AuthorErrorSeverity } from "@actalk/inkos-core/utils/author-error-catalog";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";

@@ -16,7 +16,7 @@
  * `tests/golden_author_error_catalog_diff.rs`）。
  */
 
-import catalogData from "../data/author-errors.json";
+import catalogData from "../data/author-errors.json" with { type: "json" };
 
 export type AuthorErrorSeverity = "auto-handled" | "needs-review" | "must-handle";
 

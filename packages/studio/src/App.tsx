@@ -45,7 +45,7 @@ import { useSessionEvents } from "./hooks/use-session-events";
 import { useTheme, cycleThemeMode } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr, getAppLanguage } from "./lib/app-language";
-import { buildTaskReport } from "@actalk/inkos-core";
+import { buildTaskReport } from "@actalk/inkos-core/utils/author-report";
 import { postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon, Monitor, Search } from "lucide-react";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";

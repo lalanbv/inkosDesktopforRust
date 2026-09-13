@@ -5,7 +5,7 @@ import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import { createLoopbackGuardMiddleware, guardOptionsFromEnv, originIsAllowed } from "./loopback-guard.js";
-import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store";
+import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
 import {
   StateManager,
   PipelineRunner,
@@ -6551,7 +6551,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           // 单书索引缺失跳过
         }
       }
-      const stats = await import("../lib/writing-stats");
+      const stats = await import("../lib/writing-stats.js");
       const aggregate = stats.aggregateWritingStats(rows, new Date().toISOString());
       // R16/387 号：分书 quality-first 跑通率（G12 重评触发判定读数）。
       const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
@@ -6794,7 +6794,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     );
     const archive = gzipSync(await buildTarArchive(staging, "inkos-backup"));
     await rm(staging, { recursive: true, force: true });
-    return new Response(archive as unknown as BodyInit, {
+    return new Response(new Uint8Array(archive), {
       headers: {
         "Content-Type": "application/gzip",
         "Content-Disposition": 'attachment; filename="inkos-backup.tar.gz"',
@@ -6805,7 +6805,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/backup/import", async (c) => {
     const confirm = c.req.query("confirm") === "1";
     const bytes = new Uint8Array(await c.req.arrayBuffer());
-    const { untar } = await import("../lib/tar-read");
+    const { untar } = await import("../lib/tar-read.js");
     let entries: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
     let rejected: ReadonlyArray<string>;
     try {

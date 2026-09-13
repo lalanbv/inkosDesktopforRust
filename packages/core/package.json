@@ -36,6 +36,18 @@
     "./forecast/schema": {
       "types": "./dist/forecast/schema.d.ts",
       "import": "./dist/forecast/schema.js"
+    },
+    "./utils/hook-kind": {
+      "types": "./dist/utils/hook-kind.d.ts",
+      "import": "./dist/utils/hook-kind.js"
+    },
+    "./utils/author-report": {
+      "types": "./dist/utils/author-report.d.ts",
+      "import": "./dist/utils/author-report.js"
+    },
+    "./utils/author-error-catalog": {
+      "types": "./dist/utils/author-error-catalog.d.ts",
+      "import": "./dist/utils/author-error-catalog.js"
     }
   },
   "files": [

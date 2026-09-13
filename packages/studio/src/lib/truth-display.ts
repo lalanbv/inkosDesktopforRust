@@ -199,7 +199,7 @@ export function hasTableRows(md: string): boolean {
 
 // --- pending_hooks.md ----------------------------------------------------
 
-import { normalizeHookKind, type HookKind } from "@actalk/inkos-core";
+import { normalizeHookKind, type HookKind } from "@actalk/inkos-core/utils/hook-kind";
 
 export interface PendingHook {
   readonly id: string;

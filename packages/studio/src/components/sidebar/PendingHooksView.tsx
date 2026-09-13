@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { HOOK_KIND_IDS, hookKindLabel, type HookKind } from "@actalk/inkos-core";
+import { HOOK_KIND_IDS, hookKindLabel, type HookKind } from "@actalk/inkos-core/utils/hook-kind";
 import { cn } from "../../lib/utils";
 import { tr } from "../../lib/app-language";
 import { parsePendingHooks } from "../../lib/truth-display";
