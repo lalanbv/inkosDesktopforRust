@@ -189,7 +189,8 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
     );
 
     HookRecord {
-        kind: None,
+        // R23/394 号：规范类型——新值赢，缺席保持既有（对齐 TS incoming.kind ?? existing.kind）。
+        kind: incoming.kind.or(existing.kind),
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter.min(incoming.start_chapter),
         hook_type: prefer_richer_text(&existing.hook_type, &incoming.hook_type),

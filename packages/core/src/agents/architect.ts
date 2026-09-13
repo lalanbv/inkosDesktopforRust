@@ -5,6 +5,7 @@ import { readGenreProfile } from "./rules-reader.js";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { renderHookSnapshot } from "../utils/memory-retrieval.js";
+import { normalizeHookKind } from "../utils/hook-kind.js";
 import {
   shouldPromoteHook,
   type PromotionContext,
@@ -1301,6 +1302,10 @@ ${trimmed}\n`;
         payoffTiming: phase6 ? row[6] ?? "" : "",
         notes,
       };
+
+      // R23/394 号：种子钩子从自由 type 文本归一化规范分类（查不到则无 kind）。
+      const seedKind = normalizeHookKind((row[2] ?? "").trim());
+      if (seedKind) base.kind = seedKind;
 
       if (phase7) {
         base.dependsOn = this.parseDependsOnCell(row[7] ?? "");

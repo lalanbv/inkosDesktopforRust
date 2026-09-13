@@ -297,6 +297,9 @@ pub struct HookOps {
 pub struct NewHookCandidate {
     #[serde(rename = "type")]
     pub hook_type: String,
+    /// R23/394 号：候选可带规范类型（LLM 词表输出，宿主边界归一化）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<HookKind>,
     #[serde(default)]
     pub expected_payoff: String,
     #[serde(skip_serializing_if = "Option::is_none")]

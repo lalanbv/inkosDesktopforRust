@@ -5,6 +5,7 @@ import {
   normalizeHookPayoffTiming,
   resolveHookPayoffTiming,
 } from "./hook-lifecycle.js";
+import { normalizeHookKind } from "./hook-kind.js";
 
 export function renderSummarySnapshot(
   summaries: ReadonlyArray<StoredSummary>,
@@ -52,12 +53,12 @@ export function renderHookSnapshot(
 
   const headers = language === "en"
     ? [
-      "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
 
   return [
@@ -76,6 +77,8 @@ export function renderHookSnapshot(
       renderHalfLifeCell(hook.halfLifeChapters),
       renderPromotedCell(hook.promoted, language),
       hook.notes,
+      // R23/394 号：第 14 列 kind（规范 id，无 kind 空单元格）。
+      hook.kind ?? "",
     ].map((cell) => escapeTableCell(String(cell))).join(" | ")).map((row) => `| ${row} |`),
   ].join("\n");
 }
@@ -278,8 +281,10 @@ function parsePendingHookRow(row: ReadonlyArray<string | undefined>): StoredHook
   //  11 (Phase 7 ledger):     ... + depends_on, pays_off_in_arc, core_hook, notes
   //  12 (Phase 7 hotfix 1):   ... + depends_on, pays_off_in_arc, core_hook, half_life, notes
   //  13 (Phase 7 hotfix 2):   ... + depends_on, pays_off_in_arc, core_hook, half_life, promoted, notes
+  //  14 (R23/393):            ... + kind（规范分类；词表外文本 → undefined 不臆测）
   //  additional trailing columns (e.g. stale/blocked diagnostic columns) are
   //  allowed — the parser skips past them to the notes column.
+  const phase8Kind = row.length >= 14;
   const phase7Promoted = row.length >= 13;
   const phase7HalfLife = row.length === 12;
   const phase7Compact = row.length === 11;
@@ -309,7 +314,7 @@ function parsePendingHookRow(row: ReadonlyArray<string | undefined>): StoredHook
 
   if (!phase7) return base;
 
-  return {
+  const phase7Meta = {
     ...base,
     dependsOn: parseDependsOn(row[7] ?? ""),
     paysOffInArc: (row[8] ?? "").trim(),
@@ -317,6 +322,11 @@ function parsePendingHookRow(row: ReadonlyArray<string | undefined>): StoredHook
     halfLifeChapters: (phase7HalfLife || phase7Promoted) ? parseOptionalInt(row[10]) : undefined,
     promoted: phase7Promoted ? parseOptionalBooleanCell(row[11]) : undefined,
   };
+  // R23/394 号：第 14 列 kind（别名表归一化）。
+  if (phase8Kind) {
+    return { ...phase7Meta, kind: normalizeHookKind((row[13] ?? "").trim()) };
+  }
+  return phase7Meta;
 }
 
 function parseOptionalBooleanCell(cell: string | undefined): boolean | undefined {

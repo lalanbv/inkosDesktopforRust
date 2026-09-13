@@ -822,8 +822,10 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
             let notes = merge_hook_notes(&cell(note_cell_index), &seed_note, language);
 
             let status_cell = cell(3);
+            // R23/394 号：种子钩子从自由 type 文本归一化规范分类（查不到则无 kind）。
+            let seed_kind = crate::utils::hook_kind::normalize_hook_kind(cell(2).trim());
             HookRecord {
-                kind: None,
+                kind: seed_kind,
                 hook_id: {
                     let id = cell(0);
                     if id.is_empty() { format!("hook-{}", index + 1) } else { id }

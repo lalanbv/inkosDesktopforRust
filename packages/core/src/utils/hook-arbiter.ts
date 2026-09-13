@@ -47,6 +47,8 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
 
     fallbackCandidates.push({
       type: hook.type,
+      // R23/394 号：未知 upsert 转候选时保留规范类型。
+      ...(hook.kind ? { kind: hook.kind } : {}),
       expectedPayoff: hook.expectedPayoff,
       notes: hook.notes,
       preferredHookId: hook.hookId,
@@ -125,6 +127,8 @@ function createCanonicalHook(params: {
     startChapter: params.chapter,
     type: params.candidate.type.trim(),
     status: "open",
+    // R23/394 号：候选携带的规范类型透传到新记录。
+    ...(params.candidate.kind ? { kind: params.candidate.kind } : {}),
     lastAdvancedChapter: params.chapter,
     expectedPayoff: params.candidate.expectedPayoff.trim(),
     payoffTiming: resolveHookPayoffTiming(params.candidate),

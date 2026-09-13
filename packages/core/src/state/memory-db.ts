@@ -87,6 +87,8 @@ export interface StoredHook {
   readonly startChapter: number;
   readonly type: string;
   readonly status: string;
+  /** R23/394 号：规范类型分类（markdown 台账第 14 列往返；sqlite 投影不落）。 */
+  readonly kind?: import("../models/runtime-state.js").HookKind;
   readonly lastAdvancedChapter: number;
   readonly expectedPayoff: string;
   readonly payoffTiming?: string;

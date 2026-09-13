@@ -2,6 +2,7 @@ import {
   RuntimeStateDeltaSchema,
   type RuntimeStateDelta,
 } from "../models/runtime-state.js";
+import { normalizeHookKind } from "../utils/hook-kind.js";
 
 export interface SettlerDeltaOutput {
   readonly postSettlement: string;
@@ -12,6 +13,37 @@ function sanitizeJSON(str: string): string {
   return str
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
     .replace(/,\s*([}\]])/g, "$1");
+}
+
+/**
+ * R23/394 号：LLM 边界的 kind 容错归一化——upsert 条目与候选的 kind 值
+ * 经别名表归一；词表外的值删除（undefined）而不是拒收整个结算增量。
+ */
+function sanitizeHookKinds(parsed: unknown): unknown {
+  if (typeof parsed !== "object" || parsed === null) return parsed;
+  const raw = parsed as Record<string, unknown>;
+  const hookOps = raw.hookOps as Record<string, unknown> | undefined;
+  if (Array.isArray(hookOps?.upsert)) {
+    raw.hookOps = {
+      ...hookOps,
+      upsert: hookOps.upsert.map(sanitizeEntryKind),
+    };
+  }
+  if (Array.isArray(raw.newHookCandidates)) {
+    raw.newHookCandidates = raw.newHookCandidates.map(sanitizeEntryKind);
+  }
+  return parsed;
+}
+
+function sanitizeEntryKind(entry: unknown): unknown {
+  if (typeof entry !== "object" || entry === null) return entry;
+  const record = { ...(entry as Record<string, unknown>) };
+  if ("kind" in record) {
+    const normalized = normalizeHookKind(String(record.kind ?? ""));
+    if (normalized) record.kind = normalized;
+    else delete record.kind;
+  }
+  return record;
 }
 
 export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
@@ -39,7 +71,7 @@ export function parseSettlerDeltaOutput(content: string): SettlerDeltaOutput {
   try {
     return {
       postSettlement: extract("POST_SETTLEMENT"),
-      runtimeStateDelta: RuntimeStateDeltaSchema.parse(parsed),
+      runtimeStateDelta: RuntimeStateDeltaSchema.parse(sanitizeHookKinds(parsed)),
     };
   } catch (error) {
     throw new Error(`runtime state delta failed schema validation: ${String(error)}`);

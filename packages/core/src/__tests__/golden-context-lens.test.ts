@@ -45,6 +45,8 @@ describe("context lens contract (R21)", () => {
       contextPackage: ContextPackageSchema.parse(vector.contextPackage),
       trace: tampered,
     });
-    expect(got.entries, vector.name).toEqual(vector.expected.entries);
+    expect(got.entries, vector.name).toEqual(
+      (vector.expected as { entries: unknown }).entries,
+    );
   });
 });

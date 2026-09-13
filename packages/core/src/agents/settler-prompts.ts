@@ -114,6 +114,7 @@ function buildSettlerOutputFormat(gp: GenreProfile): string {
         "hookId": "mentor-oath",
         "startChapter": 8,
         "type": "relationship",
+        "kind": "emotion",
         "status": "progressing",
         "lastAdvancedChapter": 12,
         "expectedPayoff": "揭开师债真相",
@@ -128,6 +129,7 @@ function buildSettlerOutputFormat(gp: GenreProfile): string {
   "newHookCandidates": [
     {
       "type": "mystery",
+      "kind": "suspense",
       "expectedPayoff": "新伏笔未来要回收到哪里",
       "payoffTiming": "near-term",
       "notes": "本章为什么会形成新的未解问题"
@@ -163,7 +165,8 @@ revealLevel: 6
 5. 如果旧 hook 只是被提到、没有真实状态变化，把它放进 mention，不要更新 lastAdvancedChapter
 6. 如果本章推进了旧 hook，lastAdvancedChapter 必须等于当前章号
 7. 如果回收或延后 hook，必须放在 resolve / defer 数组里
-8. chapterSummary.chapter 必须等于当前章节号`;
+8. chapterSummary.chapter 必须等于当前章节号
+9. kind 是伏笔类型分类，只能从固定词表选一个：promise/suspense/crisis/artifact/information/emotion/worldview（承诺/悬念/危机/物品/信息/情感/世界观）；归类不了就省略 kind 字段，不要发明词表以外的值`;
 }
 
 export function buildSettlerUserPrompt(params: {

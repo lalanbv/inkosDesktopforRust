@@ -32,6 +32,9 @@ pub fn parse_settler_delta_output(content: &str) -> crate::Result<SettlerDeltaOu
     let parsed: serde_json::Value = serde_json::from_str(&sanitized).map_err(|e| {
         crate::EngineError::Constraint(format!("runtime state delta is not valid JSON: {e}"))
     })?;
+    // R23/394 号：LLM 边界的 kind 容错归一化——词表外的值删除而不是拒收
+    // 整个结算增量（对齐 TS sanitizeHookKinds）。
+    let parsed = sanitize_hook_kinds(parsed);
     let delta: RuntimeStateDelta = serde_json::from_value(parsed).map_err(|e| {
         crate::EngineError::Constraint(format!("runtime state delta failed schema validation: {e}"))
     })?;
@@ -39,6 +42,48 @@ pub fn parse_settler_delta_output(content: &str) -> crate::Result<SettlerDeltaOu
         post_settlement: extract_tag(content, "POST_SETTLEMENT"),
         runtime_state_delta: delta,
     })
+}
+
+/// R23/394 号：upsert 条目与候选的 kind 值经别名表归一；不可归一的删除。
+/// 对齐 TS `sanitizeHookKinds`。
+fn sanitize_hook_kinds(mut parsed: serde_json::Value) -> serde_json::Value {
+    use crate::utils::hook_kind::normalize_hook_kind;
+    if let Some(upsert) = parsed
+        .get_mut("hookOps")
+        .and_then(|ops| ops.get_mut("upsert"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in upsert.iter_mut() {
+            sanitize_entry_kind(entry);
+        }
+    }
+    if let Some(candidates) = parsed
+        .get_mut("newHookCandidates")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for entry in candidates.iter_mut() {
+            sanitize_entry_kind(entry);
+        }
+    }
+    parsed
+}
+
+fn sanitize_entry_kind(entry: &mut serde_json::Value) {
+    use crate::utils::hook_kind::normalize_hook_kind;
+    let Some(obj) = entry.as_object_mut() else {
+        return;
+    };
+    if let Some(kind) = obj.remove("kind") {
+        let raw = kind.as_str().unwrap_or_default();
+        if let Some(normalized) = normalize_hook_kind(raw) {
+            obj.insert(
+                "kind".to_string(),
+                serde_json::Value::String(
+                    crate::utils::hook_kind::hook_kind_id(normalized).to_string(),
+                ),
+            );
+        }
+    }
 }
 
 /// 剥离 ```json ... ``` 代码围栏。对齐 TS `stripCodeFence`。

@@ -289,13 +289,13 @@ pub fn render_hook_snapshot(
     let en = language == crate::utils::language::WritingLanguage::En;
     let headers: [&str; 2] = if en {
         [
-            "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| hook_id | start_chapter | type | status | last_advanced | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     } else {
         [
-            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     };
 
@@ -320,6 +320,8 @@ pub fn render_hook_snapshot(
             render_half_life_cell(hook.half_life_chapters),
             render_promoted_cell(hook.promoted, language),
             hook.notes.clone(),
+            // R23/393 号：第 14 列 kind（规范 id，无 kind 空单元格）。
+            hook.kind.map(crate::utils::hook_kind::hook_kind_id).unwrap_or_default().to_string(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         lines.push(format!("| {} |", escaped.join(" | ")));
@@ -549,11 +551,12 @@ fn parse_strict_chapter_integer(value: Option<&str>) -> u32 {
 /// 解析 pending hook 表格行为 [`HookRecord`]（含 Phase 7 元数据）。
 ///
 /// 对齐 TS `parsePendingHookRow`：按列数分 7（legacy）/8（Phase5-6）/11（Phase7 compact）
-/// /12（+half_life）/13（+promoted）形态；payoff_timing 经
+/// /12（+half_life）/13（+promoted）/14（R23 +kind）形态；payoff_timing 经
 /// [`normalize_hook_payoff_timing`](crate::utils::hook_lifecycle::normalize_hook_payoff_timing) 规范化。
 fn parse_pending_hook_row(row: &[String]) -> HookRecord {
     use crate::utils::hook_lifecycle::normalize_hook_payoff_timing;
 
+    let phase8_kind = row.len() >= 14;
     let phase7_promoted = row.len() >= 13;
     let phase7_half_life = row.len() == 12;
     let phase7_compact = row.len() == 11;
@@ -614,6 +617,10 @@ fn parse_pending_hook_row(row: &[String]) -> HookRecord {
     }
     if phase7_promoted {
         record.promoted = parse_optional_boolean_cell(row.get(11).map(|s| s.as_str()));
+    }
+    // R23/393 号：第 14 列 kind（别名表归一化，词表外文本 → None 不臆测）。
+    if phase8_kind {
+        record.kind = crate::utils::hook_kind::normalize_hook_kind(cell(13).trim());
     }
     record
 }

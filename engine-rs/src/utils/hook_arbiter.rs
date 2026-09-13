@@ -21,7 +21,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::models::runtime_state::{
-    HookOps, HookPayoffTiming, HookRecord, HookStatus, NewHookCandidate, RuntimeStateDelta,
+    HookKind, HookOps, HookPayoffTiming, HookRecord, HookStatus, NewHookCandidate,
+    RuntimeStateDelta,
 };
 use crate::utils::hook_governance::{evaluate_hook_admission, HookAdmissionReason};
 use crate::utils::hook_lifecycle::resolve_hook_payoff_timing;
@@ -50,6 +51,8 @@ pub enum HookArbiterAction {
 #[derive(Debug, Clone)]
 struct PendingCandidate {
     hook_type: String,
+    /// R23/394 号：规范类型（候选→创建/合并全程透传）。
+    kind: Option<HookKind>,
     expected_payoff: String,
     payoff_timing: Option<HookPayoffTiming>,
     notes: String,
@@ -61,6 +64,7 @@ impl PendingCandidate {
     fn from_candidate(c: &NewHookCandidate) -> Self {
         Self {
             hook_type: c.hook_type.clone(),
+            kind: c.kind,
             expected_payoff: c.expected_payoff.clone(),
             payoff_timing: c.payoff_timing,
             notes: c.notes.clone(),
@@ -104,6 +108,7 @@ pub fn arbitrate_runtime_state_delta_hooks(
         }
         fallback_candidates.push(PendingCandidate {
             hook_type: hook.hook_type.clone(),
+            kind: hook.kind,
             expected_payoff: hook.expected_payoff.clone(),
             payoff_timing: hook.payoff_timing,
             notes: hook.notes.clone(),
@@ -258,6 +263,7 @@ pub fn arbitrate_runtime_state_delta_hooks(
 fn candidate_to_public(c: &PendingCandidate) -> NewHookCandidate {
     NewHookCandidate {
         hook_type: c.hook_type.clone(),
+        kind: c.kind,
         expected_payoff: c.expected_payoff.clone(),
         payoff_timing: c.payoff_timing,
         notes: c.notes.clone(),
@@ -278,7 +284,8 @@ fn merge_candidate_into_existing_hook(
         Some(&notes),
     );
     HookRecord {
-        kind: None,
+        // R23/394 号：规范类型——候选携带的新值赢，缺席保持既有。
+        kind: candidate.kind.or(existing.kind),
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter,
         hook_type: prefer_richer_text(&existing.hook_type, &candidate.hook_type),
@@ -309,7 +316,7 @@ fn create_canonical_hook(candidate: &PendingCandidate, chapter: u32, existing_id
         Some(candidate.notes.trim()),
     );
     HookRecord {
-        kind: None,
+        kind: candidate.kind,
         hook_id: build_canonical_hook_id(candidate, existing_ids),
         start_chapter: chapter,
         hook_type: candidate.hook_type.trim().to_string(),
@@ -609,6 +616,7 @@ mod tests {
     fn candidate(hook_type: &str, expected: &str, notes: &str) -> NewHookCandidate {
         NewHookCandidate {
             hook_type: hook_type.to_string(),
+            kind: None,
             expected_payoff: expected.to_string(),
             payoff_timing: None,
             notes: notes.to_string(),
@@ -739,6 +747,7 @@ mod tests {
         // 有 type 但 expectedPayoff 和 notes 都为空 → missing_payoff_signal。
         let c = NewHookCandidate {
             hook_type: "mystery".to_string(),
+            kind: None,
             expected_payoff: String::new(),
             payoff_timing: None,
             notes: String::new(),
@@ -877,6 +886,7 @@ mod tests {
         // build_canonical_hook_id：preferred_id 与既有冲突时回退到 slug；slug 也冲突则 -2/-3 后缀。
         let candidate = PendingCandidate {
             hook_type: "artifact".to_string(),
+            kind: None,
             expected_payoff: "Reveal why the seal answers only at midnight".to_string(),
             payoff_timing: None,
             notes: "fresh rule".to_string(),

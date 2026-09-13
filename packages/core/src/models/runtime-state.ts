@@ -137,6 +137,8 @@ export type HookOps = z.infer<typeof HookOpsSchema>;
 
 export const NewHookCandidateSchema = z.object({
   type: z.string().min(1),
+  /** R23/394 号：候选可带规范类型（LLM 词表输出，宿主边界归一化）。 */
+  kind: HookKindSchema.optional(),
   expectedPayoff: z.string().default(""),
   payoffTiming: HookPayoffTimingSchema.optional(),
   notes: z.string().default(""),

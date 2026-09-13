@@ -147,6 +147,8 @@ function mergeHookRecord(existing: HookRecord, incoming: HookRecord): HookRecord
     ...existing,
     startChapter: Math.min(existing.startChapter, incoming.startChapter),
     type: preferRicherText(existing.type, incoming.type),
+    // R23/394 号：规范类型——新值赢，缺席保持既有（零迁移兼容）。
+    kind: incoming.kind ?? existing.kind,
     status: mergeHookStatus(existing.status, incoming.status, progressed),
     lastAdvancedChapter: advanced,
     expectedPayoff,
