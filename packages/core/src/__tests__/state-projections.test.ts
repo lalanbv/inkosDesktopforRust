@@ -30,15 +30,36 @@ describe("state projections", () => {
       ],
     }, "en");
 
+    // R23/408 号：第 14 列 kind（settle 落盘投影与 Rust render_hooks_projection 对齐）。
     expect(markdown).toBe([
       "# Pending Hooks",
       "",
-      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | mid-arc | none |  | false |  |  | Old oath token resurfaces. |",
-      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | mid-arc | none |  | false |  |  | The seal is still broken. |",
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | mid-arc | none |  | false |  |  | Old oath token resurfaces. |  |",
+      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | mid-arc | none |  | false |  |  | The seal is still broken. |  |",
       "",
     ].join("\n"));
+  });
+
+  it("emits the canonical kind in column 14 when present (R23/408)", () => {
+    const markdown = renderHooksProjection({
+      hooks: [
+        {
+          hookId: "H01",
+          startChapter: 1,
+          type: "身世",
+          status: "open",
+          lastAdvancedChapter: 1,
+          expectedPayoff: "第10章",
+          notes: "镜中世界的来历真相。",
+          kind: "suspense",
+        },
+      ],
+    }, "zh");
+    expect(markdown).toContain(
+      "| H01 | 1 | 身世 | open | 1 | 第10章 | 中程 | 无 |  | 否 |  |  | 镜中世界的来历真相。 | suspense |",
+    );
   });
 
   it("renders chapter summaries projection with deterministic Chinese ordering", () => {

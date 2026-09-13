@@ -22,14 +22,16 @@ export function renderHooksProjection(
   // are visible columns, so writer and reviewer both see the causal chain, planned payoff arc,
   // stale threshold, and promotion flag. stale / blocked diagnostic flags are appended to the
   // status cell.
+  // R23/408 号：第 14 列 kind——与 Rust projections.rs render_hooks_projection
+  // 对齐（settle 落盘投影此前 13 列丢分类，双端同款缺陷同批补齐）。
   const headers = language === "en"
     ? [
-      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
 
   const currentChapter = options?.currentChapter;
@@ -64,6 +66,8 @@ export function renderHooksProjection(
           renderHalfLifeCell(hook.halfLifeChapters),
           renderPromotedCell(hook.promoted, language),
           hook.notes,
+          // R23/408 号：第 14 列 kind（规范 id，无 kind 空单元格）。
+          hook.kind ?? "",
         ].map(escapeTableCell).join(" | ")
       } |`;
     });
