@@ -6487,6 +6487,33 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, mode: next });
   });
 
+  // R13/382 号：写作数据聚合（产出节奏/通过率/token 成本；纯索引聚合）。
+  app.get("/api/v1/writing-stats", async (c) => {
+    try {
+      const books = await state.listBooks();
+      const rows: Array<{ updatedAt: string; wordCount: number; status: string; totalTokens?: number }> = [];
+      for (const bookId of books) {
+        try {
+          const index = await state.loadChapterIndex(bookId);
+          for (const meta of index) {
+            rows.push({
+              updatedAt: meta.updatedAt,
+              wordCount: meta.wordCount,
+              status: meta.status,
+              totalTokens: meta.tokenUsage?.totalTokens,
+            });
+          }
+        } catch {
+          // 单书索引缺失跳过
+        }
+      }
+      const { aggregateWritingStats } = await import("../lib/writing-stats");
+      return c.json(aggregateWritingStats(rows, new Date().toISOString()));
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // G11/373 号：书级 best-of-N 配置（governance.bestOfN 读写）。
   app.get("/api/v1/books/:id/best-of-n", async (c) => {
     const id = c.req.param("id");

@@ -4,6 +4,7 @@ import { groupBooksBySeries } from "./dashboard-book-groups";
 import type { BookSeriesInfo } from "../shared/contracts";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useServiceStore } from "../store/service";
+import { WritingStatsCard } from "../components/WritingStatsCard";
 import type { SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -227,6 +228,9 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
           </div>
         </div>
       )}
+      {/* R13/382 号：写作数据面板（产出节奏/通过率/token）。 */}
+      <WritingStatsCard />
+
       <div className="flex items-end justify-between border-b border-border/40 pb-8">
         <div>
           <h1 className="font-serif text-4xl mb-2">{t("dash.title")}</h1>

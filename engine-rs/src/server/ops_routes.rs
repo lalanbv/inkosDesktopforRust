@@ -2258,3 +2258,30 @@ pub async fn delete_experience_entry(
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
+
+/// R13/382 号：写作数据聚合（产出节奏/通过率/token 成本；纯索引聚合）。
+pub async fn get_writing_stats(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let mut rows: Vec<(String, i64, String, u64, Option<u64>)> = Vec::new();
+    let books_dir = root.join("books");
+    if let Ok(entries) = std::fs::read_dir(&books_dir) {
+        for entry in entries.flatten() {
+            let book_dir = entry.path();
+            let index_path = book_dir.join("story").join("chapter-index.json");
+            let Ok(raw) = std::fs::read_to_string(&index_path) else { continue };
+            let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+            let Some(items) = parsed.as_array().or_else(|| parsed.get("chapters").and_then(Value::as_array)) else { continue };
+            for item in items {
+                rows.push((
+                    item.get("updatedAt").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    item.get("wordCount").and_then(Value::as_i64).unwrap_or(0),
+                    item.get("status").and_then(Value::as_str).unwrap_or_default().to_string(),
+                    item.get("totalTokens").and_then(Value::as_u64).unwrap_or(0),
+                    item.get("tokenUsage").and_then(|t| t.get("totalTokens")).and_then(Value::as_u64),
+                ));
+            }
+        }
+    }
+    // TS 端点形状对齐：单行简报（聚合在客户端由同一 writing-stats 纯函数完成）。
+    (StatusCode::OK, Json(json!({ "rows": rows }))).into_response()
+}
