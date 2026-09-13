@@ -2419,3 +2419,103 @@ pub async fn put_codex(
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "io" }))),
     }
 }
+
+// ── R21/391 号：Context Lens——上下文装配透明回放（纯读，零写作链侵入；
+// 消费 367 号 trace/context 留痕，token 口径复用 estimateTextTokens）──
+
+/// GET /api/v1/books/:id/context-lens——可回放章节号列表（扫描 runtime 目录）。
+pub async fn get_context_lens_chapters(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+    }
+    let runtime_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("runtime");
+    let mut chapters: Vec<u32> = Vec::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(&runtime_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(digits) = name
+                .strip_prefix("chapter-")
+                .and_then(|rest| rest.strip_suffix(".trace.json"))
+            else {
+                continue;
+            };
+            if digits.len() == 4 && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                if let Ok(chapter) = digits.parse::<u32>() {
+                    chapters.push(chapter);
+                }
+            }
+        }
+    }
+    chapters.sort_unstable();
+    (StatusCode::OK, Json(json!({ "chapters": chapters })))
+}
+
+/// GET /api/v1/books/:id/context-lens/:chapter——单章装配投影回放。
+pub async fn get_context_lens(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter_raw)): Path<(String, String)>,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&book_id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" }))).into_response();
+    }
+    let Ok(chapter) = chapter_raw.parse::<u32>() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid chapter" }))).into_response();
+    };
+    if chapter == 0 {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid chapter" }))).into_response();
+    }
+    let runtime_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story")
+        .join("runtime");
+    let slug = format!("chapter-{chapter:04}");
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Chapter runtime artifacts not found" })),
+        )
+            .into_response()
+    };
+    let context_package: crate::models::input_governance::ContextPackage = match tokio::fs::read_to_string(
+        runtime_dir.join(format!("{slug}.context.json")),
+    )
+    .await
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    {
+        Some(package) => package,
+        None => return not_found(),
+    };
+    let trace: crate::models::input_governance::ChapterTrace = match tokio::fs::read_to_string(
+        runtime_dir.join(format!("{slug}.trace.json")),
+    )
+    .await
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    {
+        Some(trace) => trace,
+        None => return not_found(),
+    };
+    let lens = crate::utils::context_lens::build_context_lens(&context_package, &trace);
+    match serde_json::to_value(&lens) {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}

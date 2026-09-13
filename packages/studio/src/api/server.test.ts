@@ -437,6 +437,10 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     loadTranslationManifest: actual.loadTranslationManifest,
     runTranslationProject: actual.runTranslationProject,
     writeTranslationExport: actual.writeTranslationExport,
+    // R21/391 号：context lens 端点走真实投影与 schema 校验——mock 透传。
+    buildContextLens: actual.buildContextLens,
+    ContextPackageSchema: actual.ContextPackageSchema,
+    ChapterTraceSchema: actual.ChapterTraceSchema,
   };
 });
 
@@ -6542,6 +6546,73 @@ describe("createStudioServer daemon lifecycle", () => {
     const overwritten = await readFile(join(story, "series_backfill.md"), "utf-8");
     expect(overwritten).toContain("## [character] 林动");
     expect(overwritten).not.toContain("灵气体系"); // 覆盖：既有条目移除
+  });
+
+  it("context lens lists and replays chapter assembly traces (391号)", async () => {
+    await writeCompleteBookFixture(root, "demo-book", "Demo Book");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // 无留痕 → 空列表。
+    const empty = await app.request("http://localhost/api/v1/books/demo-book/context-lens");
+    await expect(empty.json()).resolves.toEqual({ chapters: [] });
+
+    // 落盘第 12 章 context + trace（未压缩装配）。
+    const runtime = join(root, "books", "demo-book", "story", "runtime");
+    await mkdir(runtime, { recursive: true });
+    const contextPackage = {
+      chapter: 12,
+      selectedContext: [
+        { source: "story/story_bible.md", reason: "正典事实", excerpt: "林渊身负古神血脉。" },
+        { source: "story/chapter_summaries.md#c11", reason: "前情", excerpt: "林渊突破。" },
+      ],
+    };
+    const trace = {
+      chapter: 12,
+      plannerInputs: [],
+      composerInputs: [],
+      selectedSources: ["story/story_bible.md", "story/chapter_summaries.md#c11"],
+      promptPacks: [],
+      contextTiers: {
+        protectedSources: ["story/story_bible.md"],
+        compressibleSources: ["story/chapter_summaries.md#c11"],
+      },
+      tokenBudget: { protectedTokens: 30, compressibleTokens: 12, totalSelectedTokens: 42 },
+      notes: [],
+    };
+    await writeFile(join(runtime, "chapter-0012.context.json"), JSON.stringify(contextPackage), "utf-8");
+    await writeFile(join(runtime, "chapter-0012.trace.json"), JSON.stringify(trace), "utf-8");
+
+    const list = await app.request("http://localhost/api/v1/books/demo-book/context-lens");
+    await expect(list.json()).resolves.toEqual({ chapters: [12] });
+
+    const lensRes = await app.request("http://localhost/api/v1/books/demo-book/context-lens/12");
+    expect(lensRes.status).toBe(200);
+    const lens = await lensRes.json();
+    expect(lens.version).toBe(1);
+    expect(lens.entries).toHaveLength(2);
+    expect(lens.entries[0]).toMatchObject({
+      order: 1,
+      source: "story/story_bible.md",
+      tier: "book-fact",
+      tierPrecedence: 100,
+      protected: true,
+      compiled: false,
+    });
+    expect(lens.entries[1]).toMatchObject({
+      order: 2,
+      source: "story/chapter_summaries.md#c11",
+      tier: "book-memory",
+      protected: false,
+    });
+    expect(lens.compression).toBeNull();
+    expect(lens.totals.tokens).toBe(lens.entries[0].tokens + lens.entries[1].tokens);
+
+    // 缺失工件 → 404；非法章节号 → 400。
+    const missing = await app.request("http://localhost/api/v1/books/demo-book/context-lens/99");
+    expect(missing.status).toBe(404);
+    const bad = await app.request("http://localhost/api/v1/books/demo-book/context-lens/abc");
+    expect(bad.status).toBe(400);
   });
 
   it("timeline-auto-beats defaults to off and round-trips the book-level flag (189号)", async () => {

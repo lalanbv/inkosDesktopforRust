@@ -26,6 +26,7 @@ pub mod chapter_splitter;
 pub mod context_assembly;
 pub mod context_ranker;
 pub mod context_source_tier;
+pub mod context_lens;
 pub mod deconstruction;
 pub mod detection_insights;
 pub mod entity_roster;

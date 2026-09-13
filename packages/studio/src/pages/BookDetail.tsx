@@ -11,6 +11,7 @@ import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
 import { CodexPanel } from "../components/CodexPanel";
 import { SeriesCanonPanel } from "../components/SeriesCanonPanel";
+import { ContextLensPanel } from "../components/ContextLensPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
 import { DirectorPanel } from "../components/DirectorPanel";
 import type { Theme } from "../hooks/use-theme";
@@ -608,6 +609,9 @@ export function BookDetail({
 
       {/* R10/377 号：实体卡编辑（名册自动派生+正典事实注入写作）。 */}
       <CodexPanel bookId={bookId} />
+
+      {/* R21/391 号：上下文透视（回放每章装配清单，纯读）。 */}
+      <ContextLensPanel bookId={bookId} />
 
       {/* R20/390 号：系列正典共享（跨书条目一次编写、逐书命中注入）。 */}
       <SeriesCanonPanel bookId={bookId} />

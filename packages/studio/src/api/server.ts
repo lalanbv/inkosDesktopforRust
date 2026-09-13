@@ -6686,6 +6686,48 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, seriesId: raw });
   });
 
+  // R21/391 号：Context Lens——上下文装配透明回放（纯读，零写作链侵入；
+  // 消费 367 号 trace/context 留痕，token 口径复用 estimateTextTokens）。
+  app.get("/api/v1/books/:id/context-lens", async (c) => {
+    const id = c.req.param("id");
+    let names: string[] = [];
+    try {
+      names = await readdir(join(root, "books", id, "story", "runtime"));
+    } catch {
+      return c.json({ chapters: [] });
+    }
+    const chapters = names
+      .map((name) => /^chapter-(\d{4})\.trace\.json$/.exec(name)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map((value) => Number.parseInt(value, 10))
+      .sort((left, right) => left - right);
+    return c.json({ chapters });
+  });
+
+  app.get("/api/v1/books/:id/context-lens/:chapter", async (c) => {
+    const id = c.req.param("id");
+    const chapter = Number.parseInt(c.req.param("chapter"), 10);
+    if (!Number.isInteger(chapter) || chapter < 1) {
+      return c.json({ error: "Invalid chapter" }, 400);
+    }
+    const runtimeDir = join(root, "books", id, "story", "runtime");
+    const slug = `chapter-${String(chapter).padStart(4, "0")}`;
+    let contextPackage: unknown;
+    let trace: unknown;
+    try {
+      contextPackage = JSON.parse(await readFile(join(runtimeDir, `${slug}.context.json`), "utf-8"));
+      trace = JSON.parse(await readFile(join(runtimeDir, `${slug}.trace.json`), "utf-8"));
+    } catch {
+      return c.json({ error: "Chapter runtime artifacts not found" }, 404);
+    }
+    const core = await import("@actalk/inkos-core");
+    const lens = core.buildContextLens({
+      contextPackage: core.ContextPackageSchema.parse(contextPackage),
+      trace: core.ChapterTraceSchema.parse(trace),
+    });
+    return c.json(lens);
+  });
+
   // R18/386 号：云备份主链——全量 tar.gz 导出 + 两段式导入恢复（恢复前自动快照）。
   // 范围：books/ + inkos.json + .inkos/（secrets 默认排除，includeSecrets=1 显式含）+ prompt/；
   // sessions/ 默认排除。备份为本地 UI 面，Rust 端点书面决策仅 TS 承担（386 备忘 §4）。

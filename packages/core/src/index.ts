@@ -988,3 +988,12 @@ export {
   type CodexLayerMerge,
   type SeriesCanonFile,
 } from "./utils/series-canon.js";
+// R21/391 号：Context Lens——上下文装配透明投影（纯读）。
+export {
+  buildContextLens,
+  CONTEXT_LENS_VERSION,
+  type ContextLens,
+  type ContextLensCompression,
+  type ContextLensEntry,
+  type ContextLensRank,
+} from "./utils/context-lens.js";

@@ -1,0 +1,419 @@
+{
+  "meta": {
+    "contract": "R21 Context Lens（391 号，四轮 P0）——上下文装配透明投影（纯读）",
+    "invariants": [
+      "entries 以 context.json（预算后实际进入 prompt 的包）为准，order=1 起装配序",
+      "tier/precedence 按来源分类表（G2/390 号含 codex-series/→user-reference）；未注册→ephemeral",
+      "protected 按 isProtectedContextSource 独立判定（不信任 trace 分层留痕）",
+      "tokens 口径 = estimateTextTokens(source+reason+excerpt join\\n)，空 excerpt 剔除",
+      "compiled = source==trace.compression.compiledSource；compression 段存在时 preCompressionSources 透传 sourceTokens",
+      "compression 无则 null；rank 透传（缺省 null）；totals 为 entries 聚合"
+    ]
+  },
+  "cases": [
+    {
+      "name": "full assembly across tiers without compression",
+      "contextPackage": {
+        "chapter": 12,
+        "selectedContext": [
+          {
+            "source": "story/story_bible.md",
+            "reason": "正典事实",
+            "excerpt": "林渊是玄山宗外门弟子，身负古神血脉。"
+          },
+          {
+            "source": "story/outline/story_frame.md#卷一",
+            "reason": "故事框架"
+          },
+          {
+            "source": "story/current_focus.md",
+            "reason": "当前焦点",
+            "excerpt": "第12章推进秘境线。"
+          },
+          {
+            "source": "story/chapter_summaries.md#c11",
+            "reason": "前情",
+            "excerpt": "第11章：林渊突破聚气五层。",
+            "rank": {
+              "recency": 0.9,
+              "frequency": 0.4
+            }
+          },
+          {
+            "source": "codex-series/wu_dong_qian_kun",
+            "reason": "系列正典卡命中（跨书）",
+            "excerpt": "应欢欢：道主之女，使炎雷之力。"
+          },
+          {
+            "source": "reference/-notes.md#战斗",
+            "reason": "参考资料",
+            "excerpt": "战斗节奏从紧，招式名不超过四字。"
+          },
+          {
+            "source": "rules/anti-ai.md",
+            "reason": "写作禁则",
+            "excerpt": "禁止总结式收尾。",
+            "rank": {
+              "hookBonus": 0.25
+            }
+          },
+          {
+            "source": "runtime/unknown-thing",
+            "reason": "未注册来源",
+            "excerpt": ""
+          },
+          {
+            "source": "story/pending_hooks.md#h3",
+            "reason": "伏笔证据",
+            "excerpt": "剑穗之谜尚未揭示。"
+          }
+        ]
+      },
+      "trace": {
+        "chapter": 12,
+        "plannerInputs": [
+          "story/outline/story_frame.md#卷一"
+        ],
+        "composerInputs": [
+          "story/runtime/chapter-0012.runtime.json"
+        ],
+        "selectedSources": [
+          "story/story_bible.md",
+          "story/outline/story_frame.md#卷一",
+          "story/current_focus.md",
+          "story/chapter_summaries.md#c11",
+          "codex-series/wu_dong_qian_kun",
+          "reference/-notes.md#战斗",
+          "rules/anti-ai.md",
+          "runtime/unknown-thing",
+          "story/pending_hooks.md#h3"
+        ],
+        "promptPacks": [],
+        "contextTiers": {
+          "protectedSources": [
+            "story/story_bible.md",
+            "story/outline/story_frame.md#卷一",
+            "story/current_focus.md",
+            "story/pending_hooks.md#h3"
+          ],
+          "compressibleSources": [
+            "story/chapter_summaries.md#c11",
+            "codex-series/wu_dong_qian_kun",
+            "reference/-notes.md#战斗",
+            "rules/anti-ai.md",
+            "runtime/unknown-thing"
+          ]
+        },
+        "tokenBudget": {
+          "protectedTokens": 77,
+          "compressibleTokens": 104,
+          "totalSelectedTokens": 181
+        },
+        "notes": []
+      },
+      "expected": {
+        "version": 1,
+        "chapter": 12,
+        "entries": [
+          {
+            "order": 1,
+            "source": "story/story_bible.md",
+            "tier": "book-fact",
+            "tierPrecedence": 100,
+            "protected": true,
+            "tokens": 26,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 2,
+            "source": "story/outline/story_frame.md#卷一",
+            "tier": "book-fact",
+            "tierPrecedence": 100,
+            "protected": true,
+            "tokens": 14,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 3,
+            "source": "story/current_focus.md",
+            "tier": "book-planning",
+            "tierPrecedence": 80,
+            "protected": true,
+            "tokens": 18,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 4,
+            "source": "story/chapter_summaries.md#c11",
+            "tier": "book-memory",
+            "tierPrecedence": 60,
+            "protected": false,
+            "tokens": 21,
+            "compiled": false,
+            "rank": {
+              "recency": 0.9,
+              "frequency": 0.4
+            }
+          },
+          {
+            "order": 5,
+            "source": "codex-series/wu_dong_qian_kun",
+            "tier": "user-reference",
+            "tierPrecedence": 40,
+            "protected": false,
+            "tokens": 30,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 6,
+            "source": "reference/-notes.md#战斗",
+            "tier": "user-reference",
+            "tierPrecedence": 40,
+            "protected": false,
+            "tokens": 26,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 7,
+            "source": "rules/anti-ai.md",
+            "tier": "style-asset",
+            "tierPrecedence": 20,
+            "protected": false,
+            "tokens": 16,
+            "compiled": false,
+            "rank": {
+              "hookBonus": 0.25
+            }
+          },
+          {
+            "order": 8,
+            "source": "runtime/unknown-thing",
+            "tier": "ephemeral",
+            "tierPrecedence": 10,
+            "protected": false,
+            "tokens": 11,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 9,
+            "source": "story/pending_hooks.md#h3",
+            "tier": "book-fact",
+            "tierPrecedence": 100,
+            "protected": true,
+            "tokens": 19,
+            "compiled": false,
+            "rank": null
+          }
+        ],
+        "compression": null,
+        "notes": [],
+        "totals": {
+          "entries": 9,
+          "protectedEntries": 4,
+          "compiledEntries": 0,
+          "tokens": 181
+        }
+      }
+    },
+    {
+      "name": "post-budget package with compiled entry and compression trail",
+      "contextPackage": {
+        "chapter": 13,
+        "selectedContext": [
+          {
+            "source": "story/story_bible.md",
+            "reason": "正典事实（受保护）",
+            "excerpt": "林渊身负古神血脉，剑穗藏有师尊遗物。"
+          },
+          {
+            "source": "story/current_focus.md",
+            "reason": "当前焦点（受保护）",
+            "excerpt": "第13章：秘境入口开启，敌袭将至。"
+          },
+          {
+            "source": "runtime/compiled-compressible-context",
+            "reason": "Semantic compilation of lower-priority context after protected context exceeded the input budget.",
+            "excerpt": "前情与参考编译摘要：林渊突破后南下秘境；战斗节奏从紧；禁总结式收尾。"
+          }
+        ]
+      },
+      "trace": {
+        "chapter": 13,
+        "plannerInputs": [
+          "story/outline/story_frame.md#卷一"
+        ],
+        "composerInputs": [
+          "story/runtime/chapter-0013.runtime.json"
+        ],
+        "selectedSources": [
+          "story/story_bible.md",
+          "story/current_focus.md",
+          "runtime/compiled-compressible-context"
+        ],
+        "promptPacks": [],
+        "contextTiers": {
+          "protectedSources": [
+            "story/story_bible.md",
+            "story/current_focus.md"
+          ],
+          "compressibleSources": [
+            "runtime/compiled-compressible-context"
+          ]
+        },
+        "tokenBudget": {
+          "protectedTokens": 57,
+          "compressibleTokens": 65,
+          "totalSelectedTokens": 122
+        },
+        "notes": [
+          "compiled-compressible-context"
+        ],
+        "compression": {
+          "compiledSource": "runtime/compiled-compressible-context",
+          "protectedSources": [
+            "story/story_bible.md",
+            "story/current_focus.md"
+          ],
+          "compressedSources": [
+            "story/chapter_summaries.md#c12",
+            "codex-series/wu_dong_qian_kun",
+            "rules/anti-ai.md"
+          ],
+          "protectedTokens": 57,
+          "compressibleTokens": 79,
+          "budgetTokens": 900,
+          "sourceTokens": [
+            {
+              "source": "story/chapter_summaries.md#c12",
+              "tokens": 33
+            },
+            {
+              "source": "codex-series/wu_dong_qian_kun",
+              "tokens": 30
+            },
+            {
+              "source": "rules/anti-ai.md",
+              "tokens": 16
+            }
+          ]
+        }
+      },
+      "expected": {
+        "version": 1,
+        "chapter": 13,
+        "entries": [
+          {
+            "order": 1,
+            "source": "story/story_bible.md",
+            "tier": "book-fact",
+            "tierPrecedence": 100,
+            "protected": true,
+            "tokens": 30,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 2,
+            "source": "story/current_focus.md",
+            "tier": "book-planning",
+            "tierPrecedence": 80,
+            "protected": true,
+            "tokens": 27,
+            "compiled": false,
+            "rank": null
+          },
+          {
+            "order": 3,
+            "source": "runtime/compiled-compressible-context",
+            "tier": "ephemeral",
+            "tierPrecedence": 10,
+            "protected": false,
+            "tokens": 65,
+            "compiled": true,
+            "rank": null
+          }
+        ],
+        "compression": {
+          "compiledSource": "runtime/compiled-compressible-context",
+          "budgetTokens": 900,
+          "protectedTokens": 57,
+          "compressibleTokens": 79,
+          "preCompressionSources": [
+            {
+              "source": "story/chapter_summaries.md#c12",
+              "tokens": 33
+            },
+            {
+              "source": "codex-series/wu_dong_qian_kun",
+              "tokens": 30
+            },
+            {
+              "source": "rules/anti-ai.md",
+              "tokens": 16
+            }
+          ]
+        },
+        "notes": [
+          "compiled-compressible-context"
+        ],
+        "totals": {
+          "entries": 3,
+          "protectedEntries": 2,
+          "compiledEntries": 1,
+          "tokens": 122
+        }
+      }
+    },
+    {
+      "name": "empty package cold start",
+      "contextPackage": {
+        "chapter": 1,
+        "selectedContext": []
+      },
+      "trace": {
+        "chapter": 1,
+        "plannerInputs": [
+          "story/outline/story_frame.md#卷一"
+        ],
+        "composerInputs": [
+          "story/runtime/chapter-0001.runtime.json"
+        ],
+        "selectedSources": [],
+        "promptPacks": [],
+        "contextTiers": {
+          "protectedSources": [],
+          "compressibleSources": []
+        },
+        "tokenBudget": {
+          "protectedTokens": 0,
+          "compressibleTokens": 0,
+          "totalSelectedTokens": 0
+        },
+        "notes": [
+          "cold-start-no-runtime"
+        ]
+      },
+      "expected": {
+        "version": 1,
+        "chapter": 1,
+        "entries": [],
+        "compression": null,
+        "notes": [
+          "cold-start-no-runtime"
+        ],
+        "totals": {
+          "entries": 0,
+          "protectedEntries": 0,
+          "compiledEntries": 0,
+          "tokens": 0
+        }
+      }
+    }
+  ]
+}

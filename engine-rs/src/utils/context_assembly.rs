@@ -179,7 +179,8 @@ pub fn is_protected_context_source(source: &str) -> bool {
         || source.starts_with("runtime/hook_debt#")
 }
 
-fn estimate_context_source_tokens(entry: &ContextSource) -> u32 {
+/// R21/391 号起 pub：Context Lens 投影复用同一估算口径（367 号留痕面）。
+pub fn estimate_context_source_tokens(entry: &ContextSource) -> u32 {
     // TS filter(Boolean)：excerpt 为 null/空串均剔除。
     let parts: Vec<&str> = [&entry.source, &entry.reason, entry.excerpt.as_deref().unwrap_or("")]
         .into_iter()
