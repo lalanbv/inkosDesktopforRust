@@ -314,10 +314,17 @@ pub async fn load_narrative_memory_seed(
             hook_id: h.hook_id,
             start_chapter: h.start_chapter as i64,
             r#type: h.hook_type,
+            // status 变体均为单词（Progressing→"progressing"…），Debug+lowercase 安全。
             status: format!("{:?}", h.status).to_lowercase(),
             last_advanced_chapter: h.last_advanced_chapter as i64,
             expected_payoff: h.expected_payoff,
-            payoff_timing: h.payoff_timing.map(|t| format!("{:?}", t).to_lowercase()).unwrap_or_default(),
+            // R26/409 号：payoff_timing 存在多词变体（NearTerm→"nearterm" 错值），
+            // 必须走 canonical 映射（"near-term"/"mid-arc"/"slow-burn"）。
+            payoff_timing: h
+                .payoff_timing
+                .map(|t| crate::utils::hook_lifecycle::hook_payoff_timing_canonical(t))
+                .unwrap_or_default()
+                .to_string(),
             notes: h.notes,
         })
         .collect();
@@ -468,7 +475,7 @@ mod tests {
         assert_eq!(seed.hooks.len(), 1);
         assert_eq!(seed.hooks[0].hook_id, "h01");
         assert_eq!(seed.hooks[0].status, "open");
-        assert_eq!(seed.hooks[0].payoff_timing, "midarc");
+        assert_eq!(seed.hooks[0].payoff_timing, "mid-arc");
         let _ = StoredHook { hook_id: "x".into(), start_chapter: 0, r#type: "t".into(), status: "open".into(), last_advanced_chapter: 0, expected_payoff: String::new(), payoff_timing: String::new(), notes: String::new() };
         let _ = HookStatus::Open;
     }
