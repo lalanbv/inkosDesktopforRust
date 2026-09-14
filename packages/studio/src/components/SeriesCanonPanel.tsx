@@ -54,9 +54,13 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
         `/series/${encodeURIComponent(id)}/canon`,
       );
       setEntries(data.entries);
-      setSelected((current) =>
-        data.entries.some((entry) => entry.name === current) ? current : (data.entries[0]?.name ?? ""),
-      );
+      const next = data.entries.some((entry) => entry.name === selected)
+        ? selected
+        : (data.entries[0]?.name ?? "");
+      setSelected(next);
+      // 442 号：自动选中必须同步回填编辑字段——字段留空而条目处于选中态时，
+      // 直接「保存条目」会把 aliases/summary/facts 静默清空。
+      populateFields(data.entries.find((entry) => entry.name === next));
     } catch {
       setEntries([]);
     }
@@ -74,12 +78,15 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
 
   const current = entries.find((entry) => entry.name === selected);
 
-  const select = (name: string) => {
-    setSelected(name);
-    const entry = entries.find((item) => item.name === name);
+  const populateFields = (entry?: SeriesCanonEntry) => {
     setAliases((entry?.aliases ?? []).join(", "));
     setSummary(entry?.summary ?? "");
     setFacts((entry?.facts ?? []).join("\n"));
+  };
+
+  const select = (name: string) => {
+    setSelected(name);
+    populateFields(entries.find((item) => item.name === name));
   };
 
   const saveBinding = async () => {

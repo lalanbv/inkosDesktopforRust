@@ -174,9 +174,14 @@ writeFileSync(join(root, "radar", "scan-20260914-walkthrough.json"), JSON.string
 // root 复用（见 walkthrough-env 头注），二次起停必须走只读断言路径。
 const enc = encodeURIComponent(BOOK);
 const bookState = (await api(`/api/v1/books/${enc}`)).body;
-if ((bookState?.nextChapter ?? 0) >= 3) {
+// 复用根（440）之上再分两种（442 号）：fixture 全链要求 run-log 同进程增长——
+// 而 env 重启后引擎内存 run-log 从零，跳过路径不得苛求该断言。
+const chainDone = (bookState?.nextChapter ?? 0) >= 3;
+let chainRan = false;
+if (chainDone) {
   console.log(`[fixture] write-next 章已落盘（nextChapter=${bookState.nextChapter}）——复用根，跳过 resync/write-next 走只读断言`);
 } else {
+  chainRan = true;
   console.log("[fixture] POST resync/1 …");
   const resync = await api(`/api/v1/books/${enc}/resync/1`, { method: "POST" });
   if (resync.status !== 200) die(`resync 失败：${JSON.stringify(resync.body).slice(0, 300)}`);
@@ -278,7 +283,8 @@ const expectKinds = new Set(["suspense", "emotion", "artifact", "worldview"]);
 const kindsOk = [...expectKinds].every((kind) => kinds.has(kind));
 
 const runLog = (await api("/api/v1/run-log")).body;
-const runLogOk = runLog.total > 0 && (runLog.entries ?? []).length > 0;
+// 442 号：复用根重启后引擎内存 run-log 从零——增长断言只约束同进程全链路径。
+const runLogOk = chainRan ? (runLog.total > 0 && (runLog.entries ?? []).length > 0) : true;
 
 console.log(`[fixture] promises timeline = ${timeline.length} 条，kinds = ${[...kinds].join(",") || "（无）"}`);
 console.log(`[fixture] run-log total = ${runLog.total}，kept = ${runLog.kept}`);
