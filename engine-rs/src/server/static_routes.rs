@@ -3,8 +3,10 @@
 //! TS 语义（server.ts L6820-6857）逐字对齐：
 //! - `GET /assets/*`：`staticDir + 请求路径` 读文件；扩展名映射 content-type
 //!   （js/css/svg/png/ico/json，其余 `application/octet-stream`）；读失败 404。
-//! - SPA 回退：`GET *` 非 `/api/v1/` 路径 → index.html（**启动时读一次缓存**；
-//!   index 缺失则不注册回退）；`/api/v1/*` 一律 404（不吞 API 未知路由）。
+//! - SPA 回退：`GET *` 非 `/api/v1/` 路径 → index.html（**mtime 校验缓存**：
+//!   每请求一次 `stat`，文件变化才重读——445 号备案修复，重建 dist 无需重启
+//!   引擎；index 缺失走 404 分支，事后补建也会被拾取）；`/api/v1/*` 一律 404
+//!   （不吞 API 未知路由）。
 //!
 //! 差异防护：路径分量含 `..` 直接 404（Rust 侧安全加固，TS 端 URL 解析已归一
 //! 的等价面）；asset 路径 percent 解码后落盘。
@@ -13,6 +15,7 @@
 //! `INKOS_STATIC_DIR` 注入；未设/目录缺失为纯 API 服务（Tauri 壳内嵌前端场景）。
 
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use axum::extract::State;
 use axum::http::{header, StatusCode, Uri};
@@ -23,14 +26,19 @@ use axum::Router;
 use crate::server::sse::BroadcastHub;
 use crate::server::{AppState, write_next_route::WriteNextRuntime};
 
-/// 静态面共享态：目录 + index.html 启动期缓存（TS 同款一次性读取）。
+/// 静态面共享态：目录 + index.html mtime 校验缓存（445 号备案修复）。
 ///
-/// index 缓存为 [`Bytes`]（170 号 W-B1 修正）：SPA 回退每次请求都要回体，
-/// `Vec<u8>` 逐请求整页 memcpy，`Bytes` 克隆为引用计数——读取时 `Vec → Bytes`
-/// 转移所有权零拷贝，此后零分配。
+/// 缓存体仍为 [`Bytes`](axum::body::Bytes)（170 号 W-B1）：命中路径零拷贝
+/// 引用计数克隆；未命中（启动首次/文件变化）才 `fs::read` 重读。每请求一次
+/// `stat` 换取「重建 dist 无需重启引擎」的热加载语义。
 struct StaticFace {
     dir: PathBuf,
-    index: Option<axum::body::Bytes>,
+    index: std::sync::RwLock<CachedIndex>,
+}
+
+struct CachedIndex {
+    mtime: Option<SystemTime>,
+    body: Option<axum::body::Bytes>,
 }
 
 /// 给全量路由挂静态前端面。
@@ -42,8 +50,13 @@ pub fn with_static_face(router: Router, static_dir: Option<PathBuf>) -> Router {
     let Some(dir) = static_dir else {
         return router;
     };
-    let index = std::fs::read(dir.join("index.html")).ok().map(axum::body::Bytes::from);
-    let face = std::sync::Arc::new(StaticFace { dir, index });
+    let index_path = dir.join("index.html");
+    let mtime = std::fs::metadata(&index_path).ok().and_then(|m| m.modified().ok());
+    let body = std::fs::read(&index_path).ok().map(axum::body::Bytes::from);
+    let face = std::sync::Arc::new(StaticFace {
+        dir,
+        index: std::sync::RwLock::new(CachedIndex { mtime, body }),
+    });
     let static_router: Router = Router::new()
         .route("/assets/*path", get(serve_asset))
         .fallback(spa_fallback)
@@ -97,6 +110,26 @@ async fn serve_asset(
     }
 }
 
+impl StaticFace {
+    /// index.html 当前体（mtime 校验：未变化走缓存克隆，变化则重读）。
+    fn index_body(&self) -> Option<axum::body::Bytes> {
+        let index_path = self.dir.join("index.html");
+        let mtime = std::fs::metadata(&index_path).ok().and_then(|m| m.modified().ok());
+        {
+            let cached = self.index.read().unwrap();
+            if cached.mtime == mtime {
+                return cached.body.clone();
+            }
+        }
+        let body = std::fs::read(&index_path).ok().map(axum::body::Bytes::from);
+        let mut cached = self.index.write().unwrap();
+        if cached.mtime != mtime {
+            *cached = CachedIndex { mtime, body: body.clone() };
+        }
+        cached.body.clone()
+    }
+}
+
 async fn spa_fallback(
     State(face): State<std::sync::Arc<StaticFace>>,
     method: axum::http::Method,
@@ -110,7 +143,7 @@ async fn spa_fallback(
     if uri.path().starts_with("/api/v1/") {
         return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
     }
-    match &face.index {
+    match face.index_body() {
         Some(html) => (
             StatusCode::OK,
             [
@@ -120,7 +153,7 @@ async fn spa_fallback(
                 (header::X_FRAME_OPTIONS, "DENY"),
             ],
             // Bytes 克隆 = 引用计数递增（170 号 W-B1：替代 Vec 整页 memcpy）。
-            html.clone(),
+            html,
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
@@ -285,6 +318,41 @@ mod tests {
         assert_eq!(status, 200);
         let (status, _, _) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 404);
+    }
+
+    /// 445 号备案修复：重建 dist（index.html 变化）后无需重启引擎——
+    /// SPA 回退按 mtime 校验重读，热加载生效。
+    #[tokio::test]
+    async fn index_hot_reload_picks_up_rewrite_without_restart() {
+        let dir = dist();
+        let mut app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
+        let (status, _, body) =
+            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        assert_eq!(status, 200);
+        assert_eq!(body, b"<!doctype html><title>t</title>".to_vec());
+
+        std::fs::write(dir.path().join("index.html"), "<!doctype html><title>t2</title>").unwrap();
+        let (status, _, body) =
+            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        assert_eq!(status, 200);
+        assert_eq!(body, b"<!doctype html><title>t2</title>".to_vec());
+    }
+
+    /// 445 号改进面：启动时 index 缺失走 404，事后补建也会被拾取（旧实现
+    /// 永久 404）。
+    #[tokio::test]
+    async fn late_created_index_is_picked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("assets")).unwrap();
+        let mut app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
+        let (status, _, _) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        assert_eq!(status, 404);
+
+        std::fs::write(dir.path().join("index.html"), "<!doctype html><title>late</title>").unwrap();
+        let (status, _, body) =
+            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        assert_eq!(status, 200);
+        assert_eq!(body, b"<!doctype html><title>late</title>".to_vec());
     }
 
     /// 170 号 W-A3：静态面（assets + SPA 回退）三安全头；API 面不加（契约不扰动）。
