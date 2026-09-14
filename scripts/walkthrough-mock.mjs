@@ -14,7 +14,8 @@
 //   args 含 action 必填字段——301/310 号教训）
 //   其余                   → PASS
 //
-// 用法：`INKOS_LLM_BASE_URL=http://127.0.0.1:<port> inkos-engine-server` 启动引擎，
+// 用法：`INKOS_LLM_BASE_URL=http://127.0.0.1:<port>/v1 inkos-engine-server` 启动引擎
+//（/v1 必须带：模型列表与 chat/completions 都走 mock 的 /v1 面——436 号实测），
 // 浏览器直连静态面（`INKOS_STATIC_DIR=packages/studio/dist`）即可离线走查全功能。
 
 import http from "node:http";

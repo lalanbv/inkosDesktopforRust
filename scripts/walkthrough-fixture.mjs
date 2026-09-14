@@ -4,10 +4,11 @@
 //   node scripts/walkthrough-fixture.mjs [projectRoot] [enginePort]
 //   # 默认 root=/tmp/inkos-walk、enginePort=8787；mock LLM 固定 1234
 //
-// 前置（两进程已由人工/脚本启动）：
+// 前置（两进程已由人工/脚本启动——或直接用 walkthrough-env.mjs 一键编排）：
 //   node scripts/walkthrough-mock.mjs 1234
-//   INKOS_PROJECT_ROOT=<root> INKOS_LLM_BASE_URL=http://127.0.0.1:1234 \
+//   INKOS_PROJECT_ROOT=<root> INKOS_LLM_BASE_URL=http://127.0.0.1:1234/v1 \
 //     INKOS_STATIC_DIR=packages/studio/dist INKOS_PORT=8787 inkos-engine-server
+//   （/v1 必须带：模型列表与 chat/completions 都走 mock 的 /v1 面——436 号实测）
 //
 // 步骤（幂等，可重复跑）：
 //   1. 写 inkos.json + .inkos/secrets.json（custom:Mock → walkthrough-mock）
