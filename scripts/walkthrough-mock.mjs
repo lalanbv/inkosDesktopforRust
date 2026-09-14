@@ -45,6 +45,7 @@ function settlerDelta(msgs) {
   return "=== RUNTIME_STATE_DELTA ===\n```json\n" + JSON.stringify(delta) + "\n```\n";
 }
 const ARGS = "{\"action\": \"create_book\", \"instruction\": \"创建玄幻小说《镜花水月》，主角苏檀。世界观：镜中世界反向修行。核心冲突：镜像侵蚀现实。\", \"createBook\": {\"title\": \"镜花水月\", \"genre\": \"xuanhuan\", \"platform\": \"qidian\", \"targetChapters\": 12, \"chapterWordCount\": 3000, \"language\": \"zh\"}}";
+let PROPOSE_SEQ = 0;
 const PORT = Number(process.argv[2] ?? 1234);
 
 http.createServer((req, res) => {
@@ -76,7 +77,10 @@ http.createServer((req, res) => {
       else if (sys.includes("continuity validator")) content = "PASS";
       else if (lastRole === "user") {
         // propose_action 工具调用（231 号协议：action 必填 + createBook 结构化）。
-        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_propose", function: { name: "propose_action", arguments: ARGS } }] } }] };
+        // toolCallId 必须逐次唯一（436 号）：前端确认卡锁定键=execId（派生自
+        // toolCallId），固定 id 会让后续同形提议复用首轮"已执行"锁，卡直接
+        // 锁死不可确认——真 LLM 每次 tool call id 均不同，mock 必须对齐。
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: `call_propose_${++PROPOSE_SEQ}`, function: { name: "propose_action", arguments: ARGS } }] } }] };
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
         return;
