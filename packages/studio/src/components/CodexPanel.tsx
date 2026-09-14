@@ -29,7 +29,15 @@ export function CodexPanel({ bookId }: { bookId: string }) {
         `/books/${encodeURIComponent(bookId)}/codex`,
       );
       setCards(data.cards);
-      if (data.cards.length > 0 && !selected) setSelected(data.cards[0]!.name);
+      const next = data.cards.some((card) => card.name === selected)
+        ? selected
+        : (data.cards[0]?.name ?? "");
+      if (next) setSelected(next);
+      // 452 号：自动选中必须同步回填编辑字段（442 号 SeriesCanon 同款静默
+      // 清空防御）——字段留空而卡片处于选中态时，保存会以空值覆盖原卡。
+      const currentCard = data.cards.find((card) => card.name === next);
+      setSummary(currentCard?.summary ?? "");
+      setFacts((currentCard?.facts ?? []).join("\n"));
     } catch {
       setCards([]);
     }
