@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Message, ToolExecution } from "../../types";
-import { createSessionRuntime, deriveResolvedProposals, deserializeMessages, extractErrorMessage, extractToolError, hasInFlightExecution, markRunningToolsFailed, mergeTaskExecution, withToolExecutions } from "./runtime";
+import { createSessionRuntime, deriveResolvedProposals, deserializeMessages, extractErrorMessage, extractToolError, findProposalOutcomeExecution, hasInFlightExecution, markRunningToolsFailed, mergeTaskExecution, withToolExecutions } from "./runtime";
 
 function exec(overrides: Partial<ToolExecution> & { id: string; tool: string }): ToolExecution {
   const { id, tool, ...rest } = overrides;
@@ -183,6 +183,81 @@ describe("deriveResolvedProposals", () => {
     ];
 
     expect(deriveResolvedProposals(messages)).toEqual({ "new-proposal": "confirmed" });
+  });
+});
+
+describe("findProposalOutcomeExecution", () => {
+  const proposalMessage = (id: string): Message => ({
+    role: "assistant",
+    content: "",
+    timestamp: 1,
+    toolExecutions: [
+      exec({
+        id,
+        tool: "propose_action",
+        details: {
+          kind: "proposed_action",
+          action: "create_book",
+          targetSessionKind: "book-create",
+          instruction: "建一本玄幻",
+        },
+      }),
+    ],
+  });
+
+  it("pairs a create_book proposal with an errored architect run (失败也命中——确认卡据此降级提示)", () => {
+    const messages: Message[] = [
+      proposalMessage("proposal-1"),
+      {
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [
+          exec({ id: "architect-1", tool: "sub_agent", agent: "architect", status: "error" }),
+        ],
+      },
+    ];
+
+    const outcome = findProposalOutcomeExecution(messages, "proposal-1");
+    expect(outcome?.id).toBe("architect-1");
+    expect(outcome?.status).toBe("error");
+  });
+
+  it("returns undefined while no production run has appeared", () => {
+    expect(findProposalOutcomeExecution([proposalMessage("proposal-1")], "proposal-1")).toBeUndefined();
+  });
+
+  it("skips non-matching sub-agents before the architect run", () => {
+    const messages: Message[] = [
+      proposalMessage("proposal-1"),
+      {
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [
+          exec({ id: "writer-1", tool: "sub_agent", agent: "writer", status: "error" }),
+          exec({ id: "architect-1", tool: "sub_agent", agent: "architect", status: "running" }),
+        ],
+      },
+    ];
+
+    expect(findProposalOutcomeExecution(messages, "proposal-1")?.id).toBe("architect-1");
+  });
+
+  it("ignores proposals of a different id", () => {
+    const messages: Message[] = [
+      proposalMessage("proposal-1"),
+      {
+        role: "assistant",
+        content: "",
+        timestamp: 2,
+        toolExecutions: [
+          exec({ id: "architect-1", tool: "sub_agent", agent: "architect", status: "error" }),
+        ],
+      },
+    ];
+
+    expect(findProposalOutcomeExecution(messages, "proposal-other")).toBeUndefined();
   });
 });
 

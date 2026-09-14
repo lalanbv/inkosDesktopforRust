@@ -384,8 +384,7 @@ function proposedActionFrom(exec: ToolExecution): string | null {
   return typeof record.action === "string" && record.action.trim() ? record.action : null;
 }
 
-function completesProposedAction(exec: ToolExecution, action: string): boolean {
-  if (exec.status !== "completed") return false;
+function matchesProposedAction(exec: ToolExecution, action: string): boolean {
   if (action === "create_book") return exec.tool === "sub_agent" && exec.agent === "architect";
   if (action === "short_run") return exec.tool === "short_fiction_run";
   if (action === "play_start") return exec.tool === "play_start";
@@ -394,6 +393,33 @@ function completesProposedAction(exec: ToolExecution, action: string): boolean {
   if (action === "storyboard_create") return exec.tool === "storyboard_create";
   if (action === "interactive_film_create") return exec.tool === "interactive_film_create";
   return false;
+}
+
+function completesProposedAction(exec: ToolExecution, action: string): boolean {
+  if (exec.status !== "completed") return false;
+  return matchesProposedAction(exec, action);
+}
+
+/**
+ * 找到某个 propose_action 提议对应的后续生产执行（不限终态——执行中的任务
+ * 也算配对命中）。确认卡用它区分"已执行"的真实成败：436 号备案，live 确认
+ * 点击即锁卡，若关联任务最终 error 而卡仍标「已执行」会误导作者。
+ */
+export function findProposalOutcomeExecution(
+  messages: ReadonlyArray<Message>,
+  proposalExecId: string,
+): ToolExecution | undefined {
+  let action: string | null = null;
+  for (const message of messages) {
+    for (const exec of message.toolExecutions ?? []) {
+      if (exec.id === proposalExecId) {
+        action = proposedActionFrom(exec);
+        continue;
+      }
+      if (action && matchesProposedAction(exec, action)) return exec;
+    }
+  }
+  return undefined;
 }
 
 export function deriveResolvedProposals(

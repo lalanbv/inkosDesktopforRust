@@ -12,10 +12,12 @@ import {
   ChevronDown,
   Wrench,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import { buildApiUrl } from "../../hooks/use-api";
 import { tr } from "../../lib/app-language";
 import { chatSelectors, useChatStore } from "../../store/chat";
+import { findProposalOutcomeExecution } from "../../store/chat/slices/message/runtime";
 import { usePreferencesStore } from "../../store/preferences";
 import {
   NarrativeForecastPreview,
@@ -782,6 +784,11 @@ function ProposedActionPreview({
 }) {
   const resolvedProposals = useChatStore((s) => s.resolvedProposals);
   const isActiveSessionStreaming = useChatStore(chatSelectors.isActiveSessionStreaming);
+  // 确认后的真实成败（436 号备案）：live 点击即锁卡，但关联生产执行若最终
+  // error，卡上的「已执行」须如实降级为失败提示，不能再绿灯误导。
+  const outcomeExecution = useChatStore((s) =>
+    findProposalOutcomeExecution(chatSelectors.activeMessages(s), exec.id),
+  );
   if (exec.tool !== "propose_action" || exec.status !== "completed") return null;
   const details = getProposedActionDetails(exec);
   if (!details) return null;
@@ -812,10 +819,17 @@ function ProposedActionPreview({
         </div>
       )}
       {resolution === "confirmed" ? (
-        <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
-          <Check size={15} className="shrink-0" />
-          {tr("已执行", "Executed")}
-        </div>
+        outcomeExecution?.status === "error" ? (
+          <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-red-600">
+            <AlertTriangle size={15} className="shrink-0" />
+            {tr("已执行 · 生产链失败（错误详情见任务卡）", "Executed · production run failed (see task card for details)")}
+          </div>
+        ) : (
+          <div className="mt-3 flex items-center gap-1.5 text-[15px] leading-6 font-medium text-primary">
+            <Check size={15} className="shrink-0" />
+            {tr("已执行", "Executed")}
+          </div>
+        )
       ) : resolution === "rejected" ? (
         <div className="mt-3 text-[15px] leading-6 font-medium text-muted-foreground">{tr("已取消", "Cancelled")}</div>
       ) : (
