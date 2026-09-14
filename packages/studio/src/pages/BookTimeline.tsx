@@ -112,7 +112,8 @@ export function TimelineEditDialog({ bookId, target, saving, writing, onSubmit, 
   saving: boolean;
   writing: boolean;
   onSubmit: (patch: { title: string; note: string }) => void;
-  onWriteFromBeat: () => void;
+  /** 449 号：携带当前草稿——弹窗本地 title/note 未保存时父级拿不到编辑值。 */
+  onWriteFromBeat: (patch: { title: string; note: string }) => void;
   onCancel: () => void;
   nav: Nav;
   t: TFunction;
@@ -152,7 +153,7 @@ export function TimelineEditDialog({ bookId, target, saving, writing, onSubmit, 
               {t("timeline.openChapter")}
             </button>
             <button
-              onClick={onWriteFromBeat}
+              onClick={() => onWriteFromBeat({ title, note })}
               disabled={writing || saving}
               className="text-xs font-bold text-primary hover:underline underline-offset-2 disabled:opacity-50"
               data-slot="timeline-write-from-beat"
@@ -530,10 +531,12 @@ export function BookTimeline({ bookId, nav, theme, t }: {
             await saveDoc(buildTimelineAfterCellEdit(base, editTarget.plotlineId, editTarget.chapter, patch));
             setEditTarget(null);
           }}
-          onWriteFromBeat={() => {
+          onWriteFromBeat={(patch) => {
             // 按此节拍写下一章：beat 文本作为规划输入（context）注入 write-next，
             // 引擎侧非空 context 替换自动 plan；带伪会话 sessionId 激活检查点+可停止。
-            const beatParts = [editTarget.title, editTarget.note].filter((part) => part.trim());
+            // 449 号：读弹窗当前草稿（patch）而非 editTarget 旧值——否则未保存的
+            // 节拍编辑对写作静默失效（真机走查实测）。
+            const beatParts = [patch.title, patch.note].filter((part) => part.trim());
             const context = `时间线节拍【${editTarget.plotlineName} · 第${editTarget.chapter}章】${beatParts.join("：")}`;
             void postApi(`/books/${bookId}/write-next`, {
               context,
