@@ -138,9 +138,20 @@ impl BooksRuntime {
                             crate::llm::agent_router::LlmEndpointConfig {
                                 base_url,
                                 api_key,
-                                model,
+                                model: model.clone(),
                                 max_tokens: 8192,
                                 extra_headers: HashMap::new(),
+                                // 441 号：生效模型卡窗口（resolve_effective_llm_studio
+                                // 注入；缺项按 TS 128k 缺省口径兜底）。
+                                context_window_tokens: effective
+                                    .get("contextWindowTokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or_else(|| {
+                                        crate::llm::lookup::builtin_context_window(
+                                            effective.get("service").and_then(serde_json::Value::as_str).unwrap_or("custom"),
+                                            &model,
+                                        )
+                                    }),
                             },
                             HashMap::new(),
                         )
@@ -1213,6 +1224,14 @@ async fn run_compose(
         router: runtime.effective_router().await,
         agent: "composer",
     };
+    // 441 号：上下文预算（与 write-next 同口径——生效模型卡窗口 + 输出预留）。
+    let context_budget = {
+        let router = composer.router.clone();
+        (router.default_context_window() > 0).then(|| crate::agents::composer::ContextBudget {
+            context_window_tokens: router.default_context_window(),
+            reserved_output_tokens: router.default_max_tokens() as u64,
+        })
+    };
     let selector = crate::agents::composer::LlmOutlineSelector { chat: &composer };
     let compiler = crate::agents::composer::LlmContextCompiler { chat: &composer };
     // 216 号：引用选段注入（与 write-next 链同款）。
@@ -1250,7 +1269,7 @@ async fn run_compose(
             book_dir: &book_dir,
             chapter_number,
             plan: &plan,
-            context_budget: None,
+            context_budget,
             compiler: Some(&compiler),
             outline_section_selector: Some(&selector),
             reference_context_provider: Some(&reference_provider),
@@ -2119,17 +2138,26 @@ pub struct WriteNextPorts {
     builtin_genres_dir: std::path::PathBuf,
     store: FsStateStore,
     timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat,
+    /// 441 号：write-next compose 上下文预算（TS contextBudgetFromClient
+    /// 镜像——生效模型卡窗口 + 输出预留；窗口恒 >0，故恒 Some）。
+    context_budget: Option<crate::agents::composer::ContextBudget>,
 }
 
 impl WriteNextPorts {
     pub async fn build(runtime: &BooksRuntime) -> Self {
+        let router = runtime.effective_router().await;
+        let context_budget = (router.default_context_window() > 0).then(|| crate::agents::composer::ContextBudget {
+            context_window_tokens: router.default_context_window(),
+            reserved_output_tokens: router.default_max_tokens() as u64,
+        });
         Self {
             project_root: runtime.state.project_root().to_path_buf(),
             builtin_genres_dir: runtime.builtin_genres_dir.clone(),
             store: FsStateStore,
             timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat {
-                router: runtime.effective_router().await,
+                router,
             },
+            context_budget,
         }
     }
 
@@ -2139,7 +2167,7 @@ impl WriteNextPorts {
             builtin_genres_dir: &self.builtin_genres_dir,
             prompt_store: &self.store,
             state_store: &self.store,
-            context_budget: None,
+            context_budget: self.context_budget,
             notify: None,
             timeline_beats: Some(&self.timeline_beats),
         }
@@ -2217,6 +2245,7 @@ mod tests {
             state: Arc::new(StateManager::new(root)),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -2239,6 +2268,19 @@ mod tests {
         let ports = WriteNextPorts::build(&runtime).await;
         let ctx = ports.ctx();
         assert!(ctx.timeline_beats.is_some());
+    }
+
+    /// 441 号：write-next compose 预算接线——ctx 携带生效窗口与输出预留
+    /// （TS contextBudgetFromClient 镜像；移植遗漏前恒 None = 压缩死分支）。
+    #[tokio::test]
+    async fn write_next_ctx_carries_context_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        let ports = WriteNextPorts::build(&runtime).await;
+        let ctx = ports.ctx();
+        let budget = ctx.context_budget.expect("budget must be wired (441)");
+        assert_eq!(budget.context_window_tokens, 128_000);
+        assert_eq!(budget.reserved_output_tokens, 1024);
     }
 
     fn fixture(root: &std::path::Path) {

@@ -140,7 +140,7 @@ cd src-tauri && cargo run
 | 运行 | `INKOS_PROJECT_ROOT` / `INKOS_PORT` | 项目根（默认 CWD）/ 监听端口（默认 8787） |
 | 运行 | `INKOS_STATIC_DIR` | 静态前端面目录（浏览器直连 = `packages/studio/dist`；未设为纯 API） |
 | 运行 | `INKOS_BUILTIN_GENRES_DIR` / `INKOS_BUILTIN_SKILLS_DIR` / `INKOS_SKILL_DIRS` | 内置题材 / 技能目录 |
-| LLM 默认端点 | `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL` / `INKOS_LLM_MAX_TOKENS` | inkos.json 服务项 + secrets 优先，配置不可用回退此组 |
+| LLM 默认端点 | `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL` / `INKOS_LLM_MAX_TOKENS` / `INKOS_LLM_CONTEXT_WINDOW` | inkos.json 服务项 + secrets 优先，配置不可用回退此组；上下文窗口缺省按模型卡（两层查，miss 128k），驱动写作链上下文压缩预算（441 号） |
 | LLM 行为 | `INKOS_LLM_TRANSIENT_RETRY`（0=关）/ `INKOS_LLM_STREAM` / `INKOS_LLM_STREAM_IDLE_TIMEOUT_MS` / `INKOS_LLM_FIRST_EVENT_TIMEOUT_MS` | 瞬态重试与流式超时 |
 | 专项 | `INKOS_COVER_*` / `INKOS_FILM_IMAGE_SIZE` | 封面生成端点与尺寸 |
 | 专项 | `INKOS_ENGINE_LOOPBACK_GUARD` / `INKOS_ENGINE_ALLOWED_ORIGINS` | loopback 加固与 CORS 白名单 |

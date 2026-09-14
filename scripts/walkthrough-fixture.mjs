@@ -19,7 +19,7 @@
 //   4. 断言：/promises 的 timeline kind 全补齐、/run-log total 增长
 //   5. 打印浏览器走查地址与四个 UI 面的点验要点
 
-import { mkdirSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, copyFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -206,6 +206,68 @@ if ((bookState?.nextChapter ?? 0) >= 3) {
     runLogAfter = current;
   }
   console.log("");
+}
+
+// ── 3.5 伪造第 3 章压缩留痕工件（441 号）──
+// 上下文透视的「压缩留痕」分支需要超预算章才在真实链路触发（缺省模型卡
+// 128k 窗口远大于走查包），纯读面板的显示验证用作者化工件承担：以真 0002
+// 工件为模板，可压来源替换为单条编译产物 + trace 增 compression 留痕。
+// 链路级压缩逻辑由 composer 单测覆盖（budget_compiles_and_records_trace）。
+const runtimeDir = join(bookDir, "story", "runtime");
+const ctx2Path = join(runtimeDir, "chapter-0002.context.json");
+const trace2Path = join(runtimeDir, "chapter-0002.trace.json");
+if (existsSync(ctx2Path) && existsSync(trace2Path)) {
+  const COMPRESSED_SRC = "runtime/compiled-compressible-context";
+  const ctx2 = JSON.parse(readFileSync(ctx2Path, "utf8"));
+  const trace2 = JSON.parse(readFileSync(trace2Path, "utf8"));
+  const compressible = trace2.contextTiers?.compressibleSources ?? [];
+  const kept = ctx2.selectedContext.filter((entry) => !compressible.includes(entry.source));
+  const excerpt = [
+    "## 编译摘要（mock 压缩产物）",
+    "",
+    "- 近章标题史：镜中醒来。",
+    "- 情绪轨迹：紧张开局。",
+    "- 上章结尾形态：苏檀坠入镜面深处，碎镜发烫。",
+    "- 未兑现承诺：H01 身世悬念推进中。",
+  ].join("\n");
+  const compiledEntry = {
+    source: COMPRESSED_SRC,
+    reason: "Compressible sources compiled into one summary entry (fixture-authored).",
+    excerpt,
+  };
+  const estimateTokens = (entry) => {
+    const text = [entry.source, entry.reason, entry.excerpt ?? ""].filter(Boolean).join("\n");
+    const cjk = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
+    return Math.ceil(cjk + (text.length - cjk) / 4);
+  };
+  const perSourceTokens = Object.fromEntries(ctx2.selectedContext.map((entry) => [entry.source, estimateTokens(entry)]));
+  const protectedTokens = kept.reduce((sum, entry) => sum + estimateTokens(entry), 0);
+  const compiledTokens = estimateTokens(compiledEntry);
+  const ctx3 = { ...ctx2, chapter: 3, selectedContext: [...kept, compiledEntry] };
+  const trace3 = {
+    ...trace2,
+    chapter: 3,
+    selectedSources: [...kept.map((entry) => entry.source), COMPRESSED_SRC],
+    contextTiers: {
+      protectedSources: trace2.contextTiers?.protectedSources ?? [],
+      compressibleSources: [COMPRESSED_SRC],
+    },
+    tokenBudget: {
+      protectedTokens,
+      compressibleTokens: compiledTokens,
+      totalSelectedTokens: protectedTokens + compiledTokens,
+    },
+    compression: {
+      compiledSource: COMPRESSED_SRC,
+      budgetTokens: 1500,
+      protectedTokens,
+      compressibleTokens: trace2.tokenBudget?.compressibleTokens ?? 0,
+      sourceTokens: compressible.map((source) => ({ source, tokens: perSourceTokens[source] ?? 0 })),
+    },
+  };
+  writeFileSync(join(runtimeDir, "chapter-0003.context.json"), JSON.stringify(ctx3, null, 2));
+  writeFileSync(join(runtimeDir, "chapter-0003.trace.json"), JSON.stringify(trace3, null, 2));
+  console.log("[fixture] 已伪造第 3 章压缩留痕工件（压缩留痕分支走查数据）");
 }
 
 // ── 4. 断言 ──

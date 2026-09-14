@@ -121,6 +121,7 @@ fn fixture_project(root: &std::path::Path) {
 fn build_agents(base_url: &str) -> WriteNextAgents<'static> {
     let router = AgentRouter::new(
         LlmEndpointConfig {
+            context_window_tokens: 128_000,
             base_url: base_url.to_string(),
             api_key: "test-key".to_string(),
             model: "test-model".to_string(),
@@ -546,6 +547,7 @@ mod audit_e2e {
             state: Arc::new(StateManager::new(root.clone())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: format!("http://{addr}"),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -644,6 +646,7 @@ mod books_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -802,6 +805,7 @@ mod books46_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -1030,6 +1034,7 @@ mod books47_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -1336,6 +1341,7 @@ mod books48_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -1609,6 +1615,7 @@ mod books49_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -1997,6 +2004,7 @@ mod books50_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm_url.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -2233,6 +2241,7 @@ mod books51_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -2504,6 +2513,7 @@ mod books52_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -2660,6 +2670,7 @@ mod books53_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -2923,6 +2934,7 @@ mod config54_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -3208,6 +3220,7 @@ mod style55_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -3440,6 +3453,7 @@ mod config56_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -3713,6 +3727,7 @@ name: 林动
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -4024,6 +4039,7 @@ name: 萧炎
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -4231,6 +4247,7 @@ mod skills60_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -4685,6 +4702,7 @@ mod projectfiles61_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -4996,6 +5014,7 @@ mod services63_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -5604,6 +5623,7 @@ mod sessions64_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -6002,6 +6022,7 @@ mod agent65_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -6382,6 +6403,7 @@ mod agent66_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -6587,6 +6609,7 @@ mod agent67_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -7045,6 +7068,7 @@ mod agent68_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -7397,6 +7421,7 @@ mod films69_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -7746,6 +7771,7 @@ mod translations70_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -8102,6 +8128,7 @@ mod play71_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -8400,6 +8427,7 @@ mod ops72_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -8731,6 +8759,7 @@ mod play73_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -9086,6 +9115,7 @@ mod image74_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -9424,6 +9454,7 @@ mod translation75_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: "http://127.0.0.1:9".into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -9615,6 +9646,7 @@ mod script76_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -9927,6 +9959,7 @@ mod film77_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -10157,6 +10190,7 @@ mod short78_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -10492,6 +10526,7 @@ mod play79_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -10705,6 +10740,7 @@ mod play80_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     max_tokens: 8192,
@@ -11042,6 +11078,7 @@ mod play81_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -11245,6 +11282,7 @@ mod play82_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -11472,6 +11510,7 @@ mod material83_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -11745,6 +11784,7 @@ mod propose84_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -11986,6 +12026,7 @@ mod research85_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -12245,6 +12286,7 @@ name: 林动
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -12470,6 +12512,7 @@ mod details86_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -12786,6 +12829,7 @@ mod sub87_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -13046,6 +13090,7 @@ mod sub88_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -13275,6 +13320,7 @@ mod sub89_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -13533,6 +13579,7 @@ mod sub90_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -13850,6 +13897,7 @@ mod sub91_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14168,6 +14216,7 @@ name: 林震
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14348,6 +14397,7 @@ mod sub93_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14512,6 +14562,7 @@ mod sub95_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14650,6 +14701,7 @@ mod sub96_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14796,6 +14848,7 @@ mod sub97_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -14956,6 +15009,7 @@ mod sub99_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -15073,6 +15127,7 @@ mod sub100_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -15260,6 +15315,7 @@ mod sub101_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -15474,6 +15530,7 @@ mod sub102_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -15713,6 +15770,7 @@ mod sub105_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -15927,6 +15985,7 @@ mod sub106_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -16149,6 +16208,7 @@ mod sub108_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -16295,6 +16355,7 @@ mod sub109_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: dead.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -16418,6 +16479,7 @@ mod sub111_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -16707,6 +16769,7 @@ mod sub112_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -16919,6 +16982,7 @@ mod sub114_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -17178,6 +17242,7 @@ mod sub126_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -17218,6 +17283,7 @@ mod sub126_e2e {
         let sink = events.clone();
         let router = AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: llm,
                 api_key: "k".into(),
                 model: "m".into(),
@@ -17420,6 +17486,7 @@ mod sub132_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.to_string(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -17730,6 +17797,7 @@ mod sub141_e2e {
     fn router_for(llm: &str) -> AgentRouter {
         AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: llm.to_string(),
                 api_key: "k".into(),
                 model: "m".into(),
@@ -17869,6 +17937,7 @@ mod sub273_upload_caps_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),
@@ -18107,6 +18176,7 @@ mod sub303_creation_domains_e2e {
             state: Arc::new(StateManager::new(root.to_path_buf())),
             router: Arc::new(AgentRouter::new(
                 LlmEndpointConfig {
+                    context_window_tokens: 128_000,
                     base_url: llm.into(),
                     api_key: "k".into(),
                     model: "m".into(),

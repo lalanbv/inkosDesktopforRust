@@ -479,6 +479,11 @@ pub async fn post_agent(
                     model: ov.model.clone(),
                     max_tokens: 8192,
                     extra_headers: std::collections::HashMap::new(),
+                    // 441 号：覆盖模型的卡窗口（TS 覆盖客户端 _piModel 同口径）。
+                    context_window_tokens: crate::llm::lookup::builtin_context_window(
+                        override_service.unwrap_or("custom"),
+                        &ov.model,
+                    ),
                 },
                 std::collections::HashMap::new(),
             )

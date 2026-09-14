@@ -82,6 +82,16 @@ pub fn list_active_text_models<'a>(registry: &'a [InkosEndpoint], service_id: &s
     ep.models.iter().filter(|m| is_active_text_model(m)).collect()
 }
 
+/// 生效模型的上下文窗口（441 号：TS `createLLMClient` 的
+/// `modelCard?.contextWindowTokens ?? 128_000` 镜像——内建卡两层查找，
+/// miss 回退 128k 缺省；`contextBudgetFromClient` 以此为预算口径）。
+pub fn builtin_context_window(service_id: &str, model_id: &str) -> u64 {
+    let registry = super::registry::builtin_endpoints();
+    lookup_model(&registry, service_id, model_id)
+        .map(|m| m.context_window_tokens as u64)
+        .unwrap_or(128_000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +147,26 @@ mod tests {
     fn case_insensitive_match() {
         let reg = sample_registry();
         assert!(lookup_model(&reg, "deepseek", "DEEPSEEK-CHAT").is_some());
+    }
+
+    /// 441 号：预算窗口口径——内建卡两层查（含 Layer 2 全局扫），
+    /// 双 miss 回退 128k 缺省（TS createLLMClient 逐字对齐）。
+    #[test]
+    fn builtin_context_window_known_card_and_fallback() {
+        assert_eq!(
+            super::builtin_context_window("deepseek", "deepseek-chat"),
+            1_000_000
+        );
+        // Layer 2：service 未知名但模型 id 全局命中
+        assert_eq!(
+            super::builtin_context_window("unknown-service", "deepseek-chat"),
+            1_000_000
+        );
+        // 双 miss → 128k 缺省
+        assert_eq!(
+            super::builtin_context_window("custom", "lm-mock-model"),
+            128_000
+        );
     }
 
     #[test]

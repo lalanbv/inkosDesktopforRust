@@ -795,6 +795,7 @@ mod project_routes_tests {
         let sm = Arc::new(StateManager::new(root.to_path_buf()));
         let runner: crate::server::WriteNextRunner = Arc::new(|_, _, _, _, _, _| Box::pin(async { Err("unused".to_string()) }));
         let default = LlmEndpointConfig {
+            context_window_tokens: 128_000,
             base_url: "http://127.0.0.1:9".to_string(),
             api_key: String::new(),
             model: "default".to_string(),

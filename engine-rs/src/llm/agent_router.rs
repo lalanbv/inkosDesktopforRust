@@ -35,6 +35,10 @@ pub struct LlmEndpointConfig {
     pub model: String,
     pub max_tokens: u32,
     pub extra_headers: HashMap<String, String>,
+    /// 生效模型上下文窗口（441 号：TS `client._piModel.contextWindow` 镜像，
+    /// `builtin_context_window` 解析——内建卡两层查，miss 128_000 缺省；
+    /// 0 = 显式关闭预算（write-next compose 不做压缩））。
+    pub context_window_tokens: u64,
 }
 
 /// 单 agent 覆盖。对齐 TS `AgentLLMOverride` 的 Rust 子集（字符串模型覆盖
@@ -172,6 +176,17 @@ impl AgentRouter {
 
     pub async fn client_for_public(&self, endpoint: &ResolvedEndpoint) -> Arc<StreamingChatClient> {
         self.client_for(endpoint).await
+    }
+
+    /// 缺省端点上下文窗口（441 号：write-next compose 预算口径，
+    /// TS `contextBudgetFromClient` 读单客户端模型卡的 Rust 等价）。
+    pub fn default_context_window(&self) -> u64 {
+        self.default.context_window_tokens
+    }
+
+    /// 缺省端点输出预留（TS `reservedOutputTokens = defaults.maxTokens`）。
+    pub fn default_max_tokens(&self) -> u32 {
+        self.default.max_tokens
     }
 
     async fn client_for(&self, endpoint: &ResolvedEndpoint) -> Arc<StreamingChatClient> {
@@ -698,6 +713,7 @@ mod tests {
     fn router_with(overrides: HashMap<String, AgentOverride>) -> AgentRouter {
         AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: "http://localhost:1".into(),
                 api_key: "sk-default".into(),
                 model: "default-model".into(),
@@ -774,6 +790,7 @@ mod tests {
     fn router_at(base: &str) -> AgentRouter {
         AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: base.into(),
                 api_key: "k".into(),
                 model: "m".into(),
@@ -918,6 +935,7 @@ mod tests {
     fn routing_router_at(base: &str, routing: TaskModelRouting) -> AgentRouter {
         AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: base.into(),
                 api_key: "k".into(),
                 model: "primary-m".into(),
@@ -942,6 +960,7 @@ mod tests {
 
         let pinned = AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: "http://localhost:1".into(),
                 api_key: "k".into(),
                 model: "default-model".into(),

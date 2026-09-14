@@ -851,6 +851,7 @@ mod tests {
     fn dummy_router() -> AgentRouter {
         AgentRouter::new(
             LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: "http://127.0.0.1:9".into(),
                 api_key: "k".into(),
                 model: "m".into(),

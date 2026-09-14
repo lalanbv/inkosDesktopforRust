@@ -41,12 +41,20 @@ const AGENTS: &[&str] = &[
 
 fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     let project_root = std::path::PathBuf::from(env("INKOS_PROJECT_ROOT", "."));
+    let env_model = env("INKOS_LLM_MODEL", "default");
+    // 441 号：上下文窗口镜像 TS 模型卡缺省（内建卡查不到 → 128k）；
+    // INKOS_LLM_CONTEXT_WINDOW 显式覆盖（直启路径无 inkos.json 服务卡的等价通道）。
+    let context_window = std::env::var("INKOS_LLM_CONTEXT_WINDOW")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or_else(|| inkos_engine::llm::lookup::builtin_context_window("custom", &env_model));
     let default = LlmEndpointConfig {
         base_url: env("INKOS_LLM_BASE_URL", "http://127.0.0.1:9"),
         api_key: env("INKOS_LLM_API_KEY", ""),
-        model: env("INKOS_LLM_MODEL", "default"),
+        model: env_model,
         max_tokens: env("INKOS_LLM_MAX_TOKENS", "8192").parse().unwrap_or(8192),
         extra_headers: HashMap::new(),
+        context_window_tokens: context_window,
     };
 
     let mut overrides: HashMap<String, AgentOverride> = HashMap::new();

@@ -1747,6 +1747,17 @@ pub async fn resolve_effective_llm_studio(
     );
     llm.insert("model".into(), json!(model));
 
+    // 441 号：生效模型卡上下文窗口（TS createLLMClient 的
+    // `modelCard?.contextWindowTokens ?? 128_000` 镜像；effective_router
+    // 据此构造 write-next compose 预算）。
+    let service_for_card = selected
+        .as_ref()
+        .map(|entry| entry.service.as_str())
+        .or_else(|| llm.get("service").and_then(Value::as_str))
+        .unwrap_or("custom");
+    let context_window = crate::llm::lookup::builtin_context_window(service_for_card, &model);
+    llm.insert("contextWindowTokens".into(), json!(context_window));
+
     let service_key = selected
         .as_ref()
         .map(service_config_key)
@@ -2031,5 +2042,31 @@ mod tests {
         assert_eq!(effective.get("provider").unwrap(), "openai");
         assert_eq!(effective.get("baseUrl").unwrap(), "https://example.invalid/v1");
         assert_eq!(effective.get("model").unwrap(), "noop-model");
+    }
+
+    /// 441 号：生效解析注入模型卡上下文窗口——已知卡取卡面值，
+    /// 未知卡（custom mock）回退 128k 缺省（TS createLLMClient 对齐）。
+    #[tokio::test]
+    async fn effective_llm_studio_injects_context_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = resolve_effective_llm_studio(
+            dir.path(),
+            &serde_json::from_str::<Map<String, Value>>(
+                r#"{ "service": "deepseek", "defaultModel": "deepseek-chat", "services": [{ "service": "deepseek" }] }"#,
+            )
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(known.get("contextWindowTokens").unwrap(), 1_000_000);
+
+        let unknown = resolve_effective_llm_studio(
+            dir.path(),
+            &serde_json::from_str::<Map<String, Value>>(
+                r#"{ "service": "custom", "defaultModel": "lm-mock-model", "services": [{ "service": "custom", "name": "Mock", "baseUrl": "http://127.0.0.1:9/v1" }] }"#,
+            )
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(unknown.get("contextWindowTokens").unwrap(), 128_000);
     }
 }

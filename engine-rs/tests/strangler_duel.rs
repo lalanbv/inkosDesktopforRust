@@ -169,6 +169,7 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
     ));
     let router = std::sync::Arc::new(AgentRouter::new(
         LlmEndpointConfig {
+            context_window_tokens: 128_000,
             base_url: llm.into(),
             api_key: "duel-key".into(),
             model: "duel-model".into(),

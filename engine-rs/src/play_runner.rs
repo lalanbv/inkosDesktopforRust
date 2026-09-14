@@ -1838,6 +1838,7 @@ mod tests {
         std::fs::write(root.join("prompt").join("play").join("mutator.md"), "自定义世界规则指引。").unwrap();
         let router = crate::llm::agent_router::AgentRouter::new(
             crate::llm::agent_router::LlmEndpointConfig {
+                context_window_tokens: 128_000,
                 base_url: "http://127.0.0.1:9".into(),
                 api_key: String::new(),
                 model: "m".into(),
