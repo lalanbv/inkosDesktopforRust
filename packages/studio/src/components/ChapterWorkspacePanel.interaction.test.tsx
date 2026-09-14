@@ -24,6 +24,15 @@ const fetchJsonMock = vi.fn(async (path: string, init?: { method?: string; body?
   if (path.endsWith("/inspiration") && init?.method === "POST") {
     return { card: "灵感卡：让镜灵在雨夜首次开口。" };
   }
+  if (path.includes("/versions/v1") && !path.includes("/restore")) {
+    return { content: "旧版本全文内容。" };
+  }
+  if (path.includes("/restore")) {
+    return {};
+  }
+  if (path.includes("/rewrite/")) {
+    return {};
+  }
   return {};
 });
 
@@ -103,5 +112,72 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
       path.endsWith("/inspiration"),
     );
     expect(inspirationCall).toBeDefined();
+  });
+
+  it("按提示重写——POST /rewrite 载荷含当前 brief 并通知变更（462 号）", async () => {
+    const user = userEvent.setup();
+    const onChapterChanged = vi.fn();
+    renderPanel(onChapterChanged);
+    const brief = document.querySelector("textarea") as HTMLTextAreaElement;
+    await user.clear(brief);
+    await user.type(brief, "重写提示：保留碎镜钥匙设定");
+    const rewrite = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.rewriteFromBrief",
+    ) as HTMLButtonElement;
+    await user.click(rewrite);
+    await vi.waitFor(() => {
+      const rewriteCall = fetchJsonMock.mock.calls.find(
+        ([path, init]) => path.includes("/rewrite/") && (init as { method?: string })?.method === "POST",
+      );
+      expect(rewriteCall).toBeDefined();
+      expect(JSON.parse((rewriteCall![1] as { body: string }).body).brief).toBe(
+        "重写提示：保留碎镜钥匙设定",
+      );
+      expect(onChapterChanged).toHaveBeenCalled();
+    });
+  });
+
+  it("历史版本预览——查看版本拉取旧版全文渲染（462 号）", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const view = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.viewVersion",
+    ) as HTMLButtonElement;
+    await user.click(view);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("旧版本全文内容。");
+    });
+  });
+
+  it("恢复版本——confirm 确认后 POST restore 并通知变更（462 号）", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    const onChapterChanged = vi.fn();
+    renderPanel(onChapterChanged);
+    const restore = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.restoreVersion",
+    ) as HTMLButtonElement;
+    await user.click(restore);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("reader.restoreComplete");
+    });
+    const restoreCall = fetchJsonMock.mock.calls.find(
+      ([path, init]) => path.includes("/restore") && (init as { method?: string })?.method === "POST",
+    );
+    expect(restoreCall).toBeDefined();
+    expect(onChapterChanged).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("恢复取消——confirm 拒绝则不调用 restore（462 号）", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    renderPanel();
+    const restore = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.restoreVersion",
+    ) as HTMLButtonElement;
+    await user.click(restore);
+    expect(fetchJsonMock.mock.calls.find(([path]) => path.includes("/restore"))).toBeUndefined();
+    confirmSpy.mockRestore();
   });
 });
