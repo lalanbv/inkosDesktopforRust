@@ -2,7 +2,9 @@
  * Draft directive parser — extracts structured form data from LLM output
  * that uses markdown directive syntax (:::type{attrs}...:::).
  *
- * Used by both TUI (textContent) and Studio (raw + fields).
+ * 435 号核实：仓内已无生产消费方（原 TUI/Studio 消费链已随聊天流重构淘汰），
+ * 仅存独立导出 + 自测——保留系 @actalk/inkos-core 已发布公共 API 的兼容性承诺，
+ * 移除属 breaking change。
  */
 
 // ---------------------------------------------------------------------------
