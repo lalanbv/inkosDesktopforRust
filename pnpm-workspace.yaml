@@ -36,5 +36,8 @@ overrides:
   # 467 号：audit:npm 全量审计修复与接受边界（语义见 scripts/audit-npm.mjs 白名单）。
   "undici@8": 8.10.0
   uuid: ^11.1.1
+  # 473 号：滚动复核发现 @babel/core 7.29.1 补丁（sourceMappingURL 任意文件读）
+  # 在 dedupe 范围内即可达——覆盖钉升级，移出接受名单。
+  "@babel/core": ^7.29.1
   # @ai-sdk/provider-utils 不覆写：ai@6.0.159 精确钉 4.0.23，强升 4.0.33+ 需
   # @ai-sdk/provider 3.0.16（npmmirror 缺）且破 ai 钉——LOW 级接受备案（467）。

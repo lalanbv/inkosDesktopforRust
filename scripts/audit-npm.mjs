@@ -24,7 +24,7 @@ const ACCEPTED = new Map([
   ["vitest", { reason: "测试运行器 dev 工具链；mocker 路径穿越 3.x 线无补丁，4.x 为大版本迁移另行评估", since: "454 号" }],
   ["@vitest/mocker", { reason: "同 vitest（3.x 线无补丁）", since: "454 号" }],
   ["esbuild", { reason: "dev server 任意文件读类——仅本地开发面暴露，不进产物", since: "467 号" }],
-  ["@babel/core", { reason: "sourceMappingURL 任意文件读——仅构建期，不进产物", since: "467 号" }],
+  // @babel/core 7.29.1 补丁已于 473 号经 override ^7.29.1 修复，移出白名单；若回归会重新被拦截。
   ["brace-expansion", { reason: "DoS 触发需攻击者可控 glob 模式；运行链（epub 导出）模式为内部静态串，dev 链（ts-morph/shadcn）非产物；补丁仅在 5.x（CJS 链跨 major 断裂）", since: "467 号" }],
   ["fast-xml-parser", { reason: "pi-ai 0.67.1 精确钉（434 号安全先例）→aws-sdk 链，补丁需跨 major 5.x 且 Bedrock 默认未启用", since: "467 号" }],
   ["postcss-selector-parser", { reason: "shadcn dev-only 低危 DoS", since: "467 号" }],
