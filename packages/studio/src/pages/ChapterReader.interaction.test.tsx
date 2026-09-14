@@ -15,6 +15,14 @@ const useApiMock = vi.fn<(path: string) => unknown>((path: string) => {
   if (path === "/books/b1") {
     return { data: { book: { id: "b1", title: "冒烟书" } }, error: null, loading: false, refetch: vi.fn() };
   }
+  if (path.startsWith("/books/b1/chapters/2")) {
+    return {
+      data: { chapterNumber: 2, filename: "chapter-002.md", content: "# 第二章 灯下续\n\n后续正文。" },
+      error: null,
+      loading: false,
+      refetch: vi.fn(),
+    };
+  }
   if (path.startsWith("/books/b1/chapters/1")) {
     return {
       data: { chapterNumber: 1, filename: "chapter-001.md", content: "# 第一章 灯下\n\n墨迹未干，故事已开。" },
@@ -57,6 +65,20 @@ describe("ChapterReader 动作链（458 号）", () => {
     await user.click(screen.getByText("reader.reject"));
     expect(postApiMock).toHaveBeenCalledWith("/books/b1/chapters/1/reject");
     expect(toBookMock).toHaveBeenCalledWith("b1");
+  });
+
+  it("对照分屏换章——splitNext 触发对照章新 fetch（462 号）", async () => {
+    const user = userEvent.setup();
+    // 第 2 章起：初始对照章 = 前一章（1），splitNext 前进到 2
+    render(<ChapterReader bookId="b1" chapterNumber={2} nav={nav} theme="light" t={t} />);
+    await user.click(screen.getByTestId("reader-split-toggle"));
+    useApiMock.mockClear();
+    const next = screen.getByLabelText("reader.splitNext");
+    await user.click(next);
+    await vi.waitFor(() => {
+      expect(useApiMock).toHaveBeenCalledWith("/books/b1/chapters/2");
+    });
+    expect(document.body.textContent).toContain("reader.compareChapter · 2");
   });
 
   it("对照分屏开关——toggle 出现分隔条与对照栏，再点关闭", async () => {

@@ -137,6 +137,24 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
     });
   });
 
+  it("灵感卡并入提示词——brief 追加卡片文本（463 号）", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const draw = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.inspiration",
+    ) as HTMLButtonElement;
+    await user.click(draw);
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("灵感卡：让镜灵在雨夜首次开口。");
+    });
+    const merge = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.addToBrief",
+    ) as HTMLButtonElement;
+    await user.click(merge);
+    const brief = document.querySelector("textarea") as HTMLTextAreaElement;
+    expect(brief.value).toBe("保留碎镜钥匙设定\n\n灵感卡：让镜灵在雨夜首次开口。");
+  });
+
   it("历史版本预览——查看版本拉取旧版全文渲染（462 号）", async () => {
     const user = userEvent.setup();
     renderPanel();
