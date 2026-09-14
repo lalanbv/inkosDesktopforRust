@@ -227,6 +227,7 @@ pub fn router(state: AppState) -> Router {    Router::new()
         .route("/api/v1/utils/count-length", post(count_length))
         .route("/api/v1/utils/cap-context", post(cap_context))
         .with_state(state)
+        .layer(axum::middleware::from_fn(api_no_store))
 }
 
 /// 带运行时句柄的组合路由（utility + SSE + write-next）。
@@ -892,6 +893,23 @@ pub fn router_books(
         // is_safe_book_id，拦 `..%2F` 注入穿越——对齐 Node 侧
         // `/api/v1/books/:id*` 中间件，补齐默认引擎的文件面纵深。
         .layer(axum::middleware::from_fn(segment_guard::guard))
+        // 445 号：API 响应统一 no-store——读取/遥测面（run-log 等）响应缺
+        // 缓存头时浏览器启发式缓存会把跨会话陈旧响应当新鲜用
+        // （RunLogPanel 间歇消失实测机制）。
+        .layer(axum::middleware::from_fn(api_no_store))
+}
+
+/// API 响应统一 `Cache-Control: no-store`（445 号）。
+async fn api_no_store(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 /// 启动 HTTP 服务（绑 127.0.0.1:port）。供独立 bin 调用。
@@ -932,6 +950,20 @@ mod tests {
         assert!(body.contains(r#""ok":true"#));
         assert!(body.contains("0.0.1-test"));
         assert!(body.contains(r#""backend":"rust-engine""#), "170 号：应答应含后端标识");
+    }
+
+    /// 445 号：API 响应统一 no-store——防浏览器启发式缓存跨会话陈旧遥测
+    /// （RunLogPanel 间歇消失实测机制）。
+    #[tokio::test]
+    async fn api_responses_carry_no_store() {
+        let resp = app()
+            .oneshot(Request::builder().uri("/api/v1/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.headers().get(axum::http::header::CACHE_CONTROL).map(|v| v.to_str().unwrap()),
+            Some("no-store")
+        );
     }
 
     #[tokio::test]
