@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseHash, routeToHash } from "./use-hash-route";
+import { PAGE_SPEC, parseHash, routeToHash } from "./use-hash-route";
 
 describe("hash route", () => {
   describe("parseHash", () => {
@@ -148,5 +148,39 @@ describe("analytics route (460 号)", () => {
   });
   it("round-trips to hash", () => {
     expect(routeToHash({ page: "analytics", bookId: "b1" })).toBe("#/book/b1/analytics");
+  });
+});
+
+describe("PAGE_SPEC 穷举一致性（461 号）", () => {
+  it("每个非 null 页面：toHash(sample) → parseHash 往返还原 sample", () => {
+    for (const [page, spec] of Object.entries(PAGE_SPEC)) {
+      if (!spec) continue;
+      // spec 为各页 PageSpecFor<K> 的联合——toHash 参数取交集为 never，
+      // 测试侧以 as never 断言（调用方保证 spec 与 sample 同页配对）。
+      const hash = spec.toHash(spec.sample as never);
+      expect(hash, `页面 ${page} 的 hash 不应为空`).not.toBe("");
+      // parseHash 对称性：analytics 类「有写入无解析」缺陷在此被抓住
+      expect(parseHash(hash), `页面 ${page} 往返失配`).toEqual(spec.sample);
+    }
+  });
+
+  it("writable=false 的页面不产可写 URL 语义保持（onboarding/radar 深链解析仍在）", () => {
+    for (const page of ["onboarding", "radar"] as const) {
+      const spec = PAGE_SPEC[page];
+      expect(spec).not.toBeNull();
+      expect(spec!.writable).toBe(false);
+      expect(parseHash(spec!.toHash(spec!.sample as never)).page).toBe(page);
+    }
+  });
+
+  it("所有页面的键集合与 HashRoute 穷举一致（缺一编译失败）", () => {
+    const expected = [
+      "dashboard", "chat", "book", "book-settings", "book-timeline", "analytics",
+      "book-create", "chapter", "services", "onboarding", "project-settings",
+      "translation", "import", "service-detail", "play", "film", "flow",
+      "film-author", "film-studio", "radar", "doctor", "genres", "style",
+      "truth", "daemon", "logs",
+    ];
+    expect(Object.keys(PAGE_SPEC).sort()).toEqual([...expected].sort());
   });
 });

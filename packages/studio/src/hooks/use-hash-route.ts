@@ -89,35 +89,66 @@ function parseHash(hash: string): HashRoute {
   return { page: "dashboard" };
 }
 
-function routeToHash(route: HashRoute): string {
-  switch (route.page) {
-    case "dashboard": return "#/";
-    case "chat": return "#/chat";
-    case "book": return `#/book/${encodeURIComponent(route.bookId)}`;
-    case "book-settings": return `#/book/${encodeURIComponent(route.bookId)}/settings`;
-    case "chapter": return `#/book/${encodeURIComponent(route.bookId)}/chapter/${route.chapterNumber}`;
-    case "book-timeline": return `#/book/${encodeURIComponent(route.bookId)}/timeline`;
-    case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
-    case "book-create": return "#/book/new";
-    case "services": return "#/services";
-    case "onboarding": return "#/onboarding";
-    case "project-settings": return "#/settings";
-    case "translation": return "#/translation";
-    case "import": return route.tab ? `#/import/${route.tab}` : "#/import";
-    case "service-detail": return `#/services/${encodeURIComponent(route.serviceId)}`;
-    case "play": return `#/play/${encodeURIComponent(route.projectId)}`;
-    case "film": return `#/film/${encodeURIComponent(route.projectId)}`;
-    case "flow": return `#/flow/${encodeURIComponent(route.projectId)}`;
-    case "film-author": return `#/film-author/${encodeURIComponent(route.projectId)}`;
-    case "film-studio": return `#/studio/film/${encodeURIComponent(route.projectId)}`;
-    case "radar": return "#/radar";
-    default: return "";
-  }
+// 461 号：页面路由单一事实表——键对 HashRoute["page"] 穷举（mapped type），
+// 新增页面漏配 = TS2322 编译错。根治「新增页面漏 hash 分支」类缺陷
+// （analytics 为 208/405 同款第三实例，460 号）。
+// - toHash：hash 写入模板（与旧 routeToHash switch 逐字等价）；
+// - writable：setRoute 是否写 URL（镜像旧 HASH_PAGES 成员关系——onboarding/
+//   radar 可产 hash 供深链解析但不写 URL，语义保留）；
+// - sample：round-trip 测试样本（parseHash(toHash(sample)) 必须还原 sample）。
+// - null = 纯 state-only 页（不产 hash 亦不解析：doctor/genres/style/truth/daemon/logs）。
+interface PageSpecFor<K extends HashRoute["page"]> {
+  readonly toHash: (route: Extract<HashRoute, { page: K }>) => string;
+  readonly writable: boolean;
+  readonly sample: Extract<HashRoute, { page: K }>;
 }
 
-export { parseHash, routeToHash }; // for testing
+const PAGE_SPEC: { readonly [K in HashRoute["page"]]: PageSpecFor<K> | null } = {
+  dashboard: { toHash: () => "#/", writable: true, sample: { page: "dashboard" } },
+  chat: { toHash: () => "#/chat", writable: true, sample: { page: "chat" } },
+  book: { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}`, writable: true, sample: { page: "book", bookId: "b1" } },
+  "book-settings": { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}/settings`, writable: true, sample: { page: "book-settings", bookId: "b1" } },
+  "book-timeline": { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}/timeline`, writable: true, sample: { page: "book-timeline", bookId: "b1" } },
+  analytics: { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}/analytics`, writable: true, sample: { page: "analytics", bookId: "b1" } },
+  "book-create": { toHash: () => "#/book/new", writable: true, sample: { page: "book-create" } },
+  chapter: { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}/chapter/${r.chapterNumber}`, writable: true, sample: { page: "chapter", bookId: "b1", chapterNumber: 2 } },
+  services: { toHash: () => "#/services", writable: true, sample: { page: "services" } },
+  onboarding: { toHash: () => "#/onboarding", writable: false, sample: { page: "onboarding" } },
+  "project-settings": { toHash: () => "#/settings", writable: true, sample: { page: "project-settings" } },
+  translation: { toHash: () => "#/translation", writable: true, sample: { page: "translation" } },
+  import: { toHash: (r) => (r.tab ? `#/import/${r.tab}` : "#/import"), writable: true, sample: { page: "import" } },
+  "service-detail": { toHash: (r) => `#/services/${encodeURIComponent(r.serviceId)}`, writable: true, sample: { page: "service-detail", serviceId: "s1" } },
+  play: { toHash: (r) => `#/play/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "play", projectId: "p1" } },
+  film: { toHash: (r) => `#/film/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film", projectId: "p1" } },
+  flow: { toHash: (r) => `#/flow/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "flow", projectId: "p1" } },
+  "film-author": { toHash: (r) => `#/film-author/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-author", projectId: "p1" } },
+  "film-studio": { toHash: (r) => `#/studio/film/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-studio", projectId: "p1" } },
+  radar: { toHash: () => "#/radar", writable: false, sample: { page: "radar" } },
+  doctor: null,
+  genres: null,
+  style: null,
+  truth: null,
+  daemon: null,
+  logs: null,
+};
 
-const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-timeline", "book-create", "chapter", "analytics", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
+function routeToHash(route: HashRoute): string {
+  // 按 page 查表后宽化：每个 spec 只处理自己的页面类型（查表键即保证）。
+  const spec = PAGE_SPEC[route.page] as {
+    toHash: (route: HashRoute) => string;
+    writable: boolean;
+  } | null;
+  return spec?.toHash(route) ?? "";
+}
+
+export { parseHash, routeToHash, PAGE_SPEC }; // for testing
+
+// 461 号：由 PAGE_SPEC 派生（writable=true 的页面），不再双处手工维护。
+const HASH_PAGES = new Set(
+  (Object.keys(PAGE_SPEC) as Array<HashRoute["page"]>).filter(
+    (page) => PAGE_SPEC[page] !== null && PAGE_SPEC[page]!.writable,
+  ),
+);
 
 export function useHashRoute() {
   const [route, setRouteState] = useState<HashRoute>(() => parseHash(window.location.hash));
