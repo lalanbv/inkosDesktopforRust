@@ -86,6 +86,19 @@ writeFileSync(join(bookDir, "book.json"), JSON.stringify({
   createdAt: "2026-09-14T00:00:00Z", updatedAt: "2026-09-14T00:00:00Z", version: 1,
 }));
 
+// 完整性判定 complete_book_exists = book.json + story/story_bible.md 双存在
+// （TS completeBookExists 同判定）；缺 story_bible 时同名建书会按「不完整目录」
+// 整目录删除重建，fixture 数据被静默清空（440 号真机实测，加固后实测 409）。
+// 注意：story_bible.md 在场时会以受保护来源 story/story_bible.md#story-bible
+// 进入 write-next 装配（440 号实测 12→13 条、+84 tokens）——对 mock 走查无碍，
+// 但 lens 面板条目数以此为準，勿再用旧基线断言。
+writeFileSync(join(bookDir, "story", "story_bible.md"), `# story_bible
+
+- 镜中世界反向修行：镜外越弱，镜内越强。
+- 苏檀贴身碎镜为镜界钥匙，母亲遗留。
+- 镜宗与皇室盟约是第一卷底层冲突。
+`);
+
 // 14 列台账（R23 分类列）——伏笔池 chips 与 promises kind 的数据源。
 writeFileSync(join(bookDir, "story", "pending_hooks.md"), `# 伏笔池
 
@@ -156,37 +169,44 @@ writeFileSync(join(root, "radar", "scan-20260914-walkthrough.json"), JSON.string
 }, null, 2));
 
 // ── 3. resync（settle→validate 链 → memory.db 前置）+ write-next（全链）──
+// 复用根守卫（440 号）：write-next 章已落盘（nextChapter ≥ 3）时 resync/1 会被
+// 「Only the latest persisted chapter can be synced safely」拒绝——而 env 缺省
+// root 复用（见 walkthrough-env 头注），二次起停必须走只读断言路径。
 const enc = encodeURIComponent(BOOK);
+const bookState = (await api(`/api/v1/books/${enc}`)).body;
+if ((bookState?.nextChapter ?? 0) >= 3) {
+  console.log(`[fixture] write-next 章已落盘（nextChapter=${bookState.nextChapter}）——复用根，跳过 resync/write-next 走只读断言`);
+} else {
+  console.log("[fixture] POST resync/1 …");
+  const resync = await api(`/api/v1/books/${enc}/resync/1`, { method: "POST" });
+  if (resync.status !== 200) die(`resync 失败：${JSON.stringify(resync.body).slice(0, 300)}`);
 
-console.log("[fixture] POST resync/1 …");
-const resync = await api(`/api/v1/books/${enc}/resync/1`, { method: "POST" });
-if (resync.status !== 200) die(`resync 失败：${JSON.stringify(resync.body).slice(0, 300)}`);
+  // 基线取 resync 之后的值——write-next 的完成信号 = 在基线上持续增长后趋稳。
+  const baseline = (await api("/api/v1/run-log")).body.total ?? 0;
 
-// 基线取 resync 之后的值——write-next 的完成信号 = 在基线上持续增长后趋稳。
-const baseline = (await api("/api/v1/run-log")).body.total ?? 0;
+  console.log(`[fixture] POST write-next …（resync 后基线 = ${baseline}）`);
+  await api(`/api/v1/books/${enc}/write-next`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
 
-console.log(`[fixture] POST write-next …（resync 后基线 = ${baseline}）`);
-await api(`/api/v1/books/${enc}/write-next`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: "{}",
-});
-
-let runLogAfter = baseline;
-let stable = 0;
-for (let i = 0; i < 30; i += 1) {
-  await sleep(5000);
-  const current = (await api("/api/v1/run-log")).body.total ?? 0;
-  process.stdout.write(`[fixture] run-log total = ${current}\r`);
-  if (current > baseline && current === runLogAfter) {
-    stable += 1;
-    if (stable >= 2) { runLogAfter = current; break; } // 连续两轮不变=链路结束
-  } else {
-    stable = 0;
+  let runLogAfter = baseline;
+  let stable = 0;
+  for (let i = 0; i < 30; i += 1) {
+    await sleep(5000);
+    const current = (await api("/api/v1/run-log")).body.total ?? 0;
+    process.stdout.write(`[fixture] run-log total = ${current}\r`);
+    if (current > baseline && current === runLogAfter) {
+      stable += 1;
+      if (stable >= 2) { runLogAfter = current; break; } // 连续两轮不变=链路结束
+    } else {
+      stable = 0;
+    }
+    runLogAfter = current;
   }
-  runLogAfter = current;
+  console.log("");
 }
-console.log("");
 
 // ── 4. 断言 ──
 const promises = await api(`/api/v1/books/${enc}/promises`);
