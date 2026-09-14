@@ -11,6 +11,11 @@ allowBuilds:
 # pi-ai(0.67.1 精确锁定)→@google/genai→protobufjs 传递链上的 critical
 #（GHSA 任意代码执行）无法经升级 pi-ai 消除，只能强制覆盖传递版本。
 overrides:
+  # 434 号：package.json 旧 pnpm.overrides 的 pi 系钉版迁入（pnpm 11 已静默
+  # 忽略旧位置，每次 pnpm 命令刷 WARN）。直接依赖侧 packages/core、cli 亦
+  # 精确锁 0.67.1，此处兜住传递链（全图强制同版，杜绝双拷贝）。
+  "@mariozechner/pi-ai": 0.67.1
+  "@mariozechner/pi-agent-core": 0.67.1
   protobufjs: ^7.5.8
   mermaid: ^11.16.1
   dompurify: ^3.4.13

@@ -5,6 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@mariozechner/pi-ai': 0.67.1
+  '@mariozechner/pi-agent-core': 0.67.1
   protobufjs: ^7.5.8
   mermaid: ^11.16.1
   dompurify: ^3.4.13

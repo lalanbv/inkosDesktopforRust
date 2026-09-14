@@ -33,16 +33,11 @@
     "verify:engine-bindings": "node scripts/verify-engine-bindings.mjs",
     "bench:gate": "node scripts/bench-gate.mjs",
     "release": "pnpm build && pnpm test",
-    "audit:rust": "node scripts/audit-rust.mjs"
+    "audit:rust": "node scripts/audit-rust.mjs",
+    "clippy:gate": "node scripts/clippy-gate.mjs"
   },
   "engines": {
     "node": ">=22.0.0",
     "pnpm": ">=9.0.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "@mariozechner/pi-ai": "0.67.1",
-      "@mariozechner/pi-agent-core": "0.67.1"
-    }
   }
 }
