@@ -27,11 +27,13 @@ export function BackupPanel() {
     setPendingFile(file);
     try {
       const raw = await file.arrayBuffer();
-      const result = await fetchJson<Preview>("/backup/import", {
+      // 443 号：服务端线格式为 {preview:{...}}（TS/Rust 一致）——面板此前按
+      // 平铺读取，预览数字全为 undefined，导入预览从未真正可读。
+      const result = await fetchJson<{ preview: Preview }>("/backup/import", {
         method: "POST",
         body: raw as unknown as BodyInit,
       });
-      setPreview(result);
+      setPreview(result.preview);
     } catch (error) {
       setNotice(String(error));
     }

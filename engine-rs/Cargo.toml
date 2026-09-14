@@ -71,6 +71,7 @@ sha2 = "0.10"
 pdf-extract = "0.12.0"
 lopdf = "0.44.0"
 hmac = "0.12"
+tar = "0.4"
 
 [[bench]]
 name = "hot_paths"

@@ -12,6 +12,7 @@
 pub mod agent_production;
 pub mod agent_route;
 pub mod audit_route;
+pub mod backup_routes;
 pub mod books_routes;
 pub mod book_create_routes;
 pub mod fanfic_routes;
@@ -275,6 +276,14 @@ pub fn router_books(
         .route("/api/v1/books/:id/analytics", get(books_routes::analytics).with_state(books.clone()))
         .route("/api/v1/books/:id/eval", get(books_routes::eval).with_state(books.clone()))
         .route("/api/v1/books/:id/export", get(books_routes::export).with_state(books.clone()))
+        // 443 号：R18 备份双端点移植（386 备案随 164 号默认引擎切换失效后翻案）。
+        .route("/api/v1/backup/export", get(backup_routes::export).with_state(books.clone()))
+        .route(
+            "/api/v1/backup/import",
+            post(backup_routes::import)
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024 * 1024))
+                .with_state(books.clone()),
+        )
         // 48 号：状态端点组（列表/详情/更新/删除 + 章节读 + approve/reject +
         // truth 文件 + chapter-review-mode）。
         .route("/api/v1/books", get(books_state_routes::list_books).with_state(books.clone()))

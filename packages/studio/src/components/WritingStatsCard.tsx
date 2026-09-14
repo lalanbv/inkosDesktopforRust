@@ -34,6 +34,22 @@ export function WritingStatsCard() {
     [stats],
   );
 
+  // 443 号：daily 契约是稀疏桶（无产出日期不出现，见 writing-stats.ts 头注）——
+  // 卡片必须自补 30 个固定日槽，否则单日数据渲染成一根撑满全宽的实心柱。
+  const slots = useMemo(() => {
+    if (!stats) return [];
+    const byDate = new Map(stats.daily.map((bucket) => [bucket.date, bucket]));
+    const now = new Date();
+    const endUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const out: Array<{ key: string; date: string; words: number; chapters: number }> = [];
+    for (let offset = 29; offset >= 0; offset -= 1) {
+      const date = new Date(endUtc - offset * 86_400_000).toISOString().slice(0, 10);
+      const bucket = byDate.get(date);
+      out.push({ key: date, date, words: bucket?.words ?? 0, chapters: bucket?.chapters ?? 0 });
+    }
+    return out;
+  }, [stats]);
+
   return (
     <div className="rounded-lg border border-border/60 p-4 space-y-2">
       <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
@@ -46,12 +62,14 @@ export function WritingStatsCard() {
       ) : (
         <div className="space-y-2">
           <div className="flex items-end gap-1 h-16" data-slot="writing-stats-bars">
-            {stats.daily.map((bucket) => (
+            {slots.map((slot) => (
               <div
-                key={bucket.date}
-                title={`${bucket.date}: ${bucket.words} 字 / ${bucket.chapters} 章`}
+                key={slot.key}
+                title={`${slot.date}: ${slot.words} 字 / ${slot.chapters} 章`}
                 className="flex-1 bg-primary/70 rounded-t"
-                style={{ height: `${Math.max(6, Math.round((bucket.words / maxWords) * 60))}px` }}
+                style={{
+                  height: `${slot.words > 0 ? Math.max(6, Math.round((slot.words / maxWords) * 60)) : 2}px`,
+                }}
               />
             ))}
           </div>
