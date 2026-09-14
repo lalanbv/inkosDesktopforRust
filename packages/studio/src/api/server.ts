@@ -6826,7 +6826,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (rejected.length > 0) {
       return c.json({ error: `unsafe entries rejected: ${rejected.join(", ")}` }, 400);
     }
-    const manifestEntry = entries.find((entry) => entry.name === "backup-manifest.json");
+    // 444 号：manifest 查找与恢复路径按「能工作的契约」对齐 Rust 移植
+    // （backup_routes.rs）——导出以 `inkos-backup/` 为包根前缀，导入须剥前缀
+    // 落回项目根；此前裸名精确查找 + 原样写回 = 导出→导入端到端断裂。
+    const BACKUP_PACKAGE_ROOT = "inkos-backup";
+    const manifestName = `${BACKUP_PACKAGE_ROOT}/backup-manifest.json`;
+    const restoreName = (name: string): string =>
+      name.startsWith(`${BACKUP_PACKAGE_ROOT}/`) ? name.slice(BACKUP_PACKAGE_ROOT.length + 1) : name;
+    const manifestEntry = entries.find((entry) => entry.name === manifestName || entry.name === "backup-manifest.json");
     if (!manifestEntry) return c.json({ error: "backup-manifest.json missing" }, 400);
     try {
       const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
@@ -6838,11 +6845,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "backup-manifest.json unreadable" }, 400);
     }
 
-    // 将覆盖项 = root 下已存在的同名文件。
+    // 将覆盖项 = root 下已存在的同名文件（剥包根前缀后的真实路径）。
     const overwriting: string[] = [];
     for (const entry of entries) {
-      if (await stat(join(root, entry.name)).then(() => true).catch(() => false)) {
-        overwriting.push(entry.name);
+      const name = restoreName(entry.name);
+      if (await stat(join(root, name)).then(() => true).catch(() => false)) {
+        overwriting.push(name);
       }
     }
     if (!confirm) {
@@ -6875,13 +6883,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await writeFile(join(backupsDir, snapshotName), Buffer.concat(chunks), "utf-8");
     }
 
-    // 写回（快照已兜底）。
+    // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数
+    // （与 Rust backup_routes.rs 同契约）。
+    let restored = 0;
     for (const entry of entries) {
-      const target = join(root, entry.name);
+      if (entry.name === manifestName || entry.name === "backup-manifest.json") continue;
+      const target = join(root, restoreName(entry.name));
       await mkdir(join(target, ".."), { recursive: true });
       await writeFile(target, entry.bytes);
+      restored += 1;
     }
-    return c.json({ ok: true, restored: entries.length, snapshot: overwriting.length > 0 });
+    return c.json({ ok: true, restored, snapshot: overwriting.length > 0 });
   });
 
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {

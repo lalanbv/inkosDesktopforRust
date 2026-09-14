@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadStudioTaskSnapshot, saveStudioTaskSnapshot, studioTaskSnapshotPath } from "./task-store.js";
@@ -7452,5 +7452,91 @@ describe("CORS loopback origin reflection（173 号 W-A4a）", () => {
     });
     expect(remote.status).toBe(403);
     expect(remote.headers.get("access-control-allow-origin")).toBeNull();
+  });
+});
+
+describe("backup export/import roundtrip (444 号)", () => {
+  /** 手工构造最小 USTAR 归档（同 tar-read.test.ts 助手；无校验和，untar 不验证）。 */
+  function makeTar(entries: Array<{ name: string; content: string }>): Buffer {
+    const blocks: Buffer[] = [];
+    for (const entry of entries) {
+      const header = Buffer.alloc(512, 0);
+      Buffer.from(entry.name, "utf-8").copy(header, 0);
+      const size = Buffer.byteLength(entry.content, "utf-8");
+      header.write(size.toString(8).padStart(11, "0"), 124);
+      header.write("0", 156);
+      blocks.push(header);
+      const payload = Buffer.from(entry.content, "utf-8");
+      blocks.push(payload);
+      const padding = (512 - (payload.length % 512)) % 512;
+      if (padding > 0) blocks.push(Buffer.alloc(padding));
+    }
+    blocks.push(Buffer.alloc(1024));
+    return Buffer.concat(blocks);
+  }
+
+  it("rejects archives whose manifest is missing (bare or prefixed lookup)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-backup-"));
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+    const tar = makeTar([{ name: "inkos-backup/books/b1/book.json", content: "{}" }]);
+    const res = await app.request("http://localhost/api/v1/backup/import", {
+      method: "POST",
+      body: new Uint8Array(tar),
+      headers: { "Content-Type": "application/x-tar" },
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "backup-manifest.json missing" });
+  });
+
+  it("roundtrips export → preview → confirm and snapshots overwritten files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-backup-"));
+    await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "t" }), "utf-8");
+    await mkdir(join(root, "books", "b1", "chapters"), { recursive: true });
+    await writeFile(join(root, "books", "b1", "book.json"), '{"id":"b1"}', "utf-8");
+    await writeFile(join(root, "books", "b1", "chapters", "0001_A.md"), "# A\n\n正文", "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const exportRes = await app.request("http://localhost/api/v1/backup/export");
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.headers.get("content-type")).toBe("application/gzip");
+    const gz = new Uint8Array(await exportRes.arrayBuffer());
+    expect([gz[0], gz[1]]).toEqual([0x1f, 0x8b]);
+
+    // 导出后破坏文件 → 预览应把真实路径列为覆盖项。
+    await writeFile(join(root, "books", "b1", "book.json"), '{"id":"b1","corrupted":true}', "utf-8");
+    const previewRes = await app.request("http://localhost/api/v1/backup/import", {
+      method: "POST",
+      body: gz,
+      headers: { "Content-Type": "application/gzip" },
+    });
+    expect(previewRes.status).toBe(200);
+    const preview = (await previewRes.json()) as { preview: { fileCount: number; overwriting: string[]; newFiles: number } };
+    expect(preview.preview.fileCount).toBeGreaterThan(2);
+    expect(preview.preview.overwriting).toContain("books/b1/book.json");
+
+    const confirmRes = await app.request("http://localhost/api/v1/backup/import?confirm=1", {
+      method: "POST",
+      body: gz,
+      headers: { "Content-Type": "application/gzip" },
+    });
+    expect(confirmRes.status).toBe(200);
+    const result = (await confirmRes.json()) as { ok: boolean; restored: number; snapshot: boolean };
+    expect(result.ok).toBe(true);
+    expect(result.snapshot).toBe(true);
+    expect(result.restored).toBeGreaterThan(1);
+    expect(result.restored).toBeLessThan(preview.preview.fileCount); // manifest 元数据不计
+
+    // 写回落到项目根相对路径且内容回滚为导出时版本。
+    await expect(readFile(join(root, "books", "b1", "book.json"), "utf-8")).resolves.toBe('{"id":"b1"}');
+    expect(await readFile(join(root, "books", "b1", "chapters", "0001_A.md"), "utf-8")).toContain("正文");
+
+    // 快照留存损坏版本（回滚保险）。
+    const backups = await readdir(join(root, "backups"));
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^pre-restore-\d+\.tar$/);
+    const snapshotText = await readFile(join(root, "backups", backups[0]!), "utf-8");
+    expect(snapshotText).toContain("corrupted");
   });
 });
