@@ -242,6 +242,7 @@ pub fn build_tension_curve(rows: &[TensionRow]) -> TensionCurve {
 /// - climax-crowding：尾段（最大章号 ×(1−climax_window) 之后）revealLevel 高点数
 ///   ≥ climax_min_count 且严格大于尾段之外的高点数；
 /// - weak-hook-streak：连续 weak_window 个点 revealLevel ≤ weak_level（取最长段）。
+///
 /// 点列为空直接返回空数组。
 pub fn detect_tension_warnings(
     points: &[TensionPoint],

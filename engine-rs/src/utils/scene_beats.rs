@@ -8,7 +8,6 @@
 //! clamp ≤6 场景），writer 按节拍顺序推进；开关 `writing.sceneBeats`
 //! 默认关（关闭时行为与既有链路一致）。
 
-use serde::Deserialize;
 
 pub const SCENE_BEATS_MAX_SCENES: usize = 6;
 

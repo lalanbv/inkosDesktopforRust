@@ -325,7 +325,7 @@ pub fn build_promise_timeline(
                 last_advanced_at,
                 expected_payoff: hook.expected_payoff.clone(),
                 state,
-                kind: hook.kind.clone(),
+                kind: hook.kind,
             }
         })
         .collect();

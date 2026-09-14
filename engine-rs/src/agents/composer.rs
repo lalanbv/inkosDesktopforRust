@@ -1864,6 +1864,200 @@ fn anchor_edge_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"^-+|-+$").unwrap())
 }
 
+
+/// R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
+/// 读 story/entity_codex.json 与（series_canon_file 提供时）.inkos/series/
+/// {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文命中卡片：
+/// book 卡渲染「## 实体卡」（source=codex/<name>）；series 幸存条目
+/// （book 同名覆盖后）渲染「## 系列实体卡」（source=codex-series/<name>）。
+pub fn load_codex_entries(
+    book_dir: &Path,
+    chapter_number: u32,
+    goal: &str,
+    memo_body: &str,
+    series_canon_file: Option<&Path>,
+) -> Vec<crate::models::input_governance::ContextSource> {
+    let _ = chapter_number;
+    let mut entries = Vec::new();
+    let scene_text = format!("{goal}\n{memo_body}");
+    let mut book_cards: Vec<crate::utils::entity_codex::EntityCodexCard> = Vec::new();
+    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("entity_codex.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(cards) = parsed.get("cards").and_then(serde_json::Value::as_array) {
+                book_cards = cards
+                    .iter()
+                    .filter_map(|card| serde_json::from_value(card.clone()).ok())
+                    .collect();
+            }
+        }
+    }
+    if !book_cards.is_empty() {
+        let matches = crate::utils::entity_codex::match_codex_cards(&scene_text, &book_cards);
+        let matches = matches.iter().take(8).cloned().collect::<Vec<_>>();
+        if let Some(block) = crate::utils::entity_codex::render_codex_block(
+            &matches,
+            crate::utils::language::WritingLanguage::Zh,
+        ) {
+            let first_name = matches
+                .first()
+                .map(|codex_match| codex_match.card.name.clone())
+                .unwrap_or_default();
+            entries.push(crate::models::input_governance::ContextSource {
+                source: format!("codex/{first_name}"),
+                reason: "Entity cards detected in this scene (canon facts).".to_string(),
+                excerpt: Some(block),
+                rank: None,
+            });
+        }
+    }
+    if let Some(series_path) = series_canon_file {
+        if let Ok(raw) = std::fs::read_to_string(series_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
+                if let Some(parsed) =
+                    crate::utils::series_canon::parse_series_canon_file(&value)
+                {
+                    if !parsed.entries.is_empty() {
+                        let merged = crate::utils::series_canon::merge_codex_layers(
+                            &book_cards,
+                            &parsed.entries,
+                        );
+                        let series_matches =
+                            crate::utils::entity_codex::match_codex_cards(&scene_text, &merged.series);
+                        let series_matches =
+                            series_matches.iter().take(8).cloned().collect::<Vec<_>>();
+                        if let Some(series_block) = crate::utils::series_canon::render_series_codex_block(
+                            &series_matches,
+                            crate::utils::language::WritingLanguage::Zh,
+                        ) {
+                            let first_name = series_matches
+                                .first()
+                                .map(|codex_match| codex_match.card.name.clone())
+                                .unwrap_or_default();
+                            entries.push(crate::models::input_governance::ContextSource {
+                                source: format!("codex-series/{first_name}"),
+                                reason: "Series canon cards detected in this scene (cross-book canon facts)."
+                                    .to_string(),
+                                excerpt: Some(series_block),
+                                rank: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    entries
+}
+
+/// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
+/// source 前缀 `rules/`、`experience/` 在上下文来源分层中与写法同层
+/// （style-asset=20）。R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失
+/// → 内置种子（内存态不落盘）；文件可解析 → 用户规则空间（显式空规则=
+/// 关闭防线，不回填）。
+pub fn load_rule_experience_entries(
+    book_dir: &Path,
+) -> Vec<crate::models::input_governance::ContextSource> {
+    let mut entries: Vec<crate::models::input_governance::ContextSource> = Vec::new();
+    let user_rules: Option<Vec<crate::utils::rule_experience_engine::AntiAiRule>> = std::fs::read_to_string(
+        book_dir.join("story").join("anti_ai_rules.json"),
+    )
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|parsed| {
+        let rules = parsed.get("rules")?.as_array()?;
+        Some(
+            rules
+                .iter()
+                .filter_map(|rule| {
+                    crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
+                })
+                .collect(),
+        )
+    });
+    let resolved = crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
+    if !resolved.rules.is_empty() {
+        if let Some(guidance) = crate::utils::rule_experience_engine::compose_anti_ai_guidance(
+            &resolved.rules,
+            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
+            None,
+        ) {
+            entries.push(crate::models::input_governance::ContextSource {
+                source: "rules/anti-ai".to_string(),
+                reason: if resolved.seeded {
+                    "Built-in anti-AI baseline rules (seeded).".to_string()
+                } else {
+                    "Bound anti-AI rules.".to_string()
+                },
+                excerpt: Some(guidance),
+                rank: None,
+            });
+        }
+    }
+    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("experience.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(items) = parsed.get("entries").and_then(serde_json::Value::as_array) {
+                let entries_list: Vec<crate::utils::rule_experience_engine::ExperienceEntry> =
+                    items
+                        .iter()
+                        .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                        .collect();
+                if !entries_list.is_empty() {
+                    if let Some(guidance) =
+                        crate::utils::rule_experience_engine::render_experience_guidance(
+                            &entries_list,
+                            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
+                            None,
+                        )
+                    {
+                        entries.push(crate::models::input_governance::ContextSource {
+                            source: "experience/proven".to_string(),
+                            reason: "Proven techniques learned from this book.".to_string(),
+                            excerpt: Some(guidance),
+                            rank: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    entries
+}
+
+/// G4/340 号：书级写法绑定 → style-asset 条目；任何缺失/解析失败返回 None。
+pub fn load_style_binding_entry(
+    book_dir: &Path,
+) -> Option<crate::models::input_governance::ContextSource> {
+    let binding_raw = std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
+    let binding: crate::utils::style_feature_engine::StyleBinding =
+        serde_json::from_str(&binding_raw).ok()?;
+    if binding.profile_name.is_empty() {
+        return None;
+    }
+    let profile_raw = std::fs::read_to_string(
+        book_dir
+            .join("story")
+            .join("style-profiles")
+            .join(format!("{}.json", binding.profile_name)),
+    )
+    .ok()?;
+    let profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
+    let resolution = crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
+    if resolution.enabled.is_empty() {
+        return None;
+    }
+    let guidance = resolution.guidance_zh;
+    if guidance.is_empty() {
+        return None;
+    }
+    Some(crate::models::input_governance::ContextSource {
+        source: format!("style/{}", binding.profile_name),
+        reason: "Bound style profile (feature pool selection).".to_string(),
+        excerpt: Some(guidance),
+        rank: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2409,198 +2603,4 @@ mod tests {
             "explicit empty rules must disable the baseline"
         );
     }
-}
-
-
-/// R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
-/// 读 story/entity_codex.json 与（series_canon_file 提供时）.inkos/series/
-/// {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文命中卡片：
-/// book 卡渲染「## 实体卡」（source=codex/<name>）；series 幸存条目
-/// （book 同名覆盖后）渲染「## 系列实体卡」（source=codex-series/<name>）。
-pub fn load_codex_entries(
-    book_dir: &Path,
-    chapter_number: u32,
-    goal: &str,
-    memo_body: &str,
-    series_canon_file: Option<&Path>,
-) -> Vec<crate::models::input_governance::ContextSource> {
-    let _ = chapter_number;
-    let mut entries = Vec::new();
-    let scene_text = format!("{goal}\n{memo_body}");
-    let mut book_cards: Vec<crate::utils::entity_codex::EntityCodexCard> = Vec::new();
-    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("entity_codex.json")) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(cards) = parsed.get("cards").and_then(serde_json::Value::as_array) {
-                book_cards = cards
-                    .iter()
-                    .filter_map(|card| serde_json::from_value(card.clone()).ok())
-                    .collect();
-            }
-        }
-    }
-    if !book_cards.is_empty() {
-        let matches = crate::utils::entity_codex::match_codex_cards(&scene_text, &book_cards);
-        let matches = matches.iter().take(8).cloned().collect::<Vec<_>>();
-        if let Some(block) = crate::utils::entity_codex::render_codex_block(
-            &matches,
-            crate::utils::language::WritingLanguage::Zh,
-        ) {
-            let first_name = matches
-                .first()
-                .map(|codex_match| codex_match.card.name.clone())
-                .unwrap_or_default();
-            entries.push(crate::models::input_governance::ContextSource {
-                source: format!("codex/{first_name}"),
-                reason: "Entity cards detected in this scene (canon facts).".to_string(),
-                excerpt: Some(block),
-                rank: None,
-            });
-        }
-    }
-    if let Some(series_path) = series_canon_file {
-        if let Ok(raw) = std::fs::read_to_string(series_path) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-                // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
-                if let Some(parsed) =
-                    crate::utils::series_canon::parse_series_canon_file(&value)
-                {
-                    if !parsed.entries.is_empty() {
-                        let merged = crate::utils::series_canon::merge_codex_layers(
-                            &book_cards,
-                            &parsed.entries,
-                        );
-                        let series_matches =
-                            crate::utils::entity_codex::match_codex_cards(&scene_text, &merged.series);
-                        let series_matches =
-                            series_matches.iter().take(8).cloned().collect::<Vec<_>>();
-                        if let Some(series_block) = crate::utils::series_canon::render_series_codex_block(
-                            &series_matches,
-                            crate::utils::language::WritingLanguage::Zh,
-                        ) {
-                            let first_name = series_matches
-                                .first()
-                                .map(|codex_match| codex_match.card.name.clone())
-                                .unwrap_or_default();
-                            entries.push(crate::models::input_governance::ContextSource {
-                                source: format!("codex-series/{first_name}"),
-                                reason: "Series canon cards detected in this scene (cross-book canon facts)."
-                                    .to_string(),
-                                excerpt: Some(series_block),
-                                rank: None,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    entries
-}
-
-/// R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
-/// source 前缀 `rules/`、`experience/` 在上下文来源分层中与写法同层
-/// （style-asset=20）。R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失
-/// → 内置种子（内存态不落盘）；文件可解析 → 用户规则空间（显式空规则=
-/// 关闭防线，不回填）。
-pub fn load_rule_experience_entries(
-    book_dir: &Path,
-) -> Vec<crate::models::input_governance::ContextSource> {
-    let mut entries: Vec<crate::models::input_governance::ContextSource> = Vec::new();
-    let user_rules: Option<Vec<crate::utils::rule_experience_engine::AntiAiRule>> = std::fs::read_to_string(
-        book_dir.join("story").join("anti_ai_rules.json"),
-    )
-    .ok()
-    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-    .and_then(|parsed| {
-        let rules = parsed.get("rules")?.as_array()?;
-        Some(
-            rules
-                .iter()
-                .filter_map(|rule| {
-                    crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
-                })
-                .collect(),
-        )
-    });
-    let resolved = crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
-    if !resolved.rules.is_empty() {
-        if let Some(guidance) = crate::utils::rule_experience_engine::compose_anti_ai_guidance(
-            &resolved.rules,
-            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
-            None,
-        ) {
-            entries.push(crate::models::input_governance::ContextSource {
-                source: "rules/anti-ai".to_string(),
-                reason: if resolved.seeded {
-                    "Built-in anti-AI baseline rules (seeded).".to_string()
-                } else {
-                    "Bound anti-AI rules.".to_string()
-                },
-                excerpt: Some(guidance),
-                rank: None,
-            });
-        }
-    }
-    if let Ok(raw) = std::fs::read_to_string(book_dir.join("story").join("experience.json")) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(items) = parsed.get("entries").and_then(serde_json::Value::as_array) {
-                let entries_list: Vec<crate::utils::rule_experience_engine::ExperienceEntry> =
-                    items
-                        .iter()
-                        .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
-                        .collect();
-                if !entries_list.is_empty() {
-                    if let Some(guidance) =
-                        crate::utils::rule_experience_engine::render_experience_guidance(
-                            &entries_list,
-                            crate::utils::rule_experience_engine::GuidanceLanguage::Zh,
-                            None,
-                        )
-                    {
-                        entries.push(crate::models::input_governance::ContextSource {
-                            source: "experience/proven".to_string(),
-                            reason: "Proven techniques learned from this book.".to_string(),
-                            excerpt: Some(guidance),
-                            rank: None,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    entries
-}
-
-/// G4/340 号：书级写法绑定 → style-asset 条目；任何缺失/解析失败返回 None。
-pub fn load_style_binding_entry(
-    book_dir: &Path,
-) -> Option<crate::models::input_governance::ContextSource> {
-    let binding_raw = std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
-    let binding: crate::utils::style_feature_engine::StyleBinding =
-        serde_json::from_str(&binding_raw).ok()?;
-    if binding.profile_name.is_empty() {
-        return None;
-    }
-    let profile_raw = std::fs::read_to_string(
-        book_dir
-            .join("story")
-            .join("style-profiles")
-            .join(format!("{}.json", binding.profile_name)),
-    )
-    .ok()?;
-    let profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
-    let resolution = crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
-    if resolution.enabled.is_empty() {
-        return None;
-    }
-    let guidance = resolution.guidance_zh;
-    if guidance.is_empty() {
-        return None;
-    }
-    Some(crate::models::input_governance::ContextSource {
-        source: format!("style/{}", binding.profile_name),
-        reason: "Bound style profile (feature pool selection).".to_string(),
-        excerpt: Some(guidance),
-        rank: None,
-    })
 }

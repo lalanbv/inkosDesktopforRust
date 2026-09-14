@@ -121,7 +121,7 @@ pub async fn run_agent_loop(
     messages.push(LLMMessage { role: LLMRole::User, content: instruction.to_string(), tool_calls: None, tool_call_id: None });
     let mut executions: Vec<LoopToolExecution> = Vec::new();
     // G8a/333 号：AI 实况——多轮 usage 累加 + 首包（首个文本输出）计时。
-    let started_ms = crate::interaction::session::utc_now_ms() as u64;
+    let started_ms = crate::interaction::session::utc_now_ms();
     let mut first_token_ms: u64 = 0;
     let mut total_usage = LoopUsage::default();
 
@@ -132,7 +132,7 @@ pub async fn run_agent_loop(
                 tool_executions: executions,
                 aborted: true,
                 usage: total_usage,
-                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
+                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
             });
         }
         let (content, tool_calls, usage) = chat.chat(&messages, tools).await?;
@@ -141,7 +141,7 @@ pub async fn run_agent_loop(
         total_usage.total_tokens += usage.total_tokens;
         if !content.trim().is_empty() {
             if first_token_ms == 0 {
-                first_token_ms = crate::interaction::session::utc_now_ms() as u64 - started_ms;
+                first_token_ms = crate::interaction::session::utc_now_ms() - started_ms;
             }
             events.on_delta(content.trim());
         }
@@ -151,7 +151,7 @@ pub async fn run_agent_loop(
                 tool_executions: executions,
                 aborted: false,
                 usage: total_usage,
-                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
+                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
             });
         }
 
@@ -207,7 +207,7 @@ pub async fn run_agent_loop(
         tool_executions: executions,
         aborted: false,
         usage: total_usage,
-        timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() as u64 - started_ms },
+        timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
     })
 }
 

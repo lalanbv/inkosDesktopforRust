@@ -142,14 +142,6 @@ pub struct ResolvedTaskModel {
 }
 
 
-#[derive(Debug, Clone, PartialEq)]
-enum FieldLeaf {
-    Model(String),
-    Service(String),
-    Temperature(f64),
-    MaxTokens(u32),
-}
-
 /// 逐字段合并：project.defaults → project.tasks[t] → book.defaults → book.tasks[t]，
 /// 后者覆盖前者；同时产出每字段来源。
 fn compose_task_override(

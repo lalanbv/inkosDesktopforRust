@@ -34,10 +34,6 @@ struct RunPlanCase {
     target_chapters: i64,
 }
 
-fn expected_of(vector: &Value) -> Value {
-    vector["expected"].clone()
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StageCase {

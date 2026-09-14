@@ -65,7 +65,6 @@ pub fn parse_info_gaps_markdown(markdown: &str) -> Vec<InfoGapEntry> {
                     });
                 }
             }
-            has_current = false;
         };
     }
 

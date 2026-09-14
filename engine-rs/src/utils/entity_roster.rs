@@ -50,7 +50,6 @@ pub fn parse_entity_roster(markdown: &str) -> Vec<RosterEntity> {
                     entries.push(RosterEntity { id: current_id.clone().unwrap_or_default(), name, aliases, kind, registered_at });
                 }
             }
-            has_current = false;
         };
     }
 

@@ -226,7 +226,7 @@ pub fn detect_proper_noun_leak(
     if content.is_empty() || protected_names.is_empty() {
         return Vec::new();
     }
-    let mut names: Vec<String> = {
+    let names: Vec<String> = {
         let mut seen: Vec<String> = Vec::new();
         for name in protected_names {
             let trimmed = name.trim();
@@ -235,7 +235,7 @@ pub fn detect_proper_noun_leak(
             }
         }
         // TS sort((a,b)=>b.length-a.length)：UTF-16 码元长度降序（长名优先掩码）。
-        seen.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()));
+        seen.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
         seen
     };
 

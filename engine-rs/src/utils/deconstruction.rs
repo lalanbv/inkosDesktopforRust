@@ -293,7 +293,7 @@ pub struct DeconstructionResult {
 /// 渲染为可发布 markdown。
 pub fn build_deconstruction_export(
     chapters: &[DeconChapter],
-    depth: &str,
+    _depth: &str,
     language: &str,
     top_characters: Option<usize>,
 ) -> DeconstructionResult {

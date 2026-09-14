@@ -88,7 +88,7 @@ pub async fn import_from_text(
 
     // G7c/332 号防呆方言：平铺 meta 块 + 危险值转义加引号。
     let meta = render_flat_meta_block(&[
-        ("sourceFile", &source_name),
+        ("sourceFile", source_name),
         ("fanficMode", mode),
         ("generatedAt", &utc_now_iso()),
     ]);

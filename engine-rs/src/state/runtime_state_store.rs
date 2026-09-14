@@ -322,7 +322,7 @@ pub async fn load_narrative_memory_seed(
             // 必须走 canonical 映射（"near-term"/"mid-arc"/"slow-burn"）。
             payoff_timing: h
                 .payoff_timing
-                .map(|t| crate::utils::hook_lifecycle::hook_payoff_timing_canonical(t))
+                .map(crate::utils::hook_lifecycle::hook_payoff_timing_canonical)
                 .unwrap_or_default()
                 .to_string(),
             notes: h.notes,

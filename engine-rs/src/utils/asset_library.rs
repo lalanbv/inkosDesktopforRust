@@ -201,7 +201,7 @@ pub fn asset_content_hash(asset: &LibraryAsset) -> String {
 }
 
 /// 库稳定排序：kind 升序 → id 升序（纯码元比较）。
-pub fn sort_assets(assets: &mut Vec<LibraryAsset>) {
+pub fn sort_assets(assets: &mut [LibraryAsset]) {
     assets.sort_by(|a, b| a.kind.as_str().cmp(b.kind.as_str()).then_with(|| a.id.cmp(&b.id)));
 }
 

@@ -32,7 +32,7 @@ fn normalize_matches_shared_vectors() {
         let raw = vector["raw"].as_str().unwrap();
         let got = normalize_hook_kind(raw).map(hook_kind_id);
         let expected = vector["expected"].as_str();
-        assert_eq!(got.as_deref(), expected, "normalize vector '{name}' drifted");
+        assert_eq!(got, expected, "normalize vector '{name}' drifted");
     }
 }
 
@@ -69,7 +69,7 @@ fn record_kind_zero_migration_matches_shared_vectors() {
         if let Ok(record) = parsed {
             let got = record.kind.map(hook_kind_id);
             let expected = vector["kind"].as_str();
-            assert_eq!(got.as_deref(), expected, "roundtrip vector '{name}' kind drifted");
+            assert_eq!(got, expected, "roundtrip vector '{name}' kind drifted");
         }
     }
 }

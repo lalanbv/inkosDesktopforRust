@@ -247,16 +247,10 @@ fn seed_fallback_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["seedFallback"].as_array().expect("fallback array") {
         let name = vector["name"].as_str().unwrap();
-        let parsed: Option<Vec<AntiAiRule>> = match vector["parsed"].as_array() {
-            Some(items) => Some(
-                items
+        let parsed: Option<Vec<AntiAiRule>> = vector["parsed"].as_array().map(|items| items
                     .iter()
                     .map(|raw| serde_json::from_value(raw.clone()).expect("rule shape"))
-                    .collect(),
-            ),
-            // JSON null = 文件缺失/损坏（TS 侧 undefined）。
-            None => None,
-        };
+                    .collect());
         let got = resolve_anti_ai_rules_with_seeds(parsed.clone());
         assert_eq!(
             got.seeded,

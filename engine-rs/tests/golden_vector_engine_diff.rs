@@ -2,7 +2,7 @@
 //!
 //! 唯一事实源 = `packages/core/src/__tests__/golden/vector-engine-vectors.json`。
 
-use inkos_engine::utils::vector_engine::{resolve_vector_engine, VectorEngine, VectorEngineContext};
+use inkos_engine::utils::vector_engine::{resolve_vector_engine, VectorEngineContext};
 use serde_json::Value;
 
 const VECTORS: &str =

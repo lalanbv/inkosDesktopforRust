@@ -8,7 +8,6 @@ use inkos_engine::utils::promise_ledger::{
     build_promise_timeline, detect_pacing_debts, detect_weak_hook_runs, hook_activity_strength,
     parse_expected_chapter, promise_ledger_contract, PromiseHookInput, WeakHookSummaryRow,
 };
-use serde::Deserialize;
 use serde_json::Value;
 
 const VECTORS: &str =

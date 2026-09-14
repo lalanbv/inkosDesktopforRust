@@ -885,7 +885,7 @@ pub async fn post_direction_candidates(
         let mut matched: Vec<crate::utils::asset_library::LibraryAsset> = Vec::new();
         for reference in body.asset_refs.iter().take(6) {
             let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
-            let (assets, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+            let (assets, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
                 .unwrap_or_else(|_| (Vec::new(), false));
             if let Some(hit) = assets.iter().find(|asset| asset.id == reference.id) {
                 matched.push(hit.clone());
@@ -1093,7 +1093,7 @@ pub async fn post_hybrid_search(
                 .and_then(|env| std::env::var(env).ok())
                 .unwrap_or_default();
             let query_vectors =
-                crate::utils::semantic_retrieval::embed_batch(embedding, &[query.clone()], Some(&api_key))
+                crate::utils::semantic_retrieval::embed_batch(embedding, std::slice::from_ref(&query), Some(&api_key))
                     .await?;
             let query_vector = query_vectors.first().ok_or("empty embedding")?;
             let db = crate::state::memory_db::MemoryDb::open(&book_dir).map_err(|e| e.to_string())?;
@@ -1433,7 +1433,7 @@ pub async fn get_quality_trend(
         )
             .into_response();
     }
-    let result = (|| async {
+    let result = async {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let metrics = db.list_review_metrics()?;
         let rows: Vec<crate::utils::quality_trend::ReviewMetricRow> = metrics
@@ -1499,7 +1499,7 @@ pub async fn get_quality_trend(
             "urgency": urgency,
             "currentChapter": current_chapter
         }))
-    })();
+    };
     match result.await {
         Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -1525,7 +1525,7 @@ pub async fn get_tension_curve(
     }
     let result = (|| {
         let markdown = std::fs::read_to_string(&summaries_path)
-            .map_err(|e| crate::EngineError::Io(e))?;
+            .map_err(crate::EngineError::Io)?;
         let summaries = crate::utils::story_markdown::parse_chapter_summaries_markdown(&markdown);
         let rows: Vec<crate::utils::tension_curve::TensionRow> = summaries
             .iter()
@@ -1964,7 +1964,7 @@ pub async fn get_asset_library(
     let Some(kind) = parse_library_kind(&kind_raw) else {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
-    match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+    match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
         Ok((assets, seeded)) => (
             StatusCode::OK,
             Json(json!({ "kind": kind.as_str(), "assets": assets, "seeded": seeded })),
@@ -1988,7 +1988,7 @@ pub async fn put_asset_library_asset(
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
     let outcome = crate::utils::asset_library::upsert_asset(
-        &runtime.state.project_root(),
+        runtime.state.project_root(),
         kind,
         &body.asset,
     );
@@ -2005,7 +2005,7 @@ pub async fn delete_asset_library_asset(
     let Some(kind) = parse_library_kind(&kind_raw) else {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
-    match crate::utils::asset_library::delete_asset(&runtime.state.project_root(), kind, &id) {
+    match crate::utils::asset_library::delete_asset(runtime.state.project_root(), kind, &id) {
         Ok((true, _, assets)) => (StatusCode::OK, Json(json!({ "ok": true, "assets": assets }))).into_response(),
         Ok((false, Some(reason), _)) => {
             let status = if reason.contains("builtin seeds") { StatusCode::BAD_REQUEST } else { StatusCode::NOT_FOUND };
@@ -2023,7 +2023,7 @@ pub async fn export_asset_library(
     let Some(kind) = parse_library_kind(&kind_raw) else {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
-    let (assets, _) = match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+    let (assets, _) = match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
         Ok(snapshot) => snapshot,
         Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
@@ -2051,12 +2051,12 @@ pub async fn import_asset_library(
     if parsed.assets.is_empty() && !parsed.errors.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
     }
-    let (existing, _) = match crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind) {
+    let (existing, _) = match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
         Ok(snapshot) => snapshot,
         Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
     let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
-    if let Err(error) = crate::utils::asset_library::save_assets(&runtime.state.project_root(), kind, &merged.merged) {
+    if let Err(error) = crate::utils::asset_library::save_assets(runtime.state.project_root(), kind, &merged.merged) {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     (
@@ -2096,7 +2096,7 @@ pub async fn adopt_library_assets(
     let mut published: Vec<Value> = Vec::new();
     for reference in body.refs.iter().take(12) {
         let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
-        let (assets, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+        let (assets, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
             .unwrap_or_else(|_| (Vec::new(), false));
         let Some(asset) = assets.iter().find(|asset| asset.id == reference.id) else { continue };
         let header = crate::utils::asset_library::render_adoption_header(asset, &book_id, language);
@@ -2326,7 +2326,7 @@ pub async fn preview_asset_library_import(
     if parsed.assets.is_empty() && !parsed.errors.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
     }
-    let (existing, _) = crate::utils::asset_library::list_assets(&runtime.state.project_root(), kind)
+    let (existing, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
         .unwrap_or_else(|_| (Vec::new(), false));
     let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
     let samples: Vec<serde_json::Value> = parsed
@@ -2356,7 +2356,7 @@ pub async fn get_series_canon(
     if !crate::utils::series_canon::is_valid_series_id(&series_id) {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series id"));
     }
-    let file = crate::utils::series_canon::load_series_canon(&runtime.state.project_root(), &series_id)
+    let file = crate::utils::series_canon::load_series_canon(runtime.state.project_root(), &series_id)
         .unwrap_or(crate::utils::series_canon::SeriesCanonFile {
             version: crate::utils::series_canon::SERIES_CANON_VERSION,
             series_id: series_id.clone(),
@@ -2394,7 +2394,7 @@ pub async fn put_series_canon(
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series canon payload"));
     };
     let entry_count = parsed.entries.len();
-    match crate::utils::series_canon::save_series_canon(&runtime.state.project_root(), &parsed) {
+    match crate::utils::series_canon::save_series_canon(runtime.state.project_root(), &parsed) {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": entry_count }))).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }

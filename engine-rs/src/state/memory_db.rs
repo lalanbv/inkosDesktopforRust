@@ -432,10 +432,8 @@ impl MemoryDb {
             })
         })?;
         let mut out = Vec::new();
-        for row in rows {
-            if let Ok(chunk) = row {
-                out.push(chunk);
-            }
+        for chunk in rows.flatten() {
+            out.push(chunk);
         }
         Ok(out)
     }

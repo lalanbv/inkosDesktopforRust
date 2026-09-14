@@ -24,8 +24,7 @@ pub fn flatten_truth_scalar(value: &str) -> String {
     value
         .replace("\r\n", "\n")
         .replace('\r', "\n")
-        .replace('\n', " ")
-        .replace('\t', " ")
+        .replace(['\n', '\t'], " ")
         .trim()
         .to_string()
 }

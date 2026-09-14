@@ -401,7 +401,7 @@ pub async fn import_canon(
     let meta_block = format!(
         "\n{}",
         render_flat_meta_block(&[
-            ("parentBookId", &parent_book_id),
+            ("parentBookId", parent_book_id),
             ("parentTitle", &parent_book.title),
             ("generatedAt", &utc_now_iso()),
         ])

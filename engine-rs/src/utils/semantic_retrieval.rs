@@ -42,7 +42,7 @@ pub struct ScoredChunk {
 /// 去重（大小写不敏感）、每段截 40 字、上限 8 术语、总长截 200 字、分隔「；」。
 pub fn build_task_driven_query(input: &TaskQueryInput) -> String {
     let mut terms: Vec<String> = Vec::new();
-    let mut push = |value: &str, terms: &mut Vec<String>| {
+    let push = |value: &str, terms: &mut Vec<String>| {
         let trimmed = value.trim();
         if trimmed.is_empty() || terms.len() >= QUERY_TERM_LIMIT {
             return;

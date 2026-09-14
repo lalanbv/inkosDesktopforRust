@@ -17,12 +17,6 @@ const VECTORS: &str =
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CandidatesCase {
-    summaries: Vec<(i64, String)>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct ResolveCase {
     candidates: Vec<String>,
     roster: Vec<RosterEntity>,
