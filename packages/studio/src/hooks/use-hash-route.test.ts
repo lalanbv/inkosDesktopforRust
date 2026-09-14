@@ -135,3 +135,18 @@ describe("play route", () => {
     expect(parseHash("#/play/a%20b")).toEqual({ page: "play", projectId: "a b" });
   });
 });
+
+describe("analytics route (460 号)", () => {
+  it("parses #/book/:id/analytics", () => {
+    expect(parseHash("#/book/b1/analytics")).toEqual({ page: "analytics", bookId: "b1" });
+  });
+  it("decodes url-encoded book ids", () => {
+    expect(parseHash("#/book/%E9%95%9C%E8%8A%B1%E6%B0%B4%E6%9C%88/analytics")).toEqual({
+      page: "analytics",
+      bookId: "镜花水月",
+    });
+  });
+  it("round-trips to hash", () => {
+    expect(routeToHash({ page: "analytics", bookId: "b1" })).toBe("#/book/b1/analytics");
+  });
+});

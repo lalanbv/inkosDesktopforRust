@@ -64,6 +64,10 @@ function parseHash(hash: string): HashRoute {
   const bookTimelineMatch = path.match(/^book\/([^/]+)\/timeline$/);
   if (bookTimelineMatch) return { page: "book-timeline", bookId: decodeURIComponent(bookTimelineMatch[1]) };
 
+  // 460 号：数据分析页深链——此前 state-only（直达/刷新回落 Dashboard，405 号同款）。
+  const analyticsMatch = path.match(/^book\/([^/]+)\/analytics$/);
+  if (analyticsMatch) return { page: "analytics", bookId: decodeURIComponent(analyticsMatch[1]) };
+
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
 
@@ -93,6 +97,7 @@ function routeToHash(route: HashRoute): string {
     case "book-settings": return `#/book/${encodeURIComponent(route.bookId)}/settings`;
     case "chapter": return `#/book/${encodeURIComponent(route.bookId)}/chapter/${route.chapterNumber}`;
     case "book-timeline": return `#/book/${encodeURIComponent(route.bookId)}/timeline`;
+    case "analytics": return `#/book/${encodeURIComponent(route.bookId)}/analytics`;
     case "book-create": return "#/book/new";
     case "services": return "#/services";
     case "onboarding": return "#/onboarding";
@@ -112,7 +117,7 @@ function routeToHash(route: HashRoute): string {
 
 export { parseHash, routeToHash }; // for testing
 
-const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-timeline", "book-create", "chapter", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
+const HASH_PAGES = new Set(["dashboard", "chat", "book", "book-settings", "book-timeline", "book-create", "chapter", "analytics", "services", "project-settings", "service-detail", "translation", "import", "play", "film", "flow", "film-author", "film-studio"]);
 
 export function useHashRoute() {
   const [route, setRouteState] = useState<HashRoute>(() => parseHash(window.location.hash));
