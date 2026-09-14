@@ -47,6 +47,10 @@ function settlerDelta(msgs) {
 }
 const ARGS = "{\"action\": \"create_book\", \"instruction\": \"创建玄幻小说《镜花水月》，主角苏檀。世界观：镜中世界反向修行。核心冲突：镜像侵蚀现实。\", \"createBook\": {\"title\": \"镜花水月\", \"genre\": \"xuanhuan\", \"platform\": \"qidian\", \"targetChapters\": 12, \"chapterWordCount\": 3000, \"language\": \"zh\"}}";
 let PROPOSE_SEQ = 0;
+// 失败注入（439 号）：置 1 后架构师链的 LLM 调用一律 400——驱动前端确认卡降级态
+//（438 号「已执行 · 生产链失败」）真机走查。400=非瞬态，不触发重试/接管链；
+// fixture 数据面（write-next 走 planner/writer/settler/审稿）不含架构师，不受影响。
+const FAIL_ARCHITECT = process.env.WALKTHROUGH_MOCK_FAIL_ARCHITECT === "1";
 const PORT = Number(process.argv[2] ?? 1234);
 
 http.createServer((req, res) => {
@@ -68,7 +72,14 @@ http.createServer((req, res) => {
       } catch {}
       const lastRole = msgs.length ? msgs[msgs.length - 1].role : "user";
       let content;
-      if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) content = ARCHITECT;
+      if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) {
+        if (FAIL_ARCHITECT) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "mock injected production failure (WALKTHROUGH_MOCK_FAIL_ARCHITECT=1)" } }));
+          return;
+        }
+        content = ARCHITECT;
+      }
       else if (sys.includes("资深小说编辑")) content = REVIEW;
       else if (sys.includes("素材分析师") || sys.includes("同人")) content = CANON;
       else if (sys.includes("创作总编")) content = PLANNER;
