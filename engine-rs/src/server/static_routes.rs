@@ -151,6 +151,9 @@ async fn spa_fallback(
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 (header::REFERRER_POLICY, "no-referrer"),
                 (header::X_FRAME_OPTIONS, "DENY"),
+                // 469 号：index.html 禁缓存——SPA 入口陈旧会让整站跑旧 bundle
+                //（445 no-store 只盖 /api/v1；assets 为内容寻址可长缓存）。
+                (header::CACHE_CONTROL, "no-store"),
             ],
             // Bytes 克隆 = 引用计数递增（170 号 W-B1：替代 Vec 整页 memcpy）。
             html,
@@ -389,7 +392,6 @@ mod tests {
                 "{uri}"
             );
         }
-
         // API 面对照：健康端点不带静态面安全头（保持既有契约响应面）。
         let response = app
             .oneshot(
@@ -402,5 +404,26 @@ mod tests {
             .unwrap();
         assert_eq!(response.status().as_u16(), 200);
         assert!(response.headers().get(header::X_FRAME_OPTIONS).is_none());
+    }
+    /// 469 号：SPA 入口 index.html 带 no-store——防浏览器缓存旧入口导致整站
+    /// 跑旧 bundle（assets 内容寻址可长缓存，不受影响）。
+    #[tokio::test]
+    async fn spa_fallback_index_carries_no_store() {
+        let dir = dist();
+        let app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
     }
 }

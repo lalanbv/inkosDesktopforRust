@@ -68,6 +68,15 @@ function parseHash(hash: string): HashRoute {
   const analyticsMatch = path.match(/^book\/([^/]+)\/analytics$/);
   if (analyticsMatch) return { page: "analytics", bookId: decodeURIComponent(analyticsMatch[1]) };
 
+  // 469 号：daemon/doctor/genres/logs/style/truth 深链补齐——同款批量实例清零。
+  if (path === "daemon") return { page: "daemon" };
+  if (path === "doctor") return { page: "doctor" };
+  if (path === "genres") return { page: "genres" };
+  if (path === "logs") return { page: "logs" };
+  if (path === "style") return { page: "style" };
+  const truthMatch = path.match(/^book\/([^/]+)\/truth$/);
+  if (truthMatch) return { page: "truth", bookId: decodeURIComponent(truthMatch[1]) };
+
   const bookMatch = path.match(/^book\/([^/]+)$/);
   if (bookMatch) return { page: "book", bookId: decodeURIComponent(bookMatch[1]) };
 
@@ -124,12 +133,12 @@ const PAGE_SPEC: { readonly [K in HashRoute["page"]]: PageSpecFor<K> | null } = 
   "film-author": { toHash: (r) => `#/film-author/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-author", projectId: "p1" } },
   "film-studio": { toHash: (r) => `#/studio/film/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-studio", projectId: "p1" } },
   radar: { toHash: () => "#/radar", writable: false, sample: { page: "radar" } },
-  doctor: null,
-  genres: null,
-  style: null,
-  truth: null,
-  daemon: null,
-  logs: null,
+  doctor: { toHash: () => "#/doctor", writable: true, sample: { page: "doctor" } },
+  genres: { toHash: () => "#/genres", writable: true, sample: { page: "genres" } },
+  style: { toHash: () => "#/style", writable: true, sample: { page: "style" } },
+  truth: { toHash: (r) => `#/book/${encodeURIComponent(r.bookId)}/truth`, writable: true, sample: { page: "truth", bookId: "b1" } },
+  daemon: { toHash: () => "#/daemon", writable: true, sample: { page: "daemon" } },
+  logs: { toHash: () => "#/logs", writable: true, sample: { page: "logs" } },
 };
 
 function routeToHash(route: HashRoute): string {

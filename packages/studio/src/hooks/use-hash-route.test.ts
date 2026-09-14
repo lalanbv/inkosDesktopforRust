@@ -117,9 +117,9 @@ describe("hash route", () => {
       expect(decodeURIComponent(hash)).toContain("自定义");
     });
 
-    it("non-hash pages return empty string", () => {
-      expect(routeToHash({ page: "daemon" })).toBe("");
-      expect(routeToHash({ page: "logs" })).toBe("");
+    it("469 号：daemon/logs 深链补齐后 hash 非空（旧 state-only 语义退役）", () => {
+      expect(routeToHash({ page: "daemon" })).toBe("#/daemon");
+      expect(routeToHash({ page: "logs" })).toBe("#/logs");
     });
   });
 });
