@@ -81,6 +81,27 @@ describe("ChapterReader 动作链（458 号）", () => {
     expect(document.body.textContent).toContain("reader.compareChapter · 2");
   });
 
+  it("对照分屏跳转输入——数字 Enter 触发对照章切换，非法输入不生效（462/468 号）", async () => {
+    const user = userEvent.setup();
+    render(<ChapterReader bookId="b1" chapterNumber={2} nav={nav} theme="light" t={t} />);
+    await user.click(screen.getByTestId("reader-split-toggle"));
+    useApiMock.mockClear();
+
+    const jump = screen.getByTestId("reader-split-jump") as HTMLInputElement;
+    await user.type(jump, "1");
+    await user.keyboard("{Enter}");
+    await vi.waitFor(() => {
+      expect(useApiMock).toHaveBeenCalledWith("/books/b1/chapters/1");
+    });
+    expect(jump.value).toBe("");
+
+    await user.type(jump, "abc");
+    await user.keyboard("{Enter}");
+    // 非数字不切换：未出现非法路径请求；commitJump 对非法输入同样清空输入框
+    expect(useApiMock.mock.calls.filter(([p]) => String(p).includes("abc"))).toHaveLength(0);
+    expect(jump.value).toBe("");
+  });
+
   it("对照分屏开关——toggle 出现分隔条与对照栏，再点关闭", async () => {
     const user = userEvent.setup();
     render(<ChapterReader bookId="b1" chapterNumber={1} nav={nav} theme="light" t={t} />);
