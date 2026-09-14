@@ -617,10 +617,13 @@ describe("chat message actions", () => {
     expect(store.getState().sessions[sessionId]).toMatchObject({ isStreaming: true, isChatStreaming: false });
     expect(store.getState().sessions[sessionId]?.stream).not.toBeNull();
     expect(findTaskExecution(store, sessionId)).toMatchObject({ status: "running" });
-    // 聊天回复正常写入
-    expect(store.getState().sessions[sessionId]?.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: "任务还在跑。",
+    // 聊天回复正常写入（451→468 号：流收尾落在 sendMessage 之后的微任务，
+    // 满载全量跑时直接断言会时序抖动——轮询等待）
+    await vi.waitFor(() => {
+      expect(store.getState().sessions[sessionId]?.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: "任务还在跑。",
+      });
     });
   });
 

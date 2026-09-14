@@ -22,6 +22,8 @@
 4. `useApi` 与 `fetchJson` **分双 mock**：前者返回固定快照，后者按路径路由并捕获载荷（457 号模式）。
 5. `userEvent.upload` 可直注隐藏 `input[type=file]`，绕开文件选择器（455 号 BackupPanel）。
 6. 每用例 `cleanup()` + mock 计数清零；异步拉取用 `vi.waitFor` / `findBy*`。
+7. **radix/cmdk 系组件两桩**（jsdom 缺失即渲染崩）：`ResizeObserver`（空 `observe/unobserve/disconnect`）与 `Element.prototype.scrollIntoView`（空函数）——参考 QuickOpenPalette.interaction.test.tsx 头部（471 号）。
+8. 多处出现的文案用 `getAllByText(...).length` 断言；文本被子元素拆分时用 `findByText` 函数匹配器或直接查 `textContent`。
 
 ## 3. 路由：PAGE_SPEC 单一事实表（461 号）
 
