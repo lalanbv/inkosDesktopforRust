@@ -326,6 +326,52 @@ try {
     }
   }
 
+  // ── DELETE 面对照（502 号）：单条删除后读面等价 ──
+  // experience：PUT 两条 → DELETE 一条 → 双端 GET 均只剩保留条；
+  const expPath = `/api/v1/books/${BOOK}/experience`;
+  const expEntries = {
+    entries: [
+      { id: "exp_del", chapter: 0, kind: "technique", text: "待删除探针条目。", enabled: true, createdAt: "2026-09-16T00:00:00.000Z" },
+      { id: "exp_keep", chapter: 0, kind: "hook", text: "保留探针条目：章末钩回落。", enabled: true, createdAt: "2026-09-16T00:00:00.000Z" },
+    ],
+  };
+  for (const api of [nodeApi, rustApi]) {
+    await api(expPath, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(expEntries) });
+  }
+  const delExp = async (base) => {
+    const res = await fetch(`${base}${expPath}/exp_del`, { method: "DELETE" });
+    return res.status;
+  };
+  compared += 1;
+  {
+    const s1 = await delExp(`http://127.0.0.1:${nodePort}`);
+    const s2 = await delExp(`http://127.0.0.1:${rustPort}`);
+    if (s1 === s2 && s1 < 400) {
+      console.log(`✓ DELETE ${expPath}/exp_del（双端 ${s1}）`);
+    } else {
+      divergences += 1;
+      console.log(`✗ DELETE ${expPath}/exp_del：node=${s1} rust=${s2}`);
+    }
+  }
+
+  // asset-library：PUT 单资产 → DELETE → 双端 GET 均回到种子态
+  const assetPath = "/api/v1/asset-library/world-sample/assets";
+  const probeAsset = { asset: { id: "probe_ws", kind: "world-sample", name: "差分探针世界样本", body: "探针正文", expectations: [], taboos: [], samples: [] } };
+  for (const api of [nodeApi, rustApi]) {
+    await api(assetPath, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(probeAsset) });
+  }
+  {
+    const s1 = (await fetch(`http://127.0.0.1:${nodePort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
+    const s2 = (await fetch(`http://127.0.0.1:${rustPort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
+    compared += 1;
+    if (s1 === s2 && s1 < 400) {
+      console.log(`✓ DELETE ${assetPath}/probe_ws（双端 ${s1}）`);
+    } else {
+      divergences += 1;
+      console.log(`✗ DELETE ${assetPath}/probe_ws：node=${s1} rust=${s2}`);
+    }
+  }
+
   for (const [path, body] of WRITE_SET) {
     const payload = JSON.stringify(body);
     const nodeStatus = (await nodeApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
