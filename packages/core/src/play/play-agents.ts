@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { Type } from "@mariozechner/pi-ai";
+// 496/499 号：pi-ai 0.73 起转售 typebox 1.x——本文件 schema 走仓内
+// @sinclair/typebox（与 WorkerResultTool<TSchema> 同源），运行时对象形态兼容。
+import { Type } from "@sinclair/typebox";
 import { BaseAgent, type AgentContext } from "../agents/base.js";
 import {
   PlayActionIntentSchema,

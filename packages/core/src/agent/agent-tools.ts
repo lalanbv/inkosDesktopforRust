@@ -941,11 +941,13 @@ export function createSubAgentTool(
     prepareArguments: prepareSubAgentArguments,
     async execute(
       toolCallId: string,
-      params: SubAgentParamsType,
+      // 499 号：pi-ai 0.73 起 execute 形参为 unknown——此处收窄为子代理参数类型。
+      rawParams: unknown,
       _signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ): Promise<AgentToolResult<unknown>> {
       return runWithAgentTrajectoryRole("subagent", async () => {
+        const params = rawParams as SubAgentParamsType;
         const { agent, instruction, bookId, title, chapterNumber, chapterCount, genre, platform, language, targetChapters, chapterWordCount, revise, feedback, mode, format, approvedOnly } = params;
         const activatedSkills = mergeActivatedSkillGuidance(
           options.workerSkills?.(agent) ?? [],

@@ -73,8 +73,8 @@
     "eval": "vitest run src/__tests__/eval"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "0.67.1",
-    "@mariozechner/pi-ai": "0.67.1",
+    "@mariozechner/pi-agent-core": "0.73.1",
+    "@mariozechner/pi-ai": "0.73.1",
     "@sinclair/typebox": "^0.34.49",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
