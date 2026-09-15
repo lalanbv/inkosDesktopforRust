@@ -8152,7 +8152,12 @@ export async function startStudioServer(
           json: "application/json",
         };
         return new Response(content, {
-          headers: { "Content-Type": contentTypes[ext] ?? "application/octet-stream" },
+          headers: {
+            "Content-Type": contentTypes[ext] ?? "application/octet-stream",
+            // 514 号：vite 产物为内容哈希文件名——不可变长缓存，
+            // 用户重载只回源 index.html（no-store），资源全走本地缓存。
+            "Cache-Control": "public, max-age=31536000, immutable",
+          },
         });
       } catch {
         return c.notFound();
