@@ -48,9 +48,6 @@ export function TaskRoutingPanel() {
     };
   }, []);
 
-  const modelFor = (kind: string): string =>
-    routing.tasks?.[kind]?.model ?? routing.defaults?.model ?? "";
-
   const setTaskModel = (kind: string, model: string) => {
     setRouting((previous) => {
       const tasks = { ...(previous.tasks ?? {}) };
