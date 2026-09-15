@@ -26,6 +26,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
+    "gate:ts": "node scripts/gate-ts.mjs",
+    "gate:ts:fast": "node scripts/gate-ts.mjs --fast",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "audit:semantic-patterns": "node scripts/audit-semantic-patterns.mjs",

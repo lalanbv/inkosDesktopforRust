@@ -45,7 +45,8 @@ WALKTHROUGH_MOCK_FAIL_ARCHITECT=1 node scripts/walkthrough-mock.mjs  # 架构师
 ## 5. 门禁清单（提交前）
 
 ```bash
-pnpm -r test && pnpm -r typecheck   # TS/Studio
+pnpm gate:ts                        # TS 全门禁一条命令（509 号：typecheck/build/test/audit+三活体套件；--fast 跳过 build 与套件）
+pnpm -r test && pnpm -r typecheck   # TS/Studio（gate:ts 的组成项）
 pnpm clippy:gate                    # Rust 双 crate -D warnings
 pnpm audit:rust                     # RustSec（含 --strict 可选）
 pnpm verify:engine-bindings         # ts-rs 导出锁
