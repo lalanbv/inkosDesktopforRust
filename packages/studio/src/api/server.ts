@@ -1691,6 +1691,29 @@ function broadcast(event: string, data: unknown): void {
   }
 }
 
+/** 498 号：建书完成点写导演灵感卡（354 号语义；已存在不覆盖；失败由调用方兜底）。 */
+export async function writeDirectorInspirationCard(
+  root: string,
+  bookId: string,
+  premise: string,
+): Promise<void> {
+  const dir = join(root, ".inkos", "director");
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${bookId}.json`);
+  let session: Record<string, unknown> = {};
+  try {
+    session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+  } catch {
+    session = {};
+  }
+  if (session.inspiration !== undefined) return; // 已有灵感卡不覆盖
+  session.updatedAt = new Date().toISOString();
+  if (!session.bookId) session.bookId = bookId;
+  session.stage = session.stage ?? "directions";
+  session.inspiration = { premise, keywords: [] };
+  await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
+}
+
 function deriveBookIdFromTitle(title: string): string {
   return title
     .trim()
@@ -3834,6 +3857,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, error });
           return;
+        }
+        // 498 号：354 号语义回迁至现役建书完成点（原接线在已删除的 BookCreate
+        // 死页面内，从未生效）——建书成功即写导演灵感卡，失败不阻断。
+        try {
+          await writeDirectorInspirationCard(root, createdBookId, body.blurb ?? body.title);
+        } catch (error) {
+          console.error("[book:create] 导演灵感卡写入失败（不阻断）：", error);
         }
         const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
         bookCreateStatus.delete(createdBookId);

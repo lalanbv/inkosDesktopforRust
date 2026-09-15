@@ -7611,3 +7611,30 @@ describe("director session PUT patch contract (478 号)", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("writeDirectorInspirationCard (498 号)", () => {
+  it("writes the inspiration card at the create completion point", async () => {
+    const { writeDirectorInspirationCard } = await import("./server.js");
+    const root = await mkdtemp(join(tmpdir(), "inkos-director-card-"));
+    await writeDirectorInspirationCard(root, "b9", "镜中世界反向修行");
+    const stored = JSON.parse(
+      await readFile(join(root, ".inkos", "director", "b9.json"), "utf-8"),
+    ) as { bookId?: string; stage?: string; inspiration?: { premise?: string; keywords?: string[] }; updatedAt?: string };
+    expect(stored.bookId).toBe("b9");
+    expect(stored.stage).toBe("directions");
+    expect(stored.inspiration).toEqual({ premise: "镜中世界反向修行", keywords: [] });
+    expect(stored.updatedAt).toBeTruthy();
+  });
+
+  it("never overwrites an existing inspiration card", async () => {
+    const { writeDirectorInspirationCard } = await import("./server.js");
+    const root = await mkdtemp(join(tmpdir(), "inkos-director-card-"));
+    const dir = join(root, ".inkos", "director");
+    await mkdir(dir, { recursive: true });
+    const existing = { bookId: "b1", stage: "writing", inspiration: { premise: "旧灵感", keywords: ["保留"] } };
+    await writeFile(join(dir, "b1.json"), JSON.stringify(existing), "utf-8");
+    await writeDirectorInspirationCard(root, "b1", "新灵感");
+    const stored = JSON.parse(await readFile(join(dir, "b1.json"), "utf-8")) as { inspiration?: { premise?: string } };
+    expect(stored.inspiration).toEqual({ premise: "旧灵感", keywords: ["保留"] });
+  });
+});
