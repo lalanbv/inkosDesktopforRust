@@ -46,8 +46,8 @@ const waitUntil = async (fn, timeoutMs, label) => {
   }
   throw new Error(`等待超时：${label}`);
 };
-const apiFor = (base, root) => async (path) => {
-  const res = await fetch(base + path);
+const apiFor = (base, root) => async (path, init) => {
+  const res = await fetch(base + path, init);
   const text = await res.text();
   // 根路径归一化：doctor 等端点会回显各自的临时根绝对路径。
   const normalized = root ? text.split(root).join("%ROOT%") : text;
@@ -250,6 +250,32 @@ try {
   ];
   let divergences = 0;
   let compared = 0;
+
+  // ── 写后读对照（490 号）：481 号静态 body 审计的活体升级——变更端点
+  // 双端写入同一载荷，断言状态码一致；持久化等价随后由 GET 差分面覆盖。
+  const WRITE_SET = [
+    ["/api/v1/task-routing", { routing: { defaults: { model: "lm-mock-model" }, tasks: { writing: { model: "m-w" } } } }],
+    [`/api/v1/books/${BOOK}/codex`, { cards: [{ id: "card_wen", kind: "character", name: "苏檀", summary: "镜宗外门新晋弟子，随身碎镜。", facts: ["佩带母亲遗留碎镜"] }] }],
+    [`/api/v1/books/${BOOK}/anti-ai-rules`, { rules: [{ id: "rule_probe", type: "phrase", pattern: "须发皆张", isRegex: false, severity: "warning", message: "避免使用陈词套语「须发皆张」。", enabled: true }] }],
+    [`/api/v1/books/${BOOK}/experience`, { entries: [{ id: "exp_probe", chapter: 0, kind: "technique", text: "冷开场探针：环境先于人声。", enabled: true, createdAt: "2026-09-16T00:00:00.000Z" }] }],
+    [`/api/v1/books/${BOOK}/timeline-auto-beats`, { enabled: true }],
+    [`/api/v1/books/${BOOK}/best-of-n`, { enabled: true, candidates: 3, minScore: 70 }],
+    [`/api/v1/books/${BOOK}/chapter-review-mode`, { mode: "manual" }],
+    [`/api/v1/books/${BOOK}/series-id`, { seriesId: null }],
+  ];
+  for (const [path, body] of WRITE_SET) {
+    const payload = JSON.stringify(body);
+    const nodeStatus = (await nodeApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
+    const rustStatus = (await rustApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
+    compared += 1;
+    if (nodeStatus === rustStatus && nodeStatus < 400) {
+      console.log(`✓ PUT ${path}（${nodeStatus}）`);
+    } else {
+      divergences += 1;
+      console.log(`✗ PUT ${path}：状态码分歧 node=${nodeStatus} rust=${rustStatus}`);
+    }
+  }
+
   for (const endpoint of ENDPOINTS) {
     const nodeRes = await nodeApi(endpoint);
     const rustRes = await rustApi(endpoint);
