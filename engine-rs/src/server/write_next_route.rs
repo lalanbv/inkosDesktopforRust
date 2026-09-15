@@ -31,7 +31,9 @@ use crate::state::manager::StateManager;
 ///
 /// 第五参为中止句柄（175 号）：实现方须注入 `WriteNextConfig.abort`——
 /// 管线在阶段边界轮询 `check_aborted`，stop 端点置位后任务在安全点停止。
-/// 第六参为规划输入（183 号）：非空时作为 `external_context` 替换自动 plan。
+/// 第六参为规划输入（183 号）：非空时作为 `external_context` 传入 planner
+/// 重跑 governed plan（481 号注释纠偏：非「替换自动 plan」，与 TS
+/// resolveGovernedPlan 同构——空/缺时才复用持久化 plan 跳过 planner）。
 pub type WriteNextRunner = Arc<
     dyn Fn(
             Arc<StateManager>,
@@ -65,8 +67,10 @@ pub struct WriteNextBody {
     pub temperature: Option<f64>,
     #[serde(rename = "sessionId", default)]
     pub session_id: Option<String>,
-    /// 规划输入（183 号）：非空时替换 write-next 的自动 plan——时间线节拍
-    /// 「按此节拍写下一章」的引擎侧出口。TS 回退端同名键收下但忽略。
+    /// 规划输入（183 号）：非空时作为 planner 的 `external_context` 重跑
+    /// governed plan——时间线节拍「按此节拍写下一章」的引擎侧出口；空/缺时
+    /// 复用持久化 plan。481 号注释纠偏：TS 回退端同样透传给 planner
+    /// （resolveGovernedPlan→planChapter），并非「收下但忽略」。
     #[serde(default)]
     pub context: Option<String>,
 }
