@@ -1742,7 +1742,10 @@ async function loadStudioBookListSummary(
 ): Promise<StudioBookListSummary> {
   const book = await state.loadBookConfig(bookId);
   const nextChapter = await state.getNextChapterNumber(bookId);
-  return { ...book, chaptersWritten: nextChapter - 1 };
+  // 487 号：version 不入契约（对齐 Rust 列表形状——前端零消费，双端差分剔除）。
+  // version 由 book.json 透传（类型未声明），收窄后剔除。
+  const { version: _version, ...bookRest } = book as typeof book & { version?: number };
+  return { ...bookRest, chaptersWritten: nextChapter - 1 };
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -3727,9 +3730,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     try {
       const book = await state.loadBookConfig(id);
+      // 487 号：version 不入契约（同 loadStudioBookListSummary，对齐 Rust 形状）。
+      const { version: _bookVersion, ...bookWithoutVersion } = book as typeof book & { version?: number };
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book, chapters, nextChapter });
+      return c.json({ book: bookWithoutVersion, chapters, nextChapter });
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
@@ -6640,7 +6645,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8").catch(() => ""),
       ),
     ).filter((card) => !known.has(card.name));
-    return c.json({ cards: [...fileCards, ...derived], seeded: derived.length > 0 });
+    // 487 号：seeded 不入契约（对齐 Rust 形状——前端只读 cards，零消费）。
+    return c.json({ cards: [...fileCards, ...derived] });
   });
 
   app.put("/api/v1/books/:id/codex", async (c) => {
