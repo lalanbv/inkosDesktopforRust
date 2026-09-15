@@ -145,7 +145,11 @@ export function AssetLibraryPanel({ bookId }: { bookId?: string }) {
           {KINDS.map((entry) => (
             <button
               key={entry.value}
-              onClick={() => setKind(entry.value)}
+              onClick={() => {
+                setKind(entry.value);
+                // id 由名称派生不带库前缀，跨库同 id 资产会沿用旧展开态串显——切库即清
+                setExpandedId(null);
+              }}
               className={`px-2 py-1 text-[11px] rounded-md border ${kind === entry.value ? "border-primary text-primary font-bold" : "border-border text-muted-foreground"}`}
             >
               {tr(entry.label, entry.en)}
