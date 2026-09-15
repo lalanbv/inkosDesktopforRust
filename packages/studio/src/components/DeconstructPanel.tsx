@@ -29,7 +29,6 @@ export function DeconstructPanel({ bookId }: { bookId: string }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [markdown, setMarkdown] = useState<string | null>(null);
-  const [publishedId, setPublishedId] = useState<string | null>(null);
 
   const parseChapters = (): DeconChapterInput[] => {
     const chapters: DeconChapterInput[] = [];
@@ -99,7 +98,6 @@ export function DeconstructPanel({ bookId }: { bookId: string }) {
         },
       );
       setMarkdown(data.markdown);
-      setPublishedId(data.publishedMaterialId ?? null);
       setNotice(
         data.publishedMaterialId
           ? tr(`已发布到材料池：${data.publishedMaterialId}`, `Published to materials: ${data.publishedMaterialId}`)
