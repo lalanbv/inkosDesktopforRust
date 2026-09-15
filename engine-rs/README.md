@@ -49,6 +49,11 @@ cargo test --features export-bindings
 8. **golden 差分骨架**（406 号定型）：Rust 差分测试先写 input 层级断言
    （`vector["input"]["字段"]`，TS 真源嵌套层级常致误读）；浮点期望值
    golden 生成必须与 Rust 同算法（floor vs round 逐字对齐）。
+9. **PUT body 形状双端逐键对照**（478/480 号）：变更类端点的 body 键名与
+   包裹层（如 director 的 `{patch}`）必须双端逐键对照——478 号坐实 Node
+   回退端读顶层键而客户端与 Rust 均发 `{patch}`，保存静默 no-op 且返回 ok。
+   480 号全量 30 端点复核零漂移；新增端点时同步核对前端载荷/TS handler/
+   Rust handler 三方一致。
 
 ## 接入方式（Phase 1+）
 
