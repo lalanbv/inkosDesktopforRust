@@ -233,17 +233,62 @@ const engines = [];
   engines.push({ name: "rust", port: rustPort, root });
 }
 
+const makeEventCollector = (base) => {
+  const names = new Set();
+  const controller = new AbortController();
+  const task = (async () => {
+    try {
+      const res = await fetch(`${base}/api/v1/events`, {
+        headers: { Accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx);
+          buf = buf.slice(idx + 1);
+          if (line.startsWith("event:")) {
+            const name = line.slice(6).trim();
+            if (name && name !== "ping") names.add(name);
+          }
+        }
+      }
+    } catch {
+      // 流中断 = 收集结束
+    }
+  })();
+  return { names, stop: async () => { controller.abort(); await task.catch(() => {}); } };
+}
 try {
   for (const engine of engines) {
     const base = `http://127.0.0.1:${engine.port}`;
     await waitUntil(async () => (await fetch(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
+  }
+
+  // SSE 收集器：双引擎就绪后先挂流，再跑各腿 fixture（492 号活体事件差分）。
+  const collectors = [
+    { name: "node", ...makeEventCollector(`http://127.0.0.1:${nodePort}`) },
+    { name: "rust", ...makeEventCollector(`http://127.0.0.1:${rustPort}`) },
+  ];
+  await new Promise((r) => setTimeout(r, 800));
+
+  for (const engine of engines) {
     execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), engine.root, engine.port], {
       cwd: repoRoot,
       stdio: ["ignore", "ignore", "inherit"],
     });
   }
 
-  // ── 2. 逐端点归一化深比对 ──
+  // ── 2. SSE 事件面活体收集（492 号）──
+;
+
+// ── 3. 逐端点归一化深比对 ──
   const [nodeApi, rustApi] = [
     apiFor(`http://127.0.0.1:${nodePort}`, roots.node),
     apiFor(`http://127.0.0.1:${rustPort}`, roots.rust),
@@ -305,6 +350,38 @@ try {
       console.log(`    rust=${b.slice(0, 260)}`);
     }
   }
+  // 确定性广播触发：directions 端点必广播 director:start + complete|error。
+  const trigger = apiFor("", "");
+  const triggers = engines.map((engine) =>
+    fetch(`http://127.0.0.1:${engine.port}/api/v1/director/directions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inspiration: { premise: "SSE 差分探针。", keywords: [] }, count: 2 }),
+    }).then((r) => r.text()).catch(() => "fetch-error"),
+  );
+  await Promise.all(triggers);
+  // 宽限期：node 侧 LLM 失败重试/回包可能迟于 rust（492 号观察），留 3s 再停表。
+  await new Promise((r) => setTimeout(r, 3000));
+  for (const collector of collectors) await collector.stop();
+
+  // ── SSE 事件名集合比对（416 号静态对照的活体升级）──
+  const [nodeCol, rustCol] = collectors;
+  // 终态归一化（492 号）：directions 触发在双端必有且仅有一个终态事件，
+  // 但容错口径不同——TS 对 mock 的 propose 兜底响应报 director:error，
+  // Rust 容错空结果报 director:complete。等价类归并后再比集合。
+  const normalize = (names) => new Set([...names].map((n) => (n === "director:complete" || n === "director:error" ? "director:terminal" : n)));
+  const nodeNames = normalize(nodeCol.names);
+  const rustNames = normalize(rustCol.names);
+  const onlyNode = [...nodeNames].filter((n) => !rustNames.has(n));
+  const onlyRust = [...rustNames].filter((n) => !nodeNames.has(n));
+  console.log(`[diff] SSE 事件数：node=${nodeNames.size} rust=${rustNames.size}（director 终态归一等价）`);
+  console.log(`[diff] node 事件：${[...nodeCol.names].sort().join(", ")}`);
+  console.log(`[diff] rust 事件：${[...rustCol.names].sort().join(", ")}`);
+  if (onlyNode.length) console.log(`✗ 仅 node 广播：${onlyNode.join(", ")}`);
+  if (onlyRust.length) console.log(`✗ 仅 rust 广播：${onlyRust.join(", ")}`);
+  if (onlyNode.length || onlyRust.length) divergences += 1;
+  else console.log(`✓ SSE 事件名集合双端一致`);
+
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;
 } catch (error) {
