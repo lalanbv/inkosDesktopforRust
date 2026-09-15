@@ -12,7 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    RUST_ENGINE_DIR_NAME, RUST_SERVER_BIN_NAME, RUST_STATIC_DIR_NAME,
+    RUST_ENGINE_DIR_NAME, RUST_GENRES_DIR_NAME, RUST_SERVER_BIN_NAME,
+    RUST_SKILLS_DIR_NAME, RUST_STATIC_DIR_NAME,
 };
 use crate::paths::PathResolver;
 use crate::supervisor::LaunchSpec;
@@ -73,6 +74,36 @@ pub fn resolve_server_bin(
 ///
 /// 缺失 → `None`（纯 API 模式：引擎仍健康可探 `/api/v1/health`，但 webview
 /// 导航 `/` 会 404——dev 未构建前端时的预期形态，调用方告警提示）。
+/// 解析引擎内置技能/题材目录（489 号部署缺口修复）。
+///
+/// 桌面默认引擎的 builtin 根 = env 或 `assets/*` 相对 CWD，而 cwd=用户项目根
+/// 必缺失 → 15 内置技能/15 内置题材静默不可用（488 号差分器坐实 16 vs 1 /
+/// 15 vs 2）。打包副本 = engine-rust/{skills,genres}（desktop-package-rust-
+/// engine.sh 组装）；dev 回退 = 仓根 packages/core/{skills,genres}（TS 同源）。
+/// 两目录必须同时在场才返回（半套不如不注入，保持引擎 env/缺省语义单一）。
+pub fn resolve_builtin_asset_dirs(
+    resource_dir: Option<&Path>,
+    _dev_repo_root: &Path,
+) -> Option<(PathBuf, PathBuf)> {
+    if let Some(rd) = resource_dir {
+        let engine_dir = rd.join(RUST_ENGINE_DIR_NAME);
+        let skills = engine_dir.join(RUST_SKILLS_DIR_NAME);
+        let genres = engine_dir.join(RUST_GENRES_DIR_NAME);
+        if skills.is_dir() && genres.is_dir() {
+            return Some((skills, genres));
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let skills = _dev_repo_root.join("packages").join("core").join("skills");
+        let genres = _dev_repo_root.join("packages").join("core").join("genres");
+        if skills.is_dir() && genres.is_dir() {
+            return Some((skills, genres));
+        }
+    }
+    None
+}
+
 pub fn resolve_static_dir(
     resource_dir: Option<&Path>,
     _dev_repo_root: &Path,
@@ -111,6 +142,7 @@ pub fn build_launch<R: PathResolver>(
     port: u16,
     server_bin: &Path,
     static_dir: Option<&Path>,
+    builtin_dirs: Option<&(PathBuf, PathBuf)>,
 ) -> LaunchSpec {
     let mut env = HashMap::new();
     env.insert("INKOS_PORT".to_string(), port.to_string());
@@ -122,6 +154,17 @@ pub fn build_launch<R: PathResolver>(
         env.insert(
             "INKOS_STATIC_DIR".to_string(),
             dir.to_string_lossy().into_owned(),
+        );
+    }
+    if let Some((skills_dir, genres_dir)) = builtin_dirs {
+        // 489 号：内置技能/题材根注入——缺失时默认引擎静默丢 15 技能/15 题材。
+        env.insert(
+            "INKOS_BUILTIN_SKILLS_DIR".to_string(),
+            skills_dir.to_string_lossy().into_owned(),
+        );
+        env.insert(
+            "INKOS_BUILTIN_GENRES_DIR".to_string(),
+            genres_dir.to_string_lossy().into_owned(),
         );
     }
     LaunchSpec {
@@ -242,7 +285,7 @@ mod tests {
         let bin = PathBuf::from("/opt/engine-rust/inkos-engine-server");
         let static_dir = PathBuf::from("/opt/engine-rust/static");
 
-        let spec = build_launch(&paths, 7788, &bin, Some(&static_dir));
+        let spec = build_launch(&paths, 7788, &bin, Some(&static_dir), None);
         assert_eq!(spec.program, "/opt/engine-rust/inkos-engine-server");
         assert!(spec.args.is_empty(), "Rust 引擎配置全走 env，无 args");
         assert_eq!(spec.env.get("INKOS_PORT").unwrap(), "7788");
@@ -261,10 +304,54 @@ mod tests {
             proj: PathBuf::from("/tmp/proj"),
         };
         let bin = PathBuf::from("/opt/engine-rust/inkos-engine-server");
-        let spec = build_launch(&paths, 7788, &bin, None);
+        let spec = build_launch(&paths, 7788, &bin, None, None);
         assert!(
             !spec.env.contains_key("INKOS_STATIC_DIR"),
             "无静态面不应注入空 INKOS_STATIC_DIR（空值会被 bin 当目录解析）"
         );
+    }
+
+    #[test]
+    fn build_launch_injects_builtin_dirs_env() {
+        // 489 号：内置技能/题材根注入——桌面默认引擎此前 cwd=项目根必缺失
+        // assets/*，静默丢 15 技能/15 题材（双引擎差分器坐实）。
+        let paths = DummyPaths {
+            proj: PathBuf::from("/tmp/proj"),
+        };
+        let bin = PathBuf::from("/opt/engine-rust/inkos-engine-server");
+        let builtin = (
+            PathBuf::from("/opt/engine-rust/skills"),
+            PathBuf::from("/opt/engine-rust/genres"),
+        );
+        let spec = build_launch(&paths, 7788, &bin, None, Some(&builtin));
+        assert_eq!(
+            spec.env.get("INKOS_BUILTIN_SKILLS_DIR").unwrap(),
+            "/opt/engine-rust/skills"
+        );
+        assert_eq!(
+            spec.env.get("INKOS_BUILTIN_GENRES_DIR").unwrap(),
+            "/opt/engine-rust/genres"
+        );
+
+        let spec_without = build_launch(&paths, 7788, &bin, None, None);
+        assert!(!spec_without.env.contains_key("INKOS_BUILTIN_SKILLS_DIR"));
+        assert!(!spec_without.env.contains_key("INKOS_BUILTIN_GENRES_DIR"));
+    }
+
+    #[test]
+    fn resolve_builtin_asset_dirs_requires_both_dirs() {
+        let resource = tempfile::tempdir().unwrap();
+        let dev_root = tempfile::tempdir().unwrap();
+        let engine_dir = resource.path().join(RUST_ENGINE_DIR_NAME);
+        mkdir_all(&engine_dir.join(RUST_SKILLS_DIR_NAME));
+        // genres 缺失 → 不注入半套
+        assert!(resolve_builtin_asset_dirs(Some(resource.path()), dev_root.path()).is_none());
+        mkdir_all(&engine_dir.join(RUST_GENRES_DIR_NAME));
+        let resolved = resolve_builtin_asset_dirs(Some(resource.path()), dev_root.path());
+        assert!(resolved.is_some(), "skills+genres 双在 → 注入");
+    }
+
+    fn mkdir_all(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
     }
 }

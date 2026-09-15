@@ -39,6 +39,14 @@ pub const RUST_SERVER_BIN_NAME: &str = "inkos-engine-server";
 /// INKOS_STATIC_DIR 直连面）。
 pub const RUST_STATIC_DIR_NAME: &str = "static";
 
+/// Rust 引擎内置技能目录名（engine-rust/skills = packages/core/skills 副本，
+/// INKOS_BUILTIN_SKILLS_DIR 直连面——489 号部署缺口修复）。
+pub const RUST_SKILLS_DIR_NAME: &str = "skills";
+
+/// Rust 引擎内置题材目录名（engine-rust/genres = packages/core/genres 副本，
+/// INKOS_BUILTIN_GENRES_DIR 直连面——489 号部署缺口修复）。
+pub const RUST_GENRES_DIR_NAME: &str = "genres";
+
 /// 后端选择 env 覆盖键（`rust`|`node`，大小写不敏感；优先于配置文件）。
 pub const ENGINE_BACKEND_ENV: &str = "INKOS_ENGINE_BACKEND";
 

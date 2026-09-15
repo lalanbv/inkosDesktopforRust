@@ -36,6 +36,12 @@ rm -rf "$DEST"
 mkdir -p "$DEST/static"
 cp "$BIN" "$DEST/inkos-engine-server"
 
+# 489 号：内置技能/题材随包（engine-rust/{skills,genres}）——壳层启动注入
+# INKOS_BUILTIN_SKILLS_DIR / INKOS_BUILTIN_GENRES_DIR。缺这份资源，桌面默认
+# 引擎静默丢 15 内置技能/15 内置题材（双引擎差分器坐实）。
+cp -R "$ROOT/packages/core/skills" "$DEST/skills"
+cp -R "$ROOT/packages/core/genres" "$DEST/genres"
+
 if [ -f "$ROOT/packages/studio/dist/index.html" ]; then
   # 一致性闸门：duel 桩（34 字节 index）不得混入发布资源。
   SIZE="$(stat -f%z "$ROOT/packages/studio/dist/index.html" 2>/dev/null || stat -c%s "$ROOT/packages/studio/dist/index.html")"

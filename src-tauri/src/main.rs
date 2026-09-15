@@ -722,11 +722,24 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                         "[main] 引擎后端 = rust（inkos-engine-server: {}）",
                         bin.display()
                     );
+                    // 489 号：内置技能/题材根注入——桌面默认引擎 cwd=项目根，
+                    // assets/* 缺失导致 15 内置技能/15 内置题材静默不可用。
+                    let builtin_dirs =
+                        inkos_desktop::engine::rustbin::resolve_builtin_asset_dirs(
+                            resource_dir.as_deref(),
+                            dev_repo_root,
+                        );
+                    if builtin_dirs.is_none() {
+                        eprintln!(
+                            "[main] Rust 引擎无内置技能/题材资源（engine-rust/{{skills,genres}} 缺失）——agent 技能与内置题材将不可用，请重跑 desktop-package-rust-engine.sh"
+                        );
+                    }
                     let spec = inkos_desktop::engine::rustbin::build_launch(
                         &paths,
                         port,
                         &bin,
                         static_dir.as_deref(),
+                        builtin_dirs.as_ref(),
                     );
                     (
                         spec,
