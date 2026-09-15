@@ -8153,15 +8153,17 @@ export async function startStudioServer(
 
     // SPA fallback — serve index.html for all non-API routes
     const indexPath = joinPath(options.staticDir!, "index.html");
-    if (existsSync(indexPath)) {
-      const indexHtml = await readFileFs(indexPath, "utf-8");
-      app.get("*", (c) => {
-        if (c.req.path.startsWith("/api/v1/")) return c.notFound();
-        // 483 号：SPA 入口 no-store（对齐 Rust 469 号）——缺省时浏览器缓存旧
-        // 入口会跑旧 bundle，前端发版后表现为"改了没生效"。
+    // 507 号（对齐 Rust 449 号）：入口按请求时读而非启动缓存——前端重建后
+    // 旧入口引用的 hash 资源已不存在，启动期缓存会白屏到重启为止。
+    app.get("*", async (c) => {
+      if (c.req.path.startsWith("/api/v1/")) return c.notFound();
+      try {
+        const indexHtml = await readFileFs(joinPath(options.staticDir!, "index.html"), "utf-8");
         return c.html(indexHtml, 200, { "Cache-Control": "no-store" });
-      });
-    }
+      } catch {
+        return c.notFound();
+      }
+    });
   }
 
   console.log(`InkOS Studio running on http://localhost:${port}`);
