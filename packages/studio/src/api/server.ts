@@ -3492,7 +3492,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     } catch {
       existing = [];
     }
-    const merged = core.mergeExperienceEntries(existing as never, body.entries as never);
+    let merged;
+    try {
+      // 495 号：条目级校验失败对齐 Rust typed-extractor 的 422（此前 500）。
+      merged = core.mergeExperienceEntries(existing as never, body.entries as never);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+    }
     await mkdir(join(path, ".."), { recursive: true });
     await writeFile(path, JSON.stringify({ version: 1, entries: merged }, null, 2), "utf-8");
     return c.json({ ok: true, entries: merged });

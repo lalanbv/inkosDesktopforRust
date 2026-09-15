@@ -308,6 +308,24 @@ try {
     [`/api/v1/books/${BOOK}/chapter-review-mode`, { mode: "manual" }],
     [`/api/v1/books/${BOOK}/series-id`, { seriesId: null }],
   ];
+  // 错误面契约（495 号）：非法载荷双端一致 422——Rust typed-extractor 拒绝 /
+  // TS 显式校验（此前 node=500 vs rust=422 分歧，已对齐）。
+  const ERROR_FACE = [
+    [`/api/v1/books/${BOOK}/experience`, { entries: [{ id: "bad_probe", kind: "technique" }] }],
+  ];
+  for (const [path, body] of ERROR_FACE) {
+    const payload = JSON.stringify(body);
+    const nodeStatus = (await nodeApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
+    const rustStatus = (await rustApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
+    compared += 1;
+    if (nodeStatus === rustStatus && nodeStatus === 422) {
+      console.log(`✓ PUT ${path} 非法载荷双端 422`);
+    } else {
+      divergences += 1;
+      console.log(`✗ PUT ${path} 非法载荷：node=${nodeStatus} rust=${rustStatus}（期望双端 422）`);
+    }
+  }
+
   for (const [path, body] of WRITE_SET) {
     const payload = JSON.stringify(body);
     const nodeStatus = (await nodeApi(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload })).status;
