@@ -11,6 +11,17 @@ interface DirectorSession {
   readonly updatedAt?: string;
 }
 
+/** 508 号：方向候选（core DirectionCandidate 同形；置信度 0–1）。 */
+interface DirectionCandidate {
+  readonly id: string;
+  readonly title: string;
+  readonly hook: string;
+  readonly genre: string;
+  readonly synopsis: string;
+  readonly differentiator: string;
+  readonly confidence: number;
+}
+
 interface Payload {
   readonly session: DirectorSession | null;
   readonly savedChapters: number;
@@ -26,7 +37,7 @@ type DirectorSessionRunMode = "ready-stop" | "range" | "full-book";
 
 /**
  * G6/353 号：导演驾驶舱/跟进面板（书籍详情挂载，拉模式）。
- * 灵感卡编辑 + 运行模式选择 + 会话保存 + G9 续跑建议注入。
+ * 灵感卡编辑 + 方向候选生成 + 运行模式选择 + 会话保存 + G9 续跑建议注入。
  */
 export function DirectorPanel({ bookId }: { bookId: string }) {
   const [premise, setPremise] = useState("");
@@ -37,6 +48,9 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
   const [stage, setStage] = useState<string>("inspiration");
   const [savedChapters, setSavedChapters] = useState(0);
   const [resumeAdvice, setResumeAdvice] = useState("");
+  // 508 号：方向候选生成（354 号端点首次 UI 接线）。
+  const [directions, setDirections] = useState<DirectionCandidate[]>([]);
+  const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -62,6 +76,44 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
     };
   }, [bookId]);
 
+  // 508 号：方向候选生成——354 号端点首次 UI 接线（premise 必填守卫）。
+  const generateDirections = async () => {
+    if (!premise.trim()) {
+      setNotice(tr("请先填写一句话灵感", "Write a one-line premise first"));
+      return;
+    }
+    setGenerating(true);
+    setNotice("");
+    try {
+      const data = await fetchJson<{ directions: DirectionCandidate[] }>(
+        `/api/v1/director/directions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ inspiration: { premise, keywords }, count: 3 }),
+        },
+      );
+      setDirections(data.directions ?? []);
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e));
+    }
+    setGenerating(false);
+  };
+
+  // 508 号：选用候选 → 会话 selectedDirection（幂等重放由引擎 PUT 语义承担）。
+  const selectDirection = (candidate: DirectionCandidate) => {
+    try {
+      void fetchJson(`/books/${encodeURIComponent(bookId)}/director`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patch: { selectedDirection: candidate } }),
+      });
+      setNotice(`已选用方向：${candidate.title}`);
+    } catch {
+      setNotice("选用失败，请重试");
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     try {
@@ -72,7 +124,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
           patch: {
             runMode,
             stage,
-              inspiration: { premise, keywords },
+            inspiration: { premise, keywords },
           },
         }),
       });
@@ -115,6 +167,13 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         >
           {saving ? tr("保存中…", "Saving…") : tr("保存", "Save")}
         </button>
+        <button
+          onClick={generateDirections}
+          disabled={generating}
+          className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-muted/30 disabled:opacity-30"
+        >
+          {tr("生成方向候选", "Generate directions")}
+        </button>
       </div>
       <div className="text-xs text-muted-foreground">
         {tr("阶段", "Stage")}: <span className="text-foreground">{stage}</span>
@@ -125,6 +184,27 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         <div className="text-xs text-muted-foreground">
           {tr("续跑建议", "Resume advice")}: {resumeAdvice}
         </div>
+      )}
+      {directions.length > 0 && (
+        <ul className="space-y-1">
+          {directions.map((candidate) => (
+            <li
+              key={candidate.id}
+              className="text-xs border border-border/40 rounded-md px-2 py-1 space-y-0.5 cursor-pointer hover:bg-muted/30"
+              onClick={() => selectDirection(candidate)}
+            >
+              <div className="font-medium text-foreground">
+                {candidate.title}
+                <span className="ml-2 text-muted-foreground font-normal">{candidate.genre}</span>
+                <span className="ml-2 text-muted-foreground/70">
+                  {tr("置信度", "confidence")} {(candidate.confidence * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="text-muted-foreground">{candidate.hook}</div>
+              <div className="text-muted-foreground/70">{candidate.differentiator}</div>
+            </li>
+          ))}
+        </ul>
       )}
       {notice && <div className="text-xs text-muted-foreground">{notice}</div>}
     </div>
