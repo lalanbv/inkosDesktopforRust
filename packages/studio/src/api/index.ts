@@ -25,6 +25,22 @@ if (!existsSync(join(distDir, "index.html"))) {
 }
 
 startStudioServer(root, port, { staticDir: distDir }).catch((e) => {
-  console.error("Failed to start studio:", e);
+  const message = e instanceof Error ? e.message : String(e);
+  // 510 号：常见启动失败给双语可行动指引；未知错误保留完整堆栈便于排障。
+  if (message.includes("inkos.json not found")) {
+    console.error(
+      [
+        "",
+        `启动失败：${root} 不是 InkOS 项目目录（缺 inkos.json）。`,
+        "Failed to start studio: not an InkOS project directory (inkos.json missing).",
+        "",
+        "请改用项目根启动：把项目目录作为第一个参数传入，或设置 INKOS_PROJECT_ROOT。",
+        "Pass the project root as the first CLI argument, or set INKOS_PROJECT_ROOT.",
+        "尚未创建项目时，先在目标目录执行 inkos init。",
+      ].join("\n"),
+    );
+  } else {
+    console.error("Failed to start studio:", e);
+  }
   process.exit(1);
 });
