@@ -2755,14 +2755,15 @@ export class PipelineRunner {
     const content = await this.readChapterContent(bookDir, targetChapter);
     const baselineChapter = targetChapter - 1;
     const baselineStoryDir = join(bookDir, "story", "snapshots", String(baselineChapter));
+    // 基线快照缺失时回退当前真相文件（483 号对齐 Rust run_resync_chain 的
+    // unwrap_or_default 容错——裸 fixture 根/未写快照的书籍此前在回退端直接失败）。
     const [oldState, oldHooks] = await Promise.all([
       readFile(join(baselineStoryDir, "current_state.md"), "utf-8"),
       readFile(join(baselineStoryDir, "pending_hooks.md"), "utf-8"),
-    ]).catch((error) => {
-      throw new Error(
-        `Cannot sync chapter ${targetChapter} safely: baseline snapshot ${baselineChapter} is unavailable (${String(error)})`,
-      );
-    });
+    ]).catch(async () => [
+      await readFile(join(bookDir, "story", "current_state.md"), "utf-8").catch(() => ""),
+      await readFile(join(bookDir, "story", "pending_hooks.md"), "utf-8").catch(() => ""),
+    ]);
 
     const reducedControlInput = await this.createGovernedArtifacts(
       book,

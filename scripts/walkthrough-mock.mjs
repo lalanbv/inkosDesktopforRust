@@ -87,6 +87,7 @@ http.createServer((req, res) => {
       else if (sys.includes("审稿")) content = "PASS\n95";
       else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
       else if (sys.includes("continuity validator")) content = "PASS";
+      else if (sys.includes("事实提取专家")) content = "（无新增可观察事实变化。）"; // 483 号：observer 阶段锚点（空内容会被 TS 管线判空流致命）
       else if (lastRole === "user") {
         // propose_action 工具调用（231 号协议：action 必填 + createBook 结构化）。
         // toolCallId 必须逐次唯一（436 号）：前端确认卡锁定键=execId（派生自

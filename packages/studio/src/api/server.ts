@@ -2683,6 +2683,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     origin: (origin) => (originIsAllowed(origin, corsExtraOrigins) ? origin : null),
   }));
 
+  // API 面禁缓存（483 号，对齐 Rust 445 号 api_no_store）：API 响应可被浏览器
+  // 启发式缓存时，回退端下 RunLogPanel/书列表等读面会间歇消失或陈旧。
+  app.use("/api/v1/*", async (c, next) => {
+    await next();
+    c.header("Cache-Control", "no-store");
+  });
+
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
     if (error instanceof ApiError) {
@@ -8098,7 +8105,9 @@ export async function startStudioServer(
       const indexHtml = await readFileFs(indexPath, "utf-8");
       app.get("*", (c) => {
         if (c.req.path.startsWith("/api/v1/")) return c.notFound();
-        return c.html(indexHtml);
+        // 483 号：SPA 入口 no-store（对齐 Rust 469 号）——缺省时浏览器缓存旧
+        // 入口会跑旧 bundle，前端发版后表现为"改了没生效"。
+        return c.html(indexHtml, 200, { "Cache-Control": "no-store" });
       });
     }
   }

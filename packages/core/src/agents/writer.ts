@@ -1107,6 +1107,8 @@ ${overrides}\n`;
       chapterNumber: baselineChapter,
       language,
     });
+    // 483 号：基线快照整体缺失（裸根/未写快照）= 无运行时状态工件可用。
+    if (!snapshot) return null;
     return buildRuntimeStateArtifactsFromSnapshot({
       snapshot,
       delta: safeDelta,

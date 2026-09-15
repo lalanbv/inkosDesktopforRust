@@ -57,7 +57,7 @@ export async function loadRuntimeStateSnapshotAtChapter(params: {
   readonly bookDir: string;
   readonly chapterNumber: number;
   readonly language: "zh" | "en";
-}): Promise<RuntimeStateSnapshot> {
+}): Promise<RuntimeStateSnapshot | null> {
   const snapshotDir = join(
     params.bookDir,
     "story",
@@ -79,11 +79,23 @@ export async function loadRuntimeStateSnapshotAtChapter(params: {
     );
   }
 
-  const [currentStateMarkdown, hooksMarkdown, summariesMarkdown] = await Promise.all([
-    readFile(join(snapshotDir, "current_state.md"), "utf-8"),
-    readFile(join(snapshotDir, "pending_hooks.md"), "utf-8"),
-    readFile(join(snapshotDir, "chapter_summaries.md"), "utf-8").catch(() => ""),
-  ]);
+  // 483 号：markdown 回退缺失（快照目录整体不存在，如裸 fixture 根）= 快照
+  // 不在场的合法形态——返回 null 走 IfPresent 调用方的无快照分支，
+  // 对齐 Rust run_resync_chain 对缺失基线的容错，不得抛 ENOENT。
+  let currentStateMarkdown: string;
+  let hooksMarkdown: string;
+  try {
+    [currentStateMarkdown, hooksMarkdown] = await Promise.all([
+      readFile(join(snapshotDir, "current_state.md"), "utf-8"),
+      readFile(join(snapshotDir, "pending_hooks.md"), "utf-8"),
+    ]);
+  } catch {
+    return null;
+  }
+  const summariesMarkdown = await readFile(
+    join(snapshotDir, "chapter_summaries.md"),
+    "utf-8",
+  ).catch(() => "");
   const markdownSnapshot: RuntimeStateSnapshot = {
     manifest: StateManifestSchema.parse({
       schemaVersion: 2,

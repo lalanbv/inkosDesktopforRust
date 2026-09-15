@@ -261,6 +261,8 @@ describe("runtime-state-store memory helpers", () => {
       chapterNumber: 0,
       language: "en",
     });
+    expect(snapshot).not.toBeNull();
+    if (!snapshot) return;
 
     expect(snapshot.manifest.lastAppliedChapter).toBe(0);
     expect(snapshot.hooks.hooks).toEqual([
@@ -480,5 +482,17 @@ describe("runtime-state-store memory helpers", () => {
     ]);
     expect(artifacts.snapshot.hooks.hooks).toHaveLength(2);
     expect(artifacts.snapshot.hooks.hooks.map((hook) => hook.hookId)).toContain("anonymous-source-scope");
+  });
+
+  // 483 号：快照目录整体缺失（裸 fixture 根/未写快照的书籍）= 快照不在场的
+  // 合法形态——必须返回 null 而非抛 ENOENT（对齐 Rust resync 的基线容错）。
+  it("returns null when the snapshot directory is entirely missing", async () => {
+    const bookDir = await mkdtemp(join(tmpdir(), "inkos-runtime-state-missing-"));
+    const snapshot = await loadRuntimeStateSnapshotAtChapter({
+      bookDir,
+      chapterNumber: 0,
+      language: "en",
+    });
+    expect(snapshot).toBeNull();
   });
 });
