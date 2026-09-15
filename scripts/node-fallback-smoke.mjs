@@ -36,6 +36,7 @@ const mockPort = argOf("--mock-port", "1234");
 const keep = has("--keep");
 
 const children = [];
+const sharedChildren = [];
 let failures = 0;
 
 const check = (name, ok, detail = "") => {
@@ -46,7 +47,7 @@ const check = (name, ok, detail = "") => {
 const startChild = (cmd, cmdArgs, opts, logPath, shared = false) => {
   const out = openSync(logPath, "a");
   const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: false });
-  if (!shared) children.push(child);
+  (shared ? sharedChildren : children).push(child);
   return child;
 };
 
@@ -212,6 +213,14 @@ for (const leg of legs) {
 }
 
 for (const child of children.splice(0)) {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // already exited
+  }
+}
+// 共享 mock 收尾同样要杀——否则进程悬挂持有管道（487 号后台卡死根因）。
+for (const child of sharedChildren.splice(0)) {
   try {
     child.kill("SIGTERM");
   } catch {

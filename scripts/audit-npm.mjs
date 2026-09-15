@@ -21,12 +21,11 @@ const REGISTRY = "https://registry.npmjs.org/";
  * 维护规则：新增条目必须给出定性理由与来源；移除条目即恢复拦截。
  */
 const ACCEPTED = new Map([
-  ["esbuild", { reason: "dev server 任意文件读类——仅本地开发面暴露，不进产物；补丁 0.28.1 需 vite 7 线跟进", since: "467 号" }],
-  // vitest/@vitest/mocker 已于 482 号升 vitest ^5.0.0（mocker 补丁线 >=4.1.11）修复，移出白名单；若回归会重新被拦截。
-  ["brace-expansion", { reason: "DoS 触发需攻击者可控 glob 模式；运行链（epub 导出）模式为内部静态串，dev 链（ts-morph/shadcn）非产物；补丁仅在 5.x（CJS 链跨 major 断裂）", since: "467 号" }],
+  // esbuild（491 号 vite 7.3.6+studio vite ^7.3.6 出清）、brace-expansion/
+  // postcss-selector-parser（491 号 override 直达补丁线）均已移出白名单；
+  // vitest/@vitest/mocker 已于 482 号修复。若回归会重新被拦截。
   ["fast-xml-parser", { reason: "pi-ai 0.67.1 精确钉（434 号安全先例）→aws-sdk 链，补丁需跨 major 5.x 且 Bedrock 默认未启用", since: "467 号" }],
-  ["postcss-selector-parser", { reason: "shadcn dev-only 低危 DoS", since: "467 号" }],
-  ["@ai-sdk/provider-utils", { reason: "ai@6.0.159 精确钉 4.0.23，补丁 4.0.33+ 需 provider 3.0.16（镜像缺）且破钉——LOW 级", since: "467 号" }],
+  ["@ai-sdk/provider-utils", { reason: "ai@6.0.x 精确钉 provider-utils 4.0.23（补丁 >=4.0.33 需 ai 7 major）——上游阻塞", since: "467 号" }],
 ]);
 
 const args = process.argv.slice(2);
