@@ -46,10 +46,13 @@ const waitUntil = async (fn, timeoutMs, label) => {
   }
   throw new Error(`等待超时：${label}`);
 };
-const apiFor = (base) => async (path) => {
+const apiFor = (base, root) => async (path) => {
   const res = await fetch(base + path);
+  const text = await res.text();
+  // 根路径归一化：doctor 等端点会回显各自的临时根绝对路径。
+  const normalized = root ? text.split(root).join("%ROOT%") : text;
   let body = null;
-  try { body = await res.json(); } catch { body = null; }
+  try { body = JSON.parse(normalized); } catch { body = null; }
   return { status: res.status, body };
 };
 
@@ -119,6 +122,8 @@ const firstDiffPath = (a, b, path = "") => {
 // 契约端点清单（GET；:id=镜花水月）。
 const BOOK = encodeURIComponent("镜花水月");
 
+/** 新增端点先经活体探测确认双端 200 再入列（488 号扩至 26 端点）。 */
+
 /**
  * 已知分歧豁免表（487 号）：路径段数组，"*" 匹配任意单段；命中子树整体剪除。
  * 每条必须注明备案依据——豁免=已知双端行为差异，不是错误默认放行。
@@ -133,6 +138,18 @@ const WAIVERS = new Map([
   [`/api/v1/asset-library/genre-base`, { reason: "种子内容双端各自撰写（364 号），canonical 化需产品决策", paths: [["assets"]] }],
   // 章节审计 issue 明细随双端机检维度差异波动
   [`/api/v1/books/${BOOK}`, { reason: "审计 issue 明细随双端机检维度差异波动", paths: [["chapters", "*", "auditIssues"], ["nextChapter"]] }],
+  // 488 号扩展腿发现：
+  // skills/genres 内置清单双端不对齐（TS 16 技能/15 题材 vs Rust 1/2）——
+  // 内置包镜像缺口 + 既有二进制早于 builtin 合并面，重建需 cargo 解阻后评估
+  [`/api/v1/skills`, { reason: "内置技能包双端不对齐（16 vs 1）——移植缺口备案", paths: [["skills"]] }],
+  [`/api/v1/genres`, { reason: "内置题材清单不对齐（15 vs 2）——builtin 合并面/构建态待重建重验", paths: [["genres"]] }],
+  // 三库种子内容双端各自撰写（364 号）——canonical 化需产品决策
+  [`/api/v1/asset-library/progression-mode`, { reason: "种子内容分叉（364 号）——canonical 化需产品决策", paths: [["assets"]] }],
+  // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
+  [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
+  // lens rank 打分内部实现差异（展示面）；currentChapter 同 resync 备案
+  [`/api/v1/books/${BOOK}/context-lens/2`, { reason: "resync 管线内部装配差异（483/484 备案）：entry source/rank 随内部实现波动", paths: [["entries"]] }],
+  [`/api/v1/books/${BOOK}/roster-candidates`, { reason: "resync 架构分歧备案（483/484）", paths: [["currentChapter"]] }],
 ]);
 const ENDPOINTS = [
   "/api/v1/books",
@@ -149,6 +166,19 @@ const ENDPOINTS = [
   "/api/v1/asset-library/genre-base",
   "/api/v1/task-routing",
   "/api/v1/project/notify",
+  // 488 号扩展（活体探测双端 200）：
+  "/api/v1/sessions",
+  "/api/v1/translations",
+  "/api/v1/skills",
+  "/api/v1/style-profiles",
+  "/api/v1/radar/history",
+  "/api/v1/genres",
+  "/api/v1/asset-library/progression-mode",
+  "/api/v1/asset-library/world-sample",
+  "/api/v1/doctor",
+  `/api/v1/books/${BOOK}/chapters/2`,
+  `/api/v1/books/${BOOK}/context-lens/2`,
+  `/api/v1/books/${BOOK}/roster-candidates`,
 ];
 
 const preseed = (root) => {
@@ -193,6 +223,9 @@ const engines = [];
         INKOS_PROJECT_ROOT: root,
         INKOS_STATIC_DIR: join(studioDir, "dist"),
         INKOS_LLM_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
+        // 内置题材目录缺省相对 CWD——编排 cwd=repoRoot 与桌面壳不同，
+        // 显式钉到 fixture 预置的 assets 目录（488 号）。
+          INKOS_BUILTIN_GENRES_DIR: join(repoRoot, "packages", "core", "genres"),
       },
     },
     join(root, "server.log"),
@@ -211,7 +244,10 @@ try {
   }
 
   // ── 2. 逐端点归一化深比对 ──
-  const [nodeApi, rustApi] = [apiFor(`http://127.0.0.1:${nodePort}`), apiFor(`http://127.0.0.1:${rustPort}`)];
+  const [nodeApi, rustApi] = [
+    apiFor(`http://127.0.0.1:${nodePort}`, roots.node),
+    apiFor(`http://127.0.0.1:${rustPort}`, roots.rust),
+  ];
   let divergences = 0;
   let compared = 0;
   for (const endpoint of ENDPOINTS) {
