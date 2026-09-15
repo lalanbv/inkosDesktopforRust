@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { ReviserAgent } from "../../agents/reviser.js";
 import type { AuditIssue } from "../../agents/continuity.js";
 import { makeAgentCtx, makeBookFixture, SAMPLE_CHAPTER, ZERO_USAGE } from "./eval-fixtures.js";
+import { spyOnLoose } from "../spy-loose.js";
 
 const CRITICAL_ISSUE: AuditIssue = {
   severity: "critical",
@@ -42,8 +43,7 @@ describe("eval: reviser (R8)", () => {
     const { root, bookDir } = await makeBookFixture("reviser-drift", "en");
     await mkdir(join(bookDir, "story"), { recursive: true });
     const agent = makeAgent(root);
-    const chatSpy = vi
-      .spyOn(ReviserAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat")
       .mockResolvedValue({ content: REVISION_RESPONSE, usage: ZERO_USAGE });
 
     try {
@@ -66,7 +66,7 @@ describe("eval: reviser (R8)", () => {
     const { root, bookDir } = await makeBookFixture("reviser-replay", "en");
     await mkdir(join(bookDir, "story"), { recursive: true });
     const agent = makeAgent(root);
-    vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: REVISION_RESPONSE,
       usage: ZERO_USAGE,
     });
@@ -84,8 +84,7 @@ describe("eval: reviser (R8)", () => {
     const { root, bookDir } = await makeBookFixture("reviser-guardrail", "en");
     await mkdir(join(bookDir, "story"), { recursive: true });
     const agent = makeAgent(root);
-    const chatSpy = vi
-      .spyOn(ReviserAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat")
       .mockResolvedValue({ content: REVISION_RESPONSE, usage: ZERO_USAGE });
 
     try {

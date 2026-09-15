@@ -59,7 +59,7 @@ async function extractPackedPackageJson(packageDir: string, packDir: string) {
   });
 }
 
-describe.sequential("publish packaging", () => {
+describe("publish packaging", () => { // vitest 5：describe.sequential 已移除；文件内默认即顺序执行。
   it("links internal source dependencies through the workspace", async () => {
     const cliPackageJson = await sourceCliPackageJsonPromise;
     const studioPackageJson = await sourceStudioPackageJsonPromise;

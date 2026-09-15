@@ -217,7 +217,7 @@ describe("Phase 5 hotfix 3 — broken frontmatter fallback", () => {
     // one for the shim fallback.
     expect(warnSpy).toHaveBeenCalled();
     const allWarnings = warnSpy.mock.calls
-      .map((call) => String(call[0] ?? ""))
+      .map((call: unknown[]) => String(call[0] ?? ""))
       .join("\n");
     expect(allWarnings).toMatch(/story_frame\.md frontmatter is malformed/);
     expect(allWarnings).toMatch(/compat shim/);

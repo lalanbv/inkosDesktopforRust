@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const proxyAgentMock = vi.fn((url: string) => ({ kind: "proxy-agent", url }));
+// vitest 5：vi.fn 的实现须为可构造的 function（箭头实现无法被 new）。
+const proxyAgentMock = vi.fn(function (this: unknown, url: string) {
+  return { kind: "proxy-agent", url };
+});
 
 vi.mock("undici", () => ({
   ProxyAgent: proxyAgentMock,

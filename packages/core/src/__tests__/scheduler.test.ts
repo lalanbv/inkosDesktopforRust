@@ -168,11 +168,14 @@ describe("Scheduler", () => {
     };
     const memorySpy = vi
       .spyOn(memoryModule, "MemoryDB")
-      .mockImplementation(() => ({
-        recordDebt: (debt: { bookId: string; status: string }) => {
-          recorded.push({ bookId: debt.bookId, status: debt.status });
-        },
-      }) as never);
+      // vitest 5：实现须为可构造的 function（箭头实现无法被 new）。
+      .mockImplementation(function (this: unknown) {
+        return {
+          recordDebt: (debt: { bookId: string; status: string }) => {
+            recorded.push({ bookId: debt.bookId, status: debt.status });
+          },
+        } as never;
+      });
 
     const writeOne = () =>
       (

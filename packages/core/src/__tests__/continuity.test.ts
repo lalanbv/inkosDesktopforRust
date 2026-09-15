@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContinuityAuditor } from "../agents/continuity.js";
+import { spyOnLoose } from "./spy-loose.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -130,7 +131,7 @@ describe("ContinuityAuditor", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat").mockResolvedValue({
       content: JSON.stringify({
         passed: true,
         issues: [],
@@ -203,7 +204,7 @@ describe("ContinuityAuditor", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat").mockResolvedValue({
       content: JSON.stringify({
         passed: true,
         issues: [],
@@ -299,7 +300,7 @@ describe("ContinuityAuditor", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat").mockResolvedValue({
       content: JSON.stringify({
         passed: true,
         issues: [],
@@ -390,7 +391,7 @@ describe("ContinuityAuditor", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat").mockResolvedValue({
       content: JSON.stringify({ passed: true, issues: [], summary: "ok" }),
       usage: ZERO_USAGE,
     });

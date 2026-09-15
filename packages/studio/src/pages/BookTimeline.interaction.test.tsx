@@ -19,7 +19,8 @@ const nav = {} as Nav;
 const t = ((key: string) => key) as TFunction;
 
 function renderDialog(overrides: {
-  onWriteFromBeat: ReturnType<typeof vi.fn>;
+  // vitest 5：ReturnType<typeof vi.fn> 含构造签名，不再可赋给普通回调——用具体签名。
+  onWriteFromBeat: (patch: { title: string; note: string }) => void;
   target?: { plotlineId: string; plotlineName: string; chapter: number; title: string; note: string };
 }) {
   const target = overrides.target ?? {

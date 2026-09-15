@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WriterAgent } from "../agents/writer.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
+import { spyOnLoose } from "./spy-loose.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -247,7 +248,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -436,7 +437,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -562,7 +563,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: "=== OBSERVATIONS ===\n- observed",
         usage: ZERO_USAGE,
@@ -678,7 +679,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -828,7 +829,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -961,7 +962,7 @@ describe("WriterAgent", () => {
       logger,
     });
 
-    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -1084,7 +1085,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -1215,7 +1216,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",
@@ -1365,7 +1366,7 @@ describe("WriterAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(WriterAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(WriterAgent.prototype, "chat")
       .mockResolvedValueOnce({
         content: [
           "=== CHAPTER_TITLE ===",

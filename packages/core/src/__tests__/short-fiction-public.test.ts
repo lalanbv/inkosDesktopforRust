@@ -11,6 +11,7 @@ import {
   validateShortFictionDraftForFinal,
 } from "../agents/short-fiction.js";
 import { saveSecrets } from "../llm/secrets.js";
+import { spyOnLoose } from "./spy-loose.js";
 import {
   extractGeminiImageBase64,
   extractImagesGenerationImage,
@@ -37,11 +38,9 @@ function fakeClient(): LLMClient {
 describe("public short-fiction chain", () => {
   it("gives outline generation enough output budget for models with a separate reasoning channel", async () => {
     const validOutline = `=== SHORT_FICTION_PLAN_TITLE ===\n电梯多一层\n=== SHORT_FICTION_PLAN ===\n## 12章完整方案`;
-    const createChat = vi
-      .spyOn(ShortFictionOutlineAgent.prototype as never, "chat" as never)
+    const createChat = spyOnLoose(ShortFictionOutlineAgent.prototype, "chat")
       .mockResolvedValue({ content: validOutline, usage: ZERO_USAGE });
-    const reviseChat = vi
-      .spyOn(ShortFictionOutlineReviserAgent.prototype as never, "chat" as never)
+    const reviseChat = spyOnLoose(ShortFictionOutlineReviserAgent.prototype, "chat")
       .mockResolvedValue({ content: validOutline, usage: ZERO_USAGE });
     const context = { client: fakeClient(), model: "fake", projectRoot: "/tmp" };
 
@@ -118,8 +117,7 @@ describe("public short-fiction chain", () => {
 旧正文有一处时间线问题。
 `, { expectedChapters: 1 });
 
-    const chatSpy = vi
-      .spyOn(ShortFictionDraftReviserAgent.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(ShortFictionDraftReviserAgent.prototype, "chat")
       .mockResolvedValue({
         content: `
 === SHORT_FICTION_TITLE ===

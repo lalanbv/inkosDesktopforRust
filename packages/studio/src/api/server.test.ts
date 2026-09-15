@@ -4481,7 +4481,7 @@ describe("createStudioServer daemon lifecycle", () => {
           content: [{ type: "text", text: "Short fiction completed." }],
           details: { kind: "short_fiction_created", storyId: "scoped-short" },
         };
-      }),
+      }) as never, // vitest 5：变体形状与基 mock 不变式冲突，旁路（482 号）
     }));
     loadBookSessionMock.mockResolvedValue({
       sessionId: "chat-scope-session",
@@ -4542,7 +4542,7 @@ describe("createStudioServer daemon lifecycle", () => {
           signal.addEventListener("abort", () => reject(new Error("This operation was aborted")));
         });
         return { content: [{ type: "text", text: "unreachable" }] };
-      }),
+      }) as never, // vitest 5：变体形状旁路（482 号）
     }));
     const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
@@ -4604,7 +4604,7 @@ describe("createStudioServer daemon lifecycle", () => {
         capturedSignal = signal;
         signal.throwIfAborted();
         return { content: [{ type: "text", text: "窗口外完成（不应到达）" }] };
-      }),
+      }) as never, // vitest 5：变体形状旁路（482 号）
     }));
     loadBookSessionMock.mockResolvedValue({
       sessionId,

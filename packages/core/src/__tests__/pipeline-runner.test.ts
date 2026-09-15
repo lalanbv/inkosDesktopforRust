@@ -1231,7 +1231,11 @@ describe("PipelineRunner", () => {
 
     const RealMemoryDB = memoryDbModule.MemoryDB;
     let constructorCalls = 0;
-    vi.spyOn(memoryDbModule, "MemoryDB").mockImplementation((...args: ConstructorParameters<typeof memoryDbModule.MemoryDB>) => {
+    // vitest 5：mockImplementation 须为可构造的 function（箭头实现无法被 new）。
+    vi.spyOn(memoryDbModule, "MemoryDB").mockImplementation(function (
+      this: unknown,
+      ...args: ConstructorParameters<typeof memoryDbModule.MemoryDB>
+    ) {
       if (constructorCalls === 1) {
         constructorCalls += 1;
         const error = new Error("database is locked");
@@ -1352,18 +1356,69 @@ describe("PipelineRunner", () => {
       writeFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "# Pending Hooks\n\n- Why the mentor vanished after the trial.\n", "utf-8"),
     ]);
 
-    const originalPlanChapter = PlannerAgent.prototype.planChapter;
-    const planChapter = vi.spyOn(PlannerAgent.prototype, "planChapter").mockImplementation(async function (this: PlannerAgent, input) {
-      const result = await originalPlanChapter.call(this, input);
+    // vitest 5：不再包裹真实 planChapter（spy 后原型方法自递归），改独立合成
+    // 实现——同文件 writeDraft governed-path 用例同款稳健模式。
+    const planChapter = vi.spyOn(PlannerAgent.prototype, "planChapter").mockImplementation(async (input) => {
+      const runtimeDir = join(input.bookDir, "story", "runtime");
+      await mkdir(runtimeDir, { recursive: true });
+      const goal = "Bring focus back to the mentor conflict.";
+      const memo = {
+        chapter: input.chapterNumber,
+        goal,
+        isGoldenOpening: true,
+        body: "",
+        threadRefs: [] as string[],
+      };
+      const intentMarkdown = [
+        "# Chapter Intent",
+        "",
+        "## Goal",
+        goal,
+        "",
+        "## Outline Node",
+        "Track the merchant guild trail.",
+        "",
+        "## Must Keep",
+        "- Lin Yue still hides the broken oath token.",
+        "",
+        "## Must Avoid",
+        "- none",
+        "",
+        "## Style Emphasis",
+        "- none",
+        "",
+        "## Conflicts",
+        "- none",
+        "",
+        "## Chapter Brief",
+        "- chapterType: confrontation",
+        "- isGoldenOpening: true",
+        "",
+        "### Beat Outline",
+        "- opening: Open on the conflict.",
+        "",
+        "### Hook Plan",
+        "- none",
+        "",
+        "### Props And Setting",
+        "- broken oath token",
+        "",
+      ].join("\n");
+      const runtimePath = join(runtimeDir, `chapter-${String(input.chapterNumber).padStart(4, "0")}.intent.md`);
+      await writeFile(runtimePath, intentMarkdown, "utf-8");
       return {
-        ...result,
-        memo: {
+        intent: {
           chapter: input.chapterNumber,
-          goal: result.intent.goal,
-          isGoldenOpening: true,
-          body: "",
-          threadRefs: [],
+          goal,
+          outlineNode: "Track the merchant guild trail.",
+          mustKeep: ["Lin Yue still hides the broken oath token."],
+          mustAvoid: [],
+          styleEmphasis: [],
         },
+        memo,
+        intentMarkdown,
+        plannerInputs: [runtimePath],
+        runtimePath,
       };
     });
     const composeChapter = vi.spyOn(ComposerModule, "composeGovernedChapter");

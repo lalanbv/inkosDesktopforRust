@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ReviserAgent } from "../agents/reviser.js";
 import { buildLengthSpec } from "../utils/length-metrics.js";
 import type { AuditIssue } from "../agents/continuity.js";
+import { spyOnLoose } from "./spy-loose.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -64,7 +65,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- repaired",
@@ -121,7 +122,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- repaired",
@@ -179,7 +180,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- repaired",
@@ -251,7 +252,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- 收紧了开头动作句。",
@@ -327,7 +328,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- removed the AI tell",
@@ -396,7 +397,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- restructured chapter pacing",
@@ -463,7 +464,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- fixed",
@@ -624,7 +625,7 @@ describe("ReviserAgent", () => {
       projectRoot: root,
     });
 
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- repaired",
@@ -738,7 +739,7 @@ describe("ReviserAgent", () => {
 
     // Model returns PATCHES when reviewer asked for REVISED_CONTENT — parser
     // must reject the patches and leave the chapter unchanged.
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- tried to patch but problem is structural",
@@ -817,7 +818,7 @@ describe("ReviserAgent", () => {
 
     // Model returns REVISED_CONTENT when reviewer asked for PATCHES — parser
     // must reject the rewrite (patch-only mode) and leave the chapter unchanged.
-    const chatSpy = vi.spyOn(ReviserAgent.prototype as never, "chat" as never).mockResolvedValue({
+    const chatSpy = spyOnLoose(ReviserAgent.prototype, "chat").mockResolvedValue({
       content: [
         "=== FIXED_ISSUES ===",
         "- rewrote whole chapter",

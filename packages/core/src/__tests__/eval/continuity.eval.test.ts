@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, vi } from "vitest";
 import { describe, expect, it } from "vitest";
 import { ContinuityAuditor } from "../../agents/continuity.js";
+import { spyOnLoose } from "../spy-loose.js";
 import {
   makeAgentCtx,
   makeBookFixture,
@@ -25,8 +26,7 @@ describe("eval: continuity auditor (R8)", () => {
   it("prompt keeps the structural-editor contract anchors", async () => {
     const { root, bookDir } = await makeBookFixture("drift", "en");
     const auditor = new ContinuityAuditor(makeAgentCtx(root));
-    const chatSpy = vi
-      .spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat")
       .mockResolvedValue({ content: SAMPLE_AUDIT_RESPONSE, usage: ZERO_USAGE });
 
     try {
@@ -53,8 +53,7 @@ describe("eval: continuity auditor (R8)", () => {
   it("replays the audit fixture into a structured AuditResult", async () => {
     const { root, bookDir } = await makeBookFixture("replay", "en");
     const auditor = new ContinuityAuditor(makeAgentCtx(root));
-    const spy = vi
-      .spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+    const spy = spyOnLoose(ContinuityAuditor.prototype, "chat")
       .mockResolvedValue({ content: SAMPLE_AUDIT_RESPONSE, usage: ZERO_USAGE });
 
     try {
@@ -78,8 +77,7 @@ describe("eval: continuity auditor (R8)", () => {
   it("chapter memo fixture flows into the audit prompt", async () => {
     const { root, bookDir } = await makeBookFixture("memo", "en");
     const auditor = new ContinuityAuditor(makeAgentCtx(root));
-    const chatSpy = vi
-      .spyOn(ContinuityAuditor.prototype as never, "chat" as never)
+    const chatSpy = spyOnLoose(ContinuityAuditor.prototype, "chat")
       .mockResolvedValue({ content: SAMPLE_AUDIT_RESPONSE, usage: ZERO_USAGE });
 
     try {

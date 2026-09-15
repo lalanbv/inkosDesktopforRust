@@ -26,6 +26,7 @@ import { computeHookDiagnostics, renderHookDiagnosticMarker } from "../utils/hoo
 import { ArchitectAgent } from "../agents/architect.js";
 import { ConsolidatorAgent } from "../agents/consolidator.js";
 import type { BookConfig } from "../models/book.js";
+import { spyOnLoose } from "./spy-loose.js";
 
 const ZERO_USAGE = {
   promptTokens: 0,
@@ -426,8 +427,8 @@ describe("Phase 7 hotfix 2 — reviewer gates critical severity on promoted", ()
         content: JSON.stringify({ passed: true, issues: [], summary: "ok" }),
         usage: ZERO_USAGE,
       });
-      vi.spyOn(ContinuityAuditor.prototype as never, "chatWithSearch" as never).mockImplementation(stub as never);
-      vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockImplementation(stub as never);
+      spyOnLoose(ContinuityAuditor.prototype, "chatWithSearch").mockImplementation(stub as never);
+      spyOnLoose(ContinuityAuditor.prototype, "chat").mockImplementation(stub as never);
 
       await auditor.auditChapter(bookDirLocal, "章节正文。", 1, "urban");
 
@@ -504,8 +505,8 @@ describe("Phase 7 hotfix 2 — reviewer gates critical severity on promoted", ()
         content: JSON.stringify({ passed: true, issues: [], summary: "ok" }),
         usage: ZERO_USAGE,
       });
-      vi.spyOn(ContinuityAuditor.prototype as never, "chatWithSearch" as never).mockImplementation(stub as never);
-      vi.spyOn(ContinuityAuditor.prototype as never, "chat" as never).mockImplementation(stub as never);
+      spyOnLoose(ContinuityAuditor.prototype, "chatWithSearch").mockImplementation(stub as never);
+      spyOnLoose(ContinuityAuditor.prototype, "chat").mockImplementation(stub as never);
 
       await auditor.auditChapter(bookDirLocal, "Chapter body.", 1, "other");
 
