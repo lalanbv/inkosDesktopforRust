@@ -5965,6 +5965,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 }
               }
               const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+              // 508 号：灵感卡服务端写入（354 语义）——agent 确认建书完成点。
+              try {
+                await writeDirectorInspirationCard(root, createdBookId, book?.title ?? createdBookId);
+              } catch { /* 不阻断建书 */ }
               bookCreateStatus.delete(createdBookId);
               broadcast("book:created", {
                 bookId: createdBookId,
@@ -6202,6 +6206,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         }
 
         const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        // 508 号：灵感卡服务端写入（354 语义）——第二完成点同样覆盖。
+        try {
+          await writeDirectorInspirationCard(root, createdBookId, book?.title ?? createdBookId);
+        } catch { /* 不阻断建书 */ }
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", {
           bookId: createdBookId,
