@@ -135,7 +135,6 @@ const WAIVERS = new Map([
   // 审计内部计数：双端机检维度实现差异，非契约面（issueCount 随审计轮次波动）
   [`/api/v1/books/${BOOK}/quality-trend`, { reason: "审计计数波动 + null-vs-缺键序列化（359 号先例）", paths: [["trend"]] }],
   // 种子内容双端各自撰写（R4/364），canonical 化需产品决策——内容分叉备案
-  [`/api/v1/asset-library/genre-base`, { reason: "种子内容双端各自撰写（364 号），canonical 化需产品决策", paths: [["assets"]] }],
   // 章节审计 issue 明细随双端机检维度差异波动
   [`/api/v1/books/${BOOK}`, { reason: "审计 issue 明细随双端机检维度差异波动", paths: [["chapters", "*", "auditIssues"], ["nextChapter"]] }],
   // 488 号扩展腿发现：
@@ -143,7 +142,6 @@ const WAIVERS = new Map([
   // 内置包镜像缺口 + 既有二进制早于 builtin 合并面，重建需 cargo 解阻后评估
 
   // 三库种子内容双端各自撰写（364 号）——canonical 化需产品决策
-  [`/api/v1/asset-library/progression-mode`, { reason: "种子内容分叉（364 号）——canonical 化需产品决策", paths: [["assets"]] }],
   // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
   [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
   // lens rank 打分内部实现差异（展示面）；currentChapter 同 resync 备案
@@ -398,9 +396,22 @@ try {
       compared += 1;
       continue;
     }
+    // asset-library 双端数组排序语义不同（node 按 id、rust 按定义序）——按 id 归一。
+    let nodeBody = nodeRes.body;
+    let rustBody = rustRes.body;
+    if (endpoint.startsWith("/api/v1/asset-library/")) {
+      const sortAssets = (o) => {
+        if (o && Array.isArray(o.assets)) {
+          return { ...o, assets: [...o.assets].sort((x, y) => String(x.id).localeCompare(String(y.id))) };
+        }
+        return o;
+      };
+      nodeBody = sortAssets(nodeBody);
+      rustBody = sortAssets(rustBody);
+    }
     const waiver = WAIVERS.get(endpoint);
-    const aNode = pruneWaivedPaths(prune(nodeRes.body), waiver?.paths ?? []);
-    const aRust = pruneWaivedPaths(prune(rustRes.body), waiver?.paths ?? []);
+    const aNode = pruneWaivedPaths(prune(nodeBody), waiver?.paths ?? []);
+    const aRust = pruneWaivedPaths(prune(rustBody), waiver?.paths ?? []);
     const a = JSON.stringify(aNode);
     const b = JSON.stringify(aRust);
     compared += 1;
