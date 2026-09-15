@@ -48,6 +48,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
   const [stage, setStage] = useState<string>("inspiration");
   const [savedChapters, setSavedChapters] = useState(0);
   const [resumeAdvice, setResumeAdvice] = useState("");
+  const [selectedTitle, setSelectedTitle] = useState("");
   // 508 号：方向候选生成（354 号端点首次 UI 接线）。
   const [directions, setDirections] = useState<DirectionCandidate[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -66,6 +67,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         if (data.session?.stage) setStage(data.session.stage);
         setSavedChapters(data.savedChapters ?? 0);
         setResumeAdvice(data.resumeAdvice ?? "");
+        setSelectedTitle(data.session?.selectedDirection?.title ?? "");
       })
       .catch(() => undefined)
       .finally(() => {
@@ -108,6 +110,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patch: { selectedDirection: candidate } }),
       });
+      setSelectedTitle(candidate.title);
       setNotice(`已选用方向：${candidate.title}`);
     } catch {
       setNotice("选用失败，请重试");
@@ -183,6 +186,11 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
       {resumeAdvice && (
         <div className="text-xs text-muted-foreground">
           {tr("续跑建议", "Resume advice")}: {resumeAdvice}
+        </div>
+      )}
+      {selectedTitle && (
+        <div className="text-xs text-muted-foreground">
+          {tr("已选用方向", "Selected direction")}: <span className="text-foreground">{selectedTitle}</span>
         </div>
       )}
       {directions.length > 0 && (

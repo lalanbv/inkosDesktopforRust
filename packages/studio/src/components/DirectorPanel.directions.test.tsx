@@ -85,7 +85,7 @@ describe("DirectorPanel 方向候选（508 号）", () => {
       patch: { selectedDirection: directionCandidates[0] },
     });
     await vi.waitFor(() => {
-      expect(screen.getByText(/已选用方向/)).toBeTruthy();
+      expect(screen.getAllByText(/已选用方向/).length).toBeGreaterThan(0);
     });
   });
 
