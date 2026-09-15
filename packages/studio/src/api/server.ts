@@ -3147,8 +3147,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.put("/api/v1/books/:id/director", async (c) => {
     const id = c.req.param("id");
-    const body = await c.req.json<Record<string, unknown>>();
-    const runMode = body.runMode;
+    const body = await c.req.json<{ patch?: Record<string, unknown> }>();
+    // 478 号：客户端与 Rust 端均以 { patch } 包裹合并键——此前读顶层导致本回退端
+    // 保存静默 no-op（返回 ok 但什么都不合并）。对齐 patch 契约。
+    const patch = body.patch ?? {};
+    const runMode = patch.runMode;
     if (runMode !== undefined && !["ready-stop", "range", "full-book"].includes(String(runMode))) {
       return c.json({ error: "invalid runMode" }, 400);
     }
@@ -3162,7 +3165,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       session = { bookId: id };
     }
     for (const key of ["inspiration", "directions", "selectedDirection", "runMode", "stage", "plan"] as const) {
-      if (body[key] !== undefined) session[key] = body[key];
+      if (patch[key] !== undefined) session[key] = patch[key];
     }
     session.updatedAt = new Date().toISOString();
     if (!session.bookId) session.bookId = id;

@@ -30,6 +30,9 @@ type DirectorSessionRunMode = "ready-stop" | "range" | "full-book";
  */
 export function DirectorPanel({ bookId }: { bookId: string }) {
   const [premise, setPremise] = useState("");
+  // 478 号：keywords 不在表单展示，但保存 patch 会整体替换 inspiration——
+  // 必须加载时回填、保存时原样回传，否则静默清空已存关键词（442 缺陷类）。
+  const [keywords, setKeywords] = useState<string[]>([]);
   const [runMode, setRunMode] = useState<DirectorSessionRunMode>("ready-stop");
   const [stage, setStage] = useState<string>("inspiration");
   const [savedChapters, setSavedChapters] = useState(0);
@@ -44,6 +47,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
       .then((data) => {
         if (cancelled) return;
         setPremise(data.session?.inspiration?.premise ?? "");
+        setKeywords(data.session?.inspiration?.keywords ?? []);
         if (data.session?.runMode) setRunMode(data.session.runMode);
         if (data.session?.stage) setStage(data.session.stage);
         setSavedChapters(data.savedChapters ?? 0);
@@ -68,7 +72,7 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
           patch: {
             runMode,
             stage,
-            inspiration: { premise, keywords: [] },
+              inspiration: { premise, keywords },
           },
         }),
       });

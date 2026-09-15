@@ -7540,3 +7540,74 @@ describe("backup export/import roundtrip (444 号)", () => {
     expect(snapshotText).toContain("corrupted");
   });
 });
+describe("director session PUT patch contract (478 号)", () => {
+  async function makeApp() {
+    const root = await mkdtemp(join(tmpdir(), "inkos-director-"));
+    await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "t" }), "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    return { root, app: createStudioServer(cloneProjectConfig() as never, root) };
+  }
+
+  it("merges { patch } body into the session file (was a silent no-op reading top-level)", async () => {
+    const { root, app } = await makeApp();
+    const res = await app.request("http://localhost/api/v1/books/b1/director", {
+      method: "PUT",
+      body: JSON.stringify({
+        patch: {
+          runMode: "range",
+          stage: "writing",
+          inspiration: { premise: "少年执灯入雾都", keywords: ["悬疑"] },
+        },
+      }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    const stored = JSON.parse(await readFile(join(root, ".inkos", "director", "b1.json"), "utf-8")) as {
+      runMode?: string;
+      stage?: string;
+      inspiration?: { premise?: string; keywords?: string[] };
+      bookId?: string;
+      updatedAt?: string;
+    };
+    expect(stored.runMode).toBe("range");
+    expect(stored.stage).toBe("writing");
+    expect(stored.inspiration).toEqual({ premise: "少年执灯入雾都", keywords: ["悬疑"] });
+    expect(stored.bookId).toBe("b1");
+    expect(stored.updatedAt).toBeTruthy();
+  });
+
+  it("patch keys absent from the request leave stored fields untouched", async () => {
+    const { root, app } = await makeApp();
+    const dir = join(root, ".inkos", "director");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "b1.json"),
+      JSON.stringify({ bookId: "b1", inspiration: { premise: "旧灵感", keywords: ["保留"] }, directions: [{ id: "d1" }] }),
+      "utf-8",
+    );
+    const res = await app.request("http://localhost/api/v1/books/b1/director", {
+      method: "PUT",
+      body: JSON.stringify({ patch: { runMode: "full-book" } }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(200);
+    const stored = JSON.parse(await readFile(join(dir, "b1.json"), "utf-8")) as {
+      inspiration?: unknown;
+      directions?: unknown;
+      runMode?: string;
+    };
+    expect(stored.inspiration).toEqual({ premise: "旧灵感", keywords: ["保留"] });
+    expect(stored.directions).toEqual([{ id: "d1" }]);
+    expect(stored.runMode).toBe("full-book");
+  });
+
+  it("rejects an invalid runMode inside patch", async () => {
+    const { app } = await makeApp();
+    const res = await app.request("http://localhost/api/v1/books/b1/director", {
+      method: "PUT",
+      body: JSON.stringify({ patch: { runMode: "turbo" } }),
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(res.status).toBe(400);
+  });
+});
