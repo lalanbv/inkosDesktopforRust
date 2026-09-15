@@ -652,6 +652,7 @@ export class WriterAgent extends BaseAgent {
     output: WriteChapterOutput,
     numericalSystem: boolean = true,
     language: "zh" | "en" = "zh",
+    allowReapply: boolean = false,
   ): Promise<void> {
     const chaptersDir = join(bookDir, "chapters");
     await mkdir(chaptersDir, { recursive: true });
@@ -674,6 +675,7 @@ export class WriterAgent extends BaseAgent {
       bookDir,
       output,
       language,
+      allowReapply,
     );
     const chapterSummariesMarkdown = runtimeStateArtifacts?.chapterSummariesMarkdown
       ?? (!output.runtimeStateDelta && output.updatedChapterSummaries
@@ -1122,6 +1124,7 @@ ${overrides}\n`;
     bookDir: string,
     output: WriteChapterOutput,
     language: "zh" | "en",
+    allowReapply: boolean = false,
   ): Promise<RuntimeStateArtifacts | null> {
     if (!output.runtimeStateDelta) return null;
     const safeDelta = this.normalizeRuntimeStateDeltaChapter(
@@ -1148,6 +1151,8 @@ ${overrides}\n`;
       bookDir,
       delta: safeDelta,
       language,
+      // 484 号：resync/重放链透传——重推导同章 delta 不得被防重放守卫拒绝。
+      allowReapply,
     });
   }
 

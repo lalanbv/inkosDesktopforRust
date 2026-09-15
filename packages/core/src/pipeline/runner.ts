@@ -2837,7 +2837,9 @@ export class PipelineRunner {
       throw new Error(`Chapter sync still failed for chapter ${targetChapter}.`);
     }
 
-    await writer.saveChapter(bookDir, syncedOutput, gp.numericalSystem, pipelineLang);
+    // 484 号：resync = 幂等重推导（Rust 直写语义对齐）——重放同章 delta 需透传
+    // allowReapply，否则 state-reducer 防重放守卫拒绝已含该章摘要的真相文件。
+    await writer.saveChapter(bookDir, syncedOutput, gp.numericalSystem, pipelineLang, true);
     await this.syncLegacyStructuredStateFromMarkdown(bookDir, targetChapter, syncedOutput);
     await this.syncNarrativeMemoryIndex(bookId);
     await this.state.snapshotState(bookId, targetChapter);
