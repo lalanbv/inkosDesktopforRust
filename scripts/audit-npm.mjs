@@ -20,13 +20,11 @@ const REGISTRY = "https://registry.npmjs.org/";
  * 已接受风险白名单：module → { reason, since }。
  * 维护规则：新增条目必须给出定性理由与来源；移除条目即恢复拦截。
  */
-const ACCEPTED = new Map([
-  // esbuild（491 号 vite 7.3.6+studio vite ^7.3.6 出清）、brace-expansion/
-  // postcss-selector-parser（491 号 override 直达补丁线）均已移出白名单；
-  // vitest/@vitest/mocker 已于 482 号修复。若回归会重新被拦截。
-  ["fast-xml-parser", { reason: "pi-ai 0.67.1 精确钉（434 号安全先例）→aws-sdk 链，补丁需跨 major 5.x 且 Bedrock 默认未启用", since: "467 号" }],
-  ["@ai-sdk/provider-utils", { reason: "ai@6.0.x 精确钉 provider-utils 4.0.23（补丁 >=4.0.33 需 ai 7 major）——上游阻塞", since: "467 号" }],
-]);
+// 501 号：白名单清零——esbuild（vite 7.3.6）、brace-expansion/postcss-selector-
+// parser（override 直达补丁线）、fast-xml-parser/provider-utils（override 出清，
+// 同 major 补丁线）、vitest/@vitest/mocker（482 号 vitest 5）全部修复。
+// 维护规则不变：新增条目必须给出定性理由与来源；移除条目即恢复拦截。
+const ACCEPTED = new Map([]);
 
 const args = process.argv.slice(2);
 const verbose = args.includes("--json");
