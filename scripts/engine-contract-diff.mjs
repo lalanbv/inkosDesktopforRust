@@ -141,8 +141,7 @@ const WAIVERS = new Map([
   // 488 号扩展腿发现：
   // skills/genres 内置清单双端不对齐（TS 16 技能/15 题材 vs Rust 1/2）——
   // 内置包镜像缺口 + 既有二进制早于 builtin 合并面，重建需 cargo 解阻后评估
-  [`/api/v1/skills`, { reason: "内置技能包双端不对齐（16 vs 1）——移植缺口备案", paths: [["skills"]] }],
-  [`/api/v1/genres`, { reason: "内置题材清单不对齐（15 vs 2）——builtin 合并面/构建态待重建重验", paths: [["genres"]] }],
+
   // 三库种子内容双端各自撰写（364 号）——canonical 化需产品决策
   [`/api/v1/asset-library/progression-mode`, { reason: "种子内容分叉（364 号）——canonical 化需产品决策", paths: [["assets"]] }],
   // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
@@ -226,6 +225,7 @@ const engines = [];
         // 内置题材目录缺省相对 CWD——编排 cwd=repoRoot 与桌面壳不同，
         // 显式钉到 fixture 预置的 assets 目录（488 号）。
           INKOS_BUILTIN_GENRES_DIR: join(repoRoot, "packages", "core", "genres"),
+          INKOS_BUILTIN_SKILLS_DIR: join(repoRoot, "packages", "core", "skills"),
       },
     },
     join(root, "server.log"),
