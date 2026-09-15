@@ -417,6 +417,34 @@ async fn generate_and_review_foundation_import(
 
 // ── POST /api/v1/books/create ────────────────────────────────────
 
+/// 500 号：354 语义回迁（498 TS 同构）——建书完成点写导演灵感卡。
+/// 已有灵感卡不覆盖（幂等）；stage 缺省 directions；纯 fs 可单测。
+pub(crate) async fn write_director_inspiration_card(
+    project_root: &Path,
+    book_id: &str,
+    premise: &str,
+) -> std::io::Result<()> {
+    let dir = project_root.join(".inkos").join("director");
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join(format!("{book_id}.json"));
+    let mut session: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({}));
+    if session.get("inspiration").is_some() {
+        return Ok(()); // 已有灵感卡不覆盖
+    }
+    let obj = session.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "director session is not an object")
+    })?;
+    obj.insert("bookId".into(), json!(book_id));
+    obj.entry("stage").or_insert_with(|| json!("directions"));
+    obj.insert("inspiration".into(), json!({ "premise": premise, "keywords": [] }));
+    obj.insert("updatedAt".into(), json!(crate::interaction::session::utc_now_ms()));
+    tokio::fs::write(&path, serde_json::to_string_pretty(&session).unwrap_or_default()).await?;
+    Ok(())
+}
+
 pub async fn create_book(
     State(runtime): State<BooksRuntime>,
     body: Bytes,
@@ -456,12 +484,20 @@ pub async fn create_book(
         .await
         .insert(book_id.clone(), BookCreateStatus { status: "creating".to_string(), error: None });
 
+    // 500 号：灵感卡 premise（blurb 优先，缺省标题）——预提取避免跨 await 借用。
+    let premise = parsed
+        .get("blurb")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| title.to_string());
+
     // 后台异步创建（TS processProjectInteractionRequest().then 链）。
     let background = {
         let runtime = runtime.clone();
         let book = book.clone();
         let external_context = build_creation_external_context(&parsed);
         let book_id = book_id.clone();
+        let premise = premise.clone();
         async move {
             let result = init_book(&runtime, &book, external_context.as_deref(), None, None).await;
             match result {
@@ -475,6 +511,12 @@ pub async fn create_book(
                         );
                         runtime.hub.broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
                         return;
+                    }
+                    // 500 号：灵感卡写入失败不阻断建书完成。
+                    if let Err(e) =
+                        write_director_inspiration_card(&runtime.state.project_root(), &book_id, &premise).await
+                    {
+                        eprintln!("[book:create] 导演灵感卡写入失败（不阻断）：{e}");
                     }
                     create_status_map().lock().await.remove(&book_id);
                     let book_summary = runtime
@@ -1094,5 +1136,46 @@ async fn copy_dir_deep(src: &std::path::Path, dest: &std::path::Path) {
         } else if let Ok(content) = tokio::fs::read_to_string(&src_path).await {
             let _ = tokio::fs::write(&dest_path, content).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod director_card_tests {
+    // 500 号：建书完成点导演灵感卡（354 语义回迁；幂等不覆盖）。
+    // 运行暂被 Xcode 许可阻断——随 481 号欠账一并补跑。
+    use super::*;
+
+    #[tokio::test]
+    async fn writes_inspiration_card_with_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        write_director_inspiration_card(root.path(), "b-probe", "镜中世界反向修行")
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(
+            root.path().join(".inkos").join("director").join("b-probe.json"),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["bookId"], "b-probe");
+        assert_eq!(v["stage"], "directions");
+        assert_eq!(v["inspiration"]["premise"], "镜中世界反向修行");
+        assert_eq!(v["inspiration"]["keywords"], serde_json::json!([]));
+        assert!(!v["updatedAt"].is_null());
+    }
+
+    #[tokio::test]
+    async fn never_overwrites_existing_inspiration_card() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(".inkos").join("director");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("b1.json"),
+            r#"{"bookId":"b1","stage":"writing","inspiration":{"premise":"旧灵感","keywords":["保留"]}}"#,
+        )
+        .unwrap();
+        write_director_inspiration_card(root.path(), "b1", "新灵感").await.unwrap();
+        let raw = std::fs::read_to_string(dir.join("b1.json")).unwrap();
+        assert!(raw.contains("旧灵感"), "已有灵感卡必须保留");
+        assert!(!raw.contains("新灵感"));
     }
 }
