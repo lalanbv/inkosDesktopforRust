@@ -4,6 +4,10 @@ import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+
+// 493 号：健康探针 version 来源（跟随包版本，不手抄）。
+const studioPkg = createRequire(import.meta.url)("../../package.json") as { version: string };
 import { createLoopbackGuardMiddleware, guardOptionsFromEnv, originIsAllowed } from "./loopback-guard.js";
 import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
 import {
@@ -2691,6 +2695,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.use("/api/v1/*", async (c, next) => {
     await next();
     c.header("Cache-Control", "no-store");
+  });
+
+  // 健康探针（493 号，对齐 Rust 62 号超集端点）：{ok, version, backend} 同形，
+  // backend 标识区分引擎——监控/编排双端统一探 this 面。
+  app.get("/api/v1/health", (c) => {
+    return c.json({ ok: true, version: studioPkg.version, backend: "node-fallback" });
   });
 
   // Structured error handler — ApiError returns typed JSON, others return 500

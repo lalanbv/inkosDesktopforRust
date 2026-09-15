@@ -175,6 +175,18 @@ async function runEngineLeg(engine) {
   // run-log 调用计数（写链遥测在位）。
   const runLog = await api("/api/v1/run-log?limit=50");
   check(`[${engine}] run-log 调用计数 > 0`, (runLog.body?.total ?? 0) > 0);
+
+  // 健康探针（493 号：node 腿补齐后双端统一探 this 面）。
+  if (engine === "node") {
+    const health = await api("/api/v1/health");
+    check(
+      `[${engine}] 健康探针 ok + backend 标识`,
+      health.status === 200
+        && health.body?.ok === true
+        && health.body?.backend === "node-fallback"
+        && typeof health.body?.version === "string",
+    );
+  }
 }
 
 // ── 共享 mock（所有引擎腿共用一个 LLM 假端点）──

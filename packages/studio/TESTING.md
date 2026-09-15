@@ -51,6 +51,8 @@ pnpm audit:rust                     # RustSec（含 --strict 可选）
 pnpm verify:engine-bindings         # ts-rs 导出锁
 INKOS_DUEL=1 cargo test --test strangler_duel   # 契约面真跑（engine-rs/ 下）
 node scripts/bench-gate.mjs         # 性能基准（静默窗；严禁 --update 洗基线）
+node scripts/node-fallback-smoke.mjs            # 回退端+双引擎一致性（485/486 号）
+node scripts/engine-contract-diff.mjs           # 双引擎 GET 契约活体差分（487/492 号）
 ```
 
 ## 6. 已知约束
