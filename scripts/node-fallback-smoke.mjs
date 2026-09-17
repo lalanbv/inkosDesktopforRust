@@ -26,7 +26,9 @@ const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const studioDir = join(repoRoot, "packages", "studio");
-const rustBinary = join(repoRoot, "engine-rs", "target", "debug", "inkos-engine-server");
+// 517 号：INKOS_SMOKE_RUST_BIN 可指 release 二进制——发布形态活体冒烟。
+const rustBinary = process.env.INKOS_SMOKE_RUST_BIN
+  ?? join(repoRoot, "engine-rs", "target", "debug", "inkos-engine-server");
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => {
