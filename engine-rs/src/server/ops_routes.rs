@@ -1076,9 +1076,10 @@ pub async fn post_hybrid_search(
     );
     let fts_ranked: Vec<Value> = fts_hits
         .iter()
-        .enumerate()
-        .map(|(i, hit)| {
-            json!({ "id": hit.id, "rank": i + 1, "score": hit.score, "source": hit.source, "title": hit.title })
+        // 520 号：对齐 TS 响应形状 {id, score, source, title}（rank 为 TS 端
+        // ftsRanked 内部产物，不入契约响应）。
+        .map(|hit| {
+            json!({ "id": hit.id, "score": hit.score, "source": hit.source, "title": hit.title })
         })
         .collect();
 
@@ -1132,11 +1133,13 @@ pub async fn post_hybrid_search(
             rank: entry["rank"].as_i64().unwrap_or(0),
         })
         .collect();
+    // 520 号：rank 已从响应形状移除，RRF 用 enumerate 重建名次。
     let fts_for_rrf: Vec<crate::utils::semantic_retrieval::RankedHit> = fts_ranked
         .iter()
-        .map(|entry| crate::utils::semantic_retrieval::RankedHit {
+        .enumerate()
+        .map(|(i, entry)| crate::utils::semantic_retrieval::RankedHit {
             id: entry["id"].as_str().unwrap_or_default().to_string(),
-            rank: entry["rank"].as_i64().unwrap_or(0),
+            rank: i as i64 + 1,
         })
         .collect();
     let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(&fts_for_rrf, &semantic_for_rrf, 60);

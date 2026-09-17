@@ -258,7 +258,16 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         &facts,
         &volume_summaries,
     );
-    let index = crate::utils::local_search::LocalSearchIndex::new(":memory:").ok();
+    // 520 号：磁盘索引（对齐 TS retrieveMemorySelection 用 story/memory.db 的
+    // FTS 表并顺带重建）——此前用 :memory: 临时索引，磁盘 FTS 表永远无人写入，
+    // hybrid-search / 检索面板等磁盘索引消费端在 Rust 侧恒空命中（差分器实证）。
+    // replace_scope 按 content_hash 去重，重复章写入开销可控；磁盘打开失败时
+    // 降级内存索引保检索不中断。
+    let index = crate::utils::local_search::LocalSearchIndex::new(
+        story_dir.join("memory.db").to_str().unwrap_or(":memory:"),
+    )
+    .ok()
+    .or_else(|| crate::utils::local_search::LocalSearchIndex::new(":memory:").ok());
     if let Some(index) = &index {
         let _ = index.replace_scope(STORY_MEMORY_SCOPE, &documents);
     }

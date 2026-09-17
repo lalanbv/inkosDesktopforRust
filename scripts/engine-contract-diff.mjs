@@ -160,6 +160,8 @@ const ENDPOINTS = [
   `/api/v1/books/${BOOK}/promises`,
   `/api/v1/books/${BOOK}/quality-trend`,
   `/api/v1/books/${BOOK}/tension-curve`,
+  // 520 号扩展（write-next 投影消费面回归）：
+  `/api/v1/books/${BOOK}/quality-debts`,
   `/api/v1/books/${BOOK}/context-lens`,
   `/api/v1/books/${BOOK}/director`,
   `/api/v1/books/${BOOK}/codex`,
@@ -487,6 +489,39 @@ try {
           console.log(`[diff] 豁免复核 ${endpoint}：无豁免 ✗ 首个分叉：${firstDiffPath(prune(n.body), prune(r.body)) ?? "?"}`);
         }
       }
+    }
+  }
+
+  // ── hybrid-search POST 活体对照（520 号：G1/349 混合召回投影消费面）──
+  // 无 embedding 配置 → 双端 mode=fts5-fallback；BM25/RRF 分数为浮点，
+  // 归一化仅比 id 序与 mode（分数面受实现精度影响，非契约）。
+  {
+    const searchPath = `/api/v1/books/${BOOK}/hybrid-search`;
+    const searchBody = JSON.stringify({ query: "苏檀 碎镜", k: 5 });
+    const nodeRes = await nodeApi(searchPath, { method: "POST", headers: { "Content-Type": "application/json" }, body: searchBody });
+    const rustRes = await rustApi(searchPath, { method: "POST", headers: { "Content-Type": "application/json" }, body: searchBody });
+    compared += 1;
+    // 520 号：BM25 打分/次序随双端分词实现波动（lens rank 同型备案）——
+    // 契约面 = mode + top 命中 + 双端交集（排序无关）；各自边缘命中输出观察。
+    const idsOf = (o) => (o?.fts ?? []).map((h) => h.id);
+    const nodeIds = idsOf(nodeRes.body);
+    const rustIds = idsOf(rustRes.body);
+    const a = JSON.stringify({ mode: nodeRes.body?.mode, top: nodeIds[0] ?? null, inter: nodeIds.filter((id) => rustIds.includes(id)).sort() });
+    const b = JSON.stringify({ mode: rustRes.body?.mode, top: rustIds[0] ?? null, inter: rustIds.filter((id) => nodeIds.includes(id)).sort() });
+    const onlyNode = nodeIds.filter((id) => !rustIds.includes(id));
+    const onlyRust = rustIds.filter((id) => !nodeIds.includes(id));
+    if (onlyNode.length || onlyRust.length) {
+      console.log(`[diff] hybrid-search 边缘命中（BM25 排序抖动备案）：仅 node=[${onlyNode}] 仅 rust=[${onlyRust}]`);
+    }
+    console.log(`[diff][hs] a=${a}`);
+    console.log(`[diff][hs] b=${b}`);
+    if (nodeRes.status === rustRes.status && nodeRes.status < 400 && a === b) {
+      console.log(`✓ POST ${searchPath}（${nodeRes.status}，mode=${nodeRes.body?.mode}，fts 命中序一致）`);
+    } else {
+      divergences += 1;
+      console.log(`✗ POST ${searchPath}：node=${nodeRes.status} rust=${rustRes.status}`);
+      console.log(`    node=${JSON.stringify(nodeRes.body)?.slice(0, 240)}`);
+      console.log(`    rust=${JSON.stringify(rustRes.body)?.slice(0, 240)}`);
     }
   }
 
