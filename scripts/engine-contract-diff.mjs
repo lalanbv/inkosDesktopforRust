@@ -9,7 +9,7 @@
 // 输出 DIVERGE 清单；退出码非零 = 存在契约漂移。供双引擎改动后回归。
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, openSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -522,6 +522,69 @@ try {
       console.log(`✗ POST ${searchPath}：node=${nodeRes.status} rust=${rustRes.status}`);
       console.log(`    node=${JSON.stringify(nodeRes.body)?.slice(0, 240)}`);
       console.log(`    rust=${JSON.stringify(rustRes.body)?.slice(0, 240)}`);
+    }
+  }
+
+  // ── 落盘工件内容面对照（522 号：API 响应面之下的内容面）──
+  // mock 确定性下双端正文/真相/结构化 state 应一致；memory.db（二进制+WAL 态）、
+  // audit_drift（时间线敏感）、runtime 留痕（trace/run/context 含耗时与时戳）豁免。
+  {
+    const bookDirOf = (root) => join(root, "books", decodeURIComponent(BOOK));
+    const isVolatile = (rel) =>
+      rel.startsWith("story/memory.db")
+      || rel === "story/audit_drift.md"
+      || rel.endsWith(".trace.json")
+      || rel.endsWith(".run.json")
+      || rel.endsWith(".context.json");
+    const walkFiles = (dir, prefix = "") => {
+      const out = [];
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) out.push(...walkFiles(join(dir, entry.name), rel));
+        else out.push(rel);
+      }
+      return out.sort();
+    };
+    const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys)
+      : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]))
+      : v);
+    const nodeFiles = walkFiles(bookDirOf(roots.node));
+    const rustFiles = walkFiles(bookDirOf(roots.rust));
+    const nodeCore = nodeFiles.filter((f) => !isVolatile(f));
+    const rustCore = rustFiles.filter((f) => !isVolatile(f));
+    const nodeSet = new Set(nodeCore);
+    const rustSet = new Set(rustCore);
+    const onlyNode = nodeCore.filter((f) => !rustSet.has(f));
+    const onlyRust = rustCore.filter((f) => !nodeSet.has(f));
+    compared += 1;
+    // 522 号：工件面本轮信息性输出（已定性备案：runtime 留痕=settle 上游专项、
+    // intent/plan/rule-stack 措辞=prompt 模板对齐专项）；清偿后逐项转硬门禁。
+    if (onlyNode.length || onlyRust.length) {
+      console.log(`[diff] 落盘工件树（备案）：仅 node=[${onlyNode}] 仅 rust=[${onlyRust}]`);
+    } else {
+      console.log(`✓ 落盘工件树存在性（${nodeCore.length} 个内容工件双端一致）`);
+    }
+    let contentDiffs = 0;
+    for (const rel of nodeCore.filter((f) => rustSet.has(f))) {
+      let a = readFileSync(join(bookDirOf(roots.node), rel), "utf-8");
+      let b = readFileSync(join(bookDirOf(roots.rust), rel), "utf-8");
+      if (rel.endsWith(".json")) {
+        // json 归一化：键序差异非契约（TS 对象序 vs serde 结构体序），缺键/值差异才是。
+        try {
+          const norm = (t) => JSON.stringify(sortKeys(JSON.parse(t)));
+          a = norm(a);
+          b = norm(b);
+        } catch { /* 非法 json 保持裸文本比 */ }
+      }
+      if (a !== b) {
+        contentDiffs += 1;
+        console.log(`[diff] 工件内容分歧：${rel}（node ${a.length}B / rust ${b.length}B）`);
+      }
+    }
+    if (contentDiffs > 0) {
+      console.log(`[diff] 工件内容分歧共 ${contentDiffs} 个（备案跟踪：settle/plan 措辞与 hook 状态语义专项）`);
+    } else {
+      console.log(`✓ 落盘工件内容一致（json 归一化后；豁免时序/二进制面）`);
     }
   }
 
