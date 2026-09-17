@@ -133,9 +133,11 @@ const BOOK = encodeURIComponent("镜花水月");
  * 每条必须注明备案依据——豁免=已知双端行为差异，不是错误默认放行。
  */
 const WAIVERS = new Map([
-  // resync 双端架构分歧（Rust 直写 vs TS 结构化状态机）——483/484 号备案
-  [`/api/v1/books/${BOOK}/promises`, { reason: "resync 架构分歧备案（483/484）", paths: [["currentChapter"]] }],
-  [`/api/v1/books/${BOOK}/context-lens`, { reason: "resync 架构分歧备案（483/484）：TS resync 产出 ch1 意图文件", paths: [["chapters"]] }],
+  // 519 号裁决：resync 端点双端幂等等价（活体精测），483 备案的 currentChapter
+  // 分歧实为 Rust write-next 投影段时序缺陷（persist 前读旧 state）——修复后
+  // promises/roster-candidates 豁免撤销。仅存 context-lens 装配留痕差异：
+  // TS resync 产出 ch1 留痕而 Rust 不产（透明回放完整性，不影响写作数据）。
+  [`/api/v1/books/${BOOK}/context-lens`, { reason: "519 号裁决备案：TS resync 产出 ch1 装配留痕而 Rust 不产（仅 lens 回放面）", paths: [["chapters"]] }],
   // 审计内部计数：双端机检维度实现差异，非契约面（issueCount 随审计轮次波动）
   [`/api/v1/books/${BOOK}/quality-trend`, { reason: "审计计数波动 + null-vs-缺键序列化（359 号先例）", paths: [["trend"]] }],
   // 种子内容双端各自撰写（R4/364），canonical 化需产品决策——内容分叉备案
@@ -148,9 +150,8 @@ const WAIVERS = new Map([
   // 三库种子内容双端各自撰写（364 号）——canonical 化需产品决策
   // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
   [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
-  // lens rank 打分内部实现差异（展示面）；currentChapter 同 resync 备案
+  // lens rank 打分内部实现差异（展示面）。
   [`/api/v1/books/${BOOK}/context-lens/2`, { reason: "resync 管线内部装配差异（483/484 备案）：entry source/rank 随内部实现波动", paths: [["entries"]] }],
-  [`/api/v1/books/${BOOK}/roster-candidates`, { reason: "resync 架构分歧备案（483/484）", paths: [["currentChapter"]] }],
 ]);
 const ENDPOINTS = [
   "/api/v1/books",
