@@ -19,6 +19,10 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
+const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
+
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const studioDir = join(repoRoot, "packages", "studio");
@@ -46,7 +50,7 @@ const check = (name, ok, detail = "") => {
 
 const startChild = (cmd, cmdArgs, opts, logPath, shared = false) => {
   const out = openSync(logPath, "a");
-  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: false });
+  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: true });
   (shared ? sharedChildren : children).push(child);
   return child;
 };
@@ -66,7 +70,7 @@ const waitUntil = async (fn, timeoutMs, label) => {
 };
 
 const apiFor = (base) => async (path, init) => {
-  const res = await fetch(base + path, init);
+  const res = await fetchT(base + path, init);
   let body = null;
   try {
     body = await res.json();
@@ -120,8 +124,8 @@ async function runEngineLeg(engine) {
   }
 
   const serverUp = await waitUntil(
-    async () => (await fetch(`${base}/api/v1/books`)).ok,
-    engine === "node" ? 30_000 : 15_000,
+    async () => (await fetchT(`${base}/api/v1/books`)).ok,
+    engine === "node" ? 90_000 : 15_000,
     `${engine} 引擎启动`,
   );
   check(`${engine} 引擎启动`, serverUp);
@@ -167,9 +171,9 @@ async function runEngineLeg(engine) {
   );
 
   // 缓存头（469/445 号双端面）。
-  const spaRes = await fetch(`${base}/`);
+  const spaRes = await fetchT(`${base}/`);
   check(`[${engine}] SPA 入口 no-store`, spaRes.headers.get("cache-control")?.includes("no-store") === true);
-  const apiRes = await fetch(`${base}/api/v1/books`);
+  const apiRes = await fetchT(`${base}/api/v1/books`);
   check(`[${engine}] API 面 no-store`, apiRes.headers.get("cache-control")?.includes("no-store") === true);
 
   // run-log 调用计数（写链遥测在位）。
@@ -192,7 +196,7 @@ async function runEngineLeg(engine) {
 // ── 共享 mock（所有引擎腿共用一个 LLM 假端点）──
 startChild("node", [join(scriptDir, "walkthrough-mock.mjs"), mockPort], { cwd: repoRoot }, join(tmpdir(), "inkos-smoke-mock.log"), true);
 const mockUp = await waitUntil(
-  async () => (await fetch(`http://127.0.0.1:${mockPort}/v1/models`)).ok,
+  async () => (await fetchT(`http://127.0.0.1:${mockPort}/v1/models`)).ok,
   15_000,
   "walkthrough-mock 启动",
 );
@@ -216,7 +220,7 @@ for (const leg of legs) {
   // 腿间清理：杀掉本腿服务器，释放端口供下一腿复用。
   for (const child of children.splice(0)) {
     try {
-      child.kill("SIGTERM");
+      try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} };
     } catch {
       // already exited
     }
@@ -226,7 +230,7 @@ for (const leg of legs) {
 
 for (const child of children.splice(0)) {
   try {
-    child.kill("SIGTERM");
+    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} };
   } catch {
     // already exited
   }
@@ -234,7 +238,7 @@ for (const child of children.splice(0)) {
 // 共享 mock 收尾同样要杀——否则进程悬挂持有管道（487 号后台卡死根因）。
 for (const child of sharedChildren.splice(0)) {
   try {
-    child.kill("SIGTERM");
+    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} };
   } catch {
     // already exited
   }

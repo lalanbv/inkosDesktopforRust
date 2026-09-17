@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
+const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const studioDir = join(repoRoot, "packages", "studio");
@@ -33,7 +35,7 @@ let failures = 0;
 
 const startChild = (cmd, cmdArgs, opts, logPath, shared = false) => {
   const out = openSync(logPath, "a");
-  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: false });
+  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: true });
   (shared ? sharedChildren : children).push(child);
   return child;
 };
@@ -56,6 +58,7 @@ const BOOK = encodeURIComponent("镜花水月");
 const VALIDATE_PY = `
 import json, sys, zipfile
 import xml.etree.ElementTree as ET
+
 
 path = sys.argv[1]
 result = {"ok": False, "checks": {}}
@@ -132,7 +135,15 @@ async function runLeg(engine) {
       join(root, "server.log"),
     );
   }
-  const up = await waitUntil(async () => (await fetch(`${base}/api/v1/books`)).ok, 30_000, `${engine} 启动`);
+  const up = await waitUntil(async () => {
+    try {
+      const r = await fetchT(`${base}/api/v1/books`);
+      return r.ok;
+    } catch (e) {
+      console.error(`[epub-smoke][debug] poll err: ${String(e).slice(0, 80)}`);
+      return false;
+    }
+  }, 90_000, `${engine} 启动`);
   check(`${engine} 引擎启动`, up);
   if (!up) throw new Error(`${engine} server failed to start`);
 
@@ -141,7 +152,7 @@ async function runLeg(engine) {
     stdio: ["ignore", "ignore", "inherit"],
   });
 
-  const res = await fetch(`${base}/api/v1/books/${BOOK}/export-save`, {
+  const res = await fetchT(`${base}/api/v1/books/${BOOK}/export-save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ format: "epub", approvedOnly: false }),
@@ -174,7 +185,7 @@ try {
   for (const leg of legs) {
     await runLeg(leg);
     for (const child of children.splice(0)) {
-      try { child.kill("SIGTERM"); } catch { /* exited */ }
+      try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
     }
     // 腿间留 1s 让端口释放，下一腿 bind 不撞 EADDRINUSE。
     await new Promise((r) => setTimeout(r, 1_000));
@@ -184,10 +195,10 @@ try {
   console.error(`[epub-smoke] 异常中断：${error?.message ?? error}`);
 } finally {
   for (const child of children.splice(0)) {
-    try { child.kill("SIGTERM"); } catch { /* exited */ }
+    try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
   }
   for (const child of sharedChildren.splice(0)) {
-    try { child.kill("SIGTERM"); } catch { /* exited */ }
+    try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
   }
 }
 

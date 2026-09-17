@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
+const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
+
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const studioDir = join(repoRoot, "packages", "studio");
@@ -32,7 +36,7 @@ const keep = args.includes("--keep");
 const children = [];
 const startChild = (cmd, cmdArgs, opts, logPath) => {
   const out = openSync(logPath, "a");
-  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: false });
+  const child = spawn(cmd, cmdArgs, { ...opts, stdio: ["ignore", out, out], detached: true });
   children.push(child);
   return child;
 };
@@ -47,7 +51,7 @@ const waitUntil = async (fn, timeoutMs, label) => {
   throw new Error(`等待超时：${label}`);
 };
 const apiFor = (base, root) => async (path, init) => {
-  const res = await fetch(base + path, init);
+  const res = await fetchT(base + path, init);
   const text = await res.text();
   // 根路径归一化：doctor 等端点会回显各自的临时根绝对路径。
   const normalized = root ? text.split(root).join("%ROOT%") : text;
@@ -189,7 +193,7 @@ const preseed = (root) => {
 
 // ── 1. mock + 双引擎 + 双根 ──
 startChild("node", [join(scriptDir, "walkthrough-mock.mjs"), mockPort], { cwd: repoRoot }, join(tmpdir(), "inkos-diff-mock.log"));
-await waitUntil(async () => (await fetch(`http://127.0.0.1:${mockPort}/v1/models`)).ok, 15_000, "mock 启动");
+await waitUntil(async () => (await fetchT(`http://127.0.0.1:${mockPort}/v1/models`)).ok, 15_000, "mock 启动");
 
 const roots = {};
 const engines = [];
@@ -266,7 +270,7 @@ const makeEventCollector = (base) => {
 try {
   for (const engine of engines) {
     const base = `http://127.0.0.1:${engine.port}`;
-    await waitUntil(async () => (await fetch(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
+    await waitUntil(async () => (await fetchT(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
   }
 
   // SSE 收集器：双引擎就绪后先挂流，再跑各腿 fixture（492 号活体事件差分）。
@@ -337,7 +341,7 @@ try {
     await api(expPath, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(expEntries) });
   }
   const delExp = async (base) => {
-    const res = await fetch(`${base}${expPath}/exp_del`, { method: "DELETE" });
+    const res = await fetchT(`${base}${expPath}/exp_del`, { method: "DELETE" });
     return res.status;
   };
   compared += 1;
@@ -359,8 +363,8 @@ try {
     await api(assetPath, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(probeAsset) });
   }
   {
-    const s1 = (await fetch(`http://127.0.0.1:${nodePort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
-    const s2 = (await fetch(`http://127.0.0.1:${rustPort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
+    const s1 = (await fetchT(`http://127.0.0.1:${nodePort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
+    const s2 = (await fetchT(`http://127.0.0.1:${rustPort}${assetPath}/probe_ws`, { method: "DELETE" })).status;
     compared += 1;
     if (s1 === s2 && s1 < 400) {
       console.log(`✓ DELETE ${assetPath}/probe_ws（双端 ${s1}）`);
@@ -464,7 +468,7 @@ try {
   process.exitCode = 1;
 } finally {
   for (const child of children) {
-    try { child.kill("SIGTERM"); } catch { /* exited */ }
+    try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
   }
   if (!keep) {
     for (const root of Object.values(roots)) rmSync(root, { recursive: true, force: true });
