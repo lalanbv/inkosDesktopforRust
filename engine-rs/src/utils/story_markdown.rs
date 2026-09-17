@@ -626,19 +626,36 @@ fn parse_pending_hook_row(row: &[String]) -> HookRecord {
 }
 
 /// 把状态单元格解析为 [`HookStatus`]。
-/// TS 用字符串（"open"/"progressing"/"deferred"/"resolved" 等），Rust 收敛为枚举；
-/// 默认 open，resolved 系列（resolved/closed/done/已回收/已解决）→ Resolved。
+/// 523 号：对齐 TS `HOOK_STATUS_ALIASES`（hook-lifecycle.ts）全量别名表——
+/// 此前仅收少量词，"pressured"/"advanced"/"confirmed"/"dormant" 等被回退 open，
+/// 落盘伏笔池状态与 TS 分叉（差分器工件面实证：fixture 的 H03=pressured
+/// 在 TS 侧 progressing、Rust 侧 open）。未命中回退 Open（TS 同语义）。
 fn parse_hook_status(cell: String) -> HookStatus {
     let lower = cell.trim().to_lowercase();
     if lower.is_empty() {
         return HookStatus::Open;
     }
     match lower.as_str() {
-        "open" => HookStatus::Open,
-        "progressing" | "active" | "ongoing" | "进行中" | "推进中" => HookStatus::Progressing,
-        "deferred" | "defer" | "paused" | "延后" | "搁置" => HookStatus::Deferred,
-        "resolved" | "closed" | "done" | "complete" | "completed" | "已解决" | "已回收" | "已完成" | "已关闭" => {
+        // progressing 组（TS 全表 + Rust 既有 ongoing）
+        "progressing" | "advanced" | "progress" | "active" | "pressured" | "confirmed"
+        | "confirmed_hit" | "confirmed-hit" | "confirmed hit" | "命中" | "已确认命中"
+        | "已推进" | "推进" | "进行中" | "持续推进" | "重大推进" | "ongoing" | "推进中" => {
+            HookStatus::Progressing
+        }
+        // deferred 组（TS 全表）
+        "deferred" | "defer" | "paused" | "hold" | "dormant" | "sleeping" | "inactive"
+        | "unplanted" | "unseeded" | "not_started" | "not-started" | "not started"
+        | "not_active" | "not-active" | "not active" | "搁置" | "延后" | "延期" | "暂缓"
+        | "休眠" | "未激活" | "未开启" | "待开启" | "未启动" | "待启动" | "未推进"
+        | "尚未推进" | "待推进" => HookStatus::Deferred,
+        // resolved 组（TS 全表 + Rust 既有 complete/completed/已关闭）
+        "resolved" | "closed" | "done" | "paid_off" | "paid-off" | "paid off" | "complete"
+        | "completed" | "已回收" | "回收" | "完成" | "已解决" | "已兑现" | "兑现" | "已关闭" => {
             HookStatus::Resolved
+        }
+        // open 组（TS 全表）
+        "open" | "pending" | "seeded" | "planted" | "待定" | "未回收" | "已埋" | "已种下" | "已铺垫" => {
+            HookStatus::Open
         }
         _ => HookStatus::Open,
     }
