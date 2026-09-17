@@ -7,7 +7,7 @@
 //!
 //! ## 移植差异备案
 //! TS 用 `Intl.Segmenter`（ICU）做词边界——Rust 以
-//! `unicode-segmentation::split_word_bounds` 近似；个别语种的分词粒度
+//! 521 号起换 icu_segmenter（与 TS Intl.Segmenter 同源 ICU 词典分词）；个别语种的分词粒度
 //! 可能不同（分数不逐字一致），检索意图（top-k 相关排序）等价。
 //! 消费面：use_skill 的 query 检索分支（240 号备案项）。
 
@@ -326,15 +326,27 @@ fn normalize_document(document: &SearchDocument, _scope: &str) -> NormalizedDocu
 /// `tokenizeSearchText`：NFKC + lower → word 分段（word-like 过滤 +
 /// Latin/数字单字符丢弃）→ 相邻汉字 bigram 追加 → 连字符复合词追加。
 pub fn tokenize_search_text(text: &str) -> Vec<String> {
-    use unicode_segmentation::UnicodeSegmentation;
+    use icu_segmenter::WordSegmenter;
+    use std::sync::OnceLock;
+    // 521 号：换 icu_segmenter WordSegmenter（compiled data）——与 TS
+    // Intl.Segmenter 同源 ICU 词典分词（中文复合词整词切出），替换
+    // 「Han 强制单字 + bigram」近似；token 序列一致后 BM25 的 tf/df 与
+    // 长度归一化才可比（差分器实证双端分数/边缘命中此前系统性漂移）。
+    static SEGMENTER: OnceLock<icu_segmenter::WordSegmenterBorrowed<'static>> = OnceLock::new();
+    let segmenter = SEGMENTER.get_or_init(|| WordSegmenter::new_auto(Default::default()));
     let normalized: String = text.nfkc().collect::<String>().to_lowercase();
-    // UAX#29 不拆汉字序列——在每个 Han 字符后预插空格，保证单字 token
-    //（TS Intl.Segmenter word 粒度 + bigram 追加的组合语义）。
-    let han_spaced = han_space_re().replace_all(&normalized, "$0 ").to_string();
     let mut tokens: Vec<String> = Vec::new();
-    for part in han_spaced.split_word_bounds() {
-        let token: &str = part.trim();
-        if !is_word_like(token) {
+    // Item=(边界, 边界前片段 WordType)——滑动窗口还原片段（官方示例同式）。
+    let breaks: Vec<(usize, icu_segmenter::options::WordType)> =
+        segmenter.segment_str(&normalized).iter_with_word_type().collect();
+    for window in breaks.windows(2) {
+        let (start, _) = window[0];
+        let (end, word_type) = window[1];
+        if !word_type.is_word_like() {
+            continue;
+        }
+        let token = normalized[start..end].trim();
+        if token.is_empty() {
             continue;
         }
         if is_ascii_word(token) && token.chars().count() < 2 {
@@ -354,17 +366,6 @@ pub fn tokenize_search_text(text: &str) -> Vec<String> {
         tokens.push(m.as_str().to_string());
     }
     tokens
-}
-
-fn han_space_re() -> &'static Regex {
-    static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    R.get_or_init(|| Regex::new(r"\p{Han}").expect("han regex"))
-}
-
-fn is_word_like(token: &str) -> bool {
-    token
-        .chars()
-        .any(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
 fn is_ascii_word(token: &str) -> bool {
@@ -546,8 +547,22 @@ mod tests {
     #[test]
     fn tokenize_han_bigrams_and_hyphen_compounds() {
         let tokens = tokenize_search_text("核心冲突 core-hook");
-        assert!(tokens.contains(&"核心".to_string()), "{tokens:?}");
-        assert!(tokens.contains(&"心冲".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"core-hook".to_string()), "{tokens:?}");
+    }
+
+    #[test]
+    // 521 号：icu_segmenter 词典分词——中文复合词整词切出（与 TS Intl.Segmenter
+    // 一致），bigram 仅在 ICU 切出相邻单字时补位（如无词典覆盖的人名）。
+    fn tokenize_icu_dictionary_words() {
+        let tokens = tokenize_search_text("核心冲突 core-hook");
+        assert!(tokens.contains(&"核心".to_string()), "{tokens:?}");
+        assert!(tokens.contains(&"冲突".to_string()), "{tokens:?}");
+        assert!(!tokens.contains(&"心冲".to_string()), "{tokens:?}");
+
+        // 「苏檀」不在 ICU 词典 → 单字序列 + bigram 补位（与 TS 同行为）。
+        let tokens = tokenize_search_text("苏檀 碎镜");
+        assert!(tokens.contains(&"苏檀".to_string()), "{tokens:?}");
+        assert!(tokens.contains(&"碎镜".to_string()), "{tokens:?}");
+        assert!(tokens.contains(&"檀碎".to_string()), "{tokens:?}");
     }
 }
