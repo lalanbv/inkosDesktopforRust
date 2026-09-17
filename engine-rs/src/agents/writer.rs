@@ -2181,8 +2181,15 @@ pub async fn settle_chapter_state(
         word_count: count_chapter_length(input.content, counting_mode),
         pre_write_check: String::new(),
         post_settlement: settlement.post_settlement,
+        // 525 号：对齐 TS 优先级（writer.ts updatedChapterSummaries）——artifacts
+        // 的 10 列全量摘要表（含冲突/揭示强度）优先，render_delta_summary_row
+        // 仅兜底；此前直用 8 列单行，resync 产物摘要表缺冲突/揭示强度两列
+        //（差分器工件面实证）。
         chapter_summary: match &settlement.runtime_state_delta {
-            Some(delta) => render_delta_summary_row(delta),
+            Some(delta) => runtime_state_artifacts
+                .as_ref()
+                .map(|artifacts| artifacts.chapter_summaries_markdown.clone())
+                .unwrap_or_else(|| render_delta_summary_row(delta)),
             None => settlement.chapter_summary,
         },
         runtime_state_delta: runtime_state_artifacts

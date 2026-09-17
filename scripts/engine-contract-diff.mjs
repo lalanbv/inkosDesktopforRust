@@ -548,6 +548,28 @@ try {
     const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys)
       : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]))
       : v);
+    // 525 号：非契约噪声归一。
+    // ① runtime plan/intent 里的绝对 root 路径（双腿 tmp 目录天然不同）；
+    // ② yaml 行首缩进（TS yaml 序列化两空格 vs serde_yaml 顶层列表——语义等价）。
+    const stripVolatileText = (t, root) => t.split(root).join("<root>").split(tmpdir()).join("<tmp>")
+      .split("\r\n").join("\n")
+      .split("\n").map((l) => l.trim()).filter((l) => l.length > 0).join("\n");
+    // 525 号：备案清单快照（已定性差异；清偿后从清单移除，未备案的新分歧硬拦截）。
+    const ALLOWED_CONTENT_DIFFS = new Set([
+      "chapters/0001_镜中醒来.md",            // fixture 直写形态（尾换行）——装置差异
+      "story/runtime/chapter-0002.intent.md", // settle 链 tension 注入列（ch1 行冲突/揭示强度）——专项
+      "story/runtime/chapter-0002.plan.md",   // 已被 root 路径归一消除；留观察位
+      "story/runtime/chapter-0002.rule-stack.yaml", // yaml 序列化格式（语义等价，已被缩进归一消除）
+      "story/snapshots/1/state/hooks.json",   // serde 空字段序列化形状（status_raw 等）
+      "story/snapshots/2/state/hooks.json",
+      "story/state/hooks.json",               // 同上（主 state 目录，525 快照断言捕获补登记）
+    ]);
+    const ALLOWED_ONLY_NODE = new Set([
+      // resync governed 管线留痕（519 裁决：TS governed / Rust 直写现状）
+      "story/runtime/chapter-0001.intent.md",
+      "story/runtime/chapter-0001.plan.md",
+      "story/runtime/chapter-0001.rule-stack.yaml",
+    ]);
     const nodeFiles = walkFiles(bookDirOf(roots.node));
     const rustFiles = walkFiles(bookDirOf(roots.rust));
     const nodeCore = nodeFiles.filter((f) => !isVolatile(f));
@@ -559,12 +581,18 @@ try {
     compared += 1;
     // 522 号：工件面本轮信息性输出（已定性备案：runtime 留痕=settle 上游专项、
     // intent/plan/rule-stack 措辞=prompt 模板对齐专项）；清偿后逐项转硬门禁。
-    if (onlyNode.length || onlyRust.length) {
+    const unknownOnlyNode = onlyNode.filter((f) => !ALLOWED_ONLY_NODE.has(f));
+    const unknownOnlyRust = onlyRust.filter((f) => !ALLOWED_ONLY_NODE.has(f));
+    if (unknownOnlyNode.length || unknownOnlyRust.length) {
+      divergences += unknownOnlyNode.length + unknownOnlyRust.length;
+      console.log(`✗ 落盘工件树（未备案）：仅 node=[${unknownOnlyNode}] 仅 rust=[${unknownOnlyRust}]`);
+    } else if (onlyNode.length || onlyRust.length) {
       console.log(`[diff] 落盘工件树（备案）：仅 node=[${onlyNode}] 仅 rust=[${onlyRust}]`);
     } else {
       console.log(`✓ 落盘工件树存在性（${nodeCore.length} 个内容工件双端一致）`);
     }
     let contentDiffs = 0;
+    let unexpected = 0;
     for (const rel of nodeCore.filter((f) => rustSet.has(f))) {
       let a = readFileSync(join(bookDirOf(roots.node), rel), "utf-8");
       let b = readFileSync(join(bookDirOf(roots.rust), rel), "utf-8");
@@ -578,16 +606,28 @@ try {
           a = norm(a);
           b = norm(b);
         } catch { /* 非法 json 保持裸文本比 */ }
+      } else if (rel.endsWith(".md") || rel.endsWith(".yaml")) {
+        a = stripVolatileText(a, roots.node);
+        b = stripVolatileText(b, roots.rust);
       }
       if (a !== b) {
-        contentDiffs += 1;
-        console.log(`[diff] 工件内容分歧：${rel}（node ${a.length}B / rust ${b.length}B）`);
+        if (ALLOWED_CONTENT_DIFFS.has(rel)) {
+          contentDiffs += 1;
+          console.log(`[diff] 工件内容分歧（备案）：${rel}`);
+        } else {
+          unexpected += 1;
+          console.log(`✗ 工件内容分歧（未备案）：${rel}（node ${a.length}B / rust ${b.length}B）`);
+        }
       }
     }
     if (contentDiffs > 0) {
-      console.log(`[diff] 工件内容分歧共 ${contentDiffs} 个（备案跟踪：settle/plan 措辞与 hook 状态语义专项）`);
+      console.log(`[diff] 工件内容分歧共 ${contentDiffs} 个（均在备案清单内；清偿后从 ALLOWED_CONTENT_DIFFS 移除）`);
     } else {
-      console.log(`✓ 落盘工件内容一致（json 归一化后；豁免时序/二进制面）`);
+      console.log(`✓ 落盘工件内容一致（归一化后；豁免时序/二进制面）`);
+    }
+    if (unexpected > 0) {
+      divergences += unexpected;
+      console.log(`✗ 未备案工件分歧 ${unexpected} 个——先定性并登记 ALLOWED_CONTENT_DIFFS/ALLOWED_ONLY_NODE，或修复`);
     }
   }
 
