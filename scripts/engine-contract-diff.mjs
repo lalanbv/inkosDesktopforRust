@@ -569,9 +569,12 @@ try {
       let a = readFileSync(join(bookDirOf(roots.node), rel), "utf-8");
       let b = readFileSync(join(bookDirOf(roots.rust), rel), "utf-8");
       if (rel.endsWith(".json")) {
-        // json 归一化：键序差异非契约（TS 对象序 vs serde 结构体序），缺键/值差异才是。
+        // json 归一化：键序差异非契约（TS 对象序 vs serde 结构体序），缺键/值差异才是；
+        // ISO 时间戳值归一（双腿独立起引擎，写入时刻天然不同，524 号）。
+        const TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+        const stamp = (v) => (typeof v === "string" && TS_RE.test(v) ? "<ts>" : v);
+        const norm = (t) => JSON.stringify(sortKeys(JSON.parse(t)), (k, v) => stamp(v));
         try {
-          const norm = (t) => JSON.stringify(sortKeys(JSON.parse(t)));
           a = norm(a);
           b = norm(b);
         } catch { /* 非法 json 保持裸文本比 */ }

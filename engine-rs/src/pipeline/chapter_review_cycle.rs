@@ -230,12 +230,35 @@ pub async fn run_chapter_review_cycle(
             None => initial_post_write_issues.to_vec(),
         };
 
+        // 524 号：篇幅越界 critical 并入审计问题列表（对齐 TS lengthIssues——
+        // 差分器工件面实证 TS auditIssues 含 "[critical] Chapter length ... is
+        // outside..." 而 Rust 缺报）。注意 passed **不**因 length 越界降级：
+        // TS 实测越界章 status 仍 ready-for-review（write-next 主链
+        // chapterStatus 仅 state-degraded 时显式传入），Rust 对齐该语义。
+        let length_issues: Vec<AuditIssue> = if length_in_range {
+            Vec::new()
+        } else {
+            vec![AuditIssue {
+                severity: AuditSeverity::Critical,
+                category: "length-budget".to_string(),
+                description: format!(
+                    "Chapter length {} is outside the required range {}-{}.",
+                    word_count, params.length_spec.hard_min, params.length_spec.hard_max
+                ),
+                suggestion: format!(
+                    "Repair only the scenes that are underdeveloped or redundant, then land near {} without changing established facts.",
+                    params.length_spec.target
+                ),
+                repair_scope: None,
+            }]
+        };
+
         let mut all_issues: Vec<AuditIssue> = llm_audit.issues.clone();
         all_issues.extend(ai_tells_issues);
         all_issues.extend(sensitive_result.issues);
         all_issues.extend(post_write_issues.clone());
+        all_issues.extend(length_issues.clone());
 
-        // 长度不进 reviser 问题——normalize 专用；lengthInRange 只作硬门控。
         let has_post_write_critical = post_write_issues
             .iter()
             .any(|issue| issue.severity == AuditSeverity::Critical);
