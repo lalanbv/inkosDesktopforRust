@@ -104,7 +104,9 @@ const validateEpub = (epubPath) => {
 
 async function runLeg(engine) {
   console.log(`\n[epub-smoke] ── 引擎腿：${engine} ──`);
-  const base = `http://127.0.0.1:${port}`;
+  // 518 号：腿间端口位移（同 node-fallback-smoke——僵尸 keep-alive 连接隔离）。
+  const legPort = Number(port) + legs.indexOf(engine) * 10;
+  const base = `http://127.0.0.1:${legPort}`;
   const root = mkdtempSync(join(tmpdir(), `inkos-epub-smoke-${engine}-`));
   mkdirSync(join(root, ".inkos"), { recursive: true });
   writeFileSync(
@@ -117,7 +119,7 @@ async function runLeg(engine) {
     startChild(
       process.execPath,
       [join(studioDir, "node_modules", "tsx", "dist", "cli.mjs"), join(studioDir, "src", "api", "index.ts"), root],
-      { cwd: studioDir, env: { ...process.env, INKOS_STUDIO_PORT: port } },
+      { cwd: studioDir, env: { ...process.env, INKOS_STUDIO_PORT: legPort } },
       join(root, "server.log"),
     );
   } else {
@@ -128,7 +130,7 @@ async function runLeg(engine) {
         cwd: repoRoot,
         env: {
           ...process.env,
-          INKOS_PORT: port,
+          INKOS_PORT: legPort,
           INKOS_PROJECT_ROOT: root,
           INKOS_STATIC_DIR: join(studioDir, "dist"),
           INKOS_LLM_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
@@ -149,7 +151,7 @@ async function runLeg(engine) {
   check(`${engine} 引擎启动`, up);
   if (!up) throw new Error(`${engine} server failed to start`);
 
-  execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), root, port], {
+  execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), root, legPort], {
     cwd: repoRoot,
     stdio: ["ignore", "ignore", "inherit"],
   });

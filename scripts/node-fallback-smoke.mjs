@@ -85,7 +85,10 @@ const apiFor = (base) => async (path, init) => {
 /** 单引擎腿：独立临时根 + 独立被测服务器 + 全套断言。 */
 async function runEngineLeg(engine) {
   console.log(`\n[smoke] ── 引擎腿：${engine} ──`);
-  const legPort = port;
+  // 518 号：腿间端口位移（node=基口、rust=+10）——SIGKILL 秒释放端口后，
+  // 主进程 undici keep-alive 池仍持有前腿 TCP 连接，同端口复用僵尸连接
+  // 即 ECONNRESET（fixture 子进程池独立故独活）。异 origin 天然隔离。
+  const legPort = Number(port) + legs.indexOf(engine) * 10;
   const base = `http://127.0.0.1:${legPort}`;
   const api = apiFor(base);
   const root = mkdtempSync(join(tmpdir(), `inkos-smoke-${engine}-`));
@@ -218,6 +221,7 @@ for (const leg of legs) {
   } catch (error) {
     failures += 1;
     console.error(`[smoke] [${leg}] 异常中断：${error?.message ?? error}`);
+    if (error?.cause) console.error(`[smoke] [${leg}] cause: ${error.cause?.code ?? error.cause}`);
   }
   // 腿间清理：杀掉本腿服务器，释放端口供下一腿复用。
   for (const child of children.splice(0)) {

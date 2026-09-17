@@ -429,6 +429,66 @@ try {
       console.log(`    rust=${b.slice(0, 260)}`);
     }
   }
+  // ── resync POST 活体对照（518 号：483 架构分歧备案的差分器实证面）──
+  // fixture 已跑过一次 resync/1（walkthrough-fixture 步骤 3），此处第二次 POST
+  // 兼职验证幂等性。归一化：auditResult.summary 文案双端各自实现（剥）；
+  // tokenUsage / lengthTelemetry 保存在性、剥 LLM 计数内部值（prompt 模板
+  // 毫级差异会进计数）；contextTrace 为 TS 独有字段（剥）。
+  {
+    // 探针钉最新持久化章（fixture write-next 已生成 ch2）：TS 侧有
+      // "仅最新章可同步"守卫，resync 非 latest 直接 500——探针走 latest 面。
+      const resyncPath = `/api/v1/books/${BOOK}/resync/2`;
+    const nodeRes = await nodeApi(resyncPath, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const rustRes = await rustApi(resyncPath, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    compared += 1;
+    if (nodeRes.status !== rustRes.status || nodeRes.status >= 400) {
+      divergences += 1;
+      console.log(`✗ POST ${resyncPath}：状态码 node=${nodeRes.status} rust=${rustRes.status}`);
+      if (nodeRes.body && typeof nodeRes.body === "object") console.log(`    node body=${JSON.stringify(nodeRes.body).slice(0, 300)}`);
+      if (rustRes.body && typeof rustRes.body === "object") console.log(`    rust body=${JSON.stringify(rustRes.body).slice(0, 300)}`);
+    } else {
+      const presence = (v) => (v === undefined || v === null ? null : "object");
+      const normalize = (o) => {
+        if (!o || typeof o !== "object") return o;
+        const { tokenUsage, lengthTelemetry, contextTrace, auditResult, ...rest } = o;
+        return {
+          ...rest,
+          auditResult: auditResult && typeof auditResult === "object"
+            ? { passed: auditResult.passed ?? null, issues: auditResult.issues ?? [] }
+            : presence(auditResult),
+          tokenUsage: presence(tokenUsage),
+          lengthTelemetry: presence(lengthTelemetry),
+        };
+      };
+      // prune：键序归一 + VOLATILE 剥离——双端序列化键序不同（node 契约序
+      // vs rust 结构体序），内容一致时裸 stringify 也会假分叉。
+      const a = JSON.stringify(prune(normalize(nodeRes.body)));
+      const b = JSON.stringify(prune(normalize(rustRes.body)));
+      if (a === b) {
+        console.log(`✓ POST ${resyncPath}（${nodeRes.status}，响应形状归一后一致；二次调用幂等）`);
+      } else {
+        divergences += 1;
+        console.log(`✗ POST ${resyncPath}：归一化后不一致`);
+        console.log(`    首个分叉：${firstDiffPath(normalize(nodeRes.body), normalize(rustRes.body)) ?? "?"}`);
+        console.log(`    node=${a.slice(0, 300)}`);
+        console.log(`    rust=${b.slice(0, 300)}`);
+      }
+      // 豁免面缩小复核：resync 关联三豁免端点做无豁免重照（信息输出，不计数）。
+      // 若三处全一致 → WAIVERS 源即可删条目正式缩小（483 备案差分器实证收口）。
+      for (const endpoint of [`/api/v1/books/${BOOK}/promises`, `/api/v1/books/${BOOK}/context-lens`, `/api/v1/books/${BOOK}/roster-candidates`]) {
+        const n = await nodeApi(endpoint);
+        const r = await rustApi(endpoint);
+        const an = JSON.stringify(prune(n.body));
+        const br = JSON.stringify(prune(r.body));
+        if (an === br) {
+          console.log(`[diff] 豁免复核 ${endpoint}：无豁免 ✓（可删豁免条目）`);
+        } else {
+          console.log(`[diff] 豁免复核 ${endpoint}：无豁免 ✗ 首个分叉：${firstDiffPath(prune(n.body), prune(r.body)) ?? "?"}`);
+        }
+      }
+    }
+  }
+
   // 确定性广播触发：directions 端点必广播 director:start + complete|error。
   const trigger = apiFor("", "");
   const triggers = engines.map((engine) =>

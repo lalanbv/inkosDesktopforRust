@@ -1005,6 +1005,7 @@ export {
 export {
   deriveCodexCards,
   matchCodexCards,
+  normalizeCodexCards,
   renderCodexBlock,
   reviseCodexCard,
   CODEX_LIMITS,

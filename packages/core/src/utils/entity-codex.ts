@@ -67,6 +67,43 @@ const clampList = (items: ReadonlyArray<string>, maxItems: number, maxChars: num
     .slice(0, maxItems)
     .map((item) => (item.length > maxChars ? item.slice(0, maxChars) : item));
 
+/**
+ * 518 号：**消费面**卡归一化（Rust 侧 EntityCodexCard 全字段 `#[serde(default)]`
+ * 的 TS 对应物；读写端点双端均 Value 原样透传，容差只发生在进管线前）。
+ * 缺 aliases 的卡此前在 matchCodexCards 展开 `...card.aliases` 即崩
+ * （差分器实证：PUT codex 200 → resync 500）。未知字段（如 Rust 回显的 id）
+ * spread 保留；kind 仅补缺省不校验取值（Rust 侧为 String 无枚举约束）。
+ */
+export function normalizeCodexCards(cards: ReadonlyArray<unknown>): EntityCodexCard[] {
+  const out: EntityCodexCard[] = [];
+  for (const card of cards) {
+    if (!card || typeof card !== "object") continue;
+    const raw = card as Record<string, unknown>;
+    if (typeof raw.name !== "string" || raw.name.length === 0) continue;
+    out.push({
+      ...raw,
+      name: raw.name,
+      aliases: Array.isArray(raw.aliases)
+        ? raw.aliases.filter((alias): alias is string => typeof alias === "string")
+        : [],
+      kind: (typeof raw.kind === "string" ? raw.kind : "other") as EntityCodexCard["kind"],
+      summary: typeof raw.summary === "string" ? raw.summary : "",
+      facts: Array.isArray(raw.facts)
+        ? raw.facts.filter((fact): fact is string => typeof fact === "string")
+        : [],
+      relationships: Array.isArray(raw.relationships)
+        ? raw.relationships.filter(
+            (relation): relation is CodexRelationship =>
+              !!relation && typeof relation === "object"
+                && typeof (relation as CodexRelationship).target === "string"
+                && typeof (relation as CodexRelationship).note === "string",
+          )
+        : [],
+    } as EntityCodexCard);
+  }
+  return out;
+}
+
 /** 卡片修订：以名册同源卡为底座合并作者扩展（summary/facts/relationships）。 */
 export function reviseCodexCard(
   base: EntityCodexCard,

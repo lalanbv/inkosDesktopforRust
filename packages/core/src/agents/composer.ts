@@ -40,6 +40,7 @@ import {
 } from "../utils/rule-experience-engine.js";
 import {
   matchCodexCards,
+  normalizeCodexCards,
   renderCodexBlock,
   type EntityCodexCard,
 } from "../utils/entity-codex.js";
@@ -474,8 +475,10 @@ export async function loadCodexEntries(
   let bookCards: EntityCodexCard[] = [];
   try {
     const raw = await readFile(join(bookDir, "story", "entity_codex.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { cards?: EntityCodexCard[] };
-    if (Array.isArray(parsed.cards)) bookCards = parsed.cards;
+    const parsed = JSON.parse(raw) as { cards?: unknown[] };
+    // 518 号：磁盘卡归一化（对齐 Rust serde(default)）——缺 aliases 的卡
+    // 在 matchCodexCards 展开即崩（差分器实证）。
+    if (Array.isArray(parsed.cards)) bookCards = normalizeCodexCards(parsed.cards);
   } catch {
     // 零打扰
   }
