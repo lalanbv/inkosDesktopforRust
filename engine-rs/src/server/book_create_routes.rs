@@ -514,7 +514,7 @@ pub async fn create_book(
                     }
                     // 500 号：灵感卡写入失败不阻断建书完成。
                     if let Err(e) =
-                        write_director_inspiration_card(&runtime.state.project_root(), &book_id, &premise).await
+                        write_director_inspiration_card(runtime.state.project_root(), &book_id, &premise).await
                     {
                         eprintln!("[book:create] 导演灵感卡写入失败（不阻断）：{e}");
                     }

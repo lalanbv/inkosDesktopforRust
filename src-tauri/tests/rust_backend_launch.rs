@@ -54,7 +54,7 @@ async fn rust_engine_serves_health_under_env_contract() {
 
     let port = supervisor::pick_free_port(4567).expect("无空闲端口");
     // 纯 API 模式：不注入 INKOS_STATIC_DIR（构建产物缺失的兜底形态）。
-    let spec = rustbin::build_launch(&paths, port, &bin, None);
+    let spec = rustbin::build_launch(&paths, port, &bin, None, None);
     assert!(!spec.env.contains_key("INKOS_STATIC_DIR"));
 
     let mut child = spawn(&spec).expect("spawn inkos-engine-server 失败");
@@ -118,7 +118,7 @@ async fn rust_engine_serves_spa_when_static_dir_set() {
     // pick_free_port 的 TOCTOU 缝隙（两测试同瞬探测得同一端口，后绑者退出，
     // 轮询的却是先绑者的纯 API 404——实测踩中）。
     let port = supervisor::pick_free_port(5600).expect("无空闲端口");
-    let spec = rustbin::build_launch(&paths, port, &bin, Some(&dist));
+    let spec = rustbin::build_launch(&paths, port, &bin, Some(&dist), None);
     assert_eq!(spec.env.get("INKOS_STATIC_DIR").unwrap(), &dist.to_string_lossy().into_owned());
 
     let mut child = spawn(&spec).expect("spawn inkos-engine-server 失败");
