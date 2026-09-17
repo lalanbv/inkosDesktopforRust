@@ -940,8 +940,10 @@ fn summary_from_row(row: &ChapterSummaryRow) -> StoredSummary {
         hook_activity: row.hook_activity.clone(),
         mood: row.mood.clone(),
         chapter_type: row.chapter_type.clone(),
-        conflict_level: None,
-        reveal_level: None,
+        // 526 号：透传结构化 rows 的张力评分——此前硬编码 None，写前记忆
+        // 检索的摘要表行恒缺冲突/揭示强度（intent 工件差分实证，TS 侧有值）。
+        conflict_level: row.conflict_level.map(i64::from),
+        reveal_level: row.reveal_level.map(i64::from),
     }
 }
 
@@ -1249,7 +1251,9 @@ mod tests {
             trace.candidates
         );
         assert_eq!(selection.active_hooks[0].hook_id, "H01");
-        assert_eq!(selection.active_hooks[0].status_raw, "pressured");
+        // 526 号：status_raw 不再持久化（TS StoredHook 无此键，JSON 形状对齐）——
+        // markdown 解析时原文在内存判定链消费；json 往返后回退空串（枚举规范名等价）。
+        assert_eq!(selection.active_hooks[0].status_raw, "");
         assert_eq!(selection.recyclable_hooks.len(), 1);
         assert_eq!(selection.summaries.len(), 1);
         // tempdir 内 SQLite 可开（memory.db 创建于 story/ 下）→ db 分支生效。

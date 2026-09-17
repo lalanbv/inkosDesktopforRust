@@ -100,8 +100,9 @@ pub struct HookRecord {
     /// TS `StoredHook.status` 是 string，`recycleThreshold` / `isRecycleTerminalStatus`
     /// 等回收判定直接吃原文；Rust 侧 `status` 归一化为 4 值枚举会丢掉这些非枚举值，
     /// 因此用本字段保留原文，判定链经 [`crate::utils::hook_lifecycle::hook_status_text`]
-    /// 读取（空串时回退枚举规范名）。序列化跳过空值，规范记录 JSON 形状不变。
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// 读取（空串时回退枚举规范名）。526 号：完全不序列化——TS StoredHook 无此键，
+    /// 原文只在内存判定链流转；反序列化走 default 空串（可由 status 重导出）。
+    #[serde(default, skip_serializing)]
     pub status_raw: String,
     pub last_advanced_chapter: u32,
     #[serde(default)]
