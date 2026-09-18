@@ -476,15 +476,16 @@ try {
         console.log(`    node=${a.slice(0, 300)}`);
         console.log(`    rust=${b.slice(0, 300)}`);
       }
-      // 豁免面缩小复核：resync 关联三豁免端点做无豁免重照（信息输出，不计数）。
-      // 若三处全一致 → WAIVERS 源即可删条目正式缩小（483 备案差分器实证收口）。
+      // 豁免面缩小复核：resync 关联三端点做无豁免裸比对（信息输出，不计数）。
+      // promises/roster-candidates 豁免已随 519 修复撤销；context-lens 仍按
+      // 519 裁决备案装配留痕差异（chapters 长度分叉为预期）。
       for (const endpoint of [`/api/v1/books/${BOOK}/promises`, `/api/v1/books/${BOOK}/context-lens`, `/api/v1/books/${BOOK}/roster-candidates`]) {
         const n = await nodeApi(endpoint);
         const r = await rustApi(endpoint);
         const an = JSON.stringify(prune(n.body));
         const br = JSON.stringify(prune(r.body));
         if (an === br) {
-          console.log(`[diff] 豁免复核 ${endpoint}：无豁免 ✓（可删豁免条目）`);
+          console.log(`[diff] 豁免复核 ${endpoint}：裸比对一致 ✓`);
         } else {
           console.log(`[diff] 豁免复核 ${endpoint}：无豁免 ✗ 首个分叉：${firstDiffPath(prune(n.body), prune(r.body)) ?? "?"}`);
         }
@@ -554,18 +555,20 @@ try {
     const stripVolatileText = (t, root) => t.split(root).join("<root>").split(tmpdir()).join("<tmp>")
       .split("\r\n").join("\n")
       .split("\n").map((l) => l.trim()).filter((l) => l.length > 0).join("\n");
-    // 525 号：备案清单快照（已定性差异；清偿后从清单移除，未备案的新分歧硬拦截）。
-    const ALLOWED_CONTENT_DIFFS = new Set([
-      "chapters/0001_镜中醒来.md",            // fixture 直写形态（尾换行）——装置差异
-      "story/runtime/chapter-0002.intent.md", // settle 链 tension 注入列（ch1 行冲突/揭示强度）——专项
-      "story/runtime/chapter-0002.plan.md",   // 已被 root 路径归一消除；留观察位
-      "story/runtime/chapter-0002.rule-stack.yaml", // yaml 序列化格式（语义等价，已被缩进归一消除）
-      "story/snapshots/1/state/hooks.json",   // serde 空字段序列化形状（status_raw 等）
-      "story/snapshots/2/state/hooks.json",
-      "story/state/hooks.json",               // 同上（主 state 目录，525 快照断言捕获补登记）
-    ]);
+    // 527 号裁决：内容备案清单全量清偿——522 号建立时 7 项备案（尾换行装置
+    // 形态/settle tension 注入列/plan 措辞/rule-stack 序列化格式/status_raw
+    // 形状），经 523–526 号修复与归一化后活体实测命中归零，清单出清；此后
+    // 任何工件内容分歧（归一化后）直接计入 divergences 硬拦截，新分歧原则
+    // 上定性修复，不再新增备案。
+    const ALLOWED_CONTENT_DIFFS = new Set([]);
+    // 527 号裁决（永久备案）：resync 留痕三件套仅 TS 侧产出。intent/plan/
+    // rule-stack 在 TS 是 resolveGovernedPlan 的 planner memo 化缓存+人类可读
+    // 留痕；Rust write-next 主链同等 memo 已存在（write_next.rs
+    // load_persisted_plan 复用跳过 planner LLM），缺失仅影响 resync 后首章
+    // write-next 多一次 planner 调用（成本面，非正确性面）+回放留痕缺失。
+    // 补齐须给 Rust resync 直写链加 governed plan 阶段=改变 resync 的 LLM
+    // 调用面，519 号已裁决 resync 架构维持现状——故永久备案，不清偿。
     const ALLOWED_ONLY_NODE = new Set([
-      // resync governed 管线留痕（519 裁决：TS governed / Rust 直写现状）
       "story/runtime/chapter-0001.intent.md",
       "story/runtime/chapter-0001.plan.md",
       "story/runtime/chapter-0001.rule-stack.yaml",
@@ -579,8 +582,8 @@ try {
     const onlyNode = nodeCore.filter((f) => !rustSet.has(f));
     const onlyRust = rustCore.filter((f) => !nodeSet.has(f));
     compared += 1;
-    // 522 号：工件面本轮信息性输出（已定性备案：runtime 留痕=settle 上游专项、
-    // intent/plan/rule-stack 措辞=prompt 模板对齐专项）；清偿后逐项转硬门禁。
+    // 527 号起工件对照全量硬门禁：内容分歧零备案（清单已清偿出清）；
+    // 仅 resync 留痕三件套按 527 裁决永久备案（仅 node 存在性，见上）。
     const unknownOnlyNode = onlyNode.filter((f) => !ALLOWED_ONLY_NODE.has(f));
     const unknownOnlyRust = onlyRust.filter((f) => !ALLOWED_ONLY_NODE.has(f));
     if (unknownOnlyNode.length || unknownOnlyRust.length) {
@@ -621,13 +624,13 @@ try {
       }
     }
     if (contentDiffs > 0) {
-      console.log(`[diff] 工件内容分歧共 ${contentDiffs} 个（均在备案清单内；清偿后从 ALLOWED_CONTENT_DIFFS 移除）`);
+      console.log(`[diff] 工件内容分歧共 ${contentDiffs} 个（备案清单内）`);
     } else {
-      console.log(`✓ 落盘工件内容一致（归一化后；豁免时序/二进制面）`);
+      console.log(`✓ 落盘工件内容一致（归一化后；零备案硬门禁）`);
     }
     if (unexpected > 0) {
       divergences += unexpected;
-      console.log(`✗ 未备案工件分歧 ${unexpected} 个——先定性并登记 ALLOWED_CONTENT_DIFFS/ALLOWED_ONLY_NODE，或修复`);
+      console.log(`✗ 未备案工件分歧 ${unexpected} 个——先定性修复（527 起内容面零备案）`);
     }
   }
 
