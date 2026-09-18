@@ -516,6 +516,14 @@ try {
     }
     console.log(`[diff][hs] a=${a}`);
     console.log(`[diff][hs] b=${b}`);
+    // 528 号：BM25 分数绝对值观察（非契约，永久豁免定性）。双端公式同源
+    // （FTS5 bm25(fts, 5.0, 1.0) 同参数），活体实测双端分差呈**恒定比例因子**
+    // （node/rust ≈ 1.1646，各命中一致）——单一全局常数差（SQLite 版本间 bm25
+    // 内部常量），单调缩放不影响排序与交集；若 df/avgdl 统计不同则各命中比例
+    // 会发散，实测不发散即排除。token 序 CLDR 微差由 521 golden 向量锁主流面。
+    // 排序一致性由交集契约覆盖；此处仅观察输出，不计数。
+    const scoresOf = (o) => JSON.stringify((o?.fts ?? []).map((h) => [h.id, Number((h.score ?? 0).toFixed(4))]));
+    console.log(`[diff][hs] score node=${scoresOf(nodeRes.body)} rust=${scoresOf(rustRes.body)}`);
     if (nodeRes.status === rustRes.status && nodeRes.status < 400 && a === b) {
       console.log(`✓ POST ${searchPath}（${nodeRes.status}，mode=${nodeRes.body?.mode}，fts 命中序一致）`);
     } else {
