@@ -208,6 +208,115 @@ export function getExecutionSkillIds(exec: ToolExecution): ReadonlyArray<string>
   return rawStringArrayField(exec.details as Record<string, unknown>, "skillIds");
 }
 
+// -- use_skill 激活预览（535 号） --
+
+export interface SkillActivationResource {
+  readonly path: string;
+  readonly heading: string;
+  readonly charStart: number;
+  readonly charEnd: number;
+  readonly score: number;
+}
+
+export interface SkillActivationDetails {
+  readonly skillId: string;
+  readonly expired: boolean;
+  readonly resourcePath?: string;
+  readonly query?: string;
+  readonly resources: ReadonlyArray<SkillActivationResource>;
+}
+
+// 消费 use_skill 工具 result 的 details：实时流为 kind:"skill_activated"
+// （含 retrievedResources 段级元数据——534 号补齐的 path/heading/charStart/charEnd）；
+// 历史回放由 transcript-restore 置为 kind:"skill_expired"（指令有时效性不重放），
+// 此时 skillId 从 args 回取。
+export function getSkillActivationDetails(exec: ToolExecution): SkillActivationDetails | null {
+  if (!exec.details || typeof exec.details !== "object" || Array.isArray(exec.details)) return null;
+  const details = exec.details as Record<string, unknown>;
+  if (details.kind === "skill_expired") {
+    const fromArgs = typeof exec.args?.skillId === "string" ? exec.args.skillId.trim() : "";
+    return { skillId: fromArgs, expired: true, resources: [] };
+  }
+  if (details.kind !== "skill_activated") return null;
+  const skillId = typeof details.skillId === "string" ? details.skillId.trim() : "";
+  if (!skillId) return null;
+  const resourcePath = typeof details.resourcePath === "string" && details.resourcePath.trim()
+    ? details.resourcePath.trim()
+    : undefined;
+  const query = typeof details.query === "string" && details.query.trim() ? details.query.trim() : undefined;
+  const resources = Array.isArray(details.retrievedResources)
+    ? details.retrievedResources.flatMap((item): SkillActivationResource[] => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const record = item as Record<string, unknown>;
+        const path = typeof record.path === "string" ? record.path : "";
+        if (!path) return [];
+        return [{
+          path,
+          heading: typeof record.heading === "string" ? record.heading : "",
+          charStart: typeof record.charStart === "number" ? record.charStart : 0,
+          charEnd: typeof record.charEnd === "number" ? record.charEnd : 0,
+          score: typeof record.score === "number" ? record.score : 0,
+        }];
+      })
+    : [];
+  return { skillId, expired: false, resourcePath, query, resources };
+}
+
+function SkillActivationPreview({ exec }: { exec: ToolExecution }) {
+  const details = getSkillActivationDetails(exec);
+  if (!details) return null;
+  if (details.expired) {
+    return (
+      <div className="mx-3 mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-border/40 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground">
+        <AlertTriangle size={12} className="shrink-0" />
+        <span>
+          {tr("技能指令已过期", "Skill instructions expired")}
+          {details.skillId && (
+            <span className="ml-1.5 rounded-full border border-border/50 bg-background/60 px-2 py-0.5 font-mono text-[11px]">
+              {details.skillId}
+            </span>
+          )}
+          <span className="ml-1">{tr("——原轮激活的指令不再重放", "— instructions from the original turn are not replayed")}</span>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-3 mb-2 space-y-1.5 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-semibold text-foreground/80">{tr("激活 Skill", "Skill activated")}</span>
+        <span className="rounded-full border border-border/50 bg-background/60 px-2 py-0.5 font-mono text-[11px] text-foreground/80">
+          {details.skillId}
+        </span>
+        {details.resourcePath && (
+          <span className="rounded-full border border-border/50 bg-background/60 px-2 py-0.5 font-mono text-[11px]">
+            {details.resourcePath}
+          </span>
+        )}
+        {details.query && (
+          <span className="min-w-0 truncate">{tr(`检索「${details.query}」`, `query: ${details.query}`)}</span>
+        )}
+      </div>
+      {details.resources.length > 0 && (
+        <ul className="space-y-0.5">
+          {details.resources.map((item, index) => (
+            <li
+              key={`${item.path}:${item.charStart}:${index}`}
+              className="flex flex-wrap items-baseline gap-x-1.5 font-mono text-[11px]"
+            >
+              <span className="text-foreground/70">{`${item.path}:${item.charStart}-${item.charEnd}`}</span>
+              {item.heading && <span className="font-sans">{item.heading}</span>}
+              <span className="text-muted-foreground/60">
+                {tr(`相关度 ${item.score.toFixed(2)}`, `score ${item.score.toFixed(2)}`)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SkillUsagePreview({ exec }: { exec: ToolExecution }) {
   const skills = getExecutionSkillIds(exec);
   if (skills.length === 0) return null;
@@ -911,6 +1020,7 @@ function hasStructuredResultPreview(exec: ToolExecution): boolean {
 
 function isPipelineTool(tool: string): boolean {
   return tool === "sub_agent"
+    || tool === "use_skill" // 535 号：技能激活是语义级动作，独立主卡展示激活预览，不折进文件操作组
     || tool === "resync_chapter_state"
     || tool === "context_compression"
     || tool === "propose_action"
@@ -1022,6 +1132,7 @@ function PipelineExecution({
         onRejectProposedAction={onRejectProposedAction}
       />
       <SkillUsagePreview exec={exec} />
+      <SkillActivationPreview exec={exec} />
       <ShortFictionResultPreview exec={exec} />
       <ScriptStoryboardResultPreview exec={exec} onOpenFilmStudio={onOpenFilmStudio} />
       <PlayResultPreview exec={exec} />

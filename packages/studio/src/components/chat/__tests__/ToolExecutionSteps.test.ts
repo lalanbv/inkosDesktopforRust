@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ToolExecution } from "../../../store/chat/types";
-import { PipelineResultDetails, ToolExecutionSteps, UtilityExecutionRow, buildPlayRunStatusUrl, buildPlaySceneImageUrl, getChapterContextTraceDetails, getChapterRevisionDetails, getChapterStateResyncDetails, getExecutionSkillIds, getGeneratedArtifactDetails, getPlayEditDetails, getPlayToolDetails, getProposedActionContractRows, getProposedActionDetails, groupToolExecutionsChronologically } from "../ToolExecutionSteps";
+import { PipelineResultDetails, ToolExecutionSteps, UtilityExecutionRow, buildPlayRunStatusUrl, buildPlaySceneImageUrl, getChapterContextTraceDetails, getChapterRevisionDetails, getChapterStateResyncDetails, getExecutionSkillIds, getSkillActivationDetails, getGeneratedArtifactDetails, getPlayEditDetails, getPlayToolDetails, getProposedActionContractRows, getProposedActionDetails, groupToolExecutionsChronologically } from "../ToolExecutionSteps";
 import { usePreferencesStore } from "../../../store/preferences";
 import { setAppLanguage } from "../../../lib/app-language";
 
@@ -756,5 +756,87 @@ describe("UtilityExecutionRow", () => {
 
     expect(html).toContain("grep 灯");
     expect(html).not.toContain("<details");
+  });
+});
+
+describe("use_skill skill activation preview (535)", () => {
+  it("renders activated skill chip, query, and retrieved resource segments", () => {
+    const exec = makeExec({
+      id: "use-skill-1",
+      tool: "use_skill",
+      label: "Use Skill",
+      details: {
+        kind: "skill_activated",
+        skillId: "longform-craft",
+        query: "开局如何建立张力",
+        retrievedResources: [
+          { path: "references/opening.md", heading: "开局布局", charStart: 12, charEnd: 340, score: 1.42 },
+          { path: "references/tension.md", heading: "", charStart: 0, charEnd: 88, score: 0.97 },
+        ],
+      },
+    });
+
+    expect(getSkillActivationDetails(exec)?.skillId).toBe("longform-craft");
+    expect(getSkillActivationDetails(exec)?.resources).toHaveLength(2);
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+    expect(html).toContain("激活 Skill");
+    expect(html).toContain("longform-craft");
+    expect(html).toContain("检索「开局如何建立张力」");
+    expect(html).toContain("references/opening.md:12-340");
+    expect(html).toContain("开局布局");
+    expect(html).toContain("相关度 1.42");
+    expect(html).toContain("references/tension.md:0-88");
+  });
+
+  it("renders resourcePath-only activation without a segment list", () => {
+    const exec = makeExec({
+      id: "use-skill-2",
+      tool: "use_skill",
+      label: "Use Skill",
+      details: {
+        kind: "skill_activated",
+        skillId: "longform-craft",
+        resourcePath: "references/plot.md",
+      },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+    expect(html).toContain("激活 Skill");
+    expect(html).toContain("longform-craft");
+    expect(html).toContain("references/plot.md");
+    expect(html).not.toContain("相关度");
+  });
+
+  it("renders the expired banner with the skill id recovered from args on restored transcripts", () => {
+    const exec = makeExec({
+      id: "use-skill-3",
+      tool: "use_skill",
+      label: "Use Skill",
+      args: { skillId: "longform-craft" },
+      result: "Skill instructions expired after their original turn.",
+      details: { kind: "skill_expired" },
+    });
+
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+    expect(html).toContain("技能指令已过期");
+    expect(html).toContain("原轮激活的指令不再重放");
+    expect(html).toContain("longform-craft");
+    expect(html).not.toContain("激活 Skill");
+  });
+
+  it("ignores executions without a skill activation details kind", () => {
+    const exec = makeExec({
+      id: "sub-1",
+      tool: "sub_agent",
+      agent: "writer",
+      label: "写作",
+      details: { kind: "chapter_written", skillIds: ["longform-craft"] },
+    });
+
+    expect(getSkillActivationDetails(exec)).toBeNull();
+    const html = renderToStaticMarkup(React.createElement(ToolExecutionSteps, { executions: [exec] }));
+    expect(html).not.toContain("激活 Skill");
+    // 既有 skillIds chip 面不受影响。
+    expect(html).toContain("专业 Skill");
   });
 });
