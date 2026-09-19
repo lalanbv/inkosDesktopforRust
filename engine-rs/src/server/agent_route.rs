@@ -752,6 +752,33 @@ pub async fn post_agent(
     } else {
         (None, None)
     };
+    // 535 号：turnSkills 轮起点预置（TS agent-session turnSkills 由
+    // skillResolution.usedSkills 预置、resources 空）——自由文本路径请求集
+    // 为空 → usedSkills 必空，空预置即对齐；非自由文本携带 requested_skills
+    // 的轮次此前 resolution=None 整段丢失（sub_agent 合并注入缺 usedSkills），
+    // 此处补解析预置。
+    let turn_seed: Vec<crate::skills::production_bindings::ActivatedSkillGuidance> =
+        if requested_skills.is_empty() {
+            Vec::new()
+        } else {
+            let loaded =
+                crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
+            let registry = crate::skills::create_skill_registry(loaded.skills);
+            crate::skills::SkillRegistry::resolve_skills(
+                &registry,
+                &crate::skills::SkillResolutionInput {
+                    requested_skills: requested_skills.clone(),
+                    disabled_skills: disabled_skills.clone(),
+                },
+            )
+            .used_skills
+            .into_iter()
+            .map(|skill| crate::skills::production_bindings::ActivatedSkillGuidance {
+                skill,
+                resources: Vec::new(),
+            })
+            .collect()
+        };
     if let Some(resolution) = &skill_resolution {
         if !resolution.available_skills.is_empty() {
             let is_zh = surface_language != "en";
@@ -1158,7 +1185,8 @@ pub async fn post_agent(
         .scope(Some(turn_scope), async {
             // 532 号：回合技能集作用域（TS agent-session turnSkills 对应物）——
             // 轮内 use_skill 激活写回，同轮 sub_agent 合并注入，轮末随 scope 丢弃。
-            crate::skills::production_bindings::scope_turn_skills(async {
+            // 535 号：轮起点以 usedSkills 预置（turn_seed）。
+            crate::skills::production_bindings::scope_turn_skills(turn_seed.clone(), async {
                 let loop_result = run_agent_loop(
                     &loop_chat,
                     &tool_executor,

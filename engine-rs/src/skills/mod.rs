@@ -165,8 +165,18 @@ impl SkillRegistry for BuiltinSkillRegistry {
             &input.requested_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
         );
         let mut missing = Vec::new();
-        let disabled_skill_ids: Vec<String> = disabled.iter().filter(|id| self.by_id.contains_key(*id)).cloned().collect();
-        let mut used: HashMap<String, AgentSkill> = HashMap::new();
+        // 535 号：disabled_skill_ids 对齐 TS Set 插入序（registry.ts resolveSkills：
+        // 规范化+去重后按输入序过滤在册）——此前 HashSet 迭代随机序。
+        let disabled_skill_ids: Vec<String> = dedupe_strings(
+            &input.disabled_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
+        )
+        .into_iter()
+        .filter(|id| self.by_id.contains_key(id))
+        .collect();
+        // 535 号：usedSkills 对齐 TS Map 插入序（请求序即产出序）——此前
+        // HashMap 迭代随机序，多技能时 system prompt 指导段顺序双端漂移
+        // 且自身逐轮不稳定（requested 已去重，push 即 Map.set 语义）。
+        let mut used: Vec<AgentSkill> = Vec::new();
         let mut forced = Vec::new();
         for id in &requested {
             match self.by_id.get(id) {
@@ -175,7 +185,7 @@ impl SkillRegistry for BuiltinSkillRegistry {
                     if disabled.contains(id) {
                         continue;
                     }
-                    used.entry(id.clone()).or_insert_with(|| skill.clone());
+                    used.push(skill.clone());
                     forced.push(id.clone());
                 }
             }
@@ -183,7 +193,7 @@ impl SkillRegistry for BuiltinSkillRegistry {
         let available_skills: Vec<AgentSkill> = self.skills.iter().filter(|s| !disabled.contains(&s.id)).cloned().collect();
         let available_skill_ids: Vec<String> = available_skills.iter().map(|s| s.id.clone()).collect();
         SkillResolutionResult {
-            used_skills: used.values().cloned().collect(),
+            used_skills: used,
             forced_skill_ids: forced,
             missing_skill_ids: dedupe_strings(&missing),
             disabled_skill_ids,
@@ -253,6 +263,26 @@ mod tests {
         let r = reg.resolve_skills(&input);
         assert!(r.used_skills.is_empty());
         assert!(r.forced_skill_ids.is_empty());
+    }
+
+    /// 535 号：usedSkills/disabledSkillIds 序确定性——请求序/输入序（TS
+    /// Map/Set 插入序镜像，registry.ts resolveSkills）；此前 HashMap/HashSet
+    /// 迭代随机序，多技能时指导段顺序双端漂移且自身不稳定。
+    #[test]
+    fn resolve_skills_preserves_request_and_disabled_order() {
+        let reg = create_skill_registry(vec![skill("a"), skill("b"), skill("c"), skill("d")]);
+        let input = SkillResolutionInput {
+            requested_skills: vec!["c".into(), "a".into(), "b".into()],
+            disabled_skills: vec!["d".into(), "d".into(), "".into()],
+        };
+        let r = reg.resolve_skills(&input);
+        assert_eq!(
+            r.used_skills.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
+        );
+        assert_eq!(r.forced_skill_ids, vec!["c", "a", "b"]);
+        // disabled：输入序 + 去重 + 滤空 + 仅在册。
+        assert_eq!(r.disabled_skill_ids, vec!["d"]);
     }
 
     #[test]

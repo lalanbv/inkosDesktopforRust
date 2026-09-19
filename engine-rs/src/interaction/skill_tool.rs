@@ -238,7 +238,7 @@ async fn retrieve_skill_resources(
                     .collect::<Vec<_>>()
                     .join(" \u{b7} "),
                 body: segment.body,
-                // 533 号：段级元数据随命中透出（对齐 TS metadata：
+                // 534 号：段级元数据随命中透出（对齐 TS metadata：
                 // { path, heading, charStart, charEnd }）。
                 metadata: Some(json!({
                     "path": path,
@@ -268,7 +268,7 @@ async fn retrieve_skill_resources(
     index.close();
     hits.iter()
         .map(|hit| {
-            // 533 号：段级元数据优先取 metadata（TS hit.metadata?.path ?? "" 对应面）。
+            // 534 号：段级元数据优先取 metadata（TS hit.metadata?.path ?? "" 对应面）。
             let meta = hit.metadata.as_ref();
             let meta_str = |key: &str| {
                 meta.and_then(|m| m.get(key))
@@ -401,7 +401,7 @@ mod tests {
         assert!(!outside.is_error);
         assert!(crate::skills::production_bindings::turn_skill_activations().is_empty());
 
-        crate::skills::production_bindings::scope_turn_skills(async {
+        crate::skills::production_bindings::scope_turn_skills(Vec::new(), async {
             let result = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
             assert!(!result.is_error);
             let activated = crate::skills::production_bindings::turn_skill_activations();
@@ -494,7 +494,7 @@ mod query_retrieval_tests {
         assert!(resources.iter().any(|r| {
             r["body"].as_str().unwrap_or_default().contains("核心冲突")
         }), "{resources:?}");
-        // 533 号：段级元数据随命中透出（对齐 TS metadata 面）——
+        // 534 号：段级元数据随命中透出（对齐 TS metadata 面）——
         // heading 为分段标题、charStart/charEnd 为文件内字符区间（非全长 0..len）。
         assert!(resources.iter().all(|r| r["path"].as_str().unwrap_or_default().ends_with(".md")), "{resources:?}");
         assert!(resources.iter().any(|r| r["heading"].as_str() == Some("开局布局")), "{resources:?}");
