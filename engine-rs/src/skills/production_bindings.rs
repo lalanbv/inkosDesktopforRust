@@ -118,12 +118,41 @@ tokio::task_local! {
     /// 当前生产操作的激活技能（139 号：TS runner `operationContext.activatedSkills`
     /// 的 task-local 对应物——sub_agent 工具面 set（merge worker 绑定与会话
     /// 激活），AgentRouter::chat 出口读取注入 system 消息）。
+    /// 530 号：写作链直呼路径（run_draft / ops 连写）同样经
+    /// [`writing_chain_activations`] + [`scope_operation_skills`] set。
     pub static OPERATION_SKILLS: Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>>;
 }
 
 /// 读取当前操作激活技能（无 set → None——TS storage.getStore() 语义）。
 pub fn current_operation_skills() -> Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>> {
     OPERATION_SKILLS.try_with(|skills| skills.clone()).ok().flatten()
+}
+
+/// 写作链 craft 激活解析（530 号）：longWriting 绑定 ∩ 可用技能；
+/// 交集为空 → None（保持无注入，等价 TS 空数组直通）。
+pub fn writing_chain_activations(
+    available_skills: &[AgentSkill],
+) -> Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>> {
+    let activations =
+        resolve_production_skill_activations(available_skills, ProductionSkillCapability::LongWriting);
+    if activations.is_empty() {
+        None
+    } else {
+        Some(std::sync::Arc::new(activations))
+    }
+}
+
+/// 以激活技能 task-local 作用域包住写作链 future（装配点：server 路由层，
+/// 与 TS「server 解析 → PipelineConfig.activatedSkills → agentCtxFor 透传」
+/// 对称；None → scope 空置，行为与未接线一致）。
+pub async fn scope_operation_skills<T, F>(
+    activations: Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>>,
+    fut: F,
+) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    OPERATION_SKILLS.scope(activations, fut).await
 }
 
 #[cfg(test)]
@@ -240,5 +269,34 @@ mod tests {
         );
         assert!(worker_skills_for_agent(&available, "exporter").is_empty());
         assert!(worker_skills_for_agent(&[], "writer").is_empty(), "无可用技能 → 空");
+    }
+
+    /// 530 号：写作链激活解析——有交集 Some、无交集 None。
+    #[test]
+    fn writing_chain_activations_intersect() {
+        let available = vec![skill("inkos-long-writing")];
+        let Some(activations) = writing_chain_activations(&available) else {
+            panic!("有交集应返回 Some");
+        };
+        assert_eq!(activated_skill_ids(&activations), ["inkos-long-writing"]);
+        // 交集为空（builtin 缺失/无技能）→ None = 保持无注入。
+        assert!(writing_chain_activations(&[skill("inkos-translation")]).is_none());
+        assert!(writing_chain_activations(&[]).is_none());
+    }
+
+    /// 530 号：scope 内可见、scope 外不可见（task-local 语义）。
+    #[tokio::test]
+    async fn scope_operation_skills_visibility() {
+        let activations = writing_chain_activations(&[skill("inkos-long-writing")]).unwrap();
+        let outside = current_operation_skills();
+        assert!(outside.is_none(), "scope 外无 set → None");
+        let inside = scope_operation_skills(Some(activations), async {
+            current_operation_skills().map(|a| activated_skill_ids(&a))
+        })
+        .await;
+        assert_eq!(inside, Some(vec!["inkos-long-writing".to_string()]));
+        // None scope（空交集）→ 仍 None。
+        let empty = scope_operation_skills(None, async { current_operation_skills() }).await;
+        assert!(empty.is_none());
     }
 }

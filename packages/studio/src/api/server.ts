@@ -2809,6 +2809,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return normalizeStudioLanguage(raw.language);
   }
 
+  /**
+   * 530 号：写作链装配变体——在 buildPipelineConfig 之上解析 longWriting
+   * 生产绑定（craft 方法）∩ 可用技能，写入 activatedSkills；write-next /
+   * draft 两个写作链路由专用。交集为空（无技能部署）→ 不带字段，行为与
+   * 基础装配一致。
+   */
+  async function buildPipelineConfigWithWritingChainSkills(
+    overrides?: Parameters<typeof buildPipelineConfig>[0],
+  ): Promise<PipelineConfig> {
+    const config = await buildPipelineConfig(overrides);
+    const configured = await loadAvailableAgentSkills({ projectRoot: config.projectRoot });
+    const activatedSkills = resolveProductionSkillActivations(configured.skills, "longWriting");
+    return activatedSkills.length > 0 ? { ...config, activatedSkills } : config;
+  }
+
   async function buildPipelineConfig(
     overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "revisionGate">> & {
       readonly currentConfig?: ProjectConfig;
@@ -4273,7 +4288,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("write:start", { bookId: id });
 
     // Fire and forget — progress/completion/errors pushed via SSE
-    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+    const pipeline = new PipelineRunner(await buildPipelineConfigWithWritingChainSkills({ bookIdForSettings: id }));
     // 检查点（174 号 W-C5）：sessionId 给定时任务全程留痕——先占活跃集合再落
     // Running 快照（对账窗口语义与确认任务一致），终态快照落盘后才释放。
     const checkpoint = body.sessionId && !deletedSessionIds.has(body.sessionId)
@@ -4342,7 +4357,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("draft:start", { bookId: id });
 
-    const pipeline = new PipelineRunner(await buildPipelineConfig());
+    const pipeline = new PipelineRunner(await buildPipelineConfigWithWritingChainSkills());
     pipeline.writeDraft(id, body.context, body.wordCount).then(
       (result) => {
         broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });

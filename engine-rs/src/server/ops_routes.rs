@@ -167,18 +167,31 @@ async fn write_one_chapter(
     use crate::pipeline::write_next::{write_next_chapter, WriteNextConfig};
     crate::write_next_assembly!(runtime, agents, ctx);
     let config = WriteNextConfig::from_project(runtime.state.project_root()).await;
-    let result = write_next_chapter(
-        &runtime.state,
-        &agents,
-        &ctx,
-        &config,
-        book_id,
-        None,
-        temperature,
-        None,
+    // 530 号：写作链 craft 激活（与 run_draft 同款装配）。
+    let available = crate::skills::external_loader::load_available_agent_skills(
+        runtime.state.project_root(),
+        &crate::server::skill_routes::env_skill_dirs_public(),
+        crate::server::skill_routes::home_dir_public().as_deref(),
     )
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
+    let activations =
+        crate::skills::production_bindings::writing_chain_activations(&available.skills);
+    let result =
+        crate::skills::production_bindings::scope_operation_skills(activations, async {
+            write_next_chapter(
+                &runtime.state,
+                &agents,
+                &ctx,
+                &config,
+                book_id,
+                None,
+                temperature,
+                None,
+            )
+            .await
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     let success = result.status == "ready-for-review";
     // 失败维度聚类原料（TS auditResult.issues.map(category)）。
     let issue_categories: Vec<String> = result

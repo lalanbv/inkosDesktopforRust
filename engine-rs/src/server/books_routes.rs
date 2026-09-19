@@ -398,19 +398,32 @@ async fn run_draft(
     body: &DraftBody,
 ) -> Result<crate::pipeline::write_next::ChapterPipelineResult, crate::pipeline::write_next::WriteNextError> {
     crate::write_next_assembly!(runtime, agents, ctx);
-    write_next_chapter(
-        &runtime.state,
-        &agents,
-        &ctx,
-        &WriteNextConfig {
-            chapter_review_mode: ChapterReviewMode::Manual,
-            ..write_next_config_with_events(runtime).await
-        },
-        book_id,
-        body.word_count,
-        None,
-        body.context.as_deref(),
+    // 530 号：写作链 craft 激活（longWriting 绑定 ∩ 可用技能），链内全部
+    // AgentRouter::chat 出口注入——对齐 TS server 装配 activatedSkills 透传。
+    let available = crate::skills::external_loader::load_available_agent_skills(
+        runtime.state.project_root(),
+        &crate::server::skill_routes::env_skill_dirs_public(),
+        crate::server::skill_routes::home_dir_public().as_deref(),
     )
+    .await;
+    let activations =
+        crate::skills::production_bindings::writing_chain_activations(&available.skills);
+    crate::skills::production_bindings::scope_operation_skills(activations, async {
+        write_next_chapter(
+            &runtime.state,
+            &agents,
+            &ctx,
+            &WriteNextConfig {
+                chapter_review_mode: ChapterReviewMode::Manual,
+                ..write_next_config_with_events(runtime).await
+            },
+            book_id,
+            body.word_count,
+            None,
+            body.context.as_deref(),
+        )
+        .await
+    })
     .await
 }
 

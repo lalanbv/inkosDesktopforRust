@@ -1610,6 +1610,58 @@ describe("PipelineRunner", () => {
     }
   });
 
+  it("propagates configured activatedSkills into worker agents during writeNextChapter (530)", async () => {
+    const guidance = [{
+      skill: {
+        id: "inkos-long-writing",
+        name: "Long-form narrative craft",
+        description: "长篇叙事工艺方法。",
+        body: "Turn the chapter goal into scenes with an immediate objective.",
+        source: "builtin" as const,
+      },
+      resources: [],
+    }];
+    const { root, runner, state, bookId } = await createRunnerFixture({
+      activatedSkills: guidance,
+    });
+
+    await Promise.all([
+      writeFile(join(state.bookDir(bookId), "story", "current_focus.md"), "# Current Focus\n\nBring focus back to the mentor conflict.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "volume_outline.md"), "# Volume Outline\n\n## Chapter 1\nTrack the merchant guild trail.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "current_state.md"), "# Current State\n\n- Lin Yue still hides the broken oath token.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "story_bible.md"), "# Story Bible\n\n- The jade seal cannot be destroyed.\n", "utf-8"),
+      writeFile(join(state.bookDir(bookId), "story", "pending_hooks.md"), "# Pending Hooks\n\n- Why the mentor vanished after the trial.\n", "utf-8"),
+    ]);
+
+    vi.spyOn(PlannerAgent.prototype, "planChapter");
+    vi.spyOn(ComposerModule, "composeGovernedChapter");
+    let writerActivatedSkills: unknown;
+    const writeChapter = vi.spyOn(WriterAgent.prototype, "writeChapter").mockImplementation(async function (this: WriterAgent, input) {
+      writerActivatedSkills = (this as unknown as { ctx: { activatedSkills?: unknown } }).ctx.activatedSkills;
+      return createWriterOutput({
+        chapterNumber: 1,
+        content: "Governed pipeline draft.",
+        wordCount: "Governed pipeline draft.".length,
+      });
+    });
+    vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({
+        passed: true,
+        issues: [],
+        summary: "clean",
+      }),
+    );
+
+    try {
+      await runner.writeNextChapter(bookId, 220);
+
+      expect(writeChapter).toHaveBeenCalledTimes(1);
+      expect(writerActivatedSkills).toEqual(guidance);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("re-plans instead of reusing a persisted invalid intent artifact on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });

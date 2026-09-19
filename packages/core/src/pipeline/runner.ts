@@ -271,6 +271,13 @@ export interface PipelineConfig {
   readonly modelOverrides?: Record<string, string | AgentLLMOverride>;
   /** G16/346 号：按任务模型路由（agent 显式 modelOverrides 优先于此）。 */
   readonly taskRouting?: import("../models/task-routing.js").TaskModelRouting;
+  /**
+   * 530 号：写作链激活技能（server 装配处按生产绑定解析后传入；如
+   * longWriting craft 方法）。传入后链内所有 worker 的 chat 出口
+   * （appendTaskSkillGuidance）注入 "## Activated professional skills" 段；
+   * 不传维持现状（无注入）。
+   */
+  readonly activatedSkills?: ReadonlyArray<ActivatedSkillGuidance>;
   readonly logger?: Logger;
   readonly onStreamProgress?: OnStreamProgress;
   readonly onContextCompression?: ContextCompressionCallback;
@@ -1178,116 +1185,122 @@ export class PipelineRunner {
   async writeDraft(bookId: string, context?: string, wordCount?: number): Promise<DraftResult> {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      await this.state.ensureControlDocuments(bookId);
-      const book = await this.state.loadBookConfig(bookId);
-      const bookDir = this.state.bookDir(bookId);
-      const chapterNumber = await this.state.getNextChapterNumber(bookId);
-      const stageLanguage = await this.resolveBookLanguage(book);
-      this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
-      const writeInput = await this.prepareWriteInput(
-        book,
-        bookDir,
-        chapterNumber,
-        context ?? this.config.externalContext,
+      // 530 号：draft 链与 write-next 同款激活透传。
+      return await this.runWithAgentContext(
+        { activatedSkills: this.config.activatedSkills },
+        async () => {
+          await this.state.ensureControlDocuments(bookId);
+          const book = await this.state.loadBookConfig(bookId);
+          const bookDir = this.state.bookDir(bookId);
+          const chapterNumber = await this.state.getNextChapterNumber(bookId);
+          const stageLanguage = await this.resolveBookLanguage(book);
+        this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
+        const writeInput = await this.prepareWriteInput(
+          book,
+          bookDir,
+          chapterNumber,
+          context ?? this.config.externalContext,
+        );
+
+        const { profile: gp } = await this.loadGenreProfile(book.genre);
+        const lengthSpec = buildLengthSpec(
+          wordCount ?? book.chapterWordCount,
+          book.language ?? gp.language,
+        );
+
+        const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+        this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
+        const output = await writer.writeChapter({
+          book,
+          bookDir,
+          chapterNumber,
+          ...writeInput,
+          lengthSpec,
+          ...(wordCount ? { wordCountOverride: wordCount } : {}),
+        });
+        const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+        const totalUsage: TokenUsageSummary = output.tokenUsage ?? {
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+        };
+        const draftOutput: WriteChapterOutput = {
+          ...output,
+          wordCount: writerCount,
+          tokenUsage: totalUsage,
+        };
+        const lengthWarnings = this.buildLengthWarnings(
+          chapterNumber,
+          draftOutput.wordCount,
+          lengthSpec,
+        );
+        const lengthTelemetry = this.buildLengthTelemetry({
+          lengthSpec,
+          writerCount,
+          postReviseCount: 0,
+          finalCount: draftOutput.wordCount,
+          repairApplied: false,
+          lengthWarning: lengthWarnings.length > 0,
+        });
+        this.logLengthWarnings(lengthWarnings);
+
+        // Save chapter file
+        const chaptersDir = join(bookDir, "chapters");
+        const paddedNum = String(chapterNumber).padStart(4, "0");
+        const sanitized = draftOutput.title.replace(/[/\\?%*:|"<>]/g, "").replace(/\s+/g, "_").slice(0, 50);
+        const filename = `${paddedNum}_${sanitized}.md`;
+        const filePath = join(chaptersDir, filename);
+
+        const resolvedLang = book.language ?? gp.language;
+        // Persist the chapter and its complete truth update as one atomic file set.
+        this.logStage(stageLanguage, { zh: "落盘草稿与真相文件", en: "persisting draft and truth files" });
+        await writer.saveChapter(bookDir, draftOutput, gp.numericalSystem, resolvedLang);
+        await this.syncLegacyStructuredStateFromMarkdown(bookDir, chapterNumber, draftOutput);
+        await this.syncNarrativeMemoryIndex(bookId);
+
+        // Update index
+        const existingIndex = await this.state.loadChapterIndex(bookId);
+        const now = new Date().toISOString();
+        const newEntry: ChapterMeta = {
+          number: chapterNumber,
+          title: draftOutput.title,
+          status: "drafted",
+          wordCount: draftOutput.wordCount,
+          createdAt: now,
+          updatedAt: now,
+          auditIssues: [],
+          lengthWarnings,
+          lengthTelemetry,
+          ...(draftOutput.tokenUsage ? { tokenUsage: draftOutput.tokenUsage } : {}),
+        };
+        const existingIdx = existingIndex.findIndex((e) => e.number === chapterNumber);
+        const updatedIndex = existingIdx >= 0
+          ? existingIndex.map((e, i) => i === existingIdx ? newEntry : e)
+          : [...existingIndex, newEntry];
+        await this.state.saveChapterIndex(bookId, updatedIndex);
+        await this.markBookActiveIfNeeded(bookId);
+
+        // Snapshot
+        this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" });
+        await this.state.snapshotState(bookId, chapterNumber);
+        await this.syncCurrentStateFactHistory(bookId, chapterNumber);
+
+        await this.emitWebhook("chapter-complete", bookId, chapterNumber, {
+          title: draftOutput.title,
+          wordCount: draftOutput.wordCount,
+        });
+
+        return {
+          chapterNumber,
+          title: draftOutput.title,
+          wordCount: draftOutput.wordCount,
+          filePath,
+          lengthWarnings,
+          lengthTelemetry,
+          tokenUsage: draftOutput.tokenUsage,
+        };
+        },
       );
-
-      const { profile: gp } = await this.loadGenreProfile(book.genre);
-      const lengthSpec = buildLengthSpec(
-        wordCount ?? book.chapterWordCount,
-        book.language ?? gp.language,
-      );
-
-      const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
-      this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
-      const output = await writer.writeChapter({
-        book,
-        bookDir,
-        chapterNumber,
-        ...writeInput,
-        lengthSpec,
-        ...(wordCount ? { wordCountOverride: wordCount } : {}),
-      });
-      const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
-      const totalUsage: TokenUsageSummary = output.tokenUsage ?? {
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-      };
-      const draftOutput: WriteChapterOutput = {
-        ...output,
-        wordCount: writerCount,
-        tokenUsage: totalUsage,
-      };
-      const lengthWarnings = this.buildLengthWarnings(
-        chapterNumber,
-        draftOutput.wordCount,
-        lengthSpec,
-      );
-      const lengthTelemetry = this.buildLengthTelemetry({
-        lengthSpec,
-        writerCount,
-        postReviseCount: 0,
-        finalCount: draftOutput.wordCount,
-        repairApplied: false,
-        lengthWarning: lengthWarnings.length > 0,
-      });
-      this.logLengthWarnings(lengthWarnings);
-
-      // Save chapter file
-      const chaptersDir = join(bookDir, "chapters");
-      const paddedNum = String(chapterNumber).padStart(4, "0");
-      const sanitized = draftOutput.title.replace(/[/\\?%*:|"<>]/g, "").replace(/\s+/g, "_").slice(0, 50);
-      const filename = `${paddedNum}_${sanitized}.md`;
-      const filePath = join(chaptersDir, filename);
-
-      const resolvedLang = book.language ?? gp.language;
-      // Persist the chapter and its complete truth update as one atomic file set.
-      this.logStage(stageLanguage, { zh: "落盘草稿与真相文件", en: "persisting draft and truth files" });
-      await writer.saveChapter(bookDir, draftOutput, gp.numericalSystem, resolvedLang);
-      await this.syncLegacyStructuredStateFromMarkdown(bookDir, chapterNumber, draftOutput);
-      await this.syncNarrativeMemoryIndex(bookId);
-
-      // Update index
-      const existingIndex = await this.state.loadChapterIndex(bookId);
-      const now = new Date().toISOString();
-      const newEntry: ChapterMeta = {
-        number: chapterNumber,
-        title: draftOutput.title,
-        status: "drafted",
-        wordCount: draftOutput.wordCount,
-        createdAt: now,
-        updatedAt: now,
-        auditIssues: [],
-        lengthWarnings,
-        lengthTelemetry,
-        ...(draftOutput.tokenUsage ? { tokenUsage: draftOutput.tokenUsage } : {}),
-      };
-      const existingIdx = existingIndex.findIndex((e) => e.number === chapterNumber);
-      const updatedIndex = existingIdx >= 0
-        ? existingIndex.map((e, i) => i === existingIdx ? newEntry : e)
-        : [...existingIndex, newEntry];
-      await this.state.saveChapterIndex(bookId, updatedIndex);
-      await this.markBookActiveIfNeeded(bookId);
-
-      // Snapshot
-      this.logStage(stageLanguage, { zh: "更新章节索引与快照", en: "updating chapter index and snapshots" });
-      await this.state.snapshotState(bookId, chapterNumber);
-      await this.syncCurrentStateFactHistory(bookId, chapterNumber);
-
-      await this.emitWebhook("chapter-complete", bookId, chapterNumber, {
-        title: draftOutput.title,
-        wordCount: draftOutput.wordCount,
-      });
-
-      return {
-        chapterNumber,
-        title: draftOutput.title,
-        wordCount: draftOutput.wordCount,
-        filePath,
-        lengthWarnings,
-        lengthTelemetry,
-        tokenUsage: draftOutput.tokenUsage,
-      };
     } finally {
       await releaseLock();
     }
@@ -1879,11 +1892,15 @@ export class PipelineRunner {
     this.throwIfOperationAborted();
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
-      return await this._writeNextChapterLocked(
-        bookId,
-        wordCount,
-        temperatureOverride,
-        externalContext ?? this.config.externalContext,
+      // 530 号：激活技能进 operationContext（agentCtxFor 透传到全部 worker）。
+      return await this.runWithAgentContext(
+        { activatedSkills: this.config.activatedSkills },
+        () => this._writeNextChapterLocked(
+          bookId,
+          wordCount,
+          temperatureOverride,
+          externalContext ?? this.config.externalContext,
+        ),
       );
     } finally {
       await releaseLock();
@@ -1903,29 +1920,36 @@ export class PipelineRunner {
     const releaseLock = await this.state.acquireBookLock(bookId);
     try {
       const results: ChapterPipelineResult[] = [];
-      for (let index = 0; index < chapterCount; index += 1) {
-        try {
-          this.throwIfOperationAborted();
-        } catch (error) {
-          // 209 号：连写中途用户中止——已完成章节已落盘，错误携带部分完成
-          // 摘要（此前裸 throw 掩盖 k 章资产；首章前中止维持原错误）。
-          throw withBatchProgress(error, results, chapterCount, "aborted");
-        }
-        let result: ChapterPipelineResult;
-        try {
-          result = await this._writeNextChapterLocked(
-            bookId,
-            options.wordCount,
-            options.temperatureOverride,
-            options.externalContext ?? this.config.externalContext,
-          );
-        } catch (error) {
-          throw withBatchProgress(error, results, chapterCount, "failed");
-        }
-        results.push(result);
-        options.onChapterComplete?.(result, results.length, chapterCount);
-        if (result.status !== "ready-for-review") break;
-      }
+      // 530 号：连写链同样带激活技能（整个批次一个 context——对齐 Rust
+      // ops 连写循环的 scope 粒度）。
+      await this.runWithAgentContext(
+        { activatedSkills: this.config.activatedSkills },
+        async () => {
+          for (let index = 0; index < chapterCount; index += 1) {
+            try {
+              this.throwIfOperationAborted();
+            } catch (error) {
+              // 209 号：连写中途用户中止——已完成章节已落盘，错误携带部分完成
+              // 摘要（此前裸 throw 掩盖 k 章资产；首章前中止维持原错误）。
+              throw withBatchProgress(error, results, chapterCount, "aborted");
+            }
+            let result: ChapterPipelineResult;
+            try {
+              result = await this._writeNextChapterLocked(
+                bookId,
+                options.wordCount,
+                options.temperatureOverride,
+                options.externalContext ?? this.config.externalContext,
+              );
+            } catch (error) {
+              throw withBatchProgress(error, results, chapterCount, "failed");
+            }
+            results.push(result);
+            options.onChapterComplete?.(result, results.length, chapterCount);
+            if (result.status !== "ready-for-review") break;
+          }
+        },
+      );
       return results;
     } finally {
       await releaseLock();
