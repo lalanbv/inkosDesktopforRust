@@ -14,7 +14,8 @@
 //!   trait 注入 LLM 调用，生产实现待 BaseAgent/LLMRouter 移植）
 //! - [`fanfic_prompt_sections`] / [`en_prompt_sections`]：同人/英文 prompt 段（writer
 //!   system prompt 的 section 依赖）
-//! - [`writer_prompts`]：writer system prompt 总装（zh 21 段 / en 19 段）+ 黄金三章纪律
+//! - [`writer_prompts`]：writer system prompt 总装（zh 16 段 / en 15 段调用项，529 号
+//!   对齐 TS c56586ec 后形态）+ 黄金三章纪律
 //! - [`settler_prompts`] / [`observer_prompts`]：writer 编排 Phase 2a/2b（Observer 事实
 //!   提取 + Settler 状态回写）的 system/user prompt 构造——纯函数，与 [`settler_parser`]
 //!   / [`settler_delta_parser`] 输出端配对

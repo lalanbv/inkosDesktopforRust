@@ -1,18 +1,21 @@
-//! 528 号：写作链 prompt golden 差分（planner + settler）。
+//! 528 号：写作链 prompt golden 差分（planner + settler + writer）。
 //!
 //! 事实源 = `packages/core/src/__tests__/golden/writing-prompts.json`
-//! （core `golden-writing-prompts.test.ts` 从 planner-prompts/settler-prompts
-//! 纯函数生成）。本测试把手抄移植面与 TS 快照**码点级**比对——防措辞漂移
-//! （漂移=双端同输入下给 LLM 的指令分叉，522 号工件差分的上游根源之一）。
-//! writer 面（输入含深对象）备案后续轮扩展。
+//! （core `golden-writing-prompts.test.ts` 从 planner-prompts/settler-prompts/
+//! writer-prompts 纯函数生成）。本测试把手抄移植面与 TS 快照**码点级**比对——
+//! 防措辞漂移（漂移=双端同输入下给 LLM 的指令分叉，522 号工件差分的上游根源之一）。
+//! 529 号：writer 面 6 案例扩展（对齐 c56586ec 后的 TS 形态）。
 
 use inkos_engine::agents::planner_prompts::{
     build_planner_user_message, get_planner_memo_system_prompt, get_planner_memo_user_template,
     PlannerLengthBudget, PlannerUserMessageInput,
 };
 use inkos_engine::agents::settler_prompts::{build_settler_system_prompt, build_settler_user_prompt, SettlerUserPromptInput};
-use inkos_engine::models::book::{BookConfig, BookStatus, Platform};
-use inkos_engine::models::book_rules::BookRules;
+use inkos_engine::agents::writer_prompts::{
+    build_writer_system_prompt, FanficContext, InputProfile, WriterPromptMode, WriterSystemPromptInput,
+};
+use inkos_engine::models::book::{BookConfig, BookStatus, FanficMode, Platform};
+use inkos_engine::models::book_rules::{BookRules, GenreLock, NarrativePerson, Protagonist};
 use inkos_engine::models::genre_profile::GenreProfile;
 use inkos_engine::utils::language::WritingLanguage;
 use serde_json::Value;
@@ -210,4 +213,175 @@ fn writing_prompts_match_ts_snapshot() {
         validation_feedback: None,
     };
     assert_match("settler.user.zh.min", build_settler_user_prompt(&user_min), &golden);
+
+    // ---------------------------------------------------------------------------
+    // writer system：6 案例面（529 号扩展）。生产唯一调用形态 = creative + governed；
+    // 其余面锁分支矩阵（en / golden-open / legacy+full / numerical+fullCast+主角铁律 /
+    // fanfic 三段）。length_spec 一律 None → build_length_spec(3000) 默认推导。
+    // ---------------------------------------------------------------------------
+
+    let writer_genre_en = GenreProfile {
+        name: "Eastern Xuanhuan".into(),
+        language: "en".into(),
+        ..settler_genre(false)
+    };
+    let writer_rules_full = BookRules {
+        version: "1.0".into(),
+        protagonist: Some(Protagonist {
+            name: "林秋".into(),
+            personality_lock: vec!["隐忍".into(), "观察力强".into()],
+            behavioral_constraints: vec!["不滥杀".into(), "不透露腰牌来历".into()],
+        }),
+        genre_lock: Some(GenreLock {
+            primary: "东方玄幻".into(),
+            forbidden: vec!["科幻".into(), "西幻".into()],
+        }),
+        narrative_person: Some(NarrativePerson::First),
+        numerical_system_overrides: None,
+        era_constraints: None,
+        prohibitions: vec!["禁止主角突然圣母".into(), "反派不降智".into()],
+        chapter_types_override: vec![],
+        fatigue_words_override: vec![],
+        additional_audit_dimensions: vec![],
+        enable_full_cast_tracking: true,
+        fanfic_mode: None,
+        allowed_deviations: vec![],
+    };
+
+    // 生产主形态：zh + creative + governed，ch6（无黄金开篇段）。
+    let writer_governed_creative = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&genre_plain),
+        book_rules: None,
+        book_rules_body: "",
+        genre_body: "题材正文：灵气复苏下的都市修行。",
+        style_guide: "## 文风\n短句为主，动作外化情绪。",
+        style_fingerprint: None,
+        chapter_number: Some(6),
+        mode: Some(WriterPromptMode::Creative),
+        fanfic_context: None,
+        language_override: None,
+        input_profile: Some(InputProfile::Governed),
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.zh.governed-creative",
+        build_writer_system_prompt(&writer_governed_creative),
+        &golden,
+    );
+
+    // 黄金开篇：ch2 追加黄金三章纪律段。
+    let writer_golden_open = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&genre_plain),
+        book_rules: None,
+        book_rules_body: "",
+        genre_body: "",
+        style_guide: "",
+        style_fingerprint: None,
+        chapter_number: Some(2),
+        mode: Some(WriterPromptMode::Creative),
+        fanfic_context: None,
+        language_override: None,
+        input_profile: Some(InputProfile::Governed),
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.zh.governed-creative-golden-open",
+        build_writer_system_prompt(&writer_golden_open),
+        &golden,
+    );
+
+    // 英文书：en 序列 + en 字数单位（words）。
+    let writer_en = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&writer_genre_en),
+        book_rules: None,
+        book_rules_body: "",
+        genre_body: "Genre guidance: qi revival in a modern city.",
+        style_guide: "Style: short sentences, show don't tell.",
+        style_fingerprint: Some("风格指纹样本"),
+        chapter_number: Some(12),
+        mode: Some(WriterPromptMode::Creative),
+        fanfic_context: None,
+        language_override: Some(WritingLanguage::En),
+        input_profile: Some(InputProfile::Governed),
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.en.governed-creative",
+        build_writer_system_prompt(&writer_en),
+        &golden,
+    );
+
+    // 库兼容面：legacy + full（旧输出格式）；style_guide 缺失标记 → 文风指南段缺位。
+    let writer_legacy_full = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&genre_plain),
+        book_rules: None,
+        book_rules_body: "本书专属规则正文：禁止圣母。",
+        genre_body: "",
+        style_guide: "(文件尚未创建)",
+        style_fingerprint: None,
+        chapter_number: Some(9),
+        mode: Some(WriterPromptMode::Full),
+        fanfic_context: None,
+        language_override: None,
+        input_profile: None,
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.zh.legacy-full",
+        build_writer_system_prompt(&writer_legacy_full),
+        &golden,
+    );
+
+    // 分支全家桶：numerical + fullCast + 主角铁律 + 人称硬约束 + 禁忌/风格禁区。
+    let writer_full_cast = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&genre_numerical),
+        book_rules: Some(&writer_rules_full),
+        book_rules_body: "",
+        genre_body: "",
+        style_guide: "文风正文",
+        style_fingerprint: None,
+        chapter_number: Some(7),
+        mode: Some(WriterPromptMode::Full),
+        fanfic_context: None,
+        language_override: None,
+        input_profile: None,
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.zh.full-cast-numerical",
+        build_writer_system_prompt(&writer_full_cast),
+        &golden,
+    );
+
+    // 同人三段：canon 模式 + 允许偏离清单。
+    let writer_fanfic_ctx = FanficContext {
+        fanfic_canon: "原作设定：林秋为杂役，腰牌来历不明。".into(),
+        fanfic_mode: FanficMode::Canon,
+        allowed_deviations: vec!["口头禅可保留".into()],
+    };
+    let writer_fanfic = WriterSystemPromptInput {
+        book: Some(&book),
+        genre_profile: Some(&genre_plain),
+        book_rules: None,
+        book_rules_body: "",
+        genre_body: "",
+        style_guide: "",
+        style_fingerprint: None,
+        chapter_number: Some(5),
+        mode: Some(WriterPromptMode::Creative),
+        fanfic_context: Some(&writer_fanfic_ctx),
+        language_override: None,
+        input_profile: None,
+        length_spec: None,
+    };
+    assert_match(
+        "writer.system.zh.fanfic",
+        build_writer_system_prompt(&writer_fanfic),
+        &golden,
+    );
 }
