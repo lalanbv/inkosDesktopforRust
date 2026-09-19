@@ -1156,18 +1156,23 @@ pub async fn post_agent(
     );
     let chat_result = crate::llm::agent_trajectory::TRAJECTORY_SCOPE
         .scope(Some(turn_scope), async {
-            let loop_result = run_agent_loop(
-                &loop_chat,
-                &tool_executor,
-                &system_prompt,
-                restored,
-                instruction,
-                Some(&tools),
-                Some(&abort_flag),
-                &bridge,
-            )
-            .await;
-            loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted, outcome.usage, outcome.timings))
+            // 532 号：回合技能集作用域（TS agent-session turnSkills 对应物）——
+            // 轮内 use_skill 激活写回，同轮 sub_agent 合并注入，轮末随 scope 丢弃。
+            crate::skills::production_bindings::scope_turn_skills(async {
+                let loop_result = run_agent_loop(
+                    &loop_chat,
+                    &tool_executor,
+                    &system_prompt,
+                    restored,
+                    instruction,
+                    Some(&tools),
+                    Some(&abort_flag),
+                    &bridge,
+                )
+                .await;
+                loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted, outcome.usage, outcome.timings))
+            })
+            .await
         })
         .await;
 

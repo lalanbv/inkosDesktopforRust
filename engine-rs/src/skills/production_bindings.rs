@@ -155,6 +155,52 @@ where
     OPERATION_SKILLS.scope(activations, fut).await
 }
 
+tokio::task_local! {
+    /// 本轮聊天的 use_skill 动态激活集（532 号：TS agent-session `turnSkills`
+    /// 对应物——轮内 use_skill 激活写回，同轮 sub_agent 合并进 worker 注入；
+    /// 轮起点为空、随 scope 丢弃，TS 每轮由 skillResolution.usedSkills 重建的
+    /// 语义对齐）。值内可变：use_skill 工具运行时 insert。
+    static TURN_SKILLS: Option<
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ActivatedSkillGuidance>>>,
+    >;
+}
+
+/// 回合作用域：包住整轮工具循环（agent_route post_agent 的 run_agent_loop）。
+pub async fn scope_turn_skills<T, F>(fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    TURN_SKILLS
+        .scope(
+            Some(std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            ))),
+            fut,
+        )
+        .await
+}
+
+/// use_skill 激活写回（TS onActivate: turnSkills.set(skill.id, activation)）；
+/// 无回合 scope（直调测试等）时静默忽略。
+pub fn activate_turn_skill(activation: ActivatedSkillGuidance) {
+    let _ = TURN_SKILLS.try_with(|turn| {
+        if let Some(turn) = turn.as_ref() {
+            turn.lock().unwrap().insert(activation.skill.id.clone(), activation);
+        }
+    });
+}
+
+/// 同轮已激活技能快照（TS activeSkills()：turnSkills.values()）；无 scope → 空。
+pub fn turn_skill_activations() -> Vec<ActivatedSkillGuidance> {
+    TURN_SKILLS
+        .try_with(|turn| {
+            turn.as_ref()
+                .map(|turn| turn.lock().unwrap().values().cloned().collect())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +344,27 @@ mod tests {
         // None scope（空交集）→ 仍 None。
         let empty = scope_operation_skills(None, async { current_operation_skills() }).await;
         assert!(empty.is_none());
+    }
+
+    /// 532 号：回合技能集——无 scope 写读均空；scope 内写后读同轮可见、
+    /// 轮末（scope 外）丢弃。
+    #[tokio::test]
+    async fn turn_skills_round_scope_semantics() {
+        assert!(turn_skill_activations().is_empty(), "scope 外读 → 空");
+        activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-long-writing"), resources: vec![] });
+        assert!(turn_skill_activations().is_empty(), "scope 外写被忽略");
+
+        let inside = scope_turn_skills(async {
+            activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-long-writing"), resources: vec![] });
+            activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-story-review"), resources: vec![] });
+            // 同 id 后写胜（TS Map.set 语义）。
+            let mut updated = skill("inkos-long-writing");
+            updated.body = "更新版".into();
+            activate_turn_skill(ActivatedSkillGuidance { skill: updated, resources: vec![] });
+            activated_skill_ids(&turn_skill_activations())
+        })
+        .await;
+        assert_eq!(inside, ["inkos-long-writing", "inkos-story-review"]);
+        assert!(turn_skill_activations().is_empty(), "轮末丢弃");
     }
 }

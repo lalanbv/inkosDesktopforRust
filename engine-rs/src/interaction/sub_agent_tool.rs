@@ -40,8 +40,9 @@ fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
 /// 与计数器，仅切 role；外层无作用域则原样执行）。
 pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     // 139 号：TS agent-tools 的 mergeActivatedSkillGuidance(workerSkills(agent),
-    // activeSkills()) → runWithAgentContext({activatedSkills})——Rust 会话面
-    // 无 use-skill 工具（激活集空），合并结果即 worker 绑定。
+    // activeSkills()) → runWithAgentContext({activatedSkills})。
+    // 532 号：use_skill 已移植（240 号）——合并序补上同轮动态激活
+    // （turn_skill_activations 后写胜，覆盖同 id worker 绑定），对齐 TS。
     let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
     let root = deps.runtime.state.project_root().to_path_buf();
     let available = crate::skills::external_loader::load_available_agent_skills(
@@ -51,7 +52,11 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
     )
     .await
     .skills;
-    let worker = crate::skills::production_bindings::worker_skills_for_agent(&available, agent);
+    let worker_binding = crate::skills::production_bindings::worker_skills_for_agent(&available, agent);
+    let worker = crate::skills::production_bindings::merge_activated_skill_guidance(&[
+        &worker_binding,
+        &crate::skills::production_bindings::turn_skill_activations(),
+    ]);
     crate::llm::agent_trajectory::with_subagent_scope(
         crate::skills::production_bindings::OPERATION_SKILLS.scope(
             Some(std::sync::Arc::new(worker)),

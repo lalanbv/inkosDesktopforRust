@@ -162,6 +162,38 @@ pub async fn tool_use_skill(
         details["query"] = json!(args["query"].as_str().unwrap_or_default().trim());
         details["retrievedResources"] = json!(retrieved);
     }
+    // 532 号：激活写回回合集（TS onActivate: turnSkills.set）——同轮后续
+    // sub_agent 经 turn_skill_activations 合并注入；resources 语义对齐：
+    // resourcePath → 全文单段，query → 检索段，无 → 空。
+    let activated_resources = resource
+        .as_ref()
+        .map(|(path, body)| {
+            vec![crate::skills::production_bindings::ActivatedSkillResource {
+                path: path.clone(),
+                heading: None,
+                body: body.clone(),
+                char_start: 0,
+                char_end: body.chars().count(),
+            }]
+        })
+        .unwrap_or_else(|| {
+            retrieved
+                .iter()
+                .map(|item| crate::skills::production_bindings::ActivatedSkillResource {
+                    path: item["path"].as_str().unwrap_or_default().to_string(),
+                    heading: item["heading"].as_str().map(str::to_string),
+                    body: item["body"].as_str().unwrap_or_default().to_string(),
+                    char_start: item["charStart"].as_u64().unwrap_or(0) as usize,
+                    char_end: item["charEnd"].as_u64().unwrap_or(0) as usize,
+                })
+                .collect()
+        });
+    crate::skills::production_bindings::activate_turn_skill(
+        crate::skills::production_bindings::ActivatedSkillGuidance {
+            skill: skill.clone(),
+            resources: activated_resources,
+        },
+    );
     let _ = to_posix; // posix 形态仅 resource 头部展示需要；保留 helper 供后续 query 分支
     text_result(text.join("\n"), Some(details))
 }
@@ -327,6 +359,29 @@ mod tests {
         assert!(result.text.contains("This skill provides instructions only."));
         assert_eq!(result.details.as_ref().unwrap()["kind"], "skill_activated");
         assert_eq!(result.details.as_ref().unwrap()["skillId"], "combat-tactics");
+    }
+
+    /// 532 号：回合作用域内 use_skill 激活写回回合集（同轮 sub_agent 可见）；
+    /// scope 外调用静默（不 panic、不残留）。
+    #[tokio::test]
+    async fn activation_feeds_turn_skills_inside_scope() {
+        let registry = registry();
+        // scope 外：写回被静默忽略。
+        let outside = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
+        assert!(!outside.is_error);
+        assert!(crate::skills::production_bindings::turn_skill_activations().is_empty());
+
+        crate::skills::production_bindings::scope_turn_skills(async {
+            let result = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
+            assert!(!result.is_error);
+            let activated = crate::skills::production_bindings::turn_skill_activations();
+            assert_eq!(
+                crate::skills::production_bindings::activated_skill_ids(&activated),
+                ["combat-tactics"]
+            );
+        })
+        .await;
+        assert!(crate::skills::production_bindings::turn_skill_activations().is_empty(), "轮末丢弃");
     }
 
     #[tokio::test]
