@@ -238,7 +238,14 @@ async fn retrieve_skill_resources(
                     .collect::<Vec<_>>()
                     .join(" \u{b7} "),
                 body: segment.body,
-                metadata: None,
+                // 533 号：段级元数据随命中透出（对齐 TS metadata：
+                // { path, heading, charStart, charEnd }）。
+                metadata: Some(json!({
+                    "path": path,
+                    "heading": segment.heading,
+                    "charStart": segment.char_start,
+                    "charEnd": segment.char_end,
+                })),
             });
         }
     }
@@ -261,12 +268,35 @@ async fn retrieve_skill_resources(
     index.close();
     hits.iter()
         .map(|hit| {
+            // 533 号：段级元数据优先取 metadata（TS hit.metadata?.path ?? "" 对应面）。
+            let meta = hit.metadata.as_ref();
+            let meta_str = |key: &str| {
+                meta.and_then(|m| m.get(key))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let meta_num = |key: &str| {
+                meta.and_then(|m| m.get(key))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let meta_path = meta_str("path");
+            let path_out = if meta_path.is_empty() {
+                hit.source.split(':').next().unwrap_or("").to_string()
+            } else {
+                meta_path
+            };
+            let char_end = match meta_num("charEnd") {
+                0 => hit.body.chars().count() as u64,
+                n => n,
+            };
             json!({
-                "path": hit.source.split(':').next().unwrap_or(""),
-                "heading": Value::Null,
+                "path": path_out,
+                "heading": meta_str("heading"),
                 "body": hit.body,
-                "charStart": 0,
-                "charEnd": hit.body.chars().count(),
+                "charStart": meta_num("charStart"),
+                "charEnd": char_end,
                 "score": hit.score,
             })
         })
@@ -463,6 +493,15 @@ mod query_retrieval_tests {
         assert!(!resources.is_empty(), "应至少召回 opening.md 分段");
         assert!(resources.iter().any(|r| {
             r["body"].as_str().unwrap_or_default().contains("核心冲突")
+        }), "{resources:?}");
+        // 533 号：段级元数据随命中透出（对齐 TS metadata 面）——
+        // heading 为分段标题、charStart/charEnd 为文件内字符区间（非全长 0..len）。
+        assert!(resources.iter().all(|r| r["path"].as_str().unwrap_or_default().ends_with(".md")), "{resources:?}");
+        assert!(resources.iter().any(|r| r["heading"].as_str() == Some("开局布局")), "{resources:?}");
+        assert!(resources.iter().any(|r| {
+            let start = r["charStart"].as_u64().unwrap_or(0);
+            let end = r["charEnd"].as_u64().unwrap_or(0);
+            end > start && (start > 0 || end < 400)
         }), "{resources:?}");
         assert!(
             result.text.contains("Relevant static references:"),
