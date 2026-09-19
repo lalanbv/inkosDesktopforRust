@@ -102,8 +102,10 @@ function parseHash(hash: string): HashRoute {
 // 新增页面漏配 = TS2322 编译错。根治「新增页面漏 hash 分支」类缺陷
 // （analytics 为 208/405 同款第三实例，460 号）。
 // - toHash：hash 写入模板（与旧 routeToHash switch 逐字等价）；
-// - writable：setRoute 是否写 URL（镜像旧 HASH_PAGES 成员关系——onboarding/
-//   radar 可产 hash 供深链解析但不写 URL，语义保留）；
+// - writable：setRoute 是否写 URL（镜像旧 HASH_PAGES 成员关系——onboarding
+//   可产 hash 供深链解析但不写 URL，语义保留；radar 原同列，532 号起升级
+//   可写——侧栏切换后 URL 停留旧路由，刷新/复制链接即丢页，与 469 号
+//   doctor/genres/logs 深链补齐同款缺陷清零）；
 // - sample：round-trip 测试样本（parseHash(toHash(sample)) 必须还原 sample）。
 // - null = 纯 state-only 页（不产 hash 亦不解析：doctor/genres/style/truth/daemon/logs）。
 interface PageSpecFor<K extends HashRoute["page"]> {
@@ -132,7 +134,7 @@ const PAGE_SPEC: { readonly [K in HashRoute["page"]]: PageSpecFor<K> | null } = 
   flow: { toHash: (r) => `#/flow/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "flow", projectId: "p1" } },
   "film-author": { toHash: (r) => `#/film-author/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-author", projectId: "p1" } },
   "film-studio": { toHash: (r) => `#/studio/film/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film-studio", projectId: "p1" } },
-  radar: { toHash: () => "#/radar", writable: false, sample: { page: "radar" } },
+  radar: { toHash: () => "#/radar", writable: true, sample: { page: "radar" } },
   doctor: { toHash: () => "#/doctor", writable: true, sample: { page: "doctor" } },
   genres: { toHash: () => "#/genres", writable: true, sample: { page: "genres" } },
   style: { toHash: () => "#/style", writable: true, sample: { page: "style" } },

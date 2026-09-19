@@ -164,13 +164,17 @@ describe("PAGE_SPEC 穷举一致性（461 号）", () => {
     }
   });
 
-  it("writable=false 的页面不产可写 URL 语义保持（onboarding/radar 深链解析仍在）", () => {
-    for (const page of ["onboarding", "radar"] as const) {
+  it("writable=false 的页面不产可写 URL 语义保持（onboarding 深链解析仍在）", () => {
+    // 532 号：radar 升级 writable=true（侧栏切换后 URL 停留旧路由、刷新即丢页，
+    // 与 469 号 doctor/genres/logs 深链补齐同款缺陷清零），不可写清单仅余 onboarding。
+    for (const page of ["onboarding"] as const) {
       const spec = PAGE_SPEC[page];
       expect(spec).not.toBeNull();
       expect(spec!.writable).toBe(false);
       expect(parseHash(spec!.toHash(spec!.sample as never)).page).toBe(page);
     }
+    // radar 反向锁定：必须可写（写入后 hashchange 幂等回落 radar，无回环）。
+    expect(PAGE_SPEC.radar!.writable).toBe(true);
   });
 
   it("所有页面的键集合与 HashRoute 穷举一致（缺一编译失败）", () => {
