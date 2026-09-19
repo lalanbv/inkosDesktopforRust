@@ -2004,12 +2004,14 @@ export class PipelineRunner {
     const paddedChapter = String(chapterNumber).padStart(4, "0");
     const runPath = join("story", "runtime", `chapter-${paddedChapter}.run.json`);
     const runId = `${bookId}:chapter-${paddedChapter}`;
+    const baseStage = `chapter-${chapterNumber}`;
     const baseRun = {
       kind: "long-fiction" as const,
       id: runId,
-      stage: `chapter-${chapterNumber}`,
+      stage: baseStage,
       model: this.config.model,
-      skillIds: ["inkos-long-writing"],
+      // 531 号：记录实际激活（530 链级注入），不再硬编码"应当激活"。
+      skillIds: this.config.activatedSkills?.map((activation) => activation.skill.id) ?? [],
       resumeCursor: String(chapterNumber),
     };
 

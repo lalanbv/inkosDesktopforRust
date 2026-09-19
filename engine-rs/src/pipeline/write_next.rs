@@ -329,6 +329,8 @@ pub async fn write_next_chapter(
     let run_path = format!("story/runtime/chapter-{padded_chapter}.run.json");
     let run_id = format!("{book_id}:chapter-{padded_chapter}");
     let base_stage = format!("chapter-{chapter_number}");
+    // 531 号：快照记录实际激活（scope 内 task-local），不再硬编码"应当激活"。
+    let skill_ids = snapshot_skill_ids();
     crate::production::write_production_run_snapshot(
         &book_dir,
         &run_path,
@@ -340,7 +342,7 @@ pub async fn write_next_chapter(
             artifacts: Vec::new(),
             observations: Vec::new(),
             model: None,
-            skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+            skill_ids: skill_ids.clone(),
             resume_cursor: Some(chapter_number.to_string()),
             error: None,
         }),
@@ -428,7 +430,7 @@ pub async fn write_next_chapter(
                     artifacts,
                     observations: vec![observation],
                     model: None,
-                    skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+                    skill_ids: snapshot_skill_ids(),
                     resume_cursor: Some(result.chapter_number.to_string()),
                     error: None,
                 }),
@@ -484,11 +486,19 @@ async fn publish_failed_run_snapshot(
         artifacts: Vec::new(),
         observations: Vec::new(),
         model: None,
-        skill_ids: Some(vec!["inkos-long-writing".to_string()]),
+        skill_ids: snapshot_skill_ids(),
         resume_cursor: None,
         error: Some(error.to_string()),
     });
     let _ = crate::production::write_production_run_snapshot(book_dir, run_path, &snapshot).await;
+}
+
+/// 531 号：run 快照 skillIds 取实际激活（写作链装配点的 task-local，
+/// 对齐 TS `baseRun.skillIds: config.activatedSkills?.map(...) ?? []`）；
+/// 无 scope（直调测试等）→ None（serde skip，键消失）。
+fn snapshot_skill_ids() -> Option<Vec<String>> {
+    crate::skills::production_bindings::current_operation_skills()
+        .map(|activations| activations.iter().map(|a| a.skill.id.clone()).collect())
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1827,6 +1837,31 @@ mod tests {
     use crate::llm::provider::LLMMessage;
     use crate::state::store::InMemoryStateStore;
     use std::sync::Mutex as StdMutex;
+
+    /// 531 号：run 快照 skillIds 取实际激活——scope 外 None、scope 内为激活 id 表。
+    #[tokio::test]
+    async fn snapshot_skill_ids_reflects_operation_scope() {
+        assert!(snapshot_skill_ids().is_none(), "scope 外 → None");
+
+        let skill = crate::skills::AgentSkill {
+            id: "inkos-long-writing".to_string(),
+            name: "Long-form narrative craft".to_string(),
+            description: "d".into(),
+            body: "正文".into(),
+            source: crate::skills::SkillSource::Builtin,
+            base_dir: None,
+        };
+        let activations = std::sync::Arc::new(vec![crate::skills::production_bindings::ActivatedSkillGuidance {
+            skill,
+            resources: vec![],
+        }]);
+        let inside = crate::skills::production_bindings::scope_operation_skills(
+            Some(activations),
+            async { snapshot_skill_ids() },
+        )
+        .await;
+        assert_eq!(inside, Some(vec!["inkos-long-writing".to_string()]));
+    }
 
     // ---- 全链 mock：按 agent 角色回放脚本响应 ----
 

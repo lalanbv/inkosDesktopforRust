@@ -14,9 +14,12 @@ use inkos_engine::agents::settler_prompts::{build_settler_system_prompt, build_s
 use inkos_engine::agents::writer_prompts::{
     build_writer_system_prompt, FanficContext, InputProfile, WriterPromptMode, WriterSystemPromptInput,
 };
+use inkos_engine::agents::append_activated_skill_guidance;
+use inkos_engine::llm::provider::{LLMMessage, LLMRole};
 use inkos_engine::models::book::{BookConfig, BookStatus, FanficMode, Platform};
 use inkos_engine::models::book_rules::{BookRules, GenreLock, NarrativePerson, Protagonist};
 use inkos_engine::models::genre_profile::GenreProfile;
+use inkos_engine::skills::{AgentSkill, SkillSource};
 use inkos_engine::utils::language::WritingLanguage;
 use serde_json::Value;
 
@@ -384,4 +387,75 @@ fn writing_prompts_match_ts_snapshot() {
         build_writer_system_prompt(&writer_fanfic),
         &golden,
     );
+
+    // ---------------------------------------------------------------------------
+    // skill 激活指导段（531 号）：append_activated_skill_guidance 拼接格式
+    // 与 TS golden 码点级比对（530 链级注入的 system 追加段）。
+    // ---------------------------------------------------------------------------
+
+    let craft_skill = AgentSkill {
+        id: "inkos-long-writing".into(),
+        name: "Long-form narrative craft".into(),
+        description: "长篇小说的场景构造、人物因果、信息释放与连载节奏。".into(),
+        body: "Turn the chapter goal into scenes with an immediate objective, resistance, a meaningful turn.".into(),
+        source: SkillSource::Builtin,
+        base_dir: None,
+    };
+
+    // 单技能、无参考资源、无既有 system → 指导段前置为首条 system。
+    let mut plain = vec![LLMMessage {
+        role: LLMRole::User,
+        content: "写下一章。".into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+    append_activated_skill_guidance(
+        &mut plain,
+        &[inkos_engine::skills::production_bindings::ActivatedSkillGuidance {
+            skill: craft_skill.clone(),
+            resources: vec![],
+        }],
+    );
+    assert_match("skill.guidance.plain", plain[0].content.clone(), &golden);
+
+    // 双技能 + 参考资源 + 空 body 回退 description + 既有 system 追加形态。
+    let fallback_skill = AgentSkill {
+        id: "inkos-story-review".into(),
+        name: "Story review".into(),
+        body: "   ".into(),
+        ..craft_skill.clone()
+    };
+    let mut full = vec![
+        LLMMessage { role: LLMRole::System, content: "你是写手。".into(), tool_calls: None, tool_call_id: None },
+        LLMMessage { role: LLMRole::User, content: "继续。".into(), tool_calls: None, tool_call_id: None },
+    ];
+    append_activated_skill_guidance(
+        &mut full,
+        &[
+            inkos_engine::skills::production_bindings::ActivatedSkillGuidance {
+                skill: craft_skill,
+                resources: vec![
+                    inkos_engine::skills::production_bindings::ActivatedSkillResource {
+                        path: "references/craft.md".into(),
+                        heading: Some("节奏".into()),
+                        body: "控制信息释放密度。".into(),
+                        char_start: 12,
+                        char_end: 88,
+                    },
+                    inkos_engine::skills::production_bindings::ActivatedSkillResource {
+                        path: "references/review.md".into(),
+                        heading: None,
+                        body: "复审清单。".into(),
+                        char_start: 0,
+                        char_end: 40,
+                    },
+                ],
+            },
+            inkos_engine::skills::production_bindings::ActivatedSkillGuidance {
+                skill: fallback_skill,
+                resources: vec![],
+            },
+        ],
+    );
+    assert_match("skill.guidance.full", full[0].content.clone(), &golden);
 }

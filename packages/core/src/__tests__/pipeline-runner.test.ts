@@ -1457,7 +1457,7 @@ describe("PipelineRunner", () => {
         kind: "long-fiction",
         status: "needs-review",
         stage: "chapter-1",
-        skillIds: ["inkos-long-writing"],
+        skillIds: [], // 531 号：未配置激活 → 空数组（实际注入面如实记录）
       });
       expect(run.artifacts).toEqual(expect.arrayContaining([
         expect.stringMatching(/^chapters\/0001_/),
@@ -1657,6 +1657,12 @@ describe("PipelineRunner", () => {
 
       expect(writeChapter).toHaveBeenCalledTimes(1);
       expect(writerActivatedSkills).toEqual(guidance);
+      // 531 号：run 快照记录实际激活的技能 id。
+      const run = JSON.parse(await readFile(
+        join(state.bookDir(bookId), "story", "runtime", "chapter-0001.run.json"),
+        "utf-8",
+      ));
+      expect(run.skillIds).toEqual(["inkos-long-writing"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

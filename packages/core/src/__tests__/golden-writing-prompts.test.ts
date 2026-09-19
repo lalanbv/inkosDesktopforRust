@@ -8,6 +8,7 @@ import {
 } from "../agents/planner-prompts.js";
 import { buildSettlerSystemPrompt, buildSettlerUserPrompt } from "../agents/settler-prompts.js";
 import { buildWriterSystemPrompt } from "../agents/writer-prompts.js";
+import { appendActivatedSkillGuidance } from "../agents/base.js";
 import type { BookConfig } from "../models/book.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { GenreProfile } from "../models/genre-profile.js";
@@ -191,6 +192,41 @@ function buildGoldenSnapshot(): Record<string, string> {
     bookFixture, genreFixture, null, "", "", "", undefined, 5, "creative",
     { fanficCanon: "原作设定：林秋为杂役，腰牌来历不明。", fanficMode: "canon", allowedDeviations: ["口头禅可保留"] },
   );
+
+  // ---------------------------------------------------------------------------
+  // skill 激活指导段（531 号）：appendActivatedSkillGuidance 拼接格式
+  // 双端码点锁死（530 链级注入的 system 追加段）。
+  // ---------------------------------------------------------------------------
+
+  const craftSkill = {
+    id: "inkos-long-writing",
+    name: "Long-form narrative craft",
+    description: "长篇小说的场景构造、人物因果、信息释放与连载节奏。",
+    body: "Turn the chapter goal into scenes with an immediate objective, resistance, a meaningful turn.",
+    source: "builtin" as const,
+  };
+
+  // 单技能、无参考资源、无既有 system → 指导段前置为首条 system。
+  snapshot["skill.guidance.plain"] = appendActivatedSkillGuidance(
+    [{ role: "user", content: "写下一章。" }],
+    [{ skill: craftSkill, resources: [] }],
+  )[0]!.content;
+
+  // 双技能 + 参考资源 + 空 body 回退 description + 既有 system 追加形态。
+  const fallbackSkill = { ...craftSkill, id: "inkos-story-review", name: "Story review", body: "   " };
+  snapshot["skill.guidance.full"] = appendActivatedSkillGuidance(
+    [{ role: "system", content: "你是写手。" }, { role: "user", content: "继续。" }],
+    [
+      {
+        skill: craftSkill,
+        resources: [
+          { path: "references/craft.md", heading: "节奏", body: "控制信息释放密度。", charStart: 12, charEnd: 88 },
+          { path: "references/review.md", body: "复审清单。", charStart: 0, charEnd: 40 },
+        ],
+      },
+      { skill: fallbackSkill, resources: [] },
+    ],
+  )[0]!.content;
 
   return snapshot;
 }

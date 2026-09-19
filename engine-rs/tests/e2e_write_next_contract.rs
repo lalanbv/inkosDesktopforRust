@@ -17626,7 +17626,9 @@ mod sub136_e2e {
         assert_eq!(run["id"], format!("b1:chapter-{:04}", result.chapter_number));
         assert_eq!(run["status"], "complete");
         assert_eq!(run["stage"], format!("chapter-{}", result.chapter_number));
-        assert_eq!(run["skillIds"][0], "inkos-long-writing");
+        // 531 号：skillIds 记录实际激活——本测试直调无 scope → 键省略
+        // （scope 内形态由 write_next 单测 snapshot_skill_ids_reflects_operation_scope 覆盖）。
+        assert!(run.get("skillIds").is_none(), "无 scope → skillIds 键省略");
         assert_eq!(run["resumeCursor"], result.chapter_number.to_string());
         // artifacts 清单六项（TS 逐字：章文件/index/真相双文件/快照目录/trace）。
         let artifacts: Vec<&str> = run["artifacts"]
