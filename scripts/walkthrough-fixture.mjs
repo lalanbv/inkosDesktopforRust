@@ -308,5 +308,5 @@ if (!kindsOk) {
 console.log(`[fixture] ✓ 数据就绪。浏览器打开 ${base} 走查：`);
 console.log(`  1. 书详情 ${base}/#/book/${enc} → 右栏「伏笔池」：分类 chips（全部/悬念/物品/情感/世界观）+ 点击筛选收窄`);
 console.log(`  2. ${base}/#/book/${enc}/settings → 「承诺账本」：kind 徽标 + 分类过滤（open 置顶排序）`);
-console.log(`  3. 同页顶部「运行遥测」：累计 ${runLog.total} · 明细 agent/model/耗时`);
+console.log(`  3. 首页 ${base}/#/ → 「运行遥测」：累计 ${runLog.total} · 明细 agent/model/耗时（R26/403 号挂 Dashboard，不在设置页）`);
 console.log(`  4. ${base}/#/radar → 点击历史条目回放 → 推荐卡「从该选题开书」→ 跳建书且输入框预填`);
