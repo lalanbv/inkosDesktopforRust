@@ -159,7 +159,7 @@ tokio::task_local! {
     /// 本轮聊天的技能激活集（532 号：TS agent-session `turnSkills` 对应物——
     /// 轮起点由 usedSkills 预置、轮内 use_skill 激活写回，同轮 sub_agent
     /// 合并进 worker 注入；随 scope 丢弃，对齐 TS 每轮重建）。
-    /// 535 号：容器由 HashMap 改插入序 Vec——TS Map.set 对已有键原位更新、
+    /// 536 号：容器由 HashMap 改插入序 Vec——TS Map.set 对已有键原位更新、
     /// 新键追加（首插序稳定），HashMap 迭代随机序使注入顺序双端漂移且
     /// 自身逐轮不稳定。
     static TURN_SKILLS: Option<
@@ -168,7 +168,7 @@ tokio::task_local! {
 }
 
 /// 回合作用域：包住整轮工具循环（agent_route post_agent 的 run_agent_loop）。
-/// `initial` 为轮起点预置集（535 号：TS agent-session turnSkills 由
+/// `initial` 为轮起点预置集（536 号：TS agent-session turnSkills 由
 /// skillResolution.usedSkills 预置，resources 空——此前 Rust 起点恒空，
 /// 请求技能已解析但未调 use_skill 的轮次 sub_agent 合并注入丢失 usedSkills）。
 pub async fn scope_turn_skills<T, F>(initial: Vec<ActivatedSkillGuidance>, fut: F) -> T
@@ -357,7 +357,7 @@ mod tests {
     }
 
     /// 532 号：回合技能集——无 scope 写读均空；scope 内写后读同轮可见、
-    /// 轮末（scope 外）丢弃。535 号：+轮起点 usedSkills 预置 +首插序稳定
+    /// 轮末（scope 外）丢弃。536 号：+轮起点 usedSkills 预置 +首插序稳定
     /// （TS Map.set 原位更新；HashMap 迭代随机序清偿——原双键序断言在
     /// HashMap 下本属掷硬币，能绿纯靠运气）。
     #[tokio::test]

@@ -165,7 +165,7 @@ impl SkillRegistry for BuiltinSkillRegistry {
             &input.requested_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
         );
         let mut missing = Vec::new();
-        // 535 号：disabled_skill_ids 对齐 TS Set 插入序（registry.ts resolveSkills：
+        // 536 号：disabled_skill_ids 对齐 TS Set 插入序（registry.ts resolveSkills：
         // 规范化+去重后按输入序过滤在册）——此前 HashSet 迭代随机序。
         let disabled_skill_ids: Vec<String> = dedupe_strings(
             &input.disabled_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
@@ -173,7 +173,7 @@ impl SkillRegistry for BuiltinSkillRegistry {
         .into_iter()
         .filter(|id| self.by_id.contains_key(id))
         .collect();
-        // 535 号：usedSkills 对齐 TS Map 插入序（请求序即产出序）——此前
+        // 536 号：usedSkills 对齐 TS Map 插入序（请求序即产出序）——此前
         // HashMap 迭代随机序，多技能时 system prompt 指导段顺序双端漂移
         // 且自身逐轮不稳定（requested 已去重，push 即 Map.set 语义）。
         let mut used: Vec<AgentSkill> = Vec::new();
@@ -265,7 +265,7 @@ mod tests {
         assert!(r.forced_skill_ids.is_empty());
     }
 
-    /// 535 号：usedSkills/disabledSkillIds 序确定性——请求序/输入序（TS
+    /// 536 号：usedSkills/disabledSkillIds 序确定性——请求序/输入序（TS
     /// Map/Set 插入序镜像，registry.ts resolveSkills）；此前 HashMap/HashSet
     /// 迭代随机序，多技能时指导段顺序双端漂移且自身不稳定。
     #[test]

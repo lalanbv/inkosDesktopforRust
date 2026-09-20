@@ -752,7 +752,7 @@ pub async fn post_agent(
     } else {
         (None, None)
     };
-    // 535 号：turnSkills 轮起点预置（TS agent-session turnSkills 由
+    // 536 号：turnSkills 轮起点预置（TS agent-session turnSkills 由
     // skillResolution.usedSkills 预置、resources 空）——自由文本路径请求集
     // 为空 → usedSkills 必空，空预置即对齐；非自由文本携带 requested_skills
     // 的轮次此前 resolution=None 整段丢失（sub_agent 合并注入缺 usedSkills），
@@ -1185,7 +1185,7 @@ pub async fn post_agent(
         .scope(Some(turn_scope), async {
             // 532 号：回合技能集作用域（TS agent-session turnSkills 对应物）——
             // 轮内 use_skill 激活写回，同轮 sub_agent 合并注入，轮末随 scope 丢弃。
-            // 535 号：轮起点以 usedSkills 预置（turn_seed）。
+            // 536 号：轮起点以 usedSkills 预置（turn_seed）。
             crate::skills::production_bindings::scope_turn_skills(turn_seed.clone(), async {
                 let loop_result = run_agent_loop(
                     &loop_chat,
