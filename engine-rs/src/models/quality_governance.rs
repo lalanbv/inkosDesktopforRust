@@ -48,6 +48,9 @@ impl QualityVerdict {
     }
 
     /// 判定 → 是否记债（债务账本的入账口径）。
+    /// 537 号备案：TS 消费面 = scheduler verdict 层（verdictCreatesDebt，
+    /// 失败即记债入账）；Rust daemon（72 号精简移植）暂为裸计数暂停、未接
+    /// verdict 判定与记债（接线专项已立案）——勿按零引用清理。
     pub fn creates_debt(self) -> bool {
         matches!(
             self,
@@ -59,6 +62,8 @@ impl QualityVerdict {
     }
 
     /// 判定 → 是否继续写下一章（false = 停在已保存章节边界）。
+    /// 537 号备案：TS 消费面 = verdictContinuesPipeline（scheduler.ts 续写
+    /// 分支）；Rust 消费面随 daemon verdict 化专项接线——勿按零引用清理。
     pub fn continues_pipeline(self) -> bool {
         matches!(
             self,

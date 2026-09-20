@@ -93,10 +93,9 @@ fn invalid_segment(namespace: &str, raw: &str) -> Response {
         .into_response()
 }
 
-/// 便捷装配：挂在路由层（CORS 之内），覆盖已注册的全部路由。
-pub fn with_segment_guard(router: axum::Router) -> axum::Router {
-    router.layer(axum::middleware::from_fn(guard))
-}
+// 装挂点唯一：server/mod.rs 路由表手写 `.layer(from_fn(guard))`（需与
+// api_no_store 保持洋葱序，不便抽象）——537 号扫出便捷装配函数零引用后
+// 删除，勿再引入单用途包装。
 
 #[cfg(test)]
 mod tests {

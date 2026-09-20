@@ -398,6 +398,10 @@ impl MemoryDb {
     // ---------------------------------------------------------------------------
 
     /// G1/349 号：upsert chunk 向量（幂等）。
+    /// 537 号备案：消费方 = hybrid 语义检索的增量缓存写面（TS
+    /// hybrid-memory-selector 的 options.cache）——TS 侧
+    /// createHybridMemorySelector 亦零调用，双端同为"已建成未接线"
+    /// （接线专项已立案）——勿按零引用清理。
     pub fn upsert_chunk_vector(&self, chunk: &StoredChunkVector) -> Result<()> {
         let vector_json = serde_json::to_string(&chunk.vector)?;
         self.conn.execute(
@@ -438,6 +442,8 @@ impl MemoryDb {
         Ok(out)
     }
 
+    /// 537 号备案：TS 侧 chunkVectorCount 同无生产消费；与 upsert/list
+    /// 构成检索缓存 API 面整体对齐——保留待接线专项。
     pub fn chunk_vector_count(&self) -> Result<u32> {
         let count: u32 = self
             .conn
