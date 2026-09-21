@@ -99,3 +99,35 @@ describe("hybrid memory selector (G1/350a)", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// ── 545 号：llm.embedding 配置面接线验收 ──
+
+import { LLMConfigSchema } from "../models/project.js";
+import { createEmbeddingClient } from "../retrieval/embedding-client.js";
+
+const minimalLlm = {
+  provider: "custom" as const,
+  baseUrl: "https://api.example.com/v1",
+  model: "test-model",
+};
+
+describe("llm.embedding 配置面（545 号接线）", () => {
+  it("LLMConfig 接受 embedding 节并产出可用客户端", () => {
+    const embedding = {
+      provider: "openai-compatible" as const,
+      baseUrl: "https://emb.example.com/v1",
+      model: "text-embedding-3-small",
+      apiKeyEnv: "INKOS_EMBEDDING_KEY",
+    };
+    const parsed = LLMConfigSchema.parse({ ...minimalLlm, embedding });
+    expect(parsed.embedding).toEqual(embedding);
+    expect(createEmbeddingClient(parsed.embedding)).not.toBeNull();
+  });
+
+  it("embedding 缺省/非法 → undefined/null（降级 LLM 精选，行为零变更）", () => {
+    const parsed = LLMConfigSchema.parse(minimalLlm);
+    expect(parsed.embedding).toBeUndefined();
+    expect(createEmbeddingClient(null)).toBeNull();
+    expect(createEmbeddingClient({ provider: "nope" })).toBeNull();
+  });
+});

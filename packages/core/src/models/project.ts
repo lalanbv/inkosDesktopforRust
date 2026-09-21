@@ -1,4 +1,7 @@
 import { z } from "zod";
+// G1/348 号 embedding 配置面（545 号接线：写作链检索向量重排的 opt-in 开关）。
+// embedding-client 运行时仅依赖 zod——models ← retrieval 无运行时环。
+import { EmbeddingConfigSchema } from "../retrieval/embedding-client.js";
 
 // C1 (v2.0.0 breaking): `maxTokens` 字段已被 providers bank 接管；zod 用 strip mode 静默丢弃老配置里的 `maxTokens`。
 const LLMServiceEntrySchema = z.object({
@@ -37,6 +40,12 @@ export const LLMConfigSchema = z.object({
   services: z.array(LLMServiceEntrySchema).optional(),
   defaultModel: z.string().min(1).optional(),
   cover: LLMCoverConfigSchema,
+  /**
+   * G1/348 号 embedding 配置（545 号接线，可选）：存在且合法时，写作链记忆
+   * 精选切换为 hybrid 向量重排（createHybridMemorySelector，指纹增量缓存 +
+   * 失败降级契约回退 BM25/LLM 精选）；缺省维持 LLM 精选（行为零变更）。
+   */
+  embedding: EmbeddingConfigSchema.optional(),
 });
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>;

@@ -3257,7 +3257,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const client = createEmbeddingClient(body.embedding ?? null);
       if (client) {
         try {
-          const memory = new MemoryDB(dbPath);
+          // 545 号修复：MemoryDB 构造参数是书目录（内部再拼 story/memory.db），
+          // 此前误传 db 文件路径——实际打开 .../story/memory.db/story/memory.db
+          // 嵌套假库，语义分支恒读空。Rust 侧 MemoryDb::open(book_dir) 一直正确。
+          const memory = new MemoryDB(join(root, "books", id));
           const chunks = memory.listChunkVectors();
           const queryVector = (await client.embed([query]))[0] ?? [];
           const scored = topKBySimilarity(

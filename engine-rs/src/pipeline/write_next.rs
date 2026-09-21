@@ -108,6 +108,10 @@ pub struct WriteNextConfig {
     pub chapter_review_mode: ChapterReviewMode,
     pub writing_review_retries: usize,
     pub input_governance_mode: InputGovernanceMode,
+    /// G1/350a 接线（545 号）：`llm.embedding` 配置（TS LLMConfig.embedding 同名
+    /// 节）。Some 时记忆语义精选切换 hybrid 向量重排（指纹增量缓存 + 失败降级
+    /// 契约回退 BM25/LLM 精选）；None 维持 LLM 精选（行为零变更）。
+    pub embedding: Option<crate::utils::semantic_retrieval::EmbeddingConfig>,
     /// 链内中止信号（Some 时在四个安全点轮询——TS `throwIfOperationAborted`
     /// 等价物：章首 / 草稿后 / 审查环后 / 落盘前；None 全链不可截断）。
     pub abort: Option<AbortHandle>,
@@ -132,6 +136,7 @@ impl Default for WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Auto,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            embedding: None,
             abort: None,
             notify_channels: None,
             on_context_compression: None,
@@ -164,10 +169,17 @@ impl WriteNextConfig {
             Some("manual") => ChapterReviewMode::Manual,
             _ => ChapterReviewMode::Auto,
         };
+        // llm.embedding（G1/350a 接线，545 号）：非法/缺省 → None（维持 LLM 精选）。
+        let embedding = config
+            .as_ref()
+            .and_then(|config| config.get("llm"))
+            .and_then(|llm| llm.get("embedding"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok());
         Self {
             notify_channels,
             writing_review_retries,
             chapter_review_mode,
+            embedding,
             ..Default::default()
         }
     }
@@ -1789,7 +1801,37 @@ pub(crate) async fn prepare_write_input(
         selector: &reference_selector,
     };
     // 244 号：记忆语义精简器（TS runner memorySemanticSelector 同款）。
-    let memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
+    // 545 号：llm.embedding 配置存在且缓存库可开 → 切换 G1/350a hybrid 向量
+    // 重排（指纹增量缓存写 retrieval_chunks）；否则维持 LLM 精选。hybrid 内部
+    // 任何 embedding 失败 → 空精选（347 号降级契约，回退 BM25 排序）。
+    let llm_memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
+    let hybrid_selector =
+        match (&config.embedding, crate::state::memory_db::MemoryDb::open(book_dir)) {
+            (Some(embedding), Ok(cache)) => {
+                let api_key = embedding
+                    .api_key_env
+                    .as_ref()
+                    .and_then(|env| std::env::var(env).ok())
+                    .unwrap_or_default();
+                Some(crate::utils::hybrid_memory_selector::HybridMemorySelector::new(
+                    std::sync::Arc::new(
+                        crate::utils::hybrid_memory_selector::ProductionEmbedder {
+                            config: embedding.clone(),
+                            api_key,
+                        },
+                    ),
+                    cache,
+                    crate::utils::hybrid_memory_selector::HYBRID_SELECT_LIMIT,
+                ))
+            }
+            _ => None,
+        };
+    let memory_selector: &dyn crate::utils::memory_retrieval::MemorySemanticSelector =
+        if let Some(hybrid) = hybrid_selector.as_ref() {
+            hybrid
+        } else {
+            &llm_memory_selector
+        };
     // R20/390 号：书挂 series_id 时解析系列正典文件（缺失零打扰）。
     let series_canon_file = book.series_id.as_ref().map(|series_id| {
         ctx.project_root
@@ -1806,7 +1848,7 @@ pub(crate) async fn prepare_write_input(
         compiler: Some(&compiler),
         outline_section_selector: Some(&selector),
         reference_context_provider: Some(&reference_provider),
-        memory_semantic_selector: Some(&memory_selector),
+        memory_semantic_selector: Some(memory_selector),
         on_context_compression: config.on_context_compression.clone(),
         series_canon_file: series_canon_file.as_deref(),
     })
@@ -2060,6 +2102,7 @@ mod tests {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            embedding: None,
             abort: None,
             notify_channels: None,
             on_context_compression: None,
@@ -2170,6 +2213,7 @@ mod tests {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            embedding: None,
             abort: None,
             notify_channels: None,
             on_context_compression: None,
@@ -2625,6 +2669,7 @@ mod tests {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
             input_governance_mode: InputGovernanceMode::V2,
+            embedding: None,
             abort: None,
             notify_channels: None,
             on_context_compression: None,
@@ -2752,6 +2797,34 @@ mod tests {
         let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
         let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());
+    }
+
+    /// 545 号：from_project 解析 llm.embedding——合法 → Some（hybrid 向量重排
+    /// 激活）；非法/缺省 → None（维持 LLM 精选，行为零变更）。
+    #[tokio::test]
+    async fn from_project_parses_llm_embedding() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{ "name": "t", "version": "0.1.0", "llm": { "provider": "custom", "baseUrl": "http://127.0.0.1:9/v1", "model": "m", "embedding": { "provider": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "nomic-embed-text" } } }"#,
+        )
+        .unwrap();
+        let config = WriteNextConfig::from_project(dir.path()).await;
+        let embedding = config.embedding.expect("embedding 节应解析成功");
+        assert_eq!(
+            embedding.provider,
+            crate::utils::semantic_retrieval::EmbeddingProvider::Ollama
+        );
+        assert_eq!(embedding.model, "nomic-embed-text");
+
+        // 非法 provider → 整节 None（降级契约：缺配置维持现状）。
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{ "name": "t", "version": "0.1.0", "llm": { "embedding": { "provider": "nope" } } }"#,
+        )
+        .unwrap();
+        let config = WriteNextConfig::from_project(dir.path()).await;
+        assert!(config.embedding.is_none());
     }
 }
 

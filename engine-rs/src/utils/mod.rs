@@ -46,6 +46,7 @@ pub mod hook_lifecycle;
 pub mod hook_policy;
 pub mod hook_promotion;
 pub mod hook_stale_detection;
+pub mod hybrid_memory_selector;
 pub mod language;
 pub mod length_metrics;
 pub mod local_search;

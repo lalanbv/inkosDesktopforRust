@@ -9,6 +9,7 @@ import type { ChapterMeta } from "../models/chapter.js";
 import type { NotifyChannel, LLMConfig, AgentLLMOverride } from "../models/project.js";
 import { TASK_AGENT_MAP, resolveAgentModel, resolveTaskModelChain, type ResolvedTaskModelChain } from "../models/task-routing.js";
 import { createHybridMemorySelector } from "../retrieval/hybrid-memory-selector.js";
+import { createEmbeddingClient } from "../retrieval/embedding-client.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import { ArchitectAgent, type ArchitectOutput } from "../agents/architect.js";
 import {
@@ -4093,6 +4094,18 @@ ${matrix}`,
     const plan = await this.resolveGovernedPlan(book, bookDir, chapterNumber, externalContext, options);
     const composerCtx = this.agentCtxFor("composer", book.id);
     const composer = new ComposerAgent(composerCtx);
+    // 545 号：G1/350a 接线——llm.embedding 配置合法时记忆精选切换 hybrid 向量
+    // 重排（指纹增量缓存写 retrieval_chunks；embedding 任何失败 → 空精选，
+    // 检索链回退 BM25 排序——347 号降级契约）。缓存库打不开仅失去缓存。
+    const embeddingClient = createEmbeddingClient(this.config.defaultLLMConfig?.embedding ?? null);
+    let hybridCache: MemoryDB | undefined;
+    if (embeddingClient) {
+      try {
+        hybridCache = new MemoryDB(bookDir);
+      } catch {
+        hybridCache = undefined;
+      }
+    }
     const composed = await composeGovernedChapter({
       book,
       bookDir,
@@ -4101,7 +4114,9 @@ ${matrix}`,
       contextBudget: contextBudgetFromClient(composerCtx.client),
       compressibleContextCompiler: (request) => composer.compileCompressibleContext(request),
       outlineSectionSelector: (request) => composer.selectOutlineSections(request),
-      memorySemanticSelector: (request) => composer.selectMemoryCandidates(request),
+      memorySemanticSelector: embeddingClient
+        ? createHybridMemorySelector({ client: embeddingClient, cache: hybridCache })
+        : (request) => composer.selectMemoryCandidates(request),
       referenceContextProvider: (request) => selectBookReferenceContext(
         this.config.projectRoot,
         book.id,
