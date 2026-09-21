@@ -4,12 +4,13 @@
 //! L6434-L6456（radar）、L6459-L6500（doctor）+ `packages/core/src/pipeline/
 //! scheduler.ts`（cronToMs 间隔近似 + 写循环策略）。
 //!
-//! Scheduler 为精简生命周期（偏差备案见 72 号记录）：
+//! Scheduler 生命周期（72 号移植；111 号补 detection/webhook/失败维度聚类；
+//! 540 号 verdict 化补齐八级判定+记债，与 TS scheduler.ts 对齐）：
 //! - cronToMs 逐字（`*/N` 分/时 → 间隔，否则每日）；tick 重入跳过
 //! - 写循环：日上限（YYYY-MM-DD 计数）+ active/outlining 书前 N 本并发 +
-//!   每书 chaptersPerCycle 章（冷却 + 重试温度步进 + 连续失败暂停）
+//!   每书 chaptersPerCycle 章（冷却 + 重试温度步进 + 八级判定链：
+//!   重试窗口 → 记债 → 降债清零续写 / 暂停在已保存章节边界）
 //! - radar tick：run_radar → 落盘（与 POST /radar/scan 同链）
-//! - 暂缓：detection 自动改写环 / webhook 通知 / 失败维度聚类
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -54,8 +55,10 @@ struct DaemonConfig {
     detection: Option<crate::models::project::DetectionConfig>,
     /// 通知通道（111 号：pause pipeline-error / diagnostic-alert webhook 事件）。
     notify_channels: Vec<crate::notify::NotifyChannel>,
-    /// 质量门控（112 号：TS config.qualityGates——maxAuditRetries /
-    /// pauseAfterConsecutiveFailures / retryTemperatureStep）。
+    /// 质量门控（112 号：TS `daemon.qualityGates`——maxAuditRetries /
+    /// retryTemperatureStep 活体消费；pauseAfterConsecutiveFailures 为 schema
+    /// 残留面：TS scheduler 同构零消费，真实暂停阈值 = governance.
+    /// maxConsecutiveDebts，540 号 verdict 化对齐）。
     quality_gates: crate::models::project::QualityGates,
 }
 
@@ -92,9 +95,10 @@ impl DaemonConfig {
             notify_channels: crate::notify::parse_notify_channels(
                 raw.as_ref().and_then(|config| config.get("notify")),
             ),
-            quality_gates: raw
-                .as_ref()
-                .and_then(|config| config.get("qualityGates"))
+            // 540 号纠偏：qualityGates 嵌在 daemon 节（TS ProjectConfigSchema
+            // 的 daemon.qualityGates），此前读顶层键——用户配置被静默忽略。
+            quality_gates: daemon
+                .and_then(|d| d.get("qualityGates"))
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or_default(),
         }
@@ -247,11 +251,34 @@ async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
     let _ = max_per_day;
 }
 
+/// 失败计数的 `Date.now().toString(36)` 等价（TS 记债 debtId 时间段）。
+fn unix_millis_base36() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut n = millis;
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+    }
+    buf.reverse();
+    String::from_utf8(buf).unwrap_or_default()
+}
+
 async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &str) {
-    // 质量门控经 config.qualityGates（112 号；缺省与 TS QualityGatesSchema 默认一致）。
+    // 质量门控经 daemon.qualityGates（112 号；540 号读取位纠偏为 daemon 节）。
     let max_audit_retries = config.quality_gates.max_audit_retries;
-    let pause_after_consecutive_failures = config.quality_gates.pause_after_consecutive_failures.max(1);
-    let retry_temperature_step = config.quality_gates.retry_temperature_step;
+    // 540 号：book 级治理方案一次载入（TS runWriteCycle → processBook 链同构；
+    // TS server 活体不带 project 级 governance——project 段恒 None）。
+    let book_governance = runtime
+        .state
+        .load_book_config(book_id)
+        .await
+        .ok()
+        .and_then(|book| book.governance);
 
     for i in 0..config.chapters_per_cycle {
         if !scheduler_running() {
@@ -270,53 +297,71 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             tokio::time::sleep(Duration::from_millis(config.cooldown_after_chapter_ms)).await;
         }
 
-        let failures = write_cycle_state()
-            .lock()
-            .unwrap()
-            .consecutive_failures
-            .get(book_id)
-            .copied()
-            .unwrap_or(0);
-        let temperature = if failures > 0 {
-            Some((0.7 + failures as f64 * retry_temperature_step).min(1.2))
-        } else {
-            None
-        };
-
-        // (成功位, 本章产物, 审计失败维度)——TS onChapterComplete 在成功与
-        // 审计未过两条路径都带真实章号/状态回调（异常路径才只走 onError）。
-        let (success, written, issue_categories) =
-            match write_one_chapter(runtime, book_id, temperature).await {
-                Ok((success, chapter_number, status, issue_categories)) => {
-                    (success, Some((chapter_number, status)), issue_categories)
+        // TS writeOneChapter：返回值 = 是否继续写下一章（成功或 defer-and-continue）。
+        if !write_one_chapter_governed(runtime, config, book_id, book_governance.as_ref()).await {
+            let failures = write_cycle_state()
+                .lock()
+                .unwrap()
+                .consecutive_failures
+                .get(book_id)
+                .copied()
+                .unwrap_or(0);
+            if failures <= max_audit_retries && config.retry_delay_ms > 0 {
+                // 立即重试一次（TS processBook 重试分支；重试同样走完整判定链）。
+                tokio::time::sleep(Duration::from_millis(config.retry_delay_ms)).await;
+                if !write_one_chapter_governed(runtime, config, book_id, book_governance.as_ref())
+                    .await
+                {
+                    break;
                 }
-                Err(error) => {
-                    runtime.hub.broadcast(
-                        "daemon:error",
-                        &json!({ "bookId": book_id, "error": error }),
-                    );
-                    (false, None, Vec::new())
-                }
-            };
-
-        if success {
-            write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);
-            let mut state = write_cycle_state().lock().unwrap();
-            let today = today_key();
-            let count = state.daily_counts.get(&today).copied().unwrap_or(0) + 1;
-            state.daily_counts.retain(|key, _| key == &today);
-            state.daily_counts.insert(today, count);
+            } else {
+                break;
+            }
         }
-        if let Some((chapter_number, _status)) = written.as_ref() {
-            runtime.hub.broadcast(
-                "daemon:chapter",
-                &json!({ "bookId": book_id, "chapter": chapter_number, "status": _status }),
-            );
-            // 检测自动改写环（111 号：TS Scheduler.runDetection——成功审计后）。
+    }
+}
+
+/// TS `Scheduler.writeOneChapter`（540 号 verdict 化重构）：成功 → 清零失败计数 +
+/// 日计数 + 检测环（仅成功后，111 号 runDetection 位）；审计未过 → 八级判定链
+/// handle_audit_failure（返回值 = 是否续写）；异常 → onError + 判定链（章号 0、
+/// 无维度）。
+async fn write_one_chapter_governed(
+    runtime: &BooksRuntime,
+    config: &DaemonConfig,
+    book_id: &str,
+    book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
+) -> bool {
+    let failures = write_cycle_state()
+        .lock()
+        .unwrap()
+        .consecutive_failures
+        .get(book_id)
+        .copied()
+        .unwrap_or(0);
+    let temperature = if failures > 0 {
+        Some((0.7 + failures as f64 * config.quality_gates.retry_temperature_step).min(1.2))
+    } else {
+        None
+    };
+
+    // (成功位, 本章产物, 审计失败维度)——TS onChapterComplete 在成功与
+    // 审计未过两条路径都带真实章号/状态回调（异常路径才只走 onError）。
+    match write_one_chapter(runtime, book_id, temperature).await {
+        Ok((true, chapter_number, status, _categories)) => {
+            {
+                let mut state = write_cycle_state().lock().unwrap();
+                state.consecutive_failures.remove(book_id);
+                let today = today_key();
+                let count = state.daily_counts.get(&today).copied().unwrap_or(0) + 1;
+                state.daily_counts.retain(|key, _| key == &today);
+                state.daily_counts.insert(today, count);
+            }
+            // 检测自动改写环（111 号；仅成功审计后，TS runDetection 在
+            // onChapterComplete 之前）。
             if let Some(detection) = &config.detection {
                 if detection.enabled {
                     if let Err(error) =
-                        run_detection(runtime, detection, book_id, *chapter_number).await
+                        run_detection(runtime, detection, book_id, chapter_number).await
                     {
                         runtime.hub.broadcast(
                             "daemon:error",
@@ -325,25 +370,73 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
                     }
                 }
             }
+            runtime.hub.broadcast(
+                "daemon:chapter",
+                &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+            );
+            true
         }
-        if success {
-            continue;
+        Ok((false, chapter_number, status, issue_categories)) => {
+            // 审计未过：先跑判定链（记债/暂停 webhook），再 onChapterComplete。
+            let continues = handle_audit_failure(
+                runtime,
+                config,
+                book_id,
+                chapter_number,
+                &issue_categories,
+                book_governance,
+            )
+            .await;
+            runtime.hub.broadcast(
+                "daemon:chapter",
+                &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
+            );
+            continues
         }
+        Err(error) => {
+            runtime.hub.broadcast(
+                "daemon:error",
+                &json!({ "bookId": book_id, "error": error }),
+            );
+            handle_audit_failure(runtime, config, book_id, 0, &[], book_governance).await;
+            false
+        }
+    }
+}
 
-        let failures = {
-            let mut state = write_cycle_state().lock().unwrap();
-            let failures = state.consecutive_failures.entry(book_id.to_string()).or_insert(0);
-            *failures += 1;
-            *failures
-        };
-        // 失败维度聚类（111 号：任一维度 ≥3 → diagnostic-alert webhook）。
+/// TS `Scheduler.handleAuditFailure`（G3/337 号八级判定链；540 号补齐 Rust 侧）：
+/// 失败计数 → 维度聚类告警 → 重试窗口内直接重试 → 窗口外八级判定 →
+/// 记债（deferred/open）→ 降债清零续写 / 暂停在已保存章节边界。
+/// 返回值 = 是否继续写下一章（true = defer-and-continue）。
+async fn handle_audit_failure(
+    runtime: &BooksRuntime,
+    config: &DaemonConfig,
+    book_id: &str,
+    chapter_number: u32,
+    issue_categories: &[String],
+    book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
+) -> bool {
+    let failures = {
+        let mut state = write_cycle_state().lock().unwrap();
+        let failures = state
+            .consecutive_failures
+            .entry(book_id.to_string())
+            .or_insert(0);
+        *failures += 1;
+        *failures
+    };
+    let (policy, max_consecutive_debts) =
+        crate::models::quality_governance::resolve_governance_policy(book_governance, None);
+
+    // 失败维度聚类（111 号：任一维度 ≥3 → diagnostic-alert webhook）。
+    if !issue_categories.is_empty() {
         let clustered: Vec<(String, u32)> = {
             let mut state = write_cycle_state().lock().unwrap();
             let dimensions = state
                 .failure_dimensions
                 .entry(book_id.to_string())
                 .or_default();
-            for category in &issue_categories {
+            for category in issue_categories {
                 *dimensions.entry(category.clone()).or_insert(0) += 1;
             }
             dimensions
@@ -358,57 +451,126 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
                 &crate::notify::WebhookPayload {
                     event: "diagnostic-alert".to_string(),
                     book_id: book_id.to_string(),
-                    chapter_number: written.as_ref().map(|(chapter, _)| *chapter),
+                    chapter_number: (chapter_number > 0).then_some(chapter_number),
                     timestamp: crate::utils::utc_time::utc_now_iso(),
                     data: Some(json!({ "dimension": dimension, "failureCount": count })),
                 },
             )
             .await;
         }
-        if failures >= pause_after_consecutive_failures {
-            write_cycle_state().lock().unwrap().paused_books.insert(book_id.to_string());
-            // pipeline-error webhook（111 号：TS handleAuditFailure 暂停分支）。
-            let reason = format!(
-                "{failures} consecutive audit failures (threshold: {pause_after_consecutive_failures})"
-            );
-            crate::notify::dispatch_webhook_event(
-                &config.notify_channels,
-                &crate::notify::WebhookPayload {
-                    event: "pipeline-error".to_string(),
-                    book_id: book_id.to_string(),
-                    chapter_number: written
-                        .as_ref()
-                        .and_then(|(chapter, _)| (*chapter > 0).then_some(*chapter)),
-                    timestamp: crate::utils::utc_time::utc_now_iso(),
-                    data: Some(json!({ "reason": reason, "consecutiveFailures": failures })),
-                },
-            )
-            .await;
-        }
-        if failures <= max_audit_retries && config.retry_delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(config.retry_delay_ms)).await;
-            let retry_temperature = Some((0.7 + failures as f64 * retry_temperature_step).min(1.2));
-            match write_one_chapter(runtime, book_id, retry_temperature).await {
-                Ok((true, chapter_number, status, _categories)) => {
-                    write_cycle_state().lock().unwrap().consecutive_failures.remove(book_id);
-                    runtime.hub.broadcast(
-                        "daemon:chapter",
-                        &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
-                    );
-                }
-                Ok((false, chapter_number, status, _categories)) => {
-                    runtime.hub.broadcast(
-                        "daemon:chapter",
-                        &json!({ "bookId": book_id, "chapter": chapter_number, "status": status }),
-                    );
-                    break;
-                }
-                Err(_) => break,
-            }
+    }
+
+    let max_audit_retries = config.quality_gates.max_audit_retries;
+    if failures <= max_audit_retries {
+        return false;
+    }
+
+    // G3/337 号八级判定——债务计数已含本轮失败（failures = consecutiveDebts+1 口径）。
+    let verdict = crate::models::quality_governance::resolve_quality_verdict(
+        &crate::models::quality_governance::QualityVerdictInput {
+            passed: false,
+            warning_count: 0,
+            local_count: 0,
+            structural_count: 0,
+            unmet_obligations: 0,
+            consecutive_debts: failures - 1,
+            policy,
+            max_consecutive_debts,
+        },
+    );
+
+    if verdict.creates_debt() {
+        // 记债入账（TS：MemoryDB(join(projectRoot,"books",bookId)).recordDebt；
+        // 打不开库按 TS try/catch 口径走 onError 广播，不中断判定链）。
+        let book_dir = runtime.state.project_root().join("books").join(book_id);
+        let debt_id_topic = if chapter_number > 0 {
+            chapter_number.to_string()
         } else {
-            break;
+            failures.to_string()
+        };
+        let debt = crate::state::memory_db::StoredQualityDebt {
+            debt_id: format!("debt-{book_id}-{debt_id_topic}-{}", unix_millis_base36()),
+            book_id: book_id.to_string(),
+            chapter: i64::from(chapter_number),
+            issue_category: issue_categories
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "audit-failure".to_string()),
+            severity: "critical".to_string(),
+            status: if verdict
+                == crate::models::quality_governance::QualityVerdict::ReplanRequired
+            {
+                "open"
+            } else {
+                "deferred"
+            }
+            .to_string(),
+            created_at: crate::utils::utc_time::utc_now_iso(),
+            follow_up_note: format!(
+                "verdict={}; categories={}",
+                verdict.as_str(),
+                issue_categories
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        };
+        let recorded =
+            crate::state::memory_db::MemoryDb::open(&book_dir).and_then(|db| db.record_debt(&debt));
+        if let Err(error) = recorded {
+            runtime.hub.broadcast(
+                "daemon:error",
+                &json!({ "bookId": book_id, "error": error.to_string() }),
+            );
         }
     }
+
+    if matches!(
+        verdict,
+        crate::models::quality_governance::QualityVerdict::LocalPatchPlan
+            | crate::models::quality_governance::QualityVerdict::PatchableObligationGap
+    ) {
+        return false;
+    }
+    if verdict.continues_pipeline() {
+        // defer-and-continue：降债继续——清空失败计数，本书写下一章不中断。
+        write_cycle_state()
+            .lock()
+            .unwrap()
+            .consecutive_failures
+            .remove(book_id);
+        return true;
+    }
+
+    // stop-for-replan / replan-required：暂停在已保存章节边界。
+    let reason = format!(
+        "verdict={}; {failures} consecutive audit failures (threshold: {max_consecutive_debts})",
+        verdict.as_str()
+    );
+    write_cycle_state()
+        .lock()
+        .unwrap()
+        .paused_books
+        .insert(book_id.to_string());
+    // pipeline-error webhook（111 号；540 号起 data 带 verdict 字段，对齐 TS）。
+    crate::notify::dispatch_webhook_event(
+        &config.notify_channels,
+        &crate::notify::WebhookPayload {
+            event: "pipeline-error".to_string(),
+            book_id: book_id.to_string(),
+            chapter_number: (chapter_number > 0).then_some(chapter_number),
+            timestamp: crate::utils::utc_time::utc_now_iso(),
+            data: Some(json!({
+                "reason": reason,
+                "consecutiveFailures": failures,
+                "verdict": verdict.as_str(),
+            })),
+        },
+    )
+    .await;
+    false
 }
 
 /// `Scheduler.runDetection`（111 号）：读章文 → 单章检测 → 不过且 autoRewrite
@@ -1928,6 +2090,151 @@ mod tests {
         assert_eq!(config.write_cron, "*/5 * * * *");
         assert_eq!(config.radar_cron, "0 */6 * * *");
         assert_eq!(config.max_chapters_per_day, 10);
+
+        // 540 号：qualityGates 嵌 daemon 节生效；顶层键（历史误读位）被忽略。
+        let raw: Value = serde_json::from_str(
+            r#"{ "qualityGates": { "maxAuditRetries": 9 }, "daemon": { "qualityGates": { "maxAuditRetries": 5, "retryTemperatureStep": 0.2 } } }"#,
+        )
+        .unwrap();
+        let config = DaemonConfig::from_raw(Some(raw));
+        assert_eq!(config.quality_gates.max_audit_retries, 5);
+        assert!((config.quality_gates.retry_temperature_step - 0.2).abs() < 1e-9);
+        assert_eq!(config.quality_gates.pause_after_consecutive_failures, 3);
+    }
+
+    /// 540 号判定链夹具：仅保证 `books/<id>/story` 目录存在（MemoryDb 落库位）。
+    fn verdict_book_dir(root: &std::path::Path, book_id: &str) {
+        std::fs::create_dir_all(root.join("books").join(book_id).join("story")).unwrap();
+    }
+
+    /// 540 号：重试窗口内（failures ≤ maxAuditRetries）不判定不记债不暂停。
+    #[tokio::test]
+    async fn audit_failure_within_retry_window_stays_unpaused() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        let config = DaemonConfig::default();
+        let continues = handle_audit_failure(&runtime, &config, "vr-retry", 1, &[], None).await;
+        assert!(!continues);
+        let state = write_cycle_state().lock().unwrap();
+        assert_eq!(state.consecutive_failures.get("vr-retry"), Some(&1));
+        assert!(!state.paused_books.contains("vr-retry"));
+    }
+
+    /// 540 号：出窗第 3 次失败（默认 gates 2/3）→ replan-required——
+    /// 记 open 债 + 暂停 + debtId/followUpNote 形状对齐 TS。
+    #[tokio::test]
+    async fn audit_failure_replan_required_records_open_debt_and_pauses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        verdict_book_dir(root, "vr-replan");
+        let runtime = runtime_for(root);
+        let config = DaemonConfig::default();
+        // 预置 2 次失败 → 本轮第 3 次（默认 maxAuditRetries=2 出窗）：
+        // consecutive_debts=2，2+1>=3 → replan-required。
+        write_cycle_state()
+            .lock()
+            .unwrap()
+            .consecutive_failures
+            .insert("vr-replan".to_string(), 2);
+        let continues = handle_audit_failure(
+            &runtime,
+            &config,
+            "vr-replan",
+            3,
+            &["pacing".to_string()],
+            None,
+        )
+        .await;
+        assert!(!continues);
+        assert!(
+            write_cycle_state()
+                .lock()
+                .unwrap()
+                .paused_books
+                .contains("vr-replan")
+        );
+
+        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-replan"))
+            .unwrap();
+        let debts = db.list_debts(None, None).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(debts[0].status, "open");
+        assert_eq!(debts[0].severity, "critical");
+        assert_eq!(debts[0].chapter, 3);
+        assert_eq!(debts[0].issue_category, "pacing");
+        assert_eq!(
+            debts[0].follow_up_note,
+            "verdict=replan-required; categories=pacing"
+        );
+        assert!(debts[0].debt_id.starts_with("debt-vr-replan-3-"));
+    }
+
+    /// 540 号：债务上限抬高（maxConsecutiveDebts=5）→ 出窗失败判
+    /// defer-and-continue——记 deferred 债 + 清零失败计数 + 续写。
+    #[tokio::test]
+    async fn audit_failure_defer_and_continue_records_deferred_debt_and_resets() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        verdict_book_dir(root, "vr-defer");
+        let runtime = runtime_for(root);
+        let config = DaemonConfig::default();
+        let governance = crate::models::quality_governance::GovernanceConfig {
+            max_consecutive_debts: Some(5),
+            ..Default::default()
+        };
+        write_cycle_state()
+            .lock()
+            .unwrap()
+            .consecutive_failures
+            .insert("vr-defer".to_string(), 2);
+        let continues =
+            handle_audit_failure(&runtime, &config, "vr-defer", 3, &[], Some(&governance)).await;
+        assert!(continues);
+        {
+            let state = write_cycle_state().lock().unwrap();
+            assert!(!state.consecutive_failures.contains_key("vr-defer"));
+            assert!(!state.paused_books.contains("vr-defer"));
+        }
+
+        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-defer"))
+            .unwrap();
+        let debts = db.list_debts(None, None).unwrap();
+        assert_eq!(debts.len(), 1);
+        assert_eq!(debts[0].status, "deferred");
+        assert_eq!(debts[0].issue_category, "audit-failure");
+    }
+
+    /// 540 号：quality-first → stop-for-replan——暂停但**不记债**
+    /// （stop-for-replan 不在 verdictCreatesDebt 集合）。
+    #[tokio::test]
+    async fn audit_failure_quality_first_stops_for_replan_without_debt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        verdict_book_dir(root, "vr-qfirst");
+        let runtime = runtime_for(root);
+        let config = DaemonConfig::default();
+        let governance = crate::models::quality_governance::GovernanceConfig {
+            policy: Some(crate::models::quality_governance::GovernancePolicy::QualityFirst),
+            ..Default::default()
+        };
+        write_cycle_state()
+            .lock()
+            .unwrap()
+            .consecutive_failures
+            .insert("vr-qfirst".to_string(), 2);
+        let continues =
+            handle_audit_failure(&runtime, &config, "vr-qfirst", 2, &[], Some(&governance)).await;
+        assert!(!continues);
+        assert!(
+            write_cycle_state()
+                .lock()
+                .unwrap()
+                .paused_books
+                .contains("vr-qfirst")
+        );
+        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-qfirst"))
+            .unwrap();
+        assert!(db.list_debts(None, None).unwrap().is_empty());
     }
 
     #[tokio::test]

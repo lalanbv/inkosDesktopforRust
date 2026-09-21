@@ -5309,6 +5309,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         retryDelayMs: currentConfig.daemon.retryDelayMs,
         cooldownAfterChapterMs: currentConfig.daemon.cooldownAfterChapterMs,
         maxChaptersPerDay: currentConfig.daemon.maxChaptersPerDay,
+        // 540 号：daemon.qualityGates 接线——schema 既有面此前未传（Scheduler
+        // 落硬编码默认）；Rust daemon 同位读取，双引擎门控配置面一致。
+        qualityGates: currentConfig.daemon.qualityGates,
         onChapterComplete: (bookId, chapter, status) => {
           broadcast("daemon:chapter", { bookId, chapter, status });
         },

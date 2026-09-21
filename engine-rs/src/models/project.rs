@@ -217,7 +217,7 @@ fn default_detection_provider() -> DetectionProvider { DetectionProvider::Custom
 fn default_threshold() -> f64 { 0.5 }
 fn default_max_retries() -> u32 { 3 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
 #[serde(rename_all = "camelCase")]
@@ -232,6 +232,19 @@ pub struct QualityGates {
 fn default_qg_max_audit() -> u32 { 2 }
 fn default_qg_pause() -> u32 { 3 }
 fn default_qg_step() -> f64 { 0.1 }
+
+// TS QualityGatesSchema 的 `.default({2,3,0.1})` 口径。derive 的全零 Default
+// 曾令缺配置 daemon 落 {0,0,0.0}（首败即暂停、永不重试）——540 号纠偏为
+// 手动 impl 与 serde 字段默认同源。
+impl Default for QualityGates {
+    fn default() -> Self {
+        QualityGates {
+            max_audit_retries: default_qg_max_audit(),
+            pause_after_consecutive_failures: default_qg_pause(),
+            retry_temperature_step: default_qg_step(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
