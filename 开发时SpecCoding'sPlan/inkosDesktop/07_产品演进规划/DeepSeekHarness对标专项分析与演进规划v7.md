@@ -1,6 +1,6 @@
 # DeepSeek Harness 对标专项分析与演进规划 v7（deepseek-ai/deepseek-harness）
 
-> 日期：2026-09-22 ｜ 编号：540 号 ｜ 前序：v1（328 号）→ v2（355 号，R1–R9）→ v3（374 号，R10–R19）→ v4（388 号，R20–R24）→ v5（396 号，R25–R29 全落）→ v6（539 号，Pi 对标专项，R30–R37）。
+> 日期：2026-09-22 ｜ 编号：541 号（原编 540，与并行会话 11760bc0 撞号后按 534/536 先例改号，见变更记录）｜ 前序：v1（328 号）→ v2（355 号，R1–R9）→ v3（374 号，R10–R19）→ v4（388 号，R20–R24）→ v5（396 号，R25–R29 全落）→ v6（539 号，Pi 对标专项，R30–R37）。
 > 本轮输入：①外部对标 **deepseek-ai/deepseek-harness**（下称 dsh；MIT；developer preview；~232k stars / 18k+ commits，@2026-09-22）——官方中文文档 **12 篇全文精读**（architecture / cordis-primer / tool-execution-pipeline / agent-lifecycle / defensive-patterns / glossary / invariants / skills / token-meter / compaction / spill / slots）+ **6 篇结构扫描**（session / tools / subagent / core / workflow / ptc-runtime / system-prompt）+ **3 篇生成目录结构扫描**（capability-seams / module-graph / tool-catalog）；②本项目架构实证勘察（本会话只读 Explore：engine-rs 工具分发 5 处 match 点 / skills 三件套 / server 分层工厂 / SSE 双端事件表 / packages 双端逐文件镜像 / src-tauri 插件半实现 / studio api 三层）；③500–539 号工程债台账与 v6（539 号）裁决的无缝衔接。
 
 ## 1. 对标对象画像：dsh 是什么
