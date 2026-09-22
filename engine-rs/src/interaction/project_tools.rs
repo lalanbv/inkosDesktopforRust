@@ -160,46 +160,26 @@ fn grep_walk(dir: &Path, out: &mut Vec<PathBuf>, depth: u32) {
     }
 }
 
-/// 工具注册表项：OpenAI function schema + 执行器。
+/// 工具注册表项：OpenAI function schema + 执行器（R38a 起本体在
+/// registry.rs 项目作用域层，此结构保留给 tools_payload 消费面）。
 pub struct InteractionTool {
     pub name: &'static str,
     pub description: &'static str,
     pub parameters: Value,
 }
 
-/// 本轮工具集（read/ls/grep）。
+/// 本轮工具集（read/ls/grep）——schema 由注册表项目作用域层投影
+/// （单一事实源；新增文件工具 = 注册一个 ToolDef）。
 pub fn interaction_tools() -> Vec<InteractionTool> {
-    vec![
-        InteractionTool {
-            name: "read",
-            description: "读取项目内文本文件内容",
-            parameters: json!({
-                "type": "object",
-                "properties": { "path": { "type": "string", "description": "项目相对路径" } },
-                "required": ["path"],
-            }),
-        },
-        InteractionTool {
-            name: "ls",
-            description: "列出项目目录内容",
-            parameters: json!({
-                "type": "object",
-                "properties": { "path": { "type": "string", "description": "项目相对路径（默认 .）" } },
-            }),
-        },
-        InteractionTool {
-            name: "grep",
-            description: "在项目文本文件中搜索",
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "path": { "type": "string", "description": "搜索根（默认 .）" },
-                },
-                "required": ["query"],
-            }),
-        },
-    ]
+    crate::interaction::registry::ToolRegistry::global()
+        .entries(crate::interaction::registry::ToolScope::Project)
+        .into_iter()
+        .map(|entry| InteractionTool {
+            name: entry.name,
+            description: entry.description,
+            parameters: entry.parameters,
+        })
+        .collect()
 }
 
 /// tools 数组（OpenAI 形态）。
@@ -233,8 +213,9 @@ fn env_flag_enabled(value: Option<String>, default: bool) -> bool {
     }
 }
 
-/// `INKOS_AGENT_ALLOW_SYSTEM_READ`（缺省 false）——read 工具绝对路径分支。
-fn allow_system_read() -> bool {
+/// `INKOS_AGENT_ALLOW_SYSTEM_READ`（缺省 false）——read 工具绝对路径分支
+/// （注册表 BookRead 描述分流同源）。
+pub(crate) fn allow_system_read() -> bool {
     env_flag_enabled(std::env::var("INKOS_AGENT_ALLOW_SYSTEM_READ").ok(), false)
 }
 
@@ -388,69 +369,10 @@ pub async fn tool_grep_book(root: &Path, args: &Value) -> ToolResult {
     ToolResult { text: results.join("\n"), details: None, is_error: false }
 }
 
-/// 书会话文件三件 schema（TS 逐字；read 描述随系统读开关分流）。
+/// 书会话文件三件 schema（TS 逐字；read 描述随系统读开关分流）——
+/// R38a 起由注册表书会话作用域层投影（单一事实源）。
 pub fn book_file_tool_schemas() -> Vec<Value> {
-    let read_description = if allow_system_read() {
-        "Read a file. Relative paths resolve under books/; absolute paths read from the system filesystem."
-    } else {
-        "Read a file from the book directory. Path is relative to books/."
-    };
-    vec![
-        json!({
-            "type": "function",
-            "function": {
-                "name": "read",
-                "description": read_description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "File path relative to books/, or an absolute path when system path reading is enabled." },
-                    },
-                    "required": ["path"],
-                },
-            },
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "ls",
-                "description": "List files in a book directory. Optionally specify a subdirectory like 'story' or 'chapters'.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "bookId": { "type": "string", "description": "Book ID" },
-                        "subdir": { "type": "string", "description": "Subdirectory within the book, e.g. 'story', 'chapters', 'story/runtime'" },
-                    },
-                    "required": ["bookId"],
-                },
-            },
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "grep",
-                "description": "Search for a text pattern across a book's story/ and chapters/ directories. Returns matching lines.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "bookId": { "type": "string", "description": "Book ID to search within" },
-                        "pattern": { "type": "string", "description": "Search pattern (plain text or regex)" },
-                    },
-                    "required": ["bookId", "pattern"],
-                },
-            },
-        }),
-    ]
-}
-
-/// 书会话文件三件分发器。
-pub async fn execute_book_file_tool(root: &Path, name: &str, args: &Value) -> ToolResult {
-    match name {
-        "read" => tool_read_book(root, args).await,
-        "ls" => tool_ls_book(root, args).await,
-        "grep" => tool_grep_book(root, args).await,
-        other => error_result(format!("Unknown tool: {other}")),
-    }
+    crate::interaction::registry::ToolRegistry::global().schemas(crate::interaction::registry::ToolScope::BookSession)
 }
 
 /// 文件工具的回环执行器（agent_loop 的 LoopToolExecutor 适配）。
@@ -465,12 +387,13 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ProjectToolExecutor<'_
     }
 }
 
-/// 分发执行；未知工具 → 错误文本。
+/// 分发执行；文件三件走注册表项目作用域层（R38a），material 双件原链，
+/// 未知工具 → 错误文本。
 pub async fn execute_tool(root: &Path, name: &str, args: &Value) -> ToolResult {
+    if let Some(result) = crate::interaction::registry::execute_project_file(root, name, args).await {
+        return result;
+    }
     match name {
-        "read" => tool_read(root, args).await,
-        "ls" => tool_ls(root, args).await,
-        "grep" => tool_grep(root, args).await,
         // material 双工具（83 号）：全部聊天会话注册（TS agent-session 各分支）。
         "ingest_material" => crate::interaction::material_tools::tool_ingest_material(root, args).await,
         "retrieve_material" => crate::interaction::material_tools::tool_retrieve_material(root, args).await,

@@ -1483,10 +1483,19 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
                 return result;
             }
         }
-        // 文件三件（105 号）：books/ 作用域——仅注册面（book/edit 会话）可达，
-        // 其余会话落到未知工具文本。
-        if matches!(name, "read" | "ls" | "grep") && self.book_edit_deps.is_some() {
-            return crate::interaction::project_tools::execute_book_file_tool(self.root, name, args).await;
+        // 文件三件（105 号）：注册表分层遮蔽分发（R38a）——book/edit 会话书层
+        // 胜出同名 read/ls/grep（dsh scope layers 最近层语义），非书会话落项目
+        // 层；注册表未收的 material 双件（83 号）与未知工具继续原链（R38b
+        // 全族迁移后收拢为注册表单点）。
+        if let Some(result) = crate::interaction::registry::execute_shadowed(
+            self.root,
+            name,
+            self.book_edit_deps.is_some(),
+            args,
+        )
+        .await
+        {
+            return result;
         }
         crate::interaction::project_tools::execute_tool(self.root, name, args).await
     }
