@@ -94,6 +94,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 0.87.0
         version: 0.87.0(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.21.3)(zod@3.25.76)
+      '@earendil-works/pi-telemetry':
+        specifier: 0.87.0
+        version: 0.87.0
       '@sinclair/typebox':
         specifier: ^0.34.49
         version: 0.34.49

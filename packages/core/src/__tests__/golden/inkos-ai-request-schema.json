@@ -1,0 +1,75 @@
+{
+  "$comment": "R33 遥测 schema（551 号；543 号施工图 §4）——第 31 守门域，双端共享单一事实源。span 名 inkos.ai.request：语义重合键镜像上游 pi.ai.request（@earendil-works/pi-agent-core AI_TELEMETRY_SCHEMA 0.87 实测），域扩展键用 inkos.*（RunLogEntry 403 号九字段映射，model/durationMs/ok 由 span 属性与 status/时长天然承载不入属性）。格式与上游 TelemetrySchemaDefinition 一致。Rust serde 侧只投影不引运行时；改动本表须双端考古后显式更新并同步 core telemetry 模块断言。",
+  "version": 1,
+  "spans": {
+    "inkos.ai.request": {
+      "description": "One governed LLM request on the InkOS provider boundary",
+      "parents": {
+        "kind": "any"
+      },
+      "startAttributes": {
+        "pi.ai.operation": {
+          "type": "string",
+          "required": true,
+          "values": ["stream", "fetch_deferred", "cancel_deferred", "generate_images"],
+          "description": "Logical provider operation"
+        },
+        "pi.ai.provider": {
+          "type": "string",
+          "required": true,
+          "description": "Selected provider id"
+        },
+        "pi.ai.model": {
+          "type": "string",
+          "required": true,
+          "description": "Requested model id"
+        },
+        "pi.ai.api": {
+          "type": "string",
+          "required": true,
+          "description": "Provider API id"
+        },
+        "pi.ai.streaming": {
+          "type": "boolean",
+          "required": true,
+          "description": "Whether this operation returns a stream"
+        },
+        "inkos.agent": {
+          "type": "string",
+          "required": true,
+          "description": "InkOS agent name or call label (RunLogEntry.agent)"
+        },
+        "inkos.attempt_index": {
+          "type": "number",
+          "required": true,
+          "description": "Chain index of this attempt, 0 = primary (RunLogEntry.attemptIndex)"
+        },
+        "inkos.round": {
+          "type": "number",
+          "required": true,
+          "description": "One-based pipeline round (RunLogEntry.round)"
+        },
+        "inkos.took_over": {
+          "type": "boolean",
+          "required": true,
+          "description": "Non-primary attempt took over on first-round hit (RunLogEntry.tookOver, R25)"
+        }
+      },
+      "endAttributes": {
+        "pi.ai.response.model": {
+          "type": "string",
+          "description": "Concrete response model"
+        },
+        "inkos.error_kind": {
+          "type": "string",
+          "values": ["transient", "fatal"],
+          "description": "InkOS error classification of a failed attempt (RunLogEntry.errorKind); absent on success"
+        }
+      },
+      "status": {
+        "default": "ok",
+        "errorWhen": "The request throws or reports a non-ok outcome"
+      }
+    }
+  }
+}

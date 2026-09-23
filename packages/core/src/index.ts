@@ -1031,3 +1031,16 @@ export {
   type ContextLensEntry,
   type ContextLensRank,
 } from "./utils/context-lens.js";
+export {
+  INKOS_AI_REQUEST_SPAN,
+  NOOP_TELEMETRY_CONTEXT,
+  inkosAiRequestEndAttributes,
+  inkosAiRequestStartAttributes,
+  loadInkosAiRequestSchema,
+  runInkosAiRequestSpan,
+  telemetrySchemaSchema,
+  type InkosAiRequestInput,
+  type InkosAiRequestOperation,
+  type InkosAiRequestOutcome,
+  type InkosTelemetrySchema,
+} from "./telemetry/inkos-ai-request.js";
