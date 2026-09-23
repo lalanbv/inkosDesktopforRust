@@ -18,6 +18,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::ToolResult;
+use crate::interaction::registry::{MutationKind, ToolDef, ToolRegistry};
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::state::memory_db::{MemoryDb, NewFact};
 
@@ -66,164 +67,192 @@ pub struct FilmAuthoringDeps<'a> {
 // ── schema（TS TypeBox 形态 → OpenAI function JSON，描述逐字） ──────
 
 /// 未确认面工具集（TS `buildFilmAuthoringToolNames(undefined)` 去 propose_action
-/// ——propose/use_skill 由注册矩阵统一追加）。
+/// ——propose/use_skill 由注册矩阵统一追加）。R38b：注册表投影薄壳——
+/// json 单一事实源在下方 ZST parameters。
 pub fn film_authoring_tool_schemas() -> Vec<Value> {
-    vec![
-        json!({
-            "type": "function",
-            "function": {
-                "name": "set_world_anchor",
-                "description": "interactive-film authoring: set/update the world anchor (story core, theme, rules, duration). Applies immediately.",
-                "parameters": {
+    ToolRegistry::global().schemas_for(&[
+        "set_world_anchor",
+        "upsert_characters",
+        "add_variable",
+        "define_ending",
+        "fill_node",
+        "revise_node",
+        "generate_node_image",
+    ])
+}
+
+// ── 注册模块（R38b）：七件作者工具 ZST 就地注册（256 号会话独占面，
+//    available = authoring 依赖在场；写 story graph → ProjectWrite，
+//    不在后台生产剔除名单）。 ──────────────────────────────────────────────
+
+crate::interaction::registry::tool_def!(
+    FilmSetWorldAnchor,
+    "set_world_anchor",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: set/update the world anchor (story core, theme, rules, duration). Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "storyCore": { "type": "string", "description": "one-sentence story core" },
+            "theme": { "type": "string", "description": "theme of the story" },
+            "genre": { "type": "string", "description": "genre, free text (e.g. suspense, romance)" },
+            "worldRules": { "type": "string", "description": "world rules that constrain the plot" },
+            "durationMinutes": { "type": "number", "description": "target playthrough duration in minutes" }
+        }
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_set_world_anchor(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    FilmUpsertCharacters,
+    "upsert_characters",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: add/update characters with voice profiles. Applies immediately and records them to memory for cross-node voice consistency.",
+    json!({
+        "type": "object",
+        "properties": {
+            "characters": {
+                "type": "array",
+                "description": "characters to add or update",
+                "items": {
                     "type": "object",
                     "properties": {
-                        "storyCore": { "type": "string", "description": "one-sentence story core" },
-                        "theme": { "type": "string", "description": "theme of the story" },
-                        "genre": { "type": "string", "description": "genre, free text (e.g. suspense, romance)" },
-                        "worldRules": { "type": "string", "description": "world rules that constrain the plot" },
-                        "durationMinutes": { "type": "number", "description": "target playthrough duration in minutes" }
-                    }
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "upsert_characters",
-                "description": "interactive-film authoring: add/update characters with voice profiles. Applies immediately and records them to memory for cross-node voice consistency.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "characters": {
-                            "type": "array",
-                            "description": "characters to add or update",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": { "type": "string" },
-                                    "name": { "type": "string" },
-                                    "role": { "type": "string", "enum": ["protagonist", "antagonist", "support", "other"] },
-                                    "motivation": { "type": "string" },
-                                    "voiceProfile": {
-                                        "type": "object",
-                                        "properties": {
-                                            "speakingRhythm": { "type": "string" },
-                                            "vocabulary": { "type": "string" },
-                                            "sampleLines": { "type": "array", "items": { "type": "string" } }
-                                        }
-                                    }
-                                },
-                                "required": ["id", "name"]
+                        "id": { "type": "string" },
+                        "name": { "type": "string" },
+                        "role": { "type": "string", "enum": ["protagonist", "antagonist", "support", "other"] },
+                        "motivation": { "type": "string" },
+                        "voiceProfile": {
+                            "type": "object",
+                            "properties": {
+                                "speakingRhythm": { "type": "string" },
+                                "vocabulary": { "type": "string" },
+                                "sampleLines": { "type": "array", "items": { "type": "string" } }
                             }
                         }
                     },
-                    "required": ["characters"]
+                    "required": ["id", "name"]
                 }
             }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "add_variable",
-                "description": "interactive-film authoring: add/update a variable. Applies immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string", "description": "variable name (unique key)" },
-                        "type": { "type": "string", "enum": ["flag", "counter", "relationship", "item"] },
-                        "default": { "description": "default value", "type": ["number", "string", "boolean"] },
-                        "desc": { "type": "string", "description": "what it tracks" }
-                    },
-                    "required": ["name", "type", "default"]
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "define_ending",
-                "description": "interactive-film authoring: define/update an ending (its nodeId must exist). Applies immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "id": { "type": "string", "description": "ending id" },
-                        "nodeId": { "type": "string", "description": "the ending node this describes (must exist)" },
-                        "title": { "type": "string" },
-                        "type": { "type": "string", "enum": ["good", "bad", "neutral", "secret"] },
-                        "description": { "type": "string" }
-                    },
-                    "required": ["id", "nodeId", "title", "type"]
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "fill_node",
-                "description": "interactive-film authoring: write/rewrite one node's scene, dialogue and choices via the model. Applies immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeId": { "type": "string", "description": "the node to fill/rewrite" },
-                        "instruction": { "type": "string", "description": "what this scene should contain (beats, who speaks, choices)" }
-                    },
-                    "required": ["nodeId", "instruction"]
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "revise_node",
-                "description": "interactive-film authoring: revise one existing node per instruction. Applies immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeId": { "type": "string", "description": "the node to fill/rewrite" },
-                        "instruction": { "type": "string", "description": "what this scene should contain (beats, who speaks, choices)" }
-                    },
-                    "required": ["nodeId", "instruction"]
-                }
-            }
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "generate_node_image",
-                "description": "interactive-film authoring: generate a shot image for a node (from its imageSlot.prompt or sceneDesc) and attach it. Applies immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nodeId": { "type": "string", "description": "the node to generate a shot image for (uses its imageSlot.prompt or sceneDesc)" },
-                        "size": {
-                            "type": "string",
-                            "enum": ["1536x1024", "1024x1536", "1024x1024"],
-                            "description": "output image size; use 1536x1024 for landscape film frames, 1024x1536 for portrait, or 1024x1024 for square"
-                        }
-                    },
-                    "required": ["nodeId"]
-                }
-            }
-        }),
-    ]
-}
+        },
+        "required": ["characters"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_upsert_characters(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+);
 
-/// 分发面（未知工具返回 None，落回后续执行器）。
-pub async fn execute_film_authoring_tool(
-    deps: &FilmAuthoringDeps<'_>,
-    name: &str,
-    args: &Value,
-) -> Option<ToolResult> {
-    match name {
-        "set_world_anchor" => Some(tool_set_world_anchor(deps, args).await),
-        "upsert_characters" => Some(tool_upsert_characters(deps, args).await),
-        "add_variable" => Some(tool_add_variable(deps, args).await),
-        "define_ending" => Some(tool_define_ending(deps, args).await),
-        "fill_node" => Some(tool_fill_or_revise_node(deps, args, NodeWriteKind::Fill).await),
-        "revise_node" => Some(tool_fill_or_revise_node(deps, args, NodeWriteKind::Revise).await),
-        "generate_node_image" => Some(tool_generate_node_image(deps, args).await),
-        _ => None,
-    }
+crate::interaction::registry::tool_def!(
+    FilmAddVariable,
+    "add_variable",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: add/update a variable. Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "variable name (unique key)" },
+            "type": { "type": "string", "enum": ["flag", "counter", "relationship", "item"] },
+            "default": { "description": "default value", "type": ["number", "string", "boolean"] },
+            "desc": { "type": "string", "description": "what it tracks" }
+        },
+        "required": ["name", "type", "default"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_add_variable(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    FilmDefineEnding,
+    "define_ending",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: define/update an ending (its nodeId must exist). Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "ending id" },
+            "nodeId": { "type": "string", "description": "the ending node this describes (must exist)" },
+            "title": { "type": "string" },
+            "type": { "type": "string", "enum": ["good", "bad", "neutral", "secret"] },
+            "description": { "type": "string" }
+        },
+        "required": ["id", "nodeId", "title", "type"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_define_ending(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    FilmFillNode,
+    "fill_node",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: write/rewrite one node's scene, dialogue and choices via the model. Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "nodeId": { "type": "string", "description": "the node to fill/rewrite" },
+            "instruction": { "type": "string", "description": "what this scene should contain (beats, who speaks, choices)" }
+        },
+        "required": ["nodeId", "instruction"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_fill_or_revise_node(ctx.film_authoring_deps.as_ref().expect("available 门控"), args, NodeWriteKind::Fill).await
+);
+
+crate::interaction::registry::tool_def!(
+    FilmReviseNode,
+    "revise_node",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: revise one existing node per instruction. Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "nodeId": { "type": "string", "description": "the node to fill/rewrite" },
+            "instruction": { "type": "string", "description": "what this scene should contain (beats, who speaks, choices)" }
+        },
+        "required": ["nodeId", "instruction"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_fill_or_revise_node(ctx.film_authoring_deps.as_ref().expect("available 门控"), args, NodeWriteKind::Revise).await
+);
+
+crate::interaction::registry::tool_def!(
+    FilmGenerateNodeImage,
+    "generate_node_image",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "interactive-film authoring: generate a shot image for a node (from its imageSlot.prompt or sceneDesc) and attach it. Applies immediately.",
+    json!({
+        "type": "object",
+        "properties": {
+            "nodeId": { "type": "string", "description": "the node to generate a shot image for (uses its imageSlot.prompt or sceneDesc)" },
+            "size": {
+                "type": "string",
+                "enum": ["1536x1024", "1024x1536", "1024x1024"],
+                "description": "output image size; use 1536x1024 for landscape film frames, 1024x1536 for portrait, or 1024x1024 for square"
+            }
+        },
+        "required": ["nodeId"]
+    }),
+    ctx.film_authoring_deps.is_some(),
+    tool_generate_node_image(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序首族）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![
+        Box::new(FilmSetWorldAnchor),
+        Box::new(FilmUpsertCharacters),
+        Box::new(FilmAddVariable),
+        Box::new(FilmDefineEnding),
+        Box::new(FilmFillNode),
+        Box::new(FilmReviseNode),
+        Box::new(FilmGenerateNodeImage),
+    ]
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -660,6 +689,19 @@ pub fn film_graph_context_message(graph: &film::StoryGraph) -> LLMMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 注册表路由测试通道（R38b）：与生产同路径（find→execute），替代原
+    /// match 分发壳——装配错名在此红。
+    async fn route(
+        deps: &FilmAuthoringDeps<'_>,
+        name: &str,
+        args: &Value,
+    ) -> Option<ToolResult> {
+        let mut ctx = crate::interaction::registry::ToolCtx::root_only(deps.root);
+        ctx.film_authoring_deps = Some(deps);
+        let def = crate::interaction::registry::ToolRegistry::global().find(name, &ctx)?;
+        Some(def.execute(&ctx, args).await)
+    }
+
     use std::sync::Mutex;
 
     fn temp_root(tag: &str) -> std::path::PathBuf {
@@ -724,7 +766,7 @@ mod tests {
         let llm = no_llm();
         let deps = deps_for(&root, &llm, "zh");
 
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "set_world_anchor",
             &json!({ "storyCore": "孤儿觉醒", "durationMinutes": 30 }),
@@ -740,7 +782,7 @@ mod tests {
         assert_eq!(graph.world_anchor.as_ref().unwrap().duration_minutes, 30.0);
 
         // add_variable：校验枚举 + 落盘。
-        let bad = execute_film_authoring_tool(
+        let bad = route(
             &deps,
             "add_variable",
             &json!({ "name": "trust", "type": "bogus", "default": 0 }),
@@ -749,7 +791,7 @@ mod tests {
         .unwrap();
         assert!(bad.is_error);
 
-        let variable = execute_film_authoring_tool(
+        let variable = route(
             &deps,
             "add_variable",
             &json!({ "name": "trust", "type": "counter", "default": 0, "desc": "信任度" }),
@@ -758,7 +800,7 @@ mod tests {
         .unwrap();
         assert_eq!(variable.text, "Variable \"trust\" added (rev 2).");
 
-        let ending = execute_film_authoring_tool(
+        let ending = route(
             &deps,
             "define_ending",
             &json!({ "id": "end1", "nodeId": "e", "title": "真相", "type": "good", "description": "揭开真相" }),
@@ -786,7 +828,7 @@ mod tests {
         let llm = no_llm();
         let deps = deps_for(&root, &llm, "zh");
 
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "upsert_characters",
             &json!({
@@ -873,7 +915,7 @@ mod tests {
         let llm = ScriptedLLM { calls: Mutex::new(Vec::new()), response };
         let deps = deps_for(&root, &llm, "zh");
 
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "fill_node",
             &json!({ "nodeId": "n1", "instruction": "写抉择场景" }),
@@ -903,7 +945,7 @@ mod tests {
 
         // en 面提示词切换。
         let deps_en = deps_for(&root, &llm, "en");
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps_en,
             "fill_node",
             &json!({ "nodeId": "n1", "instruction": "Write the decision scene" }),
@@ -930,7 +972,7 @@ mod tests {
         };
         let deps = deps_for(&root, &llm, "zh");
 
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "revise_node",
             &json!({ "nodeId": "n1", "instruction": "收紧对白" }),
@@ -947,7 +989,7 @@ mod tests {
         // LLM 无 JSON → 错误结果。
         let llm_bad = ScriptedLLM { calls: Mutex::new(Vec::new()), response: "纯散文回复".to_string() };
         let deps_bad = deps_for(&root, &llm_bad, "zh");
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps_bad,
             "fill_node",
             &json!({ "nodeId": "n1", "instruction": "写" }),
@@ -960,7 +1002,7 @@ mod tests {
         // LLM 坏 JSON 结构 → invalid node。
         let llm_invalid = ScriptedLLM { calls: Mutex::new(Vec::new()), response: "{\"id\":1}".to_string() };
         let deps_invalid = deps_for(&root, &llm_invalid, "zh");
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps_invalid,
             "revise_node",
             &json!({ "nodeId": "n1", "instruction": "改" }),
@@ -980,7 +1022,7 @@ mod tests {
         let deps = deps_for(&root, &llm, "zh");
 
         // 非法 size 在参数边界拒绝（TS TypeBox 校验位），不触达图谱。
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "generate_node_image",
             &json!({ "nodeId": "n1", "size": "800x600" }),
@@ -991,7 +1033,7 @@ mod tests {
         assert!(result.text.contains("size must be one of"), "text: {}", result.text);
 
         // 图谱缺失。
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "generate_node_image",
             &json!({ "nodeId": "n1" }),
@@ -1006,7 +1048,7 @@ mod tests {
 
         // 节点缺失。
         save_graph(&root, &sample_graph());
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "generate_node_image",
             &json!({ "nodeId": "missing" }),
@@ -1017,7 +1059,7 @@ mod tests {
         assert_eq!(result.text, "node missing not found");
 
         // 无 prompt 无 sceneDesc。
-        let result = execute_film_authoring_tool(
+        let result = route(
             &deps,
             "generate_node_image",
             &json!({ "nodeId": "n1" }),

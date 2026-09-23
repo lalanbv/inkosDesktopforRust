@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::interaction::import_chapters_tool::resolve_tool_book_id;
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::server::books_routes::BooksRuntime;
 
 /// 工具依赖：runtime + 活动书（书会话恒有）+ 会话语言（resync 双语摘要）。
@@ -442,20 +443,6 @@ fn parse_chapter_number(args: &Value) -> Option<u32> {
         .map(|v| v as u32)
 }
 
-/// 六件工具分发（未知名返回 None 交回退执行器）。
-pub async fn execute_book_edit_tool(deps: &BookEditDeps<'_>, name: &str, args: &Value) -> Option<ToolResult> {
-    match name {
-        "write_truth_file" => Some(tool_write_truth_file(deps, args).await),
-        "rename_entity" => Some(tool_rename_entity(deps, args).await),
-        "patch_chapter_text" => Some(tool_patch_chapter_text(deps, args).await),
-        "replace_chapter_text" => Some(tool_replace_chapter_text(deps, args).await),
-        "delete_latest_chapter" => Some(tool_delete_latest_chapter(deps, args).await),
-        "generate_cover" => Some(tool_generate_cover(deps, args).await),
-        "resync_chapter_state" => Some(tool_resync_chapter_state(deps, args).await),
-        _ => None,
-    }
-}
-
 /// 确定性五件 schema（WriteTruthFile/RenameEntity/PatchChapterText/
 /// ReplaceChapterText/DeleteLatestChapter Params 逐字）。
 pub fn deterministic_tool_schemas() -> Vec<Value> {
@@ -582,6 +569,132 @@ pub fn resync_chapter_state_schema() -> Value {
             },
         },
     })
+}
+
+
+// ── 注册模块（R38b）：编辑工具族七件——全部生产变更面（TS
+//    PRODUCTION_MUTATION_TOOL_NAMES 可注册子集主体，后台生产剔除）；
+//    schema 经同文件 deterministic_tool_schemas / generate_cover_schema /
+//    resync_chapter_state_schema 拆解引用（码点零搬移）。 ──
+
+crate::interaction::registry::tool_def!(
+    BookWriteTruthFile,
+    "write_truth_file",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_description(&schemas, "write_truth_file")
+    } },
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_parameters(&schemas, "write_truth_file")
+    } },
+    ctx.book_edit_deps.is_some(),
+    tool_write_truth_file(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookRenameEntity,
+    "rename_entity",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_description(&schemas, "rename_entity")
+    } },
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_parameters(&schemas, "rename_entity")
+    } },
+    ctx.book_edit_deps.is_some(),
+    tool_rename_entity(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookPatchChapterText,
+    "patch_chapter_text",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_description(&schemas, "patch_chapter_text")
+    } },
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_parameters(&schemas, "patch_chapter_text")
+    } },
+    ctx.book_edit_deps.is_some(),
+    tool_patch_chapter_text(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookReplaceChapterText,
+    "replace_chapter_text",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_description(&schemas, "replace_chapter_text")
+    } },
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_parameters(&schemas, "replace_chapter_text")
+    } },
+    ctx.book_edit_deps.is_some(),
+    tool_replace_chapter_text(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookDeleteLatestChapter,
+    "delete_latest_chapter",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_description(&schemas, "delete_latest_chapter")
+    } },
+    { {
+        let schemas = deterministic_tool_schemas();
+        schema_parameters(&schemas, "delete_latest_chapter")
+    } },
+    ctx.book_edit_deps.is_some(),
+    tool_delete_latest_chapter(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookGenerateCover,
+    "generate_cover",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { schema_description(&[generate_cover_schema()], "generate_cover") },
+    schema_parameters(&[generate_cover_schema()], "generate_cover"),
+    ctx.book_edit_deps.is_some(),
+    tool_generate_cover(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    BookResyncChapterState,
+    "resync_chapter_state",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { schema_description(&[resync_chapter_state_schema()], "resync_chapter_state") },
+    schema_parameters(&[resync_chapter_state_schema()], "resync_chapter_state"),
+    ctx.book_edit_deps.is_some(),
+    tool_resync_chapter_state(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 execute_book_edit_tool match 序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![
+        Box::new(BookWriteTruthFile),
+        Box::new(BookRenameEntity),
+        Box::new(BookPatchChapterText),
+        Box::new(BookReplaceChapterText),
+        Box::new(BookDeleteLatestChapter),
+        Box::new(BookGenerateCover),
+        Box::new(BookResyncChapterState),
+    ]
 }
 
 #[cfg(test)]

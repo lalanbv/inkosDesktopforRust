@@ -139,6 +139,38 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse { ok: true, version: state.version, backend: "rust-engine".to_string() })
 }
 
+/// 工具目录单条投影（debug 面）。
+#[derive(Debug, Serialize)]
+pub struct DebugToolEntry {
+    pub name: String,
+    pub description: String,
+    /// 参数 schema 的规范化 sha256（serde_json BTreeMap 键序即规范化序；
+    /// 双端目录机械对照用——差分器 tool-catalog 维度数据源）。
+    pub parameters_sha256: String,
+}
+
+/// `GET /api/v1/debug/tools`（Rust 超集只读端点，health 62 号同位）：全族
+/// 工具注册表投影（R38b）——名称/描述/参数哈希，声明序 = 分发链序。
+/// loopback CORS 已由全局守卫限定本机（与 health 同级）。
+async fn debug_tools() -> Json<Vec<DebugToolEntry>> {
+    use sha2::{Digest, Sha256};
+    Json(
+        crate::interaction::registry::ToolRegistry::global()
+            .all()
+            .map(|def| {
+                let parameters = def.parameters();
+                let mut hasher = Sha256::new();
+                hasher.update(serde_json::to_string(&parameters).unwrap_or_default());
+                DebugToolEntry {
+                    name: def.name().to_string(),
+                    description: def.description(),
+                    parameters_sha256: format!("{:x}", hasher.finalize()),
+                }
+            })
+            .collect(),
+    )
+}
+
 async fn derive_book_id(
     Json(req): Json<DeriveBookIdRequest>,
 ) -> Result<Json<BookIdResponse>, (StatusCode, String)> {
@@ -223,6 +255,7 @@ pub fn sidecar_cors_layer_with_extras(
 /// 构造路由（供 Tauri 命令 / 独立 bin 复用）。
 pub fn router(state: AppState) -> Router {    Router::new()
         .route("/api/v1/health", get(health))
+        .route("/api/v1/debug/tools", get(debug_tools))
         .route("/api/v1/utils/derive-book-id", post(derive_book_id))
         .route("/api/v1/utils/count-length", post(count_length))
         .route("/api/v1/utils/cap-context", post(cap_context))
@@ -937,6 +970,23 @@ mod tests {
     async fn body_string(body: axum::body::Body) -> String {
         let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// R38b：debug/tools 端点活体投影——34 件全表、声明序、哈希稳定。
+    #[tokio::test]
+    async fn debug_tools_projects_full_registry() {
+        let resp = app()
+            .oneshot(Request::builder().uri("/api/v1/debug/tools").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let entries: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
+        assert_eq!(entries.len(), 34, "全表投影（与 registry 总数断言同源）");
+        assert_eq!(entries[0]["name"], "set_world_anchor", "声明序 = 分发链序首族首件");
+        assert!(entries[0]["parameters_sha256"].as_str().unwrap().len() == 64, "sha256 hex");
+        let names: Vec<&str> = entries.iter().filter_map(|e| e["name"].as_str()).collect();
+        assert!(names.contains(&"read") && names.contains(&"ingest_material"));
     }
 
     #[tokio::test]

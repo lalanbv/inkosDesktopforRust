@@ -13,6 +13,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::llm::agent_router::AgentRouter;
 use crate::play_runner::{PlayAgents, PlayRunner};
 
@@ -55,20 +56,6 @@ pub async fn session_world_exists(project_root: &Path, session_id: &str) -> bool
     match safe_play_id(Some(session_id), session_id) {
         Ok(world_id) => crate::play::load_world(project_root, &world_id).await.is_some(),
         Err(_) => false,
-    }
-}
-
-/// play 工具分发：play_step / play_revise / play_edit；其余 → None（回落文件工具）。
-pub async fn execute_play_tool(
-    deps: &PlayToolDeps<'_>,
-    name: &str,
-    args: &Value,
-) -> Option<ToolResult> {
-    match name {
-        "play_step" => Some(tool_play_step(deps, args).await),
-        "play_revise" => Some(tool_play_revise(deps, args).await),
-        "play_edit" => Some(tool_play_edit(deps, args).await),
-        _ => None,
     }
 }
 
@@ -841,9 +828,87 @@ pub fn play_chat_system_prompt(is_en: bool) -> String {
 
 
 
+
+// ── 注册模块（R38b）：play 三件——推进/修订/编辑互动世界（TS 剔除名单
+//    不含 play 面）；available = play 世界在场；schema 经同文件
+//    play_tool_schemas 拆解引用。 ──
+
+crate::interaction::registry::tool_def!(
+    PlayStep,
+    "play_step",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = play_tool_schemas();
+        schema_description(&schemas, "play_step")
+    } },
+    { {
+        let schemas = play_tool_schemas();
+        schema_parameters(&schemas, "play_step")
+    } },
+    ctx.play_deps.is_some(),
+    tool_play_step(ctx.play_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    PlayRevise,
+    "play_revise",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = play_tool_schemas();
+        schema_description(&schemas, "play_revise")
+    } },
+    { {
+        let schemas = play_tool_schemas();
+        schema_parameters(&schemas, "play_revise")
+    } },
+    ctx.play_deps.is_some(),
+    tool_play_revise(ctx.play_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    PlayEdit,
+    "play_edit",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = play_tool_schemas();
+        schema_description(&schemas, "play_edit")
+    } },
+    { {
+        let schemas = play_tool_schemas();
+        schema_parameters(&schemas, "play_edit")
+    } },
+    ctx.play_deps.is_some(),
+    tool_play_edit(ctx.play_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 execute_play_tool match 序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![
+        Box::new(PlayStep),
+        Box::new(PlayRevise),
+        Box::new(PlayEdit),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 注册表路由测试通道（R38b）：与生产同路径（find→execute），替代原
+    /// match 分发壳——装配错名在此红。
+    async fn route(
+        deps: &PlayToolDeps<'_>,
+        name: &str,
+        args: &Value,
+    ) -> Option<ToolResult> {
+        let mut ctx = crate::interaction::registry::ToolCtx::root_only(deps.project_root);
+        ctx.play_deps = Some(deps);
+        let def = crate::interaction::registry::ToolRegistry::global().find(name, &ctx)?;
+        Some(def.execute(&ctx, args).await)
+    }
+
     use std::collections::HashMap;
 
     use crate::llm::agent_router::LlmEndpointConfig;
@@ -884,7 +949,7 @@ mod tests {
             router: &router,
             language: "zh",
         };
-        let result = execute_play_tool(&deps, "play_step", &json!({ "input": "   " }))
+        let result = route(&deps, "play_step", &json!({ "input": "   " }))
             .await
             .unwrap();
         assert_eq!(result.text, "Play input is empty.");
@@ -901,12 +966,12 @@ mod tests {
             router: &router,
             language: "zh",
         };
-        let step = execute_play_tool(&deps, "play_step", &json!({ "input": "我走" }))
+        let step = route(&deps, "play_step", &json!({ "input": "我走" }))
             .await
             .unwrap();
         assert_eq!(step.text, "还没有可推进的互动世界。先用 play_start 开一局。");
         assert!(!step.is_error);
-        let revise = execute_play_tool(
+        let revise = route(
             &deps,
             "play_revise",
             &json!({ "action": "regenerate_last" }),
@@ -916,7 +981,7 @@ mod tests {
         assert_eq!(revise.text, "还没有可重做的互动世界。先用 play_start 开一局。");
         // 英文表面语言。
         let deps_en = PlayToolDeps { language: "en", ..deps };
-        let step_en = execute_play_tool(&deps_en, "play_step", &json!({ "input": "go" }))
+        let step_en = route(&deps_en, "play_step", &json!({ "input": "go" }))
             .await
             .unwrap();
         assert_eq!(
@@ -951,7 +1016,7 @@ mod tests {
             language: "zh",
         };
         // restore 缺 turn / variantId。
-        let missing = execute_play_tool(
+        let missing = route(
             &deps,
             "play_revise",
             &json!({ "action": "restore_variant", "turn": 1 }),
@@ -961,7 +1026,7 @@ mod tests {
         assert_eq!(missing.text, "恢复版本需要 turn 和 variantId。");
         assert!(!missing.is_error);
         // edit_last_input 缺 replacement。
-        let edit = execute_play_tool(
+        let edit = route(
             &deps,
             "play_revise",
             &json!({ "action": "edit_last_input" }),
@@ -970,13 +1035,15 @@ mod tests {
         .unwrap();
         assert_eq!(edit.text, "编辑上一条玩家动作需要提供新的 input。");
         // 非法 action → 错误（zod 枚举层的 Rust 等价）。
-        let bogus = execute_play_tool(&deps, "play_revise", &json!({ "action": "bogus" }))
+        let bogus = route(&deps, "play_revise", &json!({ "action": "bogus" }))
             .await
             .unwrap();
         assert!(bogus.is_error);
         assert!(bogus.text.contains("Invalid play_revise action"), "{}", bogus.text);
         // 未知工具 → None 回落。
-        assert!(execute_play_tool(&deps, "read", &json!({})).await.is_none());
+        // read 不归 play 族——注册表下落文件层（缺参数错误为文件层语义）。
+        let fallback = route(&deps, "read", &json!({})).await.unwrap();
+        assert!(fallback.is_error && fallback.text.contains("read requires a path"));
     }
 
     #[test]
@@ -1094,7 +1161,7 @@ mod tests {
             router: &router,
             language: "zh",
         };
-        let result = execute_play_tool(
+        let result = route(
             &deps,
             "play_edit",
             &json!({
@@ -1198,7 +1265,7 @@ mod tests {
             router: &router,
             language: "zh",
         };
-        let result = execute_play_tool(
+        let result = route(
             &deps,
             "play_edit",
             &json!({
@@ -1240,7 +1307,7 @@ mod tests {
             router: &router,
             language: "zh",
         };
-        let result = execute_play_tool(&deps, "play_edit", &json!({})).await.unwrap();
+        let result = route(&deps, "play_edit", &json!({})).await.unwrap();
         assert_eq!(result.text, "还没有可编辑的互动世界。先用 play_start 开一局。");
         assert!(!result.is_error);
         // 空参数 + 已有世界 → 默认文案 + 零更新。
@@ -1258,7 +1325,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let result = execute_play_tool(&deps, "play_edit", &json!({})).await.unwrap();
+        let result = route(&deps, "play_edit", &json!({})).await.unwrap();
         assert_eq!(result.text, "互动世界设定已更新。");
         let details = result.details.unwrap();
         assert_eq!(details["updatedEntities"], 0);

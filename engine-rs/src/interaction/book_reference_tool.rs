@@ -10,6 +10,7 @@
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::references::{bind_book_reference, list_book_references, unbind_book_reference, BindBookReferenceInput};
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -183,6 +184,27 @@ pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: 
         }
         other => error_result(format!("Unknown action: {other}")),
     }
+}
+
+
+// ── 注册模块（R38b）：manage_book_reference 单件——绑定清单写面 →
+//    ProjectWrite（216 号注释：非生产写入面，不在剔除名单）；available =
+//    活动书在场（book/edit 会话恒有）。 ──
+
+crate::interaction::registry::tool_def!(
+    ManageBookReference,
+    "manage_book_reference",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { schema_description(&[manage_book_reference_schema()], "manage_book_reference") },
+    schema_parameters(&[manage_book_reference_schema()], "manage_book_reference"),
+    ctx.reference_book_id.is_some(),
+    tool_manage_book_reference(ctx.root, ctx.reference_book_id.expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(ManageBookReference)]
 }
 
 #[cfg(test)]

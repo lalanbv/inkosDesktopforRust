@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::server::books_routes::BooksRuntime;
 use crate::utils::chapter_splitter::{split_chapters, SplitChapter};
 
@@ -241,6 +242,29 @@ pub fn import_chapters_schema() -> Value {
             },
         },
     })
+}
+
+
+// ── 注册模块（R38b）：import_chapters 单件——生产变更面（TS
+//    PRODUCTION_MUTATION_TOOL_NAMES 九件之一，后台生产剔除）。 ──
+
+crate::interaction::registry::tool_def!(
+    ImportChapters,
+    "import_chapters",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { schema_description(&[import_chapters_schema()], "import_chapters") },
+    schema_parameters(&[import_chapters_schema()], "import_chapters"),
+    ctx.import_deps.is_some(),
+    { {
+        let deps = ctx.import_deps.as_ref().expect("available 门控");
+        tool_import_chapters(deps.runtime, ctx.root, deps.active_book_id, args, deps.abort.as_ref()).await
+    } }
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(ImportChapters)]
 }
 
 #[cfg(test)]

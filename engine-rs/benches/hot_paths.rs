@@ -181,10 +181,33 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     group.finish();
 }
 
+/// 工具注册表分发基准（R38b/544 号施工图 §2.4）：lookup（find：全表 34 项
+/// 名称线性扫 + available 门控）+ schema 投影（装配面每请求一次）。
+/// 执行体本身为族内既有函数（I/O 主导），不在此计量。
+fn bench_tool_registry(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tool_registry");
+    group.sample_size(30);
+
+    let registry = inkos_engine::interaction::registry::ToolRegistry::global();
+    let root = std::path::Path::new(".");
+    let ctx = inkos_engine::interaction::registry::ToolCtx::root_only(root);
+
+    // 全表尾部查找（最坏情形：末位命中）+ 未注册名查找（全表扫空）。
+    group.bench_function("lookup_last_hit", |b| {
+        b.iter(|| registry.find("retrieve_material", &ctx))
+    });
+    group.bench_function("lookup_miss", |b| b.iter(|| registry.find("nope", &ctx)));
+    group.bench_function("schemas_book_session_layer", |b| {
+        b.iter(|| registry.schemas(inkos_engine::interaction::registry::ToolScope::BookSession))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
     bench_sse_broadcast,
-    bench_write_next_hot_paths
+    bench_write_next_hot_paths,
+    bench_tool_registry
 );
 criterion_main!(benches);

@@ -1091,7 +1091,7 @@ pub async fn post_agent(
     });
     // research：chat/book-create/book 分支；import：chat 与 book 分支。
     let research_enabled = research_registered;
-    let import_deps = import_registered.then_some(ImportDeps {
+    let import_deps = import_registered.then_some(crate::interaction::registry::ImportToolDeps {
         runtime: &runtime,
         active_book_id: agent_book_id.as_deref(),
         // 102 号：导入链在章粒度安全点响应聊天轮中止（TS signal 注入）。
@@ -1134,23 +1134,25 @@ pub async fn post_agent(
         }))
         .flatten();
     let tool_executor = ChatToolRouter {
-        root,
-        film_authoring_deps,
-        play_deps,
-        propose_deps,
-        research_enabled,
-        import_deps,
-        sub_agent_deps,
-        book_edit_deps,
-        forecast_deps,
-        reference_book_id: if book_edit_session { agent_book_id.as_deref() } else { None },
-        skill_deps: skill_registry.as_ref().map(|registry| {
-            (
-                registry as &dyn crate::skills::SkillRegistry,
-                &disabled_skills[..],
-            )
-        }),
-        suppress_production: background_task.is_some(),
+        ctx: crate::interaction::registry::ToolCtx {
+            root,
+            film_authoring_deps: film_authoring_deps.as_ref(),
+            play_deps: play_deps.as_ref(),
+            propose_deps: propose_deps.as_ref(),
+            research_enabled,
+            import_deps: import_deps.as_ref(),
+            sub_agent_deps: sub_agent_deps.as_ref(),
+            book_edit_deps: book_edit_deps.as_ref(),
+            forecast_deps: forecast_deps.as_ref(),
+            reference_book_id: if book_edit_session { agent_book_id.as_deref() } else { None },
+            skill_deps: skill_registry.as_ref().map(|registry| {
+                (
+                    registry as &dyn crate::skills::SkillRegistry,
+                    &disabled_skills[..],
+                )
+            }),
+            suppress_production: background_task.is_some(),
+        },
     };
     // 256 号：authoring 图谱上下文逐轮注入（TS createInteractiveFilmContext
     // Transform——[injected, ...messages] 对应位：system 之后、历史与本轮指令
@@ -1347,157 +1349,32 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
         .collect()
 }
 
-/// import_chapters 依赖（85 号）：runtime + 活动书 + 聊天轮中止句柄（102 号）。
-struct ImportDeps<'a> {
-    runtime: &'a BooksRuntime,
-    active_book_id: Option<&'a str>,
-    abort: Option<crate::interaction::agent_loop::AbortHandle>,
-}
-
-/// TS `PRODUCTION_MUTATION_TOOL_NAMES`（agent-session.ts）的可注册子集：
-/// 后台生产任务运行时从工具表硬剔除，并在分发面拒绝（防幻觉调用绕过）。
-/// fanfic_create/continuation_import/spinoff_create/imitation_create 在 Rust
-/// 不作为 agent 工具注册（propose→confirm 生产链），无需列入。
-const PRODUCTION_MUTATION_TOOL_NAMES: &[&str] = &[
-    "sub_agent",
-    "generate_cover",
-    "write_truth_file",
-    "rename_entity",
-    "patch_chapter_text",
-    "replace_chapter_text",
-    "resync_chapter_state",
-    "delete_latest_chapter",
-    "import_chapters",
-];
-
 /// suppressProductionTools 硬剔除（对齐 TS agent-session 的 tools filter）。
+/// R38b：剔除名单改由注册表 `MutationKind::ProductionMutation` 定性驱动
+/// （原 PRODUCTION_MUTATION_TOOL_NAMES 字符串集删除——schema 面与分发面
+/// 同源单点，九件精确集由 registry 测试锁定）。
 fn strip_production_mutation_tools(tools: &mut Value) {
+    let registry = crate::interaction::registry::ToolRegistry::global();
     if let Some(entries) = tools.as_array_mut() {
         entries.retain(|entry| {
             entry["function"]["name"]
                 .as_str()
-                .is_none_or(|name| !PRODUCTION_MUTATION_TOOL_NAMES.contains(&name))
+                .is_none_or(|name| registry.mutation_kind(name) != Some(crate::interaction::registry::MutationKind::ProductionMutation))
         });
     }
 }
 
-/// 聊天回环组合执行器（84/85/87/89 号）：propose_action → research/import
-/// → sub_agent → 书会话编辑工具族 → play 工具 → 项目文件工具（含 material
-/// 双件）。
+/// 聊天回环组合执行器（84/85/87/89 号）。R38b 全族注册表收拢：字段组迁入
+/// [`crate::interaction::registry::ToolCtx`]，执行 = `execute_routed` 单点
+/// 分发（可用性门控/生产变更面抑制/声明序遮蔽均在注册表内）。
 struct ChatToolRouter<'a> {
-    root: &'a std::path::Path,
-    /// 256 号：interactive-film-authoring 七件作者工具（该会话独占面）。
-    film_authoring_deps: Option<crate::interaction::film_authoring_tools::FilmAuthoringDeps<'a>>,
-    play_deps: Option<crate::interaction::play_tools::PlayToolDeps<'a>>,
-    propose_deps: Option<crate::interaction::propose_action_tool::ProposeDeps<'a>>,
-    research_enabled: bool,
-    import_deps: Option<ImportDeps<'a>>,
-    sub_agent_deps: Option<crate::interaction::sub_agent_tool::SubAgentDeps<'a>>,
-    book_edit_deps: Option<crate::interaction::book_edit_tools::BookEditDeps<'a>>,
-    forecast_deps: Option<crate::interaction::forecast_tools::ForecastDeps<'a>>,
-    /// 216 号：manage_book_reference 的活动书（book/edit 会话恒有）。
-    reference_book_id: Option<&'a str>,
-    /// 240 号：use_skill 的技能注册表 + 禁用集。
-    skill_deps: Option<(&'a dyn crate::skills::SkillRegistry, &'a [String])>,
-    /// 215 号：suppressProductionTools——true 时名单内工具在分发面拒绝。
-    suppress_production: bool,
+    ctx: crate::interaction::registry::ToolCtx<'a>,
 }
 
 #[async_trait::async_trait]
 impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
-    #[allow(clippy::too_many_lines)]
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
-        if self.suppress_production && PRODUCTION_MUTATION_TOOL_NAMES.contains(&name) {
-            return crate::interaction::project_tools::error_result(format!("Unknown tool: {name}"));
-        }
-        if let Some(deps) = &self.film_authoring_deps {
-            if let Some(result) =
-                crate::interaction::film_authoring_tools::execute_film_authoring_tool(deps, name, args).await
-            {
-                return result;
-            }
-        }
-        if name == "propose_action" {
-            if let Some(deps) = &self.propose_deps {
-                return crate::interaction::propose_action_tool::tool_propose_action(deps, args).await;
-            }
-        }
-        if name == "research_web" && self.research_enabled {
-            let config = crate::interaction::research_tool::read_research_search_config(self.root).await;
-            let transport = crate::interaction::research_tool::TavilyTransport::from_config(&config);
-            return crate::interaction::research_tool::tool_research_web(self.root, &transport, args).await;
-        }
-        if name == "import_chapters" {
-            if let Some(deps) = &self.import_deps {
-                return crate::interaction::import_chapters_tool::tool_import_chapters(
-                    deps.runtime,
-                    self.root,
-                    deps.active_book_id,
-                    args,
-                    deps.abort.as_ref(),
-                )
-                .await;
-            }
-        }
-        if name == "sub_agent" {
-            if let Some(deps) = &self.sub_agent_deps {
-                return crate::interaction::sub_agent_tool::tool_sub_agent(deps, args).await;
-            }
-        }
-        if name == "use_skill" {
-            if let Some((registry, disabled)) = &self.skill_deps {
-                return crate::interaction::skill_tool::tool_use_skill(
-                    &**registry,
-                    disabled,
-                    args,
-                )
-                .await;
-            }
-        }
-        if name == "manage_book_reference" {
-            if let Some(book_id) = self.reference_book_id {
-                return crate::interaction::book_reference_tool::tool_manage_book_reference(
-                    self.root,
-                    book_id,
-                    args,
-                )
-                .await;
-            }
-        }
-        if let Some(deps) = &self.book_edit_deps {
-            if let Some(result) =
-                crate::interaction::book_edit_tools::execute_book_edit_tool(deps, name, args).await
-            {
-                return result;
-            }
-        }
-        if let Some(deps) = &self.forecast_deps {
-            if let Some(result) =
-                crate::interaction::forecast_tools::execute_forecast_tool(deps, name, args).await
-            {
-                return result;
-            }
-        }
-        if let Some(deps) = &self.play_deps {
-            if let Some(result) = crate::interaction::play_tools::execute_play_tool(deps, name, args).await {
-                return result;
-            }
-        }
-        // 文件三件（105 号）：注册表分层遮蔽分发（R38a）——book/edit 会话书层
-        // 胜出同名 read/ls/grep（dsh scope layers 最近层语义），非书会话落项目
-        // 层；注册表未收的 material 双件（83 号）与未知工具继续原链（R38b
-        // 全族迁移后收拢为注册表单点）。
-        if let Some(result) = crate::interaction::registry::execute_shadowed(
-            self.root,
-            name,
-            self.book_edit_deps.is_some(),
-            args,
-        )
-        .await
-        {
-            return result;
-        }
-        crate::interaction::project_tools::execute_tool(self.root, name, args).await
+        crate::interaction::registry::execute_routed(&self.ctx, name, args).await
     }
 }
 

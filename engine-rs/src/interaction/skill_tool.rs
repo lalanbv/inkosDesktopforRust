@@ -11,6 +11,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::skills::{normalize_skill_id_strict, SkillRegistry};
 
 /// 与 TS `MAX_SKILL_RESOURCE_BYTES` 一致。
@@ -350,6 +351,30 @@ pub fn serialize_skill_catalog(skills: &[(String, String, String)]) -> String {
         })
         .collect();
     serde_json::to_string(&entries).unwrap_or_default()
+}
+
+
+// ── 注册模块（R38b）：use_skill 单件——激活注入纯读返回（ReadOnly，
+//    TS 剔除名单不含）；available = 技能注册表在场（allow_intent_skill_selection
+//    分支的装配对应面）。 ──
+
+crate::interaction::registry::tool_def!(
+    UseSkill,
+    "use_skill",
+    MutationKind::ReadOnly,
+    ctx, args,
+    { schema_description(&[use_skill_schema()], "use_skill") },
+    schema_parameters(&[use_skill_schema()], "use_skill"),
+    ctx.skill_deps.is_some(),
+    { {
+        let (registry, disabled) = ctx.skill_deps.expect("available 门控");
+        tool_use_skill(registry, disabled, args).await
+    } }
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(UseSkill)]
 }
 
 #[cfg(test)]

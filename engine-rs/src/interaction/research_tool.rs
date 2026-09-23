@@ -13,6 +13,7 @@ use crate::agents::researcher::{
     run_research_report, ResearchInput, ResearchTransport,
 };
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::utils::utc_time::utc_now_iso;
 
 /// `ResearchSearchConfigSchema`（inkos.json researchSearch 节）。
@@ -227,6 +228,30 @@ pub fn research_tool_schema() -> Value {
             },
         },
     })
+}
+
+
+// ── 注册模块（R38b）：research_web 单件——写 .inkos/research/ 报告 →
+//    ProjectWrite（TS 剔除名单不含）；available = research 分支在场。 ──
+
+crate::interaction::registry::tool_def!(
+    ResearchWeb,
+    "research_web",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { schema_description(&[research_tool_schema()], "research_web") },
+    schema_parameters(&[research_tool_schema()], "research_web"),
+    ctx.research_enabled,
+    { {
+        let config = read_research_search_config(ctx.root).await;
+        let transport = TavilyTransport::from_config(&config);
+        tool_research_web(ctx.root, &transport, args).await
+    } }
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(ResearchWeb)]
 }
 
 #[cfg(test)]

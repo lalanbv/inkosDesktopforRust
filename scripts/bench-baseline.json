@@ -1,5 +1,5 @@
 {
-  "collectedAt": "2026-09-06T22:43:29.052Z",
+  "collectedAt": "2026-09-23T17:27:35.000Z",
   "host": "darwin/arm64",
   "benches": {
     "chapter_index/parse_200": 42830.77605830052,
@@ -10,6 +10,9 @@
     "sse_broadcast/dispatch/32": 126.72863672555368,
     "sse_broadcast/dispatch/8": 126.3884292676114,
     "title_dedup/resolve_duplicate_hit_200": 432543.67947122717,
-    "title_dedup/resolve_no_duplicate_200": 61045.42672339462
+    "title_dedup/resolve_no_duplicate_200": 61045.42672339462,
+    "tool_registry/lookup_last_hit": 33.389,
+    "tool_registry/lookup_miss": 35.915,
+    "tool_registry/schemas_book_session_layer": 3196.4
   }
 }

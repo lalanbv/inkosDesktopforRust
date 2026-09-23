@@ -10,6 +10,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 
 pub const PROPOSE_ACTIONS: &[&str] = &[
     "create_book", "short_run", "play_start", "generate_cover", "fanfic_init",
@@ -580,6 +581,27 @@ pub fn propose_action_schema() -> Value {
             },
         },
     })
+}
+
+
+// ── 注册模块（R38b）：propose_action 单件——schema 经同文件
+//    propose_action_schema 拆解引用（码点零搬移）；写 intents 提案 →
+//    ProjectWrite，不在后台生产剔除名单。 ──
+
+crate::interaction::registry::tool_def!(
+    ProposeAction,
+    "propose_action",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { schema_description(&[propose_action_schema()], "propose_action") },
+    schema_parameters(&[propose_action_schema()], "propose_action"),
+    ctx.propose_deps.is_some(),
+    tool_propose_action(ctx.propose_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(ProposeAction)]
 }
 
 #[cfg(test)]

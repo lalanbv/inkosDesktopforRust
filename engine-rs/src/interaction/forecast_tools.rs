@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use crate::forecast::schema::{ForecastBranch, NarrativeForecast};
 use crate::interaction::import_chapters_tool::resolve_tool_book_id;
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::llm::agent_router::RoutedAgent;
 use crate::server::books_routes::BooksRuntime;
 
@@ -228,16 +229,6 @@ fn parse_bounded_u32(args: &Value, name: &str) -> Option<u32> {
         .map(|v| v as u32)
 }
 
-/// 三件分发（未知名返回 None 交回退执行器）。
-pub async fn execute_forecast_tool(deps: &ForecastDeps<'_>, name: &str, args: &Value) -> Option<ToolResult> {
-    match name {
-        "create_narrative_forecast" => Some(tool_create_narrative_forecast(deps, args).await),
-        "get_narrative_forecast" => Some(tool_get_narrative_forecast(deps, args).await),
-        "select_narrative_branch" => Some(tool_select_narrative_branch(deps, args).await),
-        _ => None,
-    }
-}
-
 /// 三件 schema（ForecastCreate/Get/SelectParams 逐字）。
 pub fn forecast_tool_schemas() -> Vec<Value> {
     vec![
@@ -289,6 +280,72 @@ pub fn forecast_tool_schemas() -> Vec<Value> {
                 },
             },
         }),
+    ]
+}
+
+
+// ── 注册模块（R38b）：预测三件——写 story/runtime/narrative-forecasts/
+//    （forecast.json、comparison.md、selected-branch-plan.md）→ ProjectWrite
+//    （canonical 零触碰，不在后台生产剔除名单）；schema 经同文件
+//    forecast_tool_schemas 拆解引用。 ──
+
+crate::interaction::registry::tool_def!(
+    ForecastCreate,
+    "create_narrative_forecast",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_description(&schemas, "create_narrative_forecast")
+    } },
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_parameters(&schemas, "create_narrative_forecast")
+    } },
+    ctx.forecast_deps.is_some(),
+    tool_create_narrative_forecast(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    ForecastGet,
+    "get_narrative_forecast",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_description(&schemas, "get_narrative_forecast")
+    } },
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_parameters(&schemas, "get_narrative_forecast")
+    } },
+    ctx.forecast_deps.is_some(),
+    tool_get_narrative_forecast(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
+);
+
+crate::interaction::registry::tool_def!(
+    ForecastSelect,
+    "select_narrative_branch",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_description(&schemas, "select_narrative_branch")
+    } },
+    { {
+        let schemas = forecast_tool_schemas();
+        schema_parameters(&schemas, "select_narrative_branch")
+    } },
+    ctx.forecast_deps.is_some(),
+    tool_select_narrative_branch(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 execute_forecast_tool match 序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![
+        Box::new(ForecastCreate),
+        Box::new(ForecastGet),
+        Box::new(ForecastSelect),
     ]
 }
 

@@ -164,7 +164,7 @@ fn grep_walk(dir: &Path, out: &mut Vec<PathBuf>, depth: u32) {
 /// registry.rs 项目作用域层，此结构保留给 tools_payload 消费面）。
 pub struct InteractionTool {
     pub name: &'static str,
-    pub description: &'static str,
+    pub description: String,
     pub parameters: Value,
 }
 
@@ -387,18 +387,15 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ProjectToolExecutor<'_
     }
 }
 
-/// 分发执行；文件三件走注册表项目作用域层（R38a），material 双件原链，
-/// 未知工具 → 错误文本。
+/// 分发执行（R38b 单点化）：全路由注册表分发——文件三件（R38a）与
+/// material 双件（R38b）均由注册表承接，未注册/不可用 → 错误文本。
 pub async fn execute_tool(root: &Path, name: &str, args: &Value) -> ToolResult {
-    if let Some(result) = crate::interaction::registry::execute_project_file(root, name, args).await {
-        return result;
-    }
-    match name {
-        // material 双工具（83 号）：全部聊天会话注册（TS agent-session 各分支）。
-        "ingest_material" => crate::interaction::material_tools::tool_ingest_material(root, args).await,
-        "retrieve_material" => crate::interaction::material_tools::tool_retrieve_material(root, args).await,
-        other => error_result(format!("Unknown tool: {other}")),
-    }
+    crate::interaction::registry::execute_routed(
+        &crate::interaction::registry::ToolCtx::root_only(root),
+        name,
+        args,
+    )
+    .await
 }
 
 #[cfg(test)]

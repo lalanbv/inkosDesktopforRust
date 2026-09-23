@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::interaction::import_chapters_tool::resolve_tool_book_id;
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::server::books_routes::{BooksRuntime, ReviseChainResult, RevisionDiagnostics};
 
 pub const SUB_AGENTS: &[&str] = &["architect", "writer", "auditor", "reviser", "exporter"];
@@ -550,6 +551,26 @@ pub fn sub_agent_schema() -> Value {
             },
         },
     })
+}
+
+
+// ── 注册模块（R38b）：sub_agent 单件——生产变更面（TS 剔除名单九件之一，
+//    子代理可写章节/真相文件）。 ──
+
+crate::interaction::registry::tool_def!(
+    SubAgent,
+    "sub_agent",
+    MutationKind::ProductionMutation,
+    ctx, args,
+    { schema_description(&[sub_agent_schema()], "sub_agent") },
+    schema_parameters(&[sub_agent_schema()], "sub_agent"),
+    ctx.sub_agent_deps.is_some(),
+    tool_sub_agent(ctx.sub_agent_deps.as_ref().expect("available 门控"), args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(SubAgent)]
 }
 
 #[cfg(test)]

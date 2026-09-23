@@ -674,6 +674,47 @@ try {
   if (onlyNode.length || onlyRust.length) divergences += 1;
   else console.log(`✓ SSE 事件名集合双端一致`);
 
+  // ── 工具目录面差分（R38b/544 号施工图 §2.3）：debug/tools 全族投影 ──
+  // Rust 超集只读端点；Node 侧暂无对应端点（R30 pi 双包迁移期间 packages/core
+  // 冻结，TS buildChatToolSet 出口顺延）——按豁免备案 skip，不硬拦。
+  // 待 TS 端点落地后本维度转硬对照（名称集合 + 逐件 description/parametersHash）。
+  {
+    const toolsOf = async (base) => {
+      try {
+        const res = await fetchT(`${base}/api/v1/debug/tools`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+    const [nodeTools, rustTools] = await Promise.all([
+      toolsOf(`http://127.0.0.1:${engines[0].port}`),
+      toolsOf(`http://127.0.0.1:${engines[1].port}`),
+    ]);
+    compared += 1;
+    if (nodeTools && rustTools) {
+      const byName = (list) => new Map(list.map((t) => [t.name, t]));
+      const a = byName(nodeTools);
+      const b = byName(rustTools);
+      const onlyA = [...a.keys()].filter((n) => !b.has(n));
+      const onlyB = [...b.keys()].filter((n) => !a.has(n));
+      const mismatches = [...a.keys()].filter((n) => b.has(n)
+        && (a.get(n).description !== b.get(n).description
+          || a.get(n).parametersSha256 !== b.get(n).parametersSha256));
+      if (onlyA.length || onlyB.length || mismatches.length) {
+        divergences += 1;
+        console.log(`✗ 工具目录分歧：仅 node=[${onlyA}] 仅 rust=[${onlyB}] 漂移=[${mismatches}]`);
+      } else {
+        console.log(`✓ 工具目录双端一致（${rustTools.length} 件，含描述/参数哈希逐件比对）`);
+      }
+    } else if (rustTools && !nodeTools) {
+      console.log(`[diff] 工具目录维度备案：node 端 debug/tools 未落地（R30 后补齐），本轮仅 rust 侧 ${rustTools.length} 件建档`);
+    } else {
+      console.log(`[diff] 工具目录维度双端未落地，跳过`);
+    }
+  }
+
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;
 } catch (error) {

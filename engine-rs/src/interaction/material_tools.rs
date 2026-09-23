@@ -11,6 +11,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
+use crate::interaction::registry::{MutationKind, ToolDef, ToolRegistry};
 use crate::materials;
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
@@ -120,79 +121,91 @@ pub async fn tool_retrieve_material(root: &Path, args: &Value) -> ToolResult {
     text_result(lines.join("\n"), Some(details))
 }
 
-/// 两工具 schema（OpenAI function 形态，参数描述逐字）。
+/// 两工具 schema（R38b：注册表投影薄壳——json 单一事实源在 ZST parameters）。
 pub fn material_tool_schemas() -> Vec<Value> {
-    vec![
-        json!({
-            "type": "function",
-            "function": {
-                "name": "ingest_material",
-                "description": "Extract and archive a user-provided URL or uploaded file into .inkos/materials as traceable Markdown. Supports HTML/text/JSON/Markdown/PDF. This creates reference material only; it must not mutate canon, chapters, scripts, or play state.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "sourceKind": {
-                            "type": "string",
-                            "enum": ["url", "file"],
-                            "description": "Use url for an external URL; use file for a user-uploaded file path shown in the Uploaded Files block.",
-                        },
-                        "url": {
-                            "type": "string",
-                            "description": "HTTP/HTTPS URL to fetch and extract. Supports HTML/text/JSON/PDF.",
-                        },
-                        "filePath": {
-                            "type": "string",
-                            "description": "Project-relative stored_path from the Uploaded Files block, e.g. .inkos/uploads/session/file.pdf.",
-                        },
-                        "filename": {
-                            "type": "string",
-                            "description": "Original filename when known.",
-                        },
-                        "mimeType": {
-                            "type": "string",
-                            "description": "MIME type when known, e.g. application/pdf or text/markdown.",
-                        },
-                        "title": {
-                            "type": "string",
-                            "description": "Human-readable material title.",
-                        },
-                        "purpose": {
-                            "type": "string",
-                            "enum": ["reference", "worldbuilding", "script", "storyboard", "research", "general"],
-                            "description": "Why this material is being ingested. It remains reference material unless the user explicitly promotes it.",
-                        },
-                    },
-                    "required": ["sourceKind"],
-                },
+    ToolRegistry::global().schemas_for(&["ingest_material", "retrieve_material"])
+}
+
+// ── 注册模块（R38b）：ZST 就地注册，schema/执行/定性同址 ────────────────────
+
+crate::interaction::registry::tool_def!(
+    MaterialIngest,
+    "ingest_material",
+    MutationKind::ProjectWrite,
+    ctx, args,
+    "Extract and archive a user-provided URL or uploaded file into .inkos/materials as traceable Markdown. Supports HTML/text/JSON/Markdown/PDF. This creates reference material only; it must not mutate canon, chapters, scripts, or play state.",
+    json!({
+        "type": "object",
+        "properties": {
+            "sourceKind": {
+                "type": "string",
+                "enum": ["url", "file"],
+                "description": "Use url for an external URL; use file for a user-uploaded file path shown in the Uploaded Files block.",
             },
-        }),
-        json!({
-            "type": "function",
-            "function": {
-                "name": "retrieve_material",
-                "description": "Retrieve traceable snippets from previously ingested .inkos/materials reference cards. The agent supplies the semantic query; InkOS returns evidence pointers. This must not mutate canon, chapters, scripts, or play state.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language query written by the agent from the user's current task, e.g. 冷库赔偿款 0607 账页 or storyboard shot requirements.",
-                        },
-                        "purpose": {
-                            "type": "string",
-                            "enum": ["reference", "worldbuilding", "script", "storyboard", "research", "general"],
-                            "description": "Optional material purpose filter.",
-                        },
-                        "limit": {
-                            "type": "number",
-                            "description": "Maximum number of material snippets to return. Default 5.",
-                        },
-                    },
-                    "required": ["query"],
-                },
+            "url": {
+                "type": "string",
+                "description": "HTTP/HTTPS URL to fetch and extract. Supports HTML/text/JSON/PDF.",
             },
-        }),
-    ]
+            "filePath": {
+                "type": "string",
+                "description": "Project-relative stored_path from the Uploaded Files block, e.g. .inkos/uploads/session/file.pdf.",
+            },
+            "filename": {
+                "type": "string",
+                "description": "Original filename when known.",
+            },
+            "mimeType": {
+                "type": "string",
+                "description": "MIME type when known, e.g. application/pdf or text/markdown.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Human-readable material title.",
+            },
+            "purpose": {
+                "type": "string",
+                "enum": ["reference", "worldbuilding", "script", "storyboard", "research", "general"],
+                "description": "Why this material is being ingested. It remains reference material unless the user explicitly promotes it.",
+            },
+        },
+        "required": ["sourceKind"],
+    }),
+    true,
+    tool_ingest_material(ctx.root, args).await
+);
+
+crate::interaction::registry::tool_def!(
+    MaterialRetrieve,
+    "retrieve_material",
+    MutationKind::ReadOnly,
+    ctx, args,
+    "Retrieve traceable snippets from previously ingested .inkos/materials reference cards. The agent supplies the semantic query; InkOS returns evidence pointers. This must not mutate canon, chapters, scripts, or play state.",
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Natural-language query written by the agent from the user's current task, e.g. 冷库赔偿款 0607 账页 or storyboard shot requirements.",
+            },
+            "purpose": {
+                "type": "string",
+                "enum": ["reference", "worldbuilding", "script", "storyboard", "research", "general"],
+                "description": "Optional material purpose filter.",
+            },
+            "limit": {
+                "type": "number",
+                "description": "Maximum number of material snippets to return. Default 5.",
+            },
+        },
+        "required": ["query"],
+    }),
+    true,
+    tool_retrieve_material(ctx.root, args).await
+);
+
+/// 注册表汇聚口（registry 装配序 = 原 execute_tool 兜底链序）。
+pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
+    vec![Box::new(MaterialIngest), Box::new(MaterialRetrieve)]
 }
 
 #[cfg(test)]
