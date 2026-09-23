@@ -57,18 +57,43 @@ describe("inkos.ai.request schema (R33 / golden 第 31 守门域)", () => {
     const required = Object.entries(span.startAttributes)
       .filter(([, definition]) => definition.required)
       .map(([name]) => name);
-    const constructed = Object.keys(inkosAiRequestStartAttributes(BASE_INPUT));
+    // 552 号粒度修订后：只传 required 语义（不带 pi.ai.* 可选透出键）时，
+    // 构造器输出必须与 required 全集精确相等。
+    const constructed = Object.keys(
+      inkosAiRequestStartAttributes({
+        model: "duel-model",
+        agent: "writer",
+        attemptIndex: 0,
+        round: 1,
+        tookOver: false,
+      }),
+    );
     expect(constructed).toEqual(required);
+  });
+
+  it("exposes optional pi.ai.* keys only when provided (552 granularity revision)", () => {
+    const withOptional = inkosAiRequestStartAttributes({
+      ...BASE_INPUT,
+      operation: "stream",
+      provider: "deepseek",
+      api: "openai-completions",
+      streaming: true,
+    });
+    expect(withOptional["pi.ai.operation"]).toBe("stream");
+    expect(withOptional["pi.ai.provider"]).toBe("deepseek");
+    expect(withOptional["pi.ai.api"]).toBe("openai-completions");
+    expect(withOptional["pi.ai.streaming"]).toBe(true);
   });
 
   it("mirrors upstream pi.ai.* semantic keys on the streaming surface", () => {
     const schema = loadInkosAiRequestSchema();
     const start = schema.spans[INKOS_AI_REQUEST_SPAN].startAttributes;
     expect(start["pi.ai.operation"].values).toContain("stream");
-    expect(start["pi.ai.provider"].required).toBe(true);
+    // 552 号修订：provider 层细节四键降 optional（span=per governed attempt）。
+    for (const key of ["pi.ai.operation", "pi.ai.provider", "pi.ai.api", "pi.ai.streaming"]) {
+      expect(start[key].required).toBe(false);
+    }
     expect(start["pi.ai.model"].required).toBe(true);
-    expect(start["pi.ai.api"].required).toBe(true);
-    expect(start["pi.ai.streaming"].type).toBe("boolean");
     expect(Object.keys(schema.spans[INKOS_AI_REQUEST_SPAN].endAttributes)).toContain("pi.ai.response.model");
   });
 });

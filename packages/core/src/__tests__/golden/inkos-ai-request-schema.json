@@ -10,13 +10,19 @@
       "startAttributes": {
         "pi.ai.operation": {
           "type": "string",
-          "required": true,
-          "values": ["stream", "fetch_deferred", "cancel_deferred", "generate_images"],
-          "description": "Logical provider operation"
+          "required": false,
+          "values": [
+            "stream",
+            "fetch_deferred",
+            "cancel_deferred",
+            "generate_images"
+          ],
+          "description": "Logical provider operation",
+          "$comment": "552 号粒度修订：span=per governed attempt（RunLogEntry 对齐），operation 属 provider 层细节降 optional，调用方可在 span 内 setAttributes 补透。"
         },
         "pi.ai.provider": {
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "Selected provider id"
         },
         "pi.ai.model": {
@@ -26,12 +32,12 @@
         },
         "pi.ai.api": {
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "Provider API id"
         },
         "pi.ai.streaming": {
           "type": "boolean",
-          "required": true,
+          "required": false,
           "description": "Whether this operation returns a stream"
         },
         "inkos.agent": {
@@ -62,7 +68,10 @@
         },
         "inkos.error_kind": {
           "type": "string",
-          "values": ["transient", "fatal"],
+          "values": [
+            "transient",
+            "fatal"
+          ],
           "description": "InkOS error classification of a failed attempt (RunLogEntry.errorKind); absent on success"
         }
       },

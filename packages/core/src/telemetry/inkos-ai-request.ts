@@ -77,12 +77,14 @@ export function loadInkosAiRequestSchema(): InkosTelemetrySchema {
 export type InkosAiRequestOperation = "stream" | "fetch_deferred" | "cancel_deferred" | "generate_images";
 
 export interface InkosAiRequestInput {
-  readonly operation: InkosAiRequestOperation;
-  /** provider id（service-resolver 的 piProvider 映射）。 */
-  readonly provider: string;
+  /** provider 层细节可选透出（552 号粒度修订：span=per governed attempt，语义层可不设）。 */
+  readonly operation?: InkosAiRequestOperation;
+  /** provider id（service-resolver 的 piProvider 映射；可选透出）。 */
+  readonly provider?: string;
   readonly model: string;
-  readonly api: string;
-  readonly streaming: boolean;
+  /** Provider API id（可选透出）。 */
+  readonly api?: string;
+  readonly streaming?: boolean;
   /** agent 名 / 调用标签（RunLogEntry.agent）。 */
   readonly agent: string;
   /** 链内序号，0 = primary。 */
@@ -98,21 +100,22 @@ export interface InkosAiRequestOutcome {
   readonly errorKind?: "transient" | "fatal";
 }
 
-/** start 属性全集（schema required 全覆盖）。 */
+/** start 属性面（required 键全集必出；pi.ai.* 可选键按入参透出）。 */
 export function inkosAiRequestStartAttributes(
   input: InkosAiRequestInput,
 ): Record<string, string | number | boolean> {
-  return {
-    "pi.ai.operation": input.operation,
-    "pi.ai.provider": input.provider,
+  const attributes: Record<string, string | number | boolean> = {
     "pi.ai.model": input.model,
-    "pi.ai.api": input.api,
-    "pi.ai.streaming": input.streaming,
     "inkos.agent": input.agent,
     "inkos.attempt_index": input.attemptIndex,
     "inkos.round": input.round,
     "inkos.took_over": input.tookOver,
   };
+  if (input.operation !== undefined) attributes["pi.ai.operation"] = input.operation;
+  if (input.provider !== undefined) attributes["pi.ai.provider"] = input.provider;
+  if (input.api !== undefined) attributes["pi.ai.api"] = input.api;
+  if (input.streaming !== undefined) attributes["pi.ai.streaming"] = input.streaming;
+  return attributes;
 }
 
 /** end 属性（可缺省键按 schema 可选面）。 */

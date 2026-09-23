@@ -25,6 +25,16 @@ const EXPECTED_START_KEYS: [&str; 9] = [
 
 const EXPECTED_END_KEYS: [&str; 2] = ["pi.ai.response.model", "inkos.error_kind"];
 
+/// 552 号粒度修订：span=per governed attempt（与 RunLogEntry 一一对应）——
+/// pi.ai.* 四键为 provider 层细节降 optional，required 全集只剩语义五键。
+const EXPECTED_REQUIRED_START_KEYS: [&str; 5] = [
+    "pi.ai.model",
+    "inkos.agent",
+    "inkos.attempt_index",
+    "inkos.round",
+    "inkos.took_over",
+];
+
 #[test]
 fn telemetry_schema_matches_shared_golden() {
     let parsed: Value = serde_json::from_str(SCHEMA).expect("golden json 解析");
@@ -61,12 +71,17 @@ fn telemetry_schema_matches_shared_golden() {
     expected_end.sort_unstable();
     assert_eq!(end_keys, expected_end, "end 属性键集漂移");
 
-    // required 全集 = InkOS 请求面必填语义（构造器覆盖断言的 Rust 对偶）。
+    // required 全集 = 模型链语义必填面（552 号粒度修订：provider 层细节四键
+    // 降 optional；构造器覆盖断言的 Rust 对偶）。
     for key in EXPECTED_START_KEYS {
         let required = span["startAttributes"][key]["required"]
             .as_bool()
             .unwrap_or(false);
-        assert!(required, "start 属性 {key} 应为 required");
+        let should_be_required = EXPECTED_REQUIRED_START_KEYS.contains(&key);
+        assert_eq!(
+            required, should_be_required,
+            "start 属性 {key} required 形态漂移"
+        );
     }
 
     // 镜像键语义抽查：operation 枚举值与上游 pi.ai.request 一致。

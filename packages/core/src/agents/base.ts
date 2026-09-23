@@ -1,6 +1,7 @@
 import type { LLMClient, LLMMessage, LLMResponse, OnStreamProgress } from "../llm/provider.js";
 import { runWorkerAgent, runWorkerAgentTool, type WorkerResultTool } from "../agent/worker-agent.js";
 import { runWithModelChain } from "../llm/model-chain.js";
+import type { TelemetryContext } from "../telemetry/inkos-ai-request.js";
 import type { ResolvedTaskModelChain } from "../models/task-routing.js";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { appendPromptPackGuidance } from "../prompts/prompt-pack.js";
@@ -22,6 +23,8 @@ export interface AgentContext {
   readonly onStreamProgress?: OnStreamProgress;
   readonly signal?: AbortSignal;
   readonly activatedSkills?: ReadonlyArray<ActivatedSkillGuidance>;
+  /** R33 执行期接线（552 号）：inkos.ai.request span 后端；缺省 undefined→NOOP。 */
+  readonly telemetry?: TelemetryContext;
 }
 
 export abstract class BaseAgent {
@@ -52,6 +55,7 @@ export abstract class BaseAgent {
         primaryModel: this.ctx.model,
         label: this.name,
         signal: this.ctx.signal,
+        telemetry: this.ctx.telemetry,
         onEvent: (event) => this.logModelChainEvent(event),
       },
     );
@@ -74,6 +78,7 @@ export abstract class BaseAgent {
         primaryModel: this.ctx.model,
         label: this.name,
         signal: this.ctx.signal,
+        telemetry: this.ctx.telemetry,
         onEvent: (event) => this.logModelChainEvent(event),
       },
     );
