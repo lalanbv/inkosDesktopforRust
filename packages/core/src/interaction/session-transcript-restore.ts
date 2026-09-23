@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { readTranscriptEvents } from "./session-transcript.js";
 import {
   BookSessionSchema,
@@ -11,6 +11,16 @@ import type { MessageEvent, SessionKind, TranscriptEvent } from "./session-trans
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
+}
+
+/**
+ * transcript 反序列化域专用宽取：pi 0.87 的 Message union 与 Record guard
+ * narrow 不兼容（interface 成员因无隐式索引签名被剔除、条件类型成员却保留，
+ * narrow 结果恒为 ToolResultMessage|never）。运行时形状检查统一走本助手取
+ * Record 域、出口处断言回 AgentMessage，行为与 0.73 时代完全一致。
+ */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return isObject(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function contentBlocks(message: Record<string, unknown>): unknown[] {
@@ -47,17 +57,18 @@ function isThinkingBlock(block: unknown): boolean {
 }
 
 function removeTrailingThinking(message: AgentMessage): AgentMessage {
-  if (!isObject(message) || message.role !== "assistant" || !Array.isArray(message.content)) {
+  const raw = asRecord(message);
+  if (!raw || raw.role !== "assistant" || !Array.isArray(raw.content)) {
     return message;
   }
 
-  const content = [...message.content];
+  const content = [...raw.content];
   while (content.length > 0 && isThinkingBlock(content[content.length - 1])) {
     content.pop();
   }
 
-  if (content.length === message.content.length) return message;
-  return { ...message, content } as AgentMessage;
+  if (content.length === raw.content.length) return message;
+  return { ...raw, content } as AgentMessage;
 }
 
 const emptyUsage = {
@@ -102,12 +113,14 @@ function addToolResultBridges(messages: AgentMessage[]): AgentMessage[] {
     const message = messages[i];
     bridged.push(message);
 
-    if (!isObject(message) || message.role !== "toolResult") continue;
+    const raw = asRecord(message);
+    if (!raw || raw.role !== "toolResult") continue;
 
     const next = messages[i + 1];
-    if (isObject(next) && (next.role === "toolResult" || next.role === "assistant")) continue;
+    const nextRaw = asRecord(next);
+    if (nextRaw && (nextRaw.role === "toolResult" || nextRaw.role === "assistant")) continue;
 
-    const timestamp = typeof message.timestamp === "number" ? message.timestamp + 1 : Date.now();
+    const timestamp = typeof raw.timestamp === "number" ? raw.timestamp + 1 : Date.now();
     bridged.push(toolResultBridgeMessage(timestamp));
   }
 
@@ -145,25 +158,27 @@ export function appendRestoredHistoryBoundary(
 export function cleanRestoredAgentMessages(messages: AgentMessage[]): AgentMessage[] {
   const availableToolCalls = new Set<string>();
   for (const message of messages) {
-    if (isObject(message) && message.role === "assistant") {
-      for (const id of toolCallIds(message)) availableToolCalls.add(id);
+    const raw = asRecord(message);
+    if (raw && raw.role === "assistant") {
+      for (const id of toolCallIds(raw)) availableToolCalls.add(id);
     }
   }
 
   const cleaned = messages.filter((message) => {
-    if (!isObject(message)) return false;
-    if (message.role === "toolResult") {
-      return typeof message.toolCallId === "string" && availableToolCalls.has(message.toolCallId);
+    const raw = asRecord(message);
+    if (!raw) return false;
+    if (raw.role === "toolResult") {
+      return typeof raw.toolCallId === "string" && availableToolCalls.has(raw.toolCallId);
     }
-    if (message.role === "assistant") {
-      return hasTextContent(message) || hasToolCallContent(message);
+    if (raw.role === "assistant") {
+      return hasTextContent(raw) || hasToolCallContent(raw);
     }
-    return message.role === "user" || message.role === "system";
+    return raw.role === "user" || raw.role === "system";
   });
 
   if (cleaned.length === 0) return cleaned;
   const last = cleaned[cleaned.length - 1];
-  if (isObject(last) && last.role === "assistant") {
+  if (asRecord(last)?.role === "assistant") {
     cleaned[cleaned.length - 1] = removeTrailingThinking(last);
   }
 
@@ -234,25 +249,25 @@ export function adaptRestoredAgentMessagesForModel(
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    if (!isObject(message)) continue;
+    const raw = asRecord(message);
+    if (!raw) continue;
 
-    if (message.role === "assistant") {
-      const content = contentBlocks(message);
+    if (raw.role === "assistant") {
+      const content = contentBlocks(raw);
       const isBridge = content.length === 1 &&
         isObject(content[0]) &&
         content[0].type === "text" &&
         typeof content[0].text === "string" &&
         content[0].text.trim() === TOOL_RESULT_BRIDGE_TEXT;
       const previous = adapted[adapted.length - 1];
-      const previousRole = isObject(previous)
-        ? (previous as Record<string, unknown>).role
-        : undefined;
+      const previousRaw = asRecord(previous);
+      const previousRole = previousRaw?.role;
       if (
         isBridge &&
-        isObject(previous) &&
+        previousRaw &&
         (previousRole === "user" || previousRole === "system") &&
-        typeof previous.content === "string" &&
-        (previous.content.startsWith("[Tool results]") || previous.content.startsWith("[Historical tool results]"))
+        typeof previousRaw.content === "string" &&
+        (previousRaw.content.startsWith("[Tool results]") || previousRaw.content.startsWith("[Historical tool results]"))
       ) {
         continue;
       }
@@ -268,13 +283,13 @@ export function adaptRestoredAgentMessagesForModel(
       );
 
       if (foreignToolCallIds.size === 0) {
-        if (Array.isArray(message.content) && isSameAssistantModel(message, target)) {
+        if (Array.isArray(raw.content) && isSameAssistantModel(raw, target)) {
           adapted.push(message);
           continue;
         }
         const rewritten = contentWithoutThinking.length === content.length
           ? message
-          : ({ ...message, content: contentWithoutThinking } as AgentMessage);
+          : ({ ...raw, content: contentWithoutThinking } as AgentMessage);
         if (
           contentWithoutThinking.some(
             (block) =>
@@ -297,18 +312,19 @@ export function adaptRestoredAgentMessagesForModel(
           block.text.trim().length > 0,
       );
       if (textContent.length > 0) {
-        adapted.push({ ...message, content: textContent } as AgentMessage);
+        adapted.push({ ...raw, content: textContent } as AgentMessage);
       }
 
       const toolResults: AgentMessage[] = [];
       let nextIndex = index + 1;
       while (nextIndex < messages.length) {
         const next = messages[nextIndex];
+        const nextRaw = asRecord(next);
         if (
-          !isObject(next) ||
-          next.role !== "toolResult" ||
-          typeof next.toolCallId !== "string" ||
-          !foreignToolCallIds.has(next.toolCallId)
+          !nextRaw ||
+          nextRaw.role !== "toolResult" ||
+          typeof nextRaw.toolCallId !== "string" ||
+          !foreignToolCallIds.has(nextRaw.toolCallId)
         ) {
           break;
         }
@@ -322,7 +338,7 @@ export function adaptRestoredAgentMessagesForModel(
       continue;
     }
 
-    if (message.role === "toolResult") {
+    if (raw.role === "toolResult") {
       pushToolResultsAsSystem([message]);
       continue;
     }
@@ -331,8 +347,9 @@ export function adaptRestoredAgentMessagesForModel(
   }
 
   const filtered = adapted.filter((message) => {
-    if (!isObject(message) || message.role !== "assistant") return true;
-    return hasTextContent(message) || hasToolCallContent(message);
+    const raw = asRecord(message);
+    if (!raw || raw.role !== "assistant") return true;
+    return hasTextContent(raw) || hasToolCallContent(raw);
   });
 
   return requiresAssistantAfterToolResult(target)

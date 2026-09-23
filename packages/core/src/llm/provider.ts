@@ -1,9 +1,10 @@
 import type { LLMConfig } from "../models/project.js";
+// streamSimple/completeSimple 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
 import {
   streamSimple as piStreamSimple,
   completeSimple as piCompleteSimple,
-  createAssistantMessageEventStream,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type {
   Api as PiApi,
   Model as PiModel,
@@ -11,7 +12,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { resolveServicePreset } from "./service-presets.js";
 import { getEndpoint } from "./providers/index.js";
 import { lookupModel } from "./providers/lookup.js";

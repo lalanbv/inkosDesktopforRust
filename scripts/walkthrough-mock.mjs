@@ -93,16 +93,20 @@ http.createServer((req, res) => {
         // toolCallId 必须逐次唯一（436 号）：前端确认卡锁定键=execId（派生自
         // toolCallId），固定 id 会让后续同形提议复用首轮"已执行"锁，卡直接
         // 锁死不可确认——真 LLM 每次 tool call id 均不同，mock 必须对齐。
-        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: `call_propose_${++PROPOSE_SEQ}`, function: { name: "propose_action", arguments: ARGS } }] } }] };
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: `call_propose_${++PROPOSE_SEQ}`, function: { name: "propose_action", arguments: ARGS } }] }, finish_reason: null }] };
+        // 548 号（R30）：finish chunk 为 OpenAI 流式规范必需——pi-ai 0.87 严检
+        // "Stream ended without finish_reason"（0.73 宽容缺失，0.87 起报错）。
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
         res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
+        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
         return;
       } else {
         content = "已生成确认卡，请在下方点击确认。";
       }
-      const chunk = { choices: [{ delta: { content } }] };
+      const chunk = { choices: [{ delta: { content }, finish_reason: null }] };
+      const finish = { choices: [{ delta: {}, finish_reason: "stop" }] };
       res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`);
+      res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
     });
     return;
   }

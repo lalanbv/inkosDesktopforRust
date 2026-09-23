@@ -1,5 +1,5 @@
-import { Agent } from "@mariozechner/pi-agent-core";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -7,9 +7,8 @@ import {
   type Context,
   type Message,
   type Model,
-  type Provider,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import {
@@ -53,7 +52,8 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
     id: modelId,
     name: modelId,
     api: (client.apiFormat === "responses" ? "openai-responses" : "openai-completions") as Api,
-    provider: client.provider as Provider,
+    // 0.87 起 Model.provider 是 ProviderId（字符串），不再是 Provider 对象。
+    provider: client.provider,
     baseUrl: "",
     reasoning: false,
     input: ["text"],
@@ -127,6 +127,11 @@ function contextMessages(context: Context): LLMMessage[] {
     messages.push({ role: "system", content: context.systemPrompt });
   }
   for (const message of context.messages) {
+    if (message.role === "system") {
+      // 0.87 起 transcript 内 SystemMessage 携带中途指令——原样映射 system 面。
+      messages.push({ role: "system", content: textFromContent(message.content) });
+      continue;
+    }
     if (message.role === "user") {
       messages.push({ role: "user", content: textFromContent(message.content) });
       continue;

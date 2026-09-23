@@ -1,10 +1,10 @@
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEventStream,
   Model,
   Api,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { LLMMessage, LLMResponse } from "../llm/provider.js";
 
 export function isLlmStubEnabled(): boolean {

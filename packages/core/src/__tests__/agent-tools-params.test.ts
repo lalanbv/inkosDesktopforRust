@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { validateToolArguments } from "@mariozechner/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { createSubAgentTool } from "../agent/agent-tools.js";
 
 function withAgentContext<T extends Record<string, unknown>>(pipeline: T): T & {

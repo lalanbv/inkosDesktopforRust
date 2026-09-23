@@ -96,6 +96,8 @@ fn write_fixture(root: &Path, llm: &str) {
 }
 
 /// 进程内 mock LLM（对跑不依赖真实端点——两侧读同一 inkos.json）。
+/// 548 号（R30）：响应携带 OpenAI 规范必需的 finish_reason——pi-ai 0.87 严检
+/// "Stream ended without finish_reason"（0.73 宽容缺失，0.87 起报错）。
 async fn spawn_mock_llm() -> String {
     let app = axum::Router::new().route(
         "/chat/completions",
@@ -103,14 +105,17 @@ async fn spawn_mock_llm() -> String {
             // 双形态：流式请求 → SSE（129 号起带 reasoning_content 增量——
             // thinking 面对跑驱动）；非流式 → 整体 JSON（两侧客户端偏好不同）。
             if body["stream"].as_bool().unwrap_or(false) {
-                let reasoning = serde_json::json!({ "choices": [{ "delta": { "reasoning_content": "让我想想" } }] });
-                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" } }] });
+                let reasoning = serde_json::json!({ "choices": [{ "delta": { "reasoning_content": "让我想想" }, "finish_reason": null }] });
+                let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "OK" }, "finish_reason": null }] });
+                let finish = serde_json::json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] });
                 let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
                 return axum::response::IntoResponse::into_response((
                     [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                     format!("data: {reasoning}
 
 data: {chunk}
+
+data: {finish}
 
 data: {usage}
 
@@ -120,7 +125,7 @@ data: [DONE]
                 ));
             }
             axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
-                "choices": [{ "message": { "role": "assistant", "content": "OK" } }],
+                "choices": [{ "message": { "role": "assistant", "content": "OK" }, "finish_reason": "stop" }],
                 "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
             })))
         }),

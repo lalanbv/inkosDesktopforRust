@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { Agent } from "@mariozechner/pi-agent-core";
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import { getModel, getEnvApiKey, createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+// getModel/getEnvApiKey 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
+import { getModel, getEnvApiKey } from "@earendil-works/pi-ai/compat";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type {
   Model,
   Api,
@@ -13,7 +15,7 @@ import type {
   SimpleStreamOptions,
   ToolResultMessage,
   UserMessage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import { buildAgentSystemPrompt } from "./agent-system-prompt.js";
 import {
@@ -574,12 +576,12 @@ function convertAgentMessagesForModel(messages: AgentMessage[], model: Model<Api
     if (raw.role === "user" || raw.role === "assistant" || raw.role === "toolResult") {
       return [message as Message];
     }
-    if (raw.role === "system" && typeof raw.content === "string") {
-      return [{
-        role: "user",
-        content: raw.content,
-        timestamp: messageTimestamp(message),
-      }];
+    // 0.87 起系统提示词由 transcript 内 SystemMessage 携带（leading 或中途注入的
+    // 状态块/边界）——原样保留 role，由 pi 的 provider 适配层处理各上游对中途
+    // system 的兼容性（不支持的会重放合成 leading system）。0.73 时代此处把
+    // system 降级为 user，是因为旧依赖的 transcript 无 system 语义。
+    if (raw.role === "system") {
+      return [message as Message];
     }
     return [];
   });

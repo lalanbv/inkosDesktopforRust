@@ -139,7 +139,7 @@ describe("Pi worker harness", () => {
   });
 
   it("submits host-consumed state through one typed Pi tool call", async () => {
-    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
     guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
       const stream = createAssistantMessageEventStream();
       const message = {

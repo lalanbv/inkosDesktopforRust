@@ -1,5 +1,5 @@
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import type { Model } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { guardAssistantMessageStream } from "../llm/provider.js";
 

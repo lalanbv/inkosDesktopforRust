@@ -12,15 +12,33 @@ const EMPTY_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const { agentInstances, streamCalls, heldStreamCompletions, heldStreamWaiters } = vi.hoisted(() => ({
+const { agentInstances, streamCalls, heldStreamCompletions, heldStreamWaiters, piMocks } = vi.hoisted(() => ({
   agentInstances: [] as any[],
   streamCalls: [] as Array<{ model: any; context: any; options: any }>,
   heldStreamCompletions: [] as Array<() => void>,
   heldStreamWaiters: [] as Array<() => void>,
+  // （548 号 R30：getModel/getEnvApiKey/streamSimple 的消费面横跨 pi-ai 主入口与
+  // compat 子路径——桩须 vi.hoisted 共享同一实例，两处 vi.mock 各自 spread。）
+  piMocks: {
+    streamSimple: vi.fn(),
+    getEnvApiKey: vi.fn(() => "fake-key"),
+    getModel: vi.fn((provider: string, id: string) => ({
+      provider,
+      id,
+      name: id,
+      api: "anthropic-messages",
+      baseUrl: "",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 4096,
+    })),
+  },
 }));
 
-vi.mock("@mariozechner/pi-agent-core", async () => {
-  const actual = await vi.importActual<any>("@mariozechner/pi-agent-core");
+vi.mock("@earendil-works/pi-agent-core", async () => {
+  const actual = await vi.importActual<any>("@earendil-works/pi-agent-core");
   class SpyAgent extends actual.Agent {
     constructor(options: any) {
       super(options);
@@ -30,8 +48,8 @@ vi.mock("@mariozechner/pi-agent-core", async () => {
   return { ...actual, Agent: SpyAgent };
 });
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<any>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual = await vi.importActual<any>("@earendil-works/pi-ai");
 
   function clone(value: unknown): unknown {
     return JSON.parse(JSON.stringify(value));
@@ -74,7 +92,8 @@ vi.mock("@mariozechner/pi-ai", async () => {
     };
   }
 
-  const streamSimple = vi.fn((model: any, context: any, options: any) => {
+  const streamSimple = piMocks.streamSimple;
+  streamSimple.mockImplementation((model: any, context: any, options: any) => {
     streamCalls.push({ model: clone(model), context: clone(context), options: clone(options) });
     const stream = actual.createAssistantMessageEventStream();
     const last = context.messages.at(-1);
@@ -198,20 +217,17 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
   return {
     ...actual,
-    streamSimple,
-    getEnvApiKey: vi.fn(() => "fake-key"),
-    getModel: vi.fn((provider: string, id: string) => ({
-      provider,
-      id,
-      name: id,
-      api: "anthropic-messages",
-      baseUrl: "",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 4096,
-    })),
+    ...piMocks,
+  };
+});
+
+// （548 号 R30：getModel/getEnvApiKey 迁至 compat 子路径——agent-session.ts 从
+// compat import，主入口 mock 不再覆盖；compat 模块 spread 同一组 hoisted 桩。）
+vi.mock("@earendil-works/pi-ai/compat", async () => {
+  const actual = await vi.importActual<any>("@earendil-works/pi-ai/compat");
+  return {
+    ...actual,
+    ...piMocks,
   };
 });
 
@@ -422,13 +438,19 @@ describe("runAgentSession cache — bookId switch", () => {
     const model = { provider: "x", id: "y", api: "anthropic-messages" } as any;
     const pipeline = {} as any;
     const taskBlock = "## 后台任务状态\n短篇生产正在后台运行，已运行 2 分 10 秒。";
+    // 0.87 起系统提示词由 transcript 的 leading SystemMessage 携带（TranscriptContext
+    // 无 systemPrompt 字段），断言面从 messages 取，兼容旧字段回退。
+    const streamSystemPrompt = (call: { context: any } | undefined): string => {
+      const leading = call?.context?.messages?.find((m: any) => m?.role === "system");
+      return String(leading?.content ?? call?.context?.systemPrompt ?? "");
+    };
 
     await runAgentSession(
       { sessionId: "s1", bookId: null, language: "zh", pipeline, projectRoot, model },
       "hi",
     );
     expect(agentInstances).toHaveLength(1);
-    expect(String(streamCalls.at(-1)?.context.systemPrompt)).not.toContain("后台任务状态");
+    expect(streamSystemPrompt(streamCalls.at(-1))).not.toContain("后台任务状态");
 
     // 任务开始运行：注入状态块，缓存的 Agent 必须重建（否则系统提示词是旧的）
     await runAgentSession(
@@ -436,7 +458,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "任务在跑吗？",
     );
     expect(agentInstances).toHaveLength(2);
-    expect(String(streamCalls.at(-1)?.context.systemPrompt)).toContain("短篇生产正在后台运行");
+    expect(streamSystemPrompt(streamCalls.at(-1))).toContain("短篇生产正在后台运行");
 
     // 任务结束：状态块移除，Agent 再次重建，系统提示词不再包含任务状态
     await runAgentSession(
@@ -444,7 +466,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "现在呢？",
     );
     expect(agentInstances).toHaveLength(3);
-    expect(String(streamCalls.at(-1)?.context.systemPrompt)).not.toContain("后台任务状态");
+    expect(streamSystemPrompt(streamCalls.at(-1))).not.toContain("后台任务状态");
   });
 
   it("keeps cached Agents isolated by projectRoot for the same sessionId", async () => {

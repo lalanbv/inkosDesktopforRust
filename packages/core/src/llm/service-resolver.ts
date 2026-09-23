@@ -1,5 +1,7 @@
-import { getModel } from "@mariozechner/pi-ai";
-import type { Model, Api } from "@mariozechner/pi-ai";
+// getModel/getEnvApiKey 已收进 0.87 compat 子路径（deprecated，删除时钟盯上游
+// coding-agent ModelManager 迁移）——R30b 立案正统化（getBuiltinModel）。
+import { getModel } from "@earendil-works/pi-ai/compat";
+import type { Model, Api } from "@earendil-works/pi-ai";
 import { resolveServicePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getServiceApiKey } from "./secrets.js";
 import { getEndpoint } from "./providers/index.js";

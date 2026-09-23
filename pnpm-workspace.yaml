@@ -3,9 +3,17 @@ packages:
 # pnpm 11 起构建脚本白名单从 package.json 的 pnpm 字段迁到这里。
 # 三个包的 postinstall 都是常规二进制/类型生成，此前一直允许执行。
 allowBuilds:
+  # 548 号（R30）：@google/genai 2.x 起带构建脚本；0.73.1 时代未放行，
+  # 维持不放行（纯 SDK 无需原生构建，少跑脚本更安全）。
+  '@google/genai': false
   esbuild: true
   msw: true
   protobufjs: true
+minimumReleaseAgeExclude:
+  - '@earendil-works/chord@0.87.0'
+  - '@earendil-works/pi-agent-core@0.87.0'
+  - '@earendil-works/pi-ai@0.87.0'
+  - '@earendil-works/pi-telemetry@0.87.0'
 # pnpm 11 起依赖覆写同样从 package.json 的 pnpm 字段迁到这里（旧位置的
 # pnpm.overrides 已被静默忽略——277/278 号审计）。此覆写为安全修复：
 # pi-ai(0.67.1 精确锁定)→@google/genai→protobufjs 传递链上的 critical
@@ -14,8 +22,11 @@ overrides:
   # 434 号：package.json 旧 pnpm.overrides 的 pi 系钉版迁入（pnpm 11 已静默
   # 忽略旧位置，每次 pnpm 命令刷 WARN）。直接依赖侧 packages/core、cli 亦
   # 精确锁 0.67.1，此处兜住传递链（全图强制同版，杜绝双拷贝）。
-  "@mariozechner/pi-ai": 0.73.1
-  "@mariozechner/pi-agent-core": 0.73.1
+  # 548 号（R30）：pi 双包 scope 迁移 @mariozechner→@earendil-works 0.87.0
+  #（旧 scope 0.73.1 为废弃终版）。直接依赖侧 packages/core 亦精确锁 0.87.0，
+  # 此处兜住传递链（全图强制同版，杜绝双拷贝）。
+  "@earendil-works/pi-ai": 0.87.0
+  "@earendil-works/pi-agent-core": 0.87.0
   protobufjs: ^7.5.8
   mermaid: ^11.16.1
   dompurify: ^3.4.13

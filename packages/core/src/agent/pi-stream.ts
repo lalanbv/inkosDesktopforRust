@@ -1,11 +1,12 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+// streamSimple 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
+import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type {
   Api,
   AssistantMessageEventStream,
   Context,
   Model,
   SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import {
   assertWithinContextWindow,
   estimatePiContextTokens,

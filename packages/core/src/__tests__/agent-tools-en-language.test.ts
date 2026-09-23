@@ -71,8 +71,8 @@ vi.mock("../pipeline/script-storyboard-runner.js", async () => {
   };
 });
 
-vi.mock("@mariozechner/pi-agent-core", async () => {
-  const actual = await vi.importActual<any>("@mariozechner/pi-agent-core");
+vi.mock("@earendil-works/pi-agent-core", async () => {
+  const actual = await vi.importActual<any>("@earendil-works/pi-agent-core");
   class SpyAgent extends actual.Agent {
     constructor(options: any) {
       super(options);
@@ -82,8 +82,8 @@ vi.mock("@mariozechner/pi-agent-core", async () => {
   return { ...actual, Agent: SpyAgent };
 });
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<any>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual = await vi.importActual<any>("@earendil-works/pi-ai");
   const streamSimple = vi.fn((_model: any, _context: any) => {
     const stream = actual.createAssistantMessageEventStream();
     stream.push({
