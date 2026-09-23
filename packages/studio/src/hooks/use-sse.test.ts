@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { STUDIO_SSE_EVENTS, collectNewSSEMessages } from "./use-sse";
 import type { SSEMessage } from "./use-sse";
 
+// R31 golden（549 号；542 号施工图 §5 第 3 组）：SSE 事件名集合精确快照
+// （492 号事件面）——前端合法接收名单全集锁定，新增/删除/改名必须显式更新
+// golden/studio-sse-events.json 并同步 server broadcast 面。
+const goldenSSE = JSON.parse(
+  readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "__tests__", "golden", "studio-sse-events.json"), "utf8"),
+) as { events: string[] };
+
 describe("STUDIO_SSE_EVENTS", () => {
+  it("matches the golden event-name snapshot exactly (R31 / 492 号面)", () => {
+    expect([...STUDIO_SSE_EVENTS]).toEqual(goldenSSE.events);
+  });
+
   it("covers the server lifecycle events that drive the UI", () => {
     expect(STUDIO_SSE_EVENTS).toEqual(expect.arrayContaining([
       "book:creating",

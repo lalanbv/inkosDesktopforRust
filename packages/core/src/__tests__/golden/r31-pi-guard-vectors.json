@@ -1,0 +1,66 @@
+{
+  "$comment": "R31 golden 护栏（549 号，542 号施工图 §5）：pi-ai 0.87 迁移后的守门向量。四组——(1) 流守卫参数表（chat/pipeline 死线+瞬时重试预算）；(2) AssistantMessageEvent 流形态序列快照（透传语义+adaptive 新变体忽略不崩）；(3) AgentEvent 十变体名单（0.73→0.87 零漂移断言面）；(4) estimatePiContextTokens 同值断言向量（systemPrompt 语义 vs transcript SystemMessage 语义）。改动任一值须双端考古后显式更新本表。",
+  "streamGuardDefaults": {
+    "chatFirstEventTimeoutMs": 120000,
+    "chatIdleTimeoutMs": 90000,
+    "pipelineFirstEventTimeoutMs": 300000,
+    "pipelineIdleTimeoutMs": 180000,
+    "transientRetries": 2
+  },
+  "assistantEventStreamShape": [
+    "start",
+    "thinking_start",
+    "thinking_delta",
+    "thinking_end",
+    "text_start",
+    "text_delta",
+    "text_end",
+    "done"
+  ],
+  "adaptiveTolerance": {
+    "$comment": "0.87 新增 adaptive 事件变体：守卫必须透传不崩且不丢 done（548 号迁移语义）。允许名单外的未知事件类型同样透传——向前兼容面。",
+    "injectedEvent": "adaptive",
+    "mustReachTerminal": true
+  },
+  "agentEventVariants": [
+    "agent_start",
+    "agent_end",
+    "turn_start",
+    "turn_end",
+    "message_start",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end"
+  ],
+  "estimatePiContextTokensVectors": [
+    {
+      "name": "systemPrompt-legacy-form",
+      "systemPrompt": "你是小说家。遵守设定。",
+      "messages": [
+        {
+          "role": "user",
+          "content": "写一段开场。"
+        }
+      ],
+      "expectedTokens": 17
+    },
+    {
+      "name": "transcript-system-message-form",
+      "systemPrompt": null,
+      "messages": [
+        {
+          "role": "system",
+          "content": "你是小说家。遵守设定。"
+        },
+        {
+          "role": "user",
+          "content": "写一段开场。"
+        }
+      ],
+      "expectedTokens": 19,
+      "$comment": "transcript 形态较 legacy 多 2 = message.role 标签（\"system\"）计入——内容计入口径等价，偏移恒定由 parity 断言锁定。"
+    }
+  ]
+}

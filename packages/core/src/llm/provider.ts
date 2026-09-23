@@ -45,6 +45,19 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
 const DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS = 300_000;
 const DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS = 180_000;
 
+/**
+ * 流守卫参数表快照源（R31 golden，549 号；542 号施工图 §5 第 1 组）：
+ * chat/pipeline 死线与瞬时重试预算的单一事实面——golden 向量锁死
+ * （golden/r31-pi-guard-vectors.json），改动须双端考古后显式更新。
+ */
+export const STREAM_GUARD_DEFAULTS = {
+  chatFirstEventTimeoutMs: DEFAULT_FIRST_STREAM_EVENT_TIMEOUT_MS,
+  chatIdleTimeoutMs: DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  pipelineFirstEventTimeoutMs: DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS,
+  pipelineIdleTimeoutMs: DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS,
+  transientRetries: TRANSIENT_LLM_RETRIES,
+} as const;
+
 export interface StreamDeadlineOptions {
   readonly firstEventTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
