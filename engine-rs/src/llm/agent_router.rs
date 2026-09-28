@@ -222,6 +222,18 @@ impl AgentRouter {
     /// 模型跑 retryCount 轮、每轮走上述瞬态环；瞬态耗尽切下一模型，非瞬态
     /// （中止/鉴权/上下文超限/模型不存在）立即失败不切换。零配置 → 单模型
     /// 单轮，行为与现版本一致。
+    /// R32 会话压缩摘要专用（553 号）：绕过技能注入/接管链/run log 的
+    /// 一次性维护调用（`chat` 顶部的 production 技能 guidance 注入会污染
+    /// 摘要 prompt 码点；摘要非 agent 会话语义）。走 default 端点单模型。
+    pub async fn chat_maintenance(
+        &self,
+        messages: Vec<LLMMessage>,
+        max_tokens: u32,
+    ) -> Result<ChatOutcome, String> {
+        self.chat_once("compaction", &self.default.model.clone(), messages, 0.2, Some(max_tokens))
+            .await
+    }
+
     pub async fn chat(
         &self,
         agent: &str,

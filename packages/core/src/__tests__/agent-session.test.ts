@@ -22,6 +22,17 @@ const { agentInstances, streamCalls, heldStreamCompletions, heldStreamWaiters, p
   piMocks: {
     streamSimple: vi.fn(),
     getEnvApiKey: vi.fn(() => "fake-key"),
+    // R32 会话压缩摘要调用（completeSummaryRequest——仅压缩触发时消费）。
+    completeSimple: vi.fn(async () => ({
+      role: "assistant",
+      content: [{ type: "text", text: "[COMPACTED SUMMARY]" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "fake",
+      usage: EMPTY_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+    })),
     getModel: vi.fn((provider: string, id: string) => ({
       provider,
       id,
@@ -246,6 +257,8 @@ import {
 import { restoreAgentMessagesFromTranscript } from "../interaction/session-transcript-restore.js";
 import { PlayStore } from "../play/play-store.js";
 import { opaqueConversationId } from "../llm/agent-trajectory.js";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { MessageEvent } from "../interaction/session-transcript-schema.js";
 
 async function writeProjectAgentSkill(
   projectRoot: string,
@@ -1762,5 +1775,134 @@ describe("runAgentSession cache — bookId switch", () => {
 
     const events = await readTranscriptEvents(projectRoot, "s-interleave-seq");
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index + 1));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R32 会话压缩（553 号）：threshold 轮间压缩 + 溢出 compact-and-retry。
+// ---------------------------------------------------------------------------
+
+describe("runAgentSession — R32 session compaction", () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), "inkos-r32-compaction-"));
+    agentInstances.length = 0;
+    streamCalls.length = 0;
+    piMocks.completeSimple.mockClear();
+  });
+
+  afterEach(async () => {
+    evictAgentCache("s-r32-threshold");
+    evictAgentCache("s-r32-overflow");
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  /** 交替 user/assistant 的 committed 对话；assistant 8000 字符 ≈ 2000 token。 */
+  async function seedCommittedDialogue(
+    sessionId: string,
+    assistantRounds: number,
+    options: { lastUsageTokens?: number } = {},
+  ): Promise<void> {
+    let seq = 1;
+    const requestId = `${sessionId}-seed`;
+    await appendTranscriptEvent(projectRoot, {
+      type: "request_started", version: 1, sessionId, requestId, seq: seq++, timestamp: 1, input: "",
+    } as never);
+    for (let i = 0; i < assistantRounds; i++) {
+      const messages: Array<{ role: "user" | "assistant"; text: string; usage?: typeof EMPTY_USAGE }> = [
+        { role: "user", text: `q${i}` },
+        {
+          role: "assistant",
+          text: "w".repeat(8000),
+          ...(i === assistantRounds - 1 && options.lastUsageTokens
+            ? { usage: { ...EMPTY_USAGE, totalTokens: options.lastUsageTokens } as typeof EMPTY_USAGE }
+            : {}),
+        },
+      ];
+      for (const item of messages) {
+        const message = item.role === "user"
+          ? { role: "user", content: item.text, timestamp: seq }
+          : {
+              role: "assistant", content: [{ type: "text", text: item.text }], api: "anthropic-messages",
+              provider: "anthropic", model: "fake", usage: item.usage ?? EMPTY_USAGE, stopReason: "stop", timestamp: seq,
+            };
+        await appendTranscriptEvent(projectRoot, {
+          type: "message", version: 1, sessionId, requestId, uuid: `${sessionId}-u${seq}`,
+          parentUuid: null, seq: seq++, role: item.role, timestamp: seq, message,
+        } as MessageEvent);
+      }
+    }
+    await appendTranscriptEvent(projectRoot, {
+      type: "request_committed", version: 1, sessionId, requestId, seq: seq++, timestamp: 1,
+    } as never);
+  }
+
+  it("R32a: threshold 压缩在轮间触发，恢复产物被摘要替代", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages", contextWindow: 200_000, maxTokens: 4096 } as any;
+    const pipeline = {} as any;
+    // 最后一条 assistant usage totalTokens=195_000 > 200_000 − 16_384 → 触发。
+    await seedCommittedDialogue("s-r32-threshold", 12, { lastUsageTokens: 195_000 });
+
+    const result = await runAgentSession(
+      { sessionId: "s-r32-threshold", bookId: null, language: "zh", pipeline, projectRoot, model },
+      "继续",
+    );
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(piMocks.completeSimple).toHaveBeenCalledTimes(1);
+    const events = await readTranscriptEvents(projectRoot, "s-r32-threshold");
+    const compaction = events.find((event) => event.type === "compaction");
+    expect(compaction && compaction.type === "compaction").toBe(true);
+    if (compaction?.type === "compaction") {
+      expect(compaction.trigger).toBe("threshold");
+      expect(compaction.tokensBefore).toBeGreaterThan(184_000);
+    }
+    // 本轮模型上下文不再含被摘要掉的前缀对话（保留段文本 8000 字符由
+    // keepRecent=20000 预算决定，前缀 w×8000 大段被替换为摘要 system 消息）。
+    const contextText = JSON.stringify(streamCalls[0]?.context?.messages ?? []);
+    expect(contextText).toContain("COMPACTED SUMMARY");
+    const response = expect(result.responseText);
+    void response;
+  });
+
+  it("R32b: 溢出响应触发一次 compact-and-retry 后成功", async () => {
+    const model = { provider: "x", id: "y", api: "anthropic-messages", contextWindow: 200_000, maxTokens: 4096 } as any;
+    const pipeline = {} as any;
+    // seed 12 轮 ≈ 24_002 token：低于 threshold（184k）不触发轮间压缩，但
+    // 总量 > keepRecent(20_000) 保证溢出压缩有切点可切。
+    await seedCommittedDialogue("s-r32-overflow", 12);
+    piMocks.streamSimple.mockImplementationOnce(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          role: "assistant", content: [], api: "anthropic-messages", provider: "anthropic",
+          model: "fake", usage: EMPTY_USAGE, stopReason: "error",
+          errorMessage: "prompt is too long: 199000 tokens > 200000 maximum",
+          timestamp: Date.now(),
+        },
+      });
+      return stream;
+    });
+
+    const result = await runAgentSession(
+      { sessionId: "s-r32-overflow", bookId: null, language: "zh", pipeline, projectRoot, model },
+      "继续",
+    );
+
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.responseText).toBe("ok");
+    expect(piMocks.completeSimple).toHaveBeenCalledTimes(1);
+    const events = await readTranscriptEvents(projectRoot, "s-r32-overflow");
+    const compactions = events.filter((event) => event.type === "compaction");
+    expect(compactions).toHaveLength(1);
+    expect((compactions[0] as any).trigger).toBe("overflow");
+    // 第一次尝试留痕失败，重试请求 commit。
+    expect(events.some((event) => event.type === "request_failed")).toBe(true);
+    // 重试后的模型上下文已应用压缩窗口（不含被摘要掉的前缀）。
+    const retryContextText = JSON.stringify(streamCalls.at(-1)?.context?.messages ?? []);
+    expect(retryContextText).toContain("COMPACTED SUMMARY");
   });
 });

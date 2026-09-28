@@ -963,6 +963,69 @@ pub async fn post_agent(
         Some(session_kind.as_str()),
     )
     .await;
+    // ── R32 会话压缩（553 号）──
+    // threshold：恢复产物 usage 口径超 `window − reserveTokens` → 摘要落盘
+    // compaction 事件后重恢复（与 TS agent-session 轮间挂接同构）。
+    // overflow 预检：threshold 未触发但「恢复产物 + 本轮指令 + 输出预留」投影
+    // 超窗 → 主动压缩一次（TS 侧为 provider 错误驱动重试，行为目标同构；
+    // 检测点分叉备案——Rust loop 无类型化溢出错误面，且此处不含 systemPrompt
+    // 估算，偏低估方向：漏压缩由 provider 真溢出错误兜底，不会反向误压）。
+    // 压缩失败（摘要调用失败/无可切历史）一律放行现状，绝不阻断会话。
+    let mut restored = restored;
+    {
+        let compaction_request_id = uuid::Uuid::new_v4().to_string();
+        let threshold_compacted = crate::interaction::session_compaction::maybe_compact_session(
+            root,
+            session_id,
+            Some(session_kind.as_str()),
+            &compaction_request_id,
+            &runtime.router,
+            "threshold",
+        )
+        .await;
+        if threshold_compacted.is_some() {
+            restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+                root,
+                session_id,
+                Some(session_kind.as_str()),
+            )
+            .await;
+        } else {
+            let scan = crate::interaction::session_compaction::scan_session_for_compaction(
+                root,
+                session_id,
+                Some(session_kind.as_str()),
+            )
+            .await;
+            let usage = crate::interaction::session_compaction::estimate_context_tokens(
+                &scan.messages,
+                &scan.raws,
+            );
+            let context_window = runtime.router.default_context_window();
+            let projected = usage.tokens
+                + crate::llm::provider::estimate_text_tokens(instruction) as u64
+                + runtime.router.default_max_tokens() as u64;
+            if context_window > 0 && projected > context_window {
+                let overflow_compacted = crate::interaction::session_compaction::maybe_compact_session(
+                    root,
+                    session_id,
+                    Some(session_kind.as_str()),
+                    &compaction_request_id,
+                    &runtime.router,
+                    "overflow",
+                )
+                .await;
+                if overflow_compacted.is_some() {
+                    restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+                        root,
+                        session_id,
+                        Some(session_kind.as_str()),
+                    )
+                    .await;
+                }
+            }
+        }
+    }
     let restored = crate::interaction::session_restore::append_restored_history_boundary(
         restored,
         match agent_production::current_project_language(root).await {

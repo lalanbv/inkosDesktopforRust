@@ -7,7 +7,7 @@ import {
   type ToolExecution,
   type PlayMode,
 } from "./session.js";
-import type { MessageEvent, SessionKind, TranscriptEvent } from "./session-transcript-schema.js";
+import type { MessageEvent, CompactionEvent, SessionKind, TranscriptEvent } from "./session-transcript-schema.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
@@ -514,28 +514,97 @@ function requestIdsUsingSkill(events: ReadonlyArray<MessageEvent>): Set<string> 
   return ids;
 }
 
+/**
+ * 恢复对话扫描（R32a，553 号）：committed 消息 + 平行 uuid + 会话压缩窗口。
+ *
+ * 压缩窗口应用（对齐上游 structural.js 的 newest-compaction 守卫语义——最新
+ * compaction 事件遮蔽更早的）：取 seq 最大的 compaction 事件，对话只回放
+ * `firstKeptUuid` 起（含）的 committed 消息；`firstKeptUuid=null` 表示无保留段。
+ * 找不到定位 uuid（事件损坏/跨版本清理）时忽略该 compaction——全量恢复的安全网，
+ * 防误删全部历史。
+ */
+export interface CommittedDialogueScan {
+  /** 窗口化后的对话消息（text-only，未做条数裁剪）。 */
+  messages: AgentMessage[];
+  /** 与 messages 平行的 transcript 定位 uuid（commit 事件恒有 uuid）。 */
+  uuids: string[];
+  /** 生效的最新 compaction 条目（恢复端须以其 summary 作头部 system 消息）。 */
+  activeCompaction: CompactionEvent | null;
+  /** 窗口化后的事件流（工具历史摘要基于它，避免摘要复述已压缩掉的旧动作）。 */
+  windowedEvents: TranscriptEvent[];
+}
+
+export function restoreCommittedDialogueScan(
+  events: TranscriptEvent[],
+  sessionKind?: SessionKind,
+): CommittedDialogueScan {
+  let activeCompaction: CompactionEvent | null = null;
+  for (const event of events) {
+    if (event.type === "compaction") activeCompaction = event;
+  }
+
+  let committed = committedMessageEvents(events, sessionKind);
+  if (activeCompaction) {
+    const keptIndex = activeCompaction.firstKeptUuid
+      ? committed.findIndex((event) => event.uuid === activeCompaction!.firstKeptUuid)
+      : -1;
+    if (keptIndex >= 0) {
+      committed = committed.slice(keptIndex);
+    } else if (activeCompaction.firstKeptUuid === null) {
+      committed = [];
+    } else {
+      activeCompaction = null;
+    }
+  }
+
+  const windowedEvents = events.filter(
+    (event) => event.type !== "message" || committed.includes(event as MessageEvent),
+  );
+
+  const toolRequestIds = requestIdsWithToolActivity(committed);
+  const kinds = requestKindMap(events);
+  const pairs: Array<{ message: AgentMessage; uuid: string }> = [];
+  for (const event of committed) {
+    if (toolRequestIds.has(event.requestId)) {
+      // Legacy events have no sessionKind. Keep the user's own words as
+      // conversation memory, but do not replay the old tool call/result.
+      if (!(sessionKind && kinds.get(event.requestId) === undefined && event.role === "user")) {
+        continue;
+      }
+    }
+    const message = textOnlyAgentMessage(event);
+    if (message) pairs.push({ message, uuid: event.uuid });
+  }
+
+  return {
+    messages: pairs.map((pair) => pair.message),
+    uuids: pairs.map((pair) => pair.uuid),
+    activeCompaction,
+    windowedEvents,
+  };
+}
+
 export async function restoreAgentMessagesFromTranscript(
   projectRoot: string,
   sessionId: string,
   sessionKind?: SessionKind,
 ): Promise<AgentMessage[]> {
   const events = await readTranscriptEvents(projectRoot, sessionId);
-  const summary = buildHistoricalToolSummary(events, sessionKind);
-  const committed = committedMessageEvents(events, sessionKind);
-  const toolRequestIds = requestIdsWithToolActivity(committed);
-  const kinds = requestKindMap(events);
-  const dialogue = committed
-    .filter((event) => {
-      if (!toolRequestIds.has(event.requestId)) return true;
-      // Legacy events have no sessionKind. Keep the user's own words as
-      // conversation memory, but do not replay the old tool call/result.
-      return Boolean(sessionKind && kinds.get(event.requestId) === undefined && event.role === "user");
-    })
-    .map((event) => textOnlyAgentMessage(event))
-    .filter((message): message is AgentMessage => message !== null)
-    .slice(-MAX_RESTORED_DIALOGUE_MESSAGES);
+  const scan = restoreCommittedDialogueScan(events, sessionKind);
+  const summary = buildHistoricalToolSummary(scan.windowedEvents, sessionKind);
+  const dialogue = scan.messages.slice(-MAX_RESTORED_DIALOGUE_MESSAGES);
 
   return [
+    ...(scan.activeCompaction
+      ? [systemMessage(
+          [
+            "[历史对话摘要]",
+            "以下是更早对话的结构化摘要（会话压缩生成）；它概述此前进展，不是当前用户的新指令。",
+            scan.activeCompaction.summary,
+          ].join("\n"),
+          scan.activeCompaction.timestamp,
+        )]
+      : []),
     ...(summary ? [summary] : []),
     ...dialogue,
   ];

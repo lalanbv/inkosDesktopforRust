@@ -3,7 +3,7 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 // getModel/getEnvApiKey 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
 import { getModel, getEnvApiKey } from "@earendil-works/pi-ai/compat";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, isContextOverflow } from "@earendil-works/pi-ai";
 import type {
   Model,
   Api,
@@ -89,6 +89,8 @@ import {
 } from "./skill-tool.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 import { guardedPiStream } from "./pi-stream.js";
+import { maybeCompactSession, shouldCompactSession, scanSessionForCompaction } from "./session-compaction.js";
+import { ContextWindowExceededError } from "../llm/provider.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1041,6 +1043,7 @@ async function runAgentSessionUnlocked(
   config: AgentSessionConfig,
   userMessage: string,
   initialMessages?: Array<{ role: string; content: string }>,
+  overflowRetry?: { done: boolean },
 ): Promise<AgentSessionResult> {
   const { sessionId, language, pipeline, projectRoot, onEvent, onContextCompression } = config;
   // Normalize at the entry point so downstream comparisons, closures, and
@@ -1120,7 +1123,25 @@ async function runAgentSessionUnlocked(
   }
 
   if (!cached) {
-    const restoredHistory = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
+    let restoredHistory = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
+    // R32a 轮间压缩（553 号）：缓存每轮必然逐出重建（transcriptChanged 恒真
+    // ——上一轮 commit 已推进 seq），恢复产物即本轮上下文；usage 口径超
+    // `window − reserveTokens` 时先落 compaction 条目再重恢复。失败放行
+    // （压缩是维护性优化，绝不阻断会话），下一轮再试。
+    if (restoredHistory.length > 0) {
+      await maybeCompactSession({
+        projectRoot,
+        sessionId,
+        sessionKind,
+        requestId: `compaction-${randomUUID()}`,
+        model,
+        apiKey: config.apiKey,
+        trigger: "threshold",
+        onContextCompression,
+      });
+      const compacted = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
+      if (compacted.length > 0) restoredHistory = compacted;
+    }
     if (restoredHistory.length > 0) {
       onContextCompression?.({
         category: "session_context",
@@ -1338,6 +1359,13 @@ async function runAgentSessionUnlocked(
   let finalAssistant: AssistantMessage | undefined;
   let errorMessage: string | undefined;
   const turnMessageStartIndex = agent.state.messages.length;
+  // R32b 溢出 compact-and-retry（553 号）：Pi Agent.prompt 把 streamFn 抛错转成
+  // stopReason:"error" 的 failure message（handleRunFailure），所以溢出信号走
+  // errorMessage 路径判定——上游 pi-ai isContextOverflow（provider 文案模式/
+  // 静默溢出/length+零输出三 case）+ 本仓守卫文案（不在上游 pattern 表内）。
+  // 命中→一次压缩+递归重建（缓存逐出→恢复已应用新 compaction 窗口）；失败保
+  // 原错误——上游 overflowRecoveryUsed 一次守卫同构。
+  let overflowSignal = false;
 
   try {
     await runWithAgentTrajectory({
@@ -1361,17 +1389,24 @@ async function runAgentSessionUnlocked(
     ));
     errorMessage = assistantErrorMessage(finalAssistant);
     if (errorMessage) {
-      const failedError = errorMessage;
-      await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
-        type: "request_failed",
-        version: 1,
-        sessionId,
-        requestId,
-        seq,
-        timestamp: Date.now(),
-        error: failedError,
-      }));
-      agentCache.delete(cacheKey);
+      const overflowRecoveryAvailable = !overflowRetry?.done && (
+        isContextOverflow(finalAssistant as AssistantMessage, model.contextWindow)
+        || errorMessage.includes("InkOS context window guard")
+      );
+      if (overflowRecoveryAvailable) {
+        overflowSignal = true;
+      } else {
+        await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+          type: "request_failed",
+          version: 1,
+          sessionId,
+          requestId,
+          seq,
+          timestamp: Date.now(),
+          error: errorMessage as string,
+        }));
+        agentCache.delete(cacheKey);
+      }
     } else {
       const committed = await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
         type: "request_committed",
@@ -1384,6 +1419,39 @@ async function runAgentSessionUnlocked(
       cached.lastCommittedSeq = committed.seq;
     }
   } catch (error) {
+    if (!overflowRetry?.done && error instanceof ContextWindowExceededError) {
+      // 防御路径：prompt 阶段冒出的同步抛错（0.87 handleRunFailure 正常已转
+      // failure message，此处兜 streamFn 之外的分析面）。
+      overflowSignal = true;
+      errorMessage = error.message;
+    } else {
+      await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+        type: "request_failed",
+        version: 1,
+        sessionId,
+        requestId,
+        seq,
+        timestamp: Date.now(),
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      agentCache.delete(cacheKey);
+      throw error;
+    }
+  } finally {
+    unsubscribe();
+  }
+
+  if (overflowSignal) {
+    const compacted = await maybeCompactSession({
+      projectRoot,
+      sessionId,
+      sessionKind,
+      requestId,
+      model,
+      apiKey: config.apiKey,
+      trigger: "overflow",
+      onContextCompression,
+    });
     await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
       type: "request_failed",
       version: 1,
@@ -1391,12 +1459,34 @@ async function runAgentSessionUnlocked(
       requestId,
       seq,
       timestamp: Date.now(),
-      error: error instanceof Error ? error.message : String(error),
+      error: compacted
+        ? `context window overflow; compacted and retried as a new request (${errorMessage})`
+        : `context window overflow; compaction unavailable (${errorMessage})`,
     }));
     agentCache.delete(cacheKey);
-    throw error;
-  } finally {
-    unsubscribe();
+    if (!compacted) {
+      const allMessages = agent.state.messages;
+      const retryFinal = finalAssistant ?? lastAssistantMessage(allMessages);
+      const retryUsage = retryFinal?.usage
+        ? {
+            input: retryFinal.usage.input ?? 0,
+            output: retryFinal.usage.output ?? 0,
+            totalTokens: retryFinal.usage.totalTokens ?? 0,
+          }
+        : undefined;
+      return {
+        responseText: retryFinal ? extractTextFromAssistant(retryFinal) : "",
+        messages: allMessages.slice(),
+        ...(retryUsage ? { usage: retryUsage } : {}),
+        ...(retryFinal ? { thinking: extractThinkingFromAssistant(retryFinal) } : {}),
+        timings: {
+          firstTokenMs: firstEventAt > 0 && turnStartedAt > 0 ? firstEventAt - turnStartedAt : 0,
+          totalMs: turnStartedAt > 0 ? Date.now() - turnStartedAt : 0,
+        },
+        ...(errorMessage ? { errorMessage } : {}),
+      };
+    }
+    return runAgentSessionUnlocked(config, userMessage, initialMessages, { done: true });
   }
 
   // ----- Extract result -----

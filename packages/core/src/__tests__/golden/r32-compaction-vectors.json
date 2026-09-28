@@ -1,0 +1,278 @@
+{
+  "comment": "R32 会话压缩双端 golden（553 号）。TS=packages/core session-compaction 自持副本/上游原语消费，Rust=engine-rs session_compaction 自研同构。三 prompt 码点机械提取自 pi-agent-core 0.87 dist/harness/compaction/compaction.js（未导出常量），上游升级漂移须双端考古后显式同步。向量内容全 ASCII，估算=ceil(UTF-16 码元数/4)。",
+  "settings": {
+    "enabled": true,
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000
+  },
+  "summaryMaxTokens": 13107,
+  "prompts": {
+    "system": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "summarization": "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages.",
+    "updateSummarization": "The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.\n\nUpdate the existing structured summary with new information. RULES:\n- PRESERVE all existing information from the previous summary\n- ADD new progress, decisions, and context from the new messages\n- UPDATE the Progress section: move items from \"In Progress\" to \"Done\" when completed\n- UPDATE \"Next Steps\" based on what was accomplished\n- PRESERVE exact file paths, function names, and error messages\n- If something is no longer relevant, you may remove it\n\nUse this EXACT format:\n\n## Goal\n[Preserve existing goals, add new ones if the task expanded]\n\n## Constraints & Preferences\n- [Preserve existing, add new ones discovered]\n\n## Progress\n### Done\n- [x] [Include previously done items AND newly completed items]\n\n### In Progress\n- [ ] [Current work - update based on progress]\n\n### Blocked\n- [Current blockers - remove if resolved]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale] (preserve all previous, add new)\n\n## Next Steps\n1. [Update based on current state]\n\n## Critical Context\n- [Preserve important context, add new if needed]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages."
+  },
+  "triggerVectors": [
+    {
+      "name": "usage-priority-over-threshold",
+      "contextWindow": 128000,
+      "settings": null,
+      "messages": [
+        {
+          "role": "user",
+          "content": "u1"
+        },
+        {
+          "role": "assistant",
+          "content": "a1",
+          "usage": {
+            "input": 100,
+            "output": 50,
+            "cacheRead": 20,
+            "cacheWrite": 30,
+            "totalTokens": 120000
+          },
+          "stopReason": "stop"
+        },
+        {
+          "role": "user",
+          "content": "tail-of-context"
+        }
+      ],
+      "expected": {
+        "tokens": 120004,
+        "usageTokens": 120000,
+        "trailingTokens": 4,
+        "compact": true
+      }
+    },
+    {
+      "name": "usage-under-threshold",
+      "contextWindow": 128000,
+      "settings": null,
+      "messages": [
+        {
+          "role": "user",
+          "content": "u1"
+        },
+        {
+          "role": "assistant",
+          "content": "a1",
+          "usage": {
+            "input": 100,
+            "output": 50,
+            "cacheRead": 20,
+            "cacheWrite": 30,
+            "totalTokens": 90000
+          },
+          "stopReason": "stop"
+        },
+        {
+          "role": "user",
+          "content": "tail-of-context"
+        }
+      ],
+      "expected": {
+        "tokens": 90004,
+        "usageTokens": 90000,
+        "trailingTokens": 4,
+        "compact": false
+      }
+    },
+    {
+      "name": "usage-total-zero-falls-back-to-estimate",
+      "contextWindow": 7,
+      "settings": {
+        "enabled": true,
+        "reserveTokens": 5,
+        "keepRecentTokens": 2
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "u1x"
+        },
+        {
+          "role": "assistant",
+          "content": "resp",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0
+          },
+          "stopReason": "stop"
+        },
+        {
+          "role": "user",
+          "content": "tail msg here"
+        }
+      ],
+      "expected": {
+        "tokens": 6,
+        "usageTokens": 0,
+        "trailingTokens": 6,
+        "compact": true
+      }
+    },
+    {
+      "name": "settings-disabled-short-circuits",
+      "contextWindow": 128000,
+      "settings": {
+        "enabled": false,
+        "reserveTokens": 16384,
+        "keepRecentTokens": 20000
+      },
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "a1",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 999999
+          },
+          "stopReason": "stop"
+        }
+      ],
+      "expected": {
+        "tokens": 999999,
+        "usageTokens": 999999,
+        "trailingTokens": 0,
+        "compact": false
+      }
+    },
+    {
+      "name": "invalid-window-short-circuits",
+      "contextWindow": 0,
+      "settings": null,
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "a1",
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 999999
+          },
+          "stopReason": "stop"
+        }
+      ],
+      "expected": {
+        "tokens": 999999,
+        "usageTokens": 999999,
+        "trailingTokens": 0,
+        "compact": false
+      }
+    }
+  ],
+  "cutPointVectors": [
+    {
+      "name": "assistant-cut-splits-turn-back-to-user",
+      "keepRecentTokens": 150,
+      "messages": [
+        {
+          "role": "user",
+          "content": "aaaa"
+        },
+        {
+          "role": "assistant",
+          "content": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "role": "user",
+          "content": "cccc"
+        },
+        {
+          "role": "assistant",
+          "content": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+          "role": "user",
+          "content": "eeee"
+        }
+      ],
+      "expected": {
+        "firstKeptEntryIndex": 1,
+        "turnStartIndex": 0,
+        "isSplitTurn": true
+      }
+    },
+    {
+      "name": "small-history-keeps-all",
+      "keepRecentTokens": 10,
+      "messages": [
+        {
+          "role": "user",
+          "content": "a"
+        },
+        {
+          "role": "assistant",
+          "content": "b"
+        }
+      ],
+      "expected": {
+        "firstKeptEntryIndex": 0,
+        "turnStartIndex": -1,
+        "isSplitTurn": false
+      }
+    },
+    {
+      "name": "cut-at-index-zero-keeps-all",
+      "keepRecentTokens": 50,
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "role": "assistant",
+          "content": "bb"
+        }
+      ],
+      "expected": {
+        "firstKeptEntryIndex": 0,
+        "turnStartIndex": -1,
+        "isSplitTurn": false
+      }
+    }
+  ],
+  "serializeVectors": [
+    {
+      "name": "text-only-round-trip",
+      "messages": [
+        {
+          "role": "user",
+          "content": "你好"
+        },
+        {
+          "role": "assistant",
+          "content": "World reply"
+        },
+        {
+          "role": "user",
+          "content": "Second question"
+        }
+      ],
+      "expected": "[User]: 你好\n\n[Assistant]: World reply\n\n[User]: Second question"
+    }
+  ],
+  "promptAssemblyVectors": [
+    {
+      "name": "first-summary",
+      "serialized": "[User]: u1\n\n[Assistant]: a1",
+      "previousSummary": null,
+      "expected": "<conversation>\n[User]: u1\n\n[Assistant]: a1\n</conversation>\n\nThe messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages."
+    },
+    {
+      "name": "iterative-chain",
+      "serialized": "[User]: u2\n\n[Assistant]: a2",
+      "previousSummary": "PREV-SUMMARY",
+      "expected": "<conversation>\n[User]: u2\n\n[Assistant]: a2\n</conversation>\n\n<previous-summary>\nPREV-SUMMARY\n</previous-summary>\n\nThe messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.\n\nUpdate the existing structured summary with new information. RULES:\n- PRESERVE all existing information from the previous summary\n- ADD new progress, decisions, and context from the new messages\n- UPDATE the Progress section: move items from \"In Progress\" to \"Done\" when completed\n- UPDATE \"Next Steps\" based on what was accomplished\n- PRESERVE exact file paths, function names, and error messages\n- If something is no longer relevant, you may remove it\n\nUse this EXACT format:\n\n## Goal\n[Preserve existing goals, add new ones if the task expanded]\n\n## Constraints & Preferences\n- [Preserve existing, add new ones discovered]\n\n## Progress\n### Done\n- [x] [Include previously done items AND newly completed items]\n\n### In Progress\n- [ ] [Current work - update based on progress]\n\n### Blocked\n- [Current blockers - remove if resolved]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale] (preserve all previous, add new)\n\n## Next Steps\n1. [Update based on current state]\n\n## Critical Context\n- [Preserve important context, add new if needed]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages."
+    }
+  ]
+}

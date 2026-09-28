@@ -118,6 +118,24 @@ pub enum TranscriptEvent {
         /// 原始 AgentMessage（宽松：不做结构校验，重放/展示层自行解析）。
         message: Value,
     },
+    /// R32a 会话压缩条目（553 号）：恢复窗口从 `firstKeptUuid` 起，其前的对话
+    /// 以 `summary`（LLM 生成，迭代链式时已并入上一条摘要）替代。与 TS
+    /// CompactionEventSchema 同形（camelCase 序列化对齐 zod schema）。
+    Compaction {
+        version: u32,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        seq: u64,
+        timestamp: u64,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        summary: String,
+        #[serde(rename = "firstKeptUuid")]
+        first_kept_uuid: Option<String>,
+        #[serde(rename = "tokensBefore")]
+        tokens_before: u64,
+        trigger: String,
+    },
 }
 
 /// message 事件的 legacy 展示补充。
@@ -137,7 +155,16 @@ impl TranscriptEvent {
             | TranscriptEvent::RequestStarted { seq, .. }
             | TranscriptEvent::RequestCommitted { seq, .. }
             | TranscriptEvent::RequestFailed { seq, .. }
-            | TranscriptEvent::Message { seq, .. } => *seq,
+            | TranscriptEvent::Message { seq, .. }
+            | TranscriptEvent::Compaction { seq, .. } => *seq,
+        }
+    }
+
+    /// message 事件的定位 uuid（R32a 压缩窗口锚点；其余事件 None）。
+    pub fn message_uuid(&self) -> Option<&str> {
+        match self {
+            TranscriptEvent::Message { uuid, .. } => Some(uuid.as_str()),
+            _ => None,
         }
     }
 }

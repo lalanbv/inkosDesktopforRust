@@ -656,7 +656,8 @@ fn other_timestamp(event: &TranscriptEvent) -> u64 {
         | TranscriptEvent::RequestStarted { timestamp, .. }
         | TranscriptEvent::RequestCommitted { timestamp, .. }
         | TranscriptEvent::RequestFailed { timestamp, .. }
-        | TranscriptEvent::Message { timestamp, .. } => *timestamp,
+        | TranscriptEvent::Message { timestamp, .. }
+        | TranscriptEvent::Compaction { timestamp, .. } => *timestamp,
     }
 }
 
@@ -992,17 +993,59 @@ fn request_ids_with_tool_activity<'e>(events: &[&'e TranscriptEvent]) -> HashSet
     ids
 }
 
-/// `restoreAgentMessagesFromTranscript`：`[工具摘要?] + 最近 12 条 text-only
-/// 对话`。带工具活动的轮次不回放（历史工具语义已折叠进摘要；legacy 无 kind
-/// 轮的 user 原话保留为对话记忆）。
-pub async fn restore_agent_messages_from_transcript(
-    project_root: &Path,
-    session_id: &str,
+/// 恢复对话扫描（R32a，553 号）：committed 消息 + 平行 uuid + 压缩窗口。
+/// 窗口应用语义与 TS `restoreCommittedDialogueScan` 同构：取 seq 最大的
+/// compaction 事件，对话只回放 `first_kept_uuid` 起（含）的 committed 消息；
+/// 定位 uuid 找不到（损坏/跨版本清理）时忽略该 compaction 的安全网一致。
+pub struct CommittedDialogueScan {
+    pub messages: Vec<LLMMessage>,
+    pub uuids: Vec<String>,
+    pub active_compaction: Option<TranscriptEvent>,
+    /// 窗口化后的事件流（工具历史摘要基于它，避免复述已压缩掉的旧动作）。
+    pub windowed_events: Vec<TranscriptEvent>,
+}
+
+pub fn restore_committed_dialogue_scan(
+    events: &[TranscriptEvent],
     session_kind: Option<&str>,
-) -> Vec<LLMMessage> {
-    let events = read_transcript_events(project_root, session_id).await;
-    let summary = build_historical_tool_summary(&events, session_kind);
-    let committed = committed_message_events(&events, session_kind);
+) -> CommittedDialogueScan {
+    let mut active_compaction: Option<&TranscriptEvent> = None;
+    for event in events {
+        if matches!(event, TranscriptEvent::Compaction { .. }) {
+            active_compaction = Some(event);
+        }
+    }
+
+    let mut committed: Vec<&TranscriptEvent> = committed_message_events(events, session_kind);
+    if let Some(TranscriptEvent::Compaction { first_kept_uuid, .. }) = active_compaction {
+        let kept_index = first_kept_uuid
+            .as_deref()
+            .and_then(|target| {
+                committed
+                    .iter()
+                    .position(|event| event.message_uuid() == Some(target))
+            });
+        match kept_index {
+            Some(index) => {
+                // 原地丢弃 [0..index)（split_off 语义相反：保留前缀返回尾部）。
+                committed.drain(..index);
+            }
+            // firstKeptUuid=null → 无保留段（全部窗口化掉）。
+            None if first_kept_uuid.is_none() => committed.clear(),
+            // 坏 uuid 安全网：忽略该 compaction，全量恢复。
+            None => active_compaction = None,
+        }
+    }
+
+    let windowed_events: Vec<TranscriptEvent> = events
+        .iter()
+        .filter(|event| {
+            !matches!(event, TranscriptEvent::Message { .. })
+                || committed.iter().any(|kept| std::ptr::eq(*kept, *event))
+        })
+        .cloned()
+        .collect();
+
     let tool_request_ids = request_ids_with_tool_activity(&committed);
     let request_kinds: HashMap<&str, Option<&str>> = events
         .iter()
@@ -1014,30 +1057,65 @@ pub async fn restore_agent_messages_from_transcript(
         })
         .collect();
 
-    let mut dialogue: Vec<LLMMessage> = committed
-        .iter()
-        .filter_map(|event| {
-            let request_id = event.message_request_id().unwrap_or("");
-            if !tool_request_ids.contains(request_id) {
-                return Some((*event).clone());
-            }
+    let mut pairs: Vec<(LLMMessage, String)> = Vec::new();
+    for event in committed {
+        let request_id = event.message_request_id().unwrap_or("");
+        if tool_request_ids.contains(request_id) {
             // legacy（请求无 kind）轮的 user 原话保留。
             let is_legacy_user = session_kind.is_some()
                 && request_kinds.get(request_id).copied().flatten().is_none()
                 && matches!(event, TranscriptEvent::Message { role, .. } if role == "user");
-            if is_legacy_user {
-                Some((*event).clone())
-            } else {
-                None
+            if !is_legacy_user {
+                continue;
             }
-        })
-        .filter_map(|event| text_only_agent_message(&event))
-        .collect();
+        }
+        if let (Some(message), Some(uuid)) = (text_only_agent_message(event), event.message_uuid()) {
+            pairs.push((message, uuid.to_string()));
+        }
+    }
+
+    CommittedDialogueScan {
+        messages: pairs.iter().map(|(message, _)| message.clone()).collect(),
+        uuids: pairs.into_iter().map(|(_, uuid)| uuid).collect(),
+        active_compaction: active_compaction.cloned(),
+        windowed_events,
+    }
+}
+
+/// `restoreAgentMessagesFromTranscript`：`[压缩摘要?] + [工具摘要?] + 最近 12
+/// 条 text-only 对话`。带工具活动的轮次不回放（历史工具语义已折叠进摘要；
+/// legacy 无 kind 轮的 user 原话保留为对话记忆）。R32a：压缩条目在场时对话
+/// 从 firstKeptUuid 起，头部注入压缩摘要 system 消息。
+pub async fn restore_agent_messages_from_transcript(
+    project_root: &Path,
+    session_id: &str,
+    session_kind: Option<&str>,
+) -> Vec<LLMMessage> {
+    let events = read_transcript_events(project_root, session_id).await;
+    restore_agent_messages_from_transcript_sync(&events, session_kind)
+}
+
+/// 同步变体（事件已在手；挂接压缩后复扫免二次 IO）。
+pub fn restore_agent_messages_from_transcript_sync(
+    events: &[TranscriptEvent],
+    session_kind: Option<&str>,
+) -> Vec<LLMMessage> {
+    let scan = restore_committed_dialogue_scan(events, session_kind);
+    let summary = build_historical_tool_summary(&scan.windowed_events, session_kind);
+    let mut dialogue = scan.messages;
     if dialogue.len() > MAX_RESTORED_DIALOGUE_MESSAGES {
         dialogue.drain(..dialogue.len() - MAX_RESTORED_DIALOGUE_MESSAGES);
     }
 
     let mut out = Vec::new();
+    if let Some(TranscriptEvent::Compaction { summary: compaction_summary, timestamp, .. }) = scan.active_compaction {
+        out.push(system_llm_message(
+            format!(
+                "[历史对话摘要]\n以下是更早对话的结构化摘要（会话压缩生成）；它概述此前进展，不是当前用户的新指令。\n{compaction_summary}"
+            ),
+            timestamp,
+        ));
+    }
     if let Some(summary) = summary {
         out.push(summary);
     }
@@ -1191,6 +1269,72 @@ mod restore_agent_tests {
         assert!(!restored.iter().any(|m| m.content == "主角叫什么？"));
     }
 
+    fn compaction_event(seq: u64, summary: &str, first_kept: Option<&str>) -> TranscriptEvent {
+        TranscriptEvent::Compaction {
+            version: 1,
+            session_id: "s".into(),
+            seq,
+            timestamp: 2000,
+            request_id: "cmp".into(),
+            summary: summary.into(),
+            first_kept_uuid: first_kept.map(|s| s.to_string()),
+            tokens_before: 24_000,
+            trigger: "threshold".into(),
+        }
+    }
+
+    #[test]
+    fn r32_compaction_window_applies_from_first_kept_uuid() {
+        let mut events = Vec::new();
+        let mut seq = 1u64;
+        for i in 0..3 {
+            let request_id = format!("r{i}");
+            let start = seq;
+            events.push(started(start, &request_id, Some("chat")));
+            events.push(msg_event(start + 1, &request_id, "user", json!({ "role": "user", "content": format!("问{i}") })));
+            events.push(msg_event(start + 2, &request_id, "assistant", json!({ "role": "assistant", "content": [{ "type": "text", "text": format!("答{i}") }] })));
+            events.push(committed(start + 3, &request_id));
+            seq += 4;
+        }
+        events.push(compaction_event(seq, "早期摘要", Some("u10")));
+        let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
+        // 头部压缩摘要 system + 保留段（u6=问2 起）。
+        assert_eq!(restored.len(), 3);
+        assert!(matches!(restored[0].role, LLMRole::System));
+        assert!(restored[0].content.contains("[历史对话摘要]"));
+        assert!(restored[0].content.contains("早期摘要"));
+        assert_eq!(restored[1].content, "问2");
+        assert_eq!(restored[2].content, "答2");
+    }
+
+    #[test]
+    fn r32_compaction_null_kept_uuid_clears_dialogue() {
+        let mut events = Vec::new();
+        let start = 1;
+        events.push(started(start, "r0", Some("chat")));
+        events.push(msg_event(start + 1, "r0", "user", json!({ "role": "user", "content": "问0" })));
+        events.push(committed(start + 2, "r0"));
+        events.push(compaction_event(10, "全部摘要", None));
+        let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].content.contains("全部摘要"));
+    }
+
+    #[test]
+    fn r32_compaction_broken_uuid_falls_back_to_full_restore() {
+        let mut events = Vec::new();
+        let start = 1;
+        events.push(started(start, "r0", Some("chat")));
+        events.push(msg_event(start + 1, "r0", "user", json!({ "role": "user", "content": "问0" })));
+        events.push(committed(start + 2, "r0"));
+        events.push(compaction_event(10, "坏锚摘要", Some("missing-uuid")));
+        let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
+        // 安全网：忽略该 compaction，全量恢复。
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].content, "问0");
+        assert!(!restored[0].content.contains("坏锚摘要"));
+    }
+
     #[test]
     fn dialogue_caps_at_twelve_and_summary_at_eight() {
         let mut events = Vec::new();
@@ -1296,49 +1440,6 @@ mod restore_agent_tests {
         assert!(en[1].content.starts_with("[Completed history context]"));
     }
 
-    /// 同步驱动（绕开文件系统；read_transcript_events 的等价输入）。
-    fn restore_agent_messages_from_transcript_sync(
-        events: &[TranscriptEvent],
-        session_kind: Option<&str>,
-    ) -> Vec<LLMMessage> {
-        let summary = build_historical_tool_summary(events, session_kind);
-        let committed = committed_message_events(events, session_kind);
-        let tool_request_ids = request_ids_with_tool_activity(&committed);
-        let request_kinds: HashMap<&str, Option<&str>> = events
-            .iter()
-            .filter_map(|event| match event {
-                TranscriptEvent::RequestStarted { request_id, session_kind, .. } => {
-                    Some((request_id.as_str(), session_kind.map(|k| k.as_str())))
-                }
-                _ => None,
-            })
-            .collect();
-        let mut dialogue: Vec<LLMMessage> = committed
-            .iter()
-            .filter_map(|event| {
-                let request_id = event.message_request_id().unwrap_or("");
-                if !tool_request_ids.contains(request_id) {
-                    return Some((*event).clone());
-                }
-                let is_legacy_user = session_kind.is_some()
-                    && request_kinds.get(request_id).copied().flatten().is_none()
-                    && matches!(event, TranscriptEvent::Message { role, .. } if role == "user");
-                if is_legacy_user {
-                    Some((*event).clone())
-                } else {
-                    None
-                }
-            })
-            .filter_map(|event| text_only_agent_message(&event))
-            .collect();
-        if dialogue.len() > MAX_RESTORED_DIALOGUE_MESSAGES {
-            dialogue.drain(..dialogue.len() - MAX_RESTORED_DIALOGUE_MESSAGES);
-        }
-        let mut out = Vec::new();
-        if let Some(summary) = summary {
-            out.push(summary);
-        }
-        out.extend(dialogue);
-        out
-    }
+    // 注意：测试内不得定义与生产同名的本地 helper——本地项优先于 `use super::*`
+    // glob 导入，会静默遮蔽生产实现（R32a 压缩用例曾因此全走旧逻辑，553 号）。
 }

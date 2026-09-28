@@ -66,6 +66,22 @@ export const MessageEventSchema = BaseEventSchema.extend({
   message: z.unknown(),
 });
 
+/**
+ * R32a 会话压缩条目（553 号）：恢复窗口从 `firstKeptUuid` 起，其前的对话以
+ * `summary`（LLM 生成，迭代链式时已并入上一条摘要）替代。`firstKeptUuid`
+ * 为 null 表示无保留段（全部对话被摘要，极端防线）。上游语义对应
+ * pi-agent-core session `CompactionEntry`（firstKeptEntryId 等价物——本仓
+ * transcript 是线性 JSONL，无需树化 id，message uuid 即定位）。
+ */
+export const CompactionEventSchema = BaseEventSchema.extend({
+  type: z.literal("compaction"),
+  requestId: z.string().min(1),
+  summary: z.string().min(1),
+  firstKeptUuid: z.string().min(1).nullable(),
+  tokensBefore: z.number().int().nonnegative(),
+  trigger: z.enum(["threshold", "overflow"]),
+});
+
 export const TranscriptEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   SessionMetadataUpdatedEventSchema,
@@ -73,6 +89,7 @@ export const TranscriptEventSchema = z.discriminatedUnion("type", [
   RequestCommittedEventSchema,
   RequestFailedEventSchema,
   MessageEventSchema,
+  CompactionEventSchema,
 ]);
 
 export type SessionCreatedEvent = z.infer<typeof SessionCreatedEventSchema>;
@@ -81,4 +98,5 @@ export type RequestStartedEvent = z.infer<typeof RequestStartedEventSchema>;
 export type RequestCommittedEvent = z.infer<typeof RequestCommittedEventSchema>;
 export type RequestFailedEvent = z.infer<typeof RequestFailedEventSchema>;
 export type MessageEvent = z.infer<typeof MessageEventSchema>;
+export type CompactionEvent = z.infer<typeof CompactionEventSchema>;
 export type TranscriptEvent = z.infer<typeof TranscriptEventSchema>;
