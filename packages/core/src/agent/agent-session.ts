@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
-// getModel/getEnvApiKey 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
-import { getModel, getEnvApiKey } from "@earendil-works/pi-ai/compat";
+// R30b 正统化：getModel 走 providers/all 静态目录读、env key 走自持解析
+// （替代 0.87 deprecated 的 ./compat 子路径）。
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
+import { getEnvApiKey } from "../llm/pi-env-keys.js";
 import { createAssistantMessageEventStream, isContextOverflow } from "@earendil-works/pi-ai";
 import type {
   Model,
@@ -261,7 +263,7 @@ function resolveModel(spec: AgentSessionConfig["model"]): Model<Api> {
   if (!provider || !modelId) {
     throw new Error(`Invalid model spec: provider=${provider}, modelId=${modelId}`);
   }
-  return getModel(provider as any, modelId as any);
+  return getBuiltinModel(provider as any, modelId as any);
 }
 
 function envFlagEnabled(value: string | undefined, defaultValue: boolean): boolean {

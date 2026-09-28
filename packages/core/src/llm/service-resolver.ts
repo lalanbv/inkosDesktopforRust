@@ -1,6 +1,6 @@
-// getModel/getEnvApiKey 已收进 0.87 compat 子路径（deprecated，删除时钟盯上游
-// coding-agent ModelManager 迁移）——R30b 立案正统化（getBuiltinModel）。
-import { getModel } from "@earendil-works/pi-ai/compat";
+// R30b 正统化：getBuiltinModel 为上游静态目录读的正统导出（providers/all），
+// 替代 deprecated ./compat 的 getModel 别名。
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import type { Model, Api } from "@earendil-works/pi-ai";
 import { resolveServicePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getServiceApiKey } from "./secrets.js";
@@ -48,7 +48,7 @@ export async function resolveServiceModel(
     : undefined;
 
   // Get pi-ai Model — may return undefined for model IDs not in the built-in registry
-  const piModel = getModel(piProvider as any, modelId as any) as Model<Api> | undefined;
+  const piModel = getBuiltinModel(piProvider as any, modelId as any) as Model<Api> | undefined;
   const effectiveBaseUrl = configuredBaseUrl || piModel?.baseUrl || "";
   const compat = apiType === "openai-completions"
     ? resolveProviderCompat(endpoint, effectiveBaseUrl)

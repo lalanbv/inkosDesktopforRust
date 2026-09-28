@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 
 // Simulate pi-ai returning MiniMax's stale Anthropic-compatible route.
 // Our resolveServiceModel should override it with the current OpenAI-compatible preset.
-// （548 号 R30：getModel 迁至 compat 子路径，mock 须指向消费方实际 import 面。）
-vi.mock("@earendil-works/pi-ai/compat", () => ({
-  getModel: vi.fn((provider: string, modelId: string) => {
+// （554 号 R30b 正统化：getBuiltinModel 为 providers/all 正统导出，mock 指向消费方实际 import 面。）
+vi.mock("@earendil-works/pi-ai/providers/all", () => ({
+  getBuiltinModel: vi.fn((provider: string, modelId: string) => {
     if (modelId === "MiniMax-M2.7") {
       return {
         id: "MiniMax-M2.7",

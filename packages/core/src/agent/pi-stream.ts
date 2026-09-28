@@ -1,5 +1,6 @@
-// streamSimple 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+// R30b 正统化：streamSimple 自持分发（llm/pi-dispatch.ts），替代 0.87
+// deprecated 的 ./compat 子路径。
+import { piStreamSimple } from "../llm/pi-dispatch.js";
 import type {
   Api,
   AssistantMessageEventStream,
@@ -44,7 +45,7 @@ export function guardedPiStream<TApi extends Api>(
   });
   return guardAssistantMessageStream(
     model,
-    (signal) => streamSimple(model, context, {
+    (signal) => piStreamSimple(model, context, {
       ...options,
       headers: { ...(options?.headers ?? {}), ...traceHeaders },
       signal,

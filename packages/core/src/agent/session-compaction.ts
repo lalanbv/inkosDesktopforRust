@@ -24,10 +24,11 @@ import {
   shouldCompact,
   type CompactionSettings,
 } from "@earendil-works/pi-agent-core";
-// completeSimple 已收进 0.87 compat 子路径（deprecated，R30b 立案正统化）。
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+// R30b 正统化：completeSimple 走自持分发、env key 走自持解析（替代 0.87
+// deprecated 的 ./compat 子路径）。
+import { piCompleteSimple } from "../llm/pi-dispatch.js";
+import { getEnvApiKey } from "../llm/pi-env-keys.js";
 import type { Api, AssistantMessage, Context as PiContext, Message, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import { appendTranscriptEvents, readTranscriptEvents } from "../interaction/session-transcript.js";
 import { restoreCommittedDialogueScan } from "../interaction/session-transcript-restore.js";
 import type { CompactionEvent, SessionKind } from "../interaction/session-transcript-schema.js";
@@ -295,7 +296,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 /**
- * 生产摘要请求闭包：一次性 completeSimple（compat 子路径）。maxTokens 直接
+ * 生产摘要请求闭包：一次性 piCompleteSimple（R30b 自持分发）。maxTokens 直接
  * 消费上游 generateSummaryWithRequest 传入的 options（`0.8 × reserveTokens`
  * 公式在计算侧单点持有）；header/代理沿 pi-ai 默认 fetch。
  */
@@ -305,7 +306,7 @@ export function completeSummaryRequest(
 ): SummaryRequestFn {
   return async (aiContext, options) => {
     return withTimeout(
-      completeSimple(model, aiContext, {
+      piCompleteSimple(model, aiContext, {
         apiKey: apiKey ?? getEnvApiKey(model.provider),
         maxTokens: options.maxTokens ?? 8192,
         ...(options.reasoning ? { reasoning: options.reasoning } : {}),

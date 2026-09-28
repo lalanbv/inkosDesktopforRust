@@ -12,7 +12,6 @@ import { runWithAgentTrajectory } from "../llm/agent-trajectory.js";
 
 const mockStreamSimple = vi.fn();
 const mockCompleteSimple = vi.fn();
-const mockComplete = vi.fn();
 
 vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@earendil-works/pi-ai")>();
@@ -20,21 +19,15 @@ vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
     ...original,
     streamSimple: (...args: unknown[]) => mockStreamSimple(...args),
     completeSimple: (...args: unknown[]) => mockCompleteSimple(...args),
-    complete: (...args: unknown[]) => mockComplete(...args),
   };
 });
 
-// （548 号 R30：streamSimple/completeSimple/complete 迁至 compat 子路径——
-// provider.ts 从 compat import，mock 必须覆盖 compat 模块本身。）
-vi.mock("@earendil-works/pi-ai/compat", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@earendil-works/pi-ai/compat")>();
-  return {
-    ...original,
-    streamSimple: (...args: unknown[]) => mockStreamSimple(...args),
-    completeSimple: (...args: unknown[]) => mockCompleteSimple(...args),
-    complete: (...args: unknown[]) => mockComplete(...args),
-  };
-});
+// （554 号 R30b 正统化：provider.ts 从 llm/pi-dispatch.js import
+// piStreamSimple/piCompleteSimple，mock 覆盖该模块本身。）
+vi.mock("../llm/pi-dispatch.js", () => ({
+  piStreamSimple: (...args: unknown[]) => mockStreamSimple(...args),
+  piCompleteSimple: (...args: unknown[]) => mockCompleteSimple(...args),
+}));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -167,7 +160,6 @@ describe("chatCompletion via pi-ai", () => {
   beforeEach(() => {
     mockStreamSimple.mockReset();
     mockCompleteSimple.mockReset();
-    mockComplete.mockReset();
   });
 
   it("returns text content from a successful stream", async () => {

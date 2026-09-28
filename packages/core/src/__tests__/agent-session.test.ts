@@ -232,15 +232,19 @@ vi.mock("@earendil-works/pi-ai", async () => {
   };
 });
 
-// （548 号 R30：getModel/getEnvApiKey 迁至 compat 子路径——agent-session.ts 从
-// compat import，主入口 mock 不再覆盖；compat 模块 spread 同一组 hoisted 桩。）
-vi.mock("@earendil-works/pi-ai/compat", async () => {
-  const actual = await vi.importActual<any>("@earendil-works/pi-ai/compat");
-  return {
-    ...actual,
-    ...piMocks,
-  };
-});
+// （554 号 R30b 正统化：getModel/getEnvApiKey/streamSimple/completeSimple 的
+// 消费面改走 pi-dispatch / pi-env-keys / providers-all 三目标——同一组
+// vi.hoisted 桩继续 spread 到各自新落点。）
+vi.mock("../llm/pi-dispatch.js", () => ({
+  piStreamSimple: piMocks.streamSimple,
+  piCompleteSimple: piMocks.completeSimple,
+}));
+vi.mock("../llm/pi-env-keys.js", () => ({
+  getEnvApiKey: piMocks.getEnvApiKey,
+}));
+vi.mock("@earendil-works/pi-ai/providers/all", () => ({
+  getBuiltinModel: piMocks.getModel,
+}));
 
 import {
   abortAgentSession,
