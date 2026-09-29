@@ -20,44 +20,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import { buildAgentSystemPrompt } from "./agent-system-prompt.js";
-import {
-  createPatchChapterTextTool,
-  createReplaceChapterTextTool,
-  createResyncChapterStateTool,
-  createDeleteLatestChapterTool,
-  createRenameEntityTool,
-  createSubAgentTool,
-  createReadTool,
-  createGrepTool,
-  createLsTool,
-  createWriteTruthFileTool,
-  createShortFictionRunTool,
-  createGenerateCoverTool,
-  createPlayEditTool,
-  createPlayReviseTool,
-  createPlayStartTool,
-  createPlayStepTool,
-  createProposeActionTool,
-  createScriptCreationTool,
-  createStoryboardCreationTool,
-  createInteractiveFilmCreationTool,
-  createTranslationCreateTool,
-  createFanficBookTool,
-  createContinuationImportTool,
-  createSpinoffBookTool,
-  createImitationBookTool,
-  createResearchWebTool,
-  createIngestMaterialTool,
-  createRetrieveMaterialTool,
-  createManageBookReferenceTool,
-  createImportChaptersTool,
-} from "./agent-tools.js";
-import { createFilmAuthoringTools, filmLLMDepsFromClient } from "./film-authoring-tools.js";
-import {
-  createNarrativeForecastCreateTool,
-  createNarrativeForecastGetTool,
-  createNarrativeForecastSelectTool,
-} from "./forecast-tools.js";
+import { buildChatToolSet, isProductionMutationToolName } from "./chat-tool-set.js";
 import { createBookContextTransform, createInteractiveFilmContextTransform } from "./context-transform.js";
 import {
   appendTranscriptEvents,
@@ -76,7 +39,6 @@ import type { ContextCompressionCallback } from "../models/context-compression.j
 import {
   createSkillRegistry,
   loadAvailableAgentSkills,
-  mergeActivatedSkillGuidance,
   resolveProductionSkillActivations,
   type ProductionSkillCapability,
 } from "../skills/index.js";
@@ -760,271 +722,6 @@ function agentMessagesToPlain(
 // ---------------------------------------------------------------------------
 
 /**
- * 会创建/修改书籍与产物的生产工具。suppressProductionTools 为 true（同会话
- * 有后台生产任务在运行）时从工具表剔除；read/grep/ls、research/material 与
- * propose_action 保留——propose_action 引发的确认任务在 host 侧另有单任务闸门。
- */
-const PRODUCTION_MUTATION_TOOL_NAMES = new Set([
-  "sub_agent",
-  "generate_cover",
-  "write_truth_file",
-  "rename_entity",
-  "patch_chapter_text",
-  "replace_chapter_text",
-  "resync_chapter_state",
-  "delete_latest_chapter",
-  "import_chapters",
-  "fanfic_create",
-  "continuation_import",
-  "spinoff_create",
-  "imitation_create",
-]);
-
-type CreateAgentToolsForModeParams = {
-  readonly pipeline: PipelineRunner;
-  readonly bookId: string | null;
-  readonly sessionId: string;
-  readonly sessionKind: SessionKind;
-  readonly actionSource: NonNullable<AgentSessionConfig["actionSource"]>;
-  readonly requestedIntent: AgentSessionConfig["requestedIntent"];
-  readonly actionPayload: AgentSessionConfig["actionPayload"];
-  readonly projectRoot: string;
-  readonly allowSystemFileRead: boolean;
-  readonly language: string;
-  readonly playMode?: "open" | "guided";
-  readonly playWorldExists: boolean;
-  readonly intentSkillTool?: ReturnType<typeof createUseSkillTool>;
-  readonly requestedSkillIds?: () => ReadonlyArray<string>;
-  readonly attachmentPaths?: () => ReadonlyArray<string>;
-  readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
-  readonly workerSkills?: (agent: string) => ReadonlyArray<ActivatedSkillGuidance>;
-  readonly productionSkills?: (capability: ProductionSkillCapability) => ReadonlyArray<ActivatedSkillGuidance>;
-};
-
-function createAgentToolsForMode(params: CreateAgentToolsForModeParams) {
-  const tools = createModeTools(params);
-  return params.intentSkillTool ? [...tools, params.intentSkillTool] : tools;
-}
-
-function createModeTools(params: CreateAgentToolsForModeParams) {
-  const lang = params.language === "en" ? "en" : "zh";
-  const subAgentTool = createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
-    actionPayload: params.actionPayload,
-    language: lang,
-    activeSkills: params.activeSkills,
-    workerSkills: params.workerSkills,
-  });
-  const proposalTool = createProposeActionTool(lang, {
-    sameSession: params.sessionKind !== "chat",
-    requestedSkillIds: params.requestedSkillIds,
-    attachmentPaths: params.attachmentPaths,
-  });
-  const researchTool = createResearchWebTool(params.projectRoot);
-  const materialTool = createIngestMaterialTool(params.projectRoot);
-  const materialRetrievalTool = createRetrieveMaterialTool(params.projectRoot);
-  const projectReadTool = createReadTool(params.projectRoot, { scope: "project" });
-  const importChaptersTool = createImportChaptersTool(params.pipeline, params.bookId, params.projectRoot);
-  const isConfirmed = (
-    intent: NonNullable<AgentSessionConfig["requestedIntent"]>,
-  ): boolean => {
-    return (params.actionSource === "button" || params.actionSource === "slash")
-      && params.requestedIntent === intent;
-  };
-
-  if (params.sessionKind === "chat") {
-    if (isConfirmed("translation_create")) {
-      return [createTranslationCreateTool(params.projectRoot, { actionPayload: params.actionPayload })];
-    }
-    if (isConfirmed("fanfic_init")) {
-      return [createFanficBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("continuation_import")) {
-      return [createContinuationImportTool(params.pipeline, params.bookId, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("spinoff_create")) {
-      return [createSpinoffBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("style_imitation")) {
-      return [createImitationBookTool(params.pipeline, params.projectRoot, {
-        defaultSkills: params.productionSkills?.("longWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, researchTool, materialTool, materialRetrievalTool, importChaptersTool];
-  }
-
-  if (params.sessionKind === "short") {
-    if (isConfirmed("short_run")) {
-      return [createShortFictionRunTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("shortWriting"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (isConfirmed("generate_cover")) {
-      return [createGenerateCoverTool(params.projectRoot, { actionPayload: params.actionPayload })];
-    }
-    return [proposalTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "script") {
-    if (isConfirmed("script_create")) {
-      return [createScriptCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("script"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "storyboard") {
-    if (isConfirmed("storyboard_create")) {
-      return [createStoryboardCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("storyboard"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "interactive-film") {
-    if (isConfirmed("interactive_film_create")) {
-      return [createInteractiveFilmCreationTool(params.pipeline, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        language: lang,
-        defaultSkills: params.productionSkills?.("interactiveFilm"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    return [proposalTool, projectReadTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "interactive-film-authoring") {
-    const projectId = params.bookId;
-    if (!projectId) {
-      throw new Error("interactive-film-authoring session requires a non-null bookId");
-    }
-    const agentCtx = params.pipeline.createAgentContext("film-authoring", projectId);
-    const llm = filmLLMDepsFromClient(agentCtx.client, agentCtx.model, {
-      activatedSkills: () => mergeActivatedSkillGuidance(
-        params.productionSkills?.("interactiveFilm") ?? [],
-        params.activeSkills?.() ?? [],
-      ),
-    });
-    return createFilmAuthoringTools({
-      projectRoot: params.projectRoot,
-      projectId,
-      llm,
-      proposeActionTool: proposalTool,
-      confirmedIntent: params.requestedIntent,
-      language: lang,
-    });
-  }
-
-
-  if (params.sessionKind === "play") {
-    if (isConfirmed("play_start")) {
-      return [createPlayStartTool(params.pipeline, params.projectRoot, params.sessionId, params.playMode, {
-        actionPayload: params.actionPayload,
-        defaultSkills: params.productionSkills?.("play"),
-        activeSkills: params.activeSkills,
-      })];
-    }
-    if (params.playWorldExists) {
-      return [
-        createPlayEditTool(params.projectRoot, params.sessionId, lang),
-        createPlayReviseTool(params.pipeline, params.projectRoot, params.sessionId, {
-          language: lang,
-          defaultSkills: params.productionSkills?.("play"),
-          activeSkills: params.activeSkills,
-        }),
-        createPlayStepTool(params.pipeline, params.projectRoot, params.sessionId, {
-          language: lang,
-          defaultSkills: params.productionSkills?.("play"),
-          activeSkills: params.activeSkills,
-        }),
-        materialTool,
-        materialRetrievalTool,
-      ];
-    }
-    return [proposalTool, materialTool, materialRetrievalTool];
-  }
-
-  if (params.sessionKind === "book-create" && !params.bookId) {
-    if (isConfirmed("create_book")) {
-      return [createSubAgentTool(params.pipeline, params.bookId, params.projectRoot, {
-        actionPayload: params.actionPayload,
-        architectCreateOnly: true,
-        language: lang,
-        activeSkills: params.activeSkills,
-        workerSkills: params.workerSkills,
-      })];
-    }
-    return [proposalTool, researchTool, materialTool, materialRetrievalTool];
-  }
-
-  if (!params.bookId) {
-    return [];
-  }
-
-  const bookTools = [
-    subAgentTool,
-    createGenerateCoverTool(params.projectRoot, { actionPayload: params.actionPayload }),
-    createReadTool(params.projectRoot, { allowSystemPaths: params.allowSystemFileRead }),
-    createWriteTruthFileTool(params.pipeline, params.projectRoot, params.bookId),
-    createRenameEntityTool(params.pipeline, params.projectRoot, params.bookId),
-    createPatchChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
-    createReplaceChapterTextTool(params.pipeline, params.projectRoot, params.bookId),
-    createResyncChapterStateTool(params.pipeline, params.bookId, {
-      language: lang,
-      defaultSkills: params.productionSkills?.("longWriting"),
-      activeSkills: params.activeSkills,
-    }),
-    createDeleteLatestChapterTool(params.projectRoot, params.bookId),
-    researchTool,
-    materialTool,
-    materialRetrievalTool,
-    createManageBookReferenceTool(params.projectRoot, params.bookId),
-    importChaptersTool,
-    createNarrativeForecastCreateTool(params.pipeline, params.bookId, params.projectRoot),
-    createNarrativeForecastGetTool(params.bookId, params.projectRoot),
-    createNarrativeForecastSelectTool(params.bookId, params.projectRoot),
-    createGrepTool(params.projectRoot),
-    createLsTool(params.projectRoot),
-  ];
-
-  if (params.sessionKind === "edit") {
-    // Edit mode stays deterministic: forecast create runs an LLM projection,
-    // and get/select belong to the planning workflow, not text editing.
-    return bookTools.filter((tool) => ![
-      "sub_agent",
-      "generate_cover",
-      "research_web",
-      "import_chapters",
-      "create_narrative_forecast",
-      "get_narrative_forecast",
-      "select_narrative_branch",
-    ].includes(tool.name));
-  }
-
-  return bookTools;
-}
-
-/**
  * Run a single conversation turn within a cached Agent session.
  *
  * If the session already exists in the cache, reuses the Agent (with its full
@@ -1191,7 +888,7 @@ async function runAgentSessionUnlocked(
           onActivate: (activation) => turnSkills.set(activation.skill.id, activation),
         })
       : undefined;
-    const agentTools = createAgentToolsForMode({
+    const agentTools = buildChatToolSet({
       pipeline,
       bookId,
       sessionId,
@@ -1222,7 +919,7 @@ async function runAgentSessionUnlocked(
           ? `${baseSystemPrompt}\n\n${config.backgroundTaskContext}`
           : baseSystemPrompt,
         tools: suppressProductionTools
-          ? agentTools.filter((tool) => !PRODUCTION_MUTATION_TOOL_NAMES.has(tool.name))
+          ? agentTools.filter((tool) => !isProductionMutationToolName(tool.name))
           : agentTools,
         messages: initialAgentMessages,
       },

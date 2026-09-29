@@ -675,7 +675,7 @@ pub fn play_tool_schemas() -> Vec<Value> {
                         },
                         "visualContractAppend": {
                             "type": "string",
-                            "description": "A narrow new visual-contract addition. Do not use this for replacements such as 'change X to Y'; use worldContractReplacements or full visualContract instead.",
+                            "description": "A narrow new visual-contract addition. Do not use this for replacements such as 'change X to Y'; use visualContractReplacements or full visualContract instead.",
                         },
                         "premise": {
                             "type": "string",

@@ -140,6 +140,7 @@ import {
   createFileSink,
   isValidSeriesId as core_isValidSeriesId,
   parseSeriesCanonFile as core_parseSeriesCanonFile,
+  buildChatToolCatalog,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -2724,6 +2725,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // backend 标识区分引擎——监控/编排双端统一探 this 面。
   app.get("/api/v1/health", (c) => {
     return c.json({ ok: true, version: studioPkg.version, backend: "node-fallback" });
+  });
+
+  // 调试用工具目录（555 号，对齐 Rust debug/tools 裸数组形态）：书会话有效工具
+  // 投影（31 跨端名+node-only 13 名），条目 {name, description, parametersSha256}——
+  // schema 键规范化序 sha256，与 Rust serde BTreeMap 序同构，差分器 tool-catalog
+  // 维度活体对照的 node 腿。
+  app.get("/api/v1/debug/tools", (c) => {
+    return c.json(buildChatToolCatalog());
   });
 
   // Structured error handler — ApiError returns typed JSON, others return 500

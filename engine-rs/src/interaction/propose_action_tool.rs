@@ -414,11 +414,13 @@ pub fn propose_action_schema() -> Value {
                             "targetChapters": { "type": "number", "description": "Confirmed total chapter count." },
                             "chapterWordCount": { "type": "number", "description": "Confirmed per-chapter length in the book's native unit." },
                         },
+                        "required": ["title"],
                     },
                     "shortRun": {
                         "type": "object",
                         "description": "Structured execution args for action=short_run.",
                         "properties": {
+                            "title": { "type": "string", "description": "Confirmed standalone short title or working title. The host uses it as the stable project identity." },
                             "direction": { "type": "string", "description": "Confirmed standalone short direction." },
                             "reference": { "type": "string", "description": "Optional confirmed reference notes or constraints." },
                             "storyId": { "type": "string", "description": "Optional confirmed output id under shorts/." },
@@ -427,6 +429,7 @@ pub fn propose_action_schema() -> Value {
                             "charsPerChapter": { "type": "number", "minimum": 600, "maximum": 1200, "description": "Confirmed per-chapter length in the story language's native unit. zh shorts only accept 900-1200 Chinese characters; en shorts only accept 600-800 English words. Values outside the selected language's range are rejected before the task starts. Do not put total story length here." },
                             "cover": { "type": "boolean", "description": "Whether to attempt cover generation." },
                         },
+                        "required": ["title", "direction"],
                     },
                     "playStart": {
                         "type": "object",
@@ -438,8 +441,25 @@ pub fn propose_action_schema() -> Value {
                             "visualContract": { "type": "string", "description": "Confirmed visual contract for Play illustrations in natural language. Only include user-defined visual semantics; do not invent game frames, colored tiers, UI, or stats." },
                             "mode": { "type": "string", "enum": ["open", "guided"], "description": "Confirmed play mode: open for free actions, guided for suggested choices." },
                             "initialScene": { "type": "string", "description": "Confirmed opening scene shown to the player after confirmation. It must be pure narrative prose, not a title/setup/rules summary, not a question prompt, and not an action/options list." },
-                            "suggestedActions": { "type": "array", "description": "Optional action springboards shown as separate UI chips. Do not include these in initialScene.", "items": { "type": "string" } },
+                            "suggestedActions": { "type": "array", "description": "Optional action springboards shown as separate UI chips. Do not include these in initialScene.", "items": {
+                                "anyOf": [
+                                    { "type": "string", "description": "A short clickable player action." },
+                                    {
+                                        "type": "object",
+                                        "description": "A model may describe an action as an object; InkOS will normalize it to one short action string.",
+                                        "properties": {
+                                            "label": { "type": "string", "description": "Short clickable player action." },
+                                            "action": { "type": "string", "description": "Concrete action text." },
+                                            "text": { "type": "string", "description": "Concrete action text." },
+                                            "title": { "type": "string", "description": "Short action title." },
+                                            "description": { "type": "string", "description": "Optional action description." },
+                                        },
+                                    },
+                                ],
+                                "description": "Suggested action as a string or small action object.",
+                            } },
                         },
+                        "required": ["title", "premise", "initialScene"],
                     },
                     "generateCover": {
                         "type": "object",
@@ -451,6 +471,7 @@ pub fn propose_action_schema() -> Value {
                             "coverPrompt": { "type": "string", "description": "Confirmed visual direction." },
                             "outputDir": { "type": "string", "description": "Confirmed output directory." },
                         },
+                        "required": ["title"],
                     },
                     "scriptCreate": {
                         "type": "object",
@@ -467,6 +488,7 @@ pub fn propose_action_schema() -> Value {
                             "projectId": { "type": "string", "description": "Optional output id under dramas/." },
                             "outDir": { "type": "string", "description": "Optional project-relative output directory. Default dramas/." },
                         },
+                        "required": ["title"],
                     },
                     "storyboardCreate": {
                         "type": "object",
@@ -484,6 +506,7 @@ pub fn propose_action_schema() -> Value {
                             "projectId": { "type": "string", "description": "Optional output id under storyboards/." },
                             "outDir": { "type": "string", "description": "Optional project-relative output directory. Default storyboards/." },
                         },
+                        "required": ["title"],
                     },
                     "interactiveFilmCreate": {
                         "type": "object",
@@ -502,6 +525,7 @@ pub fn propose_action_schema() -> Value {
                             "projectId": { "type": "string", "description": "Optional output id under interactive-films/." },
                             "outDir": { "type": "string", "description": "Optional project-relative output directory. Default interactive-films/." },
                         },
+                        "required": ["title"],
                     },
                     "translationCreate": {
                         "type": "object",
@@ -513,6 +537,7 @@ pub fn propose_action_schema() -> Value {
                             "title": { "type": "string", "description": "Optional translation project title." },
                             "segmentMaxChars": { "type": "number", "description": "Optional long-paragraph split threshold." },
                         },
+                        "required": ["filePath", "sourceLanguage", "targetLanguage"],
                     },
                     "fanficCreate": {
                         "type": "object",
@@ -529,6 +554,7 @@ pub fn propose_action_schema() -> Value {
                             "targetChapters": { "type": "number", "description": "Confirmed total chapter count." },
                             "chapterWordCount": { "type": "number", "description": "Confirmed per-chapter length." },
                         },
+                        "required": ["title"],
                     },
                     "continuationImport": {
                         "type": "object",
@@ -545,6 +571,7 @@ pub fn propose_action_schema() -> Value {
                             "targetChapters": { "type": "number", "description": "Target total chapters for a new book." },
                             "chapterWordCount": { "type": "number", "description": "Per-chapter length for a new book." },
                         },
+                        "required": ["sourcePath"],
                     },
                     "spinoffCreate": {
                         "type": "object",
@@ -559,6 +586,7 @@ pub fn propose_action_schema() -> Value {
                             "targetChapters": { "type": "number", "description": "Optional chapter count; defaults to the parent book." },
                             "chapterWordCount": { "type": "number", "description": "Optional chapter length; defaults to the parent book." },
                         },
+                        "required": ["title", "parentBookId"],
                     },
                     "imitationCreate": {
                         "type": "object",
@@ -575,6 +603,7 @@ pub fn propose_action_schema() -> Value {
                             "targetChapters": { "type": "number", "description": "Confirmed total chapter count." },
                             "chapterWordCount": { "type": "number", "description": "Confirmed per-chapter length." },
                         },
+                        "required": ["title", "storyIdea"],
                     },
                 },
                 "required": ["action", "instruction"],

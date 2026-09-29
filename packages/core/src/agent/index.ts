@@ -36,6 +36,13 @@ export {
   type AgentSessionResult,
 } from "./agent-session.js";
 export {
+  buildChatToolSet,
+  buildChatToolCatalog,
+  isProductionMutationToolName,
+  type ChatToolCatalogEntry,
+  type ChatToolSetParams,
+} from "./chat-tool-set.js";
+export {
   createBookContextTransform,
   createInteractiveFilmContextTransform,
 } from "./context-transform.js";

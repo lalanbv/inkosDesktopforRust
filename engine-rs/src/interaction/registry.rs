@@ -285,7 +285,7 @@ tool_def!(
     json!({
         "type": "object",
         "properties": {
-            "path": { "type": "string", "description": "File path relative to books/, or an absolute path when system path reading is enabled." },
+            "path": { "type": "string", "description": "File path relative to the tool's permitted read root, or an absolute path when system path reading is enabled." },
         },
         "required": ["path"],
     }),

@@ -674,11 +674,30 @@ try {
   if (onlyNode.length || onlyRust.length) divergences += 1;
   else console.log(`✓ SSE 事件名集合双端一致`);
 
-  // ── 工具目录面差分（R38b/544 号施工图 §2.3）：debug/tools 全族投影 ──
-  // Rust 超集只读端点；Node 侧暂无对应端点（R30 pi 双包迁移期间 packages/core
-  // 冻结，TS buildChatToolSet 出口顺延）——按豁免备案 skip，不硬拦。
-  // 待 TS 端点落地后本维度转硬对照（名称集合 + 逐件 description/parametersHash）。
+  // ── 工具目录面差分（R38b/544 号施工图 §2.3；555 号转硬对照）──────────────
+  // 双端 debug/tools 裸数组同形（条目 {name, description, parametersSha256}，
+  // camelCase；Rust 侧 serde rename_all 550 号潜伏 bug 已修）。对照规则：
+  // rust-only 必须空集（硬要求）；node-only 对照豁免表（设计内不对称备案）；
+  // 交集逐件 description 逐字 + parametersSha256 相等 + 两键类型守卫。
   {
+    // node-only 13 名（555 号活体实测实名；设计内不对称：Rust 不作为 agent
+    // 工具注册——agent_route.rs 备案「Rust 走 propose→confirm + 端点」）。逐组 rationale：
+    // - 四建书件：chat 会话确认意图一次性件，Rust 侧端点承载（354 号链）；
+    // - 六一次性生产件：short/script/storyboard/interactive_film 确认意图件+
+    //   短篇翻译+play_start，Rust 侧 play/production 端点承载；
+    // - film 三一次性件：draft_structure/connect_choice/remove_node 确认意图
+    //   直执件，Rust 侧 film 端点承载。
+    const TOOL_CATALOG_ONLY_NODE = new Set([
+      "fanfic_create", "continuation_import", "spinoff_create", "imitation_create",
+      "short_fiction_run", "translation_create", "script_create",
+      "storyboard_create", "interactive_film_create", "play_start",
+      "draft_structure", "connect_choice", "remove_node",
+    ]);
+    // 哈希豁免单件（89 号偏差备案）：generate_cover 的 coverBaseUrl/Endpoint/
+    // Model/Size/ApiKeyEnv 五键 Rust 链不支持（Rust json! 刻意未列入，book_edit_
+    // tools.rs 备案注释），TS 侧在列——schema 差异是行为面真实缺口的忠实投影，
+    // 补齐方向=Rust cover 覆盖链实现后出清。description 仍硬对照。
+    const TOOL_CATALOG_HASH_EXEMPT = new Set(["generate_cover"]);
     const toolsOf = async (base) => {
       try {
         const res = await fetchT(`${base}/api/v1/debug/tools`);
@@ -693,25 +712,34 @@ try {
       toolsOf(`http://127.0.0.1:${engines[1].port}`),
     ]);
     compared += 1;
-    if (nodeTools && rustTools) {
+    if (!Array.isArray(nodeTools) || !Array.isArray(rustTools)) {
+      divergences += 1;
+      console.log(`✗ 工具目录：双端 debug/tools 必须在场（node=${Array.isArray(nodeTools)} rust=${Array.isArray(rustTools)}）`);
+    } else {
       const byName = (list) => new Map(list.map((t) => [t.name, t]));
       const a = byName(nodeTools);
       const b = byName(rustTools);
       const onlyA = [...a.keys()].filter((n) => !b.has(n));
       const onlyB = [...b.keys()].filter((n) => !a.has(n));
+      const unknownOnlyNode = onlyA.filter((n) => !TOOL_CATALOG_ONLY_NODE.has(n));
+      const malformed = [...a.values(), ...b.values()].filter((t) =>
+        typeof t?.name !== "string" || typeof t?.description !== "string"
+        || typeof t?.parametersSha256 !== "string" || t.parametersSha256.length !== 64);
       const mismatches = [...a.keys()].filter((n) => b.has(n)
         && (a.get(n).description !== b.get(n).description
-          || a.get(n).parametersSha256 !== b.get(n).parametersSha256));
-      if (onlyA.length || onlyB.length || mismatches.length) {
+          || (!TOOL_CATALOG_HASH_EXEMPT.has(n)
+            && a.get(n).parametersSha256 !== b.get(n).parametersSha256)));
+      const allowedOnlyNode = onlyA.filter((n) => TOOL_CATALOG_ONLY_NODE.has(n));
+      if (onlyB.length || unknownOnlyNode.length || mismatches.length || malformed.length) {
         divergences += 1;
-        console.log(`✗ 工具目录分歧：仅 node=[${onlyA}] 仅 rust=[${onlyB}] 漂移=[${mismatches}]`);
+        if (onlyB.length) console.log(`✗ 工具目录仅 rust（硬要求空集）：[${onlyB}]`);
+        if (unknownOnlyNode.length) console.log(`✗ 工具目录仅 node（未备案）：[${unknownOnlyNode}]`);
+        if (mismatches.length) console.log(`✗ 工具目录漂移（description/parametersSha256）：[${mismatches}]`);
+        if (malformed.length) console.log(`✗ 工具目录条目形状非法：${malformed.length} 件`);
       } else {
-        console.log(`✓ 工具目录双端一致（${rustTools.length} 件，含描述/参数哈希逐件比对）`);
+        const intersect = a.size - allowedOnlyNode.length;
+        console.log(`✓ 工具目录双端一致（交集 ${intersect} 件逐件比对 + node-only 备案 ${allowedOnlyNode.length} 件）`);
       }
-    } else if (rustTools && !nodeTools) {
-      console.log(`[diff] 工具目录维度备案：node 端 debug/tools 未落地（R30 后补齐），本轮仅 rust 侧 ${rustTools.length} 件建档`);
-    } else {
-      console.log(`[diff] 工具目录维度双端未落地，跳过`);
     }
   }
 

@@ -116,7 +116,6 @@ crate::interaction::registry::tool_def!(
         "properties": {
             "characters": {
                 "type": "array",
-                "description": "characters to add or update",
                 "items": {
                     "type": "object",
                     "properties": {

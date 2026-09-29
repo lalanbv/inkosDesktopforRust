@@ -53,7 +53,9 @@ overrides:
   "fast-xml-builder@1.1.4": ^1.1.7
   "ip-address@10.1.0": ^10.7.0
   # 467 号：audit:npm 全量审计修复与接受边界（语义见 scripts/audit-npm.mjs 白名单）。
-  "undici@8": 8.10.0
+  # 555 号：undici WS permessage-deflate DoS（GHSA-3wwx-pv8p-q78v，6/7/8 线
+  # 均受波及）——8.10.0 升 8.10.2（同 major 补丁线）；core 直依 6.28.0 同批升 6.28.1。
+  "undici@8": 8.10.2
   uuid: ^11.1.1
   # 473 号：滚动复核发现 @babel/core 7.29.1 补丁（sourceMappingURL 任意文件读）
   # 在 dedupe 范围内即可达——覆盖钉升级，移出接受名单。

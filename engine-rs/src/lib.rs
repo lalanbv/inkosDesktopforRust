@@ -18,6 +18,10 @@
 //! canonical 类型定义在 [`models`]，`#[cfg(feature = "export-bindings")]` 时
 //! 经 ts-rs 生成 `.ts` 供前端消费。详见 [`models`] 模块文档。
 
+// json! 宏展开深度上限（555 号）：propose_action 的 playStart.suggestedActions
+// 内嵌 anyOf 变体对象使默认 128 递归限额溢出。
+#![recursion_limit = "512"]
+
 pub mod agent;
 pub mod agents;
 pub mod forecast;
