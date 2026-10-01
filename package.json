@@ -37,6 +37,7 @@
     "release": "pnpm build && pnpm test",
     "audit:rust": "node scripts/audit-rust.mjs",
     "audit:npm": "node scripts/audit-npm.mjs",
+    "change-no": "node scripts/next-change-no.mjs",
     "clippy:gate": "node scripts/clippy-gate.mjs"
   },
   "engines": {
