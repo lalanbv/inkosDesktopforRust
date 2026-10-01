@@ -206,4 +206,40 @@ describe("Studio skill endpoints", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: { code: "INVALID_SKILL_IMPORT" } });
   });
+
+  it("hides user-invocable=false skills from the user face (R44 / 566)", async () => {
+    await mkdir(join(root, "skills", "model-only-helper"), { recursive: true });
+    await writeFile(
+      join(root, "skills", "model-only-helper", "SKILL.md"),
+      [
+        "---",
+        "name: model-only-helper",
+        "description: Model-internal helper.",
+        "user-invocable: false",
+        "---",
+        "Only the model may activate this.",
+      ].join("\n"),
+      { flag: "w" },
+    );
+    await mkdir(join(root, "skills", "visible-skill"), { recursive: true });
+    await writeFile(
+      join(root, "skills", "visible-skill", "SKILL.md"),
+      [
+        "---",
+        "name: visible-skill",
+        "description: Visible to users.",
+        "---",
+        "Normal skill.",
+      ].join("\n"),
+      { flag: "w" },
+    );
+
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/skills");
+    const json = await res.json() as { skills: Array<{ id: string }> };
+
+    expect(res.status).toBe(200);
+    expect(json.skills.find((skill) => skill.id === "model-only-helper")).toBeUndefined();
+    expect(json.skills.find((skill) => skill.id === "visible-skill")).toBeDefined();
+  });
 });

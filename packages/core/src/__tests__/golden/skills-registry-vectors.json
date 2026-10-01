@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "comment": "R44/566 号 skills 注册表 rank 决胜双端 golden。TS=packages/core skills/registry.ts createSkillRegistry，Rust=engine-rs skills/mod.rs create_skill_registry（tests/golden_skills_registry_diff.rs）。锁定：同 id 决胜=有效 rank 升序（显式 frontmatter rank 优先于装载层缺省表 project skills 100→builtin 600）、平秩后写胜、rank 缺省 undefined 退化为纯后写胜（R44 前行为兼容面）、显式 rank 可跨层升降。skills 数组=装载序；winnerRanks.id=null 表示幸存者 rank 缺省（undefined）。改向量必须双端同批。",
+  "cases": [
+    {
+      "name": "explicit-rank-promotes-lower-tier",
+      "skills": [ { "id": "a", "rank": 100 }, { "id": "a", "rank": 50 } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": 50 } }
+    },
+    {
+      "name": "explicit-rank-demotes-loaded-later",
+      "skills": [ { "id": "a", "rank": 900 }, { "id": "a", "rank": 400 } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": 400 } }
+    },
+    {
+      "name": "equal-rank-last-wins",
+      "skills": [ { "id": "a", "rank": 100 }, { "id": "a", "rank": 100 } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": 100 } }
+    },
+    {
+      "name": "undefined-ranks-last-wins-compat",
+      "skills": [ { "id": "a", "rank": null }, { "id": "a", "rank": null } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": null } }
+    },
+    {
+      "name": "explicit-beats-undefined-later-loaded",
+      "skills": [ { "id": "a", "rank": null }, { "id": "a", "rank": 200 } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": 200 } }
+    },
+    {
+      "name": "undefined-loses-to-earlier-explicit",
+      "skills": [ { "id": "a", "rank": 100 }, { "id": "a", "rank": null } ],
+      "expected": { "ids": ["a"], "winnerRanks": { "a": 100 } }
+    },
+    {
+      "name": "multi-group-sorted-by-id",
+      "skills": [ { "id": "b", "rank": 10 }, { "id": "a", "rank": null }, { "id": "b", "rank": 10 }, { "id": "c", "rank": null } ],
+      "expected": { "ids": ["a", "b", "c"], "winnerRanks": { "a": null, "b": 10, "c": null } }
+    },
+    {
+      "name": "no-duplicates-all-kept",
+      "skills": [ { "id": "a", "rank": 5 }, { "id": "b", "rank": null } ],
+      "expected": { "ids": ["a", "b"], "winnerRanks": { "a": 5, "b": null } }
+    }
+  ]
+}

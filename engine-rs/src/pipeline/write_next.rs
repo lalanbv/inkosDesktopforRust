@@ -1906,6 +1906,8 @@ mod tests {
             source: crate::skills::SkillSource::Builtin,
             base_dir: None,
         disable_model_invocation: None,
+        user_invocable: None,
+        rank: None,
         };
         let activations = std::sync::Arc::new(vec![crate::skills::production_bindings::ActivatedSkillGuidance {
             skill,

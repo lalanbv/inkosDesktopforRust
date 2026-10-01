@@ -3,6 +3,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { fetchJson, postApi, useApi } from "../hooks/use-api";
+import { useSkillsInvalidation } from "../hooks/use-skills-invalidation";
 import type { ChatAttachmentPayload } from "../store/chat/types";
 import { chatSelectors, useChatStore } from "../store/chat";
 import { ContextMeterBadge } from "../components/ContextMeterBadge";
@@ -297,7 +298,7 @@ function SkillPickerPanel({
 
 // -- Component --
 
-export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse: _sse }: ChatPageProps) {
+export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-create", nav, theme, t, sse }: ChatPageProps) {
   // 消息级打字机（162 号备案 → 166 号补齐）：专注模式下点击消息聚焦、其余降暗
   // ——与 ChapterReader 段落级同款语义（.focus-mode 全局环境层 + .typewriter-dim）。
   const focusMode = usePreferencesStore((state) => state.focusMode);
@@ -373,6 +374,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const { data: skillsData, loading: skillsLoading, error: skillsError, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
+  // R44/566 号：skills:change 失效事件热刷新（author_skill 写链 / import / delete）。
+  useSkillsInvalidation(sse, () => { void refetchSkills(); });
   const worldPanelInsetClass = currentSessionKind === "play" && worldPanelOpen ? "lg:pr-[380px]" : "";
   const availableSkills = skillsData?.skills ?? [];
   const selectedSkills = useMemo(

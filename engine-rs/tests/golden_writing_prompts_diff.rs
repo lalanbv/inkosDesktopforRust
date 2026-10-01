@@ -401,6 +401,8 @@ fn writing_prompts_match_ts_snapshot() {
         source: SkillSource::Builtin,
         base_dir: None,
         disable_model_invocation: None,
+        user_invocable: None,
+        rank: None,
     };
 
     // 单技能、无参考资源、无既有 system → 指导段前置为首条 system。

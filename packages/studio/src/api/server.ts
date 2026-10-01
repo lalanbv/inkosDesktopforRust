@@ -939,8 +939,12 @@ async function loadStudioSkills(root: string) {
   const configured = await loadAvailableAgentSkills({ projectRoot: root });
   const projectSkillIds = await listProjectSkillIds(root);
   const registry = createSkillRegistry({ skills: configured.skills });
+  // R44/566 号 invocation 双布尔：user-invocable=false 为模型专用技能，
+  // 用户面（studio 面板）不展示；模型面 resolveSkills 不受影响。
   return {
-    skills: registry.listSkills().map((skill) => toStudioSkill(skill, root, projectSkillIds)),
+    skills: registry.listSkills()
+      .filter((skill) => skill.userInvocable !== false)
+      .map((skill) => toStudioSkill(skill, root, projectSkillIds)),
     diagnostics: configured.diagnostics,
   };
 }
@@ -5147,6 +5151,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_SKILL_IMPORT", "Skill import payload must be JSON");
     });
     const skill = await importStudioSkillFolder(root, payload);
+    // R44/566 号：skills:change 失效事件——UI 打开中的技能面板热刷新。
+    broadcast("skills:change", { reason: "imported" });
     return c.json({ skill: toStudioSkill(skill, root, new Set([skill.id])) });
   });
 
@@ -5158,6 +5164,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(404, "SKILL_NOT_FOUND", `Project skill not found: ${id}`);
     }
     await rm(projectSkillDir(root, id), { recursive: true, force: true });
+    // R44/566 号：skills:change 失效事件（同 import）。
+    broadcast("skills:change", { reason: "deleted" });
     return c.json({ ok: true });
   });
 
@@ -6365,6 +6373,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
       const responseSessionKind = bookSession.sessionKind ?? sessionKind;
       broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId, sessionKind: responseSessionKind });
+      // R44/566 号：skills:change 失效事件——本轮成功执行过 author_skill
+      // （R37 写链落盘）即广播，UI 打开中的技能面板热刷新。
+      if (hasSuccessfulToolExec(collectedToolExecs, "author_skill")) {
+        broadcast("skills:change", { reason: "authored", sessionId: bookSession.sessionId });
+      }
 
       return c.json({
         response: hasSuccessfulToolOwnedResponse(collectedToolExecs) ? "" : result.responseText,

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "comment": "R44/566 号生产能力→内置技能绑定表单源（dsh 对标 v7 R44：production_bindings 硬编码迁数据文件）。TS=packages/core skills/production-bindings.ts resolveJsonModule 编译期内嵌，Rust=engine-rs skills/production_bindings.rs include_str! 编译期内嵌——同一文件双端零漂移（555 号活体硬对照精神：值即文件）。键=ProductionSkillCapability（八能力），值=按序绑定的内置技能 id 列表（ActivatedSkillGuidance 产出序）。改此文件必须双端同批（本仓库内即同文件，无漂移可能；外部拷贝方可漂移）。生产模式 worker agent 按能力取绑定技能指导，不可用技能静默跳过。",
+  "capabilities": {
+    "longWriting": ["inkos-long-writing"],
+    "longReview": ["inkos-long-writing", "inkos-story-review"],
+    "shortWriting": ["inkos-short-writing"],
+    "play": ["inkos-play-world"],
+    "script": ["inkos-script-writing"],
+    "storyboard": ["inkos-storyboard"],
+    "interactiveFilm": ["inkos-interactive-film"],
+    "translation": ["inkos-translation"]
+  }
+}

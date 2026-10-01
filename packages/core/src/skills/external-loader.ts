@@ -14,6 +14,8 @@ const MAX_SKILL_DESCRIPTION_CHARS = 1024;
 export interface LoadExternalAgentSkillsInput {
   readonly externalDirs: ReadonlyArray<string>;
   readonly source?: AgentSkill["source"];
+  /** R44/566 号：本批目录层的缺省 rank（frontmatter 缺席时注入）。 */
+  readonly defaultRank?: number;
 }
 
 export interface ExternalSkillDiagnostic {
@@ -35,6 +37,12 @@ export interface LoadConfiguredAgentSkillsInput {
 export interface ParseAgentSkillDocumentOptions {
   readonly skillPath: string;
   readonly source?: AgentSkill["source"];
+  /**
+   * R44/566 号：装载层缺省 rank（frontmatter `rank` 缺席时注入）——六级表
+   * project skills 100 / project .agents 200 / ~/.agents 300 / ~/.openclaw 400 /
+   * env 500 / builtin 600，低者胜；见 types.ts rank 字段注。
+   */
+  readonly defaultRank?: number;
 }
 
 export async function loadExternalAgentSkills(
@@ -47,7 +55,7 @@ export async function loadExternalAgentSkills(
   for (const dir of skillDirs) {
     const skillPath = join(dir, "SKILL.md");
     try {
-      skills.push(await loadSkillManifest(skillPath, input.source));
+      skills.push(await loadSkillManifest(skillPath, input.source, input.defaultRank));
     } catch (error) {
       diagnostics.push({
         path: skillPath,
@@ -71,6 +79,7 @@ export async function loadConfiguredAgentSkills(
       const result = await loadExternalAgentSkills({
         externalDirs: [candidate.path],
         source: candidate.source,
+        defaultRank: candidate.defaultRank,
       });
       skills.push(...result.skills);
       diagnostics.push(...result.diagnostics);
@@ -90,6 +99,8 @@ interface ConfiguredSkillDir {
   readonly path: string;
   readonly explicit: boolean;
   readonly source: AgentSkill["source"];
+  /** R44/566 号：六级缺省 rank（低者胜；与装载序的隐式优先等价）。 */
+  readonly defaultRank: number;
 }
 
 function configuredSkillDirs(input: LoadConfiguredAgentSkillsInput): ConfiguredSkillDir[] {
@@ -100,11 +111,11 @@ function configuredSkillDirs(input: LoadConfiguredAgentSkillsInput): ConfiguredS
     .filter(Boolean);
   const homeDir = input.homeDir ?? homedir();
   return [
-    ...envDirs.map((path) => ({ path, explicit: true, source: "external" as const })),
-    { path: join(homeDir, ".openclaw", "skills"), explicit: false, source: "user" },
-    { path: join(homeDir, ".agents", "skills"), explicit: false, source: "user" },
-    { path: join(input.projectRoot, ".agents", "skills"), explicit: false, source: "project" },
-    { path: join(input.projectRoot, "skills"), explicit: false, source: "project" },
+    ...envDirs.map((path) => ({ path, explicit: true, source: "external" as const, defaultRank: 500 })),
+    { path: join(homeDir, ".openclaw", "skills"), explicit: false, source: "user", defaultRank: 400 },
+    { path: join(homeDir, ".agents", "skills"), explicit: false, source: "user", defaultRank: 300 },
+    { path: join(input.projectRoot, ".agents", "skills"), explicit: false, source: "project", defaultRank: 200 },
+    { path: join(input.projectRoot, "skills"), explicit: false, source: "project", defaultRank: 100 },
   ];
 }
 
@@ -162,13 +173,14 @@ async function hasSkillManifest(dir: string): Promise<boolean> {
 async function loadSkillManifest(
   skillPath: string,
   source: AgentSkill["source"] = "external",
+  defaultRank?: number,
 ): Promise<AgentSkill> {
   const info = await stat(skillPath);
   if (info.size > MAX_SKILL_MANIFEST_BYTES) {
     throw new Error(`SKILL.md exceeds ${MAX_SKILL_MANIFEST_BYTES} bytes.`);
   }
   const raw = await readFile(skillPath, "utf-8");
-  return parseAgentSkillDocument(raw, { skillPath, source });
+  return parseAgentSkillDocument(raw, { skillPath, source, defaultRank });
 }
 
 export function parseAgentSkillDocument(
@@ -197,7 +209,12 @@ export function parseAgentSkillDocument(
     baseDir: dirname(options.skillPath),
     // R37 治理面：frontmatter kebab-case 显式映射（strict schema 会拒绝
     // 未知键，无此映射用户手改加该字段会把整份 SKILL.md 打成 diagnostic）。
+    // 治理布尔维持 R37 宽松先例（仅精确布尔生效，其他值静默忽略）；
+    // R44/566 号 rank 为位置数据取严格面（在场但非法 → zod 诊断拒绝整份，
+    // 防静默回落缺省层）。
     ...(data["disable-model-invocation"] === true ? { disableModelInvocation: true } : {}),
+    ...(data["user-invocable"] === false ? { userInvocable: false } : {}),
+    ...(data["rank"] !== undefined ? { rank: data["rank"] } : { ...(options.defaultRank !== undefined ? { rank: options.defaultRank } : {}) }),
   });
 }
 

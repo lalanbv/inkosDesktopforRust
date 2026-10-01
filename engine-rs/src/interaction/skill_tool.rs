@@ -391,6 +391,8 @@ mod tests {
             source: SkillSource::Project,
             base_dir: None,
         disable_model_invocation: None,
+        user_invocable: None,
+        rank: None,
         }])
     }
 
@@ -504,6 +506,8 @@ mod query_retrieval_tests {
             source: SkillSource::Project,
             base_dir: Some(base.to_string_lossy().into_owned()),
             disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
         }]);
 
         let result = tool_use_skill(

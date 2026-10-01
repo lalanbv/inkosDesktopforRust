@@ -85,6 +85,14 @@ pub struct AgentSkill {
     /// 不可激活。serde 键面 camelCase 对齐 TS AgentSkillSchema。
     #[serde(rename = "disableModelInvocation", skip_serializing_if = "Option::is_none")]
     pub disable_model_invocation: Option<bool>,
+    /// R44/566 号 invocation 双布尔第二位（dsh `user-invocable`，缺省 true）：
+    /// false = 用户面不可见（skills 端点过滤），模型面不受影响。
+    #[serde(rename = "userInvocable", skip_serializing_if = "Option::is_none")]
+    pub user_invocable: Option<bool>,
+    /// R44/566 号 rank 显式表：同 id 决胜=有效 rank 升序、平秩后写胜。装载层
+    /// 缺省表（project skills 100 → builtin 600，低者胜）由 loader 注入。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
 }
 
 fn default_source() -> SkillSource {
@@ -141,19 +149,31 @@ pub struct BuiltinSkillRegistry {
 
 impl BuiltinSkillRegistry {
     pub fn new(skills: Vec<AgentSkill>) -> Self {
-        // 去重（按规范化 id，last-write-wins——TS Map.set 覆盖语义；130 号
-        // 修正原 or_insert 的 first-wins：builtin+configured 合并后项目/用户
-        // 需能同名覆盖内置默认）+ 规范化 id + 按 id 排序
+        // 去重（R44/566 号 rank 显式表：同 id 决胜=有效 rank 升序、平秩保持
+        // 装载序后写胜——rank None 视为 u32::MAX，手工构造注册表退化为纯
+        // 后写胜=R44 前行为。装载层缺省 rank 已由 external_loader 注入六级
+        // 表 project skills 100 → builtin 600；130 号 last-write-wins 语义
+        // 由平秩分支保持：configured 后装载且同 rank → 覆盖 builtin）。
         let mut by_id: HashMap<String, AgentSkill> = HashMap::new();
         for mut s in skills {
             let nid = normalize_skill_id(&s.id);
             s.id = nid.clone();
-            by_id.insert(nid, s);
+            match by_id.get(&nid) {
+                Some(incumbent) if effective_rank(&s) > effective_rank(incumbent) => {}
+                _ => {
+                    by_id.insert(nid, s);
+                }
+            }
         }
         let mut skills: Vec<AgentSkill> = by_id.values().cloned().collect();
         skills.sort_by(|a, b| a.id.cmp(&b.id));
         BuiltinSkillRegistry { skills, by_id }
     }
+}
+
+/// 有效 rank：显式 rank 优先，缺省视为 u32::MAX（并列时后写胜）。
+fn effective_rank(skill: &AgentSkill) -> u32 {
+    skill.rank.unwrap_or(u32::MAX)
 }
 
 impl SkillRegistry for BuiltinSkillRegistry {
@@ -225,7 +245,7 @@ mod tests {
     use super::*;
 
     fn skill(id: &str) -> AgentSkill {
-        AgentSkill { id: id.into(), name: id.into(), description: "d".into(), body: "".into(), source: SkillSource::External, base_dir: None, disable_model_invocation: None }
+        AgentSkill { id: id.into(), name: id.into(), description: "d".into(), body: "".into(), source: SkillSource::External, base_dir: None, disable_model_invocation: None, user_invocable: None, rank: None }
     }
 
     #[test]

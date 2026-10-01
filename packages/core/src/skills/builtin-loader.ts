@@ -18,6 +18,9 @@ export async function loadBuiltinAgentSkills(
   return loadExternalAgentSkills({
     externalDirs: [builtinRoot],
     source: "builtin",
+    // R44/566 号：内置层为六级缺省 rank 表的最末层（600，低者胜——配置层
+    // 同名技能可覆盖内置默认，130 号语义的 rank 显式化形态）。
+    defaultRank: 600,
   });
 }
 

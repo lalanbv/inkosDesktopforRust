@@ -1,18 +1,30 @@
 import type { ActivatedSkillGuidance } from "../agent/skill-tool.js";
 import type { AgentSkill } from "./types.js";
+import bindings from "./production-skill-bindings.json" with { type: "json" };
 
-export const PRODUCTION_SKILL_IDS = {
-  longWriting: ["inkos-long-writing"],
-  longReview: ["inkos-long-writing", "inkos-story-review"],
-  shortWriting: ["inkos-short-writing"],
-  play: ["inkos-play-world"],
-  script: ["inkos-script-writing"],
-  storyboard: ["inkos-storyboard"],
-  interactiveFilm: ["inkos-interactive-film"],
-  translation: ["inkos-translation"],
-} as const;
+// R44/566 号：生产能力键族显式化（原从 PRODUCTION_SKILL_IDS 推导，绑定表
+// 迁 JSON 单源后改为与 production-skill-bindings.json capabilities 键族
+// 逐一对应；Rust 侧 ProductionSkillCapability 枚举同族）。
+export type ProductionSkillCapability =
+  | "longWriting"
+  | "longReview"
+  | "shortWriting"
+  | "play"
+  | "script"
+  | "storyboard"
+  | "interactiveFilm"
+  | "translation";
 
-export type ProductionSkillCapability = keyof typeof PRODUCTION_SKILL_IDS;
+// R44/566 号：绑定表单源=production-skill-bindings.json（resolveJsonModule
+// 编译期内嵌；Rust 侧 include_str! 同文件——双端零漂移）。
+const PRODUCTION_SKILL_BINDINGS = bindings.capabilities as Record<
+  ProductionSkillCapability,
+  ReadonlyArray<string>
+>;
+
+export const PRODUCTION_SKILL_IDS: Readonly<
+  Record<ProductionSkillCapability, ReadonlyArray<string>>
+> = PRODUCTION_SKILL_BINDINGS;
 
 export const NON_LONG_PRODUCTION_CAPABILITIES = [
   "shortWriting",

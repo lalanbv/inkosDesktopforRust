@@ -4,10 +4,13 @@
 //! 与内置技能包的绑定表：worker agent 按能力取绑定的技能指导
 //! （`ActivatedSkillGuidance`），不可用的技能静默跳过。
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use crate::skills::AgentSkill;
 
 /// 生产能力。对齐 TS `ProductionSkillCapability`（绑定表的键族）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProductionSkillCapability {
     LongWriting,
     LongReview,
@@ -19,18 +22,54 @@ pub enum ProductionSkillCapability {
     Translation,
 }
 
-/// TS `PRODUCTION_SKILL_IDS` 绑定表逐字。
-pub fn production_skill_ids(capability: ProductionSkillCapability) -> &'static [&'static str] {
-    match capability {
-        ProductionSkillCapability::LongWriting => &["inkos-long-writing"],
-        ProductionSkillCapability::LongReview => &["inkos-long-writing", "inkos-story-review"],
-        ProductionSkillCapability::ShortWriting => &["inkos-short-writing"],
-        ProductionSkillCapability::Play => &["inkos-play-world"],
-        ProductionSkillCapability::Script => &["inkos-script-writing"],
-        ProductionSkillCapability::Storyboard => &["inkos-storyboard"],
-        ProductionSkillCapability::InteractiveFilm => &["inkos-interactive-film"],
-        ProductionSkillCapability::Translation => &["inkos-translation"],
+impl ProductionSkillCapability {
+    fn parse(key: &str) -> Option<ProductionSkillCapability> {
+        match key {
+            "longWriting" => Some(ProductionSkillCapability::LongWriting),
+            "longReview" => Some(ProductionSkillCapability::LongReview),
+            "shortWriting" => Some(ProductionSkillCapability::ShortWriting),
+            "play" => Some(ProductionSkillCapability::Play),
+            "script" => Some(ProductionSkillCapability::Script),
+            "storyboard" => Some(ProductionSkillCapability::Storyboard),
+            "interactiveFilm" => Some(ProductionSkillCapability::InteractiveFilm),
+            "translation" => Some(ProductionSkillCapability::Translation),
+            _ => None,
+        }
     }
+}
+
+/// R44/566 号：绑定表单源=packages/core/src/skills/production-skill-bindings.json
+/// （include_str! 编译期内嵌；TS 侧 production-bindings.ts 以 import attribute
+/// 消费同一文件——值即文件，双端零漂移）。生产模式 worker agent 按能力取
+/// 绑定技能指导，不可用的技能静默跳过。
+const BINDINGS_JSON: &str =
+    include_str!("../../../packages/core/src/skills/production-skill-bindings.json");
+
+/// TS `PRODUCTION_SKILL_IDS`（JSON 单源，首次访问解析进 OnceLock）。
+pub fn production_skill_ids(capability: ProductionSkillCapability) -> &'static [String] {
+    static BINDINGS: OnceLock<HashMap<ProductionSkillCapability, Vec<String>>> = OnceLock::new();
+    let map = BINDINGS.get_or_init(|| {
+        let value: serde_json::Value = serde_json::from_str(BINDINGS_JSON)
+            .expect("production-skill-bindings.json 必须为合法 JSON");
+        let capabilities = value
+            .get("capabilities")
+            .and_then(|c| c.as_object())
+            .expect("production-skill-bindings.json 必须含 capabilities 对象");
+        let mut map = HashMap::new();
+        for (key, ids) in capabilities {
+            let capability = ProductionSkillCapability::parse(key)
+                .unwrap_or_else(|| panic!("production-skill-bindings.json 未知生产能力键: {key}"));
+            let ids = ids
+                .as_array()
+                .expect("绑定值必须是 id 数组")
+                .iter()
+                .map(|id| id.as_str().expect("绑定 id 必须为字符串").to_string())
+                .collect::<Vec<_>>();
+            map.insert(capability, ids);
+        }
+        map
+    });
+    map.get(&capability).map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// TS `NON_LONG_PRODUCTION_CAPABILITIES`。
@@ -215,6 +254,44 @@ pub fn turn_skill_activations() -> Vec<ActivatedSkillGuidance> {
 mod tests {
     use super::*;
 
+    /// R44/566 号：绑定表单源=JSON（include_str!），断言八能力全装载且
+    /// 关键绑定值与 TS 侧测试同款（同一文件，值即对拍）。
+    #[test]
+    fn bindings_json_loads_all_capabilities() {
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::LongWriting),
+            ["inkos-long-writing"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::LongReview),
+            ["inkos-long-writing", "inkos-story-review"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::ShortWriting),
+            ["inkos-short-writing"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Play),
+            ["inkos-play-world"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Script),
+            ["inkos-script-writing"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Storyboard),
+            ["inkos-storyboard"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::InteractiveFilm),
+            ["inkos-interactive-film"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Translation),
+            ["inkos-translation"]
+        );
+    }
+
     fn skill(id: &str) -> AgentSkill {
         AgentSkill {
             id: id.to_string(),
@@ -224,6 +301,8 @@ mod tests {
             source: crate::skills::SkillSource::Builtin,
             base_dir: None,
         disable_model_invocation: None,
+        user_invocable: None,
+        rank: None,
         }
     }
 

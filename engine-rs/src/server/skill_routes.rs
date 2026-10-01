@@ -182,9 +182,12 @@ pub async fn list_skills(State(runtime): State<BooksRuntime>) -> impl IntoRespon
         return internal_error_message("failed to list project skills");
     };
     let registry = create_skill_registry(available.skills);
+    // R44/566 号 invocation 双布尔：user-invocable=false 为模型专用技能，
+    // 用户面（studio 面板）不展示；模型面 resolveSkills 不受影响。
     let skills: Vec<StudioSkill> = registry
         .list_skills()
         .iter()
+        .filter(|skill| skill.user_invocable != Some(false))
         .map(|skill| to_studio_skill(skill, root, &project_skill_ids))
         .collect();
     (
@@ -513,6 +516,9 @@ async fn import_studio_skill_folder(
         &String::from_utf8_lossy(&manifest.buffer),
         &root.join(&manifest_path),
         SkillSource::Project,
+        // R44/566 号：导入面无装载层上下文（导入目录即 project skills 终点）
+        // —— rank 缺省交由 frontmatter/后续重载注入，此处不预设。
+        None,
     )
     .map_err(|message| bad_request("INVALID_SKILL_MANIFEST", message))?;
 
@@ -587,6 +593,9 @@ pub async fn import_skill(
         Ok(skill) => skill,
         Err(response) => return response,
     };
+    // R44/566 号：skills:change 失效事件——UI 打开中的技能面板热刷新
+    // （broadcast 为尽力而为观测面，不阻断响应）。
+    runtime.hub.broadcast("skills:change", &json!({ "reason": "imported" }));
     let project_skill_ids: HashSet<String> = HashSet::from([skill.id.clone()]);
     (
         StatusCode::OK,
@@ -624,5 +633,7 @@ pub async fn delete_skill(
     if let Err(e) = tokio::fs::remove_dir_all(project_skill_dir(root, &id)).await {
         return internal_error(&e);
     }
+    // R44/566 号：skills:change 失效事件（同 import）。
+    runtime.hub.broadcast("skills:change", &json!({ "reason": "deleted" }));
     (StatusCode::OK, Json(json!({ "ok": true })))
 }

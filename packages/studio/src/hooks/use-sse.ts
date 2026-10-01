@@ -27,6 +27,8 @@ export const STUDIO_SSE_EVENTS = [
   "agent:complete",
   "agent:error",
   "session:title",
+  // R44/566 号：技能注册表失效事件（author_skill 写链 / import / delete）。
+  "skills:change",
   "audit:start",
   "audit:complete",
   "audit:error",

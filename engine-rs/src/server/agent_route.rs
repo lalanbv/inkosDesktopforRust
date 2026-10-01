@@ -1439,6 +1439,18 @@ pub async fn post_agent(
                 commit_chat_turn(root, session_id, request_id, &response_text, &tool_executions)
                     .await;
             }
+            // R44/566 号：skills:change 失效事件——本轮成功执行过 author_skill
+            // （写面落盘）即广播，UI 打开中的技能面板热刷新（R37 写链的热载
+            // 通道；尽力而为观测面不阻断响应）。
+            if tool_executions
+                .iter()
+                .any(|execution| execution.tool == "author_skill" && execution.status != "error")
+            {
+                runtime.hub.broadcast(
+                    "skills:change",
+                    &json!({ "reason": "authored", "sessionId": session_id }),
+                );
+            }
             runtime.hub.broadcast(
                 "agent:complete",
                 &json!({

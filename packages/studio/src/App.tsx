@@ -671,7 +671,7 @@ export function App() {
           )}
           {view.page === "project-settings" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <ProjectSettings nav={nav} theme={theme} t={t} />
+              <ProjectSettings nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {view.page === "service-detail" && (

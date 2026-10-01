@@ -4684,6 +4684,37 @@ mod skills60_e2e {
         let skills = parsed["skills"].as_array().unwrap();
         assert!(!skills.iter().any(|s| s["id"] == "broken"));
     }
+
+    /// R44/566 号：invocation 双布尔第二位——user-invocable=false 模型专用
+    /// 技能不进用户面（GET /skills 过滤），模型面不受影响。
+    #[tokio::test]
+    async fn list_skills_hides_user_invocable_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let hidden = root.join("skills").join("model-only-helper");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(
+            hidden.join("SKILL.md"),
+            "---\nname: model-only-helper\ndescription: Model-internal helper.\nuser-invocable: false\n---\nOnly the model may activate this.",
+        )
+        .unwrap();
+        let visible = root.join("skills").join("visible-skill");
+        std::fs::create_dir_all(&visible).unwrap();
+        std::fs::write(
+            visible.join("SKILL.md"),
+            "---\nname: visible-skill\ndescription: Visible to users.\n---\nNormal skill.",
+        )
+        .unwrap();
+
+        let (status, parsed) = call(app60(&root), "GET", "/api/v1/skills", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let skills = parsed["skills"].as_array().unwrap();
+        assert!(
+            !skills.iter().any(|s| s["id"] == "model-only-helper"),
+            "user-invocable=false 必须被用户面过滤: {skills:?}"
+        );
+        assert!(skills.iter().any(|s| s["id"] == "visible-skill"));
+    }
 }
 
 // ── 61 号：project 文件浏览面（server.ts L4270-L4320）──────────────
@@ -17732,6 +17763,8 @@ mod sub139_e2e {
             source: inkos_engine::skills::SkillSource::Builtin,
             base_dir: None,
             disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
         }
     }
 

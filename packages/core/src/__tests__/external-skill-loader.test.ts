@@ -404,4 +404,41 @@ describe("external skill loader", () => {
       source: "user",
     }));
   });
+
+  it("injects tier default ranks and maps rank / user-invocable frontmatter (R44 / 566)", async () => {
+    const writeSkill = async (dir: string, id: string, extra: string[]) => {
+      const skillDir = join(dir, id);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        join(skillDir, "SKILL.md"),
+        ["---", `name: ${id}`, "description: d.", ...extra, "---", "body"].join("\n"),
+        "utf-8",
+      );
+    };
+    // 装载层缺省 rank 六级表：project skills 100 < project .agents 200。
+    await writeSkill(join(root, "project", "skills"), "tier-skills", []);
+    await writeSkill(join(root, "project", ".agents", "skills"), "tier-agents", []);
+    // 显式 frontmatter：rank 覆盖 + user-invocable 显式 false。
+    await writeSkill(join(root, "project", "skills"), "explicit", ["rank: 42", "user-invocable: false"]);
+
+    const loaded = await loadConfiguredAgentSkills({
+      projectRoot: join(root, "project"),
+      env: {},
+    });
+    const byId = new Map(loaded.skills.map((skill) => [skill.id, skill]));
+    expect(byId.get("tier-skills")?.rank).toBe(100);
+    expect(byId.get("tier-agents")?.rank).toBe(200);
+    expect(byId.get("explicit")?.rank).toBe(42);
+    expect(byId.get("explicit")?.userInvocable).toBe(false);
+    // 治理布尔宽松先例：非 false 值静默缺省（缺省 true 不落键）。
+    expect(byId.get("tier-skills")?.userInvocable).toBeUndefined();
+    expect(loaded.diagnostics).toEqual([]);
+
+    // rank 严格面：在场但非 0-1000 整数 → 整份诊断拒绝。
+    await writeSkill(join(root, "project", "skills"), "bad-rank", ["rank: abc"]);
+    const bad = await loadConfiguredAgentSkills({ projectRoot: join(root, "project"), env: {} });
+    expect(bad.skills.find((skill) => skill.id === "bad-rank")).toBeUndefined();
+    expect(bad.diagnostics.length).toBe(1);
+    expect(bad.diagnostics[0].message).toContain("rank");
+  });
 });

@@ -14,6 +14,20 @@ export const AgentSkillSchema = z.object({
    * external-loader 显式映射到本字段。
    */
   disableModelInvocation: z.boolean().optional(),
+  /**
+   * R44/566 号 invocation 双布尔第二位（dsh 同名语义 `user-invocable`，缺省
+   * true）：false = 用户面不可见（GET /api/v1/skills 过滤），模型面不受
+   * 影响。与 disable-model-invocation 正交，四组合保留。
+   */
+  userInvocable: z.boolean().optional(),
+  /**
+   * R44/566 号 rank 显式表：同 id 决胜=有效 rank 升序、平秩后写胜。装载层
+   * 缺省表（project skills 100 → project .agents 200 → ~/.agents 300 →
+   * ~/.openclaw 400 → env 500 → builtin 600，低者胜）由 loader 注入；
+   * frontmatter `rank` 显式覆盖可跨层升降。手工构造（缺省 undefined）退化为
+   * 纯后写胜（R44 前行为）。
+   */
+  rank: z.number().int().min(0).max(1000).optional(),
 }).strict();
 export type AgentSkill = z.infer<typeof AgentSkillSchema>;
 

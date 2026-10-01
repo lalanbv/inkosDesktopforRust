@@ -62,14 +62,23 @@ export function createSkillRegistry(options: CreateSkillRegistryOptions = {}): S
 }
 
 function dedupeSkills(skills: ReadonlyArray<AgentSkill>): AgentSkill[] {
+  // R44/566 号 rank 显式表：同 id 决胜=有效 rank 升序（undefined 视为
+  // MAX_SAFE_INTEGER，手工构造注册表退化为纯后写胜=R44 前行为），平秩
+  // 保持装载序后写胜。装载层缺省 rank 已由 external-loader 注入（六级表
+  // project skills 100 → builtin 600），此处的 undefined 分支仅为防御。
   const byId = new Map<string, AgentSkill>();
   for (const skill of skills) {
-    byId.set(normalizeSkillId(skill.id), {
-      ...skill,
-      id: normalizeSkillId(skill.id),
-    });
+    const id = normalizeSkillId(skill.id);
+    const incumbent = byId.get(id);
+    if (!incumbent || effectiveRank(skill) <= effectiveRank(incumbent)) {
+      byId.set(id, { ...skill, id });
+    }
   }
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function effectiveRank(skill: AgentSkill): number {
+  return skill.rank ?? Number.MAX_SAFE_INTEGER;
 }
 
 function normalizeIdList(values: ReadonlyArray<string> | undefined): string[] {

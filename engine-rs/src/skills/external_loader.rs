@@ -71,13 +71,19 @@ struct ConfiguredSkillDir {
     path: PathBuf,
     explicit: bool,
     source: SkillSource,
+    /// R44/566 号：六级缺省 rank（低者胜；与装载序隐式优先等价）。
+    default_rank: u32,
 }
 
 /// 解析 SKILL.md 文档。对齐 TS `parseAgentSkillDocument`（错误消息逐字）。
+/// `default_rank`：装载层缺省 rank（frontmatter `rank` 缺席时注入；R44/566
+/// 号六级表）。`rank` 在场但非 0–1000 整数 → 诊断拒绝整份（严格面，防位置
+/// 数据静默回落缺省层；治理布尔维持 R37 宽松先例）。
 pub fn parse_agent_skill_document(
     raw: &str,
     skill_path: &Path,
     source: SkillSource,
+    default_rank: Option<u32>,
 ) -> Result<AgentSkill, String> {
     let (data, body) = parse_frontmatter(raw)?;
     let data = data
@@ -104,6 +110,27 @@ pub fn parse_agent_skill_document(
     let id = normalize_external_skill_id(&name, &fallback_id)?;
     // R37 治理面：frontmatter kebab-case 显式映射（与 TS parseAgentSkillDocument 同构）。
     let disable_model_invocation = data.get("disable-model-invocation").and_then(|v| v.as_bool());
+    // R44/566 号：invocation 双布尔第二位（dsh `user-invocable`，缺省 true）——
+    // 仅显式 false 生效（TS === false 同构），模型面不受影响。
+    let user_invocable = match data.get("user-invocable") {
+        Some(v) if v.as_bool() == Some(false) => Some(false),
+        _ => None,
+    };
+    // R44/566 号：rank 严格面（在场必须 0–1000 整数，否则整份诊断拒绝）。
+    let rank = match data.get("rank") {
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| {
+                "SKILL.md frontmatter rank must be an integer between 0 and 1000.".to_string()
+            })?;
+            if n > 1000 {
+                return Err(
+                    "SKILL.md frontmatter rank must be an integer between 0 and 1000.".to_string(),
+                );
+            }
+            Some(n as u32)
+        }
+        None => default_rank,
+    };
 
     Ok(AgentSkill {
         id,
@@ -120,6 +147,8 @@ pub fn parse_agent_skill_document(
                 .to_string(),
         ),
         disable_model_invocation,
+        user_invocable,
+        rank,
     })
 }
 
@@ -231,7 +260,9 @@ fn normalize_external_skill_id(value: &str, fallback: &str) -> Result<String, St
     Ok(normalized)
 }
 
-/// 候选目录列表（configuredSkillDirs 逐字；env 目录显式）。
+/// 候选目录列表（configuredSkillDirs 逐字；env 目录显式）。缺省 rank 六级表：
+/// project skills 100 → project .agents 200 → ~/.agents 300 → ~/.openclaw 400
+/// → env 500（builtin 600 在 load_builtin_agent_skills）。
 fn configured_skill_dirs(project_root: &Path, env_dirs: &[String], home_dir: Option<&Path>) -> Vec<ConfiguredSkillDir> {
     let mut out: Vec<ConfiguredSkillDir> = env_dirs
         .iter()
@@ -239,6 +270,7 @@ fn configured_skill_dirs(project_root: &Path, env_dirs: &[String], home_dir: Opt
             path: PathBuf::from(path),
             explicit: true,
             source: SkillSource::External,
+            default_rank: 500,
         })
         .collect();
     if let Some(home) = home_dir {
@@ -246,22 +278,26 @@ fn configured_skill_dirs(project_root: &Path, env_dirs: &[String], home_dir: Opt
             path: home.join(".openclaw").join("skills"),
             explicit: false,
             source: SkillSource::User,
+            default_rank: 400,
         });
         out.push(ConfiguredSkillDir {
             path: home.join(".agents").join("skills"),
             explicit: false,
             source: SkillSource::User,
+            default_rank: 300,
         });
     }
     out.push(ConfiguredSkillDir {
         path: project_root.join(".agents").join("skills"),
         explicit: false,
         source: SkillSource::Project,
+        default_rank: 200,
     });
     out.push(ConfiguredSkillDir {
         path: project_root.join("skills"),
         explicit: false,
         source: SkillSource::Project,
+        default_rank: 100,
     });
     out
 }
@@ -276,7 +312,7 @@ pub async fn load_configured_agent_skills(
     let candidates = configured_skill_dirs(project_root, env_dirs, home_dir);
     let mut result = LoadExternalAgentSkillsResult::default();
     for candidate in candidates {
-        match load_external_agent_skills(&candidate.path, candidate.source).await {
+        match load_external_agent_skills(&candidate.path, candidate.source, Some(candidate.default_rank)).await {
             Ok(mut loaded) => {
                 result.skills.append(&mut loaded.skills);
                 result.diagnostics.append(&mut loaded.diagnostics);
@@ -311,7 +347,9 @@ pub fn builtin_skills_root() -> PathBuf {
 /// 不触发）；Rust 默认路径在独立部署下可能未部署——缺失静默降级为零
 /// builtin，非缺失错误计入 diagnostics（不炸端点）。
 pub async fn load_builtin_agent_skills(builtin_root: &Path) -> LoadExternalAgentSkillsResult {
-    match load_external_agent_skills(builtin_root, SkillSource::Builtin).await {
+    // R44/566 号：内置层=六级缺省 rank 表最末层（600）——配置层同名覆盖
+    // 内置默认（130 号语义）的 rank 显式化形态。
+    match load_external_agent_skills(builtin_root, SkillSource::Builtin, Some(600)).await {
         Ok(result) => result,
         Err(LoadCandidateError::Missing) => LoadExternalAgentSkillsResult::default(),
         Err(error) => LoadExternalAgentSkillsResult {
@@ -355,12 +393,13 @@ pub async fn load_available_agent_skills_with_builtin_root(
 async fn load_external_agent_skills(
     dir: &Path,
     source: SkillSource,
+    default_rank: Option<u32>,
 ) -> Result<LoadExternalAgentSkillsResult, LoadCandidateError> {
     let skill_dirs = discover_skill_dirs(dir).await?;
     let mut result = LoadExternalAgentSkillsResult::default();
     for dir in skill_dirs {
         let skill_path = PathBuf::from(&dir).join("SKILL.md");
-        match load_skill_manifest(&skill_path, source).await {
+        match load_skill_manifest(&skill_path, source, default_rank).await {
             Ok(skill) => result.skills.push(skill),
             Err(message) => result
                 .diagnostics
@@ -444,7 +483,11 @@ async fn has_skill_manifest(dir: &Path) -> bool {
 }
 
 /// 读取并解析 SKILL.md（2MB 上限）。对齐 TS `loadSkillManifest`。
-async fn load_skill_manifest(skill_path: &Path, source: SkillSource) -> Result<AgentSkill, String> {
+async fn load_skill_manifest(
+    skill_path: &Path,
+    source: SkillSource,
+    default_rank: Option<u32>,
+) -> Result<AgentSkill, String> {
     let info = tokio::fs::metadata(skill_path)
         .await
         .map_err(|e| e.to_string())?;
@@ -454,7 +497,7 @@ async fn load_skill_manifest(skill_path: &Path, source: SkillSource) -> Result<A
     let raw = tokio::fs::read_to_string(skill_path)
         .await
         .map_err(|e| e.to_string())?;
-    parse_agent_skill_document(&raw, skill_path, source)
+    parse_agent_skill_document(&raw, skill_path, source, default_rank)
 }
 
 /// 项目技能目录下的合规 id 集（GET /skills 的 editable 判定源）。
@@ -502,7 +545,7 @@ mod tests {
     use super::*;
 
     fn parse(raw: &str, skill_path: &str) -> Result<AgentSkill, String> {
-        parse_agent_skill_document(raw, Path::new(skill_path), SkillSource::Project)
+        parse_agent_skill_document(raw, Path::new(skill_path), SkillSource::Project, None)
     }
 
     #[test]
@@ -737,5 +780,30 @@ mod tests {
         let ids = list_project_skill_ids(tmp.path()).await.unwrap();
         assert!(ids.contains("good"));
         assert!(!ids.contains("empty"));
+    }
+
+    /// R44/566 号：rank 严格面 + user-invocable 宽松面 + 装载层缺省 rank 注入。
+    #[test]
+    fn parses_rank_and_user_invocable_with_tier_default() {
+        // 显式 rank + user-invocable 显式 false。
+        let explicit = parse(
+            "---\nname: E\ndescription: d\nrank: 42\nuser-invocable: false\n---\nb",
+            "/x/e/SKILL.md",
+        )
+        .unwrap();
+        assert_eq!(explicit.rank, Some(42));
+        assert_eq!(explicit.user_invocable, Some(false));
+        // 缺省注入（defaultRank=100 → project skills 层）。
+        let defaulted =
+            parse_agent_skill_document("---\nname: D\ndescription: d\n---\nb", Path::new("/x/d/SKILL.md"), SkillSource::Project, Some(100))
+                .unwrap();
+        assert_eq!(defaulted.rank, Some(100));
+        assert_eq!(defaulted.user_invocable, None);
+        // 治理布尔宽松先例：非 false 值静默缺省。
+        let lenient = parse("---\nname: L\ndescription: d\nuser-invocable: yes\n---\nb", "/x/l/SKILL.md").unwrap();
+        assert_eq!(lenient.user_invocable, None);
+        // rank 严格面：非整数/越界 → 整份拒绝。
+        assert!(parse("---\nname: B1\ndescription: d\nrank: abc\n---\nb", "/x/b1/SKILL.md").is_err());
+        assert!(parse("---\nname: B2\ndescription: d\nrank: 1001\n---\nb", "/x/b2/SKILL.md").is_err());
     }
 }
