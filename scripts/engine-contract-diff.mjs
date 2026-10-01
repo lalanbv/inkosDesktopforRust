@@ -846,6 +846,46 @@ try {
           console.log(`✓ 会话 derive 读面双端一致（深比对含消息角色/内容/工具卡）`);
         }
       }
+
+      // ── 上下文计量快照面（564 备案清偿，581 号）：会话面驱动的 chat 轮
+      // 落幕后双腿 GET /context-meter 必有快照。语义面锁死（键集/来源/
+      // 锚点态/数值符号）；tokens 数值不深比——聊天 system prompt 双端未
+      // golden 锁定，估算基数可差（启发式同源但输入面不同源，备案）。
+      {
+        const meterOf = async (engine) => {
+          const res = await fetchT(
+            `http://127.0.0.1:${engine.port}/api/v1/context-meter?sessionId=${chatSession[engine.name]}`,
+          );
+          return res.ok ? res.json().catch(() => null) : null;
+        };
+        const [nodeMeter, rustMeter] = await Promise.all([
+          meterOf(engines[0]),
+          meterOf(engines[1]),
+        ]);
+        compared += 1;
+        const shapeOk = (m) =>
+          m && typeof m === "object"
+          && typeof m.heuristicTokens === "number" && m.heuristicTokens > 0
+          && m.source === "estimate"
+          && m.anchorValid === false
+          && typeof m.surfaceNodes === "number" && m.surfaceNodes > 0
+          && typeof m.inputWindow === "number" && m.inputWindow > 0;
+        if (!shapeOk(nodeMeter) || !shapeOk(rustMeter)) {
+          divergences += 1;
+          console.log(`✗ 上下文计量快照面：形态不符 node=${JSON.stringify(nodeMeter)} rust=${JSON.stringify(rustMeter)}`);
+        } else {
+          const keysMatch =
+            JSON.stringify(Object.keys(nodeMeter).sort()) === JSON.stringify(Object.keys(rustMeter).sort());
+          const windowMatch = nodeMeter.inputWindow === rustMeter.inputWindow;
+          if (!keysMatch || !windowMatch) {
+            divergences += 1;
+            if (!keysMatch) console.log(`✗ 上下文计量快照面键集分歧：node=${Object.keys(nodeMeter).sort()} rust=${Object.keys(rustMeter).sort()}`);
+            if (!windowMatch) console.log(`✗ 上下文计量快照面窗口分歧：node=${nodeMeter.inputWindow} rust=${rustMeter.inputWindow}`);
+          } else {
+            console.log(`✓ 上下文计量快照面双端一致（键集+estimate 来源+无锚点态+窗口相等 inputWindow=${rustMeter.inputWindow}+surfaceNodes 计数非零；tokens 数值备案不深比——聊天 system prompt 双端未 golden 锁定）`);
+          }
+        }
+      }
     }
   }
 

@@ -1240,7 +1240,11 @@ async function runAgentSessionUnlocked(
   // 尽力而为：usage 缺失时纯启发式（锚点缺席），观测不阻断。
   let contextMeter: TokenMeterSnapshot | undefined;
   try {
-    const meter = new TokenMeter(model.contextWindow);
+    // 581 号：窗口兜底 128k（与 provider.ts 模型卡 miss 兜底同源）——无模型卡
+    // 模型的 contextWindow 经服务端模型列表组装为 0（>0 才带字段），此前直传
+    // → 计量窗口 0 → 超窗告警面永不触发（差分器快照面对照 node=0 vs
+    // rust=128000 当场抓获）。非正数一律按缺省窗口计。
+    const meter = new TokenMeter(model.contextWindow > 0 ? model.contextWindow : 128_000);
     for (const message of allMessages) {
       meter.append(extractMessageMeterText(message));
     }
