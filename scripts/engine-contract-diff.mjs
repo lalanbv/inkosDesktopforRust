@@ -849,6 +849,59 @@ try {
     }
   }
 
+  // ── 技能写面周期（576 号）：导入 → 用户面在册 → 删除 → 出册。566 号
+  // skills 写端点此前无活体双端对照（574 号仅 Node 单腿真机）；周期同时
+  // 驱动双腿 broadcast skills:change（SSE 事件名集合随上文收集器进入比对）。
+  {
+    const md = [
+      "---",
+      "name: diff-skill-probe",
+      "description: 576 号差分器技能写面探针。",
+      "---",
+      "探针正文。",
+    ].join("\n");
+    const dataUrl = `data:text/markdown;base64,${Buffer.from(md, "utf8").toString("base64")}`;
+    const results = {};
+    for (const engine of engines) {
+      const base = `http://127.0.0.1:${engine.port}`;
+      const steps = {};
+      try {
+        const imported = await fetchT(`${base}/api/v1/skills/import`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: [{ path: "diff-skill-probe/SKILL.md", dataUrl }] }),
+        });
+        const importedBody = await imported.json().catch(() => null);
+        steps.importStatus = imported.status;
+        steps.importId = importedBody?.skill?.id ?? null;
+        const listed = await fetchT(`${base}/api/v1/skills`);
+        const listedBody = await listed.json().catch(() => null);
+        const probe = (listedBody?.skills ?? []).find((s) => s.id === "diff-skill-probe");
+        steps.listedAfterImport = Boolean(probe);
+        steps.listedSource = probe?.source ?? null;
+        const removed = await fetchT(`${base}/api/v1/skills/diff-skill-probe`, { method: "DELETE" });
+        steps.deleteStatus = removed.status;
+        const relisted = await fetchT(`${base}/api/v1/skills`);
+        const relistedBody = await relisted.json().catch(() => null);
+        steps.listedAfterDelete = (relistedBody?.skills ?? []).some((s) => s.id === "diff-skill-probe");
+      } catch (error) {
+        steps.error = error?.message ?? String(error);
+      }
+      results[engine.name] = steps;
+    }
+    compared += 1;
+    const expected = (steps) =>
+      steps.importStatus === 200 && steps.importId === "diff-skill-probe"
+      && steps.listedAfterImport === true && steps.listedSource === "project"
+      && steps.deleteStatus === 200 && steps.listedAfterDelete === false;
+    if (expected(results.node) && expected(results.rust)) {
+      console.log(`✓ 技能写面周期双端一致（导入→在册 project→删除→出册；skills:change 事件名面由 STUDIO_SSE_EVENTS golden+双端 broadcast 路由锁定，不在本表——收集器已于会话面比对面停表）`);
+    } else {
+      divergences += 1;
+      console.log(`✗ 技能写面周期分歧：node=${JSON.stringify(results.node)} rust=${JSON.stringify(results.rust)}`);
+    }
+  }
+
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;
 } catch (error) {
