@@ -743,6 +743,113 @@ try {
     }
   }
 
+  // ── 会话事件日志面（R43/565 号）：双腿各建一 chat 会话 + 驱动一轮 agent
+  // （mock 确定性纯文本回复——聊天 system 提示词含「同人」关键词走 CANON
+  // 分支，无工具调用），读双腿 {root}/.inkos/sessions/{id}.jsonl 逐行取
+  // type 比对请求族事件计数；再 GET 会话 derive 读面深比对。R43 写前落盘
+  // 时序（request_started+user 先于 LLM 请求）下事件族双端同构。
+  // session_metadata_updated 豁免：标题生成 prompt 双端未 golden 锁定，
+  // mock 分支可能分歧（备案）。
+  {
+    const familyTypes = ["session_created", "request_started", "message", "request_committed", "request_failed"];
+    const chatSession = {};
+    for (const engine of engines) {
+      const base = `http://127.0.0.1:${engine.port}`;
+      let sessionId = null;
+      try {
+        const created = await fetchT(`${base}/api/v1/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionKind: "chat" }),
+        });
+        sessionId = (await created.json())?.session?.sessionId ?? null;
+        if (created.ok && sessionId) {
+          const drive = await fetchT(`${base}/api/v1/agent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              instruction: "你好，介绍一下这个项目。",
+              sessionId,
+              sessionKind: "chat",
+            }),
+          });
+          if (!drive.ok) {
+            console.log(`✗ 会话日志面：${engine.name} 聊天驱动失败 status=${drive.status}`);
+            sessionId = null;
+          }
+        } else {
+          console.log(`✗ 会话日志面：${engine.name} 建会话失败 status=${created.status}`);
+        }
+      } catch (error) {
+        console.log(`✗ 会话日志面：${engine.name} 驱动异常：${error?.message ?? error}`);
+        sessionId = null;
+      }
+      if (sessionId) chatSession[engine.name] = sessionId;
+    }
+    if (chatSession.node && chatSession.rust) {
+      const legCounts = {};
+      for (const engine of engines) {
+        const counts = {};
+        const file = join(engine.root, ".inkos", "sessions", `${chatSession[engine.name]}.jsonl`);
+        try {
+          for (const line of readFileSync(file, "utf-8").split(/\r?\n/)) {
+            if (!line.trim()) continue;
+            const type = JSON.parse(line)?.type;
+            if (typeof type === "string") counts[type] = (counts[type] ?? 0) + 1;
+          }
+        } catch (error) {
+          console.log(`✗ 会话日志面：${engine.name} 读取事件日志失败：${error?.message ?? error}`);
+        }
+        legCounts[engine.name] = counts;
+      }
+      const project = (counts) => Object.fromEntries(familyTypes.map((type) => [type, counts[type] ?? 0]));
+      compared += 1;
+      const nodeProjected = project(legCounts.node ?? {});
+      const rustProjected = project(legCounts.rust ?? {});
+      if (JSON.stringify(nodeProjected) === JSON.stringify(rustProjected)) {
+        const total = familyTypes.reduce((sum, type) => sum + rustProjected[type], 0);
+        console.log(`✓ 会话事件日志面双端一致（请求族 ${total} 事件逐类型计数相同 ${JSON.stringify(rustProjected)}；metadata_updated 豁免备案）`);
+      } else {
+        divergences += 1;
+        console.log(`✗ 会话事件日志面分歧：node=${JSON.stringify(nodeProjected)} rust=${JSON.stringify(rustProjected)}`);
+      }
+
+      // derive 读面活体对照：GET /api/v1/sessions/:id 深比对（身份/易变键
+      // 剪除后键集合+值逐字节）。
+      const SESSION_IDENTITY = new Set(["sessionId", "id", "uuid"]);
+      const pruneSession = (node) => {
+        if (Array.isArray(node)) return node.map(pruneSession);
+        if (node && typeof node === "object") {
+          const out = {};
+          for (const key of Object.keys(node).sort()) {
+            if (VOLATILE.has(key) || SESSION_IDENTITY.has(key)) continue;
+            out[key] = pruneSession(node[key]);
+          }
+          return out;
+        }
+        return node;
+      };
+      const sessionOf = async (engine) => {
+        const res = await fetchT(`http://127.0.0.1:${engine.port}/api/v1/sessions/${chatSession[engine.name]}`);
+        return res.ok ? res.json().catch(() => null) : null;
+      };
+      const [nodeSession, rustSession] = await Promise.all([sessionOf(engines[0]), sessionOf(engines[1])]);
+      compared += 1;
+      if (!nodeSession || !rustSession) {
+        divergences += 1;
+        console.log(`✗ 会话 derive 读面：双端 GET /sessions/:id 必须在场`);
+      } else {
+        const diffPath = firstDiffPath(pruneSession(nodeSession), pruneSession(rustSession));
+        if (diffPath) {
+          divergences += 1;
+          console.log(`✗ 会话 derive 读面分歧 @ ${diffPath}`);
+        } else {
+          console.log(`✓ 会话 derive 读面双端一致（深比对含消息角色/内容/工具卡）`);
+        }
+      }
+    }
+  }
+
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;
 } catch (error) {

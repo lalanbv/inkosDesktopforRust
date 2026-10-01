@@ -202,56 +202,95 @@ async fn maybe_broadcast_session_title(
     }
 }
 
-/// appendManualSessionMessages 等价：request_started → user →（工具轮：
-/// assistant(toolCall) + toolResult 逐对）→ assistant → request_committed。
-/// 217 号工具轮落盘——TS persistAgentEvent 逐消息持久化，此前 Rust 仅写
-/// 纯文本两消息，derive 恢复丢全部工具执行卡、历史工具摘要恒空。
-#[allow(clippy::too_many_lines)]
-async fn append_chat_turn(
+/// R43/565 号「模型可见即已记录」写前落盘（217 号批写拆批）：
+/// request_started → user 在 run_agent_loop 发出首个 LLM 请求**之前**入日志——
+/// 进程中途崩溃时用户输入仍在日志（审计面；derive 对未提交轮整体排除的
+/// 双端语义不变，golden session-transcript-derive-vectors 锁定）。
+/// 返回本轮 request_id；删除守卫拦截时 None（commit/fail 随之跳过）。
+async fn begin_chat_turn(
     project_root: &std::path::Path,
     session_id: &str,
     instruction: &str,
-    response_text: &str,
-    tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
     session_kind: SessionKind,
-) {
+) -> Option<String> {
     // 220 号：删除守卫（TS appendSessionMessagesUnlessDeleted）——轮进行中
     // 会话被删时跳过追加，防 transcript 复活「已删除」会话。
     if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
-        return;
+        return None;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = utc_now_ms();
-    append_transcript_events(project_root, session_id, |_events, next_seq| {
-        let user_uuid = uuid::Uuid::new_v4().to_string();
+    let appended = append_transcript_events(project_root, session_id, |_events, next_seq| {
+        vec![
+            TranscriptEvent::RequestStarted {
+                version: 1,
+                session_id: session_id.to_string(),
+                seq: next_seq,
+                timestamp: now,
+                request_id: request_id.clone(),
+                session_kind: Some(session_kind),
+                input: instruction.to_string(),
+            },
+            TranscriptEvent::Message {
+                version: 1,
+                session_id: session_id.to_string(),
+                request_id: request_id.clone(),
+                uuid: uuid::Uuid::new_v4().to_string(),
+                parent_uuid: None,
+                seq: next_seq + 1,
+                timestamp: now,
+                role: "user".into(),
+                pi_turn_index: None,
+                tool_call_id: None,
+                source_tool_assistant_uuid: None,
+                legacy_display: None,
+                message: json!({ "role": "user", "content": instruction, "timestamp": now }),
+            },
+        ]
+    })
+    .await;
+    // 追加失败（IO 误）视同未开局：commit/fail 一并跳过，语义同「轮未发生」。
+    if appended.is_empty() {
+        return None;
+    }
+    Some(request_id)
+}
+
+/// 轮提交（217 号拆批后半）：（工具轮：assistant(toolCall) + toolResult 逐对）
+/// → assistant → request_committed，request_id 与 begin_chat_turn 同轮。
+/// 217 号工具轮落盘——TS persistAgentEvent 逐消息持久化，此前 Rust 仅写
+/// 纯文本两消息，derive 恢复丢全部工具执行卡、历史工具摘要恒空。
+/// 备案：工具对仍随提交批落盘（非循环内逐对）——中断窗口下未提交尾被
+/// derive 整体排除，派生结果与逐对落盘一致；逐请求强断言见 debug_assert。
+#[allow(clippy::too_many_lines)]
+async fn commit_chat_turn(
+    project_root: &std::path::Path,
+    session_id: &str,
+    request_id: &str,
+    response_text: &str,
+    tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
+) {
+    // 220 号：删除守卫（收尾持久化同样不得复活已删除会话）。
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+        return;
+    }
+    let now = utc_now_ms();
+    append_transcript_events(project_root, session_id, |events, next_seq| {
+        // parent 链锚点：本轮 user 消息 uuid（begin 段写入；缺失时防御性 None）。
+        let user_uuid: Option<String> = events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                TranscriptEvent::Message { request_id: rid, uuid, role, .. }
+                    if rid == request_id && role == "user" =>
+                {
+                    Some(uuid.clone())
+                }
+                _ => None,
+            });
         let mut seq = next_seq;
-        let mut out = vec![TranscriptEvent::RequestStarted {
-            version: 1,
-            session_id: session_id.to_string(),
-            seq,
-            timestamp: now,
-            request_id: request_id.clone(),
-            session_kind: Some(session_kind),
-            input: instruction.to_string(),
-        }];
-        seq += 1;
-        out.push(TranscriptEvent::Message {
-            version: 1,
-            session_id: session_id.to_string(),
-            request_id: request_id.clone(),
-            uuid: user_uuid.clone(),
-            parent_uuid: None,
-            seq,
-            timestamp: now,
-            role: "user".into(),
-            pi_turn_index: None,
-            tool_call_id: None,
-            source_tool_assistant_uuid: None,
-            legacy_display: None,
-            message: json!({ "role": "user", "content": instruction, "timestamp": now }),
-        });
-        let mut parent_uuid = Some(user_uuid);
-        seq += 1;
+        let mut out = Vec::new();
+        let mut parent_uuid = user_uuid;
         // 工具轮：每条执行写 assistant(toolCall) + toolResult 一对
         //（TS pi-agent 消息流的还原兼容形态；derive 的 pending attach 链
         // 与历史工具摘要都消费这两类消息）。
@@ -277,7 +316,7 @@ async fn append_chat_turn(
             out.push(TranscriptEvent::Message {
                 version: 1,
                 session_id: session_id.to_string(),
-                request_id: request_id.clone(),
+                request_id: request_id.to_string(),
                 uuid: call_uuid.clone(),
                 parent_uuid: parent_uuid.clone(),
                 seq,
@@ -312,7 +351,7 @@ async fn append_chat_turn(
             out.push(TranscriptEvent::Message {
                 version: 1,
                 session_id: session_id.to_string(),
-                request_id: request_id.clone(),
+                request_id: request_id.to_string(),
                 uuid: uuid::Uuid::new_v4().to_string(),
                 parent_uuid: Some(call_uuid.clone()),
                 seq,
@@ -327,15 +366,14 @@ async fn append_chat_turn(
             seq += 1;
             parent_uuid = None;
         }
-        let assistant_uuid = uuid::Uuid::new_v4().to_string();
         out.push(TranscriptEvent::Message {
             version: 1,
             session_id: session_id.to_string(),
-            request_id: request_id.clone(),
-            uuid: assistant_uuid,
+            request_id: request_id.to_string(),
+            uuid: uuid::Uuid::new_v4().to_string(),
             parent_uuid,
             seq,
-            timestamp: now + 1,
+            timestamp: now,
             role: "assistant".into(),
             pi_turn_index: None,
             tool_call_id: None,
@@ -350,7 +388,7 @@ async fn append_chat_turn(
                 "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0,
                            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0 } },
                 "stopReason": "stop",
-                "timestamp": now + 1,
+                "timestamp": now,
             }),
         });
         seq += 1;
@@ -358,67 +396,79 @@ async fn append_chat_turn(
             version: 1,
             session_id: session_id.to_string(),
             seq,
-            timestamp: now + 1,
-            request_id,
+            timestamp: now,
+            request_id: request_id.to_string(),
         });
         out
     })
     .await;
 }
 
-/// 失败轮持久化（217 号）：TS 失败轮写 request_started → user →
-/// request_failed（assistant 错误消息在 derive 还原时空文本被丢弃，此处
-/// 即等价形态）；此前 Rust 失败轮零落盘——刷新后用户消息消失。
-async fn append_failed_chat_turn(
-    project_root: &std::path::Path,
-    session_id: &str,
-    instruction: &str,
-    error: &str,
-    session_kind: SessionKind,
-) {
+/// 轮失败收尾（217 号语义保持）：user 消息已由 begin 写前落盘，此处只补
+/// request_failed 终态标记；derive 对未提交轮仍整体排除（与 TS 一致）。
+async fn fail_chat_turn(project_root: &std::path::Path, session_id: &str, request_id: &str, error: &str) {
     // 同上：删除守卫（失败收尾的持久化同样不得复活已删除会话）。
     if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
         return;
     }
-    let request_id = uuid::Uuid::new_v4().to_string();
     let now = utc_now_ms();
     append_transcript_events(project_root, session_id, |_events, next_seq| {
-        vec![
-            TranscriptEvent::RequestStarted {
-                version: 1,
-                session_id: session_id.to_string(),
-                seq: next_seq,
-                timestamp: now,
-                request_id: request_id.clone(),
-                session_kind: Some(session_kind),
-                input: instruction.to_string(),
-            },
-            TranscriptEvent::Message {
-                version: 1,
-                session_id: session_id.to_string(),
-                request_id: request_id.clone(),
-                uuid: uuid::Uuid::new_v4().to_string(),
-                parent_uuid: None,
-                seq: next_seq + 1,
-                timestamp: now,
-                role: "user".into(),
-                pi_turn_index: None,
-                tool_call_id: None,
-                source_tool_assistant_uuid: None,
-                legacy_display: None,
-                message: json!({ "role": "user", "content": instruction, "timestamp": now }),
-            },
-            TranscriptEvent::RequestFailed {
-                version: 1,
-                session_id: session_id.to_string(),
-                seq: next_seq + 2,
-                timestamp: now + 1,
-                request_id,
-                error: error.to_string(),
-            },
-        ]
+        vec![TranscriptEvent::RequestFailed {
+            version: 1,
+            session_id: session_id.to_string(),
+            seq: next_seq,
+            timestamp: now,
+            request_id: request_id.to_string(),
+            error: error.to_string(),
+        }]
     })
     .await;
+}
+
+/// R43/565 号：「模型可见即已记录」debug 断言——请求发出前，
+/// ①本轮 request_started + user 消息必须已在日志（写前落盘生效）；
+/// ②从日志重建的模型面（committed 恢复管线）与 loop 输入逐条一致。
+/// 仅 debug 编译档生效（release 由 cfg! 常量折叠为零工作）；断言失败即
+/// panic（cargo:testgate 全目标门禁内当场红）。
+/// 备案：轮内工具交换的逐请求强断言不在此面——工具对随 commit 批落盘，
+/// 未提交尾 derive 排除语义使中断窗口派生结果与逐对落盘一致。
+async fn debug_assert_model_surface_is_logged(
+    project_root: &std::path::Path,
+    session_id: &str,
+    request_id: Option<&str>,
+    loop_input: &[crate::llm::provider::LLMMessage],
+    session_kind: SessionKind,
+) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let Some(request_id) = request_id else {
+        return;
+    };
+    let events =
+        crate::interaction::session_transcript::read_transcript_events(project_root, session_id)
+            .await;
+    assert!(
+        events.iter().any(|event| matches!(event,
+            TranscriptEvent::RequestStarted { request_id: rid, .. } if rid == request_id)),
+        "模型可见即已记录：request_started 未落盘（request_id={request_id}）",
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            TranscriptEvent::Message { request_id: rid, role, .. } if rid == request_id && role == "user")),
+        "模型可见即已记录：本轮 user 消息未在请求前落盘",
+    );
+    let rebuilt = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+        project_root,
+        session_id,
+        Some(session_kind.as_str()),
+    )
+    .await;
+    assert_eq!(
+        rebuilt,
+        loop_input,
+        "模型可见即已记录：日志重建面与 loop 输入不一致",
+    );
 }
 
 pub async fn post_agent(
@@ -1083,8 +1133,10 @@ pub async fn post_agent(
             }
         }
     }
+    // R43/565 号：debug 断言消费 pre-boundary 形态（重建面=恢复管线原产物）。
+    let restored_base = restored;
     let restored = crate::interaction::session_restore::append_restored_history_boundary(
-        restored,
+        restored_base.clone(),
         match agent_production::current_project_language(root).await {
             agent_production::StudioLang::En => "en",
             agent_production::StudioLang::Zh => "zh",
@@ -1307,6 +1359,18 @@ pub async fn post_agent(
             uuid::Uuid::new_v4().to_string(),
         ),
     );
+    // R43/565 号：写前落盘——本轮 request_started + user 先于首个 LLM 请求
+    // 入日志（崩溃窗口用户输入不丢），随后 debug 编译档断言「模型可见即已
+    // 记录」（request_started/user 在场 + 日志重建面 == loop 输入）。
+    let turn_request_id = begin_chat_turn(root, session_id, instruction, session_kind).await;
+    debug_assert_model_surface_is_logged(
+        root,
+        session_id,
+        turn_request_id.as_deref(),
+        &restored_base,
+        session_kind,
+    )
+    .await;
     let chat_result = crate::llm::agent_trajectory::TRAJECTORY_SCOPE
         .scope(Some(turn_scope), async {
             // 532 号：回合技能集作用域（TS agent-session turnSkills 对应物）——
@@ -1342,7 +1406,9 @@ pub async fn post_agent(
             // 217 号：中止轮对齐 TS——request_failed 不进会话历史（此前写
             // committed + "（无回复内容）" 占位，刷新后出现假回复）。
             if aborted {
-                append_failed_chat_turn(root, session_id, instruction, "aborted", session_kind).await;
+                if let Some(request_id) = &turn_request_id {
+                    fail_chat_turn(root, session_id, request_id, "aborted").await;
+                }
                 runtime.hub.broadcast(
                     "agent:error",
                     &json!({
@@ -1369,7 +1435,10 @@ pub async fn post_agent(
             } else {
                 raw_text
             };
-            append_chat_turn(root, session_id, instruction, &response_text, &tool_executions, session_kind).await;
+            if let Some(request_id) = &turn_request_id {
+                commit_chat_turn(root, session_id, request_id, &response_text, &tool_executions)
+                    .await;
+            }
             runtime.hub.broadcast(
                 "agent:complete",
                 &json!({
@@ -1409,9 +1478,11 @@ pub async fn post_agent(
             (StatusCode::OK, Json(payload)).into_response()
         }
         Err(error) => {
-            // 217 号：失败轮持久化（TS request_failed 语义）——user 消息
-            // 不再因 LLM 错误丢失。
-            append_failed_chat_turn(root, session_id, instruction, &error, session_kind).await;
+            // 217 号：失败轮持久化（TS request_failed 语义）——user 消息由
+            // begin 写前落盘，此处补终态标记。
+            if let Some(request_id) = &turn_request_id {
+                fail_chat_turn(root, session_id, request_id, &error).await;
+            }
             runtime.hub.broadcast(
                 "agent:error",
                 &json!({
@@ -2186,8 +2257,9 @@ mod payload_strict_tests {
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
 
-    use super::append_chat_turn;
-    use super::append_failed_chat_turn;
+    use super::begin_chat_turn;
+    use super::commit_chat_turn;
+    use super::fail_chat_turn;
     use super::AgentSessionHandle;
 
 
@@ -2251,14 +2323,23 @@ mod payload_strict_tests {
 
     /// 217 号：聊天轮工具执行落盘 → derive 恢复工具卡 + restore 产生
     /// 历史工具摘要（修复前：工具消息不落盘，恢复面全空）。
+    /// R43/565 号：begin（写前 started+user）→ commit（工具对+assistant+committed）。
     #[tokio::test]
     async fn chat_turn_persists_tool_executions_for_restore() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        append_chat_turn(
+        let request_id = begin_chat_turn(
             &root,
             "sess-tools",
             "帮我把第三章的「林动」改成「林铜」",
+            SessionKind::Book,
+        )
+        .await
+        .expect("begin");
+        commit_chat_turn(
+            &root,
+            "sess-tools",
+            &request_id,
             "已替换。",
             &[crate::interaction::agent_loop::LoopToolExecution {
                 id: "call-1".into(),
@@ -2275,7 +2356,6 @@ mod payload_strict_tests {
                 timed_out: None,
                 error_kind: None,
             }],
-            SessionKind::Book,
         )
         .await;
 
@@ -2325,6 +2405,7 @@ mod payload_strict_tests {
     }
 
     /// 220 号：删除守卫——会话删除后轮收尾的追加被跳过（不复活）。
+    /// R43/565 号：begin 返回 None（写前落盘同样被守卫拦截）。
     #[tokio::test]
     async fn chat_turn_skipped_for_deleted_session() {
         let dir = tempfile::tempdir().unwrap();
@@ -2333,16 +2414,9 @@ mod payload_strict_tests {
             .lock()
             .unwrap()
             .insert("sess-deleted".to_string());
-        append_chat_turn(
-            &root,
-            "sess-deleted",
-            "hi",
-            "hello",
-            &[],
-            SessionKind::Chat,
-        )
-        .await;
-        append_failed_chat_turn(&root, "sess-deleted", "hi", "err", SessionKind::Chat).await;
+        let guarded = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat).await;
+        assert!(guarded.is_none(), "删除守卫应拦截写前落盘");
+        fail_chat_turn(&root, "sess-deleted", "rid-x", "err").await;
         assert!(
             !crate::interaction::session_transcript::transcript_path(&root, "sess-deleted").exists(),
             "已删除会话不应被轮收尾复活"
@@ -2352,7 +2426,10 @@ mod payload_strict_tests {
             .lock()
             .unwrap()
             .remove("sess-deleted");
-        append_chat_turn(&root, "sess-deleted", "hi", "hello", &[], SessionKind::Chat).await;
+        let request_id = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat)
+            .await
+            .expect("重建后 begin 恢复");
+        commit_chat_turn(&root, "sess-deleted", &request_id, "hello", &[]).await;
         assert!(
             crate::interaction::session_transcript::transcript_path(&root, "sess-deleted").exists()
         );
@@ -2420,18 +2497,15 @@ mod payload_strict_tests {
 
     /// 217 号：失败轮持久化——request_failed + user 消息保留；derive 不含
     /// 未提交轮的 assistant 内容（恢复语义与 TS 一致）。
+    /// R43/565 号：user 由 begin 写前落盘，失败收尾只补终态标记。
     #[tokio::test]
     async fn failed_chat_turn_persists_user_message() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        append_failed_chat_turn(
-            &root,
-            "sess-fail",
-            "继续写第四章",
-            "LLM unreachable",
-            SessionKind::Chat,
-        )
-        .await;
+        let request_id = begin_chat_turn(&root, "sess-fail", "继续写第四章", SessionKind::Chat)
+            .await
+            .expect("begin");
+        fail_chat_turn(&root, "sess-fail", &request_id, "LLM unreachable").await;
 
         let events = crate::interaction::session_transcript::read_transcript_events(&root, "sess-fail").await;
         assert!(events.iter().any(|e| matches!(e, TranscriptEvent::RequestFailed { error, .. } if error == "LLM unreachable")));

@@ -1,0 +1,168 @@
+{
+  "version": 1,
+  "comment": "R43/565 号会话 transcript derive/restore 双端 golden。TS=packages/core session-transcript-restore（committedMessageEvents + restoreCommittedDialogueScan + deriveBookSessionFromTranscript），Rust=engine-rs session_restore 同名同构（tests/golden_session_transcript_derive.rs）。锁定：committed 过滤（未提交轮整体排除=中断尾部确定性修复：撕裂尾剔除且后续轮不受影响）、kind 过滤（只作用于模型面 committedMessageEvents(kind)/scan——display derive 不传 kind，展示面全量，双端同构不对称）、工具轮对话排除与 legacy 无 kind 轮 user 保留、空文本 assistant 丢弃。事件 JSON 为 wire 形态逐行落盘后双端解析（serde TranscriptEvent / zod TranscriptEventSchema 必须同收）。内容全 ASCII；scanMessages.content=文本块拍平。改向量必须双端同批。",
+  "cases": [
+    {
+      "name": "committed-turns-basic",
+      "deriveSessionKind": null,
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "input": "hello" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "hello", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "a1", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "hi there" }], "stopReason": "stop", "timestamp": 103 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1" },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 6, "timestamp": 105, "requestId": "r2", "input": "how are you" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 7, "timestamp": 106, "requestId": "r2", "uuid": "u2", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "how are you", "timestamp": 106 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 8, "timestamp": 107, "requestId": "r2", "uuid": "a2", "parentUuid": "u2", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "fine" }], "stopReason": "stop", "timestamp": 107 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 9, "timestamp": 108, "requestId": "r2" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "a1", "u2", "a2"],
+        "scanMessages": [
+          { "role": "user", "content": "hello" },
+          { "role": "assistant", "content": "hi there" },
+          { "role": "user", "content": "how are you" },
+          { "role": "assistant", "content": "fine" }
+        ],
+        "deriveRoles": ["user", "assistant", "user", "assistant"]
+      }
+    },
+    {
+      "name": "interrupted-tail-excluded-next-turn-clean",
+      "deriveSessionKind": null,
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "input": "q1" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q1", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "a1", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "ans1" }], "stopReason": "stop", "timestamp": 103 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1" },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 6, "timestamp": 105, "requestId": "r2", "input": "q2" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 7, "timestamp": 106, "requestId": "r2", "uuid": "u2", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q2", "timestamp": 106 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 8, "timestamp": 107, "requestId": "r2", "uuid": "a2partial", "parentUuid": "u2", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "partial" }], "stopReason": "stop", "timestamp": 107 } },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 9, "timestamp": 108, "requestId": "r3", "input": "q3" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 10, "timestamp": 109, "requestId": "r3", "uuid": "u3", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q3", "timestamp": 109 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 11, "timestamp": 110, "requestId": "r3", "uuid": "a3", "parentUuid": "u3", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "ans3" }], "stopReason": "stop", "timestamp": 110 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 12, "timestamp": 111, "requestId": "r3" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "a1", "u3", "a3"],
+        "scanMessages": [
+          { "role": "user", "content": "q1" },
+          { "role": "assistant", "content": "ans1" },
+          { "role": "user", "content": "q3" },
+          { "role": "assistant", "content": "ans3" }
+        ],
+        "deriveRoles": ["user", "assistant", "user", "assistant"]
+      }
+    },
+    {
+      "name": "failed-turn-excluded",
+      "deriveSessionKind": null,
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "input": "q1" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q1", "timestamp": 102 } },
+        { "type": "request_failed", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "error": "boom" }
+      ],
+      "expected": {
+        "committedUuids": [],
+        "scanMessages": [],
+        "deriveRoles": []
+      }
+    },
+    {
+      "name": "kind-filter-excludes-other-kind",
+      "deriveSessionKind": "chat",
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "sessionKind": "book", "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "sessionKind": "book", "input": "q1" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q1", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "a1", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "ans1" }], "stopReason": "stop", "timestamp": 103 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1" }
+      ],
+      "expected": {
+        "committedUuids": [],
+        "scanMessages": [],
+        "deriveRoles": ["user", "assistant"],
+        "note": "kind 过滤只作用于模型面（committed/scan）；display derive 不传 kind，展示面全量（双端同构不对称）。"
+      }
+    },
+    {
+      "name": "kind-filter-includes-same-kind",
+      "deriveSessionKind": "book",
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "sessionKind": "book", "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "sessionKind": "book", "input": "q1" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q1", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "a1", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "ans1" }], "stopReason": "stop", "timestamp": 103 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "a1"],
+        "scanMessages": [
+          { "role": "user", "content": "q1" },
+          { "role": "assistant", "content": "ans1" }
+        ],
+        "deriveRoles": ["user", "assistant"]
+      }
+    },
+    {
+      "name": "tool-round-display-cards-and-scan-exclusion",
+      "deriveSessionKind": "book",
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "sessionKind": "book", "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "sessionKind": "book", "input": "scan it" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "scan it", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "at", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "toolCall", "id": "c1", "name": "grep", "arguments": { "q": "canon" } }], "stopReason": "toolUse", "timestamp": 103 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1", "uuid": "tr", "parentUuid": "at", "role": "toolResult", "toolCallId": "c1", "message": { "role": "toolResult", "toolCallId": "c1", "toolName": "grep", "content": [{ "type": "text", "text": "found" }], "isError": false, "timestamp": 104 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 6, "timestamp": 105, "requestId": "r1", "uuid": "af", "parentUuid": null, "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "done" }], "stopReason": "stop", "timestamp": 105 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 7, "timestamp": 106, "requestId": "r1" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "at", "tr", "af"],
+        "scanMessages": [],
+        "deriveRoles": ["user", "assistant"],
+        "deriveToolCardCount": 1,
+        "note": "工具卡折叠挂到最终文本 assistant（pending attach 到 last assistant），非独立卡消息。"
+      }
+    },
+    {
+      "name": "legacy-kindless-tool-turn-keeps-user",
+      "deriveSessionKind": "book",
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "input": "old turn" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "old turn", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "at", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "toolCall", "id": "c1", "name": "ls", "arguments": {} }], "stopReason": "toolUse", "timestamp": 103 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1", "uuid": "tr", "parentUuid": "at", "role": "toolResult", "toolCallId": "c1", "message": { "role": "toolResult", "toolCallId": "c1", "toolName": "ls", "content": [{ "type": "text", "text": "files" }], "isError": false, "timestamp": 104 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 6, "timestamp": 105, "requestId": "r1" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "at", "tr"],
+        "scanMessages": [
+          { "role": "user", "content": "old turn" }
+        ],
+        "deriveRoles": ["user", "assistant"]
+      }
+    },
+    {
+      "name": "empty-text-assistant-dropped",
+      "deriveSessionKind": null,
+      "events": [
+        { "type": "session_created", "version": 1, "sessionId": "s", "seq": 1, "timestamp": 100, "bookId": null, "title": null, "createdAt": 100, "updatedAt": 100 },
+        { "type": "request_started", "version": 1, "sessionId": "s", "seq": 2, "timestamp": 101, "requestId": "r1", "input": "q1" },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 3, "timestamp": 102, "requestId": "r1", "uuid": "u1", "parentUuid": null, "role": "user", "message": { "role": "user", "content": "q1", "timestamp": 102 } },
+        { "type": "message", "version": 1, "sessionId": "s", "seq": 4, "timestamp": 103, "requestId": "r1", "uuid": "ae", "parentUuid": "u1", "role": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": "   " }], "stopReason": "stop", "timestamp": 103 } },
+        { "type": "request_committed", "version": 1, "sessionId": "s", "seq": 5, "timestamp": 104, "requestId": "r1" }
+      ],
+      "expected": {
+        "committedUuids": ["u1", "ae"],
+        "scanMessages": [
+          { "role": "user", "content": "q1" }
+        ],
+        "deriveRoles": ["user", "assistant"],
+        "note": "空文本 assistant：scan（模型面）丢弃、display derive 保留（217 号「空文本丢弃」发生在 TS 写入时序——失败轮根本不写 assistant，非 derive 过滤）。"
+      }
+    }
+  ]
+}
