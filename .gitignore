@@ -42,3 +42,14 @@ CLAUDE.md
 # 历史 UI 走查临时产物（不入库）
 gui-test-screenshots/
 flow-after.png
+
+# 585 号：README/互引引用的成品文档入库（链接完整性优先于本地文档策略；
+# 未列入白名单的工作稿仍按 docs/* 本地生效）
+!docs/plugin-system.md
+!docs/USER_GUIDE.md
+!docs/QUICK_START.md
+!docs/TROUBLESHOOTING.md
+!docs/i18n-a11y.md
+!docs/security-audit.md
+!docs/signing-procurement.md
+!docs/sea-feasibility.md

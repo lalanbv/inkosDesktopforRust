@@ -8,9 +8,8 @@
 //!    命令改名/增删须三处同批，名单在测试内 const 数组单点维护）
 //! ③ 关键事实词（双路径/wasmtime/JSON-RPC/HostContext/能力白名单）。
 //!
-//! `docs/*` 为 gitignore 的本地文档（168 号既定策略）：文档缺席（新 clone）
-//! 时本护栏跳过；本地门禁（cargo:testgate）恒有文档在场即恒受锁。
-//! 若未来把文档提升入库，去掉 skip 分支即可全环境生效。
+//! 585 号：文档已提升入库（.gitignore 白名单例外），护栏全环境恒生效
+//! （568 备案的「提升入库=去 skip 分支」兑现）。
 use std::path::PathBuf;
 
 fn doc_path() -> PathBuf {
@@ -47,11 +46,9 @@ const TAURI_COMMANDS: &[&str] = &[
 
 #[test]
 fn plugin_doc_matches_code_facts() {
-    let Ok(doc) = std::fs::read_to_string(doc_path()) else {
-        // docs/* 为 gitignore 本地文档：缺席环境跳过（见模块 doc）。
-        eprintln!("plugin-system.md 不在场（本地文档策略），护栏跳过");
-        return;
-    };
+    // 585 号：文档已提升入库（.gitignore 白名单），恒在场——skip 分支移除
+    // （568 备案兑现），护栏全环境生效。
+    let doc = std::fs::read_to_string(doc_path()).expect("docs/plugin-system.md 已入库且必须在场");
 
     // ① wit 契约交叉核验：doc 必须覆盖 wit host interface 的全部函数名。
     let wit = std::fs::read_to_string(wit_path()).expect("wit/inkos.wit 在库");
