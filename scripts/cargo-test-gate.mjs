@@ -15,6 +15,8 @@
 //   node scripts/cargo-test-gate.mjs engine-rs   # 只跑指定 crate 目录
 //
 // 前置与环境：
+// - 第一步固定跑 audit:rust（RustSec 供应链审计，570 号接入）——需 cargo-audit
+//   （`cargo install cargo-audit`），缺失即 exit 3 不静默。
 // - engine-rs 侧必须带 INKOS_DUEL=1——strangler_duel 未设 env 时早退也计
 //   pass（170/172 号假绿事故；--all-targets 会把它一并跑掉，故 env 在
 //   本脚本内固定注入，不依赖调用方记得）。
@@ -47,6 +49,25 @@ function cargoAvailable() {
 if (!cargoAvailable()) {
   console.error("✗ 未找到 cargo。请先安装 rustup（门禁缺失不应静默绿灯）");
   process.exit(3);
+}
+
+// ── 前置哨兵：Rust 供应链漏洞审计（570 号）──
+// audit:rust（RustSec，engine-rs+src-tauri 双 Cargo.lock）先于全目标测试：
+// Cargo.lock 变更在测试跑完之前即被拦截。此前 audit:rust 是孤立脚本——
+// 与 audit:npm（gate:ts 内强制）不对称，517 号 rustls 清零靠的是当时手动
+// 跑过；接入后「改依赖即审计」成为机械纪律。cargo-audit 缺失按 audit-rust
+// 自身纪律非零退出（exit 3），不静默绿灯。
+{
+  const audit = spawnSync(process.execPath, [join(scriptDir, "audit-rust.mjs")], {
+    cwd: repoRoot,
+    stdio: "inherit",
+  });
+  if (audit.status !== 0) {
+    console.error(
+      `✗ Rust 供应链审计未通过（exit ${audit.status ?? 1}）——先清漏洞再进测试门禁`,
+    );
+    process.exit(audit.status ?? 1);
+  }
 }
 
 let failed = false;
