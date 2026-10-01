@@ -156,7 +156,7 @@ pub struct DebugToolEntry {
 
 /// `GET /api/v1/debug/tools`（Rust 超集只读端点，health 62 号同位）：书会话有效
 /// 工具目录投影（555 号）——全表按名称去重、保声明序首个（与 `find()` 分发
-/// 语义同构：read/ls/grep 书层先查、遮蔽项目层同款），34 注册 → 31 唯一名。
+/// 语义同构：read/ls/grep 书层先查、遮蔽项目层同款），35 注册 → 32 唯一名。
 /// 名称/描述/参数哈希；哈希面 = serde_json BTreeMap 键序规范化 sha256。
 /// loopback CORS 已由全局守卫限定本机（与 health 同级）。
 async fn debug_tools() -> Json<Vec<DebugToolEntry>> {
@@ -983,7 +983,7 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
-    /// 555 号：debug/tools 端点活体投影——全表按名称去重 31 唯一名（书层遮蔽
+    /// 555 号：debug/tools 端点活体投影——全表按名称去重 32 唯一名（书层遮蔽
     /// 项目层同款，与 find() 分发语义同构）、声明序、哈希稳定、camelCase 键面。
     #[tokio::test]
     async fn debug_tools_projects_full_registry() {
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp.into_body()).await;
         let entries: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-        assert_eq!(entries.len(), 31, "书会话有效目录（34 注册去重 31 唯一名）");
+        assert_eq!(entries.len(), 32, "书会话有效目录（35 注册去重 32 唯一名）");
         assert_eq!(entries[0]["name"], "set_world_anchor", "声明序 = 分发链序首族首件");
         assert!(
             entries[0]["parametersSha256"].as_str().unwrap().len() == 64,
@@ -1002,7 +1002,7 @@ mod tests {
         );
         // R39：全目录过三段管线（恒 true，加法超集字段）。
         assert_eq!(entries[0]["pipeline"], true, "R39 管线标记");
-        assert!(entries.iter().all(|e| e["pipeline"] == true), "31 条全量管线标记");
+        assert!(entries.iter().all(|e| e["pipeline"] == true), "32 条全量管线标记");
         let names: Vec<&str> = entries.iter().filter_map(|e| e["name"].as_str()).collect();
         assert!(names.contains(&"read") && names.contains(&"ingest_material"));
         // 去重：名称集无重复；read 条目 = 书层投影（描述含 book，非项目层同款）

@@ -2728,7 +2728,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   // 调试用工具目录（555 号，对齐 Rust debug/tools 裸数组形态）：书会话有效工具
-  // 投影（31 跨端名+node-only 13 名），条目 {name, description, parametersSha256}——
+  // 投影（32 跨端名+node-only 13 名），条目 {name, description, parametersSha256}——
   // schema 键规范化序 sha256，与 Rust serde BTreeMap 序同构，差分器 tool-catalog
   // 维度活体对照的 node 腿。
   app.get("/api/v1/debug/tools", (c) => {

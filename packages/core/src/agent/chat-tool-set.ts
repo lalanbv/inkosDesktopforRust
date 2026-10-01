@@ -469,7 +469,7 @@ const CATALOG_STUB_LLM = {} as FilmLLMDeps;
 /**
  * node 引擎 agent 面有效工具目录（书会话有效目录框架，见模块头注）。
  *
- * 顺序 = Rust 注册表声明序（跨端 31 名，对照阅读友好）+ node-only 13 名
+ * 顺序 = Rust 注册表声明序（跨端 32 名，对照阅读友好）+ node-only 13 名
  * （设计内不对称，差分器豁免表放行）。变体裁决：
  * - read/ls/grep 取书作用域（Rust BookSession 遮蔽裁决同款）；
  * - read 取系统读关闭分支（目录投影环境无 INKOS_AGENT_ALLOW_SYSTEM_READ）；
@@ -480,7 +480,7 @@ export function buildChatToolCatalog(): ChatToolCatalogEntry[] {
   const catalog: ChatToolCatalogEntry[] = [];
   const push = (tool: AgentTool<any>) => catalog.push(catalogEntry(tool));
 
-  // ── 跨端 31 名（Rust 注册表声明序）───────────────────────────────────────
+  // ── 跨端 32 名（Rust 注册表声明序）───────────────────────────────────────
   // film 七件（film_authoring_tools.rs defs 首族）
   for (const tool of createFilmAuthoringTools({
     projectRoot: CATALOG_STUB_ROOT,
@@ -514,8 +514,10 @@ export function buildChatToolCatalog(): ChatToolCatalogEntry[] {
   push(createGrepTool(CATALOG_STUB_ROOT));
   push(createIngestMaterialTool(CATALOG_STUB_ROOT));
   push(createRetrieveMaterialTool(CATALOG_STUB_ROOT));
+  // R37（560 号）：Rust 侧清偿后入跨端集（声明序末位=Rust material+author_skill）。
+  push(createAuthorSkillTool(CATALOG_STUB_ROOT));
 
-  // ── node-only 14 名（设计内不对称：Rust 侧走 propose→confirm + 端点，
+  // ── node-only 13 名（设计内不对称：Rust 侧走 propose→confirm + 端点，
   //    agent_route.rs 备案；差分器豁免表逐组放行）────────────────────────
   // 四建书件（chat 会话确认意图一次性件）
   push(createFanficBookTool(CATALOG_STUB_PIPELINE, CATALOG_STUB_ROOT));
@@ -541,8 +543,6 @@ export function buildChatToolCatalog(): ChatToolCatalogEntry[] {
       push(tool);
     }
   }
-  // R37（559 号）：自扩展技能写入件——Rust 侧备案（498→500 先例）。
-  push(createAuthorSkillTool(CATALOG_STUB_ROOT));
 
   return catalog;
 }

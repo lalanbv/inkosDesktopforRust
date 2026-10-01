@@ -45,6 +45,8 @@ const CROSS_END_CATALOG_NAMES = [
   "grep",
   "ingest_material",
   "retrieve_material",
+  // R37（560 号）：Rust 侧清偿后入跨端集（声明序末位=material 后）。
+  "author_skill",
 ];
 
 /** node-only 设计内不对称件（Rust 走 propose→confirm + 端点，agent_route.rs 备案）。 */
@@ -62,8 +64,6 @@ const NODE_ONLY_CATALOG_NAMES = [
   "draft_structure",
   "connect_choice",
   "remove_node",
-  // R37（559 号）：自扩展技能写入件（Rust 侧备案）。
-  "author_skill",
 ];
 
 function baseParams(overrides: Partial<ChatToolSetParams> = {}): ChatToolSetParams {
@@ -94,7 +94,7 @@ describe("buildChatToolCatalog", () => {
     }
   });
 
-  it("目录名单 = 跨端 31 名（Rust 声明序）+ node-only 14 名，无重复", () => {
+  it("目录名单 = 跨端 32 名（Rust 声明序）+ node-only 13 名，无重复", () => {
     const catalog = buildChatToolCatalog();
     const names = catalog.map((entry) => entry.name);
     expect(names.slice(0, CROSS_END_CATALOG_NAMES.length)).toEqual(CROSS_END_CATALOG_NAMES);
