@@ -419,19 +419,22 @@ impl ToolRegistry {
     pub fn mutation_kind(&self, name: &str) -> Option<MutationKind> {
         self.all().find(|def| def.name() == name).map(|def| def.mutation_kind())
     }
+
+    /// crate 内测试构造器（R39 管线行为测试注入 mock ToolDef——生产装配面
+    /// 只走 `global()`；cfg(test)：lib 目标无调用点，非测试编译即消失）。
+    #[cfg(test)]
+    pub(crate) fn from_defs(defs: Vec<Box<dyn ToolDef>>) -> Self {
+        Self { defs }
+    }
 }
 
-/// 全路由分发（R38b 单点化）：注册表查找 → 生产变更面抑制判定 → 执行；
-/// 未注册/不可用 → `Unknown tool` 错误文本（原兜底链语义）。
+/// 全路由分发（R38b 单点化；R39 起过三段管线）：`lookup → available →
+/// suppress 判定 → guards（Deny 短路）→ around{超时+重试+计时} → body →
+/// post 派链`——注册表内无旁路（所有调用面经此单点）。未注册/不可用 →
+/// `Unknown tool` 错误文本（原兜底链语义）。
 pub async fn execute_routed(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolResult {
     let registry = ToolRegistry::global();
-    if let Some(def) = registry.find(name, ctx) {
-        if ctx.suppress_production && def.mutation_kind() == MutationKind::ProductionMutation {
-            return project_tools::error_result(format!("Unknown tool: {name}"));
-        }
-        return def.execute(ctx, args).await;
-    }
-    project_tools::error_result(format!("Unknown tool: {name}"))
+    crate::interaction::pipeline::run_pipeline(registry, ctx, name, args).await.0
 }
 
 #[cfg(test)]

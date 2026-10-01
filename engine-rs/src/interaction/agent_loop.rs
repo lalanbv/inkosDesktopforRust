@@ -29,7 +29,9 @@ impl LoopEvents for NoopEvents {}
 pub type AbortHandle = Arc<Mutex<bool>>;
 
 /// 单次工具执行卡（对齐 TS CollectedToolExec：结构化 details 原样携带，
-/// 未提供时序列化省略键）。
+/// 未提供时序列化省略键）。R39 观测四字段（tookMs/attempt/timedOut/
+/// errorKind）为 Rust 超集加法（health backend 先例）：执行器未接管管线
+/// 时 None，卡片投影缺键；TS 面不消费（未知键忽略）。
 #[derive(Debug, Clone)]
 pub struct LoopToolExecution {
     pub id: String,
@@ -41,6 +43,10 @@ pub struct LoopToolExecution {
     pub details: Option<Value>,
     pub started_at: u64,
     pub completed_at: Option<u64>,
+    pub took_ms: Option<u64>,
+    pub attempt: Option<u32>,
+    pub timed_out: Option<bool>,
+    pub error_kind: Option<&'static str>,
 }
 
 /// G8a/333 号 AI 实况：token 用量（多轮累加，上游 usage 权威值；字段名对齐
@@ -86,6 +92,14 @@ pub trait LoopChat: Send + Sync {
 #[async_trait::async_trait]
 pub trait LoopToolExecutor: Send + Sync {
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult;
+
+    /// 最近一次 [`Self::execute`] 的管线正交观测（R39）。缺省 None——
+    /// 未接管三段管线的执行器（文件工具兜底链等）零成本适配；接管方
+    /// （ChatToolRouter）在 execute 内存取。单轮内 execute 串行 await，
+    /// 「最近一次」在读取点无歧义。
+    fn last_observation(&self) -> Option<crate::interaction::pipeline::PipelineObservation> {
+        None
+    }
 }
 
 /// agent 循环：system + 历史回放 + user 起始，工具调用逐轮执行回填，直至
@@ -175,6 +189,7 @@ pub async fn run_agent_loop(
             let started = crate::interaction::session::utc_now_ms();
             let result = tool_exec.execute(name, &args).await;
             let completed = crate::interaction::session::utc_now_ms();
+            let observation = tool_exec.last_observation();
             let is_error = result.is_error
                 || (result.details.is_none()
                     && result.text.starts_with(|c: char| !c.is_ascii_alphanumeric())
@@ -192,6 +207,10 @@ pub async fn run_agent_loop(
                 details: (!is_error).then(|| result.details.clone()).flatten(),
                 started_at: started,
                 completed_at: Some(completed),
+                took_ms: observation.map(|o| o.took_ms),
+                attempt: observation.map(|o| o.attempt),
+                timed_out: observation.map(|o| o.timed_out),
+                error_kind: observation.and_then(|o| o.error_kind),
             });
             messages.push(LLMMessage {
                 role: LLMRole::Tool,

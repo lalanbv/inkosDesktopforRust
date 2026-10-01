@@ -29,19 +29,27 @@ overrides:
   "@earendil-works/pi-agent-core": 0.87.0
   protobufjs: ^7.5.8
   mermaid: ^11.16.1
-  dompurify: ^3.4.13
+  # 556 号：dompurify afterSanitize 脱管子树 DOM XSS（GHSA-p98j-92pf-mc4p，
+  # ^3.4.13 解析停在 3.4.15）→ 3.4.16 起修复。
+  dompurify: ^3.4.16
   js-yaml: ^4.3.2
   "undici@7": 7.29.0
   "postcss@8": ^8.5.18
   "ws@8": ^8.21.0
-  "fast-uri@3": ^3.1.6
+  # 556 号：fast-uri percent-encoded host 大小写归一不一致（GHSA-hrr3-gc8f-f4qj，
+  # ^3.1.6 解析停在 3.1.7）→ 3.1.8 起修复；同批改 major 范围键。
+  "fast-uri@3": ^3.1.8
   "vite@7.3.1": 7.3.6
   # 429 号：audit 剩余条目精确钉修复版（brace-expansion ReDoS / picomatch ReDoS /
   # browserslist 数据 / basic-ftp DoS / fast-xml-builder / ip-address）。
-  "brace-expansion@2.0.2": ^2.1.4
+  # 556 号：新披露 advisory 由精确键改 major 范围键全系收敛——精确键只覆盖
+  # 当初命中版本，lockfile 重解析出的新版本（2.1.4/5.0.9/10.7.0）逃逸覆盖。
+  # brace-expansion 递归 DoS 三连（GHSA-q2hr-2g5m-vwhr/GHSA-qhr7-859c-m2p7/
+  # GHSA-6j4f-fj2g-mc7p）与 ip-address 解析诊断无界（GHSA-h3mg-xc3c-68pw）。
+  "brace-expansion@2": ^2.1.7
   # 491 号：ts-morph→minimatch10 链的 brace-expansion 5.0.5 与 shadcn 链的
   # postcss-selector-parser 7.1.1 均在语义化范围内可直达补丁线。
-  "brace-expansion@5.0.5": ^5.0.6
+  "brace-expansion@5": ^5.0.12
   "postcss-selector-parser@7.1.1": ^7.1.3
   # 501 号：fast-xml-parser 经 @aws-sdk/xml-builder（精确钉 5.5.8）与
   # provider-utils 4.0.23（ai 6.0.x 精确钉）——同 major 补丁线 override 出清。
@@ -51,7 +59,7 @@ overrides:
   "browserslist@4.28.1": ^4.28.8
   "basic-ftp@5.2.2": ^5.3.1
   "fast-xml-builder@1.1.4": ^1.1.7
-  "ip-address@10.1.0": ^10.7.0
+  "ip-address@10": ^10.7.2
   # 467 号：audit:npm 全量审计修复与接受边界（语义见 scripts/audit-npm.mjs 白名单）。
   # 555 号：undici WS permessage-deflate DoS（GHSA-3wwx-pv8p-q78v，6/7/8 线
   # 均受波及）——8.10.0 升 8.10.2（同 major 补丁线）；core 直依 6.28.0 同批升 6.28.1。

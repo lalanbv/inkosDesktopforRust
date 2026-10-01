@@ -1216,6 +1216,7 @@ pub async fn post_agent(
             }),
             suppress_production: background_task.is_some(),
         },
+        last_observation: std::sync::Mutex::new(None),
     };
     // 256 号：authoring 图谱上下文逐轮注入（TS createInteractiveFilmContext
     // Transform——[injected, ...messages] 对应位：system 之后、历史与本轮指令
@@ -1407,6 +1408,20 @@ fn tool_execution_cards(executions: &[LoopToolExecution]) -> Vec<Value> {
             if let Some(details) = &execution.details {
                 obj.insert("details".into(), details.clone());
             }
+            // R39 管线观测（Rust 超集加法；缺键=执行器未接管管线）。timedOut
+            // 仅真值投影——false 与缺省形态不区分，卡片保持瘦。
+            if let Some(took_ms) = execution.took_ms {
+                obj.insert("tookMs".into(), json!(took_ms));
+            }
+            if let Some(attempt) = execution.attempt {
+                obj.insert("attempt".into(), json!(attempt));
+            }
+            if execution.timed_out == Some(true) {
+                obj.insert("timedOut".into(), json!(true));
+            }
+            if let Some(error_kind) = execution.error_kind {
+                obj.insert("errorKind".into(), json!(error_kind));
+            }
             card
         })
         .collect()
@@ -1428,16 +1443,31 @@ fn strip_production_mutation_tools(tools: &mut Value) {
 }
 
 /// 聊天回环组合执行器（84/85/87/89 号）。R38b 全族注册表收拢：字段组迁入
-/// [`crate::interaction::registry::ToolCtx`]，执行 = `execute_routed` 单点
-/// 分发（可用性门控/生产变更面抑制/声明序遮蔽均在注册表内）。
+/// [`crate::interaction::registry::ToolCtx`]，执行 = 注册表单点分发
+/// （可用性门控/生产变更面抑制/声明序遮蔽均在注册表内）。R39：直连
+/// [`crate::interaction::pipeline::run_pipeline`] 取正交观测——execute_routed
+/// 是丢观测薄壳，聊天回环要把 tookMs/attempt/timedOut/errorKind 透到执行卡。
 struct ChatToolRouter<'a> {
     ctx: crate::interaction::registry::ToolCtx<'a>,
+    last_observation: std::sync::Mutex<Option<crate::interaction::pipeline::PipelineObservation>>,
 }
 
 #[async_trait::async_trait]
 impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
     async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
-        crate::interaction::registry::execute_routed(&self.ctx, name, args).await
+        let (result, observation) = crate::interaction::pipeline::run_pipeline(
+            crate::interaction::registry::ToolRegistry::global(),
+            &self.ctx,
+            name,
+            args,
+        )
+        .await;
+        *self.last_observation.lock().expect("router observation lock") = Some(observation);
+        result
+    }
+
+    fn last_observation(&self) -> Option<crate::interaction::pipeline::PipelineObservation> {
+        *self.last_observation.lock().expect("router observation lock")
     }
 }
 
@@ -2175,6 +2205,10 @@ mod payload_strict_tests {
                 details: Some(json!({ "kind": "chapter_local_edit" })),
                 started_at: 1_000,
                 completed_at: Some(1_500),
+                took_ms: None,
+                attempt: None,
+                timed_out: None,
+                error_kind: None,
             }],
             SessionKind::Book,
         )

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 /// 工具执行结果：文本 + details（透传给 toolResult 事件）。
+#[derive(Clone)]
 pub struct ToolResult {
     pub text: String,
     pub details: Option<Value>,

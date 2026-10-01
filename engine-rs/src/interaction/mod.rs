@@ -23,6 +23,7 @@ pub mod export_artifact;
 pub mod film_authoring_tools;
 pub mod intents;
 pub mod modes;
+pub mod pipeline;
 pub mod play_tools;
 pub mod project_tools;
 pub mod propose_action_tool;

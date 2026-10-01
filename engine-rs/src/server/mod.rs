@@ -148,6 +148,10 @@ pub struct DebugToolEntry {
     /// 参数 schema 的规范化 sha256（serde_json BTreeMap 键序即规范化序；
     /// 双端目录机械对照用——差分器 tool-catalog 维度数据源）。
     pub parameters_sha256: String,
+    /// R39 全目录过三段管线标记（恒 true——分发单点 execute_routed/run_pipeline
+    /// 内无旁路）。加法字段 Rust 超集（health backend 先例），TS 端点不投影，
+    /// 差分器三键对照不受影响。
+    pub pipeline: bool,
 }
 
 /// `GET /api/v1/debug/tools`（Rust 超集只读端点，health 62 号同位）：书会话有效
@@ -171,6 +175,7 @@ async fn debug_tools() -> Json<Vec<DebugToolEntry>> {
                     name: def.name().to_string(),
                     description: def.description(),
                     parameters_sha256: format!("{:x}", hasher.finalize()),
+                    pipeline: true,
                 }
             })
             .collect(),
@@ -995,6 +1000,9 @@ mod tests {
             entries[0]["parametersSha256"].as_str().unwrap().len() == 64,
             "sha256 hex；camelCase 键面（与 TS 条目同名同形，差分器对照数据源）"
         );
+        // R39：全目录过三段管线（恒 true，加法超集字段）。
+        assert_eq!(entries[0]["pipeline"], true, "R39 管线标记");
+        assert!(entries.iter().all(|e| e["pipeline"] == true), "31 条全量管线标记");
         let names: Vec<&str> = entries.iter().filter_map(|e| e["name"].as_str()).collect();
         assert!(names.contains(&"read") && names.contains(&"ingest_material"));
         // 去重：名称集无重复；read 条目 = 书层投影（描述含 book，非项目层同款）
