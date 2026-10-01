@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 use serde_json::{json, Value};
 
 use super::{
-    book_edit_tools, book_reference_tool, film_authoring_tools, forecast_tools,
+    author_skill_tool, book_edit_tools, book_reference_tool, film_authoring_tools, forecast_tools,
     import_chapters_tool, material_tools, play_tools, project_tools, propose_action_tool,
     research_tool, skill_tool, sub_agent_tool,
 };
@@ -378,6 +378,9 @@ impl ToolRegistry {
                 ];
                 defs.extend(file_defs);
                 defs.extend(material_tools::defs());
+                // R37（560 号）：自扩展技能写入件——项目级常驻（TS 全模式
+                // 常驻同构；catalog node-only 豁免同批出清）。
+                defs.extend(author_skill_tool::defs());
                 defs
             },
         })
@@ -477,9 +480,9 @@ mod tests {
         let names: Vec<&str> = registry.all().map(|def| def.name()).collect();
         // 34 = film 7 + propose 1 + research 1 + import 1 + sub_agent 1
         //      + use_skill 1 + book_reference 1 + book_edit 7 + forecast 3
-        //      + play 3 + 文件三件双作用域 6 + material 2。
+        //      + play 3 + 文件三件双作用域 6 + material 2 + author_skill 1。
         // 新族注册须同步此计数（施工图 §4.1 穷举测试思想：防漏登记）。
-        assert_eq!(names.len(), 34, "注册表总件数漂移：{names:?}");
+        assert_eq!(names.len(), 35, "注册表总件数漂移：{names:?}");
         let mut sorted = names;
         sorted.sort_unstable();
         let total = sorted.len();

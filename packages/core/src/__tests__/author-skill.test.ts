@@ -118,6 +118,7 @@ describe("disable-model-invocation governance (R37)", () => {
     const resolution = registry.resolveSkills({ requestedSkills: ["locked-skill", "open-skill"] });
     expect(resolution.availableSkillIds).toEqual(["open-skill"]);
     expect(resolution.usedSkills.map((s) => s.id)).toEqual(["open-skill"]);
-    expect(resolution.disabledSkillIds).toContain("locked-skill");
+    // governance 停用不进「显式禁用清单」（那是用户输入的 disabledSkills 语义）。
+    expect(resolution.disabledSkillIds).toEqual([]);
   });
 });

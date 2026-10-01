@@ -66,11 +66,19 @@ export async function searchWeb(
  * Fetch a URL and return its text content.
  * HTML is stripped to plain text. Output is truncated to maxChars.
  */
-export async function fetchUrl(url: string, maxChars = 8000): Promise<string> {
-  try {
-    await assertPublicEgressHost(url);
-  } catch (e) {
-    throw new Error(`Fetch blocked: ${(e as Error).message}`);
+export async function fetchUrl(
+  url: string,
+  maxChars = 8000,
+  options: { allowPrivateEgress?: boolean } = {},
+): Promise<string> {
+  // 560 号：allowPrivateEgress = 用户显式配置豁免（自建网关/内网知识库
+  // 部署语义，与 Rust fetch_url 第三参同构）；缺省 false 走防线。
+  if (!options.allowPrivateEgress) {
+    try {
+      await assertPublicEgressHost(url);
+    } catch (e) {
+      throw new Error(`Fetch blocked: ${(e as Error).message}`);
+    }
   }
   const res = await fetch(url, {
     headers: {

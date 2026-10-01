@@ -390,6 +390,7 @@ mod tests {
             body: "## 规则\n\n以静制动。".into(),
             source: SkillSource::Project,
             base_dir: None,
+        disable_model_invocation: None,
         }])
     }
 
@@ -502,6 +503,7 @@ mod query_retrieval_tests {
             body: "以静制动。".into(),
             source: SkillSource::Project,
             base_dir: Some(base.to_string_lossy().into_owned()),
+            disable_model_invocation: None,
         }]);
 
         let result = tool_use_skill(

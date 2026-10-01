@@ -23,6 +23,9 @@ pub struct ResearchSearchConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
+    /// 560 号：出站 host 防线（556 号）的用户显式豁免——自建网关/内网
+    /// 知识库部署语义（与 baseUrl 不做校验同一理由）。缺省 false 走防线。
+    pub allow_private_egress: bool,
 }
 
 /// `readResearchSearchConfig`：inkos.json 缺失/损坏/节缺失 → 默认（禁用）。
@@ -48,6 +51,7 @@ pub async fn read_research_search_config(project_root: &Path) -> ResearchSearchC
         base_url: str_field("baseUrl"),
         api_key: str_field("apiKey"),
         api_key_env: str_field("apiKeyEnv"),
+        allow_private_egress: node.get("allowPrivateEgress").and_then(Value::as_bool).unwrap_or(false),
     }
 }
 
@@ -55,6 +59,7 @@ pub async fn read_research_search_config(project_root: &Path) -> ResearchSearchC
 /// partialFailures，报告仍产出——TS 语义：禁用 ≠ 不调）。
 pub struct TavilyTransport {
     options: crate::utils::web_search::WebSearchOptions,
+    allow_private_egress: bool,
 }
 
 impl TavilyTransport {
@@ -68,7 +73,7 @@ impl TavilyTransport {
         } else {
             crate::utils::web_search::WebSearchOptions::default()
         };
-        Self { options }
+        Self { options, allow_private_egress: config.allow_private_egress }
     }
 }
 
@@ -78,7 +83,7 @@ impl ResearchTransport for TavilyTransport {
         crate::utils::web_search::search_web(query, max_results, &self.options).await
     }
     async fn fetch(&self, url: &str, max_chars: usize) -> Result<String, String> {
-        crate::utils::web_search::fetch_url(url, max_chars).await
+        crate::utils::web_search::fetch_url(url, max_chars, self.allow_private_egress).await
     }
 }
 

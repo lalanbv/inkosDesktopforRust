@@ -223,6 +223,7 @@ mod tests {
             body: "正文".into(),
             source: crate::skills::SkillSource::Builtin,
             base_dir: None,
+        disable_model_invocation: None,
         }
     }
 

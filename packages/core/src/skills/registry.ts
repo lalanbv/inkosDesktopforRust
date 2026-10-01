@@ -21,16 +21,18 @@ export function createSkillRegistry(options: CreateSkillRegistryOptions = {}): S
       return byId.get(normalizeSkillId(id));
     },
     resolveSkills(input: SkillResolutionInput) {
-      const disabled = new Set(normalizeIdList(input.disabledSkills));
-      // R37 治理面：disable-model-invocation 技能模型不可激活——与显式
-      // disabled 同权（requested 强制也跳过）；listSkills/getSkill 保留
-      // （人侧/审计可见）。
+      // R37 治理面：disable-model-invocation 技能模型不可激活——并入拦截
+      // 集（requested 强制也跳过）但**不进 disabledSkillIds 输出**（那是
+      // 「显式禁用清单」语义；governance 合并在 disabledSkillIds 计算之后）。
+      // listSkills/getSkill 保留（人侧/审计可见）。
+      const normalizedInputDisabled = normalizeIdList(input.disabledSkills);
+      const disabled = new Set(normalizedInputDisabled);
+      const requested = normalizeIdList(input.requestedSkills);
+      const missingSkillIds: string[] = [];
+      const disabledSkillIds = normalizedInputDisabled.filter((id) => byId.has(id));
       for (const skill of skills) {
         if (skill.disableModelInvocation === true) disabled.add(skill.id);
       }
-      const requested = normalizeIdList(input.requestedSkills);
-      const missingSkillIds: string[] = [];
-      const disabledSkillIds = [...disabled].filter((id) => byId.has(id));
       const used = new Map<string, AgentSkill>();
       const forcedSkillIds: string[] = [];
 

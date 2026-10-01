@@ -400,6 +400,7 @@ fn writing_prompts_match_ts_snapshot() {
         body: "Turn the chapter goal into scenes with an immediate objective, resistance, a meaningful turn.".into(),
         source: SkillSource::Builtin,
         base_dir: None,
+        disable_model_invocation: None,
     };
 
     // 单技能、无参考资源、无既有 system → 指导段前置为首条 system。

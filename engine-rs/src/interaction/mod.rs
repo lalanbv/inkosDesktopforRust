@@ -10,6 +10,7 @@
 //! focus-edit、chapter-rewrite）/ project-tools / session-transcript 等。
 
 pub mod agent_loop;
+pub mod author_skill_tool;
 pub mod book_edit_tools;
 pub mod chat_prompts;
 pub mod book_reference_tool;

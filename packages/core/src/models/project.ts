@@ -132,6 +132,8 @@ export const ResearchSearchConfigSchema = z.object({
   baseUrl: z.string().url().optional(),
   apiKey: z.string().optional(),
   apiKeyEnv: z.string().optional(),
+  /** 560 号：出站 host 防线（556 号）的用户显式豁免（自建网关部署语义）。 */
+  allowPrivateEgress: z.boolean().default(false),
 }).default({
   enabled: false,
   provider: "tavily",

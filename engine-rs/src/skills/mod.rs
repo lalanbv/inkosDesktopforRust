@@ -81,6 +81,10 @@ pub struct AgentSkill {
     pub source: SkillSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_dir: Option<String>,
+    /// R37 治理面（上游 pi disable-model-invocation）：人侧保留可见、模型
+    /// 不可激活。serde 键面 camelCase 对齐 TS AgentSkillSchema。
+    #[serde(rename = "disableModelInvocation", skip_serializing_if = "Option::is_none")]
+    pub disable_model_invocation: Option<bool>,
 }
 
 fn default_source() -> SkillSource {
@@ -160,7 +164,15 @@ impl SkillRegistry for BuiltinSkillRegistry {
         self.by_id.get(&normalize_skill_id(id)).cloned()
     }
     fn resolve_skills(&self, input: &SkillResolutionInput) -> SkillResolutionResult {
-        let disabled: HashSet<String> = input.disabled_skills.iter().map(|s| normalize_skill_id(s)).collect();
+        let mut disabled: HashSet<String> = input.disabled_skills.iter().map(|s| normalize_skill_id(s)).collect();
+        // R37 治理面（559/560 号）：disable-model-invocation 技能模型不可激活
+        // ——并入拦截集但不进 disabled_skill_ids 输出（那是「显式禁用清单」
+        // 语义，与 TS registry.ts 同构）。
+        for s in &self.skills {
+            if s.disable_model_invocation == Some(true) {
+                disabled.insert(s.id.clone());
+            }
+        }
         let requested: Vec<String> = dedupe_strings(
             &input.requested_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
         );
@@ -213,7 +225,7 @@ mod tests {
     use super::*;
 
     fn skill(id: &str) -> AgentSkill {
-        AgentSkill { id: id.into(), name: id.into(), description: "d".into(), body: "".into(), source: SkillSource::External, base_dir: None }
+        AgentSkill { id: id.into(), name: id.into(), description: "d".into(), body: "".into(), source: SkillSource::External, base_dir: None, disable_model_invocation: None }
     }
 
     #[test]

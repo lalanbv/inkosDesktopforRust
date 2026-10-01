@@ -12147,7 +12147,7 @@ mod research85_e2e {
         // researchSearch 配置指向 mock Tavily（enabled + baseUrl）。
         std::fs::write(
             root.join("inkos.json"),
-            serde_json::json!({ "researchSearch": { "enabled": true, "apiKey": "k", "baseUrl": format!("{base}/search") } }).to_string(),
+            serde_json::json!({ "researchSearch": { "enabled": true, "apiKey": "k", "baseUrl": format!("{base}/search"), "allowPrivateEgress": true } }).to_string(),
         )
         .unwrap();
 
@@ -17731,6 +17731,7 @@ mod sub139_e2e {
             body: body.to_string(),
             source: inkos_engine::skills::SkillSource::Builtin,
             base_dir: None,
+            disable_model_invocation: None,
         }
     }
 

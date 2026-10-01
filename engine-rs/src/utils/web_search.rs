@@ -84,11 +84,15 @@ pub async fn search_web(
 }
 
 /// `fetchUrl`：抓 URL 文本。HTML → script/style/标签剥离 + 空白折叠；
-/// 截断按 UTF-16 码元（TS `slice`）。
-pub async fn fetch_url(url: &str, max_chars: usize) -> Result<String, String> {
-    assert_public_egress_host(url)
-        .await
-        .map_err(|reason| format!("Fetch blocked: {reason}"))?;
+/// 截断按 UTF-16 码元（TS `slice`）。`allow_private_egress`：用户显式配置
+/// （inkos.json researchSearch.allowPrivateEgress——自建网关/内网知识库
+/// 部署语义，与 search_web base_url 不做校验同一理由；缺省 false 走防线）。
+pub async fn fetch_url(url: &str, max_chars: usize, allow_private_egress: bool) -> Result<String, String> {
+    if !allow_private_egress {
+        assert_public_egress_host(url)
+            .await
+            .map_err(|reason| format!("Fetch blocked: {reason}"))?;
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .no_proxy()

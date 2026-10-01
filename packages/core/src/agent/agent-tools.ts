@@ -44,7 +44,7 @@ import {
   type ActionPayload,
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
-import { searchWeb } from "../utils/web-search.js";
+import { fetchUrl, searchWeb } from "../utils/web-search.js";
 import { formatResumeHint } from "../utils/resume-advice.js";
 import {
   runAsWorkflowTrajectory,
@@ -1312,6 +1312,7 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
         depth: params.depth ?? "standard",
       }, {
         search: (query, maxResults) => searchWeb(query, maxResults, searchOptions),
+        fetch: (url, maxChars) => fetchUrl(url, maxChars, { allowPrivateEgress: searchConfig.allowPrivateEgress }),
       });
       const reportDir = join(projectRoot, ".inkos", "research");
       await mkdir(reportDir, { recursive: true });

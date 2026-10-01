@@ -102,6 +102,8 @@ pub fn parse_agent_skill_document(
         MAX_SKILL_DESCRIPTION_CHARS,
     )?;
     let id = normalize_external_skill_id(&name, &fallback_id)?;
+    // R37 治理面：frontmatter kebab-case 显式映射（与 TS parseAgentSkillDocument 同构）。
+    let disable_model_invocation = data.get("disable-model-invocation").and_then(|v| v.as_bool());
 
     Ok(AgentSkill {
         id,
@@ -117,6 +119,7 @@ pub fn parse_agent_skill_document(
                 .to_string_lossy()
                 .to_string(),
         ),
+        disable_model_invocation,
     })
 }
 
