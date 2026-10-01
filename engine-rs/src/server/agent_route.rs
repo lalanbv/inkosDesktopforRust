@@ -1215,6 +1215,7 @@ pub async fn post_agent(
                 )
             }),
             suppress_production: background_task.is_some(),
+            session_id: Some(session_id),
         },
         last_observation: std::sync::Mutex::new(None),
     };

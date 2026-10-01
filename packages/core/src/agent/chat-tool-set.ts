@@ -17,6 +17,8 @@ import { createHash } from "node:crypto";
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
+import { SPILL_EXEMPT_TOOLS, shouldSpill, spillToolText } from "../utils/tool-spill.js";
+
 import type { PipelineRunner } from "../pipeline/runner.js";
 import type { PlayMode, SessionKind } from "../interaction/session.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
@@ -124,8 +126,37 @@ export type ChatToolSetParams = {
 /**
  * 按会话参数装配本轮 agent 工具表（聊天工具统一出口）。
  */
+/**
+ * R42 spill 出口包装（engine-rs 管线 post 段 SpillHook 的 TS 同水位）：单一
+ * text 块结果超阈值时头尾保留+全文落盘。豁免件（read/ls/grep 读回通道）
+ * 直接透传不包装。工厂零改动条款遵守——包装在 buildChatToolSet 统一出口，
+ * 各工厂仍是行为单一事实源。
+ */
+function wrapWithSpill(tool: AgentTool<any>, projectRoot: string, sessionId: string): AgentTool<any> {
+  if (SPILL_EXEMPT_TOOLS.includes(tool.name)) return tool;
+  const originalExecute = tool.execute.bind(tool);
+  return {
+    ...tool,
+    execute: async (toolCallId, params, onUpdate) => {
+      const result = await originalExecute(toolCallId, params, onUpdate);
+      const blocks = result?.content;
+      const first = blocks?.[0] as { type?: string; text?: string } | undefined;
+      if (
+        blocks?.length === 1
+        && first?.type === "text"
+        && typeof first.text === "string"
+        && shouldSpill(tool.name, first.text, (result as { isError?: boolean }).isError === true)
+      ) {
+        const text = await spillToolText(projectRoot, sessionId, tool.name, first.text);
+        return { ...result, content: [{ type: "text", text }] };
+      }
+      return result;
+    },
+  };
+}
+
 export function buildChatToolSet(params: ChatToolSetParams): AgentTool<any>[] {
-  const tools = createModeTools(params);
+  const tools = createModeTools(params).map((tool) => wrapWithSpill(tool, params.projectRoot, params.sessionId));
   return params.intentSkillTool ? [...tools, params.intentSkillTool] : tools;
 }
 

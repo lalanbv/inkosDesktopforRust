@@ -35,3 +35,4 @@ pub mod session_restore;
 pub mod skill_tool;
 pub mod session_compaction;
 pub mod session_transcript;
+pub mod spill;

@@ -72,14 +72,22 @@ pub fn default_guards() -> &'static [&'static dyn ToolGuard] {
 
 // ── post 段 ───────────────────────────────────────────────────────────────
 
+/// post 钩子（派链序 = 注册序；ctx 参数供落盘类钩子取项目根/会话标识——
+/// R42 SpillHook 首消费）。
 pub trait PostHook: Sync + Send {
-    fn post<'a>(&'a self, name: &'a str, res: ToolResult) -> futures_util::future::BoxFuture<'a, ToolResult>;
+    fn post<'a>(
+        &'a self,
+        ctx: &'a ToolCtx<'a>,
+        name: &'a str,
+        res: ToolResult,
+    ) -> futures_util::future::BoxFuture<'a, ToolResult>;
 }
 
-/// 缺省 post 钩子装配（R39 骨架空集；首消费者=R42 spill，届时注册于此，
-/// 派链序=注册序）。
+/// 缺省 post 钩子装配（声明序 = 派链序；OnceLock 静态零泄漏）。
+/// R42：SpillHook（超阈值结果头尾保留+全文落盘）。
 pub fn default_post_hooks() -> &'static [Box<dyn PostHook>] {
-    &[]
+    static HOOKS: std::sync::OnceLock<Vec<Box<dyn PostHook>>> = std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| vec![Box::new(crate::interaction::spill::SpillHook)])
 }
 
 // ── 观测段 ────────────────────────────────────────────────────────────────
@@ -238,7 +246,7 @@ pub async fn run_pipeline_with_timeout(
     // 原结果先克隆留底：钩子 future 独占持有入参，panic 即随栈展开丢弃。
     for hook in default_post_hooks() {
         let original = result.clone();
-        let chained = std::panic::AssertUnwindSafe(hook.post(name, result));
+        let chained = std::panic::AssertUnwindSafe(hook.post(ctx, name, result));
         result = match futures_util::FutureExt::catch_unwind(chained).await {
             Ok(res) => res,
             Err(panic_payload) => {
@@ -495,7 +503,12 @@ mod tests {
     async fn post_hooks_chain_in_order_and_isolate_panics() {
         struct AppendHook(&'static str);
         impl PostHook for AppendHook {
-            fn post<'a>(&'a self, _name: &'a str, mut res: ToolResult) -> futures_util::future::BoxFuture<'a, ToolResult> {
+            fn post<'a>(
+                &'a self,
+                _ctx: &'a ToolCtx<'a>,
+                _name: &'a str,
+                mut res: ToolResult,
+            ) -> futures_util::future::BoxFuture<'a, ToolResult> {
                 Box::pin(async move {
                     res.text.push_str(self.0);
                     res
@@ -504,7 +517,12 @@ mod tests {
         }
         struct PanicHook;
         impl PostHook for PanicHook {
-            fn post<'a>(&'a self, _name: &'a str, res: ToolResult) -> futures_util::future::BoxFuture<'a, ToolResult> {
+            fn post<'a>(
+                &'a self,
+                _ctx: &'a ToolCtx<'a>,
+                _name: &'a str,
+                res: ToolResult,
+            ) -> futures_util::future::BoxFuture<'a, ToolResult> {
                 Box::pin(async move {
                     let _ = res;
                     panic!("hook boom");
@@ -513,16 +531,17 @@ mod tests {
         }
         let def = MockDef::new("read", MutationKind::ReadOnly, vec![MockOutcome::Ok("body")]);
         let registry = reg_with(def);
-        // 派链序与 panic 隔离经显式 hook 列表验证——管线内部消费 default_post_hooks()，
-        // 空集形态生产零行为；派链逻辑以独立函数口径测试。
+        // 派链序与 panic 隔离经显式 hook 列表验证——SpillHook 行为由 spill.rs
+        // 测试覆盖，此处仅验证派链机制本身。
         let h1: Box<dyn PostHook> = Box::new(PanicHook);
         let h2: Box<dyn PostHook> = Box::new(AppendHook("+h2"));
         let hooks: Vec<Box<dyn PostHook>> = vec![h1, h2];
+        let ctx = ctx();
         let initial = ToolResult { text: "body".into(), details: None, is_error: false };
         let mut res = initial;
         for hook in &hooks {
             let original = res.clone();
-            let chained = std::panic::AssertUnwindSafe(hook.post("read", res));
+            let chained = std::panic::AssertUnwindSafe(hook.post(&ctx, "read", res));
             res = match futures_util::FutureExt::catch_unwind(chained).await {
                 Ok(res) => res,
                 Err(payload) => {

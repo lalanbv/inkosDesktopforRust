@@ -229,6 +229,19 @@ pub async fn tool_read_book(root: &Path, args: &Value) -> ToolResult {
     let books_root = root.join("books");
     let resolved = if allow_system_read() && Path::new(path).is_absolute() {
         PathBuf::from(path)
+    } else if path.starts_with(".inkos/spills/") {
+        // R42 spill 读回通道（SpillHook 通知引用该前缀；read 在 spill 豁免
+        // 名单内，读 spill 文件的结果不再 spill → 无回环）。
+        match crate::utils::path::safe_child_path(&root.to_string_lossy(), path) {
+            Ok(resolved) => resolved,
+            Err(message) => {
+                return ToolResult {
+                    text: format!("Failed to read \"{path}\": {message}"),
+                    details: None,
+                    is_error: false,
+                }
+            }
+        }
     } else {
         match crate::utils::path::safe_child_path(&books_root.to_string_lossy(), path) {
             Ok(resolved) => resolved,
@@ -435,5 +448,28 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["read", "ls", "grep"]);
         assert_eq!(payload[0]["type"], "function");
+    }
+
+    /// 557 号 R42：spill 读回通道——书会话 read（books/ 限定）对
+    /// `.inkos/spills/` 前缀按项目根解析（唯一放行面），逃逸拒绝语义不变；
+    /// 项目级 `tool_read` 本就 root 相对，无需分支。
+    #[tokio::test]
+    async fn read_spills_prefix_reads_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let spill_dir = root.join(".inkos").join("spills").join("session-adhoc");
+        std::fs::create_dir_all(&spill_dir).unwrap();
+        std::fs::write(spill_dir.join("abc12345-research_web.txt"), " spilled 全文").unwrap();
+
+        let read = tool_read_book(root, &json!({ "path": ".inkos/spills/session-adhoc/abc12345-research_web.txt" })).await;
+        assert!(read.text.contains("spilled 全文"), "{}", read.text);
+        assert!(!read.is_error);
+
+        // books/ 之外的普通路径仍拒绝；.inkos 内 spills/ 之外仍拒绝；真逃逸
+        // （`..` 消解越出项目根）仍拒绝——`..` 段另有 R39 守卫前置拦截。
+        let inkos_other = tool_read_book(root, &json!({ "path": ".inkos/index.json" })).await;
+        assert!(inkos_other.text.contains("escapes") || inkos_other.text.contains("Failed to read"), "{}", inkos_other.text);
+        let traversal = tool_read_book(root, &json!({ "path": ".inkos/spills/../../../../secret.txt" })).await;
+        assert!(traversal.text.contains("Path traversal blocked"), "{}", traversal.text);
     }
 }

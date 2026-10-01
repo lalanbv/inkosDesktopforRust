@@ -85,6 +85,9 @@ pub struct ToolCtx<'a> {
     pub skill_deps: Option<(&'a dyn SkillRegistry, &'a [String])>,
     /// 215 号：suppressProductionTools——true 时生产变更面工具在分发面拒绝。
     pub suppress_production: bool,
+    /// 557 号 R42：会话标识（spill 落盘 session 作用域目录；root_only 兜底
+    /// 链无会话上下文 → None → session-adhoc 目录）。
+    pub session_id: Option<&'a str>,
 }
 
 impl<'a> ToolCtx<'a> {
@@ -103,6 +106,7 @@ impl<'a> ToolCtx<'a> {
             reference_book_id: None,
             skill_deps: None,
             suppress_production: false,
+            session_id: None,
         }
     }
 }

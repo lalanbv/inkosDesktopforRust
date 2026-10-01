@@ -3556,9 +3556,15 @@ export interface ReadToolOptions {
   readonly scope?: "books" | "project";
 }
 
-function resolveReadPath(readRoot: string, requestedPath: string, options: ReadToolOptions): string {
+function resolveReadPath(projectRoot: string, readRoot: string, requestedPath: string, options: ReadToolOptions): string {
   if (options.allowSystemPaths && isAbsolute(requestedPath)) {
     return resolve(requestedPath);
+  }
+  // R42 spill 读回通道（557 号）：`.inkos/spills/` 前缀按项目根解析——
+  // books/ 限定形态的唯一放行面（read 在 spill 豁免名单内，读回不回环）；
+  // project scope 本就 root 相对，该分支仅改变 books 限定下的解析根。
+  if (requestedPath.startsWith(".inkos/spills/")) {
+    return safeChildPath(projectRoot, requestedPath);
   }
   return safeChildPath(readRoot, requestedPath);
 }
@@ -3584,7 +3590,7 @@ export function createReadTool(
       params: Static<typeof ReadParams>,
     ): Promise<AgentToolResult<undefined>> {
       try {
-        const filePath = resolveReadPath(readRoot, params.path, options);
+        const filePath = resolveReadPath(projectRoot, readRoot, params.path, options);
         const content = await readFile(filePath, "utf-8");
         return textResult(content);
       } catch (err: any) {
