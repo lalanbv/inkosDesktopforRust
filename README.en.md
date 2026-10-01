@@ -37,7 +37,7 @@ By default the desktop shell **launches the Rust engine directly (zero Node runt
   <img src="assets/studio-dashboard.png" width="760" alt="InkOS Studio creation entry">
 </p>
 
-## Current status (2026-08)
+## Current status (2026-10)
 
 | Item | Status |
 | --- | --- |
@@ -46,6 +46,7 @@ By default the desktop shell **launches the Rust engine directly (zero Node runt
 | Engine update channel | Split by the effective backend: parallel Rust / Node asset channels with health pre-checks (#166) |
 | Desktop UI | Four-phase overhaul complete (#150–163): command palette, tabs, focus mode, split-pane reading, ten-dimension review score 2.4 → 4.2 |
 | CI | GitHub Actions fully removed (#149); releases are produced by local scripts and manually uploaded to Releases |
+| Benchmark programs | v6 (Pi benchmarks #30–37: transport guards / session compaction / telemetry / skill authoring) and v7 (dsh benchmarks #38–46: tool registry / three-stage pipeline / token metering / result spill / session event log / skills registry / provider seam / plugin contract) fully delivered |
 
 ## Desktop capabilities
 
@@ -75,6 +76,7 @@ Selection order: env var `INKOS_ENGINE_BACKEND` (rust\|node) > the "Engine backe
 - **Focus mode**, chat **message-level typewriter**, **chapter read/write split pane** (width memory + prev/next chapter navigation)
 - Light / dark / auto themes following the system + comfortable / compact density; reduced-motion and keyboard accessibility (a11y) throughout
 - Notification center and task stopping; macOS unified title bar / traffic lights / window-state memory / menu-bar entry
+- **Skills library & context meter** (#566/#564): Agent Skills imports hot-refresh instantly (force-enable via +), context-meter badge by the chat input (estimate/usage dual source, over-window warning)
 
 ### Plugin system
 
