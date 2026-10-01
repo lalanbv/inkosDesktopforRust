@@ -5,6 +5,7 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { fetchJson, postApi, useApi } from "../hooks/use-api";
 import type { ChatAttachmentPayload } from "../store/chat/types";
 import { chatSelectors, useChatStore } from "../store/chat";
+import { ContextMeterBadge } from "../components/ContextMeterBadge";
 import type { ChatSessionKind } from "../store/chat";
 import { useServiceStore } from "../store/service";
 import { usePreferencesStore } from "../store/preferences";
@@ -1147,6 +1148,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                     {isZh ? "配置模型 →" : "Set up models →"}
                   </button>
                 )}
+                {/* R41/564 号：会话上下文计量徽标（末轮请求面 token，观测位）。 */}
+                <ContextMeterBadge sessionId={activeSessionId} />
                 {currentSessionKind === "play" && (
                   <button
                     type="button"

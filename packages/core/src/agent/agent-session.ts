@@ -22,6 +22,7 @@ import type { PipelineRunner } from "../pipeline/runner.js";
 import { buildAgentSystemPrompt } from "./agent-system-prompt.js";
 import { buildChatToolSet, isProductionMutationToolName } from "./chat-tool-set.js";
 import { createBookContextTransform, createInteractiveFilmContextTransform } from "./context-transform.js";
+import { TokenMeter, type TokenMeterSnapshot } from "../utils/token-meter.js";
 import {
   appendTranscriptEvents,
   readTranscriptEvents,
@@ -128,6 +129,11 @@ export interface AgentSessionResult {
   thinking?: string;
   /** G8a/333 号 AI 实况：首包/总耗时（毫秒；首包=起点到首个模型输出事件）。 */
   timings: { firstTokenMs: number; totalMs: number };
+  /**
+   * R41 计量面（564 号）：本轮末请求面 token 计量快照（表语义 = 全量
+   * state.messages 回放 = 下一轮请求面；usage 锚点校准）。
+   */
+  contextMeter?: TokenMeterSnapshot;
 }
 
 export interface AgentSessionAttachment {
@@ -515,6 +521,30 @@ function extractTextFromAssistant(msg: AssistantMessage): string {
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text)
     .join("");
+}
+
+/**
+ * R41 计量投影（564 号）：各 AgentMessage 形态的文本面（user 字符串/内容
+ * 分组、assistant 文本块；toolResult 等其余形态尽力取 text 分组）——缺省
+ * 空串不抛（计量尽力而为，不阻断主链）。
+ */
+function extractMessageMeterText(message: AgentMessage): string {
+  const candidate = message as { role?: string; content?: unknown };
+  if (candidate.role === "assistant") {
+    return extractTextFromAssistant(message as AssistantMessage);
+  }
+  const content = candidate.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        const text = (part as { text?: unknown })?.text;
+        return typeof text === "string" ? text : "";
+      })
+      .join("");
+  }
+  return "";
 }
 
 function lastAssistantMessage(messages: AgentMessage[]): AssistantMessage | undefined {
@@ -1206,12 +1236,34 @@ async function runAgentSessionUnlocked(
   const totalMs = turnStartedAt > 0 ? Date.now() - turnStartedAt : 0;
   const firstTokenMs = firstEventAt > 0 && turnStartedAt > 0 ? firstEventAt - turnStartedAt : 0;
 
+  // R41 计量面（564 号，与 Rust run_agent_loop 挂线同构）：全量消息回放入表
+  // （state.messages 已含本轮 assistant 回复 = 下一轮请求面），usage 入锚。
+  // 尽力而为：usage 缺失时纯启发式（锚点缺席），观测不阻断。
+  let contextMeter: TokenMeterSnapshot | undefined;
+  try {
+    const meter = new TokenMeter(model.contextWindow);
+    for (const message of allMessages) {
+      meter.append(extractMessageMeterText(message));
+    }
+    // 锚点模型身份 = 本轮请求侧 model.id（usage 归属请求模型）。
+    meter.noteUsage(
+      model.id ?? null,
+      usage?.input ?? 0,
+      usage?.output ?? 0,
+      usage?.totalTokens ?? 0,
+    );
+    contextMeter = meter.measure();
+  } catch {
+    contextMeter = undefined;
+  }
+
   return {
     responseText,
     messages: allMessages.slice(),
     ...(usage ? { usage } : {}),
     ...(thinking ? { thinking } : {}),
     timings: { firstTokenMs, totalMs },
+    ...(contextMeter ? { contextMeter } : {}),
     ...(errorMessage ? { errorMessage } : {}),
   };
 }

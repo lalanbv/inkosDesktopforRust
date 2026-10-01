@@ -1031,6 +1031,14 @@ export {
   type ContextLensEntry,
   type ContextLensRank,
 } from "./utils/context-lens.js";
+// R41/564 号：token 计量服务（TS 镜像，563 号 Rust 侧同批语义；双端共享 golden）。
+export { TokenMeter } from "./utils/token-meter.js";
+export type {
+  MeterSource,
+  SurfaceNode,
+  UsageAnchor,
+  TokenMeterSnapshot,
+} from "./utils/token-meter.js";
 export {
   INKOS_AI_REQUEST_SPAN,
   NOOP_TELEMETRY_CONTEXT,

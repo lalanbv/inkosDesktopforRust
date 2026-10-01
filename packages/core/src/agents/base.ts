@@ -57,6 +57,14 @@ export abstract class BaseAgent {
         signal: this.ctx.signal,
         telemetry: this.ctx.telemetry,
         onEvent: (event) => this.logModelChainEvent(event),
+        // R41 计量面（564 号）：worker-agent 响应自带权威 usage → span end
+        // 计量四键（`inkos.usage.*`，schema 可选面）。
+        usageOf: (response) => ({
+          promptTokens: response.usage.promptTokens,
+          completionTokens: response.usage.completionTokens,
+          totalTokens: response.usage.totalTokens,
+          source: "usage",
+        }),
       },
     );
   }

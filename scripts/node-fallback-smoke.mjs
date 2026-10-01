@@ -185,6 +185,13 @@ async function runEngineLeg(engine) {
   const runLog = await api("/api/v1/run-log?limit=50");
   check(`[${engine}] run-log 调用计数 > 0`, (runLog.body?.total ?? 0) > 0);
 
+  // R41/564 号：context-meter 误差面双端对照（快照面需真实聊天轮，fixture
+  // 不驱动——快照契约由双端单测/golden 各自锁定，此处备案）。
+  const meterMissing = await api("/api/v1/context-meter");
+  check(`[${engine}] context-meter 缺参 400`, meterMissing.status === 400);
+  const meterUnknown = await api("/api/v1/context-meter?sessionId=smoke-unknown-session");
+  check(`[${engine}] context-meter 未知会话 404`, meterUnknown.status === 404);
+
   // 健康探针（493 号：node 腿补齐后双端统一探 this 面）。
   if (engine === "node") {
     const health = await api("/api/v1/health");

@@ -141,6 +141,7 @@ import {
   isValidSeriesId as core_isValidSeriesId,
   parseSeriesCanonFile as core_parseSeriesCanonFile,
   buildChatToolCatalog,
+  type TokenMeterSnapshot,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -1640,6 +1641,20 @@ type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
+// ── R41/564 号：会话 token 计量观测面（与 Rust agent_route context_meter_registry
+// 同构）——sessionId → 末轮快照；cap 64 逐出最旧；内存观测面，重启即清。
+const CONTEXT_METER_REGISTRY_CAP = 64;
+const contextMeterRegistry = new Map<string, TokenMeterSnapshot>();
+
+function storeContextMeterSnapshot(sessionId: string, snapshot: TokenMeterSnapshot): void {
+  contextMeterRegistry.delete(sessionId); // Map 保序：删旧再插 = 最新在尾
+  if (contextMeterRegistry.size >= CONTEXT_METER_REGISTRY_CAP) {
+    const oldest = contextMeterRegistry.keys().next().value;
+    if (oldest !== undefined) contextMeterRegistry.delete(oldest);
+  }
+  contextMeterRegistry.set(sessionId, snapshot);
+}
+
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
 
@@ -2733,6 +2748,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // 维度活体对照的 node 腿。
   app.get("/api/v1/debug/tools", (c) => {
     return c.json(buildChatToolCatalog());
+  });
+
+  // R41/564 号：会话末轮 token 计量快照（与 Rust GET /api/v1/context-meter
+  // 同构：无记录 404 / 缺参 400；内存观测面，重启即清）。
+  app.get("/api/v1/context-meter", (c) => {
+    const sessionId = c.req.query("sessionId")?.trim();
+    if (!sessionId) {
+      return c.json(
+        { error: { code: "INVALID_SESSION_ID", message: "sessionId is required" } },
+        400,
+      );
+    }
+    const snapshot = contextMeterRegistry.get(sessionId);
+    if (!snapshot) {
+      return c.json(
+        { error: { code: "SESSION_NOT_FOUND", message: "no context meter snapshot for this session" } },
+        404,
+      );
+    }
+    return c.json(snapshot);
   });
 
   // Structured error handler — ApiError returns typed JSON, others return 500
@@ -6194,6 +6229,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         },
         instruction,
       );
+
+      // R41/564 号：末轮计量快照留痕（与 Rust agent_route 同点尽力而为——
+      // 观测面不阻断主链；错误路径无 result 自然缺席）。
+      if (result.contextMeter) {
+        storeContextMeterSnapshot(bookSession.sessionId, result.contextMeter);
+      }
 
       if (result.responseText) {
         const actionExecutionError = validateAgentActionExecution({
