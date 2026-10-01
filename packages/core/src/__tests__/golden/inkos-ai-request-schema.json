@@ -73,6 +73,26 @@
             "fatal"
           ],
           "description": "InkOS error classification of a failed attempt (RunLogEntry.errorKind); absent on success"
+        },
+        "inkos.usage.prompt_tokens": {
+          "type": "number",
+          "description": "Prompt tokens of the governed attempt usage anchor (R41 token meter); absent when usage unavailable"
+        },
+        "inkos.usage.completion_tokens": {
+          "type": "number",
+          "description": "Completion tokens of the governed attempt usage anchor (R41 token meter); absent when usage unavailable"
+        },
+        "inkos.usage.total_tokens": {
+          "type": "number",
+          "description": "Total tokens of the governed attempt usage anchor (R41 token meter); absent when usage unavailable"
+        },
+        "inkos.usage.source": {
+          "type": "string",
+          "values": [
+            "usage",
+            "estimate"
+          ],
+          "description": "Meter source of the attempt usage (authoritative usage envelope vs heuristic estimate); absent when usage unavailable"
         }
       },
       "status": {

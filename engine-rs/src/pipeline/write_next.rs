@@ -1854,6 +1854,19 @@ pub(crate) async fn prepare_write_input(
     })
     .await?;
 
+    // R41/563 号：输入准备面计量（v7 写作链接线点——观测不阻断；超窗告警
+    // 已有 budget notes 通道，ContextLens 消费，此处不重复建告警）。走
+    // tracing 不走 stage_log——127 号阶段流是边界叙事契约，计量非阶段。
+    let context_entry_count = composed.context_package.selected_context.len();
+    let prepared_surface_tokens = crate::utils::token_meter::estimate_prepared_surface(
+        Some(plan.intent_markdown.as_str()),
+        Some(plan.memo.body.as_str()),
+        &composed.context_package.selected_context,
+    );
+    tracing::info!(
+        "[context-meter] chapter {chapter_number}: {prepared_surface_tokens} tokens / {context_entry_count} entries (heuristic estimate)"
+    );
+
     Ok(PreparedWriteInput {
         chapter_intent: Some(plan.intent_markdown.clone()),
         chapter_memo: Some(plan.memo.clone()),

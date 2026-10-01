@@ -116,4 +116,45 @@ describe("model-chain × inkos.ai.request span（R33 执行期接线）", () => 
     expect(spans[0]!.attributes["inkos.error_kind"]).toBe("fatal");
     expect(spans[0]!.status.status).toBe("error");
   });
+
+  it("extracts usage anchors into span end attributes via usageOf (R41/563)", async () => {
+    const telemetry = new InMemoryTelemetryContext();
+    const runner = flakyRunner([{ ok: true, value: "metered" }]);
+    const result = await runWithModelChain(runner.run, {
+      chain: CHAIN,
+      primaryModel: "primary",
+      label: "writer",
+      telemetry,
+      // R41：usageOf 从结果提取 usage 锚点 → span end 计量四键。
+      usageOf: (result) =>
+        result === "metered"
+          ? { promptTokens: 100, completionTokens: 50, totalTokens: 150, source: "usage" }
+          : undefined,
+    });
+    expect(result).toBe("metered");
+    const spans = telemetry.getSpans();
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.attributes).toMatchObject({
+      "inkos.usage.prompt_tokens": 100,
+      "inkos.usage.completion_tokens": 50,
+      "inkos.usage.total_tokens": 150,
+      "inkos.usage.source": "usage",
+    });
+  });
+
+  it("omits usage keys entirely when usageOf is absent or yields undefined (R41/563)", async () => {
+    const telemetry = new InMemoryTelemetryContext();
+    const runner = flakyRunner([{ ok: true, value: "no-usage" }]);
+    await runWithModelChain(runner.run, {
+      chain: CHAIN,
+      primaryModel: "primary",
+      label: "writer",
+      telemetry,
+      usageOf: () => undefined,
+    });
+    const spans = telemetry.getSpans();
+    expect(spans).toHaveLength(1);
+    const usageKeys = Object.keys(spans[0]!.attributes).filter((key) => key.startsWith("inkos.usage."));
+    expect(usageKeys).toEqual([]);
+  });
 });

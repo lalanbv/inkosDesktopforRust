@@ -4,6 +4,7 @@ import { globalRunLog } from "../utils/run-log.js";
 import {
   inkosAiRequestEndAttributes,
   runInkosAiRequestSpan,
+  type InkosAiRequestUsage,
   type TelemetryContext,
 } from "../telemetry/inkos-ai-request.js";
 
@@ -42,7 +43,7 @@ export interface ModelChainAttemptContext {
   readonly label: string;
 }
 
-export interface ModelChainRunOptions {
+export interface ModelChainRunOptions<T = unknown> {
   /** 未配置接管链时传 undefined——直通 primaryModel。 */
   readonly chain?: ResolvedTaskModelChain;
   readonly primaryModel: string;
@@ -53,6 +54,11 @@ export interface ModelChainRunOptions {
   readonly onEvent?: (event: ModelChainEvent) => void;
   /** R33 执行期接线（552 号）：缺省 undefined→NOOP，零行为。 */
   readonly telemetry?: TelemetryContext;
+  /**
+   * R41 计量面（563 号）：从 run 结果提取 usage 锚点（span end 可选四键
+   * `inkos.usage.*`）。缺省 undefined → 不提取，span 无计量键（零行为）。
+   */
+  readonly usageOf?: (result: T) => InkosAiRequestUsage | undefined;
 }
 
 /**
@@ -71,6 +77,7 @@ async function runAndRecord<T>(
   round: number,
   label: string,
   telemetry: TelemetryContext | undefined,
+  usageOf?: (result: T) => InkosAiRequestUsage | undefined,
 ): Promise<T> {
   const startedAt = Date.now();
   const attempt: ModelChainAttemptContext = {
@@ -88,6 +95,10 @@ async function runAndRecord<T>(
   }, async (span) => {
     try {
       const result = await run(model, attempt);
+      const usage = usageOf?.(result);
+      if (usage !== undefined) {
+        span.setAttributes(inkosAiRequestEndAttributes({ usage }));
+      }
       globalRunLog.append({
         ts: new Date().toISOString(),
         agent: label,
@@ -124,12 +135,12 @@ async function runAndRecord<T>(
 
 export async function runWithModelChain<T>(
   run: (model: string, attempt: ModelChainAttemptContext) => Promise<T>,
-  options: ModelChainRunOptions,
+  options: ModelChainRunOptions<T>,
 ): Promise<T> {
   const chain = options.chain;
   const label = options.label ?? "unknown";
   if (!chain || (chain.attempts.length <= 1 && chain.retryCount <= 1)) {
-    return runAndRecord(run, options.primaryModel, 0, 1, label, options.telemetry);
+    return runAndRecord(run, options.primaryModel, 0, 1, label, options.telemetry, options.usageOf);
   }
   let lastError: unknown;
   for (let attemptIndex = 0; attemptIndex < chain.attempts.length; attemptIndex++) {
@@ -137,7 +148,7 @@ export async function runWithModelChain<T>(
     for (let round = 1; round <= chain.retryCount; round++) {
       options.signal?.throwIfAborted();
       try {
-        const result = await runAndRecord(run, model, attemptIndex, round, label, options.telemetry);
+        const result = await runAndRecord(run, model, attemptIndex, round, label, options.telemetry, options.usageOf);
         if (attemptIndex > 0 || round > 1) {
           options.onEvent?.({ event: "success", model, attemptIndex, round });
         }

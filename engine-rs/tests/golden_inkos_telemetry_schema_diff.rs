@@ -23,7 +23,15 @@ const EXPECTED_START_KEYS: [&str; 9] = [
     "inkos.took_over",
 ];
 
-const EXPECTED_END_KEYS: [&str; 2] = ["pi.ai.response.model", "inkos.error_kind"];
+const EXPECTED_END_KEYS: [&str; 6] = [
+    "pi.ai.response.model",
+    "inkos.error_kind",
+    // R41 计量面（563 号）：加法式可选四键（usage 锚点缺失时全缺省）。
+    "inkos.usage.prompt_tokens",
+    "inkos.usage.completion_tokens",
+    "inkos.usage.total_tokens",
+    "inkos.usage.source",
+];
 
 /// 552 号粒度修订：span=per governed attempt（与 RunLogEntry 一一对应）——
 /// pi.ai.* 四键为 provider 层细节降 optional，required 全集只剩语义五键。
@@ -107,6 +115,19 @@ fn telemetry_schema_matches_shared_golden() {
         error_kind_values,
         ["transient", "fatal"],
         "inkos.error_kind 枚举漂移（RunLogErrorKind 对齐面）"
+    );
+
+    // R41 计量面（563 号）：usage.source 枚举与 TokenMeter MeterSource 同源。
+    let usage_source_values: Vec<&str> = span["endAttributes"]["inkos.usage.source"]["values"]
+        .as_array()
+        .expect("usage.source values")
+        .iter()
+        .map(|v| v.as_str().expect("value str"))
+        .collect();
+    assert_eq!(
+        usage_source_values,
+        ["usage", "estimate"],
+        "inkos.usage.source 枚举漂移（MeterSource 对齐面）"
     );
 
     let status = &span["status"];

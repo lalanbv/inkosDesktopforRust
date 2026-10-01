@@ -267,6 +267,8 @@ pub fn sidecar_cors_layer_with_extras(
 pub fn router(state: AppState) -> Router {    Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/debug/tools", get(debug_tools))
+        // R41/563 号：会话末轮 token 计量快照（内存观测面，无状态依赖）。
+        .route("/api/v1/context-meter", get(agent_route::get_context_meter))
         .route("/api/v1/utils/derive-book-id", post(derive_book_id))
         .route("/api/v1/utils/count-length", post(count_length))
         .route("/api/v1/utils/cap-context", post(cap_context))
@@ -1015,6 +1017,78 @@ mod tests {
             read["description"].as_str().unwrap().contains("book"),
             "read 保书层首现（find() 遮蔽语义同构）"
         );
+    }
+
+    /// R41/563 号：context-meter 端点——留痕会话回快照、未知会话 404、
+    /// 缺参 400；快照 camelCase 键面（TS 消费同形）。
+    #[tokio::test]
+    async fn context_meter_serves_last_turn_snapshot() {
+        let seed = crate::utils::token_meter::TokenMeterSnapshot {
+            model: Some("test-model".into()),
+            heuristic_tokens: 100,
+            anchored_tokens: 150,
+            tokens: 150,
+            anchor_valid: true,
+            source: "usage",
+            coverage: 1.0,
+            input_window: 128_000,
+            over_window: false,
+            surface_nodes: 25,
+        };
+        crate::server::agent_route::context_meter_registry()
+            .lock()
+            .unwrap()
+            .push(("meter-test-session".into(), seed));
+
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/context-meter?sessionId=meter-test-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_string(resp.into_body()).await;
+        let snap: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(snap["model"], "test-model");
+        assert_eq!(snap["heuristicTokens"], 100, "camelCase 键面");
+        assert_eq!(snap["anchoredTokens"], 150);
+        assert_eq!(snap["tokens"], 150);
+        assert_eq!(snap["anchorValid"], true);
+        assert_eq!(snap["source"], "usage");
+        assert_eq!(snap["inputWindow"], 128_000);
+        assert_eq!(snap["overWindow"], false);
+        assert_eq!(snap["surfaceNodes"], 25);
+
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/context-meter?sessionId=unknown-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/context-meter")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 清理注册表（全局态，防跨测试污染）。
+        crate::server::agent_route::context_meter_registry()
+            .lock()
+            .unwrap()
+            .retain(|(id, _)| id != "meter-test-session");
     }
 
     #[tokio::test]

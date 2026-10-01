@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "description": "R41 token 计量共享 golden 向量（563 号）：双端纯函数回放锁。op: append|noteUsage|measure；expect = TokenMeterSnapshot（camelCase，serde 声明序无关）。启发式公式 = CJK(U+3400-9FFF) 1:1 + 其余 UTF-16 码元 ceil(/4)（双端 estimate_text_tokens/estimateTextTokens 已各自锁定）。锚点语义：ratio=usageTotal/heuristicTotal@note clamp[0.25,4]；收缩拒绝=usage 较前锚腰斩且表不缩；coverage=heuristicTotal@note/heuristicNow min 1 四位舍入。",
+  "cases": [
+    {
+      "name": "estimate-only",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒" },
+        { "op": "append", "text": "abcd" },
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 5, "anchoredTokens": 5, "tokens": 5, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 2 } }
+      ]
+    },
+    {
+      "name": "anchor-correction",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 25 },
+        { "op": "noteUsage", "model": "m1", "promptTokens": 100, "completionTokens": 50, "totalTokens": 150, "accepted": true },
+        { "op": "measure", "expect": { "model": "m1", "heuristicTokens": 100, "anchoredTokens": 150, "tokens": 150, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 25 } },
+        { "op": "append", "text": "abcd" },
+        { "op": "measure", "expect": { "model": "m1", "heuristicTokens": 101, "anchoredTokens": 152, "tokens": 152, "anchorValid": true, "source": "usage", "coverage": 0.9901, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 26 } }
+      ]
+    },
+    {
+      "name": "anchor-rejected-on-halved-usage",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 25 },
+        { "op": "noteUsage", "model": "m1", "promptTokens": 100, "completionTokens": 50, "totalTokens": 150, "accepted": true },
+        { "op": "noteUsage", "model": "m2", "promptTokens": 20, "completionTokens": 30, "totalTokens": 50, "accepted": false },
+        { "op": "measure", "expect": { "model": "m1", "heuristicTokens": 100, "anchoredTokens": 150, "tokens": 150, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 25 } },
+        { "op": "append", "text": "abcd" },
+        { "op": "noteUsage", "model": "m3", "promptTokens": 20, "completionTokens": 30, "totalTokens": 50, "accepted": false },
+        { "op": "measure", "expect": { "model": "m1", "heuristicTokens": 101, "anchoredTokens": 152, "tokens": 152, "anchorValid": true, "source": "usage", "coverage": 0.9901, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 26 } }
+      ]
+    },
+    {
+      "name": "anchor-replaced-when-usage-grows",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 25 },
+        { "op": "noteUsage", "model": "m1", "promptTokens": 100, "completionTokens": 50, "totalTokens": 150, "accepted": true },
+        { "op": "noteUsage", "model": "m2", "promptTokens": 200, "completionTokens": 100, "totalTokens": 300, "accepted": true },
+        { "op": "measure", "expect": { "model": "m2", "heuristicTokens": 100, "anchoredTokens": 300, "tokens": 300, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 25 } }
+      ]
+    },
+    {
+      "name": "ratio-clamped-high",
+      "inputWindow": 10000,
+      "ops": [
+        { "op": "append", "text": "abcdefgh" },
+        { "op": "noteUsage", "model": "m", "promptTokens": 100, "completionTokens": 0, "totalTokens": 100, "accepted": true },
+        { "op": "measure", "expect": { "model": "m", "heuristicTokens": 2, "anchoredTokens": 8, "tokens": 8, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 10000, "overWindow": false, "surfaceNodes": 1 } }
+      ]
+    },
+    {
+      "name": "ratio-clamped-low",
+      "inputWindow": 10000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 100 },
+        { "op": "noteUsage", "model": "m", "promptTokens": 10, "completionTokens": 0, "totalTokens": 10, "accepted": true },
+        { "op": "measure", "expect": { "model": "m", "heuristicTokens": 400, "anchoredTokens": 100, "tokens": 100, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 10000, "overWindow": false, "surfaceNodes": 100 } }
+      ]
+    },
+    {
+      "name": "usage-total-falls-back-to-input-plus-output",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 25 },
+        { "op": "noteUsage", "model": "m", "promptTokens": 30, "completionTokens": 12, "totalTokens": 0, "accepted": true },
+        { "op": "measure", "expect": { "model": "m", "heuristicTokens": 100, "anchoredTokens": 42, "tokens": 42, "anchorValid": true, "source": "usage", "coverage": 1.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 25 } }
+      ]
+    },
+    {
+      "name": "zero-usage-not-anchored",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "hi" },
+        { "op": "noteUsage", "model": "m", "promptTokens": 0, "completionTokens": 0, "totalTokens": 0, "accepted": false },
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 1, "anchoredTokens": 1, "tokens": 1, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 1 } }
+      ]
+    },
+    {
+      "name": "empty-meter",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 0, "anchoredTokens": 0, "tokens": 0, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 0 } }
+      ]
+    },
+    {
+      "name": "anchor-before-first-append",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "noteUsage", "model": "m", "promptTokens": 10, "completionTokens": 0, "totalTokens": 10, "accepted": true },
+        { "op": "append", "text": "hi" },
+        { "op": "measure", "expect": { "model": "m", "heuristicTokens": 1, "anchoredTokens": 1, "tokens": 1, "anchorValid": true, "source": "usage", "coverage": 0.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 1 } }
+      ]
+    },
+    {
+      "name": "over-window-flag",
+      "inputWindow": 100,
+      "ops": [
+        { "op": "append", "text": "主角觉醒", "repeat": 25 },
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 100, "anchoredTokens": 100, "tokens": 100, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 100, "overWindow": false, "surfaceNodes": 25 } },
+        { "op": "append", "text": "主角觉醒" },
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 104, "anchoredTokens": 104, "tokens": 104, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 100, "overWindow": true, "surfaceNodes": 26 } }
+      ]
+    },
+    {
+      "name": "utf16-surrogate-pair",
+      "inputWindow": 1000,
+      "ops": [
+        { "op": "append", "text": "😀😀" },
+        { "op": "measure", "expect": { "model": null, "heuristicTokens": 1, "anchoredTokens": 1, "tokens": 1, "anchorValid": false, "source": "estimate", "coverage": 0.0, "inputWindow": 1000, "overWindow": false, "surfaceNodes": 1 } }
+      ]
+    }
+  ]
+}

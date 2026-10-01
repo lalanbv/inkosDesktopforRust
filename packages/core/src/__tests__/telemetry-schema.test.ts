@@ -47,7 +47,14 @@ describe("inkos.ai.request schema (R33 / golden 第 31 守门域)", () => {
       "inkos.round",
       "inkos.took_over",
     ]);
-    expect(Object.keys(span.endAttributes)).toEqual(["pi.ai.response.model", "inkos.error_kind"]);
+    expect(Object.keys(span.endAttributes)).toEqual([
+      "pi.ai.response.model",
+      "inkos.error_kind",
+      "inkos.usage.prompt_tokens",
+      "inkos.usage.completion_tokens",
+      "inkos.usage.total_tokens",
+      "inkos.usage.source",
+    ]);
     expect(span.status).toEqual({ default: "ok", errorWhen: expect.any(String) });
   });
 
@@ -95,6 +102,33 @@ describe("inkos.ai.request schema (R33 / golden 第 31 守门域)", () => {
     }
     expect(start["pi.ai.model"].required).toBe(true);
     expect(Object.keys(schema.spans[INKOS_AI_REQUEST_SPAN].endAttributes)).toContain("pi.ai.response.model");
+  });
+
+  it("keeps R41 usage meter end keys optional and constructor-aligned (563)", () => {
+    const schema = loadInkosAiRequestSchema();
+    const end = schema.spans[INKOS_AI_REQUEST_SPAN].endAttributes;
+    // R41 计量四键全 optional：usage 缺失的 attempt 零计量键（零行为）。
+    for (const key of [
+      "inkos.usage.prompt_tokens",
+      "inkos.usage.completion_tokens",
+      "inkos.usage.total_tokens",
+      "inkos.usage.source",
+    ]) {
+      expect(end[key].required ?? false).toBe(false);
+    }
+    expect(end["inkos.usage.source"].values).toEqual(["usage", "estimate"]);
+    // 构造器：usage 在场 → 四键全出（source 缺省 estimate）。
+    const withUsage = inkosAiRequestEndAttributes({
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    expect(withUsage).toEqual({
+      "inkos.usage.prompt_tokens": 100,
+      "inkos.usage.completion_tokens": 50,
+      "inkos.usage.total_tokens": 150,
+      "inkos.usage.source": "estimate",
+    });
+    // usage 缺省 → 零计量键。
+    expect(Object.keys(inkosAiRequestEndAttributes({}))).toEqual([]);
   });
 });
 

@@ -98,6 +98,20 @@ export interface InkosAiRequestInput {
 export interface InkosAiRequestOutcome {
   readonly responseModel?: string;
   readonly errorKind?: "transient" | "fatal";
+  /**
+   * R41 计量面（563 号）：本 attempt 的 usage 锚点（schema end 可选四键
+   * `inkos.usage.*`）。usage 缺省时 source 缺省 "estimate"（启发式）；
+   * usage 整体缺省 → 四键全缺省。
+   */
+  readonly usage?: InkosAiRequestUsage;
+}
+
+export interface InkosAiRequestUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly totalTokens: number;
+  /** usage 权威信封 = "usage"；启发式估算 = "estimate"（缺省）。 */
+  readonly source?: "usage" | "estimate";
 }
 
 /** start 属性面（required 键全集必出；pi.ai.* 可选键按入参透出）。 */
@@ -125,6 +139,12 @@ export function inkosAiRequestEndAttributes(
   const attributes: Record<string, string | number | boolean> = {};
   if (outcome.responseModel !== undefined) attributes["pi.ai.response.model"] = outcome.responseModel;
   if (outcome.errorKind !== undefined) attributes["inkos.error_kind"] = outcome.errorKind;
+  if (outcome.usage !== undefined) {
+    attributes["inkos.usage.prompt_tokens"] = outcome.usage.promptTokens;
+    attributes["inkos.usage.completion_tokens"] = outcome.usage.completionTokens;
+    attributes["inkos.usage.total_tokens"] = outcome.usage.totalTokens;
+    attributes["inkos.usage.source"] = outcome.usage.source ?? "estimate";
+  }
   return attributes;
 }
 

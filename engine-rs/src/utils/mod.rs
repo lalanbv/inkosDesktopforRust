@@ -65,6 +65,7 @@ pub mod info_gap_ledger;
 pub mod promise_ledger;
 pub mod quality_trend;
 pub mod style_feature_engine;
+pub mod token_meter;
 pub mod resume_advice;
 pub mod rule_experience_engine;
 pub mod scene_beats;

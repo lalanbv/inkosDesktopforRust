@@ -53,6 +53,62 @@ fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> (Sta
     )
 }
 
+// ── R41/563 号：会话 token 计量观测面 ─────────────────────────────────
+// 每聊天轮新建 [`crate::utils::token_meter::TokenMeter`]（表语义 = 当前请求
+// 面），轮末快照留痕于此（sessionId → 末轮快照；cap 64 逐出最旧；内存观测
+// 面，重启即清——先观测不阻断）。消费面 = GET /api/v1/context-meter。
+pub(crate) fn context_meter_registry(
+) -> &'static Mutex<Vec<(String, crate::utils::token_meter::TokenMeterSnapshot)>> {
+    static REGISTRY: OnceLock<Mutex<Vec<(String, crate::utils::token_meter::TokenMeterSnapshot)>>> =
+        OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+const CONTEXT_METER_REGISTRY_CAP: usize = 64;
+
+fn store_context_meter_snapshot(
+    session_id: &str,
+    snapshot: crate::utils::token_meter::TokenMeterSnapshot,
+) {
+    let mut registry = context_meter_registry().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(slot) = registry.iter_mut().find(|(id, _)| id == session_id) {
+        slot.1 = snapshot;
+        return;
+    }
+    if registry.len() >= CONTEXT_METER_REGISTRY_CAP {
+        registry.remove(0);
+    }
+    registry.push((session_id.to_string(), snapshot));
+}
+
+/// R41/563 号：`GET /api/v1/context-meter?sessionId=…`——会话末轮 token 计量
+/// 快照（启发式/锚点校准双口径 + 超窗旗标；studio 面板挂 RunLog 旁）。
+/// 无记录（未跑过聊天轮/重启后）→ 404。
+pub async fn get_context_meter(
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    let params = query.0;
+    let Some(session_id) = params.get("sessionId").map(String::as_str).filter(|s| !s.is_empty())
+    else {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_SESSION_ID",
+            "sessionId is required",
+        )
+        .into_response();
+    };
+    let registry = context_meter_registry().lock().unwrap_or_else(|e| e.into_inner());
+    match registry.iter().find(|(id, _)| id == session_id) {
+        Some((_, snapshot)) => Json(snapshot.clone()).into_response(),
+        None => api_error(
+            StatusCode::NOT_FOUND,
+            "SESSION_NOT_FOUND",
+            "no context meter snapshot for this session",
+        )
+        .into_response(),
+    }
+}
+
 /// `normalizeSkillIdList`：单值/数组 → trim + lower + `^[a-z][a-z0-9-]*$` +
 /// 去重保序；非字符串/非法格式 → Err。
 fn normalize_skill_id_list(value: Option<&Value>) -> Result<Vec<String>, String> {
@@ -921,6 +977,7 @@ pub async fn post_agent(
                 input: completion.prompt_tokens.unwrap_or(0),
                 output: completion.completion_tokens.unwrap_or(0),
                 total_tokens: completion.total_tokens.unwrap_or(0),
+                model: Some(endpoint.model.clone()),
             };
             Ok((completion.content, tool_calls, usage))
         }
@@ -1051,6 +1108,8 @@ pub async fn post_agent(
         thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
         thinking_text: thinking_text.clone(),
     };
+    // R41/563 号：计量器（每请求新建 = 当前请求面折叠表；窗口 = 路由缺省窗）。
+    let meter = crate::utils::token_meter::TokenMeter::new(runtime.router.default_context_window());
     let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/
@@ -1263,6 +1322,7 @@ pub async fn post_agent(
                     Some(&tools),
                     Some(&abort_flag),
                     &bridge,
+                    Some(&meter),
                 )
                 .await;
                 loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted, outcome.usage, outcome.timings))
@@ -1272,6 +1332,10 @@ pub async fn post_agent(
         .await;
 
     running_agent_sessions().lock().unwrap().remove(session_id);
+
+    // R41/563 号：末轮计量快照留痕（成功/失败/中止路径同点，尽力而为——
+    // 观测面不阻断主链）。
+    store_context_meter_snapshot(session_id, meter.measure());
 
     match chat_result {
         Ok((raw_text, tool_executions, aborted, loop_usage, loop_timings)) => {
