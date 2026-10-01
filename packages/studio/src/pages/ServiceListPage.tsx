@@ -427,6 +427,35 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         </div>
       )}
 
+      {/* 575 号：自定义服务区块置顶——零配置新用户从聊天页「配置模型 →」进入后
+          无需滚动 38 个预设分组即可直达自定义服务表单（574 号走查备案的三层深
+          引导链收敛为两层）；既有 preset 用户路径不变（分组列表原序跟随）。 */}
+      {showCustomSection && (
+        <section className="space-y-3">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+            {tr("自定义服务", "Custom services")}
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            {filteredCustom.map((svc) => (
+              <ServiceCard
+                key={svc.service}
+                svc={svc}
+                onClick={() => nav.toServiceDetail(svc.service)}
+              />
+            ))}
+            {canCreateCustom && (
+              <button
+                onClick={() => nav.toServiceDetail("custom")}
+                className="flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/40 p-5 text-muted-foreground/60 transition-all hover:border-primary/30 hover:text-muted-foreground"
+              >
+                <Plus size={18} />
+                <span className="text-xs">{tr("自定义服务", "Custom service")}</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {!loading && GROUP_ORDER.map((group) => {
         const list = byGroup[group];
         if (!list || list.length === 0) return null;
@@ -454,32 +483,6 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           </section>
         );
       })}
-
-      {showCustomSection && (
-        <section className="space-y-3">
-          <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-            {tr("自定义服务", "Custom services")}
-          </h2>
-          <div className="grid grid-cols-2 gap-3">
-            {filteredCustom.map((svc) => (
-              <ServiceCard
-                key={svc.service}
-                svc={svc}
-                onClick={() => nav.toServiceDetail(svc.service)}
-              />
-            ))}
-            {canCreateCustom && (
-              <button
-                onClick={() => nav.toServiceDetail("custom")}
-                className="flex min-h-[92px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border/40 p-5 text-muted-foreground/60 transition-all hover:border-primary/30 hover:text-muted-foreground"
-              >
-                <Plus size={18} />
-                <span className="text-xs">{tr("自定义服务", "Custom service")}</span>
-              </button>
-            )}
-          </div>
-        </section>
-      )}
 
       {!loading && filtered.length === 0 && filteredCustom.length === 0 && !canCreateCustom && (
         <div className="rounded-lg border border-dashed border-border/40 p-8 text-center text-sm text-muted-foreground">
