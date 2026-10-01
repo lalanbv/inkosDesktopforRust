@@ -721,6 +721,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "ingest_material",
       "retrieve_material",
       "import_chapters",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -859,6 +860,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "research_web",
       "ingest_material",
       "retrieve_material",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -902,6 +904,7 @@ describe("runAgentSession cache — bookId switch", () => {
 
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
       "sub_agent",
+      "author_skill",
     ]);
   });
 
@@ -931,7 +934,8 @@ describe("runAgentSession cache — bookId switch", () => {
         },
         `确认执行 ${requestedIntent}`,
       );
-      expect(agentInstances.at(-1).state.tools.map((tool: any) => tool.name)).toEqual([toolName]);
+      // R37：author_skill 全模式常驻（buildChatToolSet 统一追加）。
+      expect(agentInstances.at(-1).state.tools.map((tool: any) => tool.name)).toEqual([toolName, "author_skill"]);
       evictAgentCache(sessionId);
     }
   });
@@ -951,6 +955,7 @@ describe("runAgentSession cache — bookId switch", () => {
         "read",
         "ingest_material",
         "retrieve_material",
+        "author_skill",
         "use_skill",
       ]);
       evictAgentCache(sessionId);
@@ -969,6 +974,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "propose_action",
       "ingest_material",
       "retrieve_material",
+      "author_skill",
       "use_skill",
     ]);
 
@@ -980,6 +986,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "propose_action",
       "ingest_material",
       "retrieve_material",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -1173,6 +1180,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "play_step",
       "ingest_material",
       "retrieve_material",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -1197,6 +1205,7 @@ describe("runAgentSession cache — bookId switch", () => {
     );
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
       "short_fiction_run",
+      "author_skill",
     ]);
 
     await runAgentSession(
@@ -1215,6 +1224,7 @@ describe("runAgentSession cache — bookId switch", () => {
     );
     expect(agentInstances[1].state.tools.map((tool: any) => tool.name)).toEqual([
       "generate_cover",
+      "author_skill",
     ]);
   });
 
@@ -1238,6 +1248,7 @@ describe("runAgentSession cache — bookId switch", () => {
     );
     expect(agentInstances[0].state.tools.map((tool: any) => tool.name)).toEqual([
       "play_start",
+      "author_skill",
     ]);
   });
 
@@ -1270,6 +1281,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "select_narrative_branch",
       "grep",
       "ls",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -1296,6 +1308,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "select_narrative_branch",
       "grep",
       "ls",
+      "author_skill",
       "use_skill",
     ]);
 
@@ -1325,6 +1338,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "select_narrative_branch",
       "grep",
       "ls",
+      "author_skill",
       "use_skill",
     ]);
   });
@@ -1351,6 +1365,7 @@ describe("runAgentSession cache — bookId switch", () => {
       "manage_book_reference",
       "grep",
       "ls",
+      "author_skill",
       "use_skill",
     ]);
   });

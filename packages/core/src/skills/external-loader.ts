@@ -195,6 +195,9 @@ export function parseAgentSkillDocument(
     body: parsed.body.trim(),
     source: options.source ?? "external",
     baseDir: dirname(options.skillPath),
+    // R37 治理面：frontmatter kebab-case 显式映射（strict schema 会拒绝
+    // 未知键，无此映射用户手改加该字段会把整份 SKILL.md 打成 diagnostic）。
+    ...(data["disable-model-invocation"] === true ? { disableModelInvocation: true } : {}),
   });
 }
 

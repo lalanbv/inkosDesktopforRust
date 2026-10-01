@@ -19,6 +19,7 @@ import {
   type BookConfig,
   type FanficMode,
 } from "../models/book.js";
+import { loadAvailableAgentSkills } from "../skills/builtin-loader.js";
 import { generateShortFictionCover, runShortFictionProduction } from "../pipeline/short-fiction-runner.js";
 import { runInteractiveFilmCreation, runScriptCreation, runStoryboardCreation } from "../pipeline/script-storyboard-runner.js";
 import { createTranslationProjectFromFile } from "../translation/index.js";
@@ -3324,6 +3325,100 @@ const WriteTruthFileParams = Type.Object({
   fileName: Type.String({ description: "Truth file path under story/. Prefer outline/story_frame.md, outline/volume_map.md, roles/major/<name>.md, roles/minor/<name>.md; flat files such as current_focus.md and author_intent.md are also supported." }),
   content: Type.String({ description: "Full replacement content for the truth file." }),
 });
+
+// ---------------------------------------------------------------------------
+// Author Skill Tool（R37，559 号——自扩展技能创作链写入面）
+// ---------------------------------------------------------------------------
+
+const AuthorSkillParams = Type.Object({
+  name: Type.String({ description: "Skill id: lowercase letters/digits/hyphens, starting with a letter or digit, at most 64 chars. Becomes the directory name under skills/." }),
+  description: Type.String({ description: "One-line description of WHEN to use this skill (max 1024 chars). Describe the purpose; do not write instructions that trick the model into always activating it." }),
+  body: Type.String({ description: "Skill guidance in Markdown (the body under the frontmatter). Keep it focused and reusable for this project." }),
+});
+
+/** R37 名称保留表：source 枚举保留字（agent 不得占用治理命名空间）。 */
+const AUTHOR_SKILL_RESERVED_IDS: ReadonlyArray<string> = ["builtin", "user", "external", "project"];
+
+/** author_skill 安全名校验（546 施工图 4.3：`^[a-z0-9][a-z0-9-]{0,63}$`）。 */
+export function assertSafeSkillId(name: string): string {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+    throw new Error(`Invalid skill id "${name}": use lowercase letters, digits and hyphens (start with a letter or digit, max 64 chars).`);
+  }
+  if (AUTHOR_SKILL_RESERVED_IDS.includes(name)) {
+    throw new Error(`Skill id "${name}" is reserved.`);
+  }
+  return name;
+}
+
+/**
+ * `author_skill`（R37，559 号）：agent 为当前项目沉淀可复用技能——落盘
+ * `{projectRoot}/skills/{name}/SKILL.md`（既有 project 源目录，external-loader
+ * 零改动拾取）。治理门：安全名正则 + 保留字 + 全源 id 撞名拒绝（registry
+ * dedupe 为 last-write-wins，project 件会覆盖内置同 id——写端拒绝防同会话
+ * 自我劫持）；只增不改不删（目录已存在即拒绝）；**当前会话 registry 冻结**
+ * （下会话装载路径自动生效，结果文本明示）；停用走人侧（删目录或 frontmatter
+ * 加 `disable-model-invocation: true`，R37 起 loader/registry 支持该字段）。
+ * 不给 agent 通用文件写权（agent-tools 现无 write_file，维持）。
+ */
+export function createAuthorSkillTool(projectRoot: string): AgentTool<typeof AuthorSkillParams> {
+  return {
+    name: "author_skill",
+    description: "Author a reusable project skill (persisted under skills/<name>/SKILL.md, effective from the NEXT session — the current session's skill set is frozen). Use it to distill repeatable, project-specific guidance the user asks to keep; not for one-off tasks.",
+    label: "Author Skill",
+    parameters: AuthorSkillParams,
+    async execute(_toolCallId, params): Promise<AgentToolResult<undefined>> {
+      try {
+        const name = assertSafeSkillId(params.name.trim());
+        const description = params.description.trim();
+        if (!description || description.length > 1024) {
+          throw new Error("description must be non-empty and at most 1024 characters.");
+        }
+        const body = params.body.trim();
+        if (!body) {
+          throw new Error("body must be non-empty Markdown guidance.");
+        }
+        const skillDir = join(projectRoot, "skills", name);
+        // 只增不改：同名目录已存在即拒绝（修改/删除走人侧）。
+        try {
+          await stat(skillDir);
+          throw new Error(`Skill "${name}" already exists (skills/${name}/). Modify or remove it manually instead.`);
+        } catch (err: any) {
+          if (err?.code !== "ENOENT") throw err;
+        }
+        // 撞名拒绝（546 施工图 4.3）：全源现有技能 id（builtin/project/user/
+        // external）任一同 id 即拒绝——registry last-write-wins 下 project
+        // 件覆盖既有 id，防 agent 自劫持。
+        const { skills: existing } = await loadAvailableAgentSkills({ projectRoot });
+        const collision = existing.find((skill) => skill.id === name);
+        if (collision) {
+          throw new Error(`Skill id "${name}" collides with an existing ${collision.source} skill. Choose a different id.`);
+        }
+        const manifest = [
+          "---",
+          `name: ${JSON.stringify(name)}`,
+          // JSON 字符串字面量是合法 YAML 双引号标量——description 中的换行/
+          // 分隔符/伪 frontmatter 注入全部中性化。
+          `description: ${JSON.stringify(description)}`,
+          "---",
+          "",
+          body,
+          "",
+        ].join("\n");
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), manifest, "utf-8");
+        return textResult(
+          `Skill "${name}" written to skills/${name}/SKILL.md. `
+          + "It is NOT active in this session (the skill set is frozen per session) and will load on the next session. "
+          + 'To disable it later, remove the directory or add "disable-model-invocation: true" to its frontmatter.',
+        );
+      } catch (err: any) {
+        return textResult(`author_skill failed: ${err?.message ?? String(err)}`);
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 
 export function createWriteTruthFileTool(
   pipeline: PipelineRunner,

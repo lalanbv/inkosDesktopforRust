@@ -55,6 +55,7 @@ import {
   createResearchWebTool,
   createIngestMaterialTool,
   createRetrieveMaterialTool,
+  createAuthorSkillTool,
   createManageBookReferenceTool,
   createImportChaptersTool,
 } from "./agent-tools.js";
@@ -157,7 +158,10 @@ function wrapWithSpill(tool: AgentTool<any>, projectRoot: string, sessionId: str
 
 export function buildChatToolSet(params: ChatToolSetParams): AgentTool<any>[] {
   const tools = createModeTools(params).map((tool) => wrapWithSpill(tool, params.projectRoot, params.sessionId));
-  return params.intentSkillTool ? [...tools, params.intentSkillTool] : tools;
+  // R37（559 号）：author_skill 全模式常驻——agent 为项目沉淀技能（当前
+  // 会话冻结、下会话生效；结果小且自有校验，不走 spill 包装）。
+  const withAuthorSkill = [...tools, createAuthorSkillTool(params.projectRoot)];
+  return params.intentSkillTool ? [...withAuthorSkill, params.intentSkillTool] : withAuthorSkill;
 }
 
 function createModeTools(params: ChatToolSetParams) {
@@ -511,7 +515,7 @@ export function buildChatToolCatalog(): ChatToolCatalogEntry[] {
   push(createIngestMaterialTool(CATALOG_STUB_ROOT));
   push(createRetrieveMaterialTool(CATALOG_STUB_ROOT));
 
-  // ── node-only 13 名（设计内不对称：Rust 侧走 propose→confirm + 端点，
+  // ── node-only 14 名（设计内不对称：Rust 侧走 propose→confirm + 端点，
   //    agent_route.rs 备案；差分器豁免表逐组放行）────────────────────────
   // 四建书件（chat 会话确认意图一次性件）
   push(createFanficBookTool(CATALOG_STUB_PIPELINE, CATALOG_STUB_ROOT));
@@ -537,6 +541,8 @@ export function buildChatToolCatalog(): ChatToolCatalogEntry[] {
       push(tool);
     }
   }
+  // R37（559 号）：自扩展技能写入件——Rust 侧备案（498→500 先例）。
+  push(createAuthorSkillTool(CATALOG_STUB_ROOT));
 
   return catalog;
 }

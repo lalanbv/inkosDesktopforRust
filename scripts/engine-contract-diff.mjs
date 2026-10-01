@@ -692,6 +692,8 @@ try {
       "short_fiction_run", "translation_create", "script_create",
       "storyboard_create", "interactive_film_create", "play_start",
       "draft_structure", "connect_choice", "remove_node",
+      // R37（559 号）：自扩展技能写入件——Rust 侧备案（498→500 先例：TS 先行清偿）。
+      "author_skill",
     ]);
     // 哈希豁免单件（89 号偏差备案）：generate_cover 的 coverBaseUrl/Endpoint/
     // Model/Size/ApiKeyEnv 五键 Rust 链不支持（Rust json! 刻意未列入，book_edit_

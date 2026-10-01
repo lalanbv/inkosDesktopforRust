@@ -22,6 +22,12 @@ export function createSkillRegistry(options: CreateSkillRegistryOptions = {}): S
     },
     resolveSkills(input: SkillResolutionInput) {
       const disabled = new Set(normalizeIdList(input.disabledSkills));
+      // R37 治理面：disable-model-invocation 技能模型不可激活——与显式
+      // disabled 同权（requested 强制也跳过）；listSkills/getSkill 保留
+      // （人侧/审计可见）。
+      for (const skill of skills) {
+        if (skill.disableModelInvocation === true) disabled.add(skill.id);
+      }
       const requested = normalizeIdList(input.requestedSkills);
       const missingSkillIds: string[] = [];
       const disabledSkillIds = [...disabled].filter((id) => byId.has(id));

@@ -62,6 +62,8 @@ const NODE_ONLY_CATALOG_NAMES = [
   "draft_structure",
   "connect_choice",
   "remove_node",
+  // R37（559 号）：自扩展技能写入件（Rust 侧备案）。
+  "author_skill",
 ];
 
 function baseParams(overrides: Partial<ChatToolSetParams> = {}): ChatToolSetParams {
@@ -92,7 +94,7 @@ describe("buildChatToolCatalog", () => {
     }
   });
 
-  it("目录名单 = 跨端 31 名（Rust 声明序）+ node-only 13 名，无重复", () => {
+  it("目录名单 = 跨端 31 名（Rust 声明序）+ node-only 14 名，无重复", () => {
     const catalog = buildChatToolCatalog();
     const names = catalog.map((entry) => entry.name);
     expect(names.slice(0, CROSS_END_CATALOG_NAMES.length)).toEqual(CROSS_END_CATALOG_NAMES);
@@ -124,7 +126,7 @@ describe("buildChatToolSet（agent-session 原位搬移，行为零改动）", (
     expect(names).toContain("resync_chapter_state");
   });
 
-  it("chat 会话装配通用五件", () => {
+  it("chat 会话装配通用五件 + author_skill", () => {
     const tools = buildChatToolSet(baseParams({ sessionKind: "chat", bookId: null }));
     expect(tools.map((tool) => tool.name)).toEqual([
       "propose_action",
@@ -132,6 +134,8 @@ describe("buildChatToolSet（agent-session 原位搬移，行为零改动）", (
       "ingest_material",
       "retrieve_material",
       "import_chapters",
+      // R37：author_skill 全模式常驻（buildChatToolSet 统一追加）。
+      "author_skill",
     ]);
   });
 

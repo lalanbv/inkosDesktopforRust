@@ -7,6 +7,13 @@ export const AgentSkillSchema = z.object({
   body: z.string().default(""),
   source: z.enum(["builtin", "project", "user", "external"]).default("external"),
   baseDir: z.string().min(1).optional(),
+  /**
+   * R37 治理面（上游 pi 同名字段 `disable-model-invocation` 的映射，零发明）：
+   * true = 人侧保留（listSkills/getSkill 可见）但模型不可激活
+   * （resolveSkills 视为 disabled）。frontmatter kebab-case 由
+   * external-loader 显式映射到本字段。
+   */
+  disableModelInvocation: z.boolean().optional(),
 }).strict();
 export type AgentSkill = z.infer<typeof AgentSkillSchema>;
 
