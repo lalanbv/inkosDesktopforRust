@@ -207,6 +207,14 @@ async fn maybe_broadcast_session_title(
 /// 进程中途崩溃时用户输入仍在日志（审计面；derive 对未提交轮整体排除的
 /// 双端语义不变，golden session-transcript-derive-vectors 锁定）。
 /// 返回本轮 request_id；删除守卫拦截时 None（commit/fail 随之跳过）。
+/// R44/566 号 skills:change 发射判定（584 号抽纯函数供单测）：本轮存在
+/// 成功执行的 author_skill（status != "error"）即广播失效事件。
+fn turn_authored_skill(tool_executions: &[crate::interaction::agent_loop::LoopToolExecution]) -> bool {
+    tool_executions
+        .iter()
+        .any(|execution| execution.tool == "author_skill" && execution.status != "error")
+}
+
 async fn begin_chat_turn(
     project_root: &std::path::Path,
     session_id: &str,
@@ -1441,11 +1449,9 @@ pub async fn post_agent(
             }
             // R44/566 号：skills:change 失效事件——本轮成功执行过 author_skill
             // （写面落盘）即广播，UI 打开中的技能面板热刷新（R37 写链的热载
-            // 通道；尽力而为观测面不阻断响应）。
-            if tool_executions
-                .iter()
-                .any(|execution| execution.tool == "author_skill" && execution.status != "error")
-            {
+            // 通道；尽力而为观测面不阻断响应）。判定逻辑抽纯函数供单测
+            // （584 号：发射点此前零测试）。
+            if turn_authored_skill(&tool_executions) {
                 runtime.hub.broadcast(
                     "skills:change",
                     &json!({ "reason": "authored", "sessionId": session_id }),
@@ -2272,7 +2278,39 @@ mod payload_strict_tests {
     use super::begin_chat_turn;
     use super::commit_chat_turn;
     use super::fail_chat_turn;
+    use super::turn_authored_skill;
     use super::AgentSessionHandle;
+
+    /// 584 号：skills:change 发射判定四 case——author_skill 成功广播、
+    /// author_skill 失败不广播、其他工具不广播、混合轮按成功判定。
+    #[test]
+    fn turn_authored_skill_judges_success_and_failure() {
+        let execution = |tool: &str, errored: bool| {
+            crate::interaction::agent_loop::LoopToolExecution {
+                id: format!("call-{tool}-{errored}"),
+                tool: tool.into(),
+                args: json!({}),
+                status: if errored { "error" } else { "completed" },
+                result: Some("ok".into()),
+                error: None,
+                details: None,
+                started_at: 1_000,
+                completed_at: Some(1_100),
+                took_ms: None,
+                attempt: None,
+                timed_out: None,
+                error_kind: None,
+            }
+        };
+
+        assert!(turn_authored_skill(&[execution("author_skill", false)]));
+        assert!(!turn_authored_skill(&[execution("author_skill", true)]));
+        assert!(!turn_authored_skill(&[execution("patch_chapter_text", false)]));
+        assert!(!turn_authored_skill(&[
+            execution("patch_chapter_text", false),
+            execution("author_skill", true),
+        ]));
+    }
 
 
     #[test]
