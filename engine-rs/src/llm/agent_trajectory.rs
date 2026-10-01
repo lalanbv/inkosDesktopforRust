@@ -7,7 +7,9 @@
 //! - 聊天面（RouterLoopChat）每回合构造 main 作用域；
 //! - 管线面不挂作用域（TS 管线 agent 在作用域外 → beginAgentModelCall
 //!   undefined → 零头，等价）；
-//! - subagent 嵌套作用域结构已备（role/parent_tool_call_id），接线备案。
+//! - subagent 嵌套作用域已接线（135 号：`tool_sub_agent` 执行体整体包
+//!   `derive_subagent()` 作用域，TS agent-tools `runWithAgentTrajectoryRole`
+//!   同构——本条为 567 号考古对陈旧「接线备案」的勘误）。
 
 use sha2::{Digest, Sha256};
 

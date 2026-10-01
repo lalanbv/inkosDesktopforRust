@@ -17,6 +17,7 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "../llm/agent-trajectory.js";
+import { isLlmStubEnabled, stubAgentStream } from "./llm-stub.js";
 
 /**
  * The single Pi transport boundary used by both conversational and worker
@@ -52,4 +53,22 @@ export function guardedPiStream<TApi extends Api>(
     }),
     options?.signal,
   );
+}
+
+/**
+ * R45/567 号 Provider 选择缝（dsh Service Definition + Provider + Consumer
+ * 三角色的 TS 定型面）：agent 流面的唯一入口——stub（`INKOS_AGENT_LLM_STUB`）
+ * 与 pi 真传输的选择收拢在此，Consumer（agent-session/worker）不再分支于
+ * 提供方身份。角色边界：Service Definition=LLMConfig/端点解析
+ * （service-resolver/providers lookup）；Provider=本函数背后的 pi 传输
+ * （`guardedPiStream`）与 llm-stub（`stubAgentStream`）；Consumer=各 agent
+ * 编排层——只依赖本缝声明的能力，不 import 任何具体提供方。
+ */
+export function guardedAgentStream<TApi extends Api>(
+  model: Model<TApi>,
+  context: Context,
+  options?: SimpleStreamOptions,
+): AssistantMessageEventStream {
+  if (isLlmStubEnabled()) return stubAgentStream(model, context);
+  return guardedPiStream(model, context, options);
 }

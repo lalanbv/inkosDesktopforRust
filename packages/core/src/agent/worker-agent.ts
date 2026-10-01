@@ -10,7 +10,6 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
 import {
   chatCompletion,
   type LLMClient,
@@ -19,7 +18,7 @@ import {
   type OnStreamProgress,
 } from "../llm/provider.js";
 import { guardedPiStream } from "./pi-stream.js";
-import { isLlmStubEnabled, stubChatCompletion } from "./llm-stub.js";
+import { stubWorkerStructuredResult } from "./llm-stub.js";
 
 export interface WorkerAgentOptions {
   readonly temperature?: number;
@@ -314,10 +313,9 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   options: WorkerAgentOptions = {},
 ): Promise<Static<TParameters>> {
   options.signal?.throwIfAborted();
-  if (isLlmStubEnabled()) {
-    const response = stubChatCompletion(messages, modelId);
-    return Value.Parse(resultTool.parameters, JSON.parse(response.content)) as Static<TParameters>;
-  }
+  // R45/567 号：stub 提供方实现内聚解析（含 env 判定）——Consumer 不分支于提供方身份。
+  const stubbed = stubWorkerStructuredResult(messages, modelId, resultTool);
+  if (stubbed !== undefined) return stubbed;
   if (!client._piModel) {
     throw new Error("Structured worker tools require a resolved Pi model");
   }

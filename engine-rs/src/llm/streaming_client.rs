@@ -779,6 +779,31 @@ impl StreamingChatClient {
     }
 }
 
+/// R45/567 号：LLM 提供方缝（dsh Service Definition + Provider + Consumer
+/// 三角色的 Rust 定型面）。
+/// - Service Definition＝`LlmEndpointConfig`/`ResolvedEndpoint`（agent_router
+///   解析面）+ 模型卡 lookup（providers_bank）——「要什么服务」；
+/// - Provider＝本 trait 的实现——当前唯一生产实现 [`StreamingChatClient`]
+///   （零调用点漂移：固有方法优先，既有 Consumer 路径不动）；测试内含
+///   `MockProvider` 第二实现作多提供方可接纳性的定型证明；
+/// - Consumer＝`AgentRouter::chat`/管线/loop（RouterLoopChat）——只依赖本
+///   trait 声明的能力面，不辨实现身份。
+/// usage 面随 `StreamedCompletion`（prompt/completion/total tokens，喂 R41
+/// 计量锚点）；**price 声明备案**：仓库零定价数据源，不发明价格表，待真实
+/// 消费方（成本观测）立项再入契约。
+#[async_trait::async_trait]
+pub trait LlmProvider: Send + Sync {
+    async fn stream_chat(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError>;
+}
+
+/// 生产实现：委托固有方法（同名优先不构成递归——显式路径限定）。
+#[async_trait::async_trait]
+impl LlmProvider for StreamingChatClient {
+    async fn stream_chat(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+        StreamingChatClient::stream_chat(self, params).await
+    }
+}
+
 // ── responses 传输纯函数（TS provider.ts 逐字语义） ─────────────────────
 
 use serde_json::Value;
@@ -883,6 +908,52 @@ fn sse_data_events(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use super::super::provider::LLMMessage;
+
+    /// R45/567 号：第二实现定型证明——seam 可接纳非 HTTP 提供方（进程内
+    /// mock/未来本地推理），Consumer 经 `dyn LlmProvider` 分发不辨身份。
+    struct MockProvider {
+        content: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockProvider {
+        async fn stream_chat(&self, _params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+            Ok(StreamedCompletion {
+                content: self.content.clone(),
+                prompt_tokens: Some(1),
+                completion_tokens: Some(2),
+                total_tokens: Some(3),
+                done: true,
+                tool_calls: Vec::new(),
+                reasoning: String::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_seam_accepts_second_implementation() {
+        let mock = MockProvider { content: "mock".into() };
+        // dyn 分发：Consumer 只依赖 trait 面。
+        let provider: &dyn LlmProvider = &mock;
+        let params = ChatCompletionParams {
+            messages: &[],
+            model: "mock-model",
+            stream: false,
+            temperature: 0.7,
+            max_tokens: 1024,
+            api_format: TransportApiFormat::Chat,
+            extra: None,
+            tools: None,
+            images: None,
+            progress: None,
+            deadline: StreamDeadlineSpec::INTERACTIVE,
+            trajectory: None,
+        };
+        let completion = provider.stream_chat(&params).await.unwrap();
+        assert_eq!(completion.content, "mock");
+        // usage 面（R41 锚点喂入口）在 seam 契约上可达。
+        assert_eq!(completion.total_tokens, Some(3));
+    }
 
     #[test]
     fn build_request_shape() {

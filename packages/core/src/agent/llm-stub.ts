@@ -1,4 +1,6 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { Static, TSchema } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type {
   AssistantMessage,
   AssistantMessageEventStream,
@@ -6,6 +8,7 @@ import type {
   Api,
 } from "@earendil-works/pi-ai";
 import type { LLMMessage, LLMResponse } from "../llm/provider.js";
+import type { WorkerResultTool } from "./worker-agent.js";
 
 export function isLlmStubEnabled(): boolean {
   return Boolean(process.env.INKOS_AGENT_LLM_STUB);
@@ -161,4 +164,20 @@ export function stubChatCompletion(
     content,
     usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   };
+}
+
+/**
+ * R45/567 号：结构化 worker 面的 stub 提供方实现——结果 JSON 的解析是 stub
+ * 实现细节（stubChatCompletion 产出 resultTool 形状的 JSON），归 Provider
+ * 角色；worker（Consumer）收到 undefined 即回落真传输，不分支于提供方身份。
+ * undefined 哨兵安全：结构化 worker 结果是 TypeBox 对象形状，不会是 undefined。
+ */
+export function stubWorkerStructuredResult<TParameters extends TSchema>(
+  messages: ReadonlyArray<LLMMessage>,
+  modelId: string,
+  resultTool: WorkerResultTool<TParameters>,
+): Static<TParameters> | undefined {
+  if (!isLlmStubEnabled()) return undefined;
+  const response = stubChatCompletion(messages, modelId);
+  return Value.Parse(resultTool.parameters, JSON.parse(response.content)) as Static<TParameters>;
 }

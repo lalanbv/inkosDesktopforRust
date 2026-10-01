@@ -45,7 +45,6 @@ import {
 } from "../skills/index.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { PlayStore } from "../play/play-store.js";
-import { isLlmStubEnabled, stubAgentStream } from "./llm-stub.js";
 import {
   assistantInvokesSkill,
   createUseSkillTool,
@@ -53,7 +52,7 @@ import {
   type ActivatedSkillGuidance,
 } from "./skill-tool.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
-import { guardedPiStream } from "./pi-stream.js";
+import { guardedAgentStream } from "./pi-stream.js";
 import { maybeCompactSession, shouldCompactSession, scanSessionForCompaction } from "./session-compaction.js";
 import { ContextWindowExceededError } from "../llm/provider.js";
 
@@ -965,8 +964,8 @@ async function runAgentSessionUnlocked(
           terminalToolResultTail = false;
           return localAssistantStopStream(streamModel);
         }
-        if (isLlmStubEnabled()) return stubAgentStream(streamModel, context);
-        return guardedPiStream(streamModel, context, options);
+        // R45/567 号：Provider 选择收拢进缝——Consumer 不分支于提供方身份。
+        return guardedAgentStream(streamModel, context, options);
       },
       getApiKey: (provider: string) => {
         if (config.apiKey) return config.apiKey;
