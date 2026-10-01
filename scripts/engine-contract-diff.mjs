@@ -140,14 +140,13 @@ const WAIVERS = new Map([
   [`/api/v1/books/${BOOK}/context-lens`, { reason: "519 号裁决备案：TS resync 产出 ch1 装配留痕而 Rust 不产（仅 lens 回放面）", paths: [["chapters"]] }],
   // 审计内部计数：双端机检维度实现差异，非契约面（issueCount 随审计轮次波动）
   [`/api/v1/books/${BOOK}/quality-trend`, { reason: "审计计数波动 + null-vs-缺键序列化（359 号先例）", paths: [["trend"]] }],
-  // 种子内容双端各自撰写（R4/364），canonical 化需产品决策——内容分叉备案
-  // 章节审计 issue 明细随双端机检维度差异波动
+  // 章节审计 issue 明细随双端机检维度差异波动（种子内容分叉叙事已废：
+  // 505 号活体证实三库种子归一后逐字节一致，产品决策需求撤销——567/572 号
+  // 勘误链把本注释对齐 505 裁决）
   [`/api/v1/books/${BOOK}`, { reason: "审计 issue 明细随双端机检维度差异波动", paths: [["chapters", "*", "auditIssues"], ["nextChapter"]] }],
-  // 488 号扩展腿发现：
-  // skills/genres 内置清单双端不对齐（TS 16 技能/15 题材 vs Rust 1/2）——
-  // 内置包镜像缺口 + 既有二进制早于 builtin 合并面，重建需 cargo 解阻后评估
+  // 488 号扩展腿发现（501/505 号已清偿：skills/genres 内置清单镜像缺口=环境
+  // 伪象双端等价、三库种子归一后逐字节一致——豁免已撤销，留注释存史）：
 
-  // 三库种子内容双端各自撰写（364 号）——canonical 化需产品决策
   // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
   [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
   // lens rank 打分内部实现差异（展示面）。
