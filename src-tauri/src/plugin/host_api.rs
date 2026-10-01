@@ -476,15 +476,14 @@ impl HostContext {
     /// 执行系统命令。
     ///
     /// # 可达性与安全契约
-    /// - **当前不可达自不可信边界**：WASM 插件经 Host trait（read_file/write_file/
-    ///   list_dir/http_get/log）调用，**不暴露 exec_command**（wit/inkos.wit 无此导入）。
-    ///   故 WASM 插件无法执行系统命令——强隔离边界的任意执行面为零。
-    /// - `Capability::SystemCommand { allowed_commands }` 现为**命令白名单**能力
+    /// - **WASM 路径已接线**（569 号勘误：本注释曾称「wit 无此导入、WASM 不可
+    ///   执行命令」，与 wit/inkos.wit + runtime.rs Host trait 的实际接线不符）：
+    ///   WASM 插件经 Host trait 的 `exec_command` 调用本方法，受下方白名单收敛。
+    ///   端到端验证=tests/wasm_plugin_execution.rs（白名单内 echo 通、外拒）。
+    /// - `Capability::SystemCommand { allowed_commands }` 为**命令白名单**能力
     ///   （对称 Network 的 `allowed_domains`）：仅 `allowed_commands` 内的裸命令名可执行。
     ///   bare `system_command` = 空白名单（fail-closed，无命令可执行）。命令名经
     ///   `is_safe_command_name` 校验（拒路径/shell 元字符），白名单本身不成注入向量。
-    /// - **接线就绪**：白名单已就位，若将本方法接入 WASI host imports / Tauri 命令，
-    ///   任意代码执行面已被收敛到插件声明的命令集（仍须逐命令审计其参数语义）。
     pub fn exec_command(&self, command: &str, args: &[String]) -> Result<ExecCommandResponse, PluginError> {
         // 命令白名单检查：须声明 SystemCommand 能力 且 command ∈ allowed_commands。
         if !self.can_exec(command) {

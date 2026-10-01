@@ -13,8 +13,10 @@
 // 2. runtime.rs `component::bindgen!({ path: "wit", world: "inkos-plugin" })` ✅
 // 3. Host trait 实现并委托 host_api::HostContext（复用 capability 校验）✅
 // 4. Component::from_file + Linker + 实例化 → 类型化调用 init/invoke/on-event ✅
-// 5. 真实 component 端到端测试（wit-bindgen + wasm target 编译测试插件）——唯一余项；
-//    当前测试覆盖=装载/坏文件拒绝（runtime.rs tests）+ 沙箱限制常量在位
+// 5. 真实 component 端到端测试 ✅（569 号：tests/wasm_plugin_execution.rs——
+//    examples/wasm-plugin 真实组件（wit-bindgen 客侧绑定+wasm32-wasip2 编译、
+//    fixture 受跟踪）跑通 init/invoke/on-event + guest→host 能力链
+//    （read 能力通过/无权拒/exec 白名单通与 fail-closed）；wit 副本同步护栏在测）
 //
 //
 // 当前进程隔离已端到端验证可执行；本契约是 WASM 强隔离路径的基础。

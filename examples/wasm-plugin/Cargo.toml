@@ -10,3 +10,4 @@ crate-type = ["cdylib"]
 [dependencies]
 # wit-bindgen：从 wit/ 生成 guest 侧绑定（与宿主的 wasmtime bindgen 对称）
 wit-bindgen = "0.30"
+serde_json = "1"
