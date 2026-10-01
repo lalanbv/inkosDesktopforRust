@@ -98,14 +98,9 @@ impl RpcError {
         }
     }
 
-    /// 带附加数据的错误
-    pub fn with_data(code: i32, message: impl Into<String>, data: Value) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            data: Some(data),
-        }
-    }
+    // 571 号：`with_data` 构造器真死删除（全仓零引用——错误构造恒走 `new`，
+    // data 字段保留供解析插件响应侧反序列化；JSON-RPC data 成员的构造需求
+    // 到达时再以测试同行引入）。
 }
 
 #[cfg(test)]
