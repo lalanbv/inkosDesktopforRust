@@ -4715,6 +4715,60 @@ mod skills60_e2e {
         );
         assert!(skills.iter().any(|s| s["id"] == "visible-skill"));
     }
+
+    /// 582 号：skills:change 广播 e2e——import/delete 路由经 hub 广播事件
+    /// （566 号发射点此前 Rust 侧零测试；payload 形态 reason=imported/deleted
+    /// 与 TS server 同构，574 号 Node 真机已验）。
+    #[tokio::test]
+    async fn import_and_delete_broadcast_skills_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let manifest = "---
+name: broadcast-probe
+description: 582 号广播探针。
+---
+正文";
+        let body = import_body(&[(
+            "broadcast-probe/SKILL.md",
+            manifest,
+        )]);
+        // 关键：订阅必须落在**注入 app 的同一 runtime** 的 hub 上——app60 每次
+        // 调用都重建 runtime/hub，测试在此内联路由构建以持有同一 runtime。
+        let runtime = rt60(&root);
+        let mut rx = runtime.hub.clone().subscribe();
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/skills/import",
+                axum::routing::post(skill_routes::import_skill),
+            )
+            .route(
+                "/api/v1/skills/:skillId",
+                axum::routing::delete(skill_routes::delete_skill),
+            )
+            .with_state(runtime);
+        let (status, _) = call(app.clone(), "POST", "/api/v1/skills/import", Some(&body)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let payload = rx.try_recv().expect("import 必须广播 skills:change");
+        assert_eq!(payload.event, "skills:change");
+        let data: serde_json::Value = serde_json::from_str(&payload.data).unwrap();
+        assert_eq!(data["reason"], "imported");
+
+        let (status, _) = call(
+            app.clone(),
+            "DELETE",
+            "/api/v1/skills/broadcast-probe",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let payload = rx.try_recv().expect("delete 必须广播 skills:change");
+        assert_eq!(payload.event, "skills:change");
+        let data: serde_json::Value = serde_json::from_str(&payload.data).unwrap();
+        assert_eq!(data["reason"], "deleted");
+    }
 }
 
 // ── 61 号：project 文件浏览面（server.ts L4270-L4320）──────────────
