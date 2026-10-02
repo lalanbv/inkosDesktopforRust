@@ -101,7 +101,12 @@ pub async fn list_models_for_service(
 ) -> Vec<ModelInfo> {
     let provider = get_endpoint(service);
     let preset = service_preset(service);
-    if provider.is_none() && preset.is_none() {
+    // 596 号：custom:* 服务（无 bank 卡/预设）在调用方配置了 baseUrl 时仍做
+    // live /models 探测（对齐 Node listModelsForService 第 3 层的 baseUrl
+    // 感知——595 号边界实锤：此前直接空返回使层 3 secrets 兜底对 custom
+    // 服务失效）。仅 live 层生效；bank/legacy fallback 对 custom 自然为空。
+    let custom_live_only = provider.is_none() && preset.is_none() && live_base_url.is_some();
+    if provider.is_none() && preset.is_none() && !custom_live_only {
         return Vec::new();
     }
 

@@ -282,7 +282,6 @@ pub async fn resolve_agent_model_override(
     service: Option<&str>,
     model: Option<&str>,
 ) -> Result<Option<AgentModelOverride>, (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
-    use axum::http::StatusCode;
     use serde_json::json;
 
     let resolve_key = |service: &str| -> Option<String> {
@@ -391,21 +390,29 @@ pub async fn resolve_agent_model_override(
             if secret.api_key.trim().is_empty() {
                 continue;
             }
-            let models = crate::llm::probe::list_models_for_service(&service, Some(&secret.api_key), None).await;
+            // 596 号：先解析配置 baseUrl 传入 live 探测（对齐 Node 第 3 层的
+            // baseUrl 感知）——custom:* 服务（无 bank 卡）此前因空返回而整体
+            // 下落，secrets 兜底对其失效（595 号边界实锤）。
+            let configured_base_url =
+                crate::server::service_routes::resolve_configured_service_base_url(root, &service, None)
+                    .await
+                    .filter(|url: &String| !url.is_empty());
+            let models = crate::llm::probe::list_models_for_service(
+                &service,
+                Some(&secret.api_key),
+                configured_base_url.as_deref(),
+            )
+            .await;
             if let Some(text_model) = models.iter().find(|m| is_text_chat_model_id(&m.id)) {
-                if let Some(base_url) =
-                    crate::server::service_routes::resolve_configured_service_base_url(root, &service, None).await
-                {
-                    if !base_url.is_empty() {
-                        return Ok(Some(AgentModelOverride {
-                            service: service.clone(),
-                            model: text_model.id.clone(),
-                            api_key: secret.api_key.clone(),
-                            base_url,
-                            api_format: crate::llm::providers::TransportApiFormat::Chat,
-                            stream: None,
-                        }));
-                    }
+                if let Some(base_url) = configured_base_url {
+                    return Ok(Some(AgentModelOverride {
+                        service: service.clone(),
+                        model: text_model.id.clone(),
+                        api_key: secret.api_key.clone(),
+                        base_url,
+                        api_format: crate::llm::providers::TransportApiFormat::Chat,
+                        stream: None,
+                    }));
                 }
             }
         }
@@ -4292,5 +4299,83 @@ mod tests {
         assert_eq!(to_base36(35), "z");
         assert_eq!(to_base36(36), "10");
         assert_eq!(to_base36(1782988000000), "mr3d0pog");
+    }
+}
+
+#[cfg(test)]
+mod layer3_custom_probe_tests {
+    use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use crate::server::agent_production::resolve_agent_model_override;
+    use crate::server::books_routes::BooksRuntime;
+    use crate::state::manager::StateManager;
+    use std::collections::HashMap;
+
+    async fn spawn_models_stub(body: String) -> String {
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get(move || async move {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    body,
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        format!("http://{addr}/v1")
+    }
+
+    fn runtime(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: std::sync::Arc::new(crate::server::sse::BroadcastHub::new()),
+            state: std::sync::Arc::new(StateManager::new(root.to_path_buf())),
+            router: std::sync::Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    context_window_tokens: 128_000,
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 4096,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    /// 596 号：层 3 对 custom:* 服务补 baseUrl 感知模型发现——inkos.json
+    /// llm.services 带 baseUrl + secrets 有 key + 可达 /v1/models → 命中
+    /// （对齐 Node 第 3 层；595 号边界实锤的缺口闭合）。
+    #[tokio::test]
+    async fn layer3_discovers_models_for_custom_service_via_configured_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let models_body = r#"{"object":"list","data":[{"id":"mock-large","object":"model"},{"id":"mock-small","object":"model"}]}"#;
+        let base = spawn_models_stub(models_body.to_string()).await;
+
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":[{{"service":"custom:probe","baseUrl":"{base}","apiFormat":"chat"}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:probe":{"apiKey":"sk-p"}}}"#,
+        )
+        .unwrap();
+
+        let _runtime = runtime(&root);
+        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap().unwrap();
+        assert_eq!(resolved.service, "custom:probe");
+        assert_eq!(resolved.base_url, base);
+        assert_eq!(resolved.api_key, "sk-p");
+        // 首个文本模型（bank/legacy 对 custom 为空 → live 发现序）。
+        assert_eq!(resolved.model, "mock-large");
     }
 }
