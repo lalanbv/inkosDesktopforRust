@@ -124,6 +124,22 @@ export function guardedCompleteStream<TApi extends Api>(
       }) as AssistantMessage);
       return;
     }
+    // 613 号：非流式完成的渲染链适配——前端打字机消费 text_delta 事件
+    // （stream-events → draft:delta），纯 done 事件不含增量会导致聊天页
+    // 回复不渲染（612 回归）。把完整文本作为单个 text_delta 推入（与
+    // pi-ai 事件形态同构：contentIndex/delta/partial）。
+    const fullText = message.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+    if (fullText) {
+      stream.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: fullText,
+        partial: message,
+      } as never);
+    }
     stream.push({ type: "done", reason: (message.stopReason ?? "stop") as "stop", message });
     stream.end(message);
   });
