@@ -1073,6 +1073,27 @@ function validateAgentActionExecution(args: {
 
 type AgentFailureKind = "busy" | "llm" | "internal" | "unknown";
 
+/**
+ * 589 号提案 C 选项：零显式模型直发时，解析链可能落到不含用户配置的默认卡
+ * 并报「No API key for provider: openai」——而 secrets 里明明有可用服务。
+ * 此处尽力而为地把该形态错误改写为指认真实配置（不改变行为：仍报错、
+ * 仍要求选择模型），消除「配置在场却被无视」的误导。
+ */
+async function annotateConfiguredServiceHint(message: string, projectRoot: string): Promise<string> {
+  if (!/No API key for provider/i.test(message)) return message;
+  try {
+    const secrets = await loadSecrets(projectRoot);
+    const configured = Object.keys(secrets.services ?? {}).find(
+      (id) => typeof secrets.services[id]?.apiKey === "string" && secrets.services[id].apiKey.length > 0,
+    );
+    if (!configured) return message;
+    const label = configured.split(":").pop() || configured;
+    return `${message}（检测到已配置的服务「${label}」：请在聊天页上方选择该服务的模型，或在模型配置页将其设为默认）`;
+  } catch {
+    return message;
+  }
+}
+
 function classifyAgentFailure(message: string): AgentFailureKind {
   const text = message.trim();
   if (!text) return "unknown";
@@ -6318,7 +6339,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          const failure = formatAgentFailure(result.errorMessage, language);
+          // 590 号：589 提案 C——零配置误导错误指认真实配置（尽力而为）。
+          const annotated = await annotateConfiguredServiceHint(result.errorMessage, root);
+          const failure = formatAgentFailure(annotated, language);
           return c.json({
             error: { code: failure.code, message: failure.message },
             response: failure.message,
@@ -6417,7 +6440,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         }, 429);
       }
 
-      const failure = formatAgentFailure(msg, language);
+      // 590 号：同 6342 处——失败消息尽力指认真实配置（589 提案 C）。
+      const failure = formatAgentFailure(await annotateConfiguredServiceHint(msg, root), language);
       return c.json(
         { error: { code: failure.code, message: failure.message } },
         failure.status,
