@@ -15,6 +15,7 @@
 - Sending without a selected model now points the error at your configured service (no more unrelated provider errors)
 - Session event logs are persisted write-ahead: the user message survives process interruption
 - Zero-config direct send parity: with a configured service and key, messages sent without a selected model work on both the Rust engine and the Node fallback
+- The service-level "streaming" toggle (stream: false) is now honored on the chat path: messages for that service wait for the complete reply and appear at once (previously streaming was forced)
 
 ## v1.8.0
 
