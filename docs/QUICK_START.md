@@ -139,6 +139,6 @@ security unlock-keychain ~/Library/Keychains/login.keychain-db
 
 ---
 
-**更多能力**：短篇生成、封面、开放世界互动、多模型路由、文风仿写、插件系统（[docs/plugin-system.md](./plugin-system.md)）——详见[用户指南](./USER_GUIDE.md)与上游产品 README。
+**更多能力**：短篇生成、封面、开放世界互动、多模型路由、文风仿写、插件系统（[docs/plugin-system.md](./plugin-system.md)）——桌面壳原生面（托盘/插件窗/更新）发布前人工核对见 [docs/DESKTOP_WALKTHROUGH.md](./DESKTOP_WALKTHROUGH.md)——详见[用户指南](./USER_GUIDE.md)与上游产品 README。
 
 聊天页还会显示**上下文计量徽章**（当前会话 token 体量）；技能能力包在 项目设置 → Agent Skills 导入，导入/删除即时生效。
