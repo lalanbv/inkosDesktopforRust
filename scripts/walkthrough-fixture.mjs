@@ -306,7 +306,10 @@ if (!kindsOk) {
 }
 
 console.log(`[fixture] ✓ 数据就绪。浏览器打开 ${base} 走查：`);
+console.log(`  0. ${base}/#/chat 新建会话 → 「配置模型 →」→ 服务商列表「自定义服务」区块置顶（575 号）→ 填名称/Base URL(http://127.0.0.1:${mockPort}/v1)/Key(sk-mock) → 测试连接（自动发现模型）→ 保存——聊天与计量徽章的前置`);
 console.log(`  1. 书详情 ${base}/#/book/${enc} → 右栏「伏笔池」：分类 chips（全部/悬念/物品/情感/世界观）+ 点击筛选收窄`);
 console.log(`  2. ${base}/#/book/${enc}/settings → 「承诺账本」：kind 徽标 + 分类过滤（open 置顶排序）`);
 console.log(`  3. 首页 ${base}/#/ → 「运行遥测」：累计 ${runLog.total} · 明细 agent/model/耗时（R26/403 号挂 Dashboard，不在设置页）`);
 console.log(`  4. ${base}/#/radar → 点击历史条目回放 → 推荐卡「从该选题开书」→ 跳建书且输入框预填`);
+console.log(`  5. ${base}/#/settings → 项目设置：Agent Skills 导入 SKILL.md 文件夹（导入/删除即时热刷新，566 号）+ 按任务模型路由`);
+console.log(`  6. 聊天页发消息后：输入框右下「N tok」上下文计量徽章（estimate/usage 来源悬停明细，564 号）；插件管理走系统托盘「插件管理…」（M7g）`);
