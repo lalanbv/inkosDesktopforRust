@@ -26,6 +26,7 @@
 
 ## 3. 插件管理窗（settings.html，plugin/commands.rs）
 
+| 3.0 | 权限模型 | 五能力枚举：`ReadProject` / `WriteProject` / `Filesystem{path}` / `Network{domains}` / `SystemCommand{allowed_commands}`（fail-closed：未声明即无能力；system_command 空白名单=无命令可执行） |
 | # | 步骤 | 预期 |
 |---|---|---|
 | 3.1 | 打开管理窗 | 窗口出现并列出已装插件（`list_plugins`）；已连接服务显示指标入口 |
@@ -34,6 +35,12 @@
 | 3.4 | 执行插件命令 | `execute_plugin` 返回结果或明确错误；连续失败达阈值自动禁用 |
 | 3.5 | 卸载插件 | 目录删除（`uninstall_plugin`），列表移除 |
 | 3.6 | 指标面板 | `get_plugin_metrics` 显示次数/耗时/失败数 |
+| 3.7 | 事件广播 | `cmd_broadcast_event` 手动派发插件事件（on-event 钩子） |
+| 3.8 | 插件注册表 | 远程注册表安装与更新（`cmd_fetch_plugin_registry` / `cmd_install_from_registry` / `cmd_update_plugin_from_registry` / `cmd_check_plugin_updates` / `cmd_list_plugin_versions`） |
+
+## 3·五、聊天流式偏好（607 号）
+
+服务详情「流式响应」开关（`streamPreference`，108 号 stream 偏好）：关闭时聊天走非流式完成——Rust 层 3 兜底尊重配置（custom 服务零显式直发按偏好非流式），Node 回退端 607 号起同构尊重。
 
 ## 4. 引擎双后端与更新（supervisor/updater）
 
@@ -42,12 +49,14 @@
 | 4.1 | 设置切换引擎后端（rust/node） | 引擎按所选后端重启（166 号双资产通道 + 健康预检） |
 | 4.2 | 检查更新 | shell 与 engine 通道各自检查（`cmd_check_updates`） |
 | 4.3 | 应用引擎更新 | 更新落盘后按新版本重启引擎（`cmd_apply_engine_update`） |
+| 4.4 | 应用壳更新 | `cmd_apply_shell_update`（桌壳通道独立于引擎通道） |
 | 4.4 | 诊断面板 | `cmd_get_diagnostics` 显示引擎后端/端口/版本（排查入口） |
 
 ## 5. 多项目工作区（workspace）
 
 | # | 步骤 | 预期 |
 |---|---|---|
+| 5.0 | 命令族明细 | `cmd_list_workspaces` / `cmd_create_workspace` / `cmd_switch_workspace` / `cmd_delete_workspace` / `cmd_add_project_to_workspace`（注册于 main.rs generate_handler） |
 | 5.1 | 创建/切换/删除工作区 | 命令族 `cmd_*_workspace` 行为正确，项目列表随工作区切换 |
 | 5.2 | 向工作区添加已有项目 | 不产生重复条目（`cmd_add_project_to_workspace`） |
 
