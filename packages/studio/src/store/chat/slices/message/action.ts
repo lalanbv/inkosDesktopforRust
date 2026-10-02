@@ -201,6 +201,30 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       })),
     })),
 
+  // 624 号：用户中止的聊天轮回收。引擎对中止轮返回 500 "aborted" 且不落盘
+  //（217 号契约），客户端应丢弃这轮的一切痕迹：不写错误消息、不记重试。
+  // 已产生增量文本且无工具卡的流气泡一并移除（服务端从未持久化它，刷新后
+  // 本就会消失）；有工具卡时保留——abortSession 已把运行中工具标为
+  // "已由用户停止"，那是用户需要的停止反馈。
+  discardAbortedStream: (sessionId, streamTs) =>
+    set((state) => ({
+      sessions: updateSession(state.sessions, sessionId, (session) => {
+        const streamMessage = session.messages.find(
+          (message) => message.timestamp === streamTs && message.role === "assistant",
+        );
+        if (!streamMessage) return {};
+        const hasToolCards =
+          (streamMessage.toolExecutions?.length ?? 0) > 0 ||
+          (streamMessage.parts ?? []).some((part) => part.type === "tool");
+        if (hasToolCards) return {};
+        return {
+          messages: session.messages.filter(
+            (message) => !(message.timestamp === streamTs && message.role === "assistant"),
+          ),
+        };
+      }),
+    })),
+
   loadSessionMessages: (sessionId, msgs) =>
     set((state) => {
       const session = state.sessions[sessionId];
@@ -379,6 +403,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         isChatStreaming: false,
         stream: keepProductionStream ? runtime.stream : null,
         lastError: null,
+        // 624 号：记下本轮中止时刻——被中止轮的 POST /agent 稍后拒绝时，
+        // sendMessage 的 catch 据此判定"这是中止不是失败"（此时新一轮可能
+        // 已把 isChatStreaming 置回 true，isChatStreaming 不再可区分）。
+        chatAbortedAt: stoppedAt,
         messages,
       })),
     }));
@@ -695,6 +723,19 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      // 624 号：先于失败判定检查"这轮是否被用户中止"。stop 按钮与换向重发
+      //（ChatPage onSend 先 abort 后 sendMessage）都会触发 abortSession；被
+      // 中止轮随后以 500 "aborted" 拒绝到这里时，新一轮可能已把 isChatStreaming
+      // 置回 true，下面的 isChatStreaming 判定会把中止误记为失败（幽灵重试
+      // 按钮）——引擎不落盘中止轮，客户端同样不留下任何痕迹。
+      const abortedRound = (() => {
+        const abortedAt = get().sessions[sessionId]?.chatAbortedAt;
+        return typeof abortedAt === "number" && abortedAt >= streamTs;
+      })();
+      if (abortedRound) {
+        get().discardAbortedStream(sessionId, streamTs);
+        return;
+      }
       // 用户主动停止会先把 isChatStreaming 置回 false，被中止的请求随后 reject 到
       // 这里：那不算失败，不记录重试；真正的请求失败此刻 isChatStreaming 仍为 true。
       if (get().sessions[sessionId]?.isChatStreaming) rememberFailedSend();

@@ -1366,6 +1366,118 @@ describe("chat message actions", () => {
     expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
   });
 
+  it("discards an aborted round's late rejection while the steering round is streaming (624)", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    store.getState().setSelectedModel("deepseek-v4-flash", "kkaiapi");
+
+    let rejectRound1!: (error: Error) => void;
+    let resolveRound2!: (value: unknown) => void;
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectRound1 = reject;
+      }))
+      .mockResolvedValueOnce({})
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveRound2 = resolve;
+      }));
+
+    // 不 await：第一轮的 sendMessage 要等 rejectRound1 才会 settle
+    const round1 = store.getState().sendMessage(sessionId, "第一轮");
+    await vi.waitFor(() => expect(fakeEventSources).toHaveLength(1));
+
+    // ChatPage onSend 的换向语义：先中止当前轮，紧接着发送新消息。旧轮的
+    // POST /agent 在新一轮已流式中（isChatStreaming=true）后才拒绝——
+    // 此时不能把中止误判为失败（幽灵重试按钮），也不能追加 "✗ aborted"。
+    await store.getState().abortSession(sessionId);
+    void store.getState().sendMessage(sessionId, "第二轮");
+    await vi.waitFor(() => expect(fakeEventSources).toHaveLength(2));
+
+    rejectRound1(new Error("aborted"));
+    await round1;
+    await vi.waitFor(() => {
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      expect(messages.some((message) => (message.content ?? "").includes("aborted"))).toBe(false);
+    });
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+
+    resolveRound2({ response: "第二轮回复。", session: { sessionId, sessionKind: "chat" } });
+    await vi.waitFor(() => {
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      expect(messages.some((message) => message.role === "assistant" && message.content === "第二轮回复。")).toBe(true);
+    });
+  });
+
+  it("drops the partial stream bubble without an error message when a stopped round rejects (624)", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+    const base = 1_700_000_000_100;
+    // sendMessage 先取 streamTs（Date.now()+1）再写用户消息时间戳：
+    // call1=streamTs 基值，其后统一 base+5（用户消息与 abort 时刻），保证
+    // 与 streamTs 无碰撞且 chatAbortedAt 晚于轮起点。
+    const nowSpy = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(base)
+      .mockReturnValue(base + 5);
+    let rejectAgent!: (error: Error) => void;
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectAgent = reject;
+      }))
+      .mockResolvedValueOnce({});
+
+    try {
+      const sent = store.getState().sendMessage(sessionId, "第一轮");
+      await vi.waitFor(() => expect(fakeEventSources).toHaveLength(1));
+      const streamTs = base + 1;
+      store.getState().appendStreamChunk(sessionId, "部分增量文本", streamTs);
+
+      await store.getState().abortSession(sessionId);
+      rejectAgent(new Error("aborted"));
+      await sent;
+
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      // 服务端从未持久化部分增量：气泡移除，且不留 "✗ aborted" 错误消息
+      expect(messages.some((message) => (message.content ?? "").includes("部分增量文本"))).toBe(false);
+      expect(messages.some((message) => (message.content ?? "").includes("aborted"))).toBe(false);
+      expect(store.getState().sessions[sessionId]?.lastFailedSend).toBeUndefined();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("still records a genuine failure of a later round after an earlier aborted round (624)", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+
+    let rejectRound1!: (error: Error) => void;
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectRound1 = reject;
+      }))
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error("上游连接失败"));
+
+    const round1 = store.getState().sendMessage(sessionId, "第一轮");
+    await vi.waitFor(() => expect(fakeEventSources).toHaveLength(1));
+    await store.getState().abortSession(sessionId);
+    rejectRound1(new Error("aborted"));
+    await round1;
+    await vi.waitFor(() => {
+      const messages = store.getState().sessions[sessionId]?.messages ?? [];
+      expect(messages.some((message) => (message.content ?? "").includes("aborted"))).toBe(false);
+    });
+
+    // chatAbortedAt 只对"中止时刻之前的轮"生效：下一轮的真实失败照常记录
+    await store.getState().sendMessage(sessionId, "第二轮");
+
+    expect(store.getState().sessions[sessionId]?.lastFailedSend).toEqual({ text: "第二轮" });
+    const messages = store.getState().sessions[sessionId]?.messages ?? [];
+    expect(messages.some((message) => (message.content ?? "").includes("上游连接失败"))).toBe(true);
+  });
+
   it("does nothing when retryLastSend is called without a failed-send record", async () => {
     const store = createTestStore();
     const sessionId = store.getState().createDraftSession(null, "chat");

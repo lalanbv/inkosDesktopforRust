@@ -194,6 +194,11 @@ export interface SessionRuntime {
   // 新一轮发送开始时清除。用户主动停止与后台生产任务轮的失败不记录
   //（任务卡有自己的失败展示）。存在且非聊天流式中时 UI 显示"重试"按钮。
   readonly lastFailedSend?: FailedSendRecord;
+  // 624 号：最近一次用户主动中止（stop 按钮/换向重发）的时刻。被中止轮的
+  // POST /agent 稍后以 500 "aborted" 拒绝时，sendMessage 的 catch 用它判定
+  // "这轮是被中止的"（此刻新一轮可能已把 isChatStreaming 置回 true，不能
+  // 再用 isChatStreaming 区分失败与中止）——丢弃错误痕迹、不记重试。
+  readonly chatAbortedAt?: number;
   // 仅前端存在、尚未持久化到磁盘的草稿会话。发送第一条消息时才调 POST /sessions 把它落盘。
   readonly isDraft: boolean;
 }
@@ -238,6 +243,9 @@ export interface MessageActions {
   ) => void;
   replaceStreamWithError: (sessionId: string, streamTs: number, errorMsg: string) => void;
   addErrorMessage: (sessionId: string, errorMsg: string) => void;
+  // 624 号：用户中止的聊天轮回收——移除无工具卡的流气泡（服务端从未持久化
+  // 部分增量），不写任何错误消息、不记重试；有工具卡时保留（已标"已由用户停止"）。
+  discardAbortedStream: (sessionId: string, streamTs: number) => void;
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => Promise<string>;

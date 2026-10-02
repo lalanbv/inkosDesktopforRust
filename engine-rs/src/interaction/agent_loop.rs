@@ -169,7 +169,33 @@ pub async fn run_agent_loop(
                 timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
             });
         }
-        let (content, tool_calls, usage) = chat.chat(&messages, tools).await?;
+        // 624 号：abort 不能只在轮间检查——单轮 LLM 调用可能挂起或长流，
+        // 在飞期间用户点停止/换向时引擎会白烧整个调用并误 commit（真机走查
+        // 实锤：中止轮照常 200 返回且落盘）。TS 侧 signal 直通 streamFunction
+        //（在飞即断），此处 select 对齐双端语义：旗标置位即取消本次调用，
+        // 按 aborted 轮出约（217 号契约：request_failed 不落盘、500 返回）。
+        let (content, tool_calls, usage) = {
+            let abort_waiter = async {
+                loop {
+                    if is_aborted() {
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            };
+            tokio::select! {
+                result = chat.chat(&messages, tools) => result?,
+                _ = abort_waiter, if abort.is_some() => {
+                    return Ok(LoopOutcome {
+                        response_text: String::new(),
+                        tool_executions: executions,
+                        aborted: true,
+                        usage: total_usage,
+                        timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
+                    });
+                }
+            }
+        };
         total_usage.input += usage.input;
         total_usage.output += usage.output;
         total_usage.total_tokens += usage.total_tokens;
@@ -336,6 +362,40 @@ mod tests {
         assert!(outcome.response_text.is_empty());
         assert_eq!(outcome.usage, LoopUsage::default(), "abort 后无 usage 累加");
         assert_eq!(chat.calls.lock().unwrap().len(), 0, "abort 后未发起 LLM 调用");
+    }
+
+    /// 624 号：模拟在飞 LLM 调用——chat() 内部置位 abort（用户点停止）后
+    /// 挂起永不返回；select 必须取消本次调用并按 aborted 轮出约。
+    struct InflightAbortChat {
+        abort: AbortHandle,
+    }
+
+    #[async_trait::async_trait]
+    impl LoopChat for InflightAbortChat {
+        async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
+            *self.abort.lock().unwrap() = true;
+            std::future::pending::<()>().await;
+            unreachable!("pending future 不应解析")
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_interrupts_inflight_llm_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let abort: AbortHandle = Arc::new(Mutex::new(false));
+        let chat = InflightAbortChat { abort: abort.clone() };
+        let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
+        // 旧代码（轮间才检查）会挂死整个测试，timeout 保证可证伪地转红。
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_agent_loop(&chat, &executor, "sys", Vec::new(), "hi", None, Some(&abort), &NoopEvents, None),
+        )
+        .await
+        .expect("在飞中止必须取消 LLM 调用，而非等到调用自然结束")
+        .unwrap();
+        assert!(outcome.aborted);
+        assert!(outcome.response_text.is_empty());
+        assert_eq!(outcome.usage, LoopUsage::default(), "在飞中止后无 usage 累加");
     }
 
     #[tokio::test]
