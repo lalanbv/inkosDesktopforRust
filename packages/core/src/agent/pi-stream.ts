@@ -128,6 +128,13 @@ export function guardedCompleteStream<TApi extends Api>(
     // （stream-events → draft:delta），纯 done 事件不含增量会导致聊天页
     // 回复不渲染（612 回归）。把完整文本作为单个 text_delta 推入（与
     // pi-ai 事件形态同构：contentIndex/delta/partial）。
+    // 622 号：必须先推 start——pi-agent-core agent-loop 仅在见过 start
+    // 事件（partialMessage 就位）后才把 text_delta 转发为 message_update
+    // （case "text_delta" 的 if (partialMessage) 闸门），613 号缺 start
+    // 使非流式轮 draft:delta 从未到达前端（差分器 stream 偏好面活体对照
+    // 抓获；渲染被 POST 响应兜底掩盖）。序列对齐 pi-ai 真实流
+    // （openai-completions.js：start → text_delta → done）。
+    stream.push({ type: "start", partial: { ...message, content: [] } } as never);
     const fullText = message.content
       .filter((block): block is { type: "text"; text: string } => block.type === "text")
       .map((block) => block.text)

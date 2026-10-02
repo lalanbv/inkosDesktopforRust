@@ -889,6 +889,164 @@ try {
     }
   }
 
+  // ── stream 偏好面（622 号）：层 1 显式 service+model 双腿各驱动两轮——
+  // 非流式轮（custom:MockNF，stream:false）+ 流式轮（custom:Mock，缺省流式）。
+  // 每轮独立 chat 会话 + 会话过滤 SSE 收集器，对照有序事件名序列与
+  // draft:delta 载荷文本。此前该链仅单端单测（613/621 号），活体双端从未
+  // 同场对照——606 备案的 Node 线上恒流式（pi-ai completeSimple 内部恒
+  // streamSimple）与 Rust 线上真非流式（streaming_client 108 号整体 JSON）
+  // 在 mock 协议保真（622 号按请求 stream 旗标返回形态）后首次活体对齐。
+  // session_metadata_updated 沿会话面豁免备案剔除；ping 为协议保活非合同。
+  {
+    // 622 号：驱动前活体补丁——第二服务 MockNF（stream:false）。在 fixture
+    // 跑完之后追加（fixture 会整体重写 inkos.json，preseed 会被覆盖），配置
+    // 双端均逐请求加载无启动缓存，热补丁即刻生效；fixture 环境对其他消费者
+    // （走查/冒烟）保持单服务不变。追加在 Mock 之后，首个有 key 服务仍是
+    // custom:Mock，既有维度的层 2/3 解析行为不变。
+    for (const engine of engines) {
+      const configPath = join(engine.root, "inkos.json");
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      // 层 1 显式服务解析只读标准布局 llm.services（593 号教训：顶层 services
+      // 为非标布局，层 2/3 靠 INKOS_LLM_BASE_URL 环境兜底才工作）。
+      const llm = (config.llm && typeof config.llm === "object" && !Array.isArray(config.llm))
+        ? config.llm
+        : (config.llm = {});
+      llm.services = Array.isArray(llm.services) ? llm.services : [];
+      if (!llm.services.some((s) => `${s.service ?? "custom"}:${s.name}` === "custom:MockNF")) {
+        llm.services.push({ service: "custom", name: "MockNF", baseUrl: `http://127.0.0.1:${mockPort}/v1`, stream: false });
+      }
+      writeFileSync(configPath, JSON.stringify(config));
+      const secretsPath = join(engine.root, ".inkos", "secrets.json");
+      const secrets = JSON.parse(readFileSync(secretsPath, "utf-8"));
+      secrets.services = secrets.services ?? {};
+      secrets.services["custom:MockNF"] = { apiKey: "sk-mock" };
+      writeFileSync(secretsPath, JSON.stringify(secrets));
+    }
+
+    const makeSessionCollector = (base) => {
+      const events = [];
+      const controller = new AbortController();
+      const task = (async () => {
+        try {
+          const res = await fetch(`${base}/api/v1/events`, {
+            headers: { Accept: "text/event-stream" },
+            signal: controller.signal,
+          });
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          let lastEvent = null;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, idx);
+              buf = buf.slice(idx + 1);
+              if (line.startsWith("event:")) {
+                lastEvent = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                const name = lastEvent;
+                lastEvent = null;
+                if (!name || name === "ping") continue;
+                let data = null;
+                try { data = JSON.parse(line.slice(5).trim()); } catch { /* 忽略非 JSON */ }
+                if (data && typeof data.sessionId === "string") events.push({ name, data });
+              }
+            }
+          }
+        } catch { /* 流中断 = 收集结束 */ }
+      })();
+      return { events, stop: async () => { controller.abort(); await task.catch(() => {}); } };
+    };
+
+    const drivePreferenceTurn = async (engine, service) => {
+      const base = `http://127.0.0.1:${engine.port}`;
+      const created = await fetchT(`${base}/api/v1/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionKind: "chat" }),
+      });
+      const sessionId = (await created.json().catch(() => null))?.session?.sessionId ?? null;
+      if (!created.ok || !sessionId) return { error: `建会话失败 status=${created.status}` };
+      const collector = makeSessionCollector(base);
+      await new Promise((r) => setTimeout(r, 300));
+      try {
+        const drive = await fetchT(`${base}/api/v1/agent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instruction: "你好，介绍一下这个项目。",
+            sessionId,
+            sessionKind: "chat",
+            service,
+            model: "lm-mock-model",
+          }),
+        });
+        if (!drive.ok) {
+          const detail = await drive.text().catch(() => "");
+          return { error: `驱动失败 status=${drive.status} ${detail.slice(0, 200)}` };
+        }
+      } catch (error) {
+        return { error: `驱动异常：${error?.message ?? error}` };
+      }
+      await new Promise((r) => setTimeout(r, 800));
+      await collector.stop();
+      const names = collector.events.map((e) => e.name);
+      const deltas = collector.events.filter((e) => e.name === "draft:delta").map((e) => e.data?.text ?? "");
+      return { names, deltas };
+    };
+
+    const preferenceArms = [
+      { key: "nonStream", service: "custom:MockNF" },
+      { key: "stream", service: "custom:Mock" },
+    ];
+    const preferenceResults = {};
+    for (const engine of engines) {
+      preferenceResults[engine.name] = {};
+      for (const arm of preferenceArms) {
+        preferenceResults[engine.name][arm.key] = await drivePreferenceTurn(engine, arm.service);
+      }
+    }
+    // 有序事件名序列对照（会话过滤后全序）。session:title 剔除备案：双端
+    // 发射点有意不同——Rust 126 号「终态事件后补发」（agent:complete 之后），
+    // Node 在跑轮前补发（agent:complete 之前）；标题事件在场性双端一致，
+    // 相对终态的时序非合同（前端两类事件独立消费，序无关）。
+    const projectPreferenceNames = (turn) => Array.isArray(turn?.names)
+      ? turn.names.filter((n) => n !== "session:title" && n !== "session_metadata_updated")
+      : null;
+    for (const arm of preferenceArms) {
+      compared += 1;
+      const nodeTurn = preferenceResults.node?.[arm.key];
+      const rustTurn = preferenceResults.rust?.[arm.key];
+      if (nodeTurn?.error || rustTurn?.error) {
+        divergences += 1;
+        console.log(`✗ stream 偏好面[${arm.key}]：驱动失败 node=${nodeTurn?.error ?? "-"} rust=${rustTurn?.error ?? "-"}`);
+        continue;
+      }
+      const nodeNames = projectPreferenceNames(nodeTurn);
+      const rustNames = projectPreferenceNames(rustTurn);
+      if (JSON.stringify(nodeNames) !== JSON.stringify(rustNames)) {
+        divergences += 1;
+        console.log(`✗ stream 偏好面[${arm.key}]事件序分歧：node=${JSON.stringify(nodeNames)} rust=${JSON.stringify(rustNames)}`);
+        continue;
+      }
+      // draft:delta 形态：恰一次 + 载荷文本双端逐字节一致。不锚 mock CANON
+      // 常量——差分器对照双端等价，mock 内容正确性是 mock 自身的事。
+      const nodeDeltas = nodeTurn.deltas ?? [];
+      const rustDeltas = rustTurn.deltas ?? [];
+      const deltaShapeOk = nodeDeltas.length === 1 && rustDeltas.length === 1;
+      const deltaTextOk = deltaShapeOk && nodeDeltas[0].length > 0 && nodeDeltas[0] === rustDeltas[0];
+      if (!deltaShapeOk || !deltaTextOk) {
+        divergences += 1;
+        console.log(`✗ stream 偏好面[${arm.key}]draft:delta 形态/文本分歧：node=${JSON.stringify(nodeDeltas.map((t) => t.slice(0, 40)))} rust=${JSON.stringify(rustDeltas.map((t) => t.slice(0, 40)))}`);
+      } else {
+        console.log(`✓ stream 偏好面[${arm.key}]双端一致（事件序 ${JSON.stringify(rustNames)} + draft:delta 恰一次且载荷文本逐字节相等）`);
+      }
+    }
+  }
+
   // ── 技能写面周期（576 号）：导入 → 用户面在册 → 删除 → 出册。566 号
   // skills 写端点此前无活体双端对照（574 号仅 Node 单腿真机）；周期同时
   // 驱动双腿 broadcast skills:change（SSE 事件名集合随上文收集器进入比对）。

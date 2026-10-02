@@ -65,11 +65,32 @@ http.createServer((req, res) => {
     req.on("end", () => {
       let sys = "";
       let msgs = [];
+      let wantStream = true;
       try {
         const p = JSON.parse(body);
         sys = p?.messages?.[0]?.content ?? "";
         msgs = p?.messages ?? [];
+        wantStream = p?.stream !== false;
       } catch {}
+      // 622 号：协议保真——按请求 stream 旗标返回形态。此前恒返 SSE，Rust
+      // 非流式线上路径（stream:false → 整体 JSON 解析，streaming_client 108 号）
+      // 在 mock 环境必失败，stream 偏好链（108/606/613/621 号）从未被活体验证。
+      // Node 侧 pi-ai completeSimple 内部恒 streamSimple（0.87 compat.js），不受影响。
+      const emitJson = (message, finishReason) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl-mock",
+          object: "chat.completion",
+          created: 0,
+          model: "lm-mock-model",
+          choices: [{ index: 0, message, finish_reason: finishReason }],
+          usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+        }));
+      };
+      const emitSse = (chunk, finish) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+      };
       const lastRole = msgs.length ? msgs[msgs.length - 1].role : "user";
       let content;
       if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) {
@@ -93,20 +114,27 @@ http.createServer((req, res) => {
         // toolCallId 必须逐次唯一（436 号）：前端确认卡锁定键=execId（派生自
         // toolCallId），固定 id 会让后续同形提议复用首轮"已执行"锁，卡直接
         // 锁死不可确认——真 LLM 每次 tool call id 均不同，mock 必须对齐。
-        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: `call_propose_${++PROPOSE_SEQ}`, function: { name: "propose_action", arguments: ARGS } }] }, finish_reason: null }] };
+        const toolCall = { id: `call_propose_${++PROPOSE_SEQ}`, type: "function", function: { name: "propose_action", arguments: ARGS } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
         // 548 号（R30）：finish chunk 为 OpenAI 流式规范必需——pi-ai 0.87 严检
         // "Stream ended without finish_reason"（0.73 宽容缺失，0.87 起报错）。
         const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+        emitSse(chunk, finish);
         return;
       } else {
         content = "已生成确认卡，请在下方点击确认。";
       }
+      if (!wantStream) {
+        emitJson({ role: "assistant", content }, "stop");
+        return;
+      }
       const chunk = { choices: [{ delta: { content }, finish_reason: null }] };
       const finish = { choices: [{ delta: {}, finish_reason: "stop" }] };
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+      emitSse(chunk, finish);
     });
     return;
   }

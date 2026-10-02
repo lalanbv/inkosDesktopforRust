@@ -71,6 +71,28 @@ describe("guardedCompleteStream (608)", () => {
     expect(Array.isArray(text) && (text as Array<{ text?: string }>)[0]?.text).toBe("好的。");
   });
 
+  it("emits start before text_delta (622): agent-loop forwards text_delta only after start", async () => {
+    // 622 号：pi-agent-core agent-loop 的 message_update 转发以 start 事件为
+    // 闸门（partialMessage 就位），缺 start 则 text_delta 被静默跳过、
+    // draft:delta 永不发出。成功分支事件序必须为 start → text_delta → done。
+    const full: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "好的。" }],
+      api: "openai-completions",
+      provider: "custom",
+      model: "mock-large",
+      usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    mockComplete.mockResolvedValueOnce(full);
+
+    const stream = guardedCompleteStream(model, { messages: [] } as never);
+    const result = await collect(stream);
+
+    expect(result.events).toEqual(["start", "text_delta", "done"]);
+  });
+
   it("surfaces upstream rejection as an error event with a fallback assistant tail", async () => {
     mockComplete.mockRejectedValueOnce(new Error("HTTP 500"));
     const stream = guardedCompleteStream(model, { messages: [] } as never);
