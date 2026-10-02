@@ -45,7 +45,7 @@ WALKTHROUGH_MOCK_FAIL_ARCHITECT=1 node scripts/walkthrough-mock.mjs  # 架构师
 ## 5. 门禁清单（提交前）
 
 ```bash
-pnpm gate:ts                        # TS 全门禁一条命令（509 号：typecheck/build/test/audit+三活体套件；--fast 跳过 build 与套件）
+pnpm gate:ts                        # TS 全门禁一条命令（509 号；587 号起 build 前置第 1 步：typecheck/test 消费新鲜 core dist，core 源改动后无需手动 filter build）
 pnpm -r test && pnpm -r typecheck   # TS/Studio（gate:ts 的组成项）
 pnpm clippy:gate                    # Rust 双 crate -D warnings
 pnpm audit:rust                     # RustSec（含 --strict 可选）
@@ -53,8 +53,14 @@ pnpm verify:engine-bindings         # ts-rs 导出锁
 INKOS_DUEL=1 cargo test --test strangler_duel   # 契约面真跑（engine-rs/ 下）
 node scripts/bench-gate.mjs         # 性能基准（静默窗；严禁 --update 洗基线）
 node scripts/node-fallback-smoke.mjs            # 回退端+双引擎一致性（485/486 号）
-node scripts/engine-contract-diff.mjs           # 双引擎 GET 契约活体差分（487/492 号）
+node scripts/engine-contract-diff.mjs           # 双引擎 GET 契约活体差分（487/492 号；含会话面/计量快照面/技能写面周期，581/576/585 号扩维）
 ```
+
+### 瞬态假红排查（587 号）
+
+- **「源码已对但类型/测试红，隔离复跑绿」**=core dist 陈旧类假红的特征——gate:ts 已 build 前置根治；若在 `--fast` 或单跑组成项时遇到，先 `pnpm --filter @actalk/inkos-core build` 再复跑；
+- **探针/实测环境的最小化纪律**：验证某层行为时必须移除同能力的 env 兜底（如测 Rust 层 3 secrets 兜底须去掉 `INKOS_LLM_BASE_URL`——592 号 env 伪象教训）与非标配置布局（inkos.json 的 services 必须写在 `llm.services` 段——顶层 services 不被读取，589/593 号教训）；
+- **门禁窗口禁并行重负载**（bench 误报/vitest worker 超时同类）。
 
 ## 6. 已知约束
 
