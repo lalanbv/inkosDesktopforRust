@@ -2,6 +2,20 @@
 
 [中文](CHANGELOG.md) | English
 
+## Unreleased
+
+### Added
+
+- Agent Skills: import standard SKILL.md capability packs (AgentSkills / OpenClaw compatible); imports and deletes hot-refresh across all open views; model-only skills stay out of the user list
+- Chat input now shows a context-meter badge (estimated / real-usage dual source, over-window warning, hover details)
+- Model config: the custom-services section is pinned to the top of the provider list; Test Connection auto-discovers models and matches protocol / streaming
+
+### Changed
+
+- Sending without a selected model now points the error at your configured service (no more unrelated provider errors)
+- Session event logs are persisted write-ahead: the user message survives process interruption
+- Zero-config direct send parity: with a configured service and key, messages sent without a selected model work on both the Rust engine and the Node fallback
+
 ## v1.8.0
 
 ### Release Focus
