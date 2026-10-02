@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // TS 侧统一门禁入口（509 号）：一条命令跑完全部非 Rust 门禁并汇总。
 //   node scripts/gate-ts.mjs [--fast]     # --fast 跳过 build 与活体套件
-// 步骤（任一失败即标红，最终退出码非零）：
-//   1. pnpm -r typecheck          三包双 tsconfig 类型检查
-//   2. pnpm -r build              发布产物链（core/cli tsc + studio vite7+server）
+// 步骤（任一失败即标红，最终退出码非零；587 号 build 前置为第一步）：
+//   1. pnpm -r build              发布产物链（core/cli tsc + studio vite7+server）
+//   2. pnpm -r typecheck          三包双 tsconfig 类型检查（消费新鲜 dist）
 //   3. pnpm -r test               core+studio+cli 全量测试
 //   4. node scripts/audit-npm.mjs npm 依赖审计（白名单语义）
 //   5. node scripts/node-fallback-smoke.mjs   双引擎一致性（mock+fixture+端点）
@@ -19,13 +19,17 @@ const fast = args.includes("--fast");
 const repoRoot = process.cwd();
 
 const steps = [
+  // 587 号：build 前置——studio/cli 的 typecheck 消费 core **dist**（package
+  // main 指向发布产物），陈旧 dist 会产生「源码已对但类型红」的瞬态假红
+  // （572/581 两次实测坑）。产物链先行后，typecheck/test/活体套件全部消费
+  // 新鲜 dist。--fast 仍跳过 build（快速信号折衷，dist 陈旧风险备案）。
+  ["build", ["pnpm", ["-r", "build"]]],
   ["typecheck", ["pnpm", ["-r", "typecheck"]]],
   ["test", ["pnpm", ["-r", "test"]]],
   ["audit:npm", ["node", ["scripts/audit-npm.mjs"]]],
   ...(fast
     ? []
     : [
-        ["build", ["pnpm", ["-r", "build"]]],
         ["node-fallback-smoke", ["node", ["scripts/node-fallback-smoke.mjs"]]],
         ["engine-contract-diff", ["node", ["scripts/engine-contract-diff.mjs"]]],
         ["export-epub-smoke", ["node", ["scripts/export-epub-smoke.mjs"]]],
