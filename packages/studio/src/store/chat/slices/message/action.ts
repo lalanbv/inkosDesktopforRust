@@ -610,8 +610,15 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
           };
         });
       }
+      // 623 号：role 检查必须与 finalizeStream/getOrCreateStream 同款——
+      // 毫秒撞表（streamTs=Date.now()+1 与 addUserMessage 的 Date.now()
+      // 相撞）时用户消息 timestamp===streamTs，缺 role 检查会把 hasStream
+      // 误判 true，finalizeStream 只更新 assistant 消息 → 静默 no-op，
+      // 成功回复被无声丢弃（真机走查 2/2 复现）。
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some(
+          (message) => message.timestamp === streamTs && message.role === "assistant",
+        ),
       );
       const attachResponseTools = () => {
         if (responseToolExecutions.length === 0) return;
@@ -704,8 +711,12 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         );
       }) ?? false;
       if (failureAlreadyShown) return;
+      // 623 号：与上方成功路径同款 role 收窄（replaceStreamWithError 内部
+      // 同样按 timestamp+role 定位流消息，判定口径必须一致）。
       const hasStream = Boolean(
-        get().sessions[sessionId]?.messages.some((message) => message.timestamp === streamTs),
+        get().sessions[sessionId]?.messages.some(
+          (message) => message.timestamp === streamTs && message.role === "assistant",
+        ),
       );
       if (hasStream) {
         get().replaceStreamWithError(sessionId, streamTs, errorMessage);

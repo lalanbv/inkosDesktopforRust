@@ -1431,4 +1431,33 @@ describe("chat message actions", () => {
     resolveAgent({ response: "聊完了。", session: { sessionId, sessionKind: "short" } });
     await sent;
   });
+
+  it("appends the success reply when the user bubble timestamp collides with streamTs (623)", async () => {
+    const store = createTestStore();
+    const sessionId = store.getState().createDraftSession(null, "chat");
+
+    // 毫秒撞表（623 号真机走查 2/2 复现）：sendMessage 先取
+    // streamTs = Date.now()+1，随后 addUserMessage 的 Date.now() 落在
+    // 下一毫秒 → 用户消息 timestamp === streamTs。hasStream 若不带
+    // role 检查会因用户消息误判 true，而 finalizeStream 只更新
+    // assistant 角色消息 → 静默 no-op，成功回复被无声丢弃（无回复、
+    // 无错误提示、无失败标记）。
+    const base = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(base)
+      .mockReturnValue(base + 1);
+    fetchJson
+      .mockResolvedValueOnce({ session: { sessionId, bookId: null, sessionKind: "chat" } })
+      .mockResolvedValueOnce({ response: "设定文档全文。", session: { sessionId, sessionKind: "chat" } });
+
+    try {
+      await store.getState().sendMessage(sessionId, "你好，介绍一下这个项目。");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const messages = store.getState().sessions[sessionId]?.messages ?? [];
+    const assistant = messages.find((message) => message.role === "assistant");
+    expect(assistant?.content).toBe("设定文档全文。");
+  });
 });
