@@ -405,13 +405,23 @@ pub async fn resolve_agent_model_override(
             .await;
             if let Some(text_model) = models.iter().find(|m| is_text_chat_model_id(&m.id)) {
                 if let Some(base_url) = configured_base_url {
+                    // 605 号：协议/流式从服务配置解析（对齐层 1 与 Node 第 3 层）
+                    // ——此前硬编码 Chat 会使用户配置的 Responses 协议在层 3
+                    // 兜底路径上失效。
+                    let api_format = crate::server::service_routes::resolve_configured_service_api_format(
+                        root,
+                        &service,
+                    )
+                    .await
+                    .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
+                    let stream = crate::server::service_routes::resolve_configured_service_stream(root, &service).await;
                     return Ok(Some(AgentModelOverride {
                         service: service.clone(),
                         model: text_model.id.clone(),
                         api_key: secret.api_key.clone(),
                         base_url,
-                        api_format: crate::llm::providers::TransportApiFormat::Chat,
-                        stream: None,
+                        api_format,
+                        stream,
                     }));
                 }
             }
@@ -4377,5 +4387,37 @@ mod layer3_custom_probe_tests {
         assert_eq!(resolved.api_key, "sk-p");
         // 首个文本模型（bank/legacy 对 custom 为空 → live 发现序）。
         assert_eq!(resolved.model, "mock-large");
+    }
+
+    /// 605 号：层 3 协议/流式从服务配置解析——`apiFormat: "responses"` 的
+    /// custom 服务在兜底路径上不再被硬编码为 Chat（对齐层 1 与 Node 第 3 层）。
+    #[tokio::test]
+    async fn layer3_respects_configured_api_format_and_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let models_body = r#"{"object":"list","data":[{"id":"mock-large","object":"model"}]}"#;
+        let base = spawn_models_stub(models_body.to_string()).await;
+
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"llm":{{"services":[{{"service":"custom:probe","baseUrl":"{base}","apiFormat":"responses","stream":false}}]}}}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            r#"{"services":{"custom:probe":{"apiKey":"sk-p"}}}"#,
+        )
+        .unwrap();
+
+        let _runtime = runtime(&root);
+        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap().unwrap();
+        assert!(matches!(
+            resolved.api_format,
+            crate::llm::providers::TransportApiFormat::Responses
+        ));
+        assert_eq!(resolved.stream, Some(false));
     }
 }
