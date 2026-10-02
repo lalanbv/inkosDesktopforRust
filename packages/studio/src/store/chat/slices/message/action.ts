@@ -496,12 +496,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       }));
     };
 
-    if (!get().selectedModel) {
-      get().addUserMessage(sessionId, formatUserMessageForDisplay(userInstruction, attachments));
-      get().addErrorMessage(sessionId, tr("请先选择一个模型", "Select a model first"));
-      rememberFailedSend();
-      return;
-    }
+    // 598 号：移除「未选择模型」前端硬拦——后端模型解析有 secrets 静默兜底
+    // （首个有 key 服务，与 Rust 四层解析第三层同构，596 号双端直发对齐实证）。
+    // 零配置时后端返回双语可行动错误（层 1「请先配置 API Key」指引 + 590 注解），
+    // 经下方 catch 显示，引导不劣于前端拦截。
 
     // 草稿会话：第一条消息发送时才真正把 session 文件写到磁盘。
     // 后端 POST /sessions 支持接受客户端传入的 sessionId，所以 id 保持一致，
