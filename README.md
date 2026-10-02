@@ -174,6 +174,7 @@ cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/h
 ## 文档
 
 - 📖 [用户指南](docs/USER_GUIDE.md) / 🚀 [快速开始](docs/QUICK_START.md) / 🔧 [故障排查](docs/TROUBLESHOOTING.md)
+- 🖥 [桌面壳原生面人工走查清单](docs/DESKTOP_WALKTHROUGH.md)（托盘/插件管理窗/更新/单实例——发布前人工核对）
 - ♿ [i18n 与无障碍](docs/i18n-a11y.md) · 🧩 [插件系统](docs/plugin-system.md) · 🔒 [安全审计](docs/security-audit.md) · ✍️ [签名采购](docs/signing-procurement.md) · 📦 [SEA 可行性](docs/sea-feasibility.md)
 - 🛠 模块级文档：[src-tauri/README.md](src-tauri/README.md)（桌壳）、[engine-rs/README.md](engine-rs/README.md)（引擎移植目标与纪律）、[src-tauri/tests/README.md](src-tauri/tests/README.md)（测试指引）
 - 🗂 [变更记录文档/](变更记录文档/)（逐变更归档，编号连续）与 [开发时SpecCoding'sPlan/](开发时SpecCoding'sPlan/)（设计规划）
