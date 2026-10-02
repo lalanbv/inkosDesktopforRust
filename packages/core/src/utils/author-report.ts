@@ -227,6 +227,14 @@ export function buildTaskReport(
     return typeof value === "number" && Number.isFinite(value) ? value : undefined;
   };
 
+  // 625 号：用户主动中止（stop/换向）不是任务失败——217 号契约下中止轮不落盘、
+  // 624 号聊天 UI 零痕迹，通知面同样不应产生「聊天任务出错」错误级噪音。
+  // Rust 引擎对中止轮以 agent:error{error:"aborted"} 广播（Node 同场景走
+  // agent:aborted，本就不在通知表）；按引擎侧标记精确拦截，真实失败不受扰。
+  if (event === "agent:error" && optionalString("error") === "aborted") {
+    return null;
+  }
+
   // 完成类事件：完成情况一行 + 标准下一步。
   const isDone = event.endsWith(":complete") || event === "daemon:chapter" || event === "book:created";
   if (isDone) {

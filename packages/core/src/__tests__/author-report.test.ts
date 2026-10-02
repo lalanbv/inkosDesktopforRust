@@ -115,4 +115,15 @@ describe("author report contract (G8b)", () => {
     expect(buildTaskReport("log", { x: 1 })).toBeNull();
     expect(buildTaskReport("ping", null)).toBeNull();
   });
+
+  it("suppresses the abort report: a user-aborted chat round is not a task error (625)", () => {
+    // Rust 引擎中止轮广播形态（agent_route.rs：agent:error + error:"aborted"）。
+    // 217/624 号语义：中止不落盘、聊天 UI 零痕迹——通知面同样不产生
+    // 「聊天任务出错」错误级噪音（Node 同场景走 agent:aborted，本就不在通知表）。
+    expect(buildTaskReport("agent:error", { sessionId: "s1", error: "aborted" })).toBeNull();
+    // 真实失败不受扰：非中止错误照常出报告。
+    const failure = buildTaskReport("agent:error", { sessionId: "s1", error: "LLM upstream 500" });
+    expect(failure).not.toBeNull();
+    expect(failure?.title).toBe("聊天任务出错");
+  });
 });
