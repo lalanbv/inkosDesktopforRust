@@ -5832,6 +5832,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // Resolve model — multi-service resolution
       let resolvedModel: ResolvedModel["model"] | undefined;
       let resolvedApiKey: string | undefined;
+      // 621 号：记录实际解析出模型的服务——stream 偏好从同一服务读取（对齐
+      // Rust AgentModelOverride.stream 的层内同源解析）。
+      let resolvedServiceId: string | undefined;
 
       if (reqService && reqModel) {
         // 1. Frontend explicitly selected a service+model — fail loudly if no key
@@ -5846,6 +5849,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
+          resolvedServiceId = reqService;
         } catch (e: any) {
           const msg = e?.message ?? String(e);
           if (/API key/i.test(msg)) {
@@ -5879,6 +5883,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             );
             resolvedModel = resolved.model;
             resolvedApiKey = resolved.apiKey;
+            resolvedServiceId = serviceConfigKey(firstService);
           } catch { /* fall through */ }
         }
       }
@@ -5902,6 +5907,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 );
                 resolvedModel = resolved.model;
                 resolvedApiKey = resolved.apiKey;
+                resolvedServiceId = svcName;
                 break;
               }
             } catch { /* try next */ }
@@ -5920,21 +5926,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const model = resolvedModel!;
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
-      // 607 号：服务「流式响应」开关（stream:false，108 号）在聊天兜底路径生效
-      // ——此前聊天路径恒流式忽略该偏好（606 号层 3 stream 双端分歧的 Node 侧
-      // 缺口）。服务判定：显式 service 优先；零显式时按 secrets 首个有 key 服务
-      // （与后端层 3/4 解析序一致）。
-      let streamPreference: boolean | undefined;
-      {
-        const secretsNow = await loadSecrets(root);
-        const serviceForStream = reqService
-          ?? Object.keys(secretsNow.services ?? {}).find(
-            (id) => secretsNow.services[id]?.apiKey,
-          );
-        if (serviceForStream) {
-          streamPreference = (await resolveConfiguredServiceEntry(root, serviceForStream))?.stream;
-        }
-      }
+      // 607 号：服务「流式响应」开关（stream:false，108 号）在聊天兜底路径生效。
+      // 621 号：偏好跟随实际解析出模型的服务（resolvedServiceId）——607 号的
+      // 平行链（reqService ?? 首个有 key 服务）在层 2 命中或层 3 跳过无模型
+      // 服务时会读错服务的偏好；现与 Rust AgentModelOverride.stream 的层内
+      // 同源解析同构，606 号层 3 stream 双端分歧备案就此清偿。
+      const streamPreference = resolvedServiceId
+        ? (await resolveConfiguredServiceEntry(root, resolvedServiceId))?.stream
+        : undefined;
 
       // Create pipeline with resolved model (so sub_agent tools use the frontend-selected model)
       // Don't spread config.llm — its baseUrl/provider belong to the old service.

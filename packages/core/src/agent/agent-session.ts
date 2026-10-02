@@ -174,6 +174,7 @@ interface CachedAgent {
   allowSystemFileRead: boolean;
   backgroundTaskContext: string | undefined;
   suppressProductionTools: boolean;
+  streamPreference: boolean | undefined;
   currentAttachmentPaths: string[];
   lastCommittedSeq: number;
   lastActive: number;
@@ -830,6 +831,10 @@ async function runAgentSessionUnlocked(
     const playWorldChanged = cached.playWorldExists !== playWorldExists;
     const backgroundTaskContextChanged = cached.backgroundTaskContext !== config.backgroundTaskContext;
     const suppressProductionToolsChanged = cached.suppressProductionTools !== suppressProductionTools;
+    // streamFn 闭包在 Agent 构造时捕获 config——服务「流式响应」开关切换后
+    // 必须逐出重建（transcriptChanged 恒真的常态外，失败轮未 commit 时此处
+    // 是偏好生效的唯一通路；621 号）。
+    const streamPreferenceChanged = cached.streamPreference !== config.streamPreference;
     const transcriptChanged = cached.lastCommittedSeq !== currentCommittedSeq;
 
     if (
@@ -847,6 +852,7 @@ async function runAgentSessionUnlocked(
       playWorldChanged ||
       backgroundTaskContextChanged ||
       suppressProductionToolsChanged ||
+      streamPreferenceChanged ||
       transcriptChanged
     ) {
       agentCache.delete(cacheKey);
@@ -1000,6 +1006,7 @@ async function runAgentSessionUnlocked(
       allowSystemFileRead,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
+      streamPreference: config.streamPreference,
       currentAttachmentPaths: (config.attachments ?? [])
         .map((attachment) => attachment.storedPath?.trim())
         .filter((path): path is string => Boolean(path)),

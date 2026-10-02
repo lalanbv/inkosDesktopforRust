@@ -3291,6 +3291,81 @@ describe("createStudioServer daemon lifecycle", () => {
     );
   });
 
+  // 621 号：stream 偏好跟随实际解析出模型的服务（对齐 Rust 层内同源解析）。
+  it("derives the chat stream preference from the service that actually resolved the model (layer 3)", async () => {
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      ...projectConfig,
+      llm: {
+        services: [
+          { service: "moonshot", stream: false },
+          { service: "deepseek", stream: true },
+        ],
+      },
+    }, null, 2), "utf-8");
+    loadSecretsMock.mockResolvedValue({
+      services: {
+        moonshot: { apiKey: "sk-moon" },
+        deepseek: { apiKey: "sk-deep" },
+      },
+    });
+    // 首个有 key 服务 moonshot 无可用文本模型——层 3 跳过并选中 deepseek。
+    listModelsForServiceMock.mockImplementation(async (service: string) =>
+      service === "deepseek"
+        ? [{ id: "deepseek-chat", name: "deepseek-chat", reasoning: false, contextWindow: 0 }]
+        : []);
+    resolveServiceModelMock.mockResolvedValue({
+      model: { provider: "openai", id: "deepseek-chat", modelId: "deepseek-chat" },
+      apiKey: "sk-deep",
+    });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "继续", activeBookId: "demo-book", sessionId: "agent-session-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    const agentConfig = runAgentSessionMock.mock.calls.at(-1)?.[0] as { streamPreference?: boolean };
+    // 旧平行链读首个有 key 服务 moonshot → false（错）；实际选中 deepseek → true。
+    expect(agentConfig.streamPreference).toBe(true);
+  });
+
+  it("derives the chat stream preference from the layer-2 service (defaultModel + first configured service)", async () => {
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      ...projectConfig,
+      llm: {
+        services: [
+          { service: "minimax", stream: false },
+          { service: "deepseek", stream: true },
+        ],
+        defaultModel: "MiniMax-M2.7",
+      },
+    }, null, 2), "utf-8");
+    // secrets 另有有 key 服务——旧平行链会误读它的偏好。
+    loadSecretsMock.mockResolvedValue({ services: { deepseek: { apiKey: "sk-deep" } } });
+    resolveServiceModelMock.mockResolvedValue({
+      model: { provider: "openai", id: "MiniMax-M2.7", modelId: "MiniMax-M2.7" },
+      apiKey: "sk-mini",
+    });
+
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "继续", activeBookId: "demo-book", sessionId: "agent-session-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    const agentConfig = runAgentSessionMock.mock.calls.at(-1)?.[0] as { streamPreference?: boolean };
+    // 层 2 选中 config services[0]（minimax，stream:false）——偏好读它而非 secrets 里的 deepseek。
+    expect(agentConfig.streamPreference).toBe(false);
+  });
+
   it("stores uploaded attachments and forwards them to the agent session", async () => {
     const note = Buffer.from("# 参考资料\n主角必须保留第一人称。", "utf-8").toString("base64");
     const image = Buffer.from("fakepng", "utf-8").toString("base64");
