@@ -5920,6 +5920,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const model = resolvedModel!;
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
+      // 607 号：服务「流式响应」开关（stream:false，108 号）在聊天兜底路径生效
+      // ——此前聊天路径恒流式忽略该偏好（606 号层 3 stream 双端分歧的 Node 侧
+      // 缺口）。服务判定：显式 service 优先；零显式时按 secrets 首个有 key 服务
+      // （与后端层 3/4 解析序一致）。
+      let streamPreference: boolean | undefined;
+      {
+        const secretsNow = await loadSecrets(root);
+        const serviceForStream = reqService
+          ?? Object.keys(secretsNow.services ?? {}).find(
+            (id) => secretsNow.services[id]?.apiKey,
+          );
+        if (serviceForStream) {
+          streamPreference = (await resolveConfiguredServiceEntry(root, serviceForStream))?.stream;
+        }
+      }
 
       // Create pipeline with resolved model (so sub_agent tools use the frontend-selected model)
       // Don't spread config.llm — its baseUrl/provider belong to the old service.
@@ -6148,6 +6163,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           model,
           apiKey: agentApiKey,
           pipeline,
+          // 607 号：服务「流式响应」开关传递（stream:false → 非流式完成）。
+          streamPreference,
           ...(backgroundTask
             ? {
                 backgroundTaskContext: buildRunningTaskContextBlock(backgroundTask, surfaceLanguage),

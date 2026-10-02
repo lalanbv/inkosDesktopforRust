@@ -52,7 +52,7 @@ import {
   type ActivatedSkillGuidance,
 } from "./skill-tool.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
-import { guardedAgentStream } from "./pi-stream.js";
+import { guardedAgentStream, guardedCompleteStream } from "./pi-stream.js";
 import { maybeCompactSession, shouldCompactSession, scanSessionForCompaction } from "./session-compaction.js";
 import { ContextWindowExceededError } from "../llm/provider.js";
 
@@ -87,7 +87,11 @@ export interface AgentSessionConfig {
   projectRoot: string;
   /** pi-ai Model to use, or provider+modelId to resolve via getModel. */
   model: Model<Api> | { provider: string; modelId: string };
-  /** Optional API key. When omitted, falls back to env-based key lookup. */
+  // 607 号：服务「流式响应」开关关闭（stream:false，108 号）时聊天走非流式完成——
+  // 此前聊天路径恒流式忽略该偏好（层 3 stream 双端分歧，606 号备案）。
+  // undefined / true = 默认流式。
+  streamPreference?: boolean;
+    /** Optional API key. When omitted, falls back to env-based key lookup. */
   apiKey?: string;
   /** Allow the read tool to read absolute paths outside projectRoot/books. Defaults to false; set INKOS_AGENT_ALLOW_SYSTEM_READ=1 to enable. */
   allowSystemFileRead?: boolean;
@@ -963,6 +967,10 @@ async function runAgentSessionUnlocked(
         if (terminalToolResultTail) {
           terminalToolResultTail = false;
           return localAssistantStopStream(streamModel);
+        }
+        // 607 号：服务 stream:false 偏好 → 非流式完成（一次 done 事件）。
+        if (config.streamPreference === false) {
+          return guardedCompleteStream(streamModel, context, options);
         }
         // R45/567 号：Provider 选择收拢进缝——Consumer 不分支于提供方身份。
         return guardedAgentStream(streamModel, context, options);
