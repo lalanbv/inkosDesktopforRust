@@ -968,10 +968,10 @@ async function runAgentSessionUnlocked(
           terminalToolResultTail = false;
           return localAssistantStopStream(streamModel);
         }
-        // 607 号：服务 stream:false 偏好 → 非流式完成（一次 done 事件）。
-        if (config.streamPreference === false) {
-          return guardedCompleteStream(streamModel, context, options);
-        }
+        // 608 号回滚备案：stream:false 非流式分支（guardedCompleteStream）在
+        // GUI 路径实测回复不渲染（后端已完成但前端渲染链不适配非流式事件
+        // 形态，612 号真机走查实录）——恒流式恢复为稳定态；非流式支持待
+        // 渲染链适配后重新立项（适配器与双分支单测保留在库可复用）。
         // R45/567 号：Provider 选择收拢进缝——Consumer 不分支于提供方身份。
         return guardedAgentStream(streamModel, context, options);
       },
