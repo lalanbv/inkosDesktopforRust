@@ -67,18 +67,24 @@
 3. 适配器差分逐行复核：anthropic-messages 201 行重点核 PiAnthropic 凭据链变化对本仓 header 式 auth 的影响（本仓走显式 apiKey，预期净受益：行为更可预测）。
 4. **transcript thinkingLevel 落盘裁决**（第四节第 1 条）。
 5. 门禁矩阵：gate:ts 七步全量 + 双引擎活体差分（含 SSE 维度）+ mock-llm 活体走查（发送/中止/换向三场景，624 号方法论）+ cargo:testgate（src-tauri 面若有 E2E 触达 TS 包则必跑）。
-6. **真 provider 冒烟**（若可配 key）：至少一个 openai 兼容端点+一个 anthropic 端点各一轮真实往返——openai SDK 7 传递风险的唯一直接覆盖手段。
+6. **真 provider 冒烟**（若可配 key）：至少一个 openai 兼容端点+一个 anthropic 端点各一轮真实往返——openai SDK 7 传递风险的唯一直接覆盖手段。**工具已入库（630 号）**：`node scripts/provider-smoke.mjs --service <name> --model <id>`（A 非流式+B 流式双链，key 从 .inkos/secrets.json 或 env 解析；key 缺失退出码 2 给可行动指引；成功路径接线已经 mock 活体验证）。三适配器覆盖矩阵见脚本头注释。
 7. bench:gate 零回退复核（SSE parse 面在 627 号已优化，确认 pi-ai 升级不引入 TS 侧回退——TS 侧无基准，以 vitest 时长漂移备案即可）。
 
-## 六、风险登记
+## 六、风险登记与路线裁决（630 号更新）
 
 | 风险 | 等级 | 缓解 |
 |---|---|---|
-| openai SDK 7 默认行为漂移（重试/超时/流式） | 高 | 施工序第 6 步真 provider 冒烟；不可得则迁移改双号（先 0.99 观察线） |
+| openai SDK 7 默认行为漂移（重试/超时/流式） | 高 | 施工序第 6 步真 provider 冒烟（脚本已入库）；不可得则迁移改双号（先 0.99 观察线） |
 | anthropic 凭据链语义变化 | 中 | PiAnthropic 禁默认链对本仓显式 key 形态净受益；复核 federation env 未设 |
 | 模型注册表刷新破坏 service-presets 引用 | 中 | 施工序第 3 步逐 ID 解析探针 |
 | transcript 新字段污染持久层 | 低 | 落盘裁决先行（第 4 步） |
 | 镜像滞后（npmmirror） | 低 | --registry npmjs 绕行（628 号备案） |
+
+**路线裁决（2026-10-05，630 号）——缓行**：
+1. **真 provider 冒烟不可行实证**：仓/家目录均无 .inkos/secrets.json，pi-env-keys 全表 provider env（ANTHROPIC/OPENAI/DEEPSEEK/ZAI_API_KEY 等）实测全 unset，~/.zai 仅 MCP 日志——无任何可用真实 key。
+2. **0.99 观察线降险预设被实测否定**：0.99.2 tarball 实测 dependencies 已带 `openai@7.19.0`（SDK 大版本跳升在 0.99 线即发生）——观察线=同等传输风险+两天即被 1.0 取代的死线孤儿 pin，缓释价值为零。
+3. **缓行代价可控**：pi-ai 仅服务 Node 回退端/CLI（桌面默认 Rust 引擎不触达 provider 传输）；0.87.1 已含空 text 保护补丁（629 号）；注册表刷新/anthropic 凭据链改进对回退端非关键。
+4. **复启条件**：任一真实 key 可得（env 或 secrets.json）→ 先跑 `scripts/provider-smoke.mjs` 三适配器矩阵（anthropic-messages/openai-completions/openai-responses 各一端点）→ 全绿后按本图七步施工序执行 1.0.2 迁移专项。
 
 ---
 629 号摸底全证据链：三包 tarball 对勘（pi-ai 三版本/pi-agent-core·pi-telemetry 双版本，diff 输出逐条归类于上文）、本仓导入面全量 grep 枚举、安装指纹核验（readlink 实链）。0.87.1 补丁升级已在本号落地并过类型门禁。
