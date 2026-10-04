@@ -100,6 +100,9 @@ async function runEngineLeg(engine) {
     JSON.stringify({ name: `inkos-smoke-${engine}`, version: "0.1.0", services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }] }),
   );
   writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }));
+  // 632 号：genre 读面穿越探针的诱饵（项目根、genres 目录之外——旧码可经
+  // `..%2Fdecoy` 直读此文件，守卫后应 400）。
+  writeFileSync(join(root, "decoy.md"), "# decoy\n\n陷阱文件：不应被任何路由读出。\n");
 
   // 启动被测引擎。
   if (engine === "node") {
@@ -180,6 +183,11 @@ async function runEngineLeg(engine) {
   check(`[${engine}] SPA 入口 no-store`, spaRes.headers.get("cache-control")?.includes("no-store") === true);
   const apiRes = await fetchT(`${base}/api/v1/books`);
   check(`[${engine}] API 面 no-store`, apiRes.headers.get("cache-control")?.includes("no-store") === true);
+
+  // 632 号：genre 读面 id 校验（201 段守卫只覆盖 books/projects 段——genres
+  // 自守。`..%2Fdecoy` 解码后 `../decoy` 直读项目根 decoy.md = 任意 .md 读面）。
+  const genreTraversal = await api("/api/v1/genres/..%2fdecoy");
+  check(`[${engine}] genre 穿越探针 400（防任意 .md 读）`, genreTraversal.status === 400);
 
   // run-log 调用计数（写链遥测在位）。
   const runLog = await api("/api/v1/run-log?limit=50");

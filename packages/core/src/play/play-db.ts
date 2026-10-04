@@ -70,6 +70,9 @@ export class PlayDB {
     const { DatabaseSync } = require("node:sqlite");
     this.db = new DatabaseSync(join(runDir, "play.db"));
     this.db.exec("PRAGMA journal_mode = WAL");
+    // 632 号（631 备案清偿）：play.db 同面补 busy_timeout——CLI 与桌面引擎
+    // 跨进程同 run 并发写时等待而非瞬时 SQLITE_BUSY（node:sqlite 默认 0）。
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.migrate();
   }
 

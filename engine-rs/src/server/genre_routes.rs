@@ -117,12 +117,23 @@ pub async fn genre_detail(
     State(runtime): State<BooksRuntime>,
     Path(genre_id): Path<String>,
 ) -> impl IntoResponse {
+    // 632 号：读面与写面（PUT/copy）同款校验——补对称缺口。旧码 `..%2Fdecoy`
+    // 经 Path percent-decode 成 `../decoy`，`genres/{id}.md` 可直读项目根外
+    // 任意 .md（本仓 oneshot 探针实测 200 泄内容）。
+    if genre_id_is_unsafe(&genre_id) {
+        return invalid_genre_id(&genre_id).into_response();
+    }
     match read_genre_profile(runtime.state.project_root(), &genre_id, &runtime.builtin_genres_dir).await {
         Ok(parsed) => (
             StatusCode::OK,
             Json(json!({ "profile": parsed.profile, "body": parsed.body })),
-        ),
-        Err(error) => (StatusCode::NOT_FOUND, Json(json!({ "error": error.to_string() }))),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -244,5 +255,98 @@ pub async fn copy_genre(
     match copy.await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "path": format!("genres/{genre_id}.md") }))),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() }))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use crate::pipeline::merged_audit::RevisionGate;
+    use crate::server::sse::BroadcastHub;
+    use crate::state::manager::StateManager;
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tower::util::ServiceExt;
+
+    /// 合法题材画像 fixture（真仓内容，frontmatter 齐全——避免自造内容解析失败伪象）。
+    fn valid_genre_md() -> String {
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../packages/core/genres/cozy.md"
+        ))
+        .expect("仓库内 cozy.md 应存在")
+    }
+
+    fn runtime_for(root: &std::path::Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root)),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    context_window_tokens: 128_000,
+                    base_url: "http://127.0.0.1:9".into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 1024,
+                    extra_headers: Default::default(),
+                },
+                Default::default(),
+            )),
+            builtin_genres_dir: root.join("builtin-genres"),
+            revision_gate: RevisionGate::default(),
+        }
+    }
+
+    fn genre_app(root: &std::path::Path) -> axum::Router {
+        axum::Router::new().route(
+            "/api/v1/genres/:id",
+            axum::routing::get(genre_detail).with_state(runtime_for(root)),
+        )
+    }
+
+    /// 632 号：GET 读面与写面（PUT/copy）同款 id 校验——可证伪位：旧码无守卫时
+    /// `..%2Fdecoy` 经 percent-decode 成 `../decoy`，`genres/{id}.md` 直读项目根
+    /// decoy.md → 200 泄内容（任意 .md 读面）。
+    #[tokio::test]
+    async fn genre_detail_rejects_path_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = valid_genre_md();
+        std::fs::write(dir.path().join("decoy.md"), &md).unwrap();
+        std::fs::create_dir_all(dir.path().join("genres")).unwrap();
+
+        let resp = genre_app(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/genres/..%2Fdecoy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "穿越 id 应 400 而非直读项目根外 .md"
+        );
+    }
+
+    #[tokio::test]
+    async fn genre_detail_still_serves_normal_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("genres")).unwrap();
+        std::fs::write(dir.path().join("genres").join("wuxia.md"), valid_genre_md()).unwrap();
+
+        let resp = genre_app(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/genres/wuxia")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

@@ -6618,6 +6618,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/genres/:id", async (c) => {
     const genreId = c.req.param("id");
+    // 632 号：读面与写面（copy/PUT）同款 id 校验——补对称缺口（`..%2Fdecoy`
+    // 解码后 `../decoy` 可直读项目根外任意 .md）。
+    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
+      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
+    }
     try {
       const { readGenreProfile } = await import("@actalk/inkos-core");
       const { profile, body } = await readGenreProfile(root, genreId);

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { LocalSearchIndex } from "../retrieval/local-search.js";
 import { MemoryDB } from "../state/memory-db.js";
+import { PlayDB } from "../play/play-db.js";
 
 // 631 号：SQLite 连接配置锁定。busy_timeout 是 per-connection 值（不持久化），
 // 只能从本连接读回；并发等待的行为机制可证伪证明在 Rust 侧
@@ -37,6 +38,18 @@ describe("SQLite connection pragmas (631)", () => {
     // MemoryDB 不创建父目录（生产调用方保证 story/ 存在），测试先建。
     mkdirSync(join(dir, "story"), { recursive: true });
     const db = new MemoryDB(dir);
+    try {
+      const busy = rawDb(db).prepare("PRAGMA busy_timeout").get() as { timeout: number };
+      expect(busy.timeout).toBe(5000);
+      const journal = rawDb(db).prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+      expect(journal.journal_mode).toBe("wal");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("PlayDB sets busy_timeout=5000 and WAL (631 备案清偿)", () => {
+    const db = new PlayDB(join(dir, "play-run"));
     try {
       const busy = rawDb(db).prepare("PRAGMA busy_timeout").get() as { timeout: number };
       expect(busy.timeout).toBe(5000);
