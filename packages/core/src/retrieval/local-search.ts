@@ -36,6 +36,9 @@ export class LocalSearchIndex {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
+    // 631 号：并发写者等待而非瞬时 SQLITE_BUSY（write_next 持写锁期间
+    // hybrid-search 的 migrate 写事务不再瞬时失败）。Rust 侧同值同批修复。
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
   }

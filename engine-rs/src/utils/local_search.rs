@@ -53,8 +53,18 @@ pub struct LocalSearchIndex {
     conn: Connection,
 }
 
+/// 并发写者锁等待上限（631 号）。rusqlite 0.32 在 `Connection::open` 内已默认
+/// `sqlite3_busy_timeout(db, 5000)`（inner_connection.rs:119），此处显式声明为
+/// 契约：防上游默认漂移，且与 TS 侧 `PRAGMA busy_timeout = 5000`（node:sqlite
+/// 默认 0，须显式设置）同值对齐。
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5000);
+
 impl LocalSearchIndex {
     /// `:memory:` 内存索引或文件索引（父目录自动创建）。
+    ///
+    /// 631 号：磁盘索引补齐 `journal_mode = WAL`——TS 构造函数已有而 Rust 缺失
+    /// 的移植缺口（520 号移植磁盘索引时未镜像 pragma 面）。回滚日志模式下
+    /// 读写互斥且崩溃安全性与 TS 不同；WAL 下检索面板读与 write_next 写不再互斥。
     pub fn new(path: &str) -> rusqlite::Result<Self> {
         if path != ":memory:" {
             if let Some(parent) = Path::new(path).parent() {
@@ -62,6 +72,11 @@ impl LocalSearchIndex {
             }
         }
         let conn = Connection::open(path)?;
+        if path != ":memory:" {
+            // 与 TS local-search.ts 对齐；失败容忍（只读介质等）。
+            let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        }
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         let index = Self { conn };
         index.migrate()?;
         Ok(index)
@@ -565,4 +580,61 @@ mod tests {
         assert!(tokens.contains(&"碎镜".to_string()), "{tokens:?}");
         assert!(tokens.contains(&"檀碎".to_string()), "{tokens:?}");
     }
+
+    /// 631 号：磁盘索引 journal_mode=WAL 契约（TS 构造函数已有而 Rust 此前缺失
+    /// 的移植缺口——本仓可证伪位：旧码返回 "delete"）。WAL 下检索面板读与
+    /// write_next 的 replace_scope 写不再互斥，且崩溃安全性与 TS 对齐。
+    #[test]
+    fn disk_index_runs_in_wal_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wal.db");
+        let index = LocalSearchIndex::new(path.to_str().unwrap()).unwrap();
+        let mode: String = index
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        // busy_timeout 契约值（rusqlite 默认即 5000，显式声明防上游漂移；
+        // TS 侧 node:sqlite 默认 0——同值断言在 core __tests__/sqlite-pragmas.test.ts）。
+        let timeout: i64 = index
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
+    /// 631 号：并发写者应等待 busy_timeout 而非瞬时 SQLITE_BUSY 失败。
+    /// 契约测试：rusqlite 0.32 默认即 5000ms（inner_connection.rs:119），旧码同样
+    /// 通过——本测试锁「打开+migrate+replace_scope 全链在他人持锁窗口内不死、
+    /// 锁释放后完成」的形态，防未来默认漂移。TS 侧（node:sqlite 默认 0）的
+    /// 可证伪位在 core __tests__/sqlite-pragmas.test.ts。
+    #[test]
+    fn concurrent_writer_waits_instead_of_failing_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.db");
+        // 预建索引：migrate 完成后再进入持锁窗口。
+        {
+            let index = LocalSearchIndex::new(path.to_str().unwrap()).unwrap();
+            index.replace_scope("skill:combat", &[doc("a", "A", "内容甲")]).unwrap();
+        }
+        // A 连接持写锁（与生产 replace_scope 同款 BEGIN IMMEDIATE）。
+        let blocker = Connection::open(&path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let path_str = path.to_str().unwrap().to_string();
+        let writer = std::thread::spawn(move || {
+            let index = LocalSearchIndex::new(&path_str)
+                .expect("打开（migrate 写事务）应在 busy_timeout 内等待而非瞬时失败");
+            index
+                .replace_scope("skill:combat", &[doc("b", "B", "内容乙")])
+                .expect("锁释放后的 replace_scope 应成功");
+        });
+
+        // 写者应在持锁窗口内等待（而非带 busy 错误死亡），锁释放后完成。
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        blocker.execute_batch("COMMIT").unwrap();
+        drop(blocker);
+        writer.join().expect("并发写者应在锁释放后完成");
+    }
+
 }

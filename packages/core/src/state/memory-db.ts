@@ -115,6 +115,8 @@ export class MemoryDB {
     const dbPath = join(bookDir, "story", "memory.db");
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL");
+    // 631 号：并发写者等待而非瞬时 SQLITE_BUSY。Rust 侧同值同批修复。
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.migrate();
   }
 

@@ -140,6 +140,11 @@ pub struct MemoryDb {
 }
 
 impl MemoryDb {
+    /// 并发写者锁等待上限（631 号）。rusqlite 0.32 `Connection::open` 已默认
+    /// 5000ms（inner_connection.rs:119），显式声明为契约防上游默认漂移，并与
+    /// TS 侧 `PRAGMA busy_timeout = 5000`（node:sqlite 默认 0，须显式设置）同值对齐。
+    const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5000);
+
     /// 打开/创建 `bookDir/story/memory.db` 并执行迁移。
     ///
     /// 对齐 TS 构造函数：`new DatabaseSync(join(bookDir, "story", "memory.db"))` +
@@ -149,6 +154,7 @@ impl MemoryDb {
         let conn = Connection::open(&db_path)?;
         // 内存库（测试）会静默降级为 memory 模式，不报错；磁盘库启用 WAL。
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        conn.busy_timeout(Self::BUSY_TIMEOUT)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -158,6 +164,7 @@ impl MemoryDb {
     /// 这里作为纯 Rust 增益，使单测无需临时文件。
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(Self::BUSY_TIMEOUT)?;
         let db = Self { conn };
         db.migrate()?;
         Ok(db)
@@ -1362,5 +1369,27 @@ mod tests {
         db.upsert_hook(&hook("h1", 1, "open", 1)).unwrap();
         // close 消费 self 并释放连接；不 panic 即视为成功。
         db.close().expect("显式关闭不应报错");
+    }
+
+    /// 631 号：打开即设置 busy_timeout（并发写者等待而非瞬时 SQLITE_BUSY）。
+    /// rusqlite 默认即 5000，此处锁契约值防上游默认漂移；行为机制的可证伪位
+    /// 在 TS 侧（node:sqlite 默认 0）与 local_search 并发持锁契约测试。
+    #[test]
+    fn open_sets_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("story")).unwrap();
+        let db = MemoryDb::open(dir.path()).unwrap();
+        let timeout: i64 = db
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+
+        let memory = MemoryDb::open_in_memory().unwrap();
+        let timeout: i64 = memory
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
     }
 }
