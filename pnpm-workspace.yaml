@@ -10,10 +10,10 @@ allowBuilds:
   msw: true
   protobufjs: true
 minimumReleaseAgeExclude:
-  - '@earendil-works/chord@0.87.0'
-  - '@earendil-works/pi-agent-core@0.87.0'
-  - '@earendil-works/pi-ai@0.87.0'
-  - '@earendil-works/pi-telemetry@0.87.0'
+  - '@earendil-works/chord@0.87.1'
+  - '@earendil-works/pi-agent-core@0.87.1'
+  - '@earendil-works/pi-ai@0.87.1'
+  - '@earendil-works/pi-telemetry@0.87.1'
 # pnpm 11 起依赖覆写同样从 package.json 的 pnpm 字段迁到这里（旧位置的
 # pnpm.overrides 已被静默忽略——277/278 号审计）。此覆写为安全修复：
 # pi-ai(0.67.1 精确锁定)→@google/genai→protobufjs 传递链上的 critical
@@ -25,8 +25,11 @@ overrides:
   # 548 号（R30）：pi 双包 scope 迁移 @mariozechner→@earendil-works 0.87.0
   #（旧 scope 0.73.1 为废弃终版）。直接依赖侧 packages/core 亦精确锁 0.87.0，
   # 此处兜住传递链（全图强制同版，杜绝双拷贝）。
-  "@earendil-works/pi-ai": 0.87.0
-  "@earendil-works/pi-agent-core": 0.87.0
+  # 629 号：0.87.0→0.87.1 补丁对齐（上游 09-22；openai-completions 空 text 块
+  # 过滤防 provider 400+模型注册表刷新；agent-core/telemetry dist 与 0.87.0
+  # 逐字节等价=tarball 对勘实证）。1.0 线（openai SDK 6→7 传递）另立施工图。
+  "@earendil-works/pi-ai": 0.87.1
+  "@earendil-works/pi-agent-core": 0.87.1
   protobufjs: ^7.5.8
   mermaid: ^11.16.1
   # 556 号：dompurify afterSanitize 脱管子树 DOM XSS（GHSA-p98j-92pf-mc4p，

@@ -73,9 +73,9 @@
     "eval": "vitest run src/__tests__/eval"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.87.0",
-    "@earendil-works/pi-ai": "0.87.0",
-    "@earendil-works/pi-telemetry": "0.87.0",
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-telemetry": "0.87.1",
     "@sinclair/typebox": "^0.34.49",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
