@@ -7,7 +7,10 @@
 @import "tailwindcss";
 
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
+/* 628 号：shadcn 依赖出清（其 CLI 拖入 braces<=3.0.3 无补丁线 advisory），
+   此处 = shadcn@4.2.0 dist/tailwind.css 原样 vendor（纯静态 @theme/keyframes，
+   无传递 CSS 依赖）；后续组件增补走 `pnpm dlx shadcn`（components.json 保留）。 */
+@import "./styles/shadcn-tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
