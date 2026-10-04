@@ -64,8 +64,8 @@
 
 1. ~~**telemetry 1.0.2 tarball 对勘**~~（**629 号已补录完成**：差分 10 文件全为 .map，四消费符号在位，随队 bump 零风险）+ 三包 1.0.2 指纹核验协议（629 号先例：pnpm-workspace.yaml overrides 与 minimumReleaseAgeExclude 双点同步改，遗漏 overrides 会被静默压回旧版——629 号实证坑）。
 2. bump：pnpm-workspace.yaml（overrides+exclude 清单含 chord）+ packages/core/cli package.json（specifier+cli overrides 字段）→ `pnpm install --registry https://registry.npmjs.org/`（镜像滞后绕行备案 628 号）→ 符号链接指向核验（.pnpm 残留旧版目录无害，以 readlink 为准）。
-3. 适配器差分逐行复核：anthropic-messages 201 行重点核 PiAnthropic 凭据链变化对本仓 header 式 auth 的影响（本仓走显式 apiKey，预期净受益：行为更可预测）。
-4. **transcript thinkingLevel 落盘裁决**（第四节第 1 条）。
+3. ~~适配器差分逐行复核~~（**633 号清偿**，三适配器全部零破坏，结论见第七节）。
+4. ~~**transcript thinkingLevel 落盘裁决**~~（**633 号裁决**：容忍透传零代码——证据链见第七节）。
 5. 门禁矩阵：gate:ts 七步全量 + 双引擎活体差分（含 SSE 维度）+ mock-llm 活体走查（发送/中止/换向三场景，624 号方法论）+ cargo:testgate（src-tauri 面若有 E2E 触达 TS 包则必跑）。
 6. **真 provider 冒烟**（若可配 key）：至少一个 openai 兼容端点+一个 anthropic 端点各一轮真实往返——openai SDK 7 传递风险的唯一直接覆盖手段。**工具已入库（630 号）**：`node scripts/provider-smoke.mjs --service <name> --model <id>`（A 非流式+B 流式双链，key 从 .inkos/secrets.json 或 env 解析；key 缺失退出码 2 给可行动指引；成功路径接线已经 mock 活体验证）。三适配器覆盖矩阵见脚本头注释。
 7. bench:gate 零回退复核（SSE parse 面在 627 号已优化，确认 pi-ai 升级不引入 TS 侧回退——TS 侧无基准，以 vitest 时长漂移备案即可）。
@@ -88,3 +88,32 @@
 
 ---
 629 号摸底全证据链：三包 tarball 对勘（pi-ai 三版本/pi-agent-core·pi-telemetry 双版本，diff 输出逐条归类于上文）、本仓导入面全量 grep 枚举、安装指纹核验（readlink 实链）。0.87.1 补丁升级已在本号落地并过类型门禁。
+
+## 七、适配器逐行复核结论（633 号清偿，施工序第 3/4 步）
+
+### 7.1 anthropic-messages（199 行 diff 逐行归类）
+
+| 差分类 | 触发条件 | 本仓影响 |
+|---|---|---|
+| PiAnthropic 子类（`_shouldResolveDefaultCredentials()=>false`） | 恒生效 | **净受益**：SDK 不再暗中解析 ANTHROPIC_PROFILE 配置文件/federation 凭据——本仓显式 key 形态行为更可预测 |
+| getAnthropicFederation（oidc_federation + 客户端缓存） | 仅当 `provider==="anthropic"` 且无 apiKey 且无 auth 头且 ANTHROPIC_FEDERATION_RULE_ID/ORGANIZATION_ID/IDENTITY_TOKEN_FILE 三 env 同设 | 本仓恒显式 apiKey（resolveServiceModel 硬性要求）→ 恒不触发 |
+| beta 头换代 `mid-conversation-tool-changes`→`inline-tools-2026-09-15` + tool_addition 由 reference 改 definition（支持同名重定义） | 仅当模型 compat `supportsMidConvoToolChanges` 启用 | **双版本注册表实测均零模型启用该旗标**（anthropic.json 对勘）→ 当前零触达；未来模型启用时随注册表刷新探针暴露 |
+| `onProviderStreamEvent` 观察钩子 | 仅显式传入 | 本仓不传 → 零影响 |
+| `usage.cacheWrite1h`（ephemeral_1h 增量字段） | 上游 API 返回该 usage 时 | 本仓 usage 消费为固定字段读（input/output/cacheRead/cacheWrite/total）→ additive 无害 |
+| strict schema 关键字拒绝表（minimum/maximum/format 等整请求 400 关键字的主动规避） | 仅 `supportsStrictTools` + strict 采样 | 上游防 400 修复，保护性 |
+
+### 7.2 openai-responses（43 行）
+
+Sign in with ChatGPT 特判（`provider==="openai"` 且 baseUrl=api.openai.com 且 key 非 `sk-` 前缀 → 视为订阅 token，省略 temperature/maxTokens/prompt_cache_* 字段 + 订阅用量错误信息增强）。本仓标准 `sk-` key 或自定义 baseUrl → 特判恒 false → 零行为变化（仅「误贴 ChatGPT OAuth token 当 API key」的错配场景行为不同=上游有意特性）。
+
+### 7.3 openai-completions（15 行）
+
+629/632 号已覆盖（resolveSamplingParams/空 text 过滤/onProviderStreamEvent）。**补充实测**：本仓 `provider.ts` streamOpts 只传 temperature/maxTokens/apiKey/headers/signal，**不传 reasoningEffort** → 1.0.2 `resolveSamplingParams(model, "off", undefined)` → `samplingParamsByThinkingLevel` 零触达。
+
+### 7.4 transcript thinkingLevel 落盘裁决（施工序第 4 步）
+
+**裁决：容忍透传，零代码。** 证据链：①TS `MessageEventSchema.message: z.unknown()`（不透明）；②Rust `MessageEvent.message: serde_json::Value`（session_transcript.rs:119，注释明示「宽松：不做结构校验」）；③`sanitizeSkillTurnMessage` 是条件性 thinking content 块过滤，非字段白名单；④pi-ai 适配器构造请求只读 AssistantMessage 已知字段，多余 thinkingLevel 不外发 provider；⑤engine-contract-diff 不对照 transcript（grep 零命中）。1.0 迁移后 TS 腿 transcript 内 `message.thinkingLevel` 为 additive 字段，双端恢复/差分面均容忍。
+
+### 7.5 TS 对偶审计（632 矩阵 TS 面）+ src-tauri 扫描——零新缺口
+
+server.ts 全部守卫外 id 段路由逐一核对：project/files+artifacts 通配（decode 拒绝→前缀 allowlist→resolve+relative 复核三重防御）、sessions create（timestamp-random regex）、skills/prompt-packs（SkillIdSchema/normalizeStudioPromptId）、translations（isSafeBookId）、series（isValidSeriesId）、asset-library（isLibraryKind+列表过滤）、cover/services（preset map+isHeaderSafeApiKey）。src-tauri commands 面（registry http_fetch+pubkey 验签、updater 双通道）无 id→路径 join 暴露面。备案：`sessions/:sessionId` GET 的 transcript join 双端一致未校验——解析型读（解析失败→404 与缺失同形，无存在性 oracle）+task 文件名走 `js_encode_uri_component`（632 矩阵时误判为待查，实为安全）→ 低风险备案不加代码。
