@@ -60,8 +60,12 @@ impl SseStreamParser {
             let split_at = self.pending.find("\n\n").or_else(|| self.pending.find("\r\n\r\n"));
             let Some(end) = split_at else { break };
             let sep_len = if self.pending[end..].starts_with("\r\n\r\n") { 4 } else { 2 };
-            let block: String = self.pending.drain(..end + sep_len).collect();
-            events.extend(parse_sse_block(&block));
+            let end_abs = end + sep_len;
+            // 627 号：先在借用切片上解析（事件持有 owned String，借用即止），
+            // 再 drain 缓冲——免去此前每帧一次的 block String collect 分配。
+            let parsed = parse_sse_block(&self.pending[..end_abs]);
+            self.pending.drain(..end_abs);
+            events.extend(parsed);
         }
         events
     }
@@ -103,10 +107,14 @@ fn parse_sse_block(block: &str) -> Vec<SseEvent> {
     if payload == "[DONE]" {
         return vec![SseEvent::Done];
     }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+    // 627 号：直接类型化解析（一次 serde 解析、零 Value DOM）。旧形态
+    // `from_str::<Value>` + `value.clone()` + `from_value` = 每帧两次解析
+    // 加整棵 DOM 深拷贝；畸形/形态不符载荷 parse 失败 → 跳过，语义与旧
+    // `unwrap_or(空 chunk)` 逐例等价。
+    let Ok(chunk) = serde_json::from_str::<OpenAiChunk>(payload) else {
         return Vec::new();
     };
-    parse_openai_chunk(&value)
+    parse_openai_chunk(chunk)
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,28 +176,39 @@ struct OpenAiUsage {
     total_tokens: Option<u64>,
 }
 
-fn parse_openai_chunk(value: &serde_json::Value) -> Vec<SseEvent> {
-    let chunk: OpenAiChunk = serde_json::from_value(value.clone()).unwrap_or(OpenAiChunk { choices: vec![], usage: None });
+fn parse_openai_chunk(chunk: OpenAiChunk) -> Vec<SseEvent> {
     let mut events = Vec::new();
     // TS 逐项处理语义：delta 增量 / finish_reason 终态 / usage 可同帧共存
-    if let Some(choice) = chunk.choices.first() {
-        if let Some(content) = &choice.delta.content {
-            if !content.is_empty() {
-                events.push(SseEvent::Delta(content.clone()));
-            }
+    // 627 号：消费式解构（事件直接 move 解析产物，免 content/reasoning/
+    // finish_reason 的逐字段 clone——分配已发生在 serde 解析，不重复付）。
+    let OpenAiChunk { choices, usage } = chunk;
+    if let Some(choice) = choices.into_iter().next() {
+        let OpenAiChoice {
+            delta:
+                Delta {
+                    content,
+                    reasoning_content,
+                    reasoning,
+                    reasoning_text,
+                    tool_calls,
+                },
+            finish_reason,
+        } = choice;
+        if let Some(content) = content.filter(|text| !text.is_empty()) {
+            events.push(SseEvent::Delta(content));
         }
         let reasoning = [
-            choice.delta.reasoning_content.as_deref(),
-            choice.delta.reasoning.as_deref(),
-            choice.delta.reasoning_text.as_deref(),
+            reasoning_content,
+            reasoning,
+            reasoning_text,
         ]
         .into_iter()
         .flatten()
         .find(|text| !text.is_empty());
         if let Some(reasoning) = reasoning {
-            events.push(SseEvent::ReasoningDelta(reasoning.to_string()));
+            events.push(SseEvent::ReasoningDelta(reasoning));
         }
-        if let Some(tc) = choice.delta.tool_calls.first() {
+        if let Some(tc) = tool_calls.first() {
             events.push(SseEvent::ToolCallDelta {
                 index: tc.index,
                 id: tc.id.clone(),
@@ -197,13 +216,11 @@ fn parse_openai_chunk(value: &serde_json::Value) -> Vec<SseEvent> {
                 arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
             });
         }
-        if let Some(reason) = choice.finish_reason.as_deref() {
-            if !reason.is_empty() {
-                events.push(SseEvent::FinishReason(reason.to_string()));
-            }
+        if let Some(reason) = finish_reason.filter(|reason| !reason.is_empty()) {
+            events.push(SseEvent::FinishReason(reason));
         }
     }
-    if let Some(usage) = chunk.usage {
+    if let Some(usage) = usage {
         events.push(SseEvent::Usage {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
@@ -329,5 +346,28 @@ mod tests {
         let stream = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\r\n\r\n";
         let text: String = parse_sse_stream(stream).iter().filter_map(|e| if let SseEvent::Delta(s) = e { Some(s.clone()) } else { None }).collect();
         assert_eq!(text, "ab");
+    }
+
+    #[test]
+    fn malformed_or_mismatched_payloads_are_skipped() {
+        // 627 号：类型化解析后形态不符载荷仍整帧跳过（旧 from_value
+        // unwrap_or 空 chunk 的等价语义——非法 JSON/非对象/字段类型不符）。
+        // 非法 JSON。
+        assert!(parse_sse_stream("data: {not json}\n\n").is_empty());
+        // 合法 JSON 但非对象。
+        assert!(parse_sse_stream("data: [1,2,3]\n\n").is_empty());
+        assert!(parse_sse_stream("data: \"ok\"\n\n").is_empty());
+        assert!(parse_sse_stream("data: 42\n\n").is_empty());
+        // 对象但字段类型不符（choices 非数组、usage 非对象）→ 整帧跳过。
+        assert!(parse_sse_stream("data: {\"choices\": 5}\n\n").is_empty());
+        assert!(parse_sse_stream(
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"x\"}}\n\n"
+        )
+        .is_empty());
+        // 跳过不影响后续正常帧。
+        let events = parse_sse_stream(
+            "data: [1,2,3]\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n",
+        );
+        assert_eq!(events, vec![SseEvent::Delta("好".to_string())]);
     }
 }

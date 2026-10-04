@@ -203,11 +203,68 @@ fn bench_tool_registry(c: &mut Criterion) {
     group.finish();
 }
 
+/// 627 号：SSE 逐帧解析基准——streaming_client 每 chunk 必经的最热纯 CPU
+/// 路径（每 token 数次），此前 12 基准未覆盖。流形态 = 120 个中文 content
+/// delta 帧 + finish_reason/usage 同帧 + [DONE]；两个形态：
+/// - `parse_full_stream`：整流一次解析（parser.push 一次到位）；
+/// - `push_chunked_64b`：64 字节分片喂入（真实网络 chunk 边界不定，跨块
+///   缓冲 + drain 路径；分片按字符边界切防劈开 UTF-8）。
+fn bench_sse_parse(c: &mut Criterion) {
+    let stream = {
+        let mut s = String::new();
+        for i in 0..120 {
+            s.push_str(&format!(
+                "data: {{\"id\":\"chatcmpl-{i}\",\"choices\":[{{\"delta\":{{\"content\":\"剑气纵横三千里，一剑霜寒十四州。\"}}}}]}}\n\n"
+            ));
+        }
+        s.push_str(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1024,\"completion_tokens\":2048,\"total_tokens\":3072}}\n\n",
+        );
+        s.push_str("data: [DONE]\n\n");
+        s
+    };
+    let chunks: Vec<&str> = {
+        let bytes = stream.as_bytes();
+        let mut v = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut j = (i + 64).min(bytes.len());
+            while j < bytes.len() && !stream.is_char_boundary(j) {
+                j += 1;
+            }
+            v.push(&stream[i..j]);
+            i = j;
+        }
+        v
+    };
+    let mut group = c.benchmark_group("sse_parse");
+    group.throughput(Throughput::Bytes(stream.len() as u64));
+    group.sample_size(30);
+    group.bench_function("parse_full_stream", |b| {
+        b.iter(|| {
+            std::hint::black_box(inkos_engine::llm::sse_parser::parse_sse_stream(
+                std::hint::black_box(&stream),
+            ))
+        })
+    });
+    group.bench_function("push_chunked_64b", |b| {
+        b.iter(|| {
+            let mut parser = inkos_engine::llm::sse_parser::SseStreamParser::new();
+            for chunk in &chunks {
+                std::hint::black_box(parser.push(chunk));
+            }
+            std::hint::black_box(parser.finish());
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
     bench_sse_broadcast,
     bench_write_next_hot_paths,
-    bench_tool_registry
+    bench_tool_registry,
+    bench_sse_parse
 );
 criterion_main!(benches);
