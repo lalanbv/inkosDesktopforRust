@@ -126,7 +126,15 @@ const firstDiffPath = (a, b, path = "") => {
 // 契约端点清单（GET；:id=镜花水月）。
 const BOOK = encodeURIComponent("镜花水月");
 
-/** 新增端点先经活体探测确认双端 200 再入列（488 号扩至 26 端点）。 */
+/** 新增端点先经活体探测确认双端 200 再入列（488 号扩至 26 端点、634 号扩至 36）。
+ *
+ * 634 号探测备案（双端设计内超集，不入对照）：
+ * - `/api/v1/writing-stats-rows`：仅 Rust 有——WritingStatsCard 在 TS 聚合面
+ *   `/writing-stats` 不可达时的行级回退（组件注释明示），TS 404 是设计。
+ * - `/api/v1/asset-library/:kind/assets` GET：Rust 有列表 GET；TS 同路径仅 PUT
+ *   批量 upsert，列表走 `GET /api/v1/asset-library/:kind`——读面形态差异，
+ *   前端各走各的等价读。
+ */
 
 /**
  * 已知分歧豁免表（487 号）：路径段数组，"*" 匹配任意单段；命中子树整体剪除。
@@ -182,6 +190,16 @@ const ENDPOINTS = [
   `/api/v1/books/${BOOK}/chapters/2`,
   `/api/v1/books/${BOOK}/context-lens/2`,
   `/api/v1/books/${BOOK}/roster-candidates`,
+  // 634 号扩容（488 号协议第二轮：活体探测双端 200 后入列）：
+  "/api/v1/genres/cozy",
+  "/api/v1/prompt-packs",
+  `/api/v1/books/${BOOK}/chapters/2/workspace`,
+  `/api/v1/books/${BOOK}/timeline-auto-beats`,
+  `/api/v1/books/${BOOK}/chapter-review-mode`,
+  `/api/v1/books/${BOOK}/series-id`,
+  `/api/v1/books/${BOOK}/best-of-n`,
+  `/api/v1/books/${BOOK}/style-binding`,
+  `/api/v1/books/${BOOK}/detect/stats`,
 ];
 
 const preseed = (root) => {
