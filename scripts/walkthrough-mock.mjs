@@ -88,6 +88,13 @@ const REVISE_BLOAT = process.env.WALKTHROUGH_MOCK_REVISE_BLOAT === "1";
 // chapter-review-cycle 的「修复轮次 N 未产出新内容，退出循环」分支
 //（650 首跑实录/655 红 1 的手工证据自动化入矩阵套件）。
 const REVISE_PASSTHROUGH = process.env.WALKTHROUGH_MOCK_REVISE_PASSTHROUGH === "1";
+// 669 号：WALKTHROUGH_MOCK_REVISE_PASSTHROUGH_FROM=N——从第 N 次修稿起直通
+// （默认 1）。多轮语境的「未产出」构造：轮 1 正常产出（净提升继续）→轮 2+
+// 直通回传 LAST_BODY（=上次返回的 REVISED_CONTENT=管线当前正文）→reviser 判
+// revisedContent===finalContent→「未产出」退出。与场景 F（FROM=1 单轮直通）
+// 互补覆盖多轮时序。
+const REVISE_PASSTHROUGH_FROM = Math.max(1, Math.floor(Number(process.env.WALKTHROUGH_MOCK_REVISE_PASSTHROUGH_FROM ?? "1")) || 1);
+let LAST_BODY = "";
 const BLOAT_FILLER = "他按石渊的嘱咐又把周天走了三遍，掌心玉佩随呼吸明明灭灭，窗外风声一阵紧过一阵。";
 // 651 号：analyzer 保真形态——UPDATED_HOOKS 与 walkthrough-fixture 预置池同源
 // （14 列 R23 台账，分类列驱动 memory.db promises 投影：悬念/情感/物品/世界观
@@ -98,6 +105,9 @@ const ANALYZER_HOOKS_TABLE = `| hook_id | 起始章节 | 类型 | 状态 | 最�
 | H02 | 2 | 情感线 | open | 3 | 第8章 | near-term | 无 | 第一卷 | 否 | 8 | 否 | 苏檀与镜灵的婚约誓言。 | 情感 |
 | H03 | 2 | 信物 | pressured | 3 | 第6章 | near-term | H01 | 第一卷 | 否 | 6 | 否 | 母亲留下的碎镜在镜界发光。 | 物品 |
 | H04 | 3 | 背景 | open | 0 |  | slow-burn | 无 | 第二卷 | 否 |  | 是 | 镜宗与皇室的隐秘盟约。 | 世界观 |`;
+// 669 号：修稿「上次返回的 REVISED_CONTENT」——直通形态回传它=回传管线当前
+// 正文（reviser 判与 finalContent 全等即「未产出」）。
+LAST_BODY = WRITER_BODY;
 const WRITER = `=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n${WRITER_BODY}\n\n=== POST_SETTLEMENT ===\n结算完成。\n\n=== RUNTIME_STATE_DELTA ===\n\`\`\`json\n{"chapter": 1, "chapterSummary": {"chapter": 1, "title": "风起", "characters": "林动", "events": "坊市夺回祖符，玉符异象初显", "stateChanges": "林动踏上修炼路，与雷家结仇", "hookActivity": "H01 推进", "mood": "紧张", "chapterType": "推进章"}}\n\`\`\`\n`;
 const CANON = "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: character_profiles ===\n| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |\n|------|------|----------|-------------|----------|----------|----------|----------|\n| 林川 | 云州少年 | 坚韧 | 剑不离手 | 简短 | 练剑不辍 | 师父 | 不知身世 |\n=== SECTION: key_events ===\n| 序号 | 事件 | 涉及角色 | 约束 |\n|------|------|----------|------|\n| 1 | 出城 | 林川 | 起点 |\n=== SECTION: power_system ===\n剑道九品。\n=== SECTION: writing_style ===\n短句。";
 const SETTLER_TEMPLATE = {
@@ -245,10 +255,13 @@ http.createServer((req, res) => {
         // 含「根据审稿意见对章节进行修正」，includes("审稿") 会先截胡
         // （首跑实录：修稿调用拿到审稿 JSON → REVISED_CONTENT 为空 →
         // 「未产出新内容」退出循环）。
-        if (REVISE_PASSTHROUGH) {
-          // 660 号：直通回传原文——reviser 判 revisedContent 与原文全等即
-          // 「未产出新内容」，修稿循环未产出分支的活体构造。
-          content = "=== FIXED_ISSUES ===\n无法安全修稿，正文保持原样。\n\n=== REVISED_CONTENT ===\n" + WRITER_BODY;
+        const passthroughNow = REVISE_PASSTHROUGH && REVISE_SEQ + 1 >= REVISE_PASSTHROUGH_FROM;
+        if (passthroughNow) {
+          // 660/669 号：直通回传管线当前正文（LAST_BODY=上次返回的
+          // REVISED_CONTENT）——reviser 判与 finalContent 全等即「未产出新
+          // 内容」。FROM=N 多轮构造：前 N-1 轮正常产出（净提升继续），第 N
+          // 轮起直通（未产出退出）。
+          content = "=== FIXED_ISSUES ===\n无法安全修稿，正文保持原样。\n\n=== REVISED_CONTENT ===\n" + LAST_BODY;
         }
         else if (sys.includes("只输出 PATCHES")) {
           // TARGET 必须是 WRITER 正文的精确引用（applySpotFixPatches 先精确
@@ -259,9 +272,11 @@ http.createServer((req, res) => {
           REVISE_SEQ += 1;
           let [t, r] = PATCH_PAIRS[pairIdx];
           if (REVISE_BLOAT) r = r + BLOAT_FILLER.repeat(Math.ceil(1800 / BLOAT_FILLER.length));
+          LAST_BODY = LAST_BODY.replace(t, r); // 669 号：维护管线当前正文（直通回传源）
           content = "=== FIXED_ISSUES ===\n替换了一处生硬动作描写，语义不变。\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n" + t + "\nREPLACEMENT_TEXT:\n" + r + "\n--- END PATCH ---";
         } else {
           content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
+          LAST_BODY = REVISED_BODY; // 669 号：维护管线当前正文
         }
       }
       else if (sys.includes("审稿")) {

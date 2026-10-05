@@ -84,6 +84,17 @@ const SCENARIOS = [
     },
   },
   {
+    id: "G2-多轮未产出",
+    env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,55,55,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_MOCK_REVISE_PASSTHROUGH: "1", WALKTHROUGH_MOCK_REVISE_PASSTHROUGH_FROM: "2", WALKTHROUGH_REVIEW_RETRIES: "2" },
+    expect: {
+      log: ["修复轮次 1/2（当前 45 分）", "修复轮次 2/2（当前 55 分）", "修复轮次 2 未产出新内容，退出循环"],
+      absentLog: ["达到通过线", "回退到最高分版本"],
+      chapterFileContains: "缓缓收紧五指", // 轮 1 PATCH 版落盘（净提升继续）
+      chapterFileNotContains: "纵马溅了他满身泥水", // 轮 2 直通未产出：PATCH2 不落盘
+      promisesTimeline: 4,
+    },
+  },
+  {
     id: "E-restore回退",
     env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_MOCK_REVISE_BLOAT: "1", WALKTHROUGH_REVIEW_RETRIES: "1" },
     expect: {
