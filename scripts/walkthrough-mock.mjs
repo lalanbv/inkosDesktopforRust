@@ -21,6 +21,7 @@
 // 浏览器直连静态面（`INKOS_STATIC_DIR=packages/studio/dist`）即可离线走查全功能。
 
 import http from "node:http";
+import { writeFileSync } from "node:fs";
 
 const ARCHITECT = "=== SECTION: story_frame ===\n## 主题与基调\n少年于微末中抬起头。\n\n=== SECTION: volume_map ===\n### 第一卷（1-30章）觉醒\n主角入宗门。\n\n=== SECTION: roles ===\n---ROLE---\ntier: major\nname: 林动\n---CONTENT---\n## 核心标签\n坚韧、藏拙。\n\n=== SECTION: book_rules ===\n## 主角\n- 名字：林动\n\n=== SECTION: pending_hooks ===\n| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 备注 |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n| H01 | 0 | 身世 | open | 0 | 第2卷 | 慢烧 | 无 | 第2卷中段 | true |  | 祖符来历 |\n";
 const REVIEW = "=== DIMENSION: 1 ===\n分数：90\n意见：冲突清晰。\n\n=== DIMENSION: 2 ===\n分数：88\n意见：开篇有力。\n\n=== DIMENSION: 3 ===\n分数：85\n意见：世界观内洽。\n\n=== DIMENSION: 4 ===\n分数：86\n意见：角色区分明显。\n\n=== DIMENSION: 5 ===\n分数：84\n意见：节奏可行。\n\n=== OVERALL ===\n总分：87\n通过：是\n总评：整体扎实。";
@@ -77,10 +78,13 @@ const SETTLER_TEMPLATE = {
 };
 
 // settler 分派：从消息里抽「第 N 章」动态对齐 delta.chapter（写第 2 章时固定 1 会被 reducer 拒绝）。
+// 652 号：最后一次结算章号记录给 analyzer 分派复用（CHAPTER_SUMMARY/UPDATED_STATE 的当前章号）。
+let LAST_SETTLER_CHAPTER = 1;
 function settlerDelta(msgs) {
   const text = msgs.map((m) => m?.content ?? "").join("\n");
   const match = text.match(/第\s*(\d+)\s*章/);
   const n = match ? Number(match[1]) : 1;
+  LAST_SETTLER_CHAPTER = n;
   const delta = JSON.parse(JSON.stringify(SETTLER_TEMPLATE));
   delta.chapter = n;
   delta.chapterSummary.chapter = n;
@@ -248,7 +252,21 @@ http.createServer((req, res) => {
         // 强制回写审改后 finalContent（此处占位不毁正文）；UPDATED_HOOKS 为
         // 保真形态（651 号，与 fixture 预置池同源——占位会把伏笔池写空致
         // promises 投影缺失、fixture 断言红）。
-        content = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n（正文以审改后版本为准。）\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n分析模式无结算。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | 2 |\n| 当前位置 | 青阳坊→回窑洞 |\n| 主角状态 | 引气入体、气感初成 |\n| 当前目标 | 七日内应对雷家寻仇 |\n| 当前限制 | 修为浅薄 |\n| 当前敌我 | 与雷家结仇 |\n| 当前冲突 | 祖符来历待揭 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n" + ANALYZER_HOOKS_TABLE;
+        // 652 号：CHAPTER_SUMMARY=「已选章节摘要证据」已有行回显+当前章新行
+        // （章号取自 mock 进程内最后一次 settler delta）——缺 TAG 会让
+        // parseWriterOutput 提取空串覆盖 chapter_summaries.md（650b 实录缩水：
+        // chapter_summaries 587→341、current_state 432→292；audit_drift
+        // 761→313 系审计注入面正常差异）。证据行的出场人物列 mock 固定为主角。
+        const evidenceRows = (sys.match(/^- story\/chapter_summaries\.md#\d+: .*$/gm) ?? [])
+          .map((line) => line.replace(/^- story\/chapter_summaries\.md#\d+: /, ""))
+          .map((rest) => {
+            const parts = rest.split(" | ");
+            return `| ${parts[0] ?? ""} | ${parts[1] ?? ""} | 苏檀 | ${parts[2] ?? ""} | ${parts[3] ?? ""} | ${parts[4] ?? ""} | 紧张 | 推进章 | 6 | 4 |`;
+          });
+        const summaryRows = [...new Set([...evidenceRows, `| ${LAST_SETTLER_CHAPTER} | 风起 | 林动 | 坊市夺回祖符，玉符异象初显 | 踏上修炼路 | H01 推进 | 紧张 | 推进章 | 6 | 4 |`])].join("\n");
+        content = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n（正文以审改后版本为准。）\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n分析模式无结算。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | " + LAST_SETTLER_CHAPTER + " |\n| 当前位置 | 青阳坊→回窑洞 |\n| 主角状态 | 引气入体、气感初成 |\n| 当前目标 | 七日内应对雷家寻仇 |\n| 当前限制 | 修为浅薄 |\n| 当前敌我 | 与雷家结仇 |\n| 当前冲突 | 祖符来历待揭 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n" + ANALYZER_HOOKS_TABLE
+          + "\n\n=== CHAPTER_SUMMARY ===\n| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n" + summaryRows
+          + "\n\n=== UPDATED_SUBPLOTS ===\n\n=== UPDATED_EMOTIONAL_ARCS ===\n\n=== UPDATED_CHARACTER_MATRIX ===\n";
       }
       else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
       else if (sys.includes("continuity validator")) content = "PASS";
