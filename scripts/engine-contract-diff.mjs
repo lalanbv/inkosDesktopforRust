@@ -13,6 +13,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 643 号：rust 活体腿二进制新鲜度闸（与 gate:ts rust-bin 步骤同源实现）。
+import { ensureRustBinFreshOrExit } from "./ensure-rust-bin.mjs";
 
 // 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
 const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
@@ -21,7 +23,8 @@ const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..");
 const studioDir = join(repoRoot, "packages", "studio");
-const rustBinary = join(repoRoot, "engine-rs", "target", "debug", "inkos-engine-server");
+const rustBinary = process.env.INKOS_SMOKE_RUST_BIN
+  ?? join(repoRoot, "engine-rs", "target", "debug", "inkos-engine-server");
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => {
@@ -32,6 +35,15 @@ const rustPort = argOf("--rust-port", "8901");
 const nodePort = argOf("--node-port", "8902");
 const mockPort = argOf("--mock-port", "1234");
 const keep = args.includes("--keep");
+
+// 643 号：差分器的存在意义就是双引擎对照——先过活体腿新鲜度闸（默认 debug
+// 路径 cargo build 核验/重建；env 外部产物 517 形态仅核在，新鲜度调用方自管）。
+// 二进制缺失时快速失败并给可行动指引（旧形态 spawn 失败后要等 30s 启动超时才崩）。
+ensureRustBinFreshOrExit(repoRoot);
+if (!existsSync(rustBinary)) {
+  console.error(`[diff] ✗ Rust 二进制缺失（${rustBinary}）——先在 engine-rs 下 cargo build，或设 INKOS_SMOKE_RUST_BIN 指定外部产物`);
+  process.exit(1);
+}
 
 const children = [];
 const startChild = (cmd, cmdArgs, opts, logPath) => {

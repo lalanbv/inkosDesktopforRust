@@ -18,6 +18,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 643 号：rust 活体腿二进制新鲜度闸（与 gate:ts rust-bin 步骤同源实现）。
+import { ensureRustBinFreshOrExit } from "./ensure-rust-bin.mjs";
 
 // 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
 const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
@@ -307,14 +309,11 @@ async function runEngineLeg(engine) {
   }
 }
 
-// ── 共享 mock（所有引擎腿共用一个 LLM 假端点）──
-startChild("node", [join(scriptDir, "walkthrough-mock.mjs"), mockPort], { cwd: repoRoot }, join(tmpdir(), "inkos-smoke-mock.log"), true);
-const mockUp = await waitUntil(
-  async () => (await fetchT(`http://127.0.0.1:${mockPort}/v1/models`)).ok,
-  15_000,
-  "walkthrough-mock 启动",
-);
-check("mock LLM 启动", mockUp);
+// 643 号：活体腿自带新鲜度闸——默认 debug 路径先 cargo build 核验/重建（增量，
+// 新鲜时亚秒空转）；INKOS_SMOKE_RUST_BIN 外部产物由调用方自管（517 形态）。
+// 置于任何子进程 spawn 之前：build 失败早退不留孤儿子进程。node 单腿不消费
+// Rust 二进制，不启用。
+if (engineMode !== "node") ensureRustBinFreshOrExit(repoRoot);
 
 const legs =
   engineMode === "both"
@@ -323,6 +322,15 @@ const legs =
 if (engineMode !== "node" && !legs.includes("rust")) {
   console.warn(`[smoke] ⚠ Rust 二进制缺失（${rustBinary}）——rust 腿跳过（cargo 链接受阻时属预期，不算失败）`);
 }
+
+// ── 共享 mock（所有引擎腿共用一个 LLM 假端点）──
+startChild("node", [join(scriptDir, "walkthrough-mock.mjs"), mockPort], { cwd: repoRoot }, join(tmpdir(), "inkos-smoke-mock.log"), true);
+const mockUp = await waitUntil(
+  async () => (await fetchT(`http://127.0.0.1:${mockPort}/v1/models`)).ok,
+  15_000,
+  "walkthrough-mock 启动",
+);
+check("mock LLM 启动", mockUp);
 
 for (const leg of legs) {
   try {

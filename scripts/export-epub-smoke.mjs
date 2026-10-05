@@ -11,6 +11,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, openSync } f
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 643 号：rust 活体腿二进制新鲜度闸（与 gate:ts rust-bin 步骤同源实现）。
+import { ensureRustBinFreshOrExit } from "./ensure-rust-bin.mjs";
 
 // 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
 const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
@@ -178,6 +180,9 @@ function check(name, ok, detail = "") {
   if (!ok) failures += 1;
 }
 // ── 编排 ──
+// 643 号：活体腿自带新鲜度闸（置于任何子进程 spawn 之前，build 失败早退不留
+// 孤儿子进程；node 单腿不消费 Rust 二进制，不启用）。
+if (engineMode !== "node") ensureRustBinFreshOrExit(repoRoot);
 const legs = engineMode === "both" ? ["node", ...(existsSync(rustBinary) ? ["rust"] : [])] : [engineMode];
 if (engineMode !== "node" && !legs.includes("rust")) {
   console.warn(`[epub-smoke] ⚠ Rust 二进制缺失（${rustBinary}）——rust 腿跳过`);
