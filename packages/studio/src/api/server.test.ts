@@ -362,6 +362,9 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     resolveSessionActiveBook: resolveSessionActiveBookMock,
     runAgentSession: runAgentSessionMock,
     abortAgentSession: abortAgentSessionMock,
+    // 640 号：pending-abort 标记（受理边界）——纯进程内副作用，测试桩空实现。
+    markPendingSessionAbort: () => {},
+    isAgentSessionBusy: () => false,
     createSubAgentTool: actual.createSubAgentTool,
     createShortFictionRunTool: createShortFictionRunToolMock,
     createFanficBookTool: createFanficBookToolMock,

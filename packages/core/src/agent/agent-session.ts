@@ -183,6 +183,35 @@ interface CachedAgent {
 const agentCache = new Map<string, CachedAgent>();
 const agentSessionQueues = new Map<string, Promise<void>>();
 
+// 640 号 pending-abort（排队态取消）：abort 时对「已入队未受理」的聊天轮置
+// 带序数的标记，受理点按入队序裁决——序 < 标记序的排队轮受理即中止（与在飞
+// 中止契约同形：transcript started+user+failed{"aborted"} + 500 aborted 响应，
+// 客户端 624 契约零改动）。用全局单调序数而非毫秒时间戳：同一毫秒内「先入队
+// 后置标记」与「先置标记后入队」（换向流）无法靠时钟区分，序数给出严格全序。
+// 消费语义：受理点取标记即清除（FIFO 下第一个受理者是唯一可能早于标记的轮；
+// 未命中说明标记已无目标，同样清除自愈）。
+const sessionQueueSeqCounter = { seq: 0 };
+const pendingSessionAborts = new Map<string, number>();
+
+function nextSessionQueueSeq(): number {
+  sessionQueueSeqCounter.seq += 1;
+  return sessionQueueSeqCounter.seq;
+}
+
+/** abort 路由在会话忙（队列在飞或排队）时置位；受理点按入队序裁决。 */
+export function markPendingSessionAbort(projectRoot: string, sessionId: string): void {
+  pendingSessionAborts.set(sessionQueueKey(projectRoot, sessionId), nextSessionQueueSeq());
+}
+
+/** 受理点裁决：取走标记；入队序早于标记序返回 true（本轮受理即中止）。 */
+export function takePendingSessionAbort(projectRoot: string, sessionId: string, enqueuedSeq: number): boolean {
+  const key = sessionQueueKey(projectRoot, sessionId);
+  const markedSeq = pendingSessionAborts.get(key);
+  if (markedSeq === undefined) return false;
+  pendingSessionAborts.delete(key);
+  return enqueuedSeq < markedSeq;
+}
+
 /** TTL for cached agents: 5 minutes. */
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -767,9 +796,68 @@ export async function runAgentSession(
   userMessage: string,
   initialMessages?: Array<{ role: string; content: string }>,
 ): Promise<AgentSessionResult> {
+  // 640 号：入队序在进队列前捕获（调用链同步段，无并发插队窗口）——受理点
+  // 据此裁决 pending-abort（早于标记序的排队轮受理即中止）。
+  const enqueuedSeq = nextSessionQueueSeq();
   return runInAgentSessionQueue(config.projectRoot, config.sessionId, () =>
-    runAgentSessionUnlocked(config, userMessage, initialMessages)
+    runAgentSessionUnlocked(config, userMessage, initialMessages, undefined, enqueuedSeq)
   );
+}
+
+/**
+ * 640 号受理即中止：排队轮在等待期间被 abort（入队序早于标记序），受理时
+ * 不装配 Agent、不调用模型——transcript 落 started + user + failed{"aborted"}
+ * 三事件（与在飞中止同形：在飞轮的 user 事件也已随事件流落盘），返回与在飞
+ * 中止同形状的 errorMessage 结果（server 侧 formatAgentFailure → 500 aborted，
+ * 客户端 624 chatAbortedAt 契约零改动识别为中止）。
+ */
+async function acceptAbortedChatTurn(
+  projectRoot: string,
+  sessionId: string,
+  bookId: string | null,
+  sessionKind: SessionKind,
+  input: string,
+): Promise<AgentSessionResult> {
+  const requestId = randomUUID();
+  await ensureSessionCreatedEvent(projectRoot, sessionId, bookId, sessionKind);
+  await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+    type: "request_started",
+    version: 1,
+    sessionId,
+    requestId,
+    seq,
+    timestamp: Date.now(),
+    sessionKind,
+    input,
+  }));
+  const userUuid = randomUUID();
+  await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+    type: "message",
+    version: 1,
+    sessionId,
+    requestId,
+    uuid: userUuid,
+    parentUuid: null,
+    seq,
+    role: "user",
+    timestamp: Date.now(),
+    message: { role: "user", content: input, timestamp: Date.now() },
+  }));
+  await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+    type: "request_failed",
+    version: 1,
+    sessionId,
+    requestId,
+    seq,
+    timestamp: Date.now(),
+    error: "aborted",
+  }));
+  return {
+    responseText: "",
+    messages: [],
+    timings: { firstTokenMs: 0, totalMs: 0 },
+    errorMessage: "aborted",
+  };
 }
 
 async function runAgentSessionUnlocked(
@@ -777,6 +865,7 @@ async function runAgentSessionUnlocked(
   userMessage: string,
   initialMessages?: Array<{ role: string; content: string }>,
   overflowRetry?: { done: boolean },
+  enqueuedSeq?: number,
 ): Promise<AgentSessionResult> {
   const { sessionId, language, pipeline, projectRoot, onEvent, onContextCompression } = config;
   // Normalize at the entry point so downstream comparisons, closures, and
@@ -786,6 +875,12 @@ async function runAgentSessionUnlocked(
   // a spurious cache eviction because `null !== undefined`.
   const bookId: string | null = config.bookId ? assertSafeBookId(config.bookId) : null;
   const sessionKind: SessionKind = config.sessionKind ?? (bookId ? "book" : "chat");
+  // 640 号受理边界：排队等待期间被 abort 的轮（入队序早于标记序）在此裁决——
+  // 任何重装配（技能/模型/Agent 缓存）之前短路，受理即中止零模型调用。
+  // overflowRetry 递归不传 enqueuedSeq（undefined）：压缩重试是新受理，不裁。
+  if (enqueuedSeq !== undefined && takePendingSessionAbort(projectRoot, sessionId, enqueuedSeq)) {
+    return acceptAbortedChatTurn(projectRoot, sessionId, bookId, sessionKind, userMessage);
+  }
   const playMode = config.playMode;
   const actionSource = config.actionSource ?? "free-text";
   const requestedIntent = config.requestedIntent;

@@ -486,6 +486,39 @@ async fn debug_assert_model_surface_is_logged(
     );
 }
 
+// ── 640 号 pending-abort（排队态取消）────────────────────────────
+// abort 时对「已入队未受理」的聊天轮置带序数的标记，受理点按入队序裁决——
+// 序 < 标记序的排队轮受理即中止（与在飞中止契约同形：transcript started+
+// user+failed{"aborted"} + 500 aborted 响应 + agent:error 广播）。全局单调
+// 序数而非毫秒时间戳：同一毫秒内「先入队后置标记」与「先置标记后入队」（换
+// 向流）无法靠时钟区分，AtomicU64 给出严格全序。消费语义：受理点取标记即
+// 清除（FIFO 下第一个受理者是唯一可能早于标记的轮；未命中说明标记已无目标，
+// 同样清除自愈）。TS 对应物 = packages/core agent-session.ts pendingSessionAborts。
+
+static SESSION_QUEUE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn pending_session_aborts() -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
+    static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// abort 路由在会话忙（registry 在飞或排队——Rust 到达即注册）时置位。
+pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &str) {
+    let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let key = format!("{}\0{}", project_root.display(), session_id);
+    pending_session_aborts().lock().unwrap().insert(key, seq);
+}
+
+/// 受理点裁决：取走标记；入队序早于标记序返回 true（本轮受理即中止）。
+fn take_pending_session_abort(project_root: &std::path::Path, session_id: &str, enqueued_seq: u64) -> bool {
+    let key = format!("{}\0{}", project_root.display(), session_id);
+    match pending_session_aborts().lock().unwrap().remove(&key) {
+        Some(marked_seq) => enqueued_seq < marked_seq,
+        None => false,
+    }
+}
+
 pub async fn post_agent(
     State(runtime): State<BooksRuntime>,
     req: axum::extract::Request,
@@ -825,6 +858,8 @@ pub async fn post_agent(
     };
     // std guard 不得跨 await（future Send）：先 clone Arc，再取 owned guard。
     let queue = handle.lock().unwrap().queue.clone();
+    // 640 号：入队序在等待点前捕获（受理点据此裁决 pending-abort）。
+    let enqueued_seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _queue_guard = queue.lock_owned().await;
     let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
     handle.lock().unwrap().abort_flag = abort_flag.clone();
@@ -832,6 +867,35 @@ pub async fn post_agent(
         .lock()
         .unwrap()
         .insert(session_id.to_string(), handle.clone());
+
+    // 640 号受理边界：排队等待期间被 abort 的轮（入队序早于标记序）在此裁决
+    // ——受理即中止：transcript started+user+failed{"aborted"} 三事件（与在飞
+    // 中止同形）+ agent:error 广播 + 500 aborted 响应（客户端 624 契约零改动）。
+    if take_pending_session_abort(root, session_id, enqueued_seq) {
+        let request_id = begin_chat_turn(root, session_id, instruction, session_kind).await;
+        if let Some(request_id) = &request_id {
+            fail_chat_turn(root, session_id, request_id, "aborted").await;
+        }
+        running_agent_sessions().lock().unwrap().remove(session_id);
+        runtime.hub.broadcast(
+            "agent:error",
+            &json!({
+                "instruction": instruction,
+                "activeBookId": payload.get("activeBookId").cloned().unwrap_or(Value::Null),
+                "sessionId": session_id,
+                "sessionKind": session_kind.as_str(),
+                "error": "aborted",
+            }),
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": { "code": "AGENT_ERROR", "message": "aborted" },
+                "response": "aborted",
+            })),
+        )
+            .into_response();
+    }
 
     // ── play 会话聊天面（80 号）：世界存在 → play 工具 + play 系统提示词 ──
     let surface_language = match agent_production::current_project_language(root).await {
@@ -2575,5 +2639,72 @@ mod payload_strict_tests {
         let restored =
             crate::interaction::session_restore::restore_agent_messages_from_transcript(&root, "sess-fail", None).await;
         assert!(restored.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pending_abort_tests {
+    //! 640 号 pending-abort（排队态取消）语义：全局序数裁决/消费自愈/键隔离。
+    //! 全链受理中止接线由 TS session-pending-abort.test.ts 集成镜像 +
+    //! abort 契约既有回归（624/625）共同兜底。
+
+    use super::{mark_pending_session_abort, take_pending_session_abort};
+    use std::path::PathBuf;
+
+    fn root_of(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path().to_path_buf()
+    }
+
+    #[test]
+    fn take_without_marker_is_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        assert!(!take_pending_session_abort(&root, "s-none", 1));
+    }
+
+    #[test]
+    fn enqueued_before_marker_is_aborted_and_consumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        // 入队（seq A）→ 标记（seq M > A）→ 受理 A：命中
+        let enqueued = std::sync::atomic::AtomicU64::default();
+        // 用生产计数器序列化：先入队一记（借 mark 递增两凑序）——直接以
+        // mark 的递增观察全序：首次 mark seq=n，后续 mark 单调更大。
+        mark_pending_session_abort(&root, "s-keep"); // 占序（无关标记）
+        enqueued.store(0, std::sync::atomic::Ordering::SeqCst);
+        // 模拟：请求入队序 = 当前计数器+1 之前……直接验证两 mark 间受理：
+        let marker_key_dir = tempfile::tempdir().unwrap();
+        let marker_root = root_of(&marker_key_dir);
+        // 入队序在先：借一次 mark 递增计数器后，立即以更小序构造已不可能——
+        // 因此本测试以真实交互序列验证：先 mark（充当"入队前的旧序"）不可能。
+        // 可行构造：take 的 enqueued_seq 由调用方（post_agent）捕获——这里
+        // 直接给数：标记序必然 ≥1（生产计数器已递增），0 一定早于任何标记。
+        mark_pending_session_abort(&marker_root, "s1");
+        assert!(take_pending_session_abort(&marker_root, "s1", 0));
+        // 消费后不再命中
+        assert!(!take_pending_session_abort(&marker_root, "s1", 0));
+    }
+
+    #[test]
+    fn enqueued_after_marker_misses_and_self_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        mark_pending_session_abort(&root, "s1");
+        // 受理序晚于标记序：未命中，且标记已清除（后续新轮不受误杀）
+        assert!(!take_pending_session_abort(&root, "s1", u64::MAX));
+        assert!(!take_pending_session_abort(&root, "s1", 0));
+    }
+
+    #[test]
+    fn marker_keys_are_isolated_by_root_and_session() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let root_a = root_of(&dir_a);
+        let root_b = root_of(&dir_b);
+        mark_pending_session_abort(&root_a, "s1");
+        // 同 session 不同 root / 同 root 不同 session 均不命中
+        assert!(!take_pending_session_abort(&root_b, "s1", 0));
+        assert!(!take_pending_session_abort(&root_a, "s2", 0));
+        assert!(take_pending_session_abort(&root_a, "s1", 0));
     }
 }

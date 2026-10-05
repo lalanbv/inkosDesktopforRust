@@ -410,6 +410,17 @@ pub async fn abort_session(
     }
     let chat_aborted = abort_agent_session(&session_id);
     let aborted = chat_aborted || task_aborted;
+    // 640 号受理边界：会话忙（registry 在飞或排队——到达即注册）即置
+    // pending-abort 标记——在飞轮由上面常规链中止；已入队未受理轮（受理点
+    // :829 会新建 abort_flag 冲掉此前置位）由受理点按入队序裁决受理即中止。
+    // 空闲时置位无害：标记在下一次受理时因入队序更新而未命中并自清除。
+    if crate::server::agent_route::running_agent_sessions()
+        .lock()
+        .unwrap()
+        .contains_key(&session_id)
+    {
+        crate::server::agent_route::mark_pending_session_abort(runtime.state.project_root(), &session_id);
+    }
     runtime.hub.broadcast(
         "agent:aborted",
         &json!({ "sessionId": session_id, "aborted": aborted }),

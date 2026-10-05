@@ -18598,3 +18598,220 @@ mod sub303_creation_domains_e2e {
         assert!(book_dir.join("chapters").join("0001_北境.md").is_file(), "第一章落盘");
     }
 }
+
+mod pending_abort_e2e {
+    //! 640 号 pending-abort（排队态取消）全链 e2e：A 在飞阻塞（mock LLM
+    //! hold）→ B 排队 → abort（在飞 A 常规链 + 排队 B 置标记）→ A/B 双
+    //! 500 aborted + transcript started×2+user×2+failed×2 无 committed →
+    //! 第三轮正常受理 committed（标记消费自愈不误杀）。
+
+    use super::*;
+    use axum::http::StatusCode;
+    use inkos_engine::interaction::session_transcript::{read_transcript_events, TranscriptEvent};
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
+    use inkos_engine::server::agent_route;
+    use inkos_engine::server::books_routes::BooksRuntime;
+    use inkos_engine::server::session_routes;
+    use inkos_engine::state::manager::StateManager;
+
+    const SID: &str = "1783000009000-pa";
+
+    #[derive(Clone)]
+    struct BlockingLlmState {
+        calls: Arc<Mutex<Vec<String>>>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    async fn blocking_llm_chat(
+        axum::extract::State(state): axum::extract::State<BlockingLlmState>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        // 取最后一条 user 消息判定轮次（hold 开头 = A 轮，阻塞到放行）。
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
+        let last_user = messages
+            .iter()
+            .rev()
+            .find(|m| m["role"] == "user")
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("")
+            .to_string();
+        state.calls.lock().unwrap().push(last_user.clone());
+        if last_user.starts_with("hold") {
+            state.release.notified().await;
+        }
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body("PASS"),
+        ))
+    }
+
+    fn rt_pa(root: &std::path::Path, llm: &str) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(BroadcastHub::new()),
+            state: Arc::new(StateManager::new(root.to_path_buf())),
+            router: Arc::new(AgentRouter::new(
+                LlmEndpointConfig {
+                    context_window_tokens: 128_000,
+                    base_url: llm.into(),
+                    api_key: "k".into(),
+                    model: "m".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    fn app_pa(runtime: BooksRuntime) -> axum::Router {
+        axum::Router::new()
+            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
+            .route(
+                "/api/v1/sessions/:sessionId/abort",
+                axum::routing::post(session_routes::abort_session),
+            )
+            .with_state(runtime)
+    }
+
+    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+        use tower::ServiceExt;
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        (status, parsed)
+    }
+
+    #[tokio::test]
+    async fn queued_turn_aborted_at_acceptance_while_inflight_aborts_normally() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
+
+        // 阻塞型 mock LLM：A 轮（"hold" 开头）阻塞到放行。
+        let llm_state = BlockingLlmState {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let llm_addr = listener.local_addr().unwrap();
+        let server_state = llm_state.clone();
+        tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route("/chat/completions", axum::routing::post(blocking_llm_chat))
+                .with_state(server_state);
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let app = app_pa(rt_pa(&root, &format!("http://{llm_addr}")));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(&format!(r#"{{"sessionId":"{SID}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A：入队并受理，LLM hold 中（在飞占用队列）。
+        let app_a = app.clone();
+        let turn_a = tokio::spawn(async move {
+            call(
+                app_a,
+                "POST",
+                "/api/v1/agent",
+                Some(&format!(r#"{{"instruction":"hold 第一问在飞","sessionId":"{SID}"}}"#)),
+            )
+            .await
+        });
+        // 等 A 到达 mock LLM（真实在飞标志）。
+        for _ in 0..200 {
+            if !llm_state.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            !llm_state.calls.lock().unwrap().is_empty(),
+            "A 轮必须已到达 mock LLM"
+        );
+
+        // B：排队（A 释放队列前 B 不会到 LLM）。
+        let app_b = app.clone();
+        let turn_b = tokio::spawn(async move {
+            call(
+                app_b,
+                "POST",
+                "/api/v1/agent",
+                Some(&format!(r#"{{"instruction":"第二问排队待取消","sessionId":"{SID}"}}"#)),
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            llm_state.calls.lock().unwrap().len() == 1,
+            "B 轮必须仍在队列（未到 LLM）"
+        );
+
+        // 用户停止：在飞 A 走常规中止链，排队 B 由受理点裁决。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/sessions/{SID}/abort"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["ok"], true);
+
+        // 放行 A 的 LLM 响应（loop 检测 abort flag 走中止收尾）。留一个
+        // abort_waiter 轮询周期（50ms）再放行：select 任一分支 ready 即完成，
+        // 立即放行会让 chat 分支抢先（时序确定性，627 号教训同类）。
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        llm_state.release.notify_waiters();
+        let (status_a, body_a) = turn_a.await.unwrap();
+        assert_eq!(status_a, StatusCode::INTERNAL_SERVER_ERROR, "A 在飞中止: {body_a}");
+        assert_eq!(body_a["error"]["message"], "aborted");
+        let (status_b, body_b) = turn_b.await.unwrap();
+        assert_eq!(status_b, StatusCode::INTERNAL_SERVER_ERROR, "B 受理即中止: {body_b}");
+        assert_eq!(body_b["error"]["message"], "aborted");
+
+        // transcript：两轮 started+user+failed，零 committed（A 在飞中止不写
+        // committed；B 受理即中止写 started+user+failed 三事件）。
+        let events = read_transcript_events(&root, SID).await;
+        let started = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestStarted { .. })).count();
+        let committed = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. })).count();
+        let failed = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestFailed { .. })).count();
+        let user_msgs = events.iter().filter(|e| matches!(e, TranscriptEvent::Message { role, .. } if role == "user")).count();
+        assert_eq!(started, 2, "events: {events:?}");
+        assert_eq!(user_msgs, 2, "events: {events:?}");
+        assert_eq!(failed, 2, "events: {events:?}");
+        assert_eq!(committed, 0, "events: {events:?}");
+
+        // C：标记已消费——新轮正常受理 committed（自愈不误杀）。
+        let (status_c, body_c) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(r#"{{"instruction":"第三问新消息","sessionId":"{SID}"}}"#)),
+        )
+        .await;
+        assert_eq!(status_c, StatusCode::OK, "C 新轮: {body_c}");
+        let events = read_transcript_events(&root, SID).await;
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. })).count(),
+            1
+        );
+    }
+}

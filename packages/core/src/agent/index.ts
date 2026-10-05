@@ -30,6 +30,7 @@ export {
 export {
   abortAgentSession,
   isAgentSessionBusy,
+  markPendingSessionAbort,
   runAgentSession,
   evictAgentCache,
   type AgentSessionAttachment,

@@ -34,6 +34,7 @@ import {
   SessionAlreadyMigratedError,
   abortAgentSession,
   isAgentSessionBusy,
+  markPendingSessionAbort,
   runAgentSession,
   resolveServicePreset,
   resolveServiceProviderFamily,
@@ -5703,6 +5704,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     controller?.abort();
     const taskAborted = Boolean(controller);
     const aborted = abortAgentSession(root, sessionId) || taskAborted;
+    // 640 号受理边界：会话忙（队列在飞或排队）即置 pending-abort 标记——
+    // 在飞轮由上面常规链中止；已入队未受理轮（agentCache 无条目，abort
+    // 对其 no-op）由受理点按入队序裁决受理即中止。空闲时置位无害：标记
+    // 在下一次受理时因入队序更新而未命中并自清除。
+    if (isAgentSessionBusy(root, sessionId)) markPendingSessionAbort(root, sessionId);
     broadcast("agent:aborted", { sessionId, aborted, scope: chatOnly ? "chat" : "all" });
     return c.json({ ok: true, aborted });
   });
