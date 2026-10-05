@@ -150,6 +150,8 @@ import {
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
+// 649 号：停止中性文案单一事实源（此前此处内联一份字面量，与 hooks 各持一份）。
+import { WRITE_STOPPED_MESSAGE } from "../shared/write-stopped.js";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
@@ -4437,7 +4439,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           // abort 为 AbortError），经 signal.aborted 判定替换底层文案。
           const abortedByUser = writeNextController?.signal.aborted ?? false;
           const message = abortedByUser
-            ? "写作已按您的要求停止。"
+            ? WRITE_STOPPED_MESSAGE
             : e instanceof Error
               ? e.message
               : String(e);
