@@ -146,6 +146,12 @@ if (args.engine === "node") {
     name: "walkthrough",
     version: "0.1.0",
     language: "zh",
+    // 655 号：与 walkthrough-fixture 同源透传 WALKTHROUGH_REVIEW_RETRIES——
+    // server 起时即读入 currentConfig（fixture 随后幂等重写同值），多轮修复
+    // 序列注入才对 write-next 生效。
+    writing: {
+      reviewRetries: Math.max(0, Math.floor(Number(process.env.WALKTHROUGH_REVIEW_RETRIES ?? "1")) || 1),
+    },
     llm: {
       service: "custom:Mock",
       defaultModel: "lm-mock-model",

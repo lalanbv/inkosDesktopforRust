@@ -56,6 +56,12 @@ const REVISED_BODY = WRITER_BODY
 // 精确句，REPLACEMENT 为等义改写（字数近同：局部修补不显著改变篇幅）。
 const PATCH_TARGET = "他握紧拳头，指节发出一连串细碎的爆响。";
 const PATCH_REPLACEMENT = "他缓缓收紧五指，指节间爆出一串沉闷的脆响。";
+// 655 号：多轮修复的第二组修补对（轮次感知）——同一 PATCH 对在轮 1 应用后
+// TARGET 已不存在，轮 2 重放会全 skip→「未产出新内容」退出，多轮分支无法覆盖。
+const PATCH2_TARGET = "雷家的管事当众踩碎了他捡来的药材筐，还纵马溅了他一身泥水。";
+const PATCH2_REPLACEMENT = "雷家的管事当众踏碎了他捡来的药材筐，更纵马溅了他满身泥水。";
+const PATCH_PAIRS = [[PATCH_TARGET, PATCH_REPLACEMENT], [PATCH2_TARGET, PATCH2_REPLACEMENT]];
+let REVISE_SEQ = 0;
 // 651 号：analyzer 保真形态——UPDATED_HOOKS 与 walkthrough-fixture 预置池同源
 // （14 列 R23 台账，分类列驱动 memory.db promises 投影：悬念/情感/物品/世界观
 // 四 kind 必须齐）。650 号的最小占位把伏笔池写空致投影缺失、fixture 断言红。
@@ -215,7 +221,12 @@ http.createServer((req, res) => {
         if (sys.includes("只输出 PATCHES")) {
           // TARGET 必须是 WRITER 正文的精确引用（applySpotFixPatches 先精确
           // 后空白归一匹配；匹配不到会被 skip，全 skip 即「未产出新内容」）。
-          content = "=== FIXED_ISSUES ===\n替换了首段一处生硬动作描写，语义不变。\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n" + PATCH_TARGET + "\nREPLACEMENT_TEXT:\n" + PATCH_REPLACEMENT + "\n--- END PATCH ---";
+          // 655 号：轮次感知多组修补对——轮 N 用第 N 对（越界取末对），多轮
+          // 修复分支的每一轮都产出真实差异。
+          const pairIdx = Math.min(REVISE_SEQ, PATCH_PAIRS.length - 1);
+          REVISE_SEQ += 1;
+          const [t, r] = PATCH_PAIRS[pairIdx];
+          content = "=== FIXED_ISSUES ===\n替换了一处生硬动作描写，语义不变。\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n" + t + "\nREPLACEMENT_TEXT:\n" + r + "\n--- END PATCH ---";
         } else {
           content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
         }

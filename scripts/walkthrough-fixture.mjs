@@ -60,11 +60,16 @@ if (!mockModels) {
 }
 
 // ── 1. 项目配置 ──
+// 655 号：WALKTHROUGH_REVIEW_RETRIES（默认 1=管线 writingReviewRetries 现状）
+// 写入 writing.reviewRetries——配合 mock 的 WALKTHROUGH_MOCK_AUDIT_SCORES 多值
+// 序列（如 "45,55,91"）驱动 chapter-review-cycle 的多轮修复与未净提升分支活体。
+const reviewRetries = Math.max(0, Math.floor(Number(process.env.WALKTHROUGH_REVIEW_RETRIES ?? "1")) || 1);
 mkdirSync(join(root, ".inkos"), { recursive: true });
 writeFileSync(join(root, "inkos.json"), JSON.stringify({
   name: "walkthrough",
   version: "0.1.0",
   language: "zh",
+  writing: { reviewRetries },
   llm: {
     service: "custom:Mock",
     defaultModel: "lm-mock-model",
