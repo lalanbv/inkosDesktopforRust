@@ -9,7 +9,9 @@
 //   资深小说编辑           → PASS 审校
 //   创作总编               → planner memo
 //   作家/写手              → 章节成文（CHAPTER_TITLE/CONTENT/POST_SETTLEMENT/RUNTIME_STATE_DELTA）
-//   审稿                   → PASS 95
+//   修稿编辑               → FIXED_ISSUES + REVISED_CONTENT（审改循环修稿腿，646 号）
+//   审稿                   → JSON 契约（passed/overall_score/issues/summary，645 号；
+//                             WALKTHROUGH_MOCK_AUDIT_SCORES 可注入降分序列驱动审改循环，646 号）
 //   末条消息为 user（无工具结果）→ propose_action 工具调用（231 号 propose→confirm 协议，
 //   args 含 action 必填字段——301/310 号教训）
 //   其余                   → PASS
@@ -45,6 +47,10 @@ const WRITER_BODY_PARAGRAPHS = [
   "回到窑洞，天光尚余最后一抹橘色。林动把门闩落好，又搬了口破水缸抵住，这才在草席上盘膝坐定。白日里那些视线、那些窃语，此刻都已隔在门外。他摊开手掌，祖符玉佩静静躺在掌心，裂纹里的青光比昨夜又亮了一分。石渊的声音在符纹深处响起来，只说了四个字：子时，引气。林动点头，闭目。窑洞外，风声掠过坡地，远处更鼓一声声传得很远。这一夜，青阳坊无人入睡；雷家宅院里灯火通明，家丁们来回奔走的脚步声隔着几条街都能听见。风起了。有些账，要开始清了。",
 ];
 const WRITER_BODY = WRITER_BODY_PARAGRAPHS.join("\n\n");
+// 646 号：修稿腿的修订正文——原正文追加修订尾段（reviser 判 revisedContent
+// 与原文全等即「未产出新内容」退出循环，故必须有差异；+100 字仍带内）。
+const REVISED_BODY = WRITER_BODY
+  + "\n\n坊市的喧嚣在身后一点点退去，林动的脚步却越走越稳。祖符在怀里微微发烫，像是替他记下了这条街上每一道目光。他知道，从今天起，青阳坊再没有人敢小看那个穿粗布短打的少年。";
 const WRITER = `=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n${WRITER_BODY}\n\n=== POST_SETTLEMENT ===\n结算完成。\n\n=== RUNTIME_STATE_DELTA ===\n\`\`\`json\n{"chapter": 1, "chapterSummary": {"chapter": 1, "title": "风起", "characters": "林动", "events": "坊市夺回祖符，玉符异象初显", "stateChanges": "林动踏上修炼路，与雷家结仇", "hookActivity": "H01 推进", "mood": "紧张", "chapterType": "推进章"}}\n\`\`\`\n`;
 const CANON = "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: character_profiles ===\n| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |\n|------|------|----------|-------------|----------|----------|----------|----------|\n| 林川 | 云州少年 | 坚韧 | 剑不离手 | 简短 | 练剑不辍 | 师父 | 不知身世 |\n=== SECTION: key_events ===\n| 序号 | 事件 | 涉及角色 | 约束 |\n|------|------|----------|------|\n| 1 | 出城 | 林川 | 起点 |\n=== SECTION: power_system ===\n剑道九品。\n=== SECTION: writing_style ===\n短句。";
 const SETTLER_TEMPLATE = {
@@ -77,6 +83,13 @@ const FAIL_ARCHITECT = process.env.WALKTHROUGH_MOCK_FAIL_ARCHITECT === "1";
 // 响应按 8 字符/块逐块发射——write-next 停止按钮的活体走查需要足够长的流中窗口
 //（642 号可停性验证）；0 时逐字节等价旧行为，不影响 639 等既有走查形态。
 const STREAM_DELAY_MS = Number(process.env.WALKTHROUGH_MOCK_STREAM_DELAY_MS ?? "0");
+// 审稿降分注入（646 号）：逗号分隔的分数序列（如 "62,91"）——第 N 次审稿调用
+// 取第 N 个值（越界取最后一个）；未设=恒 88（645 形态，审改循环不触发）。
+// 分数 <85 时 passed:false 并附一条 structural issue，驱动 chapter-review-cycle
+// 的修稿轮次真实触发（审改循环/降分重写分支的活体走查面）。
+const AUDIT_SCORES = (process.env.WALKTHROUGH_MOCK_AUDIT_SCORES ?? "")
+  .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+let AUDIT_CALL_SEQ = 0;
 const PORT = Number(process.argv[2] ?? 1234);
 
 http.createServer((req, res) => {
@@ -162,15 +175,41 @@ http.createServer((req, res) => {
       else if (sys.includes("素材分析师") || sys.includes("同人")) content = CANON;
       else if (sys.includes("创作总编")) content = PLANNER;
       else if (sys.includes("作家") || sys.includes("写手")) content = WRITER;
+      else if (sys.includes("修稿编辑")) {
+        // 646 号：审改循环修稿腿。auto 模式输出节为 === FIXED_ISSUES === /
+        // === REVISED_CONTENT ===；正文必须与原文有差异——reviser 判
+        // revisedContent 与原文全等即「未产出新内容」退出循环。
+        // 须排在「审稿」分支之前：修稿 persona 是「修稿编辑」但其任务描述
+        // 含「根据审稿意见对章节进行修正」，includes("审稿") 会先截胡
+        // （首跑实录：修稿调用拿到审稿 JSON → REVISED_CONTENT 为空 →
+        // 「未产出新内容」退出循环）。
+        content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
+      }
       else if (sys.includes("审稿")) {
         // 645 号：对齐 continuity 审稿 JSON 契约（parseAuditResult 四策略均要
         // 求 JSON：passed/overall_score/issues/summary）。旧形态 "PASS\n95"
         // 恒 parseFailed → 审改循环跳过 + 章节 audit-failed（644 走查实录）。
+        // 646 号：WALKTHROUGH_MOCK_AUDIT_SCORES 注入按调用次序递进取分，
+        // <85 时 passed:false + structural issue，真实触发审改循环修稿轮。
+        let score = 88;
+        if (AUDIT_SCORES.length > 0) {
+          score = AUDIT_SCORES[Math.min(AUDIT_CALL_SEQ, AUDIT_SCORES.length - 1)];
+          AUDIT_CALL_SEQ += 1;
+        }
+        const passed = score >= 85;
         content = JSON.stringify({
-          passed: true,
-          overall_score: 88,
-          issues: [],
-          summary: "开篇冲突清晰，主线推进扎实，节奏与伏笔承接到位。",
+          passed,
+          overall_score: score,
+          issues: passed ? [] : [{
+            severity: "critical",
+            repair_scope: "structural",
+            category: "开篇拖沓",
+            description: `mock 注入降分（第 ${AUDIT_CALL_SEQ} 次审稿 ${score} 分）：开篇铺陈过长，进入主线偏慢，冲突入场偏晚。`,
+            suggestion: "压缩首段铺陈，让坊市冲突提前入场，保留玉符异象作为章尾钩子。",
+          }],
+          summary: passed
+            ? "开篇冲突清晰，主线推进扎实，节奏与伏笔承接到位。"
+            : `结构完成度不足（mock 注入 ${score} 分），需修稿后复审。`,
         });
       }
       else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
