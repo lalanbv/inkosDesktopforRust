@@ -55,6 +55,15 @@ const REVISED_BODY = WRITER_BODY
 // 精确句，REPLACEMENT 为等义改写（字数近同：局部修补不显著改变篇幅）。
 const PATCH_TARGET = "他握紧拳头，指节发出一连串细碎的爆响。";
 const PATCH_REPLACEMENT = "他缓缓收紧五指，指节间爆出一串沉闷的脆响。";
+// 651 号：analyzer 保真形态——UPDATED_HOOKS 与 walkthrough-fixture 预置池同源
+// （14 列 R23 台账，分类列驱动 memory.db promises 投影：悬念/情感/物品/世界观
+// 四 kind 必须齐）。650 号的最小占位把伏笔池写空致投影缺失、fixture 断言红。
+const ANALYZER_HOOKS_TABLE = `| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| H01 | 1 | 身世 | progressing | 3 | 第10章 | slow-burn | 无 | 第一卷 | 是 | 10 | 是 | 镜中世界的来历真相。 | 悬念 |
+| H02 | 2 | 情感线 | open | 3 | 第8章 | near-term | 无 | 第一卷 | 否 | 8 | 否 | 苏檀与镜灵的婚约誓言。 | 情感 |
+| H03 | 2 | 信物 | pressured | 3 | 第6章 | near-term | H01 | 第一卷 | 否 | 6 | 否 | 母亲留下的碎镜在镜界发光。 | 物品 |
+| H04 | 3 | 背景 | open | 0 |  | slow-burn | 无 | 第二卷 | 否 |  | 是 | 镜宗与皇室的隐秘盟约。 | 世界观 |`;
 const WRITER = `=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n${WRITER_BODY}\n\n=== POST_SETTLEMENT ===\n结算完成。\n\n=== RUNTIME_STATE_DELTA ===\n\`\`\`json\n{"chapter": 1, "chapterSummary": {"chapter": 1, "title": "风起", "characters": "林动", "events": "坊市夺回祖符，玉符异象初显", "stateChanges": "林动踏上修炼路，与雷家结仇", "hookActivity": "H01 推进", "mood": "紧张", "chapterType": "推进章"}}\n\`\`\`\n`;
 const CANON = "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: character_profiles ===\n| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |\n|------|------|----------|-------------|----------|----------|----------|----------|\n| 林川 | 云州少年 | 坚韧 | 剑不离手 | 简短 | 练剑不辍 | 师父 | 不知身世 |\n=== SECTION: key_events ===\n| 序号 | 事件 | 涉及角色 | 约束 |\n|------|------|----------|------|\n| 1 | 出城 | 林川 | 起点 |\n=== SECTION: power_system ===\n剑道九品。\n=== SECTION: writing_style ===\n短句。";
 const SETTLER_TEMPLATE = {
@@ -235,10 +244,11 @@ http.createServer((req, res) => {
         // 650 号：buildPersistenceOutput→ChapterAnalyzer（审改循环修订后
         // finalContent≠初稿时被调）——此前无分派落入 else 确认卡文本，
         // analyzer 拿到非法载荷后管线静默悬挂（修订产物从未落盘，646/650
-        // 全中）。对齐其 === TAG === 输出契约给最小合法形态：content 由
-        // persistenceOutput 强制回写审改后 finalContent（此处占位不毁正文）；
-        // UPDATED_* 为最小占位，落盘面 truth 保持语义由 runner 链兜住。
-        content = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n（正文以审改后版本为准。）\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n分析模式无结算。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | 2 |\n| 当前位置 | 青阳坊 |\n| 主角状态 | 修炼起步 |\n| 当前目标 | 夺回祖符 |\n| 当前限制 | 修为浅薄 |\n| 当前敌我 | 与雷家结仇 |\n| 当前冲突 | 祖符来历 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n";
+        // 全中）。对齐其 === TAG === 输出契约：content 由 persistenceOutput
+        // 强制回写审改后 finalContent（此处占位不毁正文）；UPDATED_HOOKS 为
+        // 保真形态（651 号，与 fixture 预置池同源——占位会把伏笔池写空致
+        // promises 投影缺失、fixture 断言红）。
+        content = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n（正文以审改后版本为准。）\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n分析模式无结算。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | 2 |\n| 当前位置 | 青阳坊→回窑洞 |\n| 主角状态 | 引气入体、气感初成 |\n| 当前目标 | 七日内应对雷家寻仇 |\n| 当前限制 | 修为浅薄 |\n| 当前敌我 | 与雷家结仇 |\n| 当前冲突 | 祖符来历待揭 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n" + ANALYZER_HOOKS_TABLE;
       }
       else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
       else if (sys.includes("continuity validator")) content = "PASS";
