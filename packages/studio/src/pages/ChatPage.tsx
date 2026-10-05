@@ -315,6 +315,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
   const input = useChatStore((s) => s.input);
   const loading = useChatStore(chatSelectors.isActiveSessionStreaming);
   const chatStreaming = useChatStore(chatSelectors.isActiveSessionChatStreaming);
+  // 648 号：write_next 生产任务执行中——QuickActions「写下一章」chip 翻就地停止。
+  const writeNextRunning = useChatStore(chatSelectors.activeSessionWriteNextRunning);
   const lastFailedSend = useChatStore(chatSelectors.activeSessionLastFailedSend);
   const selectedModel = useChatStore((s) => s.selectedModel);
   const selectedService = useChatStore((s) => s.selectedService);
@@ -663,6 +665,15 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
     });
   };
 
+  // 648 号：QuickActions「写下一章」chip 的就地停止——与「停止当前回复」同一
+  // 中止链（abortSession → /sessions/:id/abort）；scope=all 让后端经
+  // reservedProductionSessions→activeConfirmedTasks 命中生产任务控制器，
+  // 聊天轮与轮内 write-next 一并中止（640 受理边界语义）。
+  const handleStopWriteNext = () => {
+    if (!activeSessionId) return;
+    void abortSession(activeSessionId);
+  };
+
   const handleProposedAction = async (details: ProposedActionDetails) => {
     // Lock the proposal card so the production action can't be re-fired.
     markProposalResolved(details.execId, "confirmed");
@@ -961,6 +972,8 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
               onAction={handleQuickAction}
               disabled={loading || !activeSessionId}
               isZh={isZh}
+              writeNextRunning={writeNextRunning}
+              onStopWriteNext={handleStopWriteNext}
             />
           </div>
         </div>
