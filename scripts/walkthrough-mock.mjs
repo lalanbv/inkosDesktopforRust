@@ -75,7 +75,9 @@ const PATCH_REPLACEMENT = "他缓缓收紧五指，指节间爆出一串沉闷�
 // TARGET 已不存在，轮 2 重放会全 skip→「未产出新内容」退出，多轮分支无法覆盖。
 const PATCH2_TARGET = "雷家的管事当众踩碎了他捡来的药材筐，还纵马溅了他一身泥水。";
 const PATCH2_REPLACEMENT = "雷家的管事当众踏碎了他捡来的药材筐，更纵马溅了他满身泥水。";
-const PATCH_PAIRS = [[PATCH_TARGET, PATCH_REPLACEMENT], [PATCH2_TARGET, PATCH2_REPLACEMENT]];
+const PATCH3_TARGET = "林动的指甲深深掐进掌心。";
+const PATCH3_REPLACEMENT = "林动的指甲深深掐进掌心，掌纹里渗出细密的汗意。";
+const PATCH_PAIRS = [[PATCH_TARGET, PATCH_REPLACEMENT], [PATCH2_TARGET, PATCH2_REPLACEMENT], [PATCH3_TARGET, PATCH3_REPLACEMENT]];
 let REVISE_SEQ = 0;
 // 658 号：WALKTHROUGH_MOCK_REVISE_BLOAT=1——修稿 REPLACEMENT 追加超长填充，
 // 修订内容越篇幅带（hardMax 3818）→ review-cycle 的 bestSnapshot 择优选初稿

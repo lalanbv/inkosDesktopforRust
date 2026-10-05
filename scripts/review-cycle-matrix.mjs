@@ -73,6 +73,17 @@ const SCENARIOS = [
     },
   },
   {
+    id: "G-三轮净提升链",
+    env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,55,70,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_REVIEW_RETRIES: "3" },
+    expect: {
+      log: ["修复轮次 1/3（当前 45 分）", "修复轮次 2/3（当前 55 分）", "修复轮次 3/3（当前 70 分）", "修复后达到通过线（91 分）"],
+      absentLog: ["未净提升", "未产出新内容", "回退到最高分版本"],
+      chapterFileContains: "缓缓收紧五指",
+      chapterFileAlsoContains: "掌纹里渗出细密的汗意",
+      promisesTimeline: 4,
+    },
+  },
+  {
     id: "E-restore回退",
     env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_MOCK_REVISE_BLOAT: "1", WALKTHROUGH_REVIEW_RETRIES: "1" },
     expect: {
@@ -162,7 +173,7 @@ for (let i = 0; i < SCENARIOS.length; i++) {
   }
 }
 
-console.log("\n──────── 审改循环六分支矩阵汇总 ────────");
+console.log("\n──────── 审改循环矩阵汇总 ────────");
 let failed = 0;
 for (const [id, ok, seconds, checks] of results) {
   console.log(`${ok ? "✓" : "✗"} ${id}（${seconds}s，${checks.length} 断言）`);
@@ -172,4 +183,4 @@ if (failed > 0) {
   console.error(`\n[rcm] ✗ ${failed} 场景失败`);
   process.exit(1);
 }
-console.log("\n[rcm] ✓ 六分支矩阵全部通过");
+console.log("\n[rcm] ✓ 审改循环矩阵全部通过");
