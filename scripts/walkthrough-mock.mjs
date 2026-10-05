@@ -79,11 +79,18 @@ const SETTLER_TEMPLATE = {
 
 // settler 分派：从消息里抽「第 N 章」动态对齐 delta.chapter（写第 2 章时固定 1 会被 reducer 拒绝）。
 // 652 号：最后一次结算章号记录给 analyzer 分派复用（CHAPTER_SUMMARY/UPDATED_STATE 的当前章号）。
+// 653 号：取**最后一个**「第 N 章」命中——planner 文本「# 第 1 章 memo」先于目标章引用出现，
+// 取首个会让 LAST_SETTLER_CHAPTER/delta.chapter 恒偏 1（652c 实录：写第 2 章时 analyzer 摘要行章号=1）。
 let LAST_SETTLER_CHAPTER = 1;
 function settlerDelta(msgs) {
   const text = msgs.map((m) => m?.content ?? "").join("\n");
-  const match = text.match(/第\s*(\d+)\s*章/);
-  const n = match ? Number(match[1]) : 1;
+  // 653 号：章号锚=「## 已有章节摘要」表格的最大已有章号+1（写第 N 章=已有
+  // N-1 章+1，连续写作单调自洽）。不可用「第 N 章」文本命中：消息里的命中全
+  // 是 memo 标题（「# 第 1 章 memo」）与伏笔表预期回收（「第8章」）——取首
+  // 恒偏 1、取末跳到回收章（652c/653b 两轮实测），settler 输入本身不含目标章号。
+  const summaryBlock = text.match(/## 已有章节摘要\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? "";
+  const summaryMax = [...summaryBlock.matchAll(/^\| (\d+) \|/gm)].reduce((m, x) => Math.max(m, Number(x[1])), 0);
+  const n = summaryMax + 1;
   LAST_SETTLER_CHAPTER = n;
   const delta = JSON.parse(JSON.stringify(SETTLER_TEMPLATE));
   delta.chapter = n;
