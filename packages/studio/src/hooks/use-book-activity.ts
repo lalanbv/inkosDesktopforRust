@@ -152,6 +152,23 @@ export function writeTaskSessionId(bookId: string): string {
   return `book:${bookId}:write`;
 }
 
+/**
+ * 用户主动停止 write-next 的双端中性文案（642 号）：TS server.ts 直连端点与
+ * Rust write_next_route 字面同形，停止以 write:error{error:本文案} 广播。
+ */
+export const WRITE_STOPPED_MESSAGE = "写作已按您的要求停止。";
+
+/**
+ * 用户主动停止属中性结果、不以失败呈现（188 号）。644 号走查实证：642 号把
+ * 停止广播换成中性文案后，UI 侧遗留的 `includes("Operation aborted")` 判定
+ * 不再命中——中性文案被红色失败分支包裹自相矛盾。判定同时认双端中性文案
+ * 与遗留 abort 字面（兼容旧快照/旧广播形态）。
+ */
+export function isWriteStoppedMessage(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return error.includes(WRITE_STOPPED_MESSAGE) || error.includes("Operation aborted");
+}
+
 export function shouldRefetchBookView(message: SSEMessage, bookId: string): boolean {
   return getBookId(message) === bookId && BOOK_REFRESH_EVENTS.has(message.event);
 }

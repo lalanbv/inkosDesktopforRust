@@ -126,4 +126,21 @@ describe("author report contract (G8b)", () => {
     expect(failure).not.toBeNull();
     expect(failure?.title).toBe("聊天任务出错");
   });
+
+  it("suppresses the user-stop report: write-next stop is not a task failure (644)", () => {
+    // 642 号契约：用户停止 write-next 双端以 write:error + 中性文案广播
+    // （TS 直连端点与 Rust write_next_route 字面同形）。644 号活体走查实证
+    // 该形态在通知中心落「写章失败 [必须处理]」错误级噪音（188 号语义回归
+    // 的通知面对偶）——停止不是失败，不出报告；真实失败不受扰。
+    expect(
+      buildTaskReport("write:error", { bookId: "b1", error: "写作已按您的要求停止。" }),
+    ).toBeNull();
+    // 遗留 abort 字面同免（与 WriteStatusBanner 判定同口径）。
+    expect(buildTaskReport("write:error", { bookId: "b1", error: "Operation aborted" })).toBeNull();
+    expect(buildTaskReport("write:error", { bookId: "b1", error: "aborted" })).toBeNull();
+    // 真实失败不受扰。
+    const failure = buildTaskReport("write:error", { bookId: "b1", error: "LLM 429 quota exceeded" });
+    expect(failure).not.toBeNull();
+    expect(failure?.title).toBe("写章失败");
+  });
 });

@@ -18,7 +18,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
-import { deriveBookActivity, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
+import { deriveBookActivity, isWriteStoppedMessage, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { GitBranch,
   ChevronLeft,
@@ -53,6 +53,41 @@ interface ChapterMeta {
   readonly title: string;
   readonly status: string;
   readonly wordCount: number;
+}
+
+/** 644 号：写作状态提示条（纯移动自 BookDetail 内联 JSX——jsdom 可直测三态）。 */
+export function WriteStatusBanner({ writing, drafting, lastError, t }: {
+  writing: boolean;
+  drafting: boolean;
+  lastError: string | null;
+  t: TFunction;
+}) {
+  if (!(writing || drafting || lastError)) return null;
+  return (
+    <div
+      className={`rounded-2xl border px-4 py-3 text-sm ${
+        lastError
+          ? isWriteStoppedMessage(lastError)
+            ? // 188 号：用户主动停止属中性结果，不以红色失败呈现（644 号：判定
+              // 认 642 号双端中性文案，遗留 abort 字面兼容）
+              "border-border/60 bg-secondary/30 text-muted-foreground"
+            : "border-destructive/30 bg-destructive/5 text-destructive"
+          : "border-primary/20 bg-primary/[0.04] text-foreground"
+      }`}
+    >
+      {lastError ? (
+        <span>
+          {isWriteStoppedMessage(lastError)
+            ? `${t("book.writeStopped")}`
+            : `${t("book.pipelineFailed")}: ${lastError}`}
+        </span>
+      ) : writing ? (
+        <span>{t("book.pipelineWriting")}</span>
+      ) : (
+        <span>{t("book.pipelineDrafting")}</span>
+      )}
+    </div>
+  );
 }
 
 interface BookData {
@@ -730,30 +765,7 @@ export function BookDetail({
         </div>
       </div>
 
-      {(writing || drafting || activity.lastError) && (
-        <div
-          className={`rounded-2xl border px-4 py-3 text-sm ${
-            activity.lastError
-              ? activity.lastError.includes("Operation aborted")
-                ? // 188 号：用户主动停止属中性结果，不以红色失败呈现
-                  "border-border/60 bg-secondary/30 text-muted-foreground"
-                : "border-destructive/30 bg-destructive/5 text-destructive"
-              : "border-primary/20 bg-primary/[0.04] text-foreground"
-          }`}
-        >
-          {activity.lastError ? (
-            <span>
-              {activity.lastError.includes("Operation aborted")
-                ? `${t("book.writeStopped")}`
-                : `${t("book.pipelineFailed")}: ${activity.lastError}`}
-            </span>
-          ) : writing ? (
-            <span>{t("book.pipelineWriting")}</span>
-          ) : (
-            <span>{t("book.pipelineDrafting")}</span>
-          )}
-        </div>
-      )}
+      <WriteStatusBanner writing={writing} drafting={drafting} lastError={activity.lastError} t={t} />
 
       {/* Tool Strip */}
       <div className="flex flex-wrap items-center gap-2 py-1">

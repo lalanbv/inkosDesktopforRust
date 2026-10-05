@@ -231,7 +231,17 @@ export function buildTaskReport(
   // 624 号聊天 UI 零痕迹，通知面同样不应产生「聊天任务出错」错误级噪音。
   // Rust 引擎对中止轮以 agent:error{error:"aborted"} 广播（Node 同场景走
   // agent:aborted，本就不在通知表）；按引擎侧标记精确拦截，真实失败不受扰。
-  if (event === "agent:error" && optionalString("error") === "aborted") {
+  // 644 号对偶清偿（write-next 面）：用户停止 write-next 双端以 :error + 中性
+  // 文案「写作已按您的要求停止。」广播（TS 直连端点与 Rust write_next_route
+  // 字面同形，642 号契约）——走查实证它在通知中心落「写章失败 [必须处理]」
+  // 错误级噪音。中止/停止是作者意图的收敛，不是任务失败，一律不出报告。
+  const errorPayload = optionalString("error");
+  if (
+    event.endsWith(":error")
+    && (errorPayload === "aborted"
+      || errorPayload === "Operation aborted"
+      || errorPayload === "写作已按您的要求停止。")
+  ) {
     return null;
   }
 

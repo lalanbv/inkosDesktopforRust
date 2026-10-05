@@ -51,6 +51,10 @@ let PROPOSE_SEQ = 0;
 //（438 号「已执行 · 生产链失败」）真机走查。400=非瞬态，不触发重试/接管链；
 // fixture 数据面（write-next 走 planner/writer/settler/审稿）不含架构师，不受影响。
 const FAIL_ARCHITECT = process.env.WALKTHROUGH_MOCK_FAIL_ARCHITECT === "1";
+// 慢速流（644 号）：每块 delta 间隔毫秒数（默认 0=一次性发射，现行为）。正文类
+// 响应按 8 字符/块逐块发射——write-next 停止按钮的活体走查需要足够长的流中窗口
+//（642 号可停性验证）；0 时逐字节等价旧行为，不影响 639 等既有走查形态。
+const STREAM_DELAY_MS = Number(process.env.WALKTHROUGH_MOCK_STREAM_DELAY_MS ?? "0");
 const PORT = Number(process.argv[2] ?? 1234);
 
 http.createServer((req, res) => {
@@ -90,6 +94,37 @@ http.createServer((req, res) => {
       const emitSse = (chunk, finish) => {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+      };
+      // 644 号：慢速流形态（WALKTHROUGH_MOCK_STREAM_DELAY_MS>0 时启用）——正文
+      // 按 8 字符/块逐块发射，块间 delay；finish chunk 与 [DONE] 收尾保持 OpenAI
+      // 流式规范（548 号）。引擎侧 abort 断开连接时 close 事件清 timer（真停链路：
+      // 引擎中止 → provider 断流 → 管线消费中止）。
+      const emitSseSlow = (content, finish) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        const delta = (c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c }, finish_reason: null }] })}\n\n`;
+        if (!(STREAM_DELAY_MS > 0)) {
+          res.end(`${delta(content)}data: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+          return;
+        }
+        const pieces = [];
+        for (let i = 0; i < content.length; i += 8) pieces.push(content.slice(i, i + 8));
+        let idx = 0;
+        const timer = setInterval(() => {
+          if (res.writableEnded || res.destroyed) {
+            clearInterval(timer);
+            return;
+          }
+          if (idx < pieces.length) {
+            res.write(delta(pieces[idx++]));
+          } else {
+            clearInterval(timer);
+            res.end(`data: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+          }
+        }, STREAM_DELAY_MS);
+        // 连接提前断开（引擎 abort→provider 断流）即停发射。挂 res 不挂 req：
+        // IncomingMessage 的 close 在请求体消费完（end 后）就触发，挂 req 会把
+        // timer 立刻清掉、流永不推进（644 号走查首跑挂死根因）。
+        res.on("close", () => clearInterval(timer));
       };
       const lastRole = msgs.length ? msgs[msgs.length - 1].role : "user";
       let content;
@@ -132,9 +167,8 @@ http.createServer((req, res) => {
         emitJson({ role: "assistant", content }, "stop");
         return;
       }
-      const chunk = { choices: [{ delta: { content }, finish_reason: null }] };
-      const finish = { choices: [{ delta: {}, finish_reason: "stop" }] };
-      emitSse(chunk, finish);
+      // 644 号：正文类响应走慢速流形态（delay=0 时一次性发射，与旧 emitSse 等价）。
+      emitSseSlow(content, { choices: [{ delta: {}, finish_reason: "stop" }] });
     });
     return;
   }
