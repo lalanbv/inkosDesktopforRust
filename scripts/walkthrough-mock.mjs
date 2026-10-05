@@ -3,18 +3,33 @@
 //
 //   node scripts/walkthrough-mock.mjs [port]   # 默认 1234
 //
-// 分派（按 system 关键词，与 engine-rs 九路 agent 提示词对应）：
+// 分派（按 system 关键词；657 教训：本表与真实 agent 清单的对齐审计是 mock
+// 改动固定步骤——新增/改动分派须同步本表，657 号曾补录 4 个漏记分支）：
 //   网络小说架构师/总架构师 → 5 段地基（story_frame/volume_map/roles/book_rules/pending_hooks）
-//   素材分析师             → 同人正典文档
-//   资深小说编辑           → PASS 审校
+//   资深小说编辑           → 评分维度审校
+//   素材分析师/同人         → 同人正典文档
 //   创作总编               → planner memo
 //   作家/写手              → 章节成文（CHAPTER_TITLE/CONTENT/POST_SETTLEMENT/RUNTIME_STATE_DELTA）
-//   修稿编辑               → FIXED_ISSUES + REVISED_CONTENT（审改循环修稿腿，646 号）
+//   修稿编辑               → 直通（REVISE_PASSTHROUGH，660 号）/PATCHES（patch-only，
+//                             655 号）/REVISED_CONTENT（整章重写）三形态（审改循环修稿腿）
 //   审稿                   → JSON 契约（passed/overall_score/issues/summary，645 号；
 //                             WALKTHROUGH_MOCK_AUDIT_SCORES 可注入降分序列驱动审改循环，646 号）
+//   小说连续性分析师        → analyzer 保真形态（=== TAG === 全套+伏笔池同源表，650–652 号）
+//   状态追踪分析师          → RUNTIME_STATE_DELTA（章号=摘要表 max+1，653 号）
+//   continuity validator   → PASS
+//   事实提取专家            → 空更新占位（483 号）
 //   末条消息为 user（无工具结果）→ propose_action 工具调用（231 号 propose→confirm 协议，
 //   args 含 action 必填字段——301/310 号教训）
-//   其余                   → PASS
+//   其余                   → 已生成确认卡
+//
+// 环境变量家族（注入注入）：
+//   WALKTHROUGH_MOCK_FAIL_ARCHITECT=1      架构师链一律 400（439 号，前端确认卡降级态走查）
+//   WALKTHROUGH_MOCK_STREAM_DELAY_MS=N     正文逐块流式间隔毫秒（644 号，停止窗口构造）
+//   WALKTHROUGH_MOCK_AUDIT_SCORES=60,85    审稿降分序列（646 号，驱动审改循环）
+//   WALKTHROUGH_MOCK_AUDIT_SCOPE=local     降分 issue repair_scope（650 号，PATCHES 路由）
+//   WALKTHROUGH_MOCK_REVISE_BLOAT=1        修稿产出越篇幅带（658 号，restore 回退分支）
+//   WALKTHROUGH_MOCK_REVISE_PASSTHROUGH=1  修稿直通回传原文（660 号，未产出新内容分支）
+//   WALKTHROUGH_REVIEW_RETRIES=N（fixture）writing.reviewRetries（655 号，多轮修复上限）
 //
 // 用法：`INKOS_LLM_BASE_URL=http://127.0.0.1:<port>/v1 inkos-engine-server` 启动引擎
 //（/v1 必须带：模型列表与 chat/completions 都走 mock 的 /v1 面——436 号实测），
