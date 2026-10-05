@@ -66,6 +66,11 @@ let REVISE_SEQ = 0;
 // 修订内容越篇幅带（hardMax 3818）→ review-cycle 的 bestSnapshot 择优选初稿
 // 并触发「回退到最高分版本」restore 分支（六分支矩阵最后一员）的活体构造。
 const REVISE_BLOAT = process.env.WALKTHROUGH_MOCK_REVISE_BLOAT === "1";
+// 660 号：WALKTHROUGH_MOCK_REVISE_PASSTHROUGH=1——修稿直通形态：响应回传
+// 管线正文（WRITER_BODY）致 reviser 判 revisedContent===finalContent，触发
+// chapter-review-cycle 的「修复轮次 N 未产出新内容，退出循环」分支
+//（650 首跑实录/655 红 1 的手工证据自动化入矩阵套件）。
+const REVISE_PASSTHROUGH = process.env.WALKTHROUGH_MOCK_REVISE_PASSTHROUGH === "1";
 const BLOAT_FILLER = "他按石渊的嘱咐又把周天走了三遍，掌心玉佩随呼吸明明灭灭，窗外风声一阵紧过一阵。";
 // 651 号：analyzer 保真形态——UPDATED_HOOKS 与 walkthrough-fixture 预置池同源
 // （14 列 R23 台账，分类列驱动 memory.db promises 投影：悬念/情感/物品/世界观
@@ -223,7 +228,12 @@ http.createServer((req, res) => {
         // 含「根据审稿意见对章节进行修正」，includes("审稿") 会先截胡
         // （首跑实录：修稿调用拿到审稿 JSON → REVISED_CONTENT 为空 →
         // 「未产出新内容」退出循环）。
-        if (sys.includes("只输出 PATCHES")) {
+        if (REVISE_PASSTHROUGH) {
+          // 660 号：直通回传原文——reviser 判 revisedContent 与原文全等即
+          // 「未产出新内容」，修稿循环未产出分支的活体构造。
+          content = "=== FIXED_ISSUES ===\n无法安全修稿，正文保持原样。\n\n=== REVISED_CONTENT ===\n" + WRITER_BODY;
+        }
+        else if (sys.includes("只输出 PATCHES")) {
           // TARGET 必须是 WRITER 正文的精确引用（applySpotFixPatches 先精确
           // 后空白归一匹配；匹配不到会被 skip，全 skip 即「未产出新内容」）。
           // 655 号：轮次感知多组修补对——轮 N 用第 N 对（越界取末对），多轮

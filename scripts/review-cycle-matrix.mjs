@@ -63,6 +63,16 @@ const SCENARIOS = [
     },
   },
   {
+    id: "F-未产出新内容",
+    env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_MOCK_REVISE_PASSTHROUGH: "1", WALKTHROUGH_REVIEW_RETRIES: "1" },
+    expect: {
+      log: ["修复轮次 1/1（当前 45 分）", "修复轮次 1 未产出新内容，退出循环"],
+      absentLog: ["达到通过线", "回退到最高分版本"],
+      chapterFileNotContains: "缓缓收紧五指", // 直通回传原文：落盘保持原稿
+      promisesTimeline: 4,
+    },
+  },
+  {
     id: "E-restore回退",
     env: { WALKTHROUGH_MOCK_STREAM_DELAY_MS: "20", WALKTHROUGH_MOCK_AUDIT_SCORES: "45,91", WALKTHROUGH_MOCK_AUDIT_SCOPE: "local", WALKTHROUGH_MOCK_REVISE_BLOAT: "1", WALKTHROUGH_REVIEW_RETRIES: "1" },
     expect: {
