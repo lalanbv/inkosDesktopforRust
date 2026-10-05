@@ -23,6 +23,7 @@ import {
 } from "../components/ai-elements/reasoning";
 import { ChatMessage } from "../components/chat/ChatMessage";
 import { MessageHud } from "../components/chat/MessageHud";
+import { SessionBranchSwitcher } from "../components/chat/SessionBranchSwitcher";
 import { QuickActions } from "../components/chat/QuickActions";
 import { ToolExecutionSteps, type ProposedActionDetails } from "../components/chat/ToolExecutionSteps";
 import {
@@ -1153,6 +1154,13 @@ export function ChatPage({ activeBookId, mode = activeBookId ? "book" : "book-cr
                 )}
                 {/* R41/564 号：会话上下文计量徽标（末轮请求面 token，观测位）。 */}
                 <ContextMeterBadge sessionId={activeSessionId} />
+                {/* R36/638 号：对话分支切换器（head 指针移动，弃用路径可切回）。 */}
+                <SessionBranchSwitcher
+                  sessionId={activeSessionId}
+                  isDraft={activeSession?.isDraft ?? false}
+                  disabled={loading || !activeSessionId}
+                  isZh={isZh}
+                />
                 {currentSessionKind === "play" && (
                   <button
                     type="button"

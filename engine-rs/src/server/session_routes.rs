@@ -21,8 +21,8 @@ use serde_json::{json, Value};
 
 use crate::interaction::book_session_store::{
     branch_book_session, create_and_persist_book_session, delete_book_session,
-    list_book_sessions, load_book_session, load_project_session, rename_book_session,
-    resolve_session_active_book, BranchBookSessionError,
+    derive_branch_points, list_book_sessions, load_book_session, load_project_session,
+    rename_book_session, resolve_session_active_book, BranchBookSessionError,
 };
 use crate::interaction::session::{is_safe_book_id, PlayMode, SessionKind};
 use crate::server::books_routes::BooksRuntime;
@@ -314,6 +314,22 @@ pub async fn branch_session(
             format!("Branch target seq {target} not found in transcript"),
         )
         .into_response(),
+    }
+}
+
+// ── GET /api/v1/sessions/:sessionId/branches ───────────────────
+
+/// R36 分支点读面（638 号）：可回退分支点清单（request_committed 全集 +
+/// preview + 是否在当前链上），供 studio 分支切换器渲染。对齐 TS
+/// `GET /api/v1/sessions/:sessionId/branches`。
+pub async fn session_branch_points(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(session_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    match derive_branch_points(root, &session_id).await {
+        Some(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or(json!({})))).into_response(),
+        None => not_found().into_response(),
     }
 }
 

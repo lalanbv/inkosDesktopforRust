@@ -496,6 +496,21 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     }
   },
 
+  branchSession: async (sessionId, toSeq) => {
+    // R36 分支切换（638 号）：head 指针移动是 append-only 的 branch_moved
+    // 事件；成功后重拉详情——active 链投影（消息视图/压缩边界）立即生效。
+    const result = await fetchJson<{ ok: boolean; head: number | null; branchCount: number }>(
+      `/sessions/${encodeURIComponent(sessionId)}/branch`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toSeq }),
+      },
+    );
+    await get().loadSessionDetail(sessionId);
+    return { head: result.head, branchCount: result.branchCount };
+  },
+
   sendMessage: async (sessionId, text, options?: SendMessageOptions) => {
     const trimmed = text.trim();
     const attachments = options?.attachments ?? [];

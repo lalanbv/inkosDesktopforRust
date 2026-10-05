@@ -30,6 +30,7 @@ import {
   migrateBookSession,
   branchBookSession,
   BranchTargetNotFoundError,
+  deriveSessionBranchPoints,
   SessionAlreadyMigratedError,
   abortAgentSession,
   isAgentSessionBusy,
@@ -5737,6 +5738,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     if (!result) return c.json({ error: "Session not found" }, 404);
     return c.json({ ok: true, head: result.head, branchCount: result.branchCount });
+  });
+
+  // R36 分支点读面（638 号）：可回退分支点清单（request_committed 全集 +
+  // preview + 是否在当前链上），供 studio 分支切换器渲染。
+  app.get("/api/v1/sessions/:sessionId/branches", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const result = await deriveSessionBranchPoints(root, sessionId);
+    if (!result) return c.json({ error: "Session not found" }, 404);
+    return c.json(result);
   });
 
   app.post("/api/v1/agent", async (c) => {

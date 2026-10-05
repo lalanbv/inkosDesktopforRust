@@ -659,6 +659,11 @@ pub fn router_books(
             post(session_routes::branch_session).with_state(books.clone()),
         )
         .route(
+            // R36 分支点读面（638 号）：分支切换器数据源
+            "/api/v1/sessions/:sessionId/branches",
+            get(session_routes::session_branch_points).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/sessions/:sessionId",
             get(session_routes::get_session)
                 .put(session_routes::rename_session)

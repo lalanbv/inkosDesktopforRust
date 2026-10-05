@@ -17,8 +17,8 @@ use crate::interaction::session_restore::{
     read_legacy_book_session,
 };
 use crate::interaction::session_transcript::{
-    append_transcript_events, legacy_book_session_path, read_transcript_events, sessions_dir,
-    transcript_head, transcript_path, TranscriptEvent,
+    active_chain_events, append_transcript_events, legacy_book_session_path,
+    read_transcript_events, sessions_dir, transcript_head, transcript_path, TranscriptEvent,
 };
 
 /// `loadBookSession`：transcript derive → legacy 读取 + 就地迁移。
@@ -214,6 +214,76 @@ pub async fn branch_book_session(
             .iter()
             .filter(|event| matches!(event, TranscriptEvent::BranchMoved { .. }))
             .count() as u64,
+    })
+}
+
+/// R36 分支点读面（638 号）：一个可回退分支点 = 一条已提交请求的
+/// request_committed 事件（该轮收尾点——消息先于 commit 落盘，branch 到它 =
+/// 「保留到该轮结束」）。preview 取同 requestId 的 request_started.input；
+/// on_active_chain 标记该点是否在当前 head 链上（false = 已弃用分支，可切回）。
+/// 对齐 TS `SessionBranchPoint` / `SessionBranchPointsResult`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SessionBranchPoint {
+    pub seq: u64,
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+    pub timestamp: u64,
+    pub preview: String,
+    #[serde(rename = "onActiveChain")]
+    pub on_active_chain: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SessionBranchPointsResult {
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    pub head: Option<u64>,
+    #[serde(rename = "branchCount")]
+    pub branch_count: u64,
+    pub points: Vec<SessionBranchPoint>,
+}
+
+/// 分支点 derive：committed 轮全集 + started.input 预览 + active 链标记。
+/// 会话不存在（无 transcript）返回 None。
+pub async fn derive_branch_points(
+    project_root: &Path,
+    session_id: &str,
+) -> Option<SessionBranchPointsResult> {
+    let events = read_transcript_events(project_root, session_id).await;
+    if events.is_empty() {
+        return None;
+    }
+    let chain: Vec<&TranscriptEvent> = active_chain_events(&events);
+    let chain_seqs: std::collections::HashSet<u64> = chain.iter().map(|event| event.seq()).collect();
+    let started_inputs: std::collections::HashMap<&str, &str> = events
+        .iter()
+        .filter_map(|event| match event {
+            TranscriptEvent::RequestStarted { request_id, input, .. } => {
+                Some((request_id.as_str(), input.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    let mut points = Vec::new();
+    for event in &events {
+        if let TranscriptEvent::RequestCommitted { seq, timestamp, request_id, .. } = event {
+            points.push(SessionBranchPoint {
+                seq: *seq,
+                request_id: request_id.clone(),
+                timestamp: *timestamp,
+                preview: started_inputs.get(request_id.as_str()).map(|s| (*s).to_string()).unwrap_or_default(),
+                on_active_chain: chain_seqs.contains(seq),
+            });
+        }
+    }
+    Some(SessionBranchPointsResult {
+        session_id: session_id.to_string(),
+        head: transcript_head(events.iter()),
+        branch_count: events
+            .iter()
+            .filter(|event| matches!(event, TranscriptEvent::BranchMoved { .. }))
+            .count() as u64,
+        points,
     })
 }
 
@@ -771,4 +841,133 @@ mod tests {
             assert!(line.contains("\"parentSeq\""), "行缺 parentSeq：{line}");
         }
     }
+
+    // ── R36 分支点读面（638 号）：TS session-branch-points.test.ts 五态镜像 ──
+
+    #[tokio::test]
+    async fn branch_points_linear_two_rounds_all_on_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "第一个问题", "第一答").await;
+        append_committed_round(&root, "s1", "r2", "第二个问题", "第二答").await;
+
+        let result = derive_branch_points(&root, "s1").await.unwrap();
+        assert_eq!(result.session_id, "s1");
+        assert_eq!(result.branch_count, 0);
+        assert_eq!(result.points.len(), 2);
+        assert_eq!(result.points[0].preview, "第一个问题");
+        assert_eq!(result.points[1].preview, "第二个问题");
+        assert!(result.points.iter().all(|point| point.on_active_chain));
+        let events = read_transcript_events(&root, "s1").await;
+        let last_seq = events.last().unwrap().seq();
+        assert_eq!(result.points[1].seq, last_seq);
+        assert_eq!(result.head, Some(last_seq));
+    }
+
+    #[tokio::test]
+    async fn branch_points_after_branch_marks_abandoned_off_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "第一轮", "一答").await;
+        append_committed_round(&root, "s1", "r2", "第二轮（将弃用）", "二答").await;
+        let before = derive_branch_points(&root, "s1").await.unwrap();
+        let first_commit_seq = before.points[0].seq;
+
+        branch_book_session(&root, "s1", Some(first_commit_seq)).await.unwrap();
+        append_committed_round(&root, "s1", "r2b", "第二轮重写", "重写答").await;
+
+        let after = derive_branch_points(&root, "s1").await.unwrap();
+        assert_eq!(after.branch_count, 1);
+        assert_eq!(after.points.len(), 3);
+        let abandoned: Vec<_> = after.points.iter().filter(|p| !p.on_active_chain).collect();
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].preview, "第二轮（将弃用）");
+        assert!(after
+            .points
+            .iter()
+            .any(|p| p.preview == "第二轮重写" && p.on_active_chain));
+        assert!(after
+            .points
+            .iter()
+            .any(|p| p.seq == first_commit_seq && p.on_active_chain));
+    }
+
+    #[tokio::test]
+    async fn branch_points_skip_failed_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "成功轮", "答").await;
+        append_transcript_events(&root, "s1", |_events, next_seq| {
+            vec![TranscriptEvent::RequestFailed {
+                parent_seq: None,
+                version: 1,
+                session_id: "s1".to_string(),
+                seq: next_seq,
+                timestamp: utc_now_ms(),
+                request_id: "r-failed".to_string(),
+                error: "boom".to_string(),
+            }]
+        })
+        .await;
+        let result = derive_branch_points(&root, "s1").await.unwrap();
+        assert_eq!(result.points.len(), 1);
+        assert_eq!(result.points[0].preview, "成功轮");
+    }
+
+    #[tokio::test]
+    async fn branch_points_orphan_committed_preview_empty_and_missing_session_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let path = transcript_path(&root, "s1");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "request_committed", "version": 1, "sessionId": "s1",
+                    "requestId": "orphan", "seq": 0, "timestamp": 1, "parentSeq": null
+                })
+            ),
+        )
+        .await
+        .unwrap();
+        let result = derive_branch_points(&root, "s1").await.unwrap();
+        assert_eq!(result.points.len(), 1);
+        assert_eq!(result.points[0].preview, "");
+        assert!(result.points[0].on_active_chain);
+
+        assert!(derive_branch_points(&root, "ghost").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn branch_points_after_reset_leaf_all_off_chain_head_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "第一轮", "答").await;
+        branch_book_session(&root, "s1", None).await.unwrap();
+        let result = derive_branch_points(&root, "s1").await.unwrap();
+        assert_eq!(result.head, None);
+        assert_eq!(result.branch_count, 1);
+        assert_eq!(result.points.len(), 1);
+        assert!(!result.points[0].on_active_chain);
+    }
+
+    #[tokio::test]
+    async fn branch_points_json_shape_camel_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "预览问", "答").await;
+        let result = derive_branch_points(&root, "s1").await.unwrap();
+        let value = serde_json::to_value(&result).unwrap();
+        assert!(value.get("sessionId").is_some());
+        assert!(value.get("branchCount").is_some());
+        assert!(value.get("head").is_some());
+        let point = &value["points"][0];
+        assert!(point.get("requestId").is_some());
+        assert!(point.get("onActiveChain").is_some());
+        assert!(point.get("seq").is_some());
+        assert!(point.get("preview").is_some());
+    }
+
 }

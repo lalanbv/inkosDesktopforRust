@@ -343,6 +343,7 @@ export {
   createAndPersistBookSession,
   branchBookSession,
   BranchTargetNotFoundError,
+  deriveSessionBranchPoints,
   SessionAlreadyMigratedError,
 } from "./interaction/book-session-store.js";
 export {

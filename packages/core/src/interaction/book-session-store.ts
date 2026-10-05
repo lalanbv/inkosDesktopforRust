@@ -2,6 +2,7 @@ import { readdir, unlink } from "node:fs/promises";
 import { createBookSession } from "./session.js";
 import type { BookSession, PlayMode, SessionKind } from "./session.js";
 import {
+  activeChainEvents,
   appendTranscriptEvents,
   legacyBookSessionPath,
   readTranscriptEvents,
@@ -261,6 +262,59 @@ export class BranchTargetNotFoundError extends Error {
     super(`Branch target seq ${toSeq} not found in transcript`);
     this.name = "BranchTargetNotFoundError";
   }
+}
+
+/**
+ * R36 分支点读面（638 号）：一个可回退分支点 = 一条已提交请求的
+ * request_committed 事件（该轮事件 seq 最大的收尾点——消息先于 commit 落盘，
+ * branch 到它 = 「保留到该轮结束」）。preview 取同 requestId 的
+ * request_started.input（每轮必有、纯文本，免解析 message 载荷形状）；
+ * onActiveChain 标记该点是否在当前 head 链上（false = 已弃用分支，可切回）。
+ * 失败轮（request_failed 无 committed）不是分支点。会话不存在返回 null。
+ */
+export interface SessionBranchPoint {
+  readonly seq: number;
+  readonly requestId: string;
+  readonly timestamp: number;
+  readonly preview: string;
+  readonly onActiveChain: boolean;
+}
+
+export interface SessionBranchPointsResult {
+  readonly sessionId: string;
+  readonly head: number | null;
+  readonly branchCount: number;
+  readonly points: ReadonlyArray<SessionBranchPoint>;
+}
+
+export async function deriveSessionBranchPoints(
+  projectRoot: string,
+  sessionId: string,
+): Promise<SessionBranchPointsResult | null> {
+  const events = await readTranscriptEvents(projectRoot, sessionId);
+  if (events.length === 0) return null;
+  const chainSeqs = new Set(activeChainEvents(events).map((event) => event.seq));
+  const startedInputs = new Map<string, string>();
+  for (const event of events) {
+    if (event.type === "request_started") startedInputs.set(event.requestId, event.input);
+  }
+  const points: SessionBranchPoint[] = [];
+  for (const event of events) {
+    if (event.type !== "request_committed") continue;
+    points.push({
+      seq: event.seq,
+      requestId: event.requestId,
+      timestamp: event.timestamp,
+      preview: startedInputs.get(event.requestId) ?? "",
+      onActiveChain: chainSeqs.has(event.seq),
+    });
+  }
+  return {
+    sessionId,
+    head: transcriptHead(events),
+    branchCount: events.filter((event) => event.type === "branch_moved").length,
+    points,
+  };
 }
 
 export async function migrateBookSession(

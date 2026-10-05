@@ -962,6 +962,38 @@ try {
             } else {
               console.log(`✓ branch 面双端一致（branch+第二轮+链完整性+derive 深比对；head 绝对 seq 豁免备案）`);
             }
+
+            // ── 分支点读面（638 号）：双腿 GET /branches 必须在场且等价。
+            // 点位 seq/timestamp/head 为绝对序数（同 head 豁免因果链），
+            // 结构面（点位数/preview 文本/在链标记/branchCount）硬比。
+            const branchesOf = async (engine) => {
+              const res = await fetchT(`http://127.0.0.1:${engine.port}/api/v1/sessions/${chatSession[engine.name]}/branches`);
+              return res.ok ? res.json().catch(() => null) : null;
+            };
+            const [nodePoints, rustPoints] = await Promise.all([branchesOf(engines[0]), branchesOf(engines[1])]);
+            compared += 1;
+            const normalizeBranches = (payload) => payload && typeof payload === "object"
+              ? {
+                branchCount: payload.branchCount,
+                points: (Array.isArray(payload.points) ? payload.points : []).map((point) => ({
+                  preview: point.preview,
+                  onActiveChain: point.onActiveChain,
+                })),
+              }
+              : null;
+            const nodeNorm = normalizeBranches(nodePoints);
+            const rustNorm = normalizeBranches(rustPoints);
+            const pointsShapeOk = (payload) => payload && Array.isArray(payload.points) && payload.points.length >= 2
+              && payload.points.every((point) => typeof point.preview === "string" && typeof point.onActiveChain === "boolean");
+            if (!pointsShapeOk(nodePoints) || !pointsShapeOk(rustPoints)) {
+              divergences += 1;
+              console.log(`✗ 分支点读面：双腿 GET /branches 形态不过 node=${JSON.stringify(nodePoints)?.slice(0, 200)} rust=${JSON.stringify(rustPoints)?.slice(0, 200)}`);
+            } else if (JSON.stringify(nodeNorm) !== JSON.stringify(rustNorm)) {
+              divergences += 1;
+              console.log(`✗ 分支点读面分歧 node=${JSON.stringify(nodeNorm)} rust=${JSON.stringify(rustNorm)}`);
+            } else {
+              console.log(`✓ 分支点读面双端一致（${nodeNorm.points.length} 点位；seq/timestamp/head 绝对序数豁免备案）`);
+            }
           }
         }
       }
