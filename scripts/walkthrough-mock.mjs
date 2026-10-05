@@ -62,6 +62,11 @@ const PATCH2_TARGET = "雷家的管事当众踩碎了他捡来的药材筐，还
 const PATCH2_REPLACEMENT = "雷家的管事当众踏碎了他捡来的药材筐，更纵马溅了他满身泥水。";
 const PATCH_PAIRS = [[PATCH_TARGET, PATCH_REPLACEMENT], [PATCH2_TARGET, PATCH2_REPLACEMENT]];
 let REVISE_SEQ = 0;
+// 658 号：WALKTHROUGH_MOCK_REVISE_BLOAT=1——修稿 REPLACEMENT 追加超长填充，
+// 修订内容越篇幅带（hardMax 3818）→ review-cycle 的 bestSnapshot 择优选初稿
+// 并触发「回退到最高分版本」restore 分支（六分支矩阵最后一员）的活体构造。
+const REVISE_BLOAT = process.env.WALKTHROUGH_MOCK_REVISE_BLOAT === "1";
+const BLOAT_FILLER = "他按石渊的嘱咐又把周天走了三遍，掌心玉佩随呼吸明明灭灭，窗外风声一阵紧过一阵。";
 // 651 号：analyzer 保真形态——UPDATED_HOOKS 与 walkthrough-fixture 预置池同源
 // （14 列 R23 台账，分类列驱动 memory.db promises 投影：悬念/情感/物品/世界观
 // 四 kind 必须齐）。650 号的最小占位把伏笔池写空致投影缺失、fixture 断言红。
@@ -225,7 +230,8 @@ http.createServer((req, res) => {
           // 修复分支的每一轮都产出真实差异。
           const pairIdx = Math.min(REVISE_SEQ, PATCH_PAIRS.length - 1);
           REVISE_SEQ += 1;
-          const [t, r] = PATCH_PAIRS[pairIdx];
+          let [t, r] = PATCH_PAIRS[pairIdx];
+          if (REVISE_BLOAT) r = r + BLOAT_FILLER.repeat(Math.ceil(1800 / BLOAT_FILLER.length));
           content = "=== FIXED_ISSUES ===\n替换了一处生硬动作描写，语义不变。\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n" + t + "\nREPLACEMENT_TEXT:\n" + r + "\n--- END PATCH ---";
         } else {
           content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
