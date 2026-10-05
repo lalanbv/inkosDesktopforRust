@@ -34,8 +34,13 @@ pub async fn tool_ingest_material(root: &Path, args: &Value) -> ToolResult {
         }
     }
     let field = |name: &str| args.get(name).and_then(Value::as_str).filter(|v| !v.is_empty());
+    // 635 号：SSRF 豁免从项目配置读（researchSearch.allowPrivateEgress）——
+    // 不从 LLM 工具参数来（防提示注入自开豁免）。
+    let allow_private_egress =
+        crate::interaction::research_tool::read_research_search_config(root).await.allow_private_egress;
     let input = materials::IngestMaterialInput {
         source_kind,
+        allow_private_egress,
         url: field("url"),
         file_path: field("filePath"),
         filename: field("filename"),

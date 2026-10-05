@@ -574,6 +574,7 @@ pub async fn import_canon_file(
             &root,
             &crate::materials::IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some(file_path),
                 filename,

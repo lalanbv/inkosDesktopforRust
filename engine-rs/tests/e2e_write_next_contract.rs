@@ -11770,6 +11770,14 @@ mod material83_e2e {
 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        // 635 号：本测试的 mock 源即 127.0.0.1——fixture 显式开私网豁免
+        //（生产语义=用户以 researchSearch.allowPrivateEgress 允许内网文档源）。
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "researchSearch": { "allowPrivateEgress": true } }"#,
+        )
+        .unwrap();
         let url = format!("http://{source_addr}/docs/page.html");
         let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let tools_in = tool_names.clone();

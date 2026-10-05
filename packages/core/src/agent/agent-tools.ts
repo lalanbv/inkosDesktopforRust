@@ -1398,6 +1398,9 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
       onUpdate?.(textResult(params.sourceKind === "url"
         ? `Extracting URL: ${params.url ?? "(missing)"}`
         : `Extracting file: ${params.filePath ?? params.filename ?? "(missing)"}`));
+      // 635 号：SSRF 豁免从项目配置读（researchSearch.allowPrivateEgress）——
+      // 不从 LLM 工具参数来（防提示注入自开豁免）。
+      const allowPrivateEgress = (await readResearchSearchConfig(projectRoot)).allowPrivateEgress;
       const asset = await ingestMaterial(projectRoot, {
         sourceKind: params.sourceKind,
         url: params.url,
@@ -1406,7 +1409,7 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
         mimeType: params.mimeType,
         title: params.title,
         purpose: params.purpose ?? "reference",
-      });
+      }, { allowPrivateEgress });
       return textResult(
         [
           `Material ingested: ${asset.markdownPath}`,

@@ -27,6 +27,9 @@ pub struct IngestMaterialInput<'a> {
     pub mime_type: Option<&'a str>,
     pub title: Option<&'a str>,
     pub purpose: Option<&'a str>,
+    /// 635 号：私网出站豁免（researchSearch.allowPrivateEgress 项目配置透传；
+    /// 不从 LLM 工具参数来——防提示注入自开豁免）。缺省 false=556 防线生效。
+    pub allow_private_egress: bool,
 }
 
 /// `MaterialAsset`（manifest JSON 形态，camelCase）。
@@ -141,7 +144,7 @@ async fn read_material_source(project_root: &Path, input: &IngestMaterialInput<'
         let Some(url) = input.url.filter(|u| !u.is_empty()) else {
             return Err("ingest_material.url is required for URL sources.".to_string());
         };
-        return read_url_material(url).await;
+        return read_url_material(url, input.allow_private_egress).await;
     }
     let Some(file_path) = input.file_path.filter(|p| !p.is_empty()) else {
         return Err("ingest_material.filePath is required for file sources.".to_string());
@@ -176,10 +179,16 @@ async fn read_material_source(project_root: &Path, input: &IngestMaterialInput<'
     )
 }
 
-async fn read_url_material(url: &str) -> Result<MaterialSource, String> {
+async fn read_url_material(url: &str, allow_private_egress: bool) -> Result<MaterialSource, String> {
     let parsed = url::Url::parse(url).map_err(|_| format!("Unsupported URL protocol: {url}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("Unsupported URL protocol: {}", parsed.scheme()));
+    }
+    // 635 号：接线 556 号 SSRF 防线（与 TS readUrlMaterial 同批）——私网/
+    // 回环/链路本地 URL 在出站前拒绝，不再放行到连接层；豁免走项目配置
+    // researchSearch.allowPrivateEgress（与 research_web 同源，560 号形态）。
+    if !allow_private_egress {
+        crate::utils::web_search::assert_public_egress_host(url).await?;
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
@@ -647,6 +656,35 @@ fn normalize_limit(limit: Option<f64>) -> usize {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    /// 635 号：URL ingest 走 556 号 SSRF 防线（可证伪——旧码无守卫时错误是
+    /// "Fetch failed: ..."（连接被拒），新码在出站前即拒 "loopback/private"）。
+    #[tokio::test]
+    async fn url_ingest_rejects_loopback_before_fetch() {
+        let err = match read_url_material("http://127.0.0.1:9/secret", false).await {
+            Err(e) => e,
+            Ok(_) => panic!("loopback URL 应被出站前拒绝"),
+        };
+        assert!(
+            err.contains("loopback/private address"),
+            "应出站前拒绝而非放行到连接层，实际错误：{err}"
+        );
+    }
+
+    /// 635 号：豁免路径语义——allow_private_egress=true 时私网 URL 放行到
+    /// 连接层（127.0.0.1:9 discard 端口连接立即失败 → "Fetch failed"，
+    /// 而非出站前 "loopback/private address" 拒绝）。
+    #[tokio::test]
+    async fn url_ingest_allows_private_when_exempted() {
+        let err = match read_url_material("http://127.0.0.1:9/secret", true).await {
+            Err(e) => e,
+            Ok(_) => panic!("discard 端口应连接失败"),
+        };
+        assert!(
+            err.contains("Fetch failed"),
+            "豁免路径应放行到连接层，实际错误：{err}"
+        );
+    }
+
 
     fn fixture_pdf() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.pdf")
@@ -661,6 +699,7 @@ mod tests {
             &root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("sample.pdf"),
                 filename: Some("sample.pdf"),
@@ -687,6 +726,7 @@ mod tests {
             &root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("scan.pdf"),
                 filename: Some("scanned.pdf"),
@@ -744,6 +784,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("source.md"),
                 filename: Some("雪夜古宅.md"),
@@ -814,6 +855,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("page.html"),
                 filename: None,
@@ -834,6 +876,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("../../etc/passwd"),
                 filename: None,
@@ -850,6 +893,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "url",
+                allow_private_egress: false,
                 url: None,
                 file_path: None,
                 filename: None,
@@ -865,6 +909,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: None,
                 filename: None,
@@ -882,6 +927,7 @@ mod tests {
             root,
             &IngestMaterialInput {
                 source_kind: "file",
+                allow_private_egress: false,
                 url: None,
                 file_path: Some("doc.pdf"),
                 filename: None,

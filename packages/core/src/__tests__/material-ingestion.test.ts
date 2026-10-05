@@ -5,6 +5,40 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ingestMaterial } from "../materials/ingest.js";
 
 describe("material ingestion", () => {
+  // 635 号：URL ingest 走 556 号 SSRF 防线（可证伪——旧码无守卫时 fetch 会被
+  // 调用，本测试断言私网 URL 在出站前被拒且 fetch 零调用）。
+  it("rejects loopback URLs before fetching", async () => {
+    let calls = 0;
+    const fetchSpy = (async () => {
+      calls += 1;
+      throw new Error("network must not be touched for private hosts");
+    }) as typeof fetch;
+
+    await expect(ingestMaterial(root, {
+      sourceKind: "url",
+      url: "http://127.0.0.1:9/secret",
+      purpose: "research",
+    }, { fetch: fetchSpy })).rejects.toThrow(/loopback\/private address/);
+    expect(calls).toBe(0);
+  });
+
+  it("fetches private URLs when allowPrivateEgress is configured (635 豁免路径)", async () => {
+    const fetchSpy = (async () => new Response(
+      "<html><head><title>内网资料</title></head><body><p>内网正文。</p></body></html>",
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    )) as typeof fetch;
+
+    const asset = await ingestMaterial(root, {
+      sourceKind: "url",
+      url: "http://127.0.0.1:9/intranet-doc",
+      purpose: "research",
+    }, { fetch: fetchSpy, allowPrivateEgress: true, now: () => new Date("2026-07-03T00:00:00.000Z") });
+
+    expect(asset.kind).toBe("webpage");
+    expect(asset.title).toBe("内网资料");
+    expect(asset.excerpt).toContain("内网正文");
+  });
+
   let root: string;
 
   beforeEach(async () => {
