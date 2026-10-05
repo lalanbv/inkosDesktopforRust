@@ -654,6 +654,11 @@ pub fn router_books(
             post(session_routes::abort_session).with_state(books.clone()),
         )
         .route(
+            // R36 会话树化（636 号）：分支 head 指针移动（append-only）
+            "/api/v1/sessions/:sessionId/branch",
+            post(session_routes::branch_session).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/sessions/:sessionId",
             get(session_routes::get_session)
                 .put(session_routes::rename_session)

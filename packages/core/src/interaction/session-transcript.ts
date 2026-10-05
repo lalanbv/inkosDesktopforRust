@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { TranscriptEventSchema, type TranscriptEvent } from "./session-transcript-schema.js";
+import {
+  TranscriptEventSchema,
+  type BranchMovedEvent,
+  type TranscriptEvent,
+} from "./session-transcript-schema.js";
 import type { SessionKind, TranscriptRole } from "./session-transcript-schema.js";
 
 const SESSIONS_DIR = ".inkos/sessions";
@@ -50,6 +54,63 @@ export async function nextTranscriptSeq(projectRoot: string, sessionId: string):
   return events.reduce((max, event) => Math.max(max, event.seq), 0) + 1;
 }
 
+function isBranchMoved(event: TranscriptEvent): event is BranchMovedEvent {
+  return event.type === "branch_moved";
+}
+
+function eventParentSeq(event: TranscriptEvent): number | null | undefined {
+  return (event as { parentSeq?: number | null }).parentSeq;
+}
+
+/**
+ * R36 head replay（636 号）：按 seq 序重放 branch_moved 重建当前 head——
+ * `toSeq` 即新 head（null = resetLeaf 置空），其余事件延伸链（head = seq）。
+ * 与 Pi「leaf 不落盘」不同：head 从事件流可重建（O(n) 一次，装载路径已有
+ * 全量读取），服务端跨进程重启/双引擎切换后分支状态不丢。
+ */
+export function transcriptHead(events: ReadonlyArray<TranscriptEvent>): number | null {
+  let head: number | null = null;
+  for (const event of events) {
+    head = isBranchMoved(event) ? event.toSeq : event.seq;
+  }
+  return head;
+}
+
+/**
+ * R36 active 链过滤（636 号）：从 head 沿 parentSeq 反向回溯出 root→head
+ * 路径（升序返回，等于 seq 序的路径子集——父 seq 恒小于子 seq，append-only
+ * 不变量）。弃用分支上的事件被剪除；未落 branch_moved 的纯 legacy 文件回溯
+ * 退化为全量（缺省语义 = 线性链，父即 seq 序前一事件）——旧行为零改写。
+ * 链断（parentSeq 指向不存在事件）时保留已收集后缀，恢复安全网同 553 号
+ * compaction 容错先例。branch_moved 自身不入链（元事件，replay 时改写 head
+ * 而非延伸链）。
+ */
+export function activeChainEvents(events: ReadonlyArray<TranscriptEvent>): TranscriptEvent[] {
+  if (events.length === 0) return [];
+  const sorted = [...events].sort((a, b) => a.seq - b.seq);
+  const head = transcriptHead(sorted);
+  if (head === null) return [];
+
+  const bySeq = new Map<number, { event: TranscriptEvent; index: number }>();
+  sorted.forEach((event, index) => bySeq.set(event.seq, { event, index }));
+
+  const chain: TranscriptEvent[] = [];
+  let cursor = bySeq.get(head);
+  while (cursor && chain.length <= sorted.length) {
+    const { event, index } = cursor;
+    if (isBranchMoved(event)) break;
+    chain.push(event);
+    const parent = eventParentSeq(event);
+    if (parent === undefined) {
+      // legacy 线性语义：父 = seq 序前一事件
+      cursor = index > 0 ? bySeq.get(sorted[index - 1].seq) : undefined;
+    } else {
+      cursor = parent === null ? undefined : bySeq.get(parent);
+    }
+  }
+  return chain.reverse();
+}
+
 export async function appendTranscriptEvent(
   projectRoot: string,
   event: TranscriptEvent,
@@ -73,6 +134,14 @@ export async function appendTranscriptEvents(
     const events = await readTranscriptEvents(projectRoot, sessionId);
     const nextSeq = events.reduce((max, event) => Math.max(max, event.seq), 0) + 1;
     const built = await buildEvents({ events, nextSeq });
+    // R36（636 号）：parentSeq 由 append 助手统一戳记——链语义单一事实源，
+    // 写入方零感知。branch_moved 改写 head 不延伸链；其余事件以戳记时 head
+    // 为父并推进 head。per-session 串行队列保证戳记时 head 即追加序前驱。
+    let head = transcriptHead(events);
+    for (const event of built) {
+      (event as { parentSeq?: number | null }).parentSeq = head;
+      head = isBranchMoved(event) ? event.toSeq : event.seq;
+    }
     result = built.map((event) => TranscriptEventSchema.parse(event));
     if (result.length === 0) return;
 

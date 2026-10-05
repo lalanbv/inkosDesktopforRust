@@ -969,6 +969,7 @@ async fn append_production_user_turn(
     append_transcript_events(root, session_id, |_events, next_seq| {
         vec![
             TranscriptEvent::RequestStarted {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 seq: next_seq,
@@ -978,6 +979,7 @@ async fn append_production_user_turn(
                 input: instruction.to_string(),
             },
             TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.clone(),
@@ -993,6 +995,7 @@ async fn append_production_user_turn(
                 message: json!({ "role": "user", "content": instruction, "timestamp": now }),
             },
             TranscriptEvent::RequestCommitted {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 seq: next_seq + 2,
@@ -1032,6 +1035,7 @@ async fn append_production_assistant_message(
     append_transcript_events(root, session_id, |_events, next_seq| {
         vec![
             TranscriptEvent::RequestStarted {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 seq: next_seq,
@@ -1041,6 +1045,7 @@ async fn append_production_assistant_message(
                 input: String::new(),
             },
             TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.clone(),
@@ -1069,6 +1074,7 @@ async fn append_production_assistant_message(
                 }),
             },
             TranscriptEvent::RequestCommitted {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 seq: next_seq + 2,

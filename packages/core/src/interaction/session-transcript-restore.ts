@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { readTranscriptEvents } from "./session-transcript.js";
+import { activeChainEvents, readTranscriptEvents, transcriptHead } from "./session-transcript.js";
 import {
   BookSessionSchema,
   type BookSession,
@@ -535,9 +535,13 @@ export interface CommittedDialogueScan {
 }
 
 export function restoreCommittedDialogueScan(
-  events: TranscriptEvent[],
+  rawEvents: TranscriptEvent[],
   sessionKind?: SessionKind,
 ): CommittedDialogueScan {
+  // R36 树化（636 号）：入口先做 active 链过滤——恢复只看 root→head 路径上
+  // 的事件，弃用分支整体剪除；纯 legacy 文件过滤退化为全量（零行为变更）。
+  // compaction 随链生效：分支各自的压缩边界互不污染（546 施工图 §3.4）。
+  const events = activeChainEvents(rawEvents);
   let activeCompaction: CompactionEvent | null = null;
   for (const event of events) {
     if (event.type === "compaction") activeCompaction = event;
@@ -951,7 +955,9 @@ export async function deriveBookSessionFromTranscript(
     updatedAt = Math.max(updatedAt, event.updatedAt);
   }
 
-  const messages = messageEventsToInteractionMessages(committedMessageEvents(events));
+  const messages = messageEventsToInteractionMessages(
+    committedMessageEvents(activeChainEvents(events)),
+  );
 
   if (title === null) {
     title = firstUserMessageTitle(messages);
@@ -966,6 +972,10 @@ export async function deriveBookSessionFromTranscript(
     messages,
     draftRounds: [],
     events: [],
+    // R36 树化（636 号）：head/branchCount 随 derive 透出（GET 详情与列表
+    // 共用）；legacy json 路径不经此函数，字段缺省。
+    head: transcriptHead(events),
+    branchCount: events.filter((event) => event.type === "branch_moved").length,
     createdAt,
     updatedAt,
   });

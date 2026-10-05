@@ -23,7 +23,24 @@ fn is_zero(n: &u64) -> bool {
     *n == 0
 }
 
+/// `Option<Option<T>>` 的 serde 语义修正：JSON `null` 默认塌缩为外层 `None`
+/// （与键缺省不可分）。本仓 parentSeq 三态必须可分：缺省=legacy 线性链、
+/// null=显式链根、数字=父 seq。键缺省走 `default`；在场时包一层 Some。
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
+}
+
 /// transcript 事件（tagged by `type`；字段名 camelCase 对齐 zod schema）。
+///
+/// R36 会话树化（636 号）：全部变体携带 `parentSeq`（链父 seq）。三态镜像
+/// TS `number | null | undefined`：`Option<Option<u64>>`——`None`=键缺省
+/// （legacy 线性语义），`Some(None)`=显式链根（null），`Some(Some(n))`=父
+/// seq。新写入由 [`append_transcript_events`] 统一戳记（恒带键，链根为
+/// null）；旧文件零改写解析。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TranscriptEvent {
@@ -33,6 +50,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "bookId")]
         book_id: Option<String>,
         #[serde(rename = "sessionKind", skip_serializing_if = "Option::is_none")]
@@ -52,6 +75,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "updatedAt")]
         updated_at: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +99,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "requestId")]
         request_id: String,
         #[serde(rename = "sessionKind", skip_serializing_if = "Option::is_none")]
@@ -82,6 +117,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "requestId")]
         request_id: String,
     },
@@ -91,6 +132,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "requestId")]
         request_id: String,
         error: String,
@@ -101,6 +148,12 @@ pub enum TranscriptEvent {
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "requestId")]
         request_id: String,
         uuid: String,
@@ -121,12 +174,20 @@ pub enum TranscriptEvent {
     /// R32a 会话压缩条目（553 号）：恢复窗口从 `firstKeptUuid` 起，其前的对话
     /// 以 `summary`（LLM 生成，迭代链式时已并入上一条摘要）替代。与 TS
     /// CompactionEventSchema 同形（camelCase 序列化对齐 zod schema）。
+    /// R36 起压缩沿 active 链解释（636 号）：恢复取 root→head 路径上最近
+    /// 一条 compaction，分支各自的压缩边界互不污染。
     Compaction {
         version: u32,
         #[serde(rename = "sessionId")]
         session_id: String,
         seq: u64,
         timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
         #[serde(rename = "requestId")]
         request_id: String,
         summary: String,
@@ -135,6 +196,26 @@ pub enum TranscriptEvent {
         #[serde(rename = "tokensBefore")]
         tokens_before: u64,
         trigger: String,
+    },
+    /// R36 会话树化（636 号）：分支指针移动（对齐 Pi branch 的 leaf 语义）。
+    /// `toSeq` = 新 head（null = resetLeaf）；`fromSeq` = 移动前 head。自身
+    /// 不入任何对话链——replay 只改写 head 不延伸链。
+    BranchMoved {
+        version: u32,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        seq: u64,
+        timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
+        #[serde(rename = "fromSeq")]
+        from_seq: Option<u64>,
+        #[serde(rename = "toSeq")]
+        to_seq: Option<u64>,
     },
 }
 
@@ -156,7 +237,8 @@ impl TranscriptEvent {
             | TranscriptEvent::RequestCommitted { seq, .. }
             | TranscriptEvent::RequestFailed { seq, .. }
             | TranscriptEvent::Message { seq, .. }
-            | TranscriptEvent::Compaction { seq, .. } => *seq,
+            | TranscriptEvent::Compaction { seq, .. }
+            | TranscriptEvent::BranchMoved { seq, .. } => *seq,
         }
     }
 
@@ -167,6 +249,98 @@ impl TranscriptEvent {
             _ => None,
         }
     }
+
+    /// parentSeq 三态读取：`None`=键缺省（legacy 线性），`Some(None)`=显式
+    /// 链根，`Some(Some(n))`=父 seq（R36 链回溯消费）。
+    pub fn parent_seq(&self) -> Option<Option<u64>> {
+        match self {
+            TranscriptEvent::SessionCreated { parent_seq, .. }
+            | TranscriptEvent::SessionMetadataUpdated { parent_seq, .. }
+            | TranscriptEvent::RequestStarted { parent_seq, .. }
+            | TranscriptEvent::RequestCommitted { parent_seq, .. }
+            | TranscriptEvent::RequestFailed { parent_seq, .. }
+            | TranscriptEvent::Message { parent_seq, .. }
+            | TranscriptEvent::Compaction { parent_seq, .. }
+            | TranscriptEvent::BranchMoved { parent_seq, .. } => *parent_seq,
+        }
+    }
+
+    fn set_parent_seq(&mut self, value: Option<Option<u64>>) {
+        match self {
+            TranscriptEvent::SessionCreated { parent_seq, .. }
+            | TranscriptEvent::SessionMetadataUpdated { parent_seq, .. }
+            | TranscriptEvent::RequestStarted { parent_seq, .. }
+            | TranscriptEvent::RequestCommitted { parent_seq, .. }
+            | TranscriptEvent::RequestFailed { parent_seq, .. }
+            | TranscriptEvent::Message { parent_seq, .. }
+            | TranscriptEvent::Compaction { parent_seq, .. }
+            | TranscriptEvent::BranchMoved { parent_seq, .. } => *parent_seq = value,
+        }
+    }
+
+    fn is_branch_moved(&self) -> bool {
+        matches!(self, TranscriptEvent::BranchMoved { .. })
+    }
+}
+
+/// R36 head replay（636 号）：按 seq 序重放 branch_moved 重建当前 head——
+/// `toSeq` 即新 head（null = resetLeaf 置空），其余事件延伸链（head = seq）。
+/// 与 Pi「leaf 不落盘」不同：head 从事件流可重建（O(n) 一次，装载路径已有
+/// 全量读取），服务端跨进程重启/双引擎切换后分支状态不丢。
+pub fn transcript_head<'a>(events: impl IntoIterator<Item = &'a TranscriptEvent>) -> Option<u64> {
+    let mut head = None;
+    for event in events {
+        head = match event {
+            TranscriptEvent::BranchMoved { to_seq, .. } => *to_seq,
+            other => Some(other.seq()),
+        };
+    }
+    head
+}
+
+/// R36 active 链过滤（636 号）：从 head 沿 parentSeq 反向回溯出 root→head
+/// 路径（升序返回，等于 seq 序的路径子集——父 seq 恒小于子 seq，append-only
+/// 不变量）。弃用分支上的事件被剪除；纯 legacy 文件回溯退化为全量（键缺省
+/// 语义 = 线性链，父即 seq 序前一事件）——旧行为零改写。链断（parentSeq
+/// 指向不存在事件）时保留已收集后缀，恢复安全网同 553 号 compaction 容错
+/// 先例。branch_moved 自身不入链（元事件，replay 时改写 head 而非延伸链）。
+pub fn active_chain_events(events: &[TranscriptEvent]) -> Vec<&TranscriptEvent> {
+    if events.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted: Vec<&TranscriptEvent> = events.iter().collect();
+    sorted.sort_by_key(|event| event.seq());
+    let Some(head) = transcript_head(sorted.iter().copied()) else {
+        return Vec::new();
+    };
+
+    let index_by_seq: HashMap<u64, usize> = sorted
+        .iter()
+        .enumerate()
+        .map(|(index, event)| (event.seq(), index))
+        .collect();
+
+    let mut chain: Vec<&TranscriptEvent> = Vec::new();
+    let mut cursor = index_by_seq.get(&head).copied();
+    while let Some(index) = cursor {
+        if chain.len() > sorted.len() {
+            break;
+        }
+        let event = sorted[index];
+        if event.is_branch_moved() {
+            break;
+        }
+        chain.push(event);
+        cursor = match event.parent_seq() {
+            // 键缺省（legacy 线性语义）：父 = seq 序前一事件
+            None => index.checked_sub(1).map(|prev| sorted[prev].seq()),
+            Some(None) => None,
+            Some(Some(parent)) => Some(parent),
+        }
+        .and_then(|seq| index_by_seq.get(&seq).copied());
+    }
+    chain.reverse();
+    chain
 }
 
 /// `.inkos/sessions`。
@@ -226,6 +400,10 @@ fn session_lock(project_root: &Path, session_id: &str) -> Arc<tokio::sync::Mutex
 
 /// 追加事件（per-session 串行：读现有 → 计算次 seq → 追加写）。
 /// `build_events` 收到 `(events, next_seq)`；返回实际写入的事件。
+///
+/// R36（636 号）：parentSeq 由本助手统一戳记——链语义单一事实源，写入方
+/// 零感知。branch_moved 改写 head 不延伸链；其余事件以戳记时 head 为父并
+/// 推进 head。per-session 串行锁保证戳记时 head 即追加序前驱。
 pub async fn append_transcript_events<F>(
     project_root: &Path,
     session_id: &str,
@@ -238,10 +416,23 @@ where
     let _guard = lock.lock().await;
     let events = read_transcript_events(project_root, session_id).await;
     let next_seq = events.iter().map(TranscriptEvent::seq).max().unwrap_or(0) + 1;
-    let built = build_events(&events, next_seq);
+    let mut built = build_events(&events, next_seq);
     if built.is_empty() {
         return Vec::new();
     }
+    let mut head = transcript_head(&events);
+    for event in built.iter_mut() {
+        event.set_parent_seq(Some(head));
+        head = if event.is_branch_moved() {
+            match event {
+                TranscriptEvent::BranchMoved { to_seq, .. } => *to_seq,
+                _ => unreachable!("is_branch_moved 已判定"),
+            }
+        } else {
+            Some(event.seq())
+        };
+    }
+
     if tokio::fs::create_dir_all(sessions_dir(project_root)).await.is_err() {
         return Vec::new();
     }

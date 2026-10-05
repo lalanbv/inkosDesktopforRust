@@ -477,6 +477,7 @@ pub async fn maybe_compact_session(
         let request_id = request_id.to_string();
         move |_events, next_seq| {
         vec![TranscriptEvent::Compaction {
+            parent_seq: None,
             version: 1,
             session_id: session_id_owned,
             request_id,

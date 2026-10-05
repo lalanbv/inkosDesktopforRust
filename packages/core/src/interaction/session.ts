@@ -139,6 +139,10 @@ export const BookSessionSchema = z.object({
   draftRounds: z.array(DraftRoundSchema).default([]),
   events: z.array(InteractionEventSchema).default([]),
   currentExecution: ExecutionStateSchema.optional(),
+  // R36 会话树化（636 号）：transcript derive 时由 head replay / branch_moved
+  // 计数填充（legacy json 路径无此二字段——可选缺省）。
+  head: z.number().int().nonnegative().nullable().optional(),
+  branchCount: z.number().int().nonnegative().optional(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
 });

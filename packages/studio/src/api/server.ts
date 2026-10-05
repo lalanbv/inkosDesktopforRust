@@ -28,8 +28,11 @@ import {
   renameBookSession,
   deleteBookSession,
   migrateBookSession,
+  branchBookSession,
+  BranchTargetNotFoundError,
   SessionAlreadyMigratedError,
   abortAgentSession,
+  isAgentSessionBusy,
   runAgentSession,
   resolveServicePreset,
   resolveServiceProviderFamily,
@@ -5701,6 +5704,39 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const aborted = abortAgentSession(root, sessionId) || taskAborted;
     broadcast("agent:aborted", { sessionId, aborted, scope: chatOnly ? "chat" : "all" });
     return c.json({ ok: true, aborted });
+  });
+
+  // R36 会话树化（636 号）：分支 = 追加 branch_moved 事件 + head 指针移动。
+  // toSeq 缺省/null = resetLeaf（head 置空，后续写入开新链根）。
+  app.post("/api/v1/sessions/:sessionId/branch", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const body = await c.req.json<{ toSeq?: unknown }>().catch(() => ({}) as { toSeq?: unknown });
+    const rawToSeq = (body as { toSeq?: unknown }).toSeq;
+    let toSeq: number | null;
+    if (rawToSeq === undefined || rawToSeq === null) {
+      toSeq = null;
+    } else if (typeof rawToSeq === "number" && Number.isInteger(rawToSeq) && rawToSeq >= 0) {
+      toSeq = rawToSeq;
+    } else {
+      throw new ApiError(400, "INVALID_BRANCH_TARGET", "toSeq must be a non-negative integer or null");
+    }
+    // 忙判定：轮进行中拒绝分支——保证单个请求的事件整体落在同一条链上
+    //（聊天轮与生产任务走同一互斥队列/控制器注册表）。
+    const taskController = await findRunningTaskController(sessionId);
+    if (taskController || isAgentSessionBusy(root, sessionId)) {
+      throw new ApiError(409, "SESSION_BUSY", "Session has an in-flight request; abort it before branching");
+    }
+    let result: Awaited<ReturnType<typeof branchBookSession>>;
+    try {
+      result = await branchBookSession(root, sessionId, toSeq);
+    } catch (error) {
+      if (error instanceof BranchTargetNotFoundError) {
+        throw new ApiError(400, "INVALID_BRANCH_TARGET", error.message);
+      }
+      throw error;
+    }
+    if (!result) return c.json({ error: "Session not found" }, 404);
+    return c.json({ ok: true, head: result.head, branchCount: result.branchCount });
   });
 
   app.post("/api/v1/agent", async (c) => {

@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 
 use crate::interaction::session::BookSession;
 use crate::interaction::session_transcript::{
-    append_transcript_events, legacy_book_session_path, read_transcript_events, TranscriptEvent,
+    active_chain_events, append_transcript_events, legacy_book_session_path,
+    read_transcript_events, transcript_head, TranscriptEvent,
 };
 
 fn is_object(value: &Value) -> bool {
@@ -631,7 +632,12 @@ pub async fn derive_book_session_from_transcript(
         }
     }
 
-    let committed = committed_message_events(&events, None);
+    // R36 树化（636 号）：对话消息取 active 路径（元数据保持全局扫描）。
+    let chain: Vec<TranscriptEvent> = active_chain_events(&events)
+        .into_iter()
+        .cloned()
+        .collect();
+    let committed = committed_message_events(&chain, None);
     let messages = message_events_to_interaction_messages(&committed);
     if title.is_none() {
         title = first_user_message_title(&messages);
@@ -644,6 +650,13 @@ pub async fn derive_book_session_from_transcript(
         play_mode,
         title,
         messages,
+        // head/branchCount 随 derive 透出（GET 详情与列表共用，恒带键对齐
+        // TS）；branch_moved 不入链，计数按全事件流。
+        head: transcript_head(events.iter()),
+        branch_count: events
+            .iter()
+            .filter(|event| matches!(event, TranscriptEvent::BranchMoved { .. }))
+            .count() as u64,
         created_at,
         updated_at,
     })
@@ -657,7 +670,8 @@ fn other_timestamp(event: &TranscriptEvent) -> u64 {
         | TranscriptEvent::RequestCommitted { timestamp, .. }
         | TranscriptEvent::RequestFailed { timestamp, .. }
         | TranscriptEvent::Message { timestamp, .. }
-        | TranscriptEvent::Compaction { timestamp, .. } => *timestamp,
+        | TranscriptEvent::Compaction { timestamp, .. }
+        | TranscriptEvent::BranchMoved { timestamp, .. } => *timestamp,
     }
 }
 
@@ -712,6 +726,7 @@ pub async fn migrate_legacy_book_session_to_transcript(
                 })
             };
             transcript_events.push(TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session.session_id.clone(),
                 request_id: request_id.clone(),
@@ -731,6 +746,7 @@ pub async fn migrate_legacy_book_session_to_transcript(
         }
         let mut out = vec![
             TranscriptEvent::SessionCreated {
+                parent_seq: None,
                 version: 1,
                 session_id: session.session_id.clone(),
                 seq: next_seq,
@@ -743,6 +759,7 @@ pub async fn migrate_legacy_book_session_to_transcript(
                 updated_at: session.updated_at,
             },
             TranscriptEvent::RequestStarted {
+                parent_seq: None,
                 version: 1,
                 session_id: session.session_id.clone(),
                 seq: next_seq + 1,
@@ -754,6 +771,7 @@ pub async fn migrate_legacy_book_session_to_transcript(
         ];
         out.extend(transcript_events);
         out.push(TranscriptEvent::RequestCommitted {
+            parent_seq: None,
             version: 1,
             session_id: session.session_id.clone(),
             seq,
@@ -1006,9 +1024,17 @@ pub struct CommittedDialogueScan {
 }
 
 pub fn restore_committed_dialogue_scan(
-    events: &[TranscriptEvent],
+    raw_events: &[TranscriptEvent],
     session_kind: Option<&str>,
 ) -> CommittedDialogueScan {
+    // R36 树化（636 号）：入口先做 active 链过滤——恢复只看 root→head 路径上
+    // 的事件，弃用分支整体剪除；纯 legacy 文件过滤退化为全量（零行为变更）。
+    // compaction 随链生效：分支各自的压缩边界互不污染（546 施工图 §3.4）。
+    let chain: Vec<TranscriptEvent> = active_chain_events(raw_events)
+        .into_iter()
+        .cloned()
+        .collect();
+    let events: &[TranscriptEvent] = &chain;
     let mut active_compaction: Option<&TranscriptEvent> = None;
     for event in events {
         if matches!(event, TranscriptEvent::Compaction { .. }) {
@@ -1147,6 +1173,7 @@ mod restore_agent_tests {
 
     fn msg_event(seq: u64, request_id: &str, role: &str, message: Value) -> TranscriptEvent {
         TranscriptEvent::Message {
+            parent_seq: None,
             version: 1,
             session_id: "s".into(),
             request_id: request_id.into(),
@@ -1165,6 +1192,7 @@ mod restore_agent_tests {
 
     fn started(seq: u64, request_id: &str, kind: Option<&str>) -> TranscriptEvent {
         TranscriptEvent::RequestStarted {
+            parent_seq: None,
             version: 1,
             session_id: "s".into(),
             seq,
@@ -1177,6 +1205,7 @@ mod restore_agent_tests {
 
     fn committed(seq: u64, request_id: &str) -> TranscriptEvent {
         TranscriptEvent::RequestCommitted {
+            parent_seq: None,
             version: 1,
             session_id: "s".into(),
             seq,
@@ -1271,6 +1300,7 @@ mod restore_agent_tests {
 
     fn compaction_event(seq: u64, summary: &str, first_kept: Option<&str>) -> TranscriptEvent {
         TranscriptEvent::Compaction {
+            parent_seq: None,
             version: 1,
             session_id: "s".into(),
             seq,

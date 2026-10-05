@@ -20,9 +20,9 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use crate::interaction::book_session_store::{
-    create_and_persist_book_session, delete_book_session, list_book_sessions,
-    load_book_session, load_project_session, rename_book_session,
-    resolve_session_active_book,
+    branch_book_session, create_and_persist_book_session, delete_book_session,
+    list_book_sessions, load_book_session, load_project_session, rename_book_session,
+    resolve_session_active_book, BranchBookSessionError,
 };
 use crate::interaction::session::{is_safe_book_id, PlayMode, SessionKind};
 use crate::server::books_routes::BooksRuntime;
@@ -253,6 +253,68 @@ pub async fn put_session_play_mode(
     )
     .await;
     (StatusCode::OK, Json(json!({ "session": session.to_response_json() }))).into_response()
+}
+
+// ── POST /api/v1/sessions/:sessionId/branch ────────────────────
+
+/// R36 会话树化（636 号）：分支 = 追加 branch_moved 事件 + head 指针移动。
+/// toSeq 缺省/null = resetLeaf（head 置空，后续写入开新链根）。忙判定对齐
+/// TS：轮进行中拒绝分支——保证单个请求的事件整体落在同一条链上。
+pub async fn branch_session(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(session_id): AxumPath<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    let to_seq = match payload.get("toSeq") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(seq) => Some(seq),
+            None => {
+                return api_error(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_BRANCH_TARGET",
+                    "toSeq must be a non-negative integer or null",
+                )
+                .into_response()
+            }
+        },
+    };
+    let task_running =
+        crate::server::agent_production::find_running_task_controller(root, &session_id)
+            .await
+            .is_some();
+    let chat_running = crate::server::agent_route::running_agent_sessions()
+        .lock()
+        .unwrap()
+        .contains_key(&session_id);
+    if task_running || chat_running {
+        return api_error(
+            StatusCode::CONFLICT,
+            "SESSION_BUSY",
+            "Session has an in-flight request; abort it before branching",
+        )
+        .into_response();
+    }
+    match branch_book_session(root, &session_id, to_seq).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "head": result.head,
+                "branchCount": result.branch_count,
+            })),
+        )
+            .into_response(),
+        Err(BranchBookSessionError::SessionMissing) => not_found().into_response(),
+        Err(BranchBookSessionError::InvalidTarget(target)) => api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_BRANCH_TARGET",
+            format!("Branch target seq {target} not found in transcript"),
+        )
+        .into_response(),
+    }
 }
 
 // ── PUT /api/v1/sessions/:sessionId ────────────────────────────

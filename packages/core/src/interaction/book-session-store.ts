@@ -6,6 +6,7 @@ import {
   legacyBookSessionPath,
   readTranscriptEvents,
   sessionsDir,
+  transcriptHead,
   transcriptPath,
 } from "./session-transcript.js";
 import {
@@ -130,6 +131,8 @@ export interface BookSessionSummary {
   readonly playMode?: PlayMode;
   readonly title: string | null;
   readonly messageCount: number;
+  readonly head: number | null;
+  readonly branchCount: number;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -168,6 +171,8 @@ export async function listBookSessions(
           playMode: session.playMode,
           title: session.title,
           messageCount: session.messages.length,
+          head: session.head ?? null,
+          branchCount: session.branchCount ?? 0,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
         };
@@ -202,6 +207,60 @@ export async function deleteBookSession(
     unlink(transcriptPath(projectRoot, sessionId)).catch(() => undefined),
     unlink(legacyBookSessionPath(projectRoot, sessionId)).catch(() => undefined),
   ]);
+}
+
+/** R36 branch 结果（636 号）：移动后的 head 与累计分支次数。 */
+export interface BranchBookSessionResult {
+  readonly head: number | null;
+  readonly branchCount: number;
+}
+
+/**
+ * R36 会话树化（636 号）：分支 = 追加一条 branch_moved 事件（append-only 不
+ * 破坏）+ head 指针移动（replay 重建）。`toSeq` = 新 head 的事件 seq；null =
+ * resetLeaf（head 置空，后续写入开新链根）。弃用路径零删改、可再 branch 回
+ * 去。调用方负责忙判定（轮进行中不 branch，保证单请求事件整体在同一链上）。
+ * 会话不存在（无 transcript）返回 null。
+ */
+export async function branchBookSession(
+  projectRoot: string,
+  sessionId: string,
+  toSeq: number | null,
+): Promise<BranchBookSessionResult | null> {
+  let appended = 0;
+  await appendTranscriptEvents(projectRoot, sessionId, ({ events, nextSeq }) => {
+    if (events.length === 0) return [];
+    const branchTargets = new Set(events.map((event) => event.seq));
+    if (toSeq !== null && !branchTargets.has(toSeq)) {
+      throw new BranchTargetNotFoundError(toSeq);
+    }
+    appended = 1;
+    const fromSeq = transcriptHead(events);
+    return [{
+      type: "branch_moved",
+      version: 1,
+      sessionId,
+      seq: nextSeq,
+      timestamp: Date.now(),
+      fromSeq,
+      toSeq,
+    }];
+  });
+  if (!appended) return null;
+
+  const events = await readTranscriptEvents(projectRoot, sessionId);
+  return {
+    head: transcriptHead(events),
+    branchCount: events.filter((event) => event.type === "branch_moved").length,
+  };
+}
+
+/** branch 目标 seq 不在事件流中（服务端映射 400 INVALID_BRANCH_TARGET）。 */
+export class BranchTargetNotFoundError extends Error {
+  constructor(readonly toSeq: number) {
+    super(`Branch target seq ${toSeq} not found in transcript`);
+    this.name = "BranchTargetNotFoundError";
+  }
 }
 
 export async function migrateBookSession(

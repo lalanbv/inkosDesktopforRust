@@ -17,8 +17,8 @@ use crate::interaction::session_restore::{
     read_legacy_book_session,
 };
 use crate::interaction::session_transcript::{
-    append_transcript_events, legacy_book_session_path, read_transcript_events,
-    sessions_dir, transcript_path, TranscriptEvent,
+    append_transcript_events, legacy_book_session_path, read_transcript_events, sessions_dir,
+    transcript_head, transcript_path, TranscriptEvent,
 };
 
 /// `loadBookSession`：transcript derive → legacy 读取 + 就地迁移。
@@ -42,6 +42,7 @@ async fn append_session_created_event(project_root: &Path, session: &BookSession
             return Vec::new();
         }
         vec![TranscriptEvent::SessionCreated {
+            parent_seq: None,
             version: 1,
             session_id: session.session_id.clone(),
             seq: next_seq,
@@ -64,6 +65,7 @@ async fn append_session_metadata_updated_event(
 ) {
     append_transcript_events(project_root, session_id, |_events, next_seq| {
         vec![TranscriptEvent::SessionMetadataUpdated {
+            parent_seq: None,
             version: 1,
             session_id: session_id.to_string(),
             seq: next_seq,
@@ -146,6 +148,75 @@ pub async fn delete_book_session(project_root: &Path, session_id: &str) {
     let _ = tokio::fs::remove_file(legacy_book_session_path(project_root, session_id)).await;
 }
 
+/// R36 branch 结果（636 号）：移动后的 head 与累计分支次数。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct BranchBookSessionResult {
+    #[serde(rename = "head")]
+    pub head: Option<u64>,
+    #[serde(rename = "branchCount")]
+    pub branch_count: u64,
+}
+
+/// branch 失败态（服务端映射：SessionMissing → 404；InvalidTarget → 400）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum BranchBookSessionError {
+    /// 会话不存在（无 transcript）。
+    SessionMissing,
+    /// 目标 seq 不在事件流中。
+    InvalidTarget(u64),
+}
+
+/// R36 会话树化（636 号）：分支 = 追加一条 branch_moved 事件（append-only 不
+/// 破坏）+ head 指针移动（replay 重建）。`to_seq` = 新 head 的事件 seq；None =
+/// resetLeaf（head 置空，后续写入开新链根）。弃用路径零删改、可再 branch 回
+/// 去。调用方负责忙判定（轮进行中不 branch，保证单请求事件整体在同一链上）。
+pub async fn branch_book_session(
+    project_root: &Path,
+    session_id: &str,
+    to_seq: Option<u64>,
+) -> Result<BranchBookSessionResult, BranchBookSessionError> {
+    let mut missing = false;
+    let mut invalid_target: Option<u64> = None;
+    append_transcript_events(project_root, session_id, |events, next_seq| {
+        if events.is_empty() {
+            missing = true;
+            return Vec::new();
+        }
+        if let Some(target) = to_seq {
+            if !events.iter().any(|event| event.seq() == target) {
+                invalid_target = Some(target);
+                return Vec::new();
+            }
+        }
+        let from_seq = transcript_head(events.iter());
+        vec![TranscriptEvent::BranchMoved {
+            version: 1,
+            session_id: session_id.to_string(),
+            seq: next_seq,
+            timestamp: utc_now_ms(),
+            parent_seq: None,
+            from_seq,
+            to_seq,
+        }]
+    })
+    .await;
+    if let Some(target) = invalid_target {
+        return Err(BranchBookSessionError::InvalidTarget(target));
+    }
+    if missing {
+        return Err(BranchBookSessionError::SessionMissing);
+    }
+
+    let events = read_transcript_events(project_root, session_id).await;
+    Ok(BranchBookSessionResult {
+        head: transcript_head(events.iter()),
+        branch_count: events
+            .iter()
+            .filter(|event| matches!(event, TranscriptEvent::BranchMoved { .. }))
+            .count() as u64,
+    })
+}
+
 /// 会话摘要。对齐 TS `BookSessionSummary`。
 #[derive(Debug, Clone)]
 pub struct BookSessionSummary {
@@ -155,6 +226,9 @@ pub struct BookSessionSummary {
     pub play_mode: Option<PlayMode>,
     pub title: Option<String>,
     pub message_count: usize,
+    /// R36 树化（636 号）：active 链 head / 分支计数（derive 缺省 null/0）。
+    pub head: Option<u64>,
+    pub branch_count: u64,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -168,6 +242,8 @@ impl BookSessionSummary {
             "sessionKind": self.session_kind,
             "title": self.title,
             "messageCount": self.message_count,
+            "head": self.head,
+            "branchCount": self.branch_count,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         });
@@ -221,6 +297,8 @@ pub async fn list_book_sessions(
             play_mode: session.play_mode,
             title: session.title.clone(),
             message_count: session.messages.len(),
+            head: session.head,
+            branch_count: session.branch_count,
             created_at: session.created_at,
             updated_at: session.updated_at,
         });
@@ -371,4 +449,326 @@ pub async fn resolve_session_active_book(
         return book_ids.into_iter().next();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    //! R36 会话树化（636 号）：分支/head replay/恢复读面链式回溯。
+    //! 与 TS `session-branch.test.ts` 四态镜像（线性旧文件/单分支/多分支/
+    //! 重启 replay）+ 压缩边界互不污染 + JSON 形态。
+
+    use super::*;
+    use crate::interaction::session_restore::restore_agent_messages_from_transcript_sync;
+    use crate::interaction::session_transcript::active_chain_events;
+    use std::path::PathBuf;
+
+    fn root_of(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path().to_path_buf()
+    }
+
+    /// 一轮已提交对话：request_started + user + assistant + request_committed。
+    /// parent_seq 构造恒 None——由 append 助手统一戳记（生产同路径）。
+    async fn append_committed_round(
+        project_root: &Path,
+        session_id: &str,
+        request_id: &str,
+        user_text: &str,
+        assistant_text: &str,
+    ) -> u64 {
+        let now = utc_now_ms();
+        let user_uuid = format!("u-{request_id}-user");
+        let appended = append_transcript_events(project_root, session_id, |_events, next_seq| {
+            let mut seq = next_seq;
+            vec![
+                TranscriptEvent::RequestStarted {
+                    parent_seq: None,
+                    version: 1,
+                    session_id: session_id.to_string(),
+                    seq: { seq += 1; seq - 1 },
+                    timestamp: now,
+                    request_id: request_id.to_string(),
+                    session_kind: None,
+                    input: user_text.to_string(),
+                },
+                TranscriptEvent::Message {
+                    parent_seq: None,
+                    version: 1,
+                    session_id: session_id.to_string(),
+                    seq: { seq += 1; seq - 1 },
+                    timestamp: now,
+                    request_id: request_id.to_string(),
+                    uuid: user_uuid.clone(),
+                    parent_uuid: None,
+                    role: "user".into(),
+                    pi_turn_index: None,
+                    tool_call_id: None,
+                    source_tool_assistant_uuid: None,
+                    legacy_display: None,
+                    message: serde_json::json!({
+                        "role": "user", "content": user_text, "timestamp": now
+                    }),
+                },
+                TranscriptEvent::Message {
+                    parent_seq: None,
+                    version: 1,
+                    session_id: session_id.to_string(),
+                    seq: { seq += 1; seq - 1 },
+                    timestamp: now,
+                    request_id: request_id.to_string(),
+                    uuid: format!("u-{request_id}-assistant"),
+                    parent_uuid: Some(user_uuid.clone()),
+                    role: "assistant".into(),
+                    pi_turn_index: None,
+                    tool_call_id: None,
+                    source_tool_assistant_uuid: None,
+                    legacy_display: None,
+                    message: serde_json::json!({
+                        "role": "assistant",
+                        "content": [{ "type": "text", "text": assistant_text }],
+                        "timestamp": now
+                    }),
+                },
+                TranscriptEvent::RequestCommitted {
+                    parent_seq: None,
+                    version: 1,
+                    session_id: session_id.to_string(),
+                    seq,
+                    timestamp: now,
+                    request_id: request_id.to_string(),
+                },
+            ]
+        })
+        .await;
+        assert!(!appended.is_empty());
+        appended.last().unwrap().seq()
+    }
+
+    fn dialogue_texts(messages: &[crate::llm::provider::LLMMessage]) -> Vec<String> {
+        messages
+            .iter()
+            .filter(|message| message.role != crate::llm::provider::LLMRole::System)
+            .map(|message| message.content.clone())
+            .collect()
+    }
+
+    async fn restored_texts(project_root: &Path, session_id: &str) -> Vec<String> {
+        let events = read_transcript_events(project_root, session_id).await;
+        dialogue_texts(&restore_agent_messages_from_transcript_sync(&events, None))
+    }
+
+    #[tokio::test]
+    async fn append_helper_stamps_parent_seq_linear_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        let events = read_transcript_events(&root, "s1").await;
+        let seqs: Vec<u64> = events.iter().map(|event| event.seq()).collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4]);
+        assert_eq!(events[0].parent_seq(), Some(None));
+        assert_eq!(events[1].parent_seq(), Some(Some(1)));
+        assert_eq!(events[2].parent_seq(), Some(Some(2)));
+        assert_eq!(events[3].parent_seq(), Some(Some(3)));
+        assert_eq!(transcript_head(events.iter()), Some(4));
+        assert_eq!(active_chain_events(&events).len(), 4);
+    }
+
+    #[tokio::test]
+    async fn legacy_file_without_parent_seq_parses_and_restores_linear() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let path = transcript_path(&root, "s1");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        // 直接写 raw JSONL（绕过 append 助手）——模拟 R36 之前的旧文件形态。
+        let legacy = [
+            r#"{"type":"request_started","version":1,"sessionId":"s1","requestId":"r1","seq":1,"timestamp":1,"input":"旧一问"}"#,
+            r#"{"type":"message","version":1,"sessionId":"s1","requestId":"r1","uuid":"lu1","parentUuid":null,"seq":2,"role":"user","timestamp":1,"message":{"role":"user","content":"旧一问","timestamp":1}}"#,
+            r#"{"type":"message","version":1,"sessionId":"s1","requestId":"r1","uuid":"lu2","parentUuid":"lu1","seq":3,"role":"assistant","timestamp":1,"message":{"role":"assistant","content":[{"type":"text","text":"旧一答"}],"timestamp":1}}"#,
+            r#"{"type":"request_committed","version":1,"sessionId":"s1","requestId":"r1","seq":4,"timestamp":1}"#,
+        ]
+        .join("\n");
+        tokio::fs::write(&path, format!("{legacy}\n")).await.unwrap();
+
+        let events = read_transcript_events(&root, "s1").await;
+        assert_eq!(events.len(), 4);
+        assert!(events.iter().all(|event| event.parent_seq().is_none()));
+        assert_eq!(restored_texts(&root, "s1").await, vec!["旧一问", "旧一答"]);
+
+        // 旧文件上继续追加（新写入恒带值）：链从 legacy 前缀自然延展。
+        append_committed_round(&root, "s1", "r2", "新二问", "新二答").await;
+        let after = read_transcript_events(&root, "s1").await;
+        assert_eq!(after[4].parent_seq(), Some(Some(4)));
+        assert_eq!(
+            restored_texts(&root, "s1").await,
+            vec!["旧一问", "旧一答", "新二问", "新二答"]
+        );
+    }
+
+    #[tokio::test]
+    async fn single_branch_prunes_abandoned_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        append_committed_round(&root, "s1", "r2", "第二问（弃）", "第二答（弃）").await;
+
+        let result = branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        assert_eq!(result.head, Some(commit1_seq));
+        assert_eq!(result.branch_count, 1);
+
+        append_committed_round(&root, "s1", "r2b", "第二问", "第二答").await;
+        let after = read_transcript_events(&root, "s1").await;
+        let chain = active_chain_events(&after);
+        assert!(chain
+            .iter()
+            .all(|event| !matches!(event, TranscriptEvent::BranchMoved { .. })));
+        let texts = restored_texts(&root, "s1").await;
+        assert_eq!(texts, vec!["第一问", "第一答", "第二问", "第二答"]);
+        assert!(!texts.join("").contains("弃"));
+        // 重启 replay：head 从落盘事件流重建
+        assert_eq!(transcript_head(after.iter()), after.last().unwrap().seq().into());
+    }
+
+    #[tokio::test]
+    async fn multi_branch_rewrites_from_branch_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+
+        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        let r1a_commit =
+            append_committed_round(&root, "s1", "r1a", "（占位）", "（占位答）").await;
+        // 事件流里 r1a 的 started seq = r1a_commit - 3
+        let r1a_started = r1a_commit - 3;
+        let second = branch_book_session(&root, "s1", Some(r1a_started)).await.unwrap();
+        assert_eq!(second.head, Some(r1a_started));
+        assert_eq!(second.branch_count, 2);
+        append_committed_round(&root, "s1", "r1b", "改写一问", "改写一答").await;
+
+        assert_eq!(
+            restored_texts(&root, "s1").await,
+            vec!["第一问", "第一答", "改写一问", "改写一答"]
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_leaf_starts_new_root_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        append_committed_round(&root, "s1", "r1", "旧问", "旧答").await;
+        let result = branch_book_session(&root, "s1", None).await.unwrap();
+        assert_eq!(result.head, None);
+        assert_eq!(result.branch_count, 1);
+        assert!(restored_texts(&root, "s1").await.is_empty());
+
+        append_committed_round(&root, "s1", "r2", "新链问", "新链答").await;
+        let events = read_transcript_events(&root, "s1").await;
+        let started2 = events
+            .iter()
+            .find(|event| matches!(event, TranscriptEvent::RequestStarted { request_id, .. } if request_id == "r2"))
+            .unwrap();
+        assert_eq!(started2.parent_seq(), Some(None));
+        assert_eq!(restored_texts(&root, "s1").await, vec!["新链问", "新链答"]);
+    }
+
+    #[tokio::test]
+    async fn invalid_target_and_missing_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        assert_eq!(
+            branch_book_session(&root, "ghost", Some(1)).await,
+            Err(BranchBookSessionError::SessionMissing)
+        );
+        append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        assert_eq!(
+            branch_book_session(&root, "s1", Some(99)).await,
+            Err(BranchBookSessionError::InvalidTarget(99))
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_on_abandoned_path_does_not_pollute_new_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        append_committed_round(&root, "s1", "r2", "第二问", "第二答").await;
+        // 主路径上压缩：窗口从 r2 的 user 消息起
+        append_transcript_events(&root, "s1", |_events, next_seq| {
+            vec![TranscriptEvent::Compaction {
+                parent_seq: None,
+                version: 1,
+                session_id: "s1".to_string(),
+                seq: next_seq,
+                timestamp: utc_now_ms(),
+                request_id: "compact-1".to_string(),
+                summary: "此前对话摘要".to_string(),
+                first_kept_uuid: Some("u-r2-user".to_string()),
+                tokens_before: 100,
+                trigger: "threshold".to_string(),
+            }]
+        })
+        .await;
+        // 压缩生效：恢复窗口只有 r2
+        assert_eq!(restored_texts(&root, "s1").await, vec!["第二问", "第二答"]);
+
+        // 分支回 r1 之后：compaction 在弃用路径上，新分支恢复全量
+        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        append_committed_round(&root, "s1", "r1b", "分支新问", "分支新答").await;
+        assert_eq!(
+            restored_texts(&root, "s1").await,
+            vec!["第一问", "第一答", "分支新问", "分支新答"]
+        );
+    }
+
+    #[tokio::test]
+    async fn derive_exposes_head_and_branch_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        append_committed_round(&root, "s1", "r2", "第二问", "第二答").await;
+        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        append_committed_round(&root, "s1", "r2b", "第二问", "第二答").await;
+
+        let session = load_book_session(&root, "s1").await.unwrap();
+        assert_eq!(session.branch_count, 1);
+        let last_seq = read_transcript_events(&root, "s1").await.last().unwrap().seq();
+        assert_eq!(session.head, Some(last_seq));
+        // active 路径：r1 + r2b（弃用 r2 不在 derive 消息里）
+        let user_texts: Vec<String> = session
+            .messages
+            .iter()
+            .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+            .filter_map(|message| message.get("content").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(user_texts, vec!["第一问", "第二问"]);
+
+        // 列表摘要透出同字段
+        let summaries = list_book_sessions(&root, None).await;
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].branch_count, 1);
+        assert_eq!(summaries[0].head, Some(last_seq));
+        assert_eq!(summaries[0].to_json()["branchCount"], serde_json::json!(1));
+    }
+
+    #[tokio::test]
+    async fn branch_moved_line_serializes_camel_case_with_parent_seq() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
+        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+
+        let raw = tokio::fs::read_to_string(transcript_path(&root, "s1")).await.unwrap();
+        let branch_line = raw
+            .lines()
+            .find(|line| line.contains("branch_moved"))
+            .expect("branch_moved 行必须在场");
+        let parsed: Value = serde_json::from_str(branch_line).unwrap();
+        assert_eq!(parsed["type"], "branch_moved");
+        assert_eq!(parsed["fromSeq"], serde_json::json!(commit1_seq));
+        assert_eq!(parsed["toSeq"], serde_json::json!(commit1_seq));
+        assert!(parsed.get("parentSeq").is_some(), "新写入恒带 parentSeq 键");
+        // 全部新写入行恒带 parentSeq
+        for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+            assert!(line.contains("\"parentSeq\""), "行缺 parentSeq：{line}");
+        }
+    }
 }

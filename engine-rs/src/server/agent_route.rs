@@ -231,6 +231,7 @@ async fn begin_chat_turn(
     let appended = append_transcript_events(project_root, session_id, |_events, next_seq| {
         vec![
             TranscriptEvent::RequestStarted {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 seq: next_seq,
@@ -240,6 +241,7 @@ async fn begin_chat_turn(
                 input: instruction.to_string(),
             },
             TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.clone(),
@@ -322,6 +324,7 @@ async fn commit_chat_turn(
                 "timestamp": execution.started_at,
             });
             out.push(TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.to_string(),
@@ -357,6 +360,7 @@ async fn commit_chat_turn(
                     .insert("details".into(), details.clone());
             }
             out.push(TranscriptEvent::Message {
+                parent_seq: None,
                 version: 1,
                 session_id: session_id.to_string(),
                 request_id: request_id.to_string(),
@@ -375,6 +379,7 @@ async fn commit_chat_turn(
             parent_uuid = None;
         }
         out.push(TranscriptEvent::Message {
+            parent_seq: None,
             version: 1,
             session_id: session_id.to_string(),
             request_id: request_id.to_string(),
@@ -401,6 +406,7 @@ async fn commit_chat_turn(
         });
         seq += 1;
         out.push(TranscriptEvent::RequestCommitted {
+            parent_seq: None,
             version: 1,
             session_id: session_id.to_string(),
             seq,
@@ -422,6 +428,7 @@ async fn fail_chat_turn(project_root: &std::path::Path, session_id: &str, reques
     let now = utc_now_ms();
     append_transcript_events(project_root, session_id, |_events, next_seq| {
         vec![TranscriptEvent::RequestFailed {
+            parent_seq: None,
             version: 1,
             session_id: session_id.to_string(),
             seq: next_seq,

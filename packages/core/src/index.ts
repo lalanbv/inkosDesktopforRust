@@ -341,6 +341,8 @@ export {
   deleteBookSession,
   migrateBookSession,
   createAndPersistBookSession,
+  branchBookSession,
+  BranchTargetNotFoundError,
   SessionAlreadyMigratedError,
 } from "./interaction/book-session-store.js";
 export {
@@ -349,6 +351,8 @@ export {
   sessionsDir,
   readTranscriptEvents,
   nextTranscriptSeq,
+  transcriptHead,
+  activeChainEvents,
   transcriptPath,
   legacyBookSessionPath,
 } from "./interaction/session-transcript.js";
@@ -359,6 +363,8 @@ export {
   restoreAgentMessagesFromTranscript,
 } from "./interaction/session-transcript-restore.js";
 export {
+  BranchMovedEventSchema,
+  CompactionEventSchema,
   MessageEventSchema,
   RequestCommittedEventSchema,
   RequestFailedEventSchema,
@@ -368,6 +374,7 @@ export {
   TranscriptEventSchema,
 } from "./interaction/session-transcript-schema.js";
 export type {
+  BranchMovedEvent,
   TranscriptEvent,
   MessageEvent,
   RequestCommittedEvent,

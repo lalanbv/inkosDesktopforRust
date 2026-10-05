@@ -7231,7 +7231,13 @@ mod agent68_e2e {
         std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
         let mut payload = String::new();
         for event in events {
-            let line = serde_json::to_string(&event).unwrap();
+            // R36（636 号）：本助手模拟 legacy 文件（无 parentSeq 键）——
+            // Option<Option> 序列化 None 亦产出 null（显式链根语义），须剥除。
+            let mut value = serde_json::to_value(&event).unwrap();
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("parentSeq");
+            }
+            let line = serde_json::to_string(&value).unwrap();
             writeln!(payload, "{line}").unwrap();
         }
         std::fs::write(transcript_path(root, session_id), payload).unwrap();
@@ -7239,6 +7245,7 @@ mod agent68_e2e {
 
     fn msg_event(seq: u64, request_id: &str, role: &str, session_id: &str, message: serde_json::Value) -> TranscriptEvent {
         TranscriptEvent::Message {
+            parent_seq: None,
             version: 1,
             session_id: session_id.into(),
             request_id: request_id.into(),
@@ -7390,6 +7397,7 @@ mod agent68_e2e {
             SID_REPLAY,
             vec![
                 TranscriptEvent::RequestStarted {
+                    parent_seq: None,
                     version: 1,
                     session_id: SID_REPLAY.into(),
                     seq: 1,
@@ -7412,6 +7420,7 @@ mod agent68_e2e {
                     "content": [{ "type": "text", "text": "主角名叫林动。" }],
                 })),
                 TranscriptEvent::RequestCommitted {
+                    parent_seq: None,
                     version: 1,
                     session_id: SID_REPLAY.into(),
                     seq: 5,
@@ -7419,6 +7428,7 @@ mod agent68_e2e {
                     request_id: "r1".into(),
                 },
                 TranscriptEvent::RequestStarted {
+                    parent_seq: None,
                     version: 1,
                     session_id: SID_REPLAY.into(),
                     seq: 6,
@@ -7435,6 +7445,7 @@ mod agent68_e2e {
                     "content": [{ "type": "text", "text": "主角名叫林动。" }],
                 })),
                 TranscriptEvent::RequestCommitted {
+                    parent_seq: None,
                     version: 1,
                     session_id: SID_REPLAY.into(),
                     seq: 9,

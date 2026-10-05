@@ -14,7 +14,7 @@
 // 降级为跳过并告警，不算失败。
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, openSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,6 +188,100 @@ async function runEngineLeg(engine) {
   // 自守。`..%2Fdecoy` 解码后 `../decoy` 直读项目根 decoy.md = 任意 .md 读面）。
   const genreTraversal = await api("/api/v1/genres/..%2fdecoy");
   check(`[${engine}] genre 穿越探针 400（防任意 .md 读）`, genreTraversal.status === 400);
+
+  // 636 号：会话树化 branch 探针——建会话 → 驱动一轮聊天 → branch 回提交点
+  // → 驱动第二轮 → 落盘事件流链完整（新写入恒带 parentSeq）+ derive 只见
+  // active 路径。忙判定路径（轮进行中 409）依赖竞态窗口，不入冒烟（双端
+  // 实现同构，路由单测/代码审读覆盖）。
+  {
+    const created = await api("/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionKind: "chat" }),
+    });
+    const sessionId = created.body?.session?.sessionId;
+    check(`[${engine}] branch 探针建会话`, created.status === 200 && !!sessionId);
+    if (sessionId) {
+      const drive = await api("/api/v1/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: "branch探针第一问", sessionId, sessionKind: "chat" }),
+      });
+      check(`[${engine}] branch 探针第一轮驱动`, drive.status === 200);
+
+      const transcriptFile = join(root, ".inkos", "sessions", `${sessionId}.jsonl`);
+      const readLines = () => readFileSync(transcriptFile, "utf-8").split(/\r?\n/).filter((line) => line.trim());
+      let lines = readLines();
+      const allStamped = lines.every((line) => line.includes('"parentSeq"'));
+      const commitLine = lines.map((line) => JSON.parse(line)).find((event) => event.type === "request_committed");
+      check(`[${engine}] transcript 新写入恒带 parentSeq 且首轮 committed 在场`, allStamped && !!commitLine);
+
+      const invalidBranch = await api(`/api/v1/sessions/${sessionId}/branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toSeq: 99999 }),
+      });
+      check(
+        `[${engine}] branch 无效目标 400`,
+        invalidBranch.status === 400 && invalidBranch.body?.error?.code === "INVALID_BRANCH_TARGET",
+      );
+
+      const branch = await api(`/api/v1/sessions/${sessionId}/branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toSeq: commitLine.seq }),
+      });
+      check(
+        `[${engine}] branch 回提交点 200（head/branchCount）`,
+        branch.status === 200 && branch.body?.ok === true
+          && branch.body?.head === commitLine.seq && branch.body?.branchCount === 1,
+      );
+
+      const drive2 = await api("/api/v1/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction: "branch探针第二问", sessionId, sessionKind: "chat" }),
+      });
+      check(`[${engine}] branch 后第二轮驱动`, drive2.status === 200);
+
+      lines = readLines();
+      const events = lines.map((line) => JSON.parse(line));
+      const branchMoved = events.filter((event) => event.type === "branch_moved");
+      const round2Started = events.find(
+        (event) => event.type === "request_started" && event.input === "branch探针第二问",
+      );
+      const round2Committed = events
+        .filter((event) => event.type === "request_committed")
+        .at(-1);
+      check(
+        `[${engine}] branch_moved 落盘且第二轮链回分支点`,
+        branchMoved.length === 1
+          && branchMoved[0].toSeq === commitLine.seq
+          && round2Started?.parentSeq === commitLine.seq
+          && round2Committed?.seq > round2Started?.seq,
+      );
+
+      const derived = await api(`/api/v1/sessions/${sessionId}`);
+      const derivedUserTexts = (derived.body?.session?.messages ?? [])
+        .filter((message) => message.role === "user")
+        .map((message) => (typeof message.content === "string" ? message.content : ""));
+      check(
+        `[${engine}] derive 透出 head/branchCount 且对话取 active 路径`,
+        derived.status === 200
+          && derived.body?.session?.branchCount === 1
+          && typeof derived.body?.session?.head === "number"
+          && derivedUserTexts.includes("branch探针第一问")
+          && derivedUserTexts.includes("branch探针第二问"),
+      );
+
+      const branchGhost = await api("/api/v1/sessions/smoke-ghost-session/branch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toSeq: 1 }),
+      });
+      check(`[${engine}] branch 未知会话 404`, branchGhost.status === 404);
+    }
+  }
 
   // run-log 调用计数（写链遥测在位）。
   const runLog = await api("/api/v1/run-log?limit=50");

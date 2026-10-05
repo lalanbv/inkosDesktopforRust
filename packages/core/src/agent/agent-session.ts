@@ -1314,3 +1314,12 @@ export function abortAgentSession(projectRoot: string, sessionId: string): boole
   }
   return aborted;
 }
+
+/**
+ * R36 分支忙判定（636 号）：该会话是否有排队的 agent 任务（聊天轮/生产任务
+ * 走同一互斥队列）。branch 要求「单请求事件整体在同一链上」——轮进行中拒绝
+ * 分支（服务端映射 409 SESSION_BUSY）。无副作用，对照 abortAgentSession。
+ */
+export function isAgentSessionBusy(projectRoot: string, sessionId: string): boolean {
+  return agentSessionQueues.has(sessionQueueKey(projectRoot, sessionId));
+}

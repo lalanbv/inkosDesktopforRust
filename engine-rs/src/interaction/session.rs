@@ -109,6 +109,12 @@ pub struct BookSession {
     pub title: Option<String>,
     #[serde(default)]
     pub messages: Vec<Value>,
+    /// R36 会话树化（636 号）：active 链 head（derive 填充；legacy json 路径
+    /// default None → 序列化 null，对齐 TS derive 恒带键）。
+    #[serde(rename = "head", default)]
+    pub head: Option<u64>,
+    #[serde(rename = "branchCount", default)]
+    pub branch_count: u64,
     #[serde(rename = "createdAt")]
     pub created_at: u64,
     #[serde(rename = "updatedAt")]
@@ -157,6 +163,8 @@ pub fn create_book_session(
         play_mode,
         title: None,
         messages: Vec::new(),
+        head: None,
+        branch_count: 0,
         created_at: now,
         updated_at: now,
     }

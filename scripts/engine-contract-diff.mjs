@@ -865,6 +865,107 @@ try {
         }
       }
 
+      // ── R36 branch 维度（636 号）：双腿各 branch 回首轮提交点 → 驱动第二轮
+      // → per-leg 链完整性（branch_moved 恰 1 条 / 第二轮 started.parentSeq ==
+      // toSeq / 全事件带 parentSeq）→ 跨腿 derive 深比对。head 是绝对 seq，
+      // metadata_updated 计数豁免可致双端 seq 漂移——branch 比对面 head 按
+      // volatile 剪除（branchCount/消息面结构等价仍硬比，备案）。
+      {
+        const branchToCommit = async (engine) => {
+          const file = join(engine.root, ".inkos", "sessions", `${chatSession[engine.name]}.jsonl`);
+          let commitSeq = null;
+          try {
+            for (const line of readFileSync(file, "utf-8").split(/\r?\n/)) {
+              if (!line.trim()) continue;
+              const event = JSON.parse(line);
+              if (event.type === "request_committed") {
+                commitSeq = event.seq;
+                break;
+              }
+            }
+          } catch {
+            commitSeq = null;
+          }
+          if (commitSeq === null) return null;
+          const res = await fetchT(`http://127.0.0.1:${engine.port}/api/v1/sessions/${chatSession[engine.name]}/branch`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ toSeq: commitSeq }),
+          });
+          return res.ok ? res.json().catch(() => null) : null;
+        };
+        const [nodeBranch, rustBranch] = await Promise.all([branchToCommit(engines[0]), branchToCommit(engines[1])]);
+        compared += 1;
+        if (!nodeBranch?.ok || !rustBranch?.ok) {
+          divergences += 1;
+          console.log(`✗ branch 面：双腿 branch 必须成功 node=${JSON.stringify(nodeBranch)} rust=${JSON.stringify(rustBranch)}`);
+        } else {
+          const drive2 = async (engine) => fetchT(`http://127.0.0.1:${engine.port}/api/v1/agent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              instruction: "再简短介绍一遍这个项目。",
+              sessionId: chatSession[engine.name],
+              sessionKind: "chat",
+            }),
+          });
+          const [dNode, dRust] = await Promise.all([drive2(engines[0]), drive2(engines[1])]);
+          const chainOk = (engine) => {
+            const file = join(engine.root, ".inkos", "sessions", `${chatSession[engine.name]}.jsonl`);
+            try {
+              const events = readFileSync(file, "utf-8")
+                .split(/\r?\n/)
+                .filter((line) => line.trim())
+                .map((line) => JSON.parse(line));
+              const moves = events.filter((event) => event.type === "branch_moved");
+              const started2 = events.find(
+                (event) => event.type === "request_started" && event.input === "再简短介绍一遍这个项目。",
+              );
+              return moves.length === 1
+                && !!started2
+                && started2.parentSeq === moves[0].toSeq
+                && events.every((event) => "parentSeq" in event);
+            } catch {
+              return false;
+            }
+          };
+          compared += 1;
+          if (!dNode.ok || !dRust.ok || !chainOk(engines[0]) || !chainOk(engines[1])) {
+            divergences += 1;
+            console.log(`✗ branch 面：第二轮驱动/链完整性不过 node=${dNode.status}/${chainOk(engines[0])} rust=${dRust.status}/${chainOk(engines[1])}`);
+          } else {
+            const BRANCH_VOLATILE = new Set([...VOLATILE, "head"]);
+            const pruneBranchSession = (node) => {
+              if (Array.isArray(node)) return node.map(pruneBranchSession);
+              if (node && typeof node === "object") {
+                const out = {};
+                for (const key of Object.keys(node).sort()) {
+                  if (BRANCH_VOLATILE.has(key) || SESSION_IDENTITY.has(key)) continue;
+                  out[key] = pruneBranchSession(node[key]);
+                }
+                return out;
+              }
+              return node;
+            };
+            const sessionAfter = async (engine) => {
+              const res = await fetchT(`http://127.0.0.1:${engine.port}/api/v1/sessions/${chatSession[engine.name]}`);
+              return res.ok ? res.json().catch(() => null) : null;
+            };
+            const [nodeAfter, rustAfter] = await Promise.all([sessionAfter(engines[0]), sessionAfter(engines[1])]);
+            compared += 1;
+            const diffPathBranch = nodeAfter && rustAfter
+              ? firstDiffPath(pruneBranchSession(nodeAfter), pruneBranchSession(rustAfter))
+              : "(双端 GET 必须在场)";
+            if (diffPathBranch) {
+              divergences += 1;
+              console.log(`✗ branch 后 derive 读面分歧 @ ${diffPathBranch}`);
+            } else {
+              console.log(`✓ branch 面双端一致（branch+第二轮+链完整性+derive 深比对；head 绝对 seq 豁免备案）`);
+            }
+          }
+        }
+      }
+
       // ── 上下文计量快照面（564 备案清偿，581 号）：会话面驱动的 chat 轮
       // 落幕后双腿 GET /context-meter 必有快照。语义面锁死（键集/来源/
       // 锚点态/数值符号）；tokens 数值不深比——聊天 system prompt 双端未

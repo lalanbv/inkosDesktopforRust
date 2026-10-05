@@ -29,6 +29,7 @@ export {
 } from "./agent-tools.js";
 export {
   abortAgentSession,
+  isAgentSessionBusy,
   runAgentSession,
   evictAgentCache,
   type AgentSessionAttachment,
