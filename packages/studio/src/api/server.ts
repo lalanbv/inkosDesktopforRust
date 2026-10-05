@@ -2638,10 +2638,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
   // write-next 检查点（174 号 W-C5）：本进程活跃 write-next 任务（执行 id 集合）。
-  // 与确认式生产任务分开记账——write-next 管线不消费 AbortController 信号，
-  // 若混入 activeConfirmedTasks，abort 端点会宣称 aborted:true 而实际停不下来
-  // （假停止）。独立集合让「停止」保持诚实的「无任务可停」，重启对账则把
-  // 本集合视为 running 快照的第二个存活来源。
+  // 可停性已对齐 Rust（641 号）：write-next 的 AbortController 同时注册进
+  // activeConfirmedTasks（findRunningTaskController 命中），signal 经
+  // pipeline.runWithAbortSignal 直通管线安全点与 provider 层——本集合退居
+  // 对账面（重启对账把本集合视为 running 快照的第二个存活来源）。
   const activeWriteNextTasks = new Set<string>();
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
   // → 之后才 set controller"的 check-then-act：两个并发确认请求都能通过检查，
@@ -4375,8 +4375,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           startedAt: Date.now(),
         }
       : null;
-    if (checkpoint) {
+    // 641 号：write-next 可停性对齐 Rust（active_confirmed_tasks 注册 +
+    // check_aborted 安全点）——controller 进 findRunningTaskController 查的
+    // 同张表，signal 经 pipeline.runWithAbortSignal 直通管线
+    // throwIfOperationAborted 与 provider 层（confirmed 路径同通道）。此前
+    // 本任务对 abort 端点是 no-op（aborted:false，2640 注释的假停止问题）。
+    const writeNextController = checkpoint ? new AbortController() : null;
+    if (checkpoint && writeNextController) {
       activeWriteNextTasks.add(checkpoint.executionId);
+      activeConfirmedTasks.set(checkpoint.executionId, writeNextController);
       await saveStudioTaskSnapshot(root, {
         version: 1,
         sessionId: checkpoint.sessionId,
@@ -4413,17 +4420,31 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         });
       }
       activeWriteNextTasks.delete(checkpoint.executionId);
+      activeConfirmedTasks.delete(checkpoint.executionId);
     };
-    pipeline.writeNextChapter(id, body.wordCount, undefined, body.context).then(
-      async (result) => {
-        broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
-        await finishCheckpoint("completed");
-      },
-      async (e) => {
-        broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
-        await finishCheckpoint("error", e instanceof Error ? e.message : String(e));
-      },
-    );
+    pipeline
+      .runWithAbortSignal(writeNextController?.signal, () =>
+        pipeline.writeNextChapter(id, body.wordCount, undefined, body.context),
+      )
+      .then(
+        async (result) => {
+          broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
+          await finishCheckpoint("completed");
+        },
+        async (e) => {
+          // 641 号：用户停止的写作轮与 Rust 同文案中性收尾（write_next_route
+          // 「写作已按您的要求停止。」）——provider 层抛 signal.reason（无参
+          // abort 为 AbortError），经 signal.aborted 判定替换底层文案。
+          const abortedByUser = writeNextController?.signal.aborted ?? false;
+          const message = abortedByUser
+            ? "写作已按您的要求停止。"
+            : e instanceof Error
+              ? e.message
+              : String(e);
+          broadcast("write:error", { bookId: id, error: message });
+          await finishCheckpoint("error", message);
+        },
+      );
 
     return c.json({ status: "writing", bookId: id });
   });

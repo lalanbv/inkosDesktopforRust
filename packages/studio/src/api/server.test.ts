@@ -270,6 +270,17 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
       return task();
     });
 
+    // 641 号：直连 write-next 的 signal 包裹入口（与 runWithAgentContext 同
+    // 记账——cancellation 断言 signal 直达管线）。
+    runWithAbortSignal = vi.fn(async (
+      signal: AbortSignal | undefined,
+      task: () => Promise<unknown>,
+    ) => {
+      pipelineAbortSignals.push(signal);
+      signal?.throwIfAborted();
+      return task();
+    });
+
     createAgentContext = vi.fn(() => ({}));
 
     initBook = initBookMock;
@@ -5189,6 +5200,52 @@ describe("createStudioServer daemon lifecycle", () => {
     await expect(loadStudioTaskSnapshot(root, "agent-session-1")).resolves.toMatchObject({
       execution: { status: "error", completedAt: expect.any(Number) },
     });
+  });
+
+  it("aborts a direct write-next task through POST /abort (641 号: 可停性对齐 Rust)", async () => {
+    let rejectWrite!: (error: Error) => void;
+    writeNextChapterMock.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectWrite = reject;
+    }));
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // 直连端点（非 confirmed 路径）携带 sessionId 落检查点。
+    const directResponse = await app.request("http://localhost/api/v1/books/demo-book/write-next", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "agent-session-1" }),
+    });
+    expect(directResponse.status).toBe(200);
+    await vi.waitFor(async () => {
+      const task = await loadStudioTaskSnapshot(root, "agent-session-1");
+      expect(task?.execution.status).toBe("running");
+    });
+
+    const abortResponse = await app.request("http://localhost/api/v1/sessions/agent-session-1/abort", {
+      method: "POST",
+    });
+    expect(abortResponse.status).toBe(200);
+    // 旧码此断言为 aborted:false（write-next 不在控制器注册表，abort no-op）
+    await expect(abortResponse.json()).resolves.toMatchObject({ aborted: true });
+    // signal 直达管线（runWithAbortSignal 记账）
+    expect(pipelineAbortSignals.at(-1)?.aborted).toBe(true);
+
+    // 管线在检查点抛出中止错误（provider 层 signal.reason 形态）
+    rejectWrite(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }));
+    await loadStudioTaskSnapshot(root, "agent-session-1").then(async () => {
+      // write:error 广播与快照终态是异步收尾，等快照落定
+    });
+    await vi.waitFor(async () => {
+      const task = await loadStudioTaskSnapshot(root, "agent-session-1");
+      expect(task?.execution.status).toBe("error");
+      expect(task?.execution.error).toBe("写作已按您的要求停止。");
+    });
+    // 双表注销：再次 abort 回到「无任务可停」诚实态
+    const secondAbort = await app.request("http://localhost/api/v1/sessions/agent-session-1/abort", {
+      method: "POST",
+    });
+    await expect(secondAbort.json()).resolves.toMatchObject({ aborted: false });
   });
 
   it("keeps a running production task alive when only the parallel chat scope is aborted", async () => {
