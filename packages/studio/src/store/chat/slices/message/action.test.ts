@@ -1572,4 +1572,76 @@ describe("chat message actions", () => {
     const assistant = messages.find((message) => message.role === "assistant");
     expect(assistant?.content).toBe("设定文档全文。");
   });
+
+  // ── R36 分支切换（638 号）+ 强替重拉（639 号 D1 修复）──
+
+  it("branchSession 强替重拉：本地消息被磁盘 active 链投影整体替换", async () => {
+    const store = createTestStore();
+    fetchJson.mockResolvedValueOnce({
+      session: { sessionId: "s-branch", bookId: null, sessionKind: "chat" },
+    });
+    const sessionId = await store.getState().createSession(null, "chat");
+    // 本地旧视图：两轮消息（分支切换前的弃用路径）
+    const stale = [
+      { role: "user" as const, content: "第一问", timestamp: 1 },
+      { role: "assistant" as const, content: "第一答", timestamp: 2 },
+      { role: "user" as const, content: "第二问（将弃用）", timestamp: 3 },
+      { role: "assistant" as const, content: "第二答（将弃用）", timestamp: 4 },
+    ];
+    store.setState((state) => ({
+      sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, messages: stale } },
+    }));
+    fetchJson.mockReset();
+    fetchJson.mockImplementation(async (path: string, init?: { method?: string }) => {
+      if (path === `/sessions/${sessionId}/branch` && init?.method === "POST") {
+        return { ok: true, head: 5, branchCount: 1 };
+      }
+      if (path === `/sessions/${sessionId}`) {
+        // 磁盘 active 链投影：分支后只剩第一轮
+        return {
+          session: {
+            sessionId,
+            bookId: null,
+            sessionKind: "chat",
+            messages: [
+              { role: "user", content: "第一问", timestamp: 1 },
+              { role: "assistant", content: "第一答", timestamp: 2 },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+
+    const result = await store.getState().branchSession(sessionId, 5);
+    expect(result).toEqual({ head: 5, branchCount: 1 });
+    const messages = store.getState().sessions[sessionId]?.messages ?? [];
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.content)).toEqual(["第一问", "第一答"]);
+  });
+
+  it("缺省 loadSessionDetail 仍保留本地已有消息（任务恢复守卫不被强替波及）", async () => {
+    const store = createTestStore();
+    fetchJson.mockResolvedValueOnce({
+      session: { sessionId: "s-keep", bookId: null, sessionKind: "chat" },
+    });
+    const sessionId = await store.getState().createSession(null, "chat");
+    const local = [{ role: "user" as const, content: "本地未落盘消息", timestamp: 9 }];
+    store.setState((state) => ({
+      sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, messages: local } },
+    }));
+    fetchJson.mockReset();
+    fetchJson.mockResolvedValue({
+      session: {
+        sessionId,
+        bookId: null,
+        sessionKind: "chat",
+        messages: [{ role: "user", content: "磁盘投影", timestamp: 1 }],
+      },
+    });
+
+    await store.getState().loadSessionDetail(sessionId);
+    const messages = store.getState().sessions[sessionId]?.messages ?? [];
+    expect(messages.map((message) => message.content)).toEqual(["本地未落盘消息"]);
+  });
 });

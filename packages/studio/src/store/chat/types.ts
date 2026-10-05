@@ -269,9 +269,11 @@ export interface MessageActions {
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  loadSessionDetail: (sessionId: string) => Promise<void>;
-  // R36 分支切换（638 号）：branch 到指定提交点后重拉会话详情（active 链
-  // 投影立即生效）。轮进行中服务端 409、目标非法 400——抛错由调用方展示。
+  loadSessionDetail: (sessionId: string, opts?: { forceReplace?: boolean }) => Promise<void>;
+  // R36 分支切换（638 号）：branch 到指定提交点后强替重拉会话详情
+  //（forceReplace：active 链投影整体替换本地消息，639 号 D1 修复——缺省
+  // merge 守卫会把视图留在弃用路径上）。轮进行中服务端 409、目标非法
+  // 400——抛错由调用方展示。
   branchSession: (sessionId: string, toSeq: number) => Promise<{ head: number | null; branchCount: number }>;
   sendMessage: (sessionId: string, text: string, options?: SendMessageOptions) => Promise<void>;
   // 用 lastFailedSend 记录的原样参数重发上一条失败的消息；无记录或聊天轮流式中时不做任何事。

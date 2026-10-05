@@ -419,7 +419,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
     }
   },
 
-  loadSessionDetail: async (sessionId) => {
+  loadSessionDetail: async (sessionId, opts?: { forceReplace?: boolean }) => {
     // 草稿会话：磁盘上还没有文件，直接跳过远端拉取。
     const existing = get().sessions[sessionId];
     if (existing?.isDraft) return;
@@ -441,7 +441,10 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       set((state) => {
         const runtime = state.sessions[detailSessionId];
         const nextBookId = detail.bookId ?? runtime?.bookId ?? null;
-        const baseMessages = runtime?.messages.length ? runtime.messages : messages;
+        // forceReplace（639 号 D1）：分支切换后的重拉必须用磁盘 active 链投影
+        // 整体替换本地消息——缺省守卫（runtime 已有消息则保留）是任务恢复
+        // 场景防覆盖流式卡的，会让分支后视图停在弃用路径上与真实上下文脱节。
+        const baseMessages = !opts?.forceReplace && runtime?.messages.length ? runtime.messages : messages;
         const nextMessages = task ? mergeTaskExecution(baseMessages, task.execution) : baseMessages;
         return {
           sessions: {
@@ -498,7 +501,8 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
 
   branchSession: async (sessionId, toSeq) => {
     // R36 分支切换（638 号）：head 指针移动是 append-only 的 branch_moved
-    // 事件；成功后重拉详情——active 链投影（消息视图/压缩边界）立即生效。
+    // 事件；成功后强替重拉详情——active 链投影（消息视图/压缩边界）立即
+    // 生效。409 忙闸保证此刻无在飞请求/任务，强替不会打断任何流。
     const result = await fetchJson<{ ok: boolean; head: number | null; branchCount: number }>(
       `/sessions/${encodeURIComponent(sessionId)}/branch`,
       {
@@ -507,7 +511,7 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         body: JSON.stringify({ toSeq }),
       },
     );
-    await get().loadSessionDetail(sessionId);
+    await get().loadSessionDetail(sessionId, { forceReplace: true });
     return { head: result.head, branchCount: result.branchCount };
   },
 
