@@ -51,6 +51,10 @@ const WRITER_BODY = WRITER_BODY_PARAGRAPHS.join("\n\n");
 // 与原文全等即「未产出新内容」退出循环，故必须有差异；+100 字仍带内）。
 const REVISED_BODY = WRITER_BODY
   + "\n\n坊市的喧嚣在身后一点点退去，林动的脚步却越走越稳。祖符在怀里微微发烫，像是替他记下了这条街上每一道目光。他知道，从今天起，青阳坊再没有人敢小看那个穿粗布短打的少年。";
+// 650 号：PATCHES 形态的局部修补对（patch-only 路由）——TARGET 为 WRITER 正文
+// 精确句，REPLACEMENT 为等义改写（字数近同：局部修补不显著改变篇幅）。
+const PATCH_TARGET = "他握紧拳头，指节发出一连串细碎的爆响。";
+const PATCH_REPLACEMENT = "他缓缓收紧五指，指节间爆出一串沉闷的脆响。";
 const WRITER = `=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n${WRITER_BODY}\n\n=== POST_SETTLEMENT ===\n结算完成。\n\n=== RUNTIME_STATE_DELTA ===\n\`\`\`json\n{"chapter": 1, "chapterSummary": {"chapter": 1, "title": "风起", "characters": "林动", "events": "坊市夺回祖符，玉符异象初显", "stateChanges": "林动踏上修炼路，与雷家结仇", "hookActivity": "H01 推进", "mood": "紧张", "chapterType": "推进章"}}\n\`\`\`\n`;
 const CANON = "=== SECTION: world_rules ===\n剑气纵横三千里。\n=== SECTION: character_profiles ===\n| 角色 | 身份 | 性格底色 | 语癖/口头禅 | 说话风格 | 行为模式 | 关键关系 | 信息边界 |\n|------|------|----------|-------------|----------|----------|----------|----------|\n| 林川 | 云州少年 | 坚韧 | 剑不离手 | 简短 | 练剑不辍 | 师父 | 不知身世 |\n=== SECTION: key_events ===\n| 序号 | 事件 | 涉及角色 | 约束 |\n|------|------|----------|------|\n| 1 | 出城 | 林川 | 起点 |\n=== SECTION: power_system ===\n剑道九品。\n=== SECTION: writing_style ===\n短句。";
 const SETTLER_TEMPLATE = {
@@ -90,6 +94,10 @@ const STREAM_DELAY_MS = Number(process.env.WALKTHROUGH_MOCK_STREAM_DELAY_MS ?? "
 const AUDIT_SCORES = (process.env.WALKTHROUGH_MOCK_AUDIT_SCORES ?? "")
   .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
 let AUDIT_CALL_SEQ = 0;
+// 降分 issue 的 repair_scope（650 号）："local"（默认 structural）→ reviser
+// resolveAutoOutputMode 判 patch-only → 修稿腿走 PATCHES 局部修补路由，
+// 与 646 号的 REVISED_CONTENT 整章重写路径互为对偶覆盖。
+const AUDIT_SCOPE = process.env.WALKTHROUGH_MOCK_AUDIT_SCOPE === "local" ? "local" : "structural";
 const PORT = Number(process.argv[2] ?? 1234);
 
 http.createServer((req, res) => {
@@ -176,14 +184,21 @@ http.createServer((req, res) => {
       else if (sys.includes("创作总编")) content = PLANNER;
       else if (sys.includes("作家") || sys.includes("写手")) content = WRITER;
       else if (sys.includes("修稿编辑")) {
-        // 646 号：审改循环修稿腿。auto 模式输出节为 === FIXED_ISSUES === /
-        // === REVISED_CONTENT ===；正文必须与原文有差异——reviser 判
-        // revisedContent 与原文全等即「未产出新内容」退出循环。
+        // 646 号：审改循环修稿腿。auto 模式输出节按 reviser 路由指令探测：
+        // patch-only（650 号，AUDIT_SCOPE=local 全 local issue → 「只输出
+        // PATCHES」）→ PATCHES 局部修补形态；rewrite-only / allow-full →
+        // REVISED_CONTENT 整章重写形态。
         // 须排在「审稿」分支之前：修稿 persona 是「修稿编辑」但其任务描述
         // 含「根据审稿意见对章节进行修正」，includes("审稿") 会先截胡
         // （首跑实录：修稿调用拿到审稿 JSON → REVISED_CONTENT 为空 →
         // 「未产出新内容」退出循环）。
-        content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
+        if (sys.includes("只输出 PATCHES")) {
+          // TARGET 必须是 WRITER 正文的精确引用（applySpotFixPatches 先精确
+          // 后空白归一匹配；匹配不到会被 skip，全 skip 即「未产出新内容」）。
+          content = "=== FIXED_ISSUES ===\n替换了首段一处生硬动作描写，语义不变。\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n" + PATCH_TARGET + "\nREPLACEMENT_TEXT:\n" + PATCH_REPLACEMENT + "\n--- END PATCH ---";
+        } else {
+          content = "=== FIXED_ISSUES ===\n压缩了开篇铺陈，冲突提前入场，章尾钩子保留。\n\n=== REVISED_CONTENT ===\n" + REVISED_BODY;
+        }
       }
       else if (sys.includes("审稿")) {
         // 645 号：对齐 continuity 审稿 JSON 契约（parseAuditResult 四策略均要
@@ -202,15 +217,28 @@ http.createServer((req, res) => {
           overall_score: score,
           issues: passed ? [] : [{
             severity: "critical",
-            repair_scope: "structural",
-            category: "开篇拖沓",
-            description: `mock 注入降分（第 ${AUDIT_CALL_SEQ} 次审稿 ${score} 分）：开篇铺陈过长，进入主线偏慢，冲突入场偏晚。`,
-            suggestion: "压缩首段铺陈，让坊市冲突提前入场，保留玉符异象作为章尾钩子。",
+            repair_scope: AUDIT_SCOPE,
+            category: AUDIT_SCOPE === "local" ? "措辞" : "开篇拖沓",
+            description: AUDIT_SCOPE === "local"
+              ? `mock 注入降分（第 ${AUDIT_CALL_SEQ} 次审稿 ${score} 分）：首段「握紧拳头」动作描写生硬，措辞需要局部打磨。`
+              : `mock 注入降分（第 ${AUDIT_CALL_SEQ} 次审稿 ${score} 分）：开篇铺陈过长，进入主线偏慢，冲突入场偏晚。`,
+            suggestion: AUDIT_SCOPE === "local"
+              ? "替换该句动作为更具体的身体反应。"
+              : "压缩首段铺陈，让坊市冲突提前入场，保留玉符异象作为章尾钩子。",
           }],
           summary: passed
             ? "开篇冲突清晰，主线推进扎实，节奏与伏笔承接到位。"
             : `结构完成度不足（mock 注入 ${score} 分），需修稿后复审。`,
         });
+      }
+      else if (sys.includes("小说连续性分析师")) {
+        // 650 号：buildPersistenceOutput→ChapterAnalyzer（审改循环修订后
+        // finalContent≠初稿时被调）——此前无分派落入 else 确认卡文本，
+        // analyzer 拿到非法载荷后管线静默悬挂（修订产物从未落盘，646/650
+        // 全中）。对齐其 === TAG === 输出契约给最小合法形态：content 由
+        // persistenceOutput 强制回写审改后 finalContent（此处占位不毁正文）；
+        // UPDATED_* 为最小占位，落盘面 truth 保持语义由 runner 链兜住。
+        content = "=== CHAPTER_TITLE ===\n风起\n\n=== CHAPTER_CONTENT ===\n（正文以审改后版本为准。）\n\n=== PRE_WRITE_CHECK ===\n\n=== POST_SETTLEMENT ===\n分析模式无结算。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|------|-----|\n| 当前章节 | 2 |\n| 当前位置 | 青阳坊 |\n| 主角状态 | 修炼起步 |\n| 当前目标 | 夺回祖符 |\n| 当前限制 | 修为浅薄 |\n| 当前敌我 | 与雷家结仇 |\n| 当前冲突 | 祖符来历 |\n\n=== UPDATED_LEDGER ===\n\n=== UPDATED_HOOKS ===\n";
       }
       else if (sys.includes("状态追踪分析师")) content = settlerDelta(msgs);
       else if (sys.includes("continuity validator")) content = "PASS";
