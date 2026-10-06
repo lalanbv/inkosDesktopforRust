@@ -468,6 +468,11 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     writeTranslationExport: actual.writeTranslationExport,
     // R21/391 号：context lens 端点走真实投影与 schema 校验——mock 透传。
     buildContextLens: actual.buildContextLens,
+    // 684 号：export 端点消费真实构建器（state 面已 mock——loadChapterIndex/
+    // loadBookConfig/bookDir），构建器本体必须透传，否则 route 拿到 undefined
+    // 直接 500（682 号「逐枚举 mock 工厂对新增消费是静默断点」复发）。
+    buildExportArtifact: actual.buildExportArtifact,
+    writeExportArtifact: actual.writeExportArtifact,
     ContextPackageSchema: actual.ContextPackageSchema,
     ChapterTraceSchema: actual.ChapterTraceSchema,
     // R22/392 号：反AI规则 GET 种子兜底——mock 透传种子常量与校验器。
@@ -3156,8 +3161,36 @@ describe("createStudioServer daemon lifecycle", () => {
     expect(resyncChapterArtifactsMock).toHaveBeenCalledWith("demo-book", 3);
   });
 
-  it("routes export-save through the shared structured interaction runtime", async () => {
+  // 684 号：非 ASCII 书名（中文书名的产品主路径）裸入 Content-Disposition
+  // 会让 undici 在响应头物化时抛 TypeError——服务端 500（onError 的响应缓存
+  // 被毒化连 JSON 错误体都发不出）。红绿=修复前 headers.get() 直接抛。
+  it("exports a CJK-titled book with an RFC 5987 Content-Disposition", async () => {
+    const cjkBookId = "雾港手记";
+    const bookDir = join(root, "books", cjkBookId);
+    await mkdir(join(bookDir, "chapters"), { recursive: true });
+    await writeFile(join(bookDir, "chapters", "0003_Demo.md"), "# Demo\n\n正文", "utf-8");
+    loadChapterIndexMock.mockResolvedValue([
+      { number: 3, title: "Demo", status: "ready-for-review", wordCount: 6 },
+    ]);
+    loadBookConfigMock.mockResolvedValue({ title: cjkBookId, language: "zh" });
+
     const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request(
+      `http://localhost/api/v1/books/${encodeURIComponent(cjkBookId)}/export?format=txt`,
+    );
+    expect(response.status).toBe(200);
+    let disposition: string | null = null;
+    expect(() => {
+      disposition = response.headers.get("content-disposition");
+    }).not.toThrow();
+    expect(disposition).toContain(`filename="${cjkBookId.replace(/[^A-Za-z0-9._-]+/g, "_")}.txt"`);
+    expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent(`${cjkBookId}.txt`)}`);
+    await expect(response.text()).resolves.toContain("# Demo");
+  });
+
+  it("routes export-save through the shared structured interaction runtime", async () => {    const { createStudioServer } = await import("./server.js");
     const app = createStudioServer(cloneProjectConfig() as never, root);
 
     const response = await app.request("http://localhost/api/v1/books/demo-book/export-save", {

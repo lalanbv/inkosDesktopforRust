@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 双引擎 GET 契约活体差分（487 号）：
 //   node scripts/engine-contract-diff.mjs [--rust-port 8901] [--node-port 8902] [--mock-port 1234]
+//   node scripts/engine-contract-diff.mjs --probe "<path1,path2,...>"   # 候选端点探测（684 号）
 //
 // 同时起 Rust 引擎与 TS 回退端（各自独立临时根 + 同一 mock LLM），各跑一遍
 // fixture 保证数据形态一致，然后对一组稳定 GET 端点做**归一化深比对**：
@@ -35,6 +36,17 @@ const rustPort = argOf("--rust-port", "8901");
 const nodePort = argOf("--node-port", "8902");
 const mockPort = argOf("--mock-port", "1234");
 const keep = args.includes("--keep");
+// 684 号：探测模式一等公民化——488/634 的「新增端点先活体探测双端 200 再入列」
+// 原为临时手搓，现固化为 --probe "<path1,path2,...>"。起齐 mock+双引擎+fixture
+// 后对候选 GET 逐个报状态码对与响应形状，不比对不计数；$BOOK=书名编码、
+// $SESSION=双端各自会话清单首项 id。
+const probePaths = argOf("--probe", null);
+const PROBE_PATHS = probePaths
+  ? probePaths.split(",").map((s) => s.trim()).filter(Boolean)
+  : null;
+
+/** 探测模式完成后的早退哨兵：finally 清理必须照常执行，故不能 process.exit。 */
+class ProbeEarlyExit extends Error {}
 
 // 643 号：差分器的存在意义就是双引擎对照——先过活体腿新鲜度闸（默认 debug
 // 路径 cargo build 核验/重建；env 外部产物 517 形态仅核在，新鲜度调用方自管）。
@@ -69,7 +81,7 @@ const apiFor = (base, root) => async (path, init) => {
   const normalized = root ? text.split(root).join("%ROOT%") : text;
   let body = null;
   try { body = JSON.parse(normalized); } catch { body = null; }
-  return { status: res.status, body };
+  return { status: res.status, body, text: normalized, contentType: res.headers.get("content-type") ?? "" };
 };
 
 /** 递归剪除易变键并做键排序规范化（保证两侧同构可比）。 */
@@ -78,6 +90,9 @@ const VOLATILE = new Set([
   "lastAdvanced", "lastAdvancedChapter", "recordedAt", "registeredAt",
   "lastAppliedChapter", "chapterNumber", "nextChapter", "savedChapters",
   "total", "kept", "tookOverCount", "failureCount",
+  // 684 号：interaction/session 惰性建会话，sessionId=创建时刻毫秒戳——
+  // 双腿各自起引擎天然不同（run-6 活体捕获 1ms 之差假分叉）。
+  "sessionId",
 ]);
 const prune = (node) => {
   if (Array.isArray(node)) return node.map(prune);
@@ -171,6 +186,13 @@ const WAIVERS = new Map([
   [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
   // lens rank 打分内部实现差异（展示面）。
   [`/api/v1/books/${BOOK}/context-lens/2`, { reason: "resync 管线内部装配差异（483/484 备案）：entry source/rank 随内部实现波动", paths: [["entries"]] }],
+  // 684 号：backend 是引擎身份标识（node-fallback vs rust-engine）、version
+  // 是双端独立版本号（studio 1.8.0 vs engine 0.1.0）——均为设计内身份面。
+  [`/api/v1/health`, { reason: "684 号备案：backend/version=双端身份标识（node-fallback vs rust-engine；1.8.0 vs 0.1.0）", paths: [["backend"], ["version"]] }],
+  // 684 号：run-log entries 是 LLM 调用记账——双端管线编排实现差异（调用
+  // 次数/agent 序非镜像，如 planner 重试编排不同）；产出等价由工件树差分 +
+  // 导出 TEXT 面锁定，记账明细非契约面。
+  [`/api/v1/run-log`, { reason: "684 号备案：LLM 调用记账随双端编排实现差异（次数/agent 序），产出等价由工件树差分锁定", paths: [["entries"]] }],
 ]);
 const ENDPOINTS = [
   "/api/v1/books",
@@ -212,7 +234,47 @@ const ENDPOINTS = [
   `/api/v1/books/${BOOK}/best-of-n`,
   `/api/v1/books/${BOOK}/style-binding`,
   `/api/v1/books/${BOOK}/detect/stats`,
+  // 684 号扩容（488 号协议第三轮：--probe 活体探测双端 200 后入列；探测协议
+  // 自本轮起一等公民化）。project/services/interaction/health 全家 + 书级
+  // analytics/eval/truth/fanfic/series-backfill 读面。
+  "/api/v1/health",
+  "/api/v1/daemon",
+  "/api/v1/run-log",
+  "/api/v1/services",
+  "/api/v1/services/config",
+  "/api/v1/services/models",
+  "/api/v1/services/models/custom",
+  "/api/v1/project",
+  "/api/v1/project/detection",
+  "/api/v1/project/chapter-review-mode",
+  "/api/v1/project/default-model",
+  "/api/v1/project/model-overrides",
+  "/api/v1/project/research-search",
+  "/api/v1/cover/config",
+  "/api/v1/interactive-films",
+  "/api/v1/interaction/session",
+  `/api/v1/books/${BOOK}/analytics`,
+  `/api/v1/books/${BOOK}/eval`,
+  `/api/v1/books/${BOOK}/truth`,
+  `/api/v1/books/${BOOK}/truth/story_bible.md`,
+  `/api/v1/books/${BOOK}/series-backfill/existing`,
+  `/api/v1/books/${BOOK}/fanfic`,
+  // 684 号：导出正文面（TEXT 模式）——txt 载荷 = 书名 + 章节原文拼接，
+  // 双端夹具同源必须逐字节一致（epub/tar.gz 二进制容器不在此列，见
+  // STATUS_ONLY）。
+  `/api/v1/books/${BOOK}/export?format=txt`,
 ];
+
+// 684 号：非 JSON 端点的两种弱比对模式。
+// - TEXT：响应为纯文本契约面（导出正文）——归一化后逐字节比对，强于仅状态码；
+// - STATUS_ONLY：响应为二进制容器（gzip/tar/epub），容器内部时间戳与压缩
+//   字典序天然非确定，字节级比对不可行——锁状态码 + content-type 前缀。
+const TEXT_ENDPOINTS = new Set([
+  `/api/v1/books/${BOOK}/export?format=txt`,
+]);
+const STATUS_ONLY_ENDPOINTS = new Set([
+  `/api/v1/backup/export`,
+]);
 
 const preseed = (root) => {
   mkdirSync(join(root, ".inkos"), { recursive: true });
@@ -317,6 +379,48 @@ try {
       cwd: repoRoot,
       stdio: ["ignore", "ignore", "inherit"],
     });
+  }
+
+  // ── 1.5 探测模式（684 号）：候选端点双端状态码对，入列前置协议 ──
+  if (PROBE_PATHS) {
+    const resolvePath = async (port, raw) => {
+      let p = raw.replaceAll("$BOOK", BOOK);
+      if (p.includes("$SESSION")) {
+        const res = await fetchT(`http://127.0.0.1:${port}/api/v1/sessions`);
+        const body = await res.json().catch(() => null);
+        const first = body?.sessions?.[0]?.id ?? body?.[0]?.id ?? null;
+        if (!first) return null;
+        p = p.replaceAll("$SESSION", encodeURIComponent(String(first)));
+      }
+      return p;
+    };
+    const shapeOf = (x) => {
+      const text = x.text.split(roots.node).join("%ROOT%").split(roots.rust).join("%ROOT%");
+      let b = null;
+      try { b = JSON.parse(text); } catch { return `${x.ct} ${x.text.length}B 非JSON·首64=${text.slice(0, 64)}`; }
+      if (Array.isArray(b)) return `JSON[${b.length}] 首=${JSON.stringify(b[0] ?? null).slice(0, 200)}`;
+      return `JSON{${Object.keys(b).join(",")}}`;
+    };
+    console.log(`[probe] 探测 ${PROBE_PATHS.length} 个候选端点（状态码对 + 响应形状；入列先探测——634 号协议）`);
+    for (const raw of PROBE_PATHS) {
+      const np = await resolvePath(nodePort, raw);
+      const rp = await resolvePath(rustPort, raw);
+      if (!np || !rp) {
+        console.log(`[probe] $SESSION-解析失败（会话清单空） ${raw}`);
+        continue;
+      }
+      const [n, r] = await Promise.all([
+        fetchT(`http://127.0.0.1:${nodePort}${np}`).then(async (res) => ({ status: res.status, ct: res.headers.get("content-type") ?? "", text: await res.text() })).catch((e) => ({ status: -1, ct: "", text: String(e) })),
+        fetchT(`http://127.0.0.1:${rustPort}${rp}`).then(async (res) => ({ status: res.status, ct: res.headers.get("content-type") ?? "", text: await res.text() })).catch((e) => ({ status: -1, ct: "", text: String(e) })),
+      ]);
+      const verdict = n.status === r.status
+        ? (n.status === 200 ? "BOTH-200 " : `BOTH-${n.status}`)
+        : `✗DIVERGE node=${n.status} rust=${r.status}`;
+      console.log(`[probe] ${verdict} ${raw}`);
+      console.log(`    node : ${shapeOf(n)}`);
+      console.log(`    rust : ${shapeOf(r)}`);
+    }
+    throw new ProbeEarlyExit();
   }
 
   // ── 2. SSE 事件面活体收集（492 号）──
@@ -432,6 +536,38 @@ try {
       compared += 1;
       continue;
     }
+    // 684 号：文本契约面——归一化换行后逐字节比对（导出正文双端夹具同源）。
+    if (TEXT_ENDPOINTS.has(endpoint)) {
+      compared += 1;
+      const a = nodeRes.text.replace(/\r\n/g, "\n").trimEnd();
+      const b = rustRes.text.replace(/\r\n/g, "\n").trimEnd();
+      if (a === b) {
+        console.log(`✓ TEXT ${endpoint}（${nodeRes.status}，${a.length}B 逐字节一致）`);
+      } else {
+        divergences += 1;
+        const la = a.split("\n");
+        const lb = b.split("\n");
+        const at = la.findIndex((line, i) => line !== lb[i]);
+        console.log(`✗ TEXT ${endpoint}：首处分叉行 #${at + 1}`);
+        console.log(`    node=${JSON.stringify(la[at] ?? "").slice(0, 200)}`);
+        console.log(`    rust=${JSON.stringify(lb[at] ?? "").slice(0, 200)}`);
+      }
+      continue;
+    }
+    // 684 号：二进制容器面——只锁状态码 + content-type（gzip/tar 内部时间戳
+    // 与压缩序天然非确定，字节级比对不可行；持久化内容等价由工件树差分覆盖）。
+    if (STATUS_ONLY_ENDPOINTS.has(endpoint)) {
+      compared += 1;
+      const ct = (r) => (r.contentType ?? "").split(";")[0].trim();
+      const nonEmpty = nodeRes.text.length > 0 && rustRes.text.length > 0;
+      if (ct(nodeRes) === ct(rustRes) && nonEmpty) {
+        console.log(`✓ STATUS-ONLY ${endpoint}（${nodeRes.status}，ct=${ct(nodeRes)}，bytes node=${nodeRes.text.length}/rust=${rustRes.text.length}）`);
+      } else {
+        divergences += 1;
+        console.log(`✗ STATUS-ONLY ${endpoint}：node=${nodeRes.status}/${ct(nodeRes)} rust=${rustRes.status}/${ct(rustRes)} nonEmpty=${nonEmpty}`);
+      }
+      continue;
+    }
     // asset-library 双端数组排序语义不同（node 按 id、rust 按定义序）——按 id 归一。
     let nodeBody = nodeRes.body;
     let rustBody = rustRes.body;
@@ -444,6 +580,22 @@ try {
       };
       nodeBody = sortAssets(nodeBody);
       rustBody = sortAssets(rustBody);
+    }
+    // 684 号：truth 列表面归一化——①`runtime/` 工作产物为 node-only 备案
+    // 不对称（工件树差分同源备案）②`.json` 条目 preview 是 200 字符截断的
+    // 内部持久化原文：序列化风格（键序/默认键/信封）双端不同且截断后不可
+    // 语义解析——内容等价由各自 API 面端点（anti-ai-rules/codex 等）锁定，
+    // 此处只比文件名在场性 ③md/yaml 条目 name+size+preview 全量比对
+    // ④readdir 序不稳定，按 name 排序后比对。
+    if (endpoint === `/api/v1/books/${BOOK}/truth`) {
+      const normalizeTruth = (o) => ({
+        files: (o?.files ?? [])
+          .filter((f) => !String(f.name).startsWith("runtime/"))
+          .map((f) => (String(f.name).endsWith(".json") ? { name: f.name } : f))
+          .sort((x, y) => String(x.name).localeCompare(String(y.name))),
+      });
+      nodeBody = normalizeTruth(nodeBody);
+      rustBody = normalizeTruth(rustBody);
     }
     const waiver = WAIVERS.get(endpoint);
     const aNode = pruneWaivedPaths(prune(nodeBody), waiver?.paths ?? []);
@@ -1266,8 +1418,12 @@ try {
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;
 } catch (error) {
-  console.error(`[diff] 异常中断：${error?.message ?? error}`);
-  process.exitCode = 1;
+  if (error instanceof ProbeEarlyExit) {
+    // 探测模式正常收尾（finally 负责杀子进程/清根）。
+  } else {
+    console.error(`[diff] 异常中断：${error?.message ?? error}`);
+    process.exitCode = 1;
+  }
 } finally {
   for (const child of children) {
     try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }

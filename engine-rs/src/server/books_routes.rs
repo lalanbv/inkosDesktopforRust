@@ -23,6 +23,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use async_trait::async_trait;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::continuity::{AuditChapterOptions, TruthFileOverrides};
@@ -1979,6 +1980,43 @@ pub async fn eval(
 
 // ── GET /api/v1/books/:id/export（47 号）──────────────────────────
 
+/// 684 号：Content-Disposition 合成（TS `attachmentDisposition` 逐字镜像）。
+///
+/// - ASCII 兜底名：`[^A-Za-z0-9._-]+` 连续段折叠为单 `_`，空名兜底 download；
+/// - `filename*=UTF-8''`：encodeURIComponent 逐字节镜像（保留 `-_.!~*'()`）。
+///
+/// 非 ASCII 书名裸拼头值会产出 obs-text（非可见 ASCII，严格客户端拒收）——
+/// 合成值域恒 ASCII，`HeaderValue::from_str` 恒可插。
+const ENCODE_COMPONENT_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
+
+fn attachment_disposition(file_name: &str) -> String {
+    let mut fallback = String::with_capacity(file_name.len());
+    let mut in_run = false;
+    for c in file_name.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            fallback.push(c);
+            in_run = false;
+        } else if !in_run {
+            fallback.push('_');
+            in_run = true;
+        }
+    }
+    if fallback.is_empty() {
+        fallback.push_str("download");
+    }
+    let encoded = utf8_percent_encode(file_name, ENCODE_COMPONENT_SET);
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct ExportQuery {
     #[serde(default)]
@@ -2009,9 +2047,11 @@ pub async fn export(
             if let Ok(value) = axum::http::HeaderValue::from_str(&artifact.content_type) {
                 headers.insert(axum::http::header::CONTENT_TYPE, value);
             }
-            if let Ok(value) =
-                axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{}\"", artifact.file_name))
-            {
+            // 684 号：Content-Disposition 走 RFC 6266/5987 合成（TS
+            // attachmentDisposition 逐字镜像）——非 ASCII 书名裸拼会产生
+            // obs-text 头值（非可见 ASCII，严格客户端拒收），合成值恒 ASCII。
+            let disposition = attachment_disposition(&artifact.file_name);
+            if let Ok(value) = axum::http::HeaderValue::from_str(&disposition) {
                 headers.insert(axum::http::header::CONTENT_DISPOSITION, value);
             }
             response
@@ -2447,6 +2487,50 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Export failed");
+    }
+
+    #[tokio::test]
+    async fn export_cjk_book_emits_rfc5987_content_disposition() {
+        // 684 号：非 ASCII 书名裸拼头值时 from_str 会放行 obs-text（raw UTF-8
+        // 字节），但值非可见 ASCII（to_str 失败，严格客户端拒收/下载名乱码）——
+        // RFC 5987 合成后值域恒 ASCII。期望值与 TS attachmentDisposition 同
+        // 向量（"雾港手记" 连续非 ASCII 段折叠为单 `_` 兜底名；filename* 为
+        // encodeURIComponent 逐字节镜像）。
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("books").join("雾港手记");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"雾港手记","title":"雾港手记","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        let runtime = runtime_for(dir.path());
+        let response = app(runtime)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/books/%E9%9B%BE%E6%B8%AF%E6%89%8B%E8%AE%B0/export?format=txt")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let disposition = response
+            .headers()
+            .get(axum::http::header::CONTENT_DISPOSITION)
+            .expect("Content-Disposition 必须在场（中文书名不得静默丢头）")
+            .to_str()
+            .expect("头值必须恒 ASCII")
+            .to_string();
+        assert_eq!(
+            disposition,
+            "attachment; filename=\"_.txt\"; filename*=UTF-8''%E9%9B%BE%E6%B8%AF%E6%89%8B%E8%AE%B0.txt"
+        );
     }
 
     #[tokio::test]

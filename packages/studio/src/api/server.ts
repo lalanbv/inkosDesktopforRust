@@ -3484,7 +3484,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const snapshot = await listAssets(root, kind);
     return c.body(core.buildAssetLibraryExport(snapshot.assets), 200, {
       "Content-Type": "application/json; charset=utf-8",
-      "Content-Disposition": `attachment; filename="asset-library-${kind}.json"`,
+      "Content-Disposition": attachmentDisposition(`asset-library-${kind}.json`),
     });
   });
 
@@ -6644,7 +6644,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(responseBody, {
         headers: {
           "Content-Type": artifact.contentType,
-          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
+          // 684 号：非 ASCII 文件名裸入 Content-Disposition 会让 undici 在
+          // 响应头物化时抛 TypeError（中文书名导出必 500）——统一走 RFC 5987
+          // 助手（story-graph 家族既有约定）。
+          "Content-Disposition": attachmentDisposition(artifact.fileName),
         },
       });
     } catch {
@@ -8219,7 +8222,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(new Uint8Array(archive), {
         headers: {
           "Content-Type": "application/gzip",
-          "Content-Disposition": `attachment; filename="${encodeURIComponent(id)}.tar.gz"`,
+          // 684 号：quoted-string 内的 percent 编码不会被浏览器解码（落盘成
+          // 字面 %XX 名）——统一 attachmentDisposition（filename* 才是解码面）。
+          "Content-Disposition": attachmentDisposition(`${id}.tar.gz`),
         },
       });
     } catch (error) {

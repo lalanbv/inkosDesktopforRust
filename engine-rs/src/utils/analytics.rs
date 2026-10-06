@@ -124,7 +124,9 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
     let total_chapters = chapters.len() as u32;
     let total_words: u64 = chapters.iter().map(|c| c.word_count).sum();
     let avg_words_per_chapter = if total_chapters > 0 {
-        total_words / total_chapters as u64
+        // 684 号：TS Math.round 镜像——截断除法在 61.5 形态产出 61 而 TS 四舍
+        // 五入 62（contract-diff 活体捕获）。
+        (total_words as f64 / total_chapters as f64).round() as u64
     } else {
         0
     };
@@ -256,6 +258,15 @@ mod tests {
         assert_eq!(a.avg_words_per_chapter, 2000);
         // audited = approved + rejected = 2; passed = approved = 1 → 50%
         assert_eq!(a.audit_pass_rate, 50);
+    }
+
+    #[test]
+    fn avg_words_per_chapter_rounds_half_up_like_ts_math_round() {
+        // 684 号：TS Math.round 镜像——61.5 必须舍入 62（截断除法给 61，
+        // contract-diff analytics 活体捕获）。
+        let chapters = vec![ch(1, "approved", 61, &[], None), ch(2, "approved", 62, &[], None)];
+        let a = compute_analytics("b", &chapters);
+        assert_eq!(a.avg_words_per_chapter, 62);
     }
 
     #[test]

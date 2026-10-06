@@ -562,7 +562,7 @@ fn llm_service(raw: &Value) -> Option<String> {
 /// `{enabled:false, provider:"tavily"}`；可选 baseUrl/apiKey/apiKeyEnv）。
 fn parse_research_search(value: Option<&Value>) -> Result<Value, String> {
     let Some(obj) = value.filter(|v| !v.is_null()).and_then(Value::as_object) else {
-        return Ok(json!({ "enabled": false, "provider": "tavily" }));
+        return Ok(json!({ "enabled": false, "provider": "tavily", "allowPrivateEgress": false }));
     };
     let enabled = match obj.get("enabled") {
         None => false,
@@ -576,7 +576,15 @@ fn parse_research_search(value: Option<&Value>) -> Result<Value, String> {
             return Err("Invalid enum value. Expected 'tavily' | 'custom'".to_string())
         }
     };
-    let mut out = json!({ "enabled": enabled, "provider": provider });
+    // 684 号：TS schema `allowPrivateEgress: z.boolean().default(false)` 镜像——
+    // 旧形态整键缺失，GET 形状漂移且 PUT 往返把用户显式配置的私网豁免
+    // （635 号 SSRF 防线的用户开关）静默清除（contract-diff 活体捕获）。
+    let allow_private_egress = match obj.get("allowPrivateEgress") {
+        None => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("Invalid input: expected boolean, received other".to_string()),
+    };
+    let mut out = json!({ "enabled": enabled, "provider": provider, "allowPrivateEgress": allow_private_egress });
     if let Some(base_url) = obj.get("baseUrl") {
         match base_url {
             Value::String(s) if is_valid_url(s) => {
@@ -970,5 +978,43 @@ mod project_routes_tests {
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{resp}");
         assert!(resp.get("error").is_some_and(|e| e.is_string()), "{resp}");
+    }
+
+    /// 684 号：researchSearch PUT 往返必须保真 `allowPrivateEgress`——TS schema
+    /// default 字段（635 号 SSRF 私网豁免的用户开关），旧形态解析时整键丢弃，
+    /// GET 形状漂移且用户显式配置被 PUT 静默清除（contract-diff 活体捕获）。
+    #[tokio::test]
+    async fn research_search_put_roundtrips_allow_private_egress() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{"name":"t","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        let (status, resp) = run_req(
+            dir.path(),
+            "PUT",
+            "/api/v1/project/research-search",
+            Some(r#"{ "researchSearch": { "enabled": true, "provider": "custom", "allowPrivateEgress": true } }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        let (status, resp) = run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        assert_eq!(resp["researchSearch"]["allowPrivateEgress"], true, "{resp}");
+        assert_eq!(resp["researchSearch"]["enabled"], true, "{resp}");
+    }
+
+    #[tokio::test]
+    async fn research_search_get_defaults_include_allow_private_egress() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("inkos.json"),
+            r#"{"name":"t","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        let (status, resp) = run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+        assert_eq!(resp["researchSearch"]["allowPrivateEgress"], false, "{resp}");
     }
 }

@@ -1308,7 +1308,10 @@ pub async fn list_custom_services_models(
         let models: Vec<Value> = probed
             .iter()
             .filter(|m| is_text_chat_model_id(&m.id))
-            .map(|m| json!({ "id": m.id, "name": m.name }))
+            // 684 号：TS ProbedModel 恒带 contextWindow（未配置默认 0，probe.ts
+            // 同源镜像）——缺键造成 groups[].models[] 形状漂移（contract-diff
+            // 活体捕获）。
+            .map(|m| json!({ "id": m.id, "name": m.name, "contextWindow": m.context_window }))
             .collect();
         groups.push(json!({ "service": id, "label": label, "models": models }));
     }

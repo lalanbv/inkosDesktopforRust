@@ -1176,7 +1176,9 @@ mod books47_e2e {
         );
         assert_eq!(
             response.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"b1.txt\""
+            // 684 号：RFC 5987 合成（TS attachmentDisposition 镜像）——ASCII 名
+            // 兜底与 filename* 同形。
+            "attachment; filename=\"b1.txt\"; filename*=UTF-8''b1.txt"
         );
         let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
@@ -1210,7 +1212,7 @@ mod books47_e2e {
         );
         assert_eq!(
             response.headers().get("content-disposition").unwrap(),
-            "attachment; filename=\"b1.epub\""
+            "attachment; filename=\"b1.epub\"; filename*=UTF-8''b1.epub"
         );
         let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
         assert_eq!(&body[..4], &[0x50, 0x4B, 0x03, 0x04]);
@@ -3144,7 +3146,8 @@ mod config54_e2e {
         // GET 无键 → 整体默认。
         let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/research-search", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(parsed["researchSearch"], serde_json::json!({ "enabled": false, "provider": "tavily" }));
+        // 684 号：TS schema default 字段 allowPrivateEgress 入投影（PUT 往返保真）。
+        assert_eq!(parsed["researchSearch"], serde_json::json!({ "enabled": false, "provider": "tavily", "allowPrivateEgress": false }));
 
         // PUT 合法：填充 + 可选字段保留。
         let (status, parsed) = call(
