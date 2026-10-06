@@ -520,21 +520,11 @@ pub async fn get_story_graph_analysis(
 }
 
 // ── 三种导出 ────────────────────────────────────────────────────
+// 685 号：attachment_disposition 收敛到 task_store 共享实现——旧本地副本的
+// 兜底名逐字符映射不折叠连续段、无空名兜底，与 TS attachmentDisposition
+// /books export 语义有差；共享版（运行折叠 + download 兜底）为单一事实源。
 
-fn attachment_disposition(filename: &str) -> String {
-    let safe_ascii: String = filename
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let encoded = crate::server::task_store::js_encode_uri_component(filename);
-    format!("attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{encoded}")
-}
+use crate::server::task_store::attachment_disposition;
 
 fn text_response(body: String, content_type: &str, disposition_filename: &str) -> Response {
     (

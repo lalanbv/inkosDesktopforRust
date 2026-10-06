@@ -26,7 +26,14 @@ pub async fn extract_translation_source(
             buffer.len()
         ));
     }
-    let source_path = to_posix_relative(project_root, &safe_path);
+    // 685 号：safe_child_path 走 canonicalize（真符号链接逃逸防线，强于 TS
+    // 词法 resolve），但 project_root 是原始形态——macOS /tmp→/private/tmp
+    // 形态下 strip_prefix 失配，unwrap_or 泄漏绝对路径（TS 契约面=项目根相对
+    // 路径，contract-diff translations/:id 活体捕获）。相对化对 canonical 根做。
+    let canonical_root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    let source_path = to_posix_relative(&canonical_root, &safe_path);
     let filename = safe_path
         .file_name()
         .and_then(|n| n.to_str())

@@ -50,6 +50,11 @@ mod tests {
         assert_eq!(result.manifest.chapters.len(), 2);
         assert_eq!(result.manifest.chapters[0].status, TranslationChapterStatus::Pending);
         assert_eq!(result.manifest.source.kind, TranslationSourceKind::Text);
+        // 685 号：source.path 必须是项目根相对路径——tempdir 在 macOS 走
+        // /var→/private/var 符号链接，canonicalize 后 strip_prefix 对原始根
+        // 失配曾泄漏绝对路径（contract-diff translations/:id 活体捕获）。
+        assert!(!std::path::Path::new(&result.manifest.source.path).is_absolute(), "{}", result.manifest.source.path);
+        assert_eq!(result.manifest.source.path, "novel.txt");
         // source/translated 章节文件 + manifest + glossary + review 报告。
         assert!(root.join("translations").join(&result.manifest.id).join("manifest.json").is_file());
         assert!(root.join(&result.manifest.chapters[0].source_path).is_file());

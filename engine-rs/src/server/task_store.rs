@@ -120,6 +120,32 @@ pub fn js_encode_uri_component(value: &str) -> String {
     out
 }
 
+/// Content-Disposition 合成（685 号收敛：books_routes / interactive_film_routes
+/// 两份本地副本统一到此处；TS `attachmentDisposition` 逐字镜像）。
+///
+/// - ASCII 兜底名：`[^A-Za-z0-9._-]+` 连续段折叠为单 `_`，空名兜底 download；
+/// - `filename*=UTF-8''`：[`js_encode_uri_component`] 逐字节镜像。
+///
+/// 非 ASCII 书名裸拼头值会产出 obs-text（非可见 ASCII，严格客户端拒收）——
+/// 合成值域恒 ASCII，`HeaderValue::from_str` 恒可插。
+pub(crate) fn attachment_disposition(file_name: &str) -> String {
+    let mut fallback = String::with_capacity(file_name.len());
+    let mut in_run = false;
+    for c in file_name.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            fallback.push(c);
+            in_run = false;
+        } else if !in_run {
+            fallback.push('_');
+            in_run = true;
+        }
+    }
+    if fallback.is_empty() {
+        fallback.push_str("download");
+    }
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{}", js_encode_uri_component(file_name))
+}
+
 fn task_file_name(session_id: &str) -> String {
     format!("{}.json", js_encode_uri_component(session_id))
 }

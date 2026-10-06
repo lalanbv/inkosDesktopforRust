@@ -280,6 +280,84 @@ if (existsSync(ctx2Path) && existsSync(trace2Path)) {
   console.log("[fixture] 已伪造第 3 章压缩留痕工件（压缩留痕分支走查数据）");
 }
 
+// ── 3.6 走查实体播种（685 号：id 依赖端点入列差分的夹具面）──
+// ① 固定 id 会话（双端同 id，POST /sessions 幂等复活语义 → 重复跑安全）——
+//    GET /sessions/:id 与 /branches 得以静态入列差分；
+// ② interactive-films/diff-film/story-graph.json 静态图——graph/validation/
+//    analysis 三端点无 LLM 依赖（纯文件回显 + 双端计算面）；字段全显式
+//    （不依赖 zod default / serde default 双端补齐差异）；
+// ③ translations-src.md 翻译源——翻译项目 id 含创建时刻时间戳（project.ts
+//    L20）非确定，create 由差分器 $TRANSLATION 占位对双腿各自动态解析，
+//    夹具只播种源文件。
+const DIFF_SESSION_ID = "1730000000000-diffwalk";
+const sessionPost = await api("/api/v1/sessions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ sessionId: DIFF_SESSION_ID, bookId: BOOK }),
+});
+if (sessionPost.status !== 200) {
+  console.warn(`[fixture] ⚠ 固定 id 会话创建失败（${sessionPost.status}）——sessions/:id 差分面将缺数据`);
+} else {
+  console.log(`[fixture] 固定 id 会话就绪：${DIFF_SESSION_ID}`);
+}
+
+const FILM_ID = "diff-film";
+mkdirSync(join(root, "interactive-films", FILM_ID), { recursive: true });
+const diffGraph = {
+  schemaVersion: 1,
+  projectId: FILM_ID,
+  title: "镜中歧路",
+  worldAnchor: {
+    storyCore: "苏檀在镜中世界寻找归途。",
+    theme: "自我与本我的对峙",
+    genre: "玄幻",
+    worldRules: "镜内伤势与镜外互换。",
+    durationMinutes: 15,
+  },
+  characters: [
+    { id: "c_sutan", name: "苏檀", role: "protagonist", motivation: "找回打碎的归乡镜。" },
+    { id: "c_shadow", name: "镜影", role: "antagonist", motivation: "取代镜外的自己。" },
+  ],
+  variables: [
+    { name: "trust", type: "counter", default: 0, desc: "对镜影的信任度。" },
+    { name: "mirrorKey", type: "item", default: false, desc: "是否取得镜钥。" },
+  ],
+  nodes: [
+    {
+      id: "n1", title: "倒悬之镜", type: "start", sceneDesc: "苏檀坠入镜面深处。",
+      dialogue: [{ speaker: "苏檀", text: "这是哪里？", emotion: "惊" }],
+      choices: [
+        { id: "ch1a", text: "触摸镜面", targetNodeId: "n2", effects: [{ var: "trust", op: "add", value: 1 }] },
+        { id: "ch1b", text: "后退探路", targetNodeId: "n3", effects: [] },
+      ],
+      act: "第一幕",
+    },
+    {
+      id: "n2", title: "镜影低语", type: "branch", sceneDesc: "镜影提出交易。",
+      dialogue: [{ speaker: "镜影", text: "把名字给我。", emotion: "诡" }],
+      choices: [
+        { id: "ch2a", text: "交出名字", targetNodeId: "e_bad", effects: [{ var: "trust", op: "add", value: 2 }], weight: "heavy" },
+        { id: "ch2b", text: "拒绝并夺镜钥", targetNodeId: "n3", effects: [{ var: "mirrorKey", op: "set", value: true }], weight: "critical" },
+      ],
+      act: "第一幕",
+    },
+    {
+      id: "n3", title: "镜渊归途", type: "ending", sceneDesc: "镜钥开启归途。",
+      dialogue: [], choices: [], act: "终幕",
+    },
+  ],
+  endings: [
+    { id: "e_bad", nodeId: "n3", title: "镜中永眠", type: "bad", description: "名字被夺，苏檀留在镜内。" },
+    { id: "e_good", nodeId: "n3", title: "携钥而归", type: "good", description: "苏檀握镜钥踏上归途。" },
+  ],
+};
+writeFileSync(join(root, "interactive-films", FILM_ID, "story-graph.json"), JSON.stringify(diffGraph, null, 2));
+writeFileSync(
+  join(root, "translations-src.md"),
+  "# 第一章 雨夜来客\n\n雨落在青石巷，苏檀推开了碎镜斋的门。\n\n# 第二章 旧账\n\n账本上第一笔写着：镜面一面，碎。\n",
+);
+console.log(`[fixture] 走查实体播种完成（会话 ${DIFF_SESSION_ID} / 影线 ${FILM_ID} / 翻译源）`);
+
 // ── 4. 断言 ──
 const promises = await api(`/api/v1/books/${enc}/promises`);
 const timeline = promises.body?.timeline ?? [];

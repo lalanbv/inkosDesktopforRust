@@ -935,10 +935,14 @@ pub fn analyze_path_distribution(graph: &StoryGraph) -> PathDistribution {
 // ── validation（validation.ts：14 规则） ─────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValidationIssue {
     pub code: &'static str,
     pub level: &'static str,
     pub message: String,
+    // 685 号：缺 rename_all 时 node_ids 以蛇形出线（TS 契约面=nodeIds，UI 消费
+    // 面）——contract-diff story-graph/validation 活体捕获（555 号 serde rename
+    // 潜伏 bug 同型）。
     pub node_ids: Vec<String>,
 }
 

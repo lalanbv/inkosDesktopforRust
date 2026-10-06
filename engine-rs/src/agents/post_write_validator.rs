@@ -12,6 +12,7 @@
 
 use regex::Regex;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use crate::models::book_rules::{BookRules, NarrativePerson};
@@ -976,19 +977,59 @@ pub fn detect_paragraph_length_drift(
 // ── 标题查重 / 去重 / 重生成 ──
 
 /// 标题查重。逐字移植 TS `detectDuplicateTitle`。
-pub fn detect_duplicate_title(new_title: &str, existing_titles: &[String]) -> Vec<PostWriteViolation> {
-    if new_title.trim().is_empty() {
+/// 标题探测预归一化索引（685 号）。
+///
+/// resolve 流程对同一 existing 列表做多轮探测（初检 / 重生成复检 / 计数器
+/// 循环 / 折叠复检），旧形态每轮全量 `to_lowercase` + 正则 `strip_punct`
+/// （且 `strip_punct(new)` 在循环内逐迭代重算）——O(probes×titles) 的分配
+/// 热点（bench title_dedup 活体）。索引一次构建，探测面只做借用比较；
+/// 匹配语义与旧逐字循环逐例等价（顺序 / 空跳过 / 首中即断）。
+struct TitleIndex<'a> {
+    /// trim + lowercase 且非空者（保序）。
+    lower: Vec<String>,
+    /// 与 lower 平行的 strip_punct 形态。
+    strip: Vec<String>,
+    /// 与 lower 平行的原始标题引用（violation 文案回显原始形态——语义保持）。
+    original: Vec<&'a String>,
+}
+
+impl<'a> TitleIndex<'a> {
+    fn build(existing_titles: &'a [String]) -> Self {
+        let mut lower = Vec::with_capacity(existing_titles.len());
+        let mut strip = Vec::with_capacity(existing_titles.len());
+        let mut original = Vec::with_capacity(existing_titles.len());
+        for existing in existing_titles {
+            let norm = existing.trim().to_lowercase();
+            if norm.is_empty() {
+                continue;
+            }
+            strip.push(strip_punct(&norm));
+            lower.push(norm);
+            original.push(existing);
+        }
+        TitleIndex { lower, strip, original }
+    }
+}
+
+/// 对预归一化索引的探测（detect_duplicate_title 的内燃形态）。
+/// 新标题的 strip 形态惰性计算：初检在精确比较阶段断掉时不付 regex 成本。
+fn detect_duplicate_title_indexed(new_title: &str, index: &TitleIndex) -> Vec<PostWriteViolation> {
+    let trimmed = new_title.trim();
+    if trimmed.is_empty() {
         return Vec::new();
     }
-    let normalized = new_title.trim().to_lowercase();
+    let normalized = trimmed.to_lowercase();
     let mut violations = Vec::new();
+    let mut strip_new_memo: Option<String> = None;
 
-    for existing in existing_titles {
-        let existing_norm = existing.trim().to_lowercase();
-        if existing_norm.is_empty() {
-            continue;
-        }
-        if normalized == existing_norm {
+    for (existing_norm, existing_strip, existing_original) in index
+        .lower
+        .iter()
+        .zip(index.strip.iter())
+        .zip(index.original.iter())
+        .map(|((n, s), o)| (n, s, *o))
+    {
+        if normalized == *existing_norm {
             violations.push(PostWriteViolation {
                 rule: "duplicate-title".to_string(),
                 severity: ViolationSeverity::Warning,
@@ -997,19 +1038,25 @@ pub fn detect_duplicate_title(new_title: &str, existing_titles: &[String]) -> Ve
             });
             break;
         }
-        let strip_new = strip_punct(&normalized);
-        let strip_existing = strip_punct(&existing_norm);
-        if strip_new == strip_existing {
+        let strip_new = strip_new_memo.get_or_insert_with(|| strip_punct(&normalized));
+        if *strip_new == *existing_strip {
             violations.push(PostWriteViolation {
                 rule: "near-duplicate-title".to_string(),
                 severity: ViolationSeverity::Warning,
-                description: format!("章节标题\"{new_title}\"与已有标题\"{existing}\"高度相似"),
+                description: format!("章节标题\"{new_title}\"与已有标题\"{existing_original}\"高度相似"),
                 suggestion: "避免使用相似的章节标题".to_string(),
             });
             break;
         }
     }
     violations
+}
+
+pub fn detect_duplicate_title(new_title: &str, existing_titles: &[String]) -> Vec<PostWriteViolation> {
+    if new_title.trim().is_empty() {
+        return Vec::new();
+    }
+    detect_duplicate_title_indexed(new_title, &TitleIndex::build(existing_titles))
 }
 
 /// 标题去重解析（含重生成）。逐字移植 TS `resolveDuplicateTitle`。
@@ -1027,10 +1074,13 @@ pub fn resolve_duplicate_title(
         };
     }
 
-    let duplicate_issues = detect_duplicate_title(trimmed, existing_titles);
+    // 685 号：索引一次构建、全流程探测面复用（初检 / 重生成复检 / 计数器
+    // 循环 / 折叠复检对同一列表的每轮全量重归一化消除）。
+    let index = TitleIndex::build(existing_titles);
+    let duplicate_issues = detect_duplicate_title_indexed(trimmed, &index);
     if !duplicate_issues.is_empty() {
         if let Some(regenerated) = regenerate_duplicate_title(trimmed, existing_titles, language, content) {
-            if detect_duplicate_title(&regenerated, existing_titles).is_empty() {
+            if detect_duplicate_title_indexed(&regenerated, &index).is_empty() {
                 return ResolveDuplicateTitleResult {
                     title: regenerated,
                     issues: duplicate_issues,
@@ -1044,7 +1094,7 @@ pub fn resolve_duplicate_title(
             } else {
                 format!("{trimmed}（{counter}）")
             };
-            if detect_duplicate_title(&candidate, existing_titles).is_empty() {
+            if detect_duplicate_title_indexed(&candidate, &index).is_empty() {
                 return ResolveDuplicateTitleResult {
                     title: candidate,
                     issues: duplicate_issues,
@@ -1067,7 +1117,7 @@ pub fn resolve_duplicate_title(
     }
 
     if let Some(regenerated) = regenerate_collapsed_title(trimmed, existing_titles, language, content) {
-        if detect_duplicate_title(&regenerated, existing_titles).is_empty()
+        if detect_duplicate_title_indexed(&regenerated, &index).is_empty()
             && detect_title_collapse(&regenerated, existing_titles, language).is_empty()
         {
             return ResolveDuplicateTitleResult {
@@ -1095,24 +1145,30 @@ fn detect_title_collapse(
     existing_titles: &[String],
     language: WritingLanguage,
 ) -> Vec<PostWriteViolation> {
-    let all_titles: Vec<String> = existing_titles
+    // TS: .slice(-3)——旧形态为取末 3 个先把全列表 trim+collect（长书 200+
+    // 次 String 分配，685 号）；倒扫取到 3 个非空即止，序还原后等价。
+    let mut recent_titles: Vec<&String> = existing_titles
         .iter()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
+        .rev()
+        .filter(|t| !t.trim().is_empty())
+        .take(3)
         .collect();
-    // TS: .slice(-3)
-    let start = all_titles.len().saturating_sub(3);
-    let recent_titles = &all_titles[start..];
     if recent_titles.len() < 3 {
         return Vec::new();
     }
+    recent_titles.reverse();
 
     let new_title_owned = new_title.to_string();
     let mut rows: Vec<CadenceSummaryRow> = Vec::new();
-    for (i, title) in recent_titles.iter().chain(std::iter::once(&new_title_owned)).enumerate() {
+    for (i, title) in recent_titles
+        .iter()
+        .copied()
+        .chain(std::iter::once(&new_title_owned))
+        .enumerate()
+    {
         rows.push(CadenceSummaryRow {
             chapter: (i + 1) as u32,
-            title: title.clone(),
+            title: title.trim().to_string(),
             mood: String::new(),
             chapter_type: String::new(),
         });
@@ -1251,20 +1307,22 @@ fn extract_chinese_title_qualifier(
     None
 }
 
-fn extract_english_title_terms(text: &str) -> Vec<String> {
-    let mut terms: Vec<String> = Vec::new();
+/// 685 号：返回 HashSet（blocked 仅做成员判断，无序消费）；分段借用切片 +
+/// 候选缓冲复用（旧形态每 (start,size) 三元组一次 String 分配 + Vec 线性
+/// 去重，200 标题连接体上 O(n²)——bench title_dedup hit 情形主热点）。
+fn extract_english_title_terms(text: &str) -> HashSet<String> {
+    let mut terms: HashSet<String> = HashSet::new();
     for m in en_word_re().find_iter(text) {
         let word = m.as_str().to_lowercase();
-        if !terms.contains(&word) {
-            terms.push(word);
-        }
+        terms.insert(word);
     }
     terms
 }
 
-fn extract_chinese_title_terms(text: &str) -> Vec<String> {
-    let mut terms: Vec<String> = Vec::new();
-    let segments: Vec<String> = cjk_segment_re().find_iter(text).map(|m| m.as_str().to_string()).collect();
+fn extract_chinese_title_terms(text: &str) -> HashSet<String> {
+    let mut terms: HashSet<String> = HashSet::new();
+    let segments: Vec<&str> = cjk_segment_re().find_iter(text).map(|m| m.as_str()).collect();
+    let mut buffer = String::new();
     for segment in &segments {
         let chars: Vec<char> = segment.chars().collect();
         for start in 0..chars.len() {
@@ -1272,16 +1330,21 @@ fn extract_chinese_title_terms(text: &str) -> Vec<String> {
                 if start + size > chars.len() {
                     break;
                 }
-                let candidate: String = chars[start..start + size].iter().collect::<String>().trim().to_string();
-                if utf16_len(&candidate) < 2 {
+                buffer.clear();
+                buffer.extend(&chars[start..start + size]);
+                let candidate = buffer.trim();
+                if utf16_len(candidate) < 2 {
                     continue;
                 }
                 if candidate.chars().any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c)) {
                     continue;
                 }
-                if !terms.contains(&candidate) {
-                    terms.push(candidate);
+                // contains 先判：候选大量重复时免 to_string 分配（&str 借用
+                // 探测，Borrow<str> 同哈希）。
+                if terms.contains(candidate) {
+                    continue;
                 }
+                terms.insert(candidate.to_string());
             }
         }
     }

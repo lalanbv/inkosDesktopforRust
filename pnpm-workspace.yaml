@@ -73,6 +73,10 @@ overrides:
   "proxy-addr@2": ^2.0.8
   "source-map-js@1": ^1.2.2
   "katex@0.16": 0.18.2
+  # 685 号：MCP TypeScript SDK OAuth client 凭据误送（GHSA-6qxp-vccf-f47h，
+  # high，1.12.0 起受波及、1.31.0 起修复；@modelcontextprotocol/sdk←@google/genai
+  # ←pi-ai←inkos-core 运行时链）→ ^1.31.0（major 内范围键，556 号教训防逃逸）。
+  "@modelcontextprotocol/sdk@1": ^1.31.0
   # 681 号：caniuse-lite 钉镜像可用线——npmmirror 对 1.0.30001810 的包清单 404
   #（packument 列出但 CDN 缺 tarball，镜像同步缺陷；npmjs 可用），钉 1.0.30001809
   #（满足 browserslist@4.28.8 的 ^1.0.30001809 下限；429 号 browserslist 数据钉版先例）。

@@ -84,6 +84,36 @@ const apiFor = (base, root) => async (path, init) => {
   return { status: res.status, body, text: normalized, contentType: res.headers.get("content-type") ?? "" };
 };
 
+// 685 号：动态占位解析（id 含创建时刻时间戳等非确定成分的端点）。
+// $TRANSLATION=对**各腿引擎**分别 POST /translations/create（纯文件加工无
+// LLM 依赖）取返回 projectId——双腿 id 天然不同，占位按引擎解析；创建失败
+// （缺夹具源文件等）返回 null，调用方降级报告。$SESSION=各腿会话清单首项 id。
+/** $TRANSLATION 解析出的双腿各自翻译项目 id（%TID% 归一化用）。 */
+const resolvedTranslationIds = new Map();
+const resolveDynamicPath = async (port, raw) => {
+  let p = raw.replaceAll("$BOOK", BOOK);
+  if (p.includes("$TRANSLATION")) {
+    const res = await fetchT(`http://127.0.0.1:${port}/api/v1/translations/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePath: "translations-src.md", sourceLanguage: "zh", targetLanguage: "en", title: "镜花手记" }),
+    }).catch(() => null);
+    const body = res ? await res.json().catch(() => null) : null;
+    const id = body?.projectId ?? null;
+    if (!id) return null;
+    resolvedTranslationIds.set(port, String(id));
+    p = p.replaceAll("$TRANSLATION", encodeURIComponent(String(id)));
+  }
+  if (p.includes("$SESSION")) {
+    const res = await fetchT(`http://127.0.0.1:${port}/api/v1/sessions`);
+    const body = await res.json().catch(() => null);
+    const first = body?.sessions?.[0]?.id ?? body?.[0]?.id ?? null;
+    if (!first) return null;
+    p = p.replaceAll("$SESSION", encodeURIComponent(String(first)));
+  }
+  return p;
+};
+
 /** 递归剪除易变键并做键排序规范化（保证两侧同构可比）。 */
 const VOLATILE = new Set([
   "ts", "createdAt", "updatedAt", "timestamp", "durationMs", "elapsedMs",
@@ -263,6 +293,14 @@ const ENDPOINTS = [
   // 双端夹具同源必须逐字节一致（epub/tar.gz 二进制容器不在此列，见
   // STATUS_ONLY）。
   `/api/v1/books/${BOOK}/export?format=txt`,
+  // 685 号扩容（488 号协议第四轮：夹具播种真实实体——固定 id 会话 + 静态
+  // story-graph + 翻译源文件；翻译 id 经 $TRANSLATION 动态占位双腿各解）。
+  `/api/v1/sessions/1730000000000-diffwalk`,
+  `/api/v1/sessions/1730000000000-diffwalk/branches`,
+  `/api/v1/projects/diff-film/story-graph`,
+  `/api/v1/projects/diff-film/story-graph/validation`,
+  `/api/v1/projects/diff-film/story-graph/analysis`,
+  `/api/v1/translations/$TRANSLATION`,
 ];
 
 // 684 号：非 JSON 端点的两种弱比对模式。
@@ -383,17 +421,6 @@ try {
 
   // ── 1.5 探测模式（684 号）：候选端点双端状态码对，入列前置协议 ──
   if (PROBE_PATHS) {
-    const resolvePath = async (port, raw) => {
-      let p = raw.replaceAll("$BOOK", BOOK);
-      if (p.includes("$SESSION")) {
-        const res = await fetchT(`http://127.0.0.1:${port}/api/v1/sessions`);
-        const body = await res.json().catch(() => null);
-        const first = body?.sessions?.[0]?.id ?? body?.[0]?.id ?? null;
-        if (!first) return null;
-        p = p.replaceAll("$SESSION", encodeURIComponent(String(first)));
-      }
-      return p;
-    };
     const shapeOf = (x) => {
       const text = x.text.split(roots.node).join("%ROOT%").split(roots.rust).join("%ROOT%");
       let b = null;
@@ -403,8 +430,8 @@ try {
     };
     console.log(`[probe] 探测 ${PROBE_PATHS.length} 个候选端点（状态码对 + 响应形状；入列先探测——634 号协议）`);
     for (const raw of PROBE_PATHS) {
-      const np = await resolvePath(nodePort, raw);
-      const rp = await resolvePath(rustPort, raw);
+      const np = await resolveDynamicPath(nodePort, raw);
+      const rp = await resolveDynamicPath(rustPort, raw);
       if (!np || !rp) {
         console.log(`[probe] $SESSION-解析失败（会话清单空） ${raw}`);
         continue;
@@ -524,8 +551,32 @@ try {
   }
 
   for (const endpoint of ENDPOINTS) {
-    const nodeRes = await nodeApi(endpoint);
-    const rustRes = await rustApi(endpoint);
+    // 685 号：动态占位按腿解析（$TRANSLATION 等 id 非确定端点）——waiver/
+    // TEXT/STATUS 集合仍以模板串为键。
+    const [nodePath, rustPath] = await Promise.all([
+      resolveDynamicPath(nodePort, endpoint),
+      resolveDynamicPath(rustPort, endpoint),
+    ]);
+    if (!nodePath || !rustPath) {
+      console.log(`- ${endpoint}：动态占位解析失败（创建面缺依赖），跳过`);
+      continue;
+    }
+    let nodeRes = await nodeApi(nodePath);
+    let rustRes = await rustApi(rustPath);
+    // 685 号：$TRANSLATION 端点的响应体内嵌双腿各自的翻译项目 id（章节
+    // source/translated 相对路径前缀）——语义自洽的纯身份值，替换为 %TID% 再比。
+    if (endpoint.includes("$TRANSLATION")) {
+      const scrub = (res, port) => {
+        const tid = resolvedTranslationIds.get(port);
+        if (!tid) return res;
+        const text = res.text.split(tid).join("%TID%");
+        let body = null;
+        try { body = JSON.parse(text); } catch { /* 非 JSON 面 */ }
+        return { ...res, text, body };
+      };
+      nodeRes = scrub(nodeRes, nodePort);
+      rustRes = scrub(rustRes, rustPort);
+    }
     if (nodeRes.status === 404 && rustRes.status === 404) {
       console.log(`- ${endpoint}：双端 404，跳过`);
       continue;
