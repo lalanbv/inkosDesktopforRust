@@ -7,6 +7,11 @@
 @import "tailwindcss";
 
 @import "tw-animate-css";
+/* 681 号：KaTeX 渲染样式——@streamdown/math 的 getStyles() 约定宿主引入
+   katex/dist/katex.min.css，但宿主从未引入（全页样式表 0 个 katex 条目，
+   .katex-mathml 无隐藏规则导致 MathML 辅助文本视觉泄漏、KaTeX 字体不加载
+   公式退化为回退字体）。GUI 走查（681 号）首次发现，本行修复。 */
+@import "katex/dist/katex.min.css";
 /* 628 号：shadcn 依赖出清（其 CLI 拖入 braces<=3.0.3 无补丁线 advisory），
    此处 = shadcn@4.2.0 dist/tailwind.css 原样 vendor（纯静态 @theme/keyframes，
    无传递 CSS 依赖）；后续组件增补走 `pnpm dlx shadcn`（components.json 保留）。 */
