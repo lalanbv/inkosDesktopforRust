@@ -852,6 +852,7 @@ export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAg
 export { BookWriteLockError, StateManager } from "./state/manager.js";
 export { syncChapterWordCounts, type ChapterWordCountChange, type ChapterWordSyncDeps, type ChapterWordSyncResult } from "./state/chapter-word-sync.js";
 export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOptions, type DeleteLatestChapterResult } from "./state/chapter-delete.js";
+export { findChapterFileByNumber, parseChapterFileName } from "./state/chapter-filename.js";
 export {
   archiveChapterVersion,
   listChapterVersions,

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { bootstrapStructuredStateFromMarkdown, resolveDurableStoryProgress } from "./state-bootstrap.js";
+import { parseChapterFileName } from "./chapter-filename.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 
 /**
@@ -513,20 +514,18 @@ export class StateManager {
     }
 
     const rows = await Promise.all(files.flatMap(async (file) => {
-      const match = file.match(/^(\d+)[_-]?(.*?)\.md$/);
-      if (!match) return [];
-      const number = parseInt(match[1]!, 10);
-      if (!Number.isFinite(number) || number <= 0) return [];
+      const parsed = parseChapterFileName(file);
+      if (!parsed) return [];
       const filePath = join(chaptersDir, file);
       const [metadata, content] = await Promise.all([
         stat(filePath).catch(() => null),
         readFile(filePath, "utf-8").catch(() => ""),
       ]);
       const timestamp = (metadata?.mtime ?? new Date()).toISOString();
-      const rawTitle = match[2]?.replace(/^_+/, "").replace(/_/g, " ").trim();
+      const rawTitle = parsed.base.replace(/^_+/, "").replace(/_/g, " ").trim();
       return [{
-        number,
-        title: rawTitle || `第${number}章`,
+        number: parsed.number,
+        title: rawTitle || `第${parsed.number}章`,
         status: "ready-for-review" as const,
         wordCount: content.replace(/\s+/g, "").length,
         createdAt: timestamp,

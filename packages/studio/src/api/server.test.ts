@@ -363,6 +363,8 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     processProjectInteractionRequest: processProjectInteractionRequestMock,
     createInteractionToolsFromDeps: createInteractionToolsFromDepsMock,
     deleteLatestChapter: deleteLatestChapterMock,
+    // 682 号：章节文件定位单一事实源——透传真实现（纯函数，无桩必要）。
+    findChapterFileByNumber: actual.findChapterFileByNumber,
     executeEditTransaction: actual.executeEditTransaction,
     listChapterVersions: actual.listChapterVersions,
     readChapterPlanDocument: actual.readChapterPlanDocument,
@@ -3039,6 +3041,40 @@ describe("createStudioServer daemon lifecycle", () => {
       expect.objectContaining({ temperature: 0.9, signal: expect.any(AbortSignal) }),
     );
     await expect(readFile(chapterPath, "utf-8")).resolves.toBe(before);
+  });
+
+  it("opens chapter files whose leading digits are not zero-padded (682 号：能列出即可打开)", async () => {
+    const chaptersDir = join(root, "books", "demo-book", "chapters");
+    await writeFile(join(chaptersDir, "7_导入.md"), "# 第7章\n\n导入的非补零章节。", "utf-8");
+    await writeFile(join(chaptersDir, "00071_七十一.md"), "# 第71章\n\n前缀碰撞样本。", "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    // 主路径回归：4 位补零照常打开（beforeEach 既有 0003_Demo.md）
+    const mainline = await app.request("http://localhost/api/v1/books/demo-book/chapters/3");
+    expect(mainline.status).toBe(200);
+    await expect(mainline.json()).resolves.toMatchObject({ filename: "0003_Demo.md" });
+
+    // 修复前：列表（core 索引宽松 \d+）可见、详情（padStart(4) 严格）404 —— 红
+    const imported = await app.request("http://localhost/api/v1/books/demo-book/chapters/7");
+    expect(imported.status).toBe(200);
+    await expect(imported.json()).resolves.toMatchObject({ filename: "7_导入.md" });
+
+    // 71 章照常打开
+    const seventyOne = await app.request("http://localhost/api/v1/books/demo-book/chapters/71");
+    expect(seventyOne.status).toBe(200);
+    await expect(seventyOne.json()).resolves.toMatchObject({ filename: "00071_七十一.md" });
+  });
+
+  it("does not prefix-collide a padded lookup onto a longer chapter number (682 号)", async () => {
+    // 修复前 startsWith("0007") 会命中 00071_ 并把 71 章正文当 7 章返回（200 误配）
+    const chaptersDir = join(root, "books", "demo-book", "chapters");
+    await writeFile(join(chaptersDir, "00071_七十一.md"), "# 第71章", "utf-8");
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/books/demo-book/chapters/7");
+    expect(response.status).toBe(404);
   });
 
   it("regenerates a chapter in place without rolling back downstream chapters", async () => {

@@ -8,7 +8,7 @@
 // （680 号：673 备案「Rust 腿六分支未逐一注入」的套件化清偿——审改循环
 // 日志经 on_log 管道落 inkos.log（674b），rust 腿断言面=inkos.log 而非
 // stdout env.log；rust 腿前置 ensure-rust-bin 新鲜度闸（641 教训：先重建
-// 再判读））。
+// 再判读；682 号收紧：uncertified/skipped 亦拒绝出具活体证据））。
 //
 // 七场景（各起独立 walkthrough-env 实例，串行；双腿同一场景表）：
 //   B 达标退出    local "45,91"   retries=1  → 修复轮次 1/1→复审 91 达标退出，
@@ -46,13 +46,22 @@ if (engine !== "rust" && engine !== "node") {
 }
 
 // rust 腿前置新鲜度闸（641 教训：testgate 的 cargo test 不编译 bin 目标，
-// 活体腿消费陈旧二进制=测旧代码零信号）。build 失败/二进制缺失即拒绝。
+// 活体腿消费陈旧二进制=测旧代码零信号）。682 号收紧（681 P3 备案）：rust 腿
+// 的产品是「二进制与源码同源可证」的活体证据——build-failed/missing 既有拒绝
+// 外，uncertified（cargo 不可用，新鲜度无法自证）与 skipped
+// （GATE_TS_SKIP_RUST_BIN=1 显式豁免）同样拒绝出具；override
+// （INKOS_SMOKE_RUST_BIN，517 形态外部产物）=显式声明新鲜度调用方自管，放行。
 if (engine === "rust") {
   const { ensureRustBinFresh } = await import(pathToFileURL(join(scriptDir, "ensure-rust-bin.mjs")).href);
   const verdict = ensureRustBinFresh(repoRoot);
   console.log(`[rcm] rust-bin 新鲜度闸：${verdict.status}${verdict.detail ? `（${verdict.detail}）` : ""}`);
-  if (verdict.status === "build-failed" || verdict.status === "missing") {
-    console.error(`[rcm] ✗ rust 腿拒绝在 ${verdict.status} 状态下出具活体证据`);
+  const refusedDetail = verdict.status === "skipped"
+    ? "（GATE_TS_SKIP_RUST_BIN=1——rust 证据需 cargo 指纹同源，请清除该 env 重跑）"
+    : verdict.status === "uncertified"
+      ? "（cargo 不可用，二进制新鲜度无法自证）"
+      : "";
+  if (["build-failed", "missing", "uncertified", "skipped"].includes(verdict.status)) {
+    console.error(`[rcm] ✗ rust 腿拒绝在 ${verdict.status} 状态下出具活体证据${refusedDetail}`);
     process.exit(1);
   }
 }

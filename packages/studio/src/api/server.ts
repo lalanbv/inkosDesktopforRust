@@ -112,6 +112,7 @@ import {
   createLLMTranslationModel,
   deleteLatestChapter,
   executeEditTransaction,
+  findChapterFileByNumber,
   listChapterVersions,
   readChapterPlanDocument,
   readChapterUserBrief,
@@ -4000,8 +4001,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     try {
       const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      // 682 号：与 core 索引同源定位——「能列出即可打开」+ 前缀碰撞根除
+      const match = findChapterFileByNumber(files, num);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
       const content = await readFile(join(chaptersDir, match), "utf-8");
       return c.json({ chapterNumber: num, filename: match, content });
@@ -4063,8 +4064,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const bookDir = state.bookDir(id);
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const chapterFile = files.find((file) => file.startsWith(paddedNum) && file.endsWith(".md"));
+      const chapterFile = findChapterFileByNumber(files, num);
       if (!chapterFile) {
         return c.json({ error: "Chapter not found" }, 404);
       }
@@ -6569,8 +6569,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const book = await state.loadBookConfig(id);
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      const match = findChapterFileByNumber(files, chapterNum);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
 
       const content = await readFile(join(chaptersDir, match), "utf-8");
@@ -6606,8 +6605,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const book = await state.loadBookConfig(id);
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      const match = findChapterFileByNumber(files, chapterNum);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
 
       const pipeline = new PipelineRunner(await buildPipelineConfig({
@@ -7297,8 +7295,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(chapterNum).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      const match = findChapterFileByNumber(files, chapterNum);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
 
       const content = await readFile(join(chaptersDir, match), "utf-8");
