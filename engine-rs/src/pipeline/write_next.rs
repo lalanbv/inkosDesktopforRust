@@ -852,6 +852,10 @@ async fn write_next_chapter_locked(
             genre: book.genre.clone(),
         };
 
+        // 679 号：审改循环日志管道句柄（各 clone 一份 Arc 供闭包 move 捕获——
+        // Arc<dyn Fn> 'static 约束要求 move；两闭包共享同一底层管道）
+        let on_log_warn = config.on_log.clone();
+        let on_log_stage = config.on_log.clone();
         // 44 号：完整审计器主链（真实 audit_chapter 编排；缺省回退最小协议）。
         let scoped_full = agents
             .full_auditor
@@ -893,8 +897,26 @@ async fn write_next_chapter_locked(
                 }
             }),
             run_post_write_checks: Some(Arc::new(run_post_write_checks)),
-            log_warn: Arc::new(|zh, en| tracing::warn!(target: "write-next", "{zh} / {en}")),
-            log_stage: Arc::new(|zh, en| tracing::info!(target: "write-next", "{zh} / {en}")),
+            // 679 号：审改循环 logStage/logWarn 接 config.on_log 管道（SSE
+            // `log` 事件 + log_file 落盘）——与 TS review-cycle 的
+            // config.logger?.info 同构。此前硬编码 tracing:: 宏而 bin 无
+            // subscriber→审改循环阶段日志全盲（tracing-subscriber 依赖因
+            // bench +45~242% 副作用不可用，674 定案）；warn 级同时保留
+            // tracing（有 subscriber 时双通道）。
+            log_warn: Arc::new(move |zh, en| {
+                let message = format!("{zh} / {en}");
+                if let Some(on_log) = on_log_warn.as_ref() {
+                    on_log("warn", &message);
+                }
+                tracing::warn!(target: "write-next", "{message}");
+            }),
+            log_stage: Arc::new(move |zh, en| {
+                let message = format!("{zh} / {en}");
+                if let Some(on_log) = on_log_stage.as_ref() {
+                    on_log("info", &message);
+                }
+                tracing::info!(target: "write-next", "{message}");
+            }),
         };
 
         let review = run_chapter_review_cycle(ReviewCycleParams {
