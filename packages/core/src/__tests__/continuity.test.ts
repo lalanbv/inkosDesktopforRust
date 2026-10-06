@@ -456,4 +456,32 @@ describe("ContinuityAuditor", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // 683 号：前章上下文定位与 682 单一事实源统一——非 4 位前导号文件名
+  // （手工放置/导入形态）也加载为审稿上下文（修复前静默缺失返回空串）。
+  it("loads previous-chapter context from a non-padded filename (683 号)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "inkos-continuity-prev-"));
+    try {
+      const chaptersDir = join(root, "chapters");
+      await mkdir(chaptersDir, { recursive: true });
+      await writeFile(join(chaptersDir, "1_手动导入.md"), "# 第1章 手动导入\n\n前章正文。", "utf-8");
+
+      const auditor = new ContinuityAuditor({
+        client: {
+          provider: "openai",
+          apiFormat: "chat",
+          stream: false,
+          defaults: { temperature: 0.7, maxTokens: 4096, thinkingBudget: 0, extra: {} },
+        },
+        model: "test-model",
+        projectRoot: root,
+      });
+
+      // 修复前：padStart(4) 定位 "0001" 找不到 "1_手动导入.md" → 返回 ""（红）
+      await expect((auditor as unknown as { loadPreviousChapter: (bookDir: string, chapter: number) => Promise<string> }).loadPreviousChapter(root, 2))
+        .resolves.toContain("前章正文。");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

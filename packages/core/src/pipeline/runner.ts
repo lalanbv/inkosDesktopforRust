@@ -30,6 +30,7 @@ import { analyzeAITells } from "../agents/ai-tells.js";
 import { analyzeSensitiveWords } from "../agents/sensitive-words.js";
 import { StateManager } from "../state/manager.js";
 import { archiveChapterVersion, readChapterUserBrief } from "../state/chapter-workspace.js";
+import { findChapterFileByNumber } from "../state/chapter-filename.js";
 import { MemoryDB, type Fact } from "../state/memory-db.js";
 import { dispatchNotification, dispatchWebhookEvent } from "../notify/dispatcher.js";
 import type { WebhookEvent } from "../notify/webhook.js";
@@ -1727,10 +1728,10 @@ export class PipelineRunner {
       });
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(targetChapter).padStart(4, "0");
-      const existingFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      // 683 号：落盘定位同源统一——原文件名原地覆写（保留非补零形态）
+      const existingFile = findChapterFileByNumber(files, targetChapter);
       if (!existingFile) {
-        throw new Error(`Chapter ${targetChapter} file not found in ${chaptersDir} (expected filename starting with ${paddedNum})`);
+        throw new Error(`Chapter ${targetChapter} file not found in ${chaptersDir}`);
       }
       await archiveChapterVersion(bookDir, targetChapter, content, "revision");
       const reviseLang = book.language ?? gp.language;
@@ -4182,8 +4183,8 @@ ${matrix}`,
   private async readChapterContent(bookDir: string, chapterNumber: number): Promise<string> {
     const chaptersDir = join(bookDir, "chapters");
     const files = await readdir(chaptersDir);
-    const paddedNum = String(chapterNumber).padStart(4, "0");
-    const chapterFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+    // 683 号：与 682 单一事实源统一——非 4 位前导号可定位，startsWith 前缀碰撞根除
+    const chapterFile = findChapterFileByNumber(files, chapterNumber);
     if (!chapterFile) {
       throw new Error(`Chapter ${chapterNumber} file not found in ${chaptersDir}`);
     }

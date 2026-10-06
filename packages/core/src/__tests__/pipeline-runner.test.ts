@@ -4705,6 +4705,90 @@ describe("PipelineRunner", () => {
     }
   });
 
+  // 683 号：审查发现的 682 同族缺口——管线内部 readChapterContent/落盘定位
+  // 仍为 padStart(4)+startsWith（硬抛），非 4 位章节「能列出能打开但修订失败」。
+  it("revises a chapter whose filename digits are not zero-padded, persisting in place (683 号)", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const storyDir = join(state.bookDir(bookId), "story");
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    const chapterFile = join(chaptersDir, "1_手动导入.md");
+
+    await Promise.all([
+      writeFile(chapterFile, "# 第1章 手动导入\n\nOriginal body.", "utf-8"),
+      writeFile(join(storyDir, "current_state.md"), createStateCard({
+        chapter: 1,
+        location: "Ashen ferry crossing",
+        protagonistState: "Lin Yue still hides the oath token.",
+        goal: "Find the vanished mentor.",
+        conflict: "The mentor debt is still personal.",
+      }), "utf-8"),
+      writeFile(join(storyDir, "pending_hooks.md"), "# Pending Hooks\n", "utf-8"),
+    ]);
+    await state.saveChapterIndex(bookId, [{
+      number: 1,
+      title: "手动导入",
+      status: "audit-failed",
+      wordCount: "Original body.".length,
+      createdAt: "2026-03-19T00:00:00.000Z",
+      updatedAt: "2026-03-19T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]);
+
+    // 首审失败（触发修订）+ 复审通过（shouldApplyRevision 闸放行落盘）
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter")
+      .mockResolvedValueOnce(createAuditResult({ passed: false, issues: [CRITICAL_ISSUE], summary: "needs revision" }))
+      .mockResolvedValueOnce(createAuditResult({ passed: true, issues: [], summary: "clean" }));
+    vi.spyOn(ReviserAgent.prototype, "reviseChapter").mockResolvedValue(
+      createReviseOutput({ revisedContent: "Spot-fixed body.", wordCount: "Spot-fixed body.".length }),
+    );
+
+    try {
+      await snapshotRevisionBaseline(state, bookId, 0);
+      // 修复前：readChapterContent 抛 "Chapter 1 file not found in ... (expected 0001)"（红）
+      await runner.reviseDraft(bookId, 1);
+      // 修订落盘=引擎规范名（0001_<标题>.md）；手工非规范旧名（1_手动导入.md）
+      // 不被删除（saveChapter 的取代清理按 NNNN_ 规范前缀判定、与 engine-rs
+      // writer.rs 逐字镜像——引擎不删非自己写入形态的同号文件，683 号裁决）。
+      // 同号双文件并存=双端镜像的既有语义（索引重建按前导号归并展示）。
+      const mdFiles = (await readdir(chaptersDir)).filter((f) => f.endsWith(".md")).sort();
+      expect(mdFiles).toEqual(["0001_手动导入.md", "1_手动导入.md"]);
+      const canonical = mdFiles.find((f) => f.startsWith("0001_"))!;
+      await expect(readFile(join(chaptersDir, canonical), "utf-8")).resolves.toContain("Spot-fixed body.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("audits a chapter whose filename digits are not zero-padded (683 号)", async () => {
+    const { root, runner, state, bookId } = await createRunnerFixture();
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    await writeFile(join(chaptersDir, "2_手动导入.md"), "# 第2章 手动导入\n\nBody.", "utf-8");
+    await state.saveChapterIndex(bookId, [{
+      number: 2,
+      title: "手动导入",
+      status: "drafted",
+      wordCount: "Body.".length,
+      createdAt: "2026-03-19T00:00:00.000Z",
+      updatedAt: "2026-03-19T00:00:00.000Z",
+      auditIssues: [],
+      lengthWarnings: [],
+    }]);
+
+    const auditChapter = vi.spyOn(ContinuityAuditor.prototype, "auditChapter").mockResolvedValue(
+      createAuditResult({ passed: true, issues: [], summary: "clean" }),
+    );
+
+    try {
+      // 修复前：readChapterContent 抛 "Chapter 2 file not found"（红）
+      const result = await runner.auditDraft(bookId, 2);
+      expect(result.chapterNumber).toBe(2);
+      expect(auditChapter).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("passes governed control inputs into manual revise on the governed path", async () => {
     const { root, runner, state, bookId } = await createRunnerFixture({
     });

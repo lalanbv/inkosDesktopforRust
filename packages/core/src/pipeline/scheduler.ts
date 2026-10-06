@@ -1,6 +1,7 @@
 import { PipelineRunner } from "./runner.js";
 import type { PipelineConfig } from "./runner.js";
 import { StateManager } from "../state/manager.js";
+import { findChapterFileByNumber } from "../state/chapter-filename.js";
 import type { BookConfig } from "../models/book.js";
 import type { QualityGates, DetectionConfig } from "../models/project.js";
 import type { GovernanceConfig } from "../models/quality-governance.js";
@@ -427,8 +428,8 @@ export class Scheduler {
     const { join } = await import("node:path");
     const chaptersDir = join(bookDir, "chapters");
     const files = await readdir(chaptersDir);
-    const paddedNum = String(chapterNumber).padStart(4, "0");
-    const chapterFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+    // 683 号：与 682 单一事实源统一（非 4 位前导号可定位+前缀碰撞根除）
+    const chapterFile = findChapterFileByNumber(files, chapterNumber);
     if (!chapterFile) {
       throw new Error(`Chapter ${chapterNumber} file not found in ${chaptersDir}`);
     }

@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { findChapterFileByNumber } from "../state/chapter-filename.js";
 import type { StoredHook, StoredSummary } from "../state/memory-db.js";
 import {
   parseChapterSummariesMarkdown,
@@ -60,10 +61,10 @@ async function readPreviousEndingExcerpt(
   }
 
   const chaptersDir = join(bookDir, "chapters");
-  const padded = String(previousChapter).padStart(4, "0");
   try {
     const files = await readdir(chaptersDir);
-    const match = files.find((file) => file.startsWith(padded) && file.endsWith(".md"));
+    // 683 号：与 682 单一事实源统一
+    const match = findChapterFileByNumber(files, previousChapter);
     if (!match) {
       return undefined;
     }

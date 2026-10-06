@@ -1,5 +1,6 @@
 import { access, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
+import { parseChapterFileName } from "../state/chapter-filename.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import {
   archiveChapterVersion,
@@ -257,14 +258,14 @@ async function executeEntityRename(
 
 async function findChapterPath(root: string, chapterNumber: number): Promise<{ readonly chaptersDir: string; readonly chapterPath: string; readonly chapterFile: string }> {
   const chaptersDir = join(root, "chapters");
-  const paddedChapter = String(chapterNumber).padStart(4, "0");
   const chapterFile = (await readdir(chaptersDir).catch((error) => {
     if (isMissingDirectoryError(error)) {
       return [];
     }
     throw error;
   }))
-    .find((file) => file.startsWith(`${paddedChapter}_`) && file.endsWith(".md"));
+    // 683 号：与 682 单一事实源统一（数值等值定位，前缀碰撞根除）
+    .find((file) => parseChapterFileName(file)?.number === chapterNumber);
 
   if (!chapterFile) {
     throw new Error(`Chapter ${chapterNumber} not found.`);

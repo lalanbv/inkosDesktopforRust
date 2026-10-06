@@ -1,4 +1,5 @@
 import { BaseAgent } from "./base.js";
+import { findChapterFileByNumber } from "../state/chapter-filename.js";
 import type { GenreProfile } from "../models/genre-profile.js";
 import type { BookRules } from "../models/book-rules.js";
 import type { FanficMode } from "../models/book.js";
@@ -852,8 +853,8 @@ ${overrides}\n`;
     const chaptersDir = join(bookDir, "chapters");
     try {
       const files = await readdir(chaptersDir);
-      const paddedPrev = String(currentChapter - 1).padStart(4, "0");
-      const prevFile = files.find((f) => f.startsWith(paddedPrev) && f.endsWith(".md"));
+      // 683 号：与 682 单一事实源统一（非 4 位前导号也可加载前章上下文）
+      const prevFile = findChapterFileByNumber(files, currentChapter - 1);
       if (!prevFile) return "";
       return await readFile(join(chaptersDir, prevFile), "utf-8");
     } catch {

@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { findChapterFileByNumber } from "../state/chapter-filename.js";
 import type { StateManager } from "../state/manager.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { computeAnalytics } from "./analytics.js";
@@ -89,8 +90,8 @@ export async function evaluateBookQuality(options: EvaluateBookQualityOptions): 
   const chapterEvals: ChapterEval[] = [];
 
   for (const ch of filteredIndex) {
-    const paddedNum = String(ch.number).padStart(4, "0");
-    const file = chapterFiles.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+    // 683 号：与 682 单一事实源统一
+    const file = findChapterFileByNumber(chapterFiles, ch.number);
     const content = file ? await readFile(join(chaptersDir, file), "utf-8") : "";
     const aiTells = content ? analyzeAITells(content) : { issues: [] };
     const paragraphs = content

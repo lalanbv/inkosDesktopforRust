@@ -660,6 +660,10 @@ export class WriterAgent extends BaseAgent {
     const paddedNum = String(output.chapterNumber).padStart(4, "0");
     const filename = `${paddedNum}_${this.sanitizeFilename(output.title)}.md`;
     const existingChapterFiles = await readdir(chaptersDir).catch(() => []);
+    // 被取代文件=同规范前缀（NNNN_）下改名旧版。683 号裁决：不按数值等值
+    // 扩大清理——引擎不得删除非自己写入形态的同号文件（如手工 7_x.md、
+    // 差分夹具 0001-镜中醒来.md 种子），否则双端镜像破裂且用户文件丢失；
+    // 与 engine-rs writer.rs save_chapter 的 starts_with("{padded}_") 逐字镜像。
     const supersededChapterFiles = existingChapterFiles
       .filter((file) => file.startsWith(`${paddedNum}_`) && file.endsWith(".md") && file !== filename);
 
