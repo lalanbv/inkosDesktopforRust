@@ -1,8 +1,6 @@
 //! project 配置域端点（54 号）：inkos.json 轻量键值读写面。
 //!
 //! 契约来源 `packages/studio/src/api/server.ts`：
-//! - `GET/PUT /project/input-governance-mode`（L4348/L4353）：mode ∈
-//!   legacy|v2（缺省/非法值读侧归 v2；写侧非法 400）
 //! - `GET/PUT /project/detection`（L4367/L4372）：DetectionConfigSchema
 //!   校验 + zod default 填充（7 字段标准化后落盘）；null 删键
 //! - `GET/PUT /project/model-overrides`（L5733/L5738）：对象透传
@@ -13,6 +11,10 @@
 //! - `GET/PUT /project/chapter-review-mode`（L5803/L5808）：writing.reviewMode
 //! - `GET/PUT /project/notify`（L5875/L5880）：数组透传
 //! - `POST /project/language`（L5553）：language 字段透传（不校验值）
+//!
+//! 原 `GET/PUT /project/input-governance-mode` 已随 686 号移除：TS 上游
+//! e7c04465 删除该端点与 legacy 输入治理管线分支，本侧对齐（inkos.json
+//! 遗留 `inputGovernanceMode` 键双端同为未知键忽略）。
 //!
 //! 错误形状：多数端点读/写失败走 onError → 500
 //! `{"error":{"code":"INTERNAL_ERROR",...}}`；language POST 为平铺
@@ -237,47 +239,6 @@ pub async fn put_project(
         return flat_internal("inkos.json write failed".to_string());
     }
     ok_json(json!({ "ok": true }))
-}
-
-// ── GET/PUT /api/v1/project/input-governance-mode ────────────────
-
-pub async fn get_input_governance_mode(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
-    let Some(raw) = load_raw_config(runtime.state.project_root()).await else {
-        return internal_error();
-    };
-    let mode = if raw.get("inputGovernanceMode") == Some(&json!("legacy")) { "legacy" } else { "v2" };
-    ok_json(json!({ "mode": mode }))
-}
-
-pub async fn put_input_governance_mode(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
-    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return internal_error();
-    };
-    let mode = parsed.get("mode");
-    let mode = match mode {
-        Some(Value::String(s)) if s == "legacy" || s == "v2" => s.as_str(),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "mode must be legacy or v2" })),
-            )
-        }
-    };
-    let root = runtime.state.project_root();
-    let Some(mut raw) = load_raw_config(root).await else {
-        return internal_error();
-    };
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
-    };
-    obj.insert("inputGovernanceMode".to_string(), json!(mode));
-    if !save_raw_config(root, &raw).await {
-        return internal_error();
-    }
-    ok_json(json!({ "ok": true, "mode": mode }))
 }
 
 // ── GET/PUT /api/v1/project/detection ────────────────────────────
@@ -944,7 +905,6 @@ mod project_routes_tests {
     async fn non_object_root_puts_return_500_not_panic() {
         for (uri, body, expect_flat) in [
             ("/api/v1/project", r#"{ "language": "zh" }"#, true),
-            ("/api/v1/project/input-governance-mode", r#"{ "mode": "v2" }"#, false),
             ("/api/v1/project/detection", r#"{ "detection": null }"#, false),
             ("/api/v1/project/model-overrides", r#"{ "overrides": {} }"#, false),
             ("/api/v1/project/default-model", r#"{ "defaultModel": "m" }"#, false),

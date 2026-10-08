@@ -154,8 +154,12 @@ const STREAM_DELAY_MS = Number(process.env.WALKTHROUGH_MOCK_STREAM_DELAY_MS ?? "
 // 取第 N 个值（越界取最后一个）；未设=恒 88（645 形态，审改循环不触发）。
 // 分数 <85 时 passed:false 并附一条 structural issue，驱动 chapter-review-cycle
 // 的修稿轮次真实触发（审改循环/降分重写分支的活体走查面）。
+// 686 号解析修复：空段先滤再转数——旧形态 `"".split(",")→[""]→Number("")→0`
+// 把「未设」静默变成 `[0]`（首轮 0 分注入恒触发审改循环，契约差分/走查的
+// 默认形态被反转；686 号实录 node=1 vs rust=3 次审稿文本分叉即此暴露）。
 const AUDIT_SCORES = (process.env.WALKTHROUGH_MOCK_AUDIT_SCORES ?? "")
-  .split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  .split(",").map((s) => s.trim()).filter((s) => s !== "")
+  .map((s) => Number(s)).filter((n) => Number.isFinite(n));
 let AUDIT_CALL_SEQ = 0;
 // 降分 issue 的 repair_scope（650 号）："local"（默认 structural）→ reviser
 // resolveAutoOutputMode 判 patch-only → 修稿腿走 PATCHES 局部修补路由，

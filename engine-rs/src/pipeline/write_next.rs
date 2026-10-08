@@ -95,19 +95,10 @@ pub enum ChapterReviewMode {
     Manual,
 }
 
-/// 输入治理模式。对齐 TS `inputGovernanceMode`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum InputGovernanceMode {
-    #[default]
-    V2,
-    Legacy,
-}
-
 /// runner 配置面。
 pub struct WriteNextConfig {
     pub chapter_review_mode: ChapterReviewMode,
     pub writing_review_retries: usize,
-    pub input_governance_mode: InputGovernanceMode,
     /// G1/350a 接线（545 号）：`llm.embedding` 配置（TS LLMConfig.embedding 同名
     /// 节）。Some 时记忆语义精选切换 hybrid 向量重排（指纹增量缓存 + 失败降级
     /// 契约回退 BM25/LLM 精选）；None 维持 LLM 精选（行为零变更）。
@@ -135,7 +126,6 @@ impl Default for WriteNextConfig {
         WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Auto,
             writing_review_retries: 1,
-            input_governance_mode: InputGovernanceMode::V2,
             embedding: None,
             abort: None,
             notify_channels: None,
@@ -1769,7 +1759,8 @@ async fn run_promotion_pass(book_dir: &Path, chapter_number: u32) {
     }
 }
 
-/// 输入准备：v2 治理（plan 持久化复用 + composer）/ legacy。
+/// 输入准备：v2 治理（plan 持久化复用 + composer）。TS 上游已于 e7c04465
+/// 统一移除 legacy 输入治理面（端点+管线分支），本侧 686 号随动对齐。
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_write_input(
     _state: &StateManager,
@@ -1781,16 +1772,6 @@ pub(crate) async fn prepare_write_input(
     chapter_number: u32,
     external_context: Option<&str>,
 ) -> Result<PreparedWriteInput, WriteNextError> {
-    if config.input_governance_mode == InputGovernanceMode::Legacy {
-        return Ok(PreparedWriteInput {
-            chapter_intent: None,
-            chapter_memo: None,
-            chapter_intent_data: None,
-            context_package: None,
-            rule_stack: None,
-        });
-    }
-
     // resolveGovernedPlan：无新上下文时复用持久化 plan（跳过 planner LLM）。
     let plan = match load_persisted_plan(book_dir, chapter_number).await {
         Some(plan) if external_context.map(str::trim).unwrap_or("").is_empty() => plan,
@@ -2139,7 +2120,6 @@ mod tests {
         let config = WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
-            input_governance_mode: InputGovernanceMode::V2,
             embedding: None,
             abort: None,
             notify_channels: None,
@@ -2250,7 +2230,6 @@ mod tests {
         let config = WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
-            input_governance_mode: InputGovernanceMode::V2,
             embedding: None,
             abort: None,
             notify_channels: None,
@@ -2706,7 +2685,6 @@ mod tests {
         WriteNextConfig {
             chapter_review_mode: ChapterReviewMode::Manual,
             writing_review_retries: 1,
-            input_governance_mode: InputGovernanceMode::V2,
             embedding: None,
             abort: None,
             notify_channels: None,

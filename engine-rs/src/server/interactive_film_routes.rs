@@ -549,8 +549,9 @@ pub async fn get_export_json(
         return invalid_id(&id);
     }
     match loaded_graph(&runtime, &id).await {
+        // 无尾换行对齐 TS `JSON.stringify(graph, null, 2)`（686 号字节级镜像）。
         Ok(graph) => text_response(
-            format!("{}\n", serde_json::to_string_pretty(&graph).unwrap_or_default()),
+            serde_json::to_string_pretty(&graph).unwrap_or_default(),
             "application/json; charset=utf-8",
             &format!("{id}.story-graph.json"),
         ),

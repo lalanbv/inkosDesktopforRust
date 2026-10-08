@@ -95,9 +95,14 @@ pub struct Choice {
     pub text: String,
     #[serde(rename = "targetNodeId")]
     pub target_node_id: String,
+    // Option 字段序列化对齐 TS `JSON.stringify`（undefined 省略，非 null）——
+    // 686 号：export/json、export/html（内嵌 GRAPH）与 save 回写文件三面双端
+    // 字节级镜像；zod schema 同名为 .optional()（686 号前 Rust 出线 null 键）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<Condition>,
     #[serde(default)]
     pub effects: Vec<Effect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub weight: Option<ChoiceWeight>,
 }
 
@@ -115,6 +120,7 @@ pub struct DialogueLine {
 pub struct ImageSlot {
     #[serde(default)]
     pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_ref: Option<String>,
 }
 
@@ -159,6 +165,7 @@ pub struct Character {
     pub role: CharacterRole,
     #[serde(default)]
     pub motivation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_profile: Option<VoiceProfile>,
 }
 
@@ -173,13 +180,31 @@ pub struct WorldAnchor {
     pub genre: String,
     #[serde(default)]
     pub world_rules: String,
-    #[serde(default)]
+    /// JS `Number` 序列化镜像（`15` 而非 serde_json f64 默认的 `15.0`——686 号
+    /// export/html GRAPH 与 export/json 双端字节级镜像；超 2^53 整值仍走 f64）。
+    #[serde(default, serialize_with = "serialize_js_number")]
     pub duration_minutes: f64,
 }
 
+/// f64 → JS `JSON.stringify` 数字形态：整值（|v| < 2^53）出整型字面量。
+mod js_number {
+    use serde::Serializer;
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if value.is_finite() && value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+            serializer.serialize_i64(*value as i64)
+        } else {
+            serializer.serialize_f64(*value)
+        }
+    }
+}
+use js_number::serialize as serialize_js_number;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Position {
+    #[serde(serialize_with = "serialize_js_number")]
     pub x: f64,
+    #[serde(serialize_with = "serialize_js_number")]
     pub y: f64,
 }
 
@@ -197,9 +222,11 @@ pub struct StoryNode {
     pub dialogue: Vec<DialogueLine>,
     #[serde(default)]
     pub choices: Vec<Choice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_slot: Option<ImageSlot>,
     #[serde(default)]
     pub act: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Position>,
 }
 
@@ -252,6 +279,7 @@ pub struct StoryGraph {
     pub schema_version: u32,
     pub project_id: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub world_anchor: Option<WorldAnchor>,
     #[serde(default)]
     pub characters: Vec<Character>,

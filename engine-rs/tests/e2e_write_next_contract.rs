@@ -2958,10 +2958,6 @@ mod config54_e2e {
     fn app54(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route(
-                "/api/v1/project/input-governance-mode",
-                axum::routing::get(get_input_governance_mode).put(put_input_governance_mode),
-            )
-            .route(
                 "/api/v1/project/detection",
                 axum::routing::get(get_detection).put(put_detection),
             )
@@ -3005,24 +3001,13 @@ mod config54_e2e {
     }
 
     #[tokio::test]
-    async fn governance_mode_and_review_mode_roundtrip() {
+    async fn review_mode_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture54(&root);
 
-        // governance：无键 → v2；legacy 落盘；非法 400。
-        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/input-governance-mode", None).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(parsed["mode"], "v2");
-        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/input-governance-mode", Some(r#"{ "mode": "legacy" }"#)).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(parsed, serde_json::json!({ "ok": true, "mode": "legacy" }));
-        assert_eq!(read_config(&root)["inputGovernanceMode"], "legacy");
-        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/input-governance-mode", Some(r#"{ "mode": "bad" }"#)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "mode must be legacy or v2");
-
         // review-mode：无键 auto；manual 落盘 writing.reviewMode；非法值归 auto。
+        // （input-governance-mode 面已随 686 号移除——TS 上游 e7c04465 删除。）
         let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/chapter-review-mode", None).await;
         assert_eq!(parsed["mode"], "auto");
         let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/chapter-review-mode", Some(r#"{ "mode": "manual" }"#)).await;
@@ -7787,12 +7772,13 @@ mod films69_e2e {
         assert!(html.contains("if-player"));
         assert!(html.contains("data:image/png;base64,"), "资产应内嵌");
 
-        // json（pretty + 尾换行）
+        // json（pretty；无尾换行——686 号对齐 TS JSON.stringify 契约）
         let (status, _, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/json").await;
         assert_eq!(status, StatusCode::OK);
         let text = String::from_utf8(body).unwrap();
         assert!(text.contains("\"schemaVersion\": 1"));
-        assert!(text.ends_with("}\n"));
+        assert!(text.ends_with("}"));
+        assert!(!text.ends_with("}\n"));
 
         // tar.gz：gunzip + tar 头（ustar magic）
         let (status, headers, body) = call_raw(app.clone(), "/api/v1/projects/film1/export").await;

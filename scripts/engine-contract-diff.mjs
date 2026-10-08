@@ -191,6 +191,14 @@ const BOOK = encodeURIComponent("镜花水月");
  * - `/api/v1/asset-library/:kind/assets` GET：Rust 有列表 GET；TS 同路径仅 PUT
  *   批量 upsert，列表走 `GET /api/v1/asset-library/:kind`——读面形态差异，
  *   前端各走各的等价读。
+ *
+ * 686 号探测备案（第五轮 probe 实录）：
+ * - `/api/v1/writing-stats`：node=200 rust=404——TS 聚合投影面（R13/382），
+ *   与上行 -rows 互补成对，前端回退链已消费，维持备案。
+ * - `/api/v1/project/input-governance-mode`：probe 实录 node=404 rust=200——
+ *   TS 上游 e7c04465 已删该端点与 legacy 管线分支，686 号 Rust 随动移除
+ *   （端点+WriteNextConfig.input_governance_mode+ProjectConfig 键+bindings），
+ *   inkos.json 遗留键双端同为未知键忽略；本条移除后双端 404 一致。
  */
 
 /**
@@ -215,7 +223,7 @@ const WAIVERS = new Map([
   // doctor 回退端缺 retrieval.chunkCount 键——Rust 侧修复需 cargo
   [`/api/v1/doctor`, { reason: "回退端多 retrieval.chunkCount（Rust 侧补齐需 cargo）", paths: [["retrieval"]] }],
   // lens rank 打分内部实现差异（展示面）。
-  [`/api/v1/books/${BOOK}/context-lens/2`, { reason: "resync 管线内部装配差异（483/484 备案）：entry source/rank 随内部实现波动", paths: [["entries"]] }],
+  [`/api/v1/books/${BOOK}/context-lens/2`, { reason: "resync 管线内部装配差异（483/484 备案）：entry source/rank 随内部实现波动；686 号扩备案：totals 选择计数亦随检索层 BM25 阈值边缘命中翻转（528 号恒定比例因子同类——H02/H03/note-1/2 在阈值边缘，双端 SQLite bm25 常数差致 retrieved 翻转，与 hybrid-search 边缘命中备案同源）", paths: [["entries"], ["totals"]] }],
   // 684 号：backend 是引擎身份标识（node-fallback vs rust-engine）、version
   // 是双端独立版本号（studio 1.8.0 vs engine 0.1.0）——均为设计内身份面。
   [`/api/v1/health`, { reason: "684 号备案：backend/version=双端身份标识（node-fallback vs rust-engine；1.8.0 vs 0.1.0）", paths: [["backend"], ["version"]] }],
@@ -223,6 +231,10 @@ const WAIVERS = new Map([
   // 次数/agent 序非镜像，如 planner 重试编排不同）；产出等价由工件树差分 +
   // 导出 TEXT 面锁定，记账明细非契约面。
   [`/api/v1/run-log`, { reason: "684 号备案：LLM 调用记账随双端编排实现差异（次数/agent 序），产出等价由工件树差分锁定", paths: [["entries"]] }],
+  // 686 号备案：logs entries 是 studio 阶段叙事环形缓冲（R13 logger 投影）
+  // ——双端阶段粒度刻意不同（node 细粒度逐阶段 vs rust 宏阶段双语同文），
+  // 非契约面；写作产出等价由工件树差分锁定（run-log 684 备案同类）。
+  [`/api/v1/logs`, { reason: "686 号备案：阶段叙事环形缓冲双端粒度刻意不同（run-log 684 备案同类），产出等价由工件树差分锁定", paths: [["entries"]] }],
 ]);
 const ENDPOINTS = [
   "/api/v1/books",
@@ -301,6 +313,21 @@ const ENDPOINTS = [
   `/api/v1/projects/diff-film/story-graph/validation`,
   `/api/v1/projects/diff-film/story-graph/analysis`,
   `/api/v1/translations/$TRANSLATION`,
+  // 686 号扩容（488 号协议第五轮：probe 活体探测双端同码后入列）。logs /
+  // services 按服务读面（模型清单+secret 脱盲面）/三库便携导出/系列 canon
+  // 惰性空面/play run 惰性面/film export 四格式（json、ink、html 文本面 +
+  // tar.gz 容器面——686 号当日修复 Option null 序列化与 json 尾换行后字节级
+  // 等价，入列锁回归）。
+  "/api/v1/logs",
+  "/api/v1/services/custom:Mock/models",
+  "/api/v1/services/custom:Mock/secret",
+  "/api/v1/asset-library/world-sample/export",
+  "/api/v1/series/nonexistent/canon",
+  "/api/v1/play/runs/nonworld/nonrun",
+  "/api/v1/projects/diff-film/export/json",
+  "/api/v1/projects/diff-film/export/ink",
+  "/api/v1/projects/diff-film/export/html",
+  "/api/v1/projects/diff-film/export",
 ];
 
 // 684 号：非 JSON 端点的两种弱比对模式。
@@ -309,9 +336,15 @@ const ENDPOINTS = [
 //   字典序天然非确定，字节级比对不可行——锁状态码 + content-type 前缀。
 const TEXT_ENDPOINTS = new Set([
   `/api/v1/books/${BOOK}/export?format=txt`,
+  // 686 号：film 导出文本面（ink 脚本 + 自包含可玩 HTML——GRAPH 内嵌序列化
+  // 双端字节级等价由 686 号 Option-null/js-number/尾换行三修复锁定）。
+  `/api/v1/projects/diff-film/export/ink`,
+  `/api/v1/projects/diff-film/export/html`,
 ]);
 const STATUS_ONLY_ENDPOINTS = new Set([
   `/api/v1/backup/export`,
+  // 686 号：film 项目便携包（tar.gz 容器面——tar 头时间戳非确定）。
+  `/api/v1/projects/diff-film/export`,
 ]);
 
 const preseed = (root) => {

@@ -296,17 +296,6 @@ pub enum ModelOverrideValue {
     Override(AgentLLMOverride),
 }
 
-/// 输入治理模式。对齐 TS `z.enum(["legacy","v2"])`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"legacy\" | \"v2\""))]
-pub enum InputGovernanceMode {
-    #[serde(rename = "legacy")]
-    Legacy,
-    #[serde(rename = "v2")]
-    V2,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
@@ -403,13 +392,10 @@ pub struct ProjectConfig {
     pub research_search: ResearchSearchConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_overrides: Option<HashMap<String, ModelOverrideValue>>,
-    #[serde(default = "default_governance")]
-    pub input_governance_mode: InputGovernanceMode,
     #[serde(default)]
     pub daemon: DaemonConfig,
 }
 fn default_language() -> String { "zh".into() }
-fn default_governance() -> InputGovernanceMode { InputGovernanceMode::V2 }
 fn default_foundation() -> FoundationConfig { FoundationConfig { review_retries: 2 } }
 fn default_writing() -> WritingConfig { WritingConfig { review_retries: 1, review_mode: super::book::ChapterReviewModeVal::Auto, revision_gate: super::book::RevisionGateVal::Strict } }
 
@@ -450,7 +436,6 @@ mod tests {
         let p: ProjectConfig = serde_json::from_str(json).unwrap();
         assert_eq!(p.name, "demo");
         assert_eq!(p.language, "zh"); // default
-        assert_eq!(p.input_governance_mode, InputGovernanceMode::V2); // default
         assert_eq!(p.daemon.max_concurrent_books, 3); // default
         assert!(p.notify.is_empty());
     }
