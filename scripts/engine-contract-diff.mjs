@@ -442,17 +442,18 @@ try {
     await waitUntil(async () => (await fetchT(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
   }
 
-  // 688 号契约源守卫（与 strangler_duel 同语义）：/api/v1/prompt-packs 是 fork
-  // 契约面（上游 2.0 已删）。node 腿 404 ⇒ TS 契约源=上游 2.0，fork 契约字节级
-  // 对跑整体失效——响亮记账后按 0 分歧收尾（finally 照常清理），非静默豁免；
-  // TS 恢复 fork 契约（2.0 迁移落地，见变更记录 688 号 §五）后守卫自动复活。
+  // 695 号契约源守卫（688 号守卫的升级版）：/api/v1/prompt-packs 是 fork 契约面
+  //（上游 2.0 已删）。node 腿 404 ⇒ TS 契约源=上游 2.0 → 进入「三域活体分歧
+  // 报告」模式：fork 契约字节级对跑（全量 ENDPOINTS 表）整体失效不再逐端点跑，
+  // 改为跑三域报告（共享面缩减集活体对比 + fork-only/上游新增两域声明清单活体
+  // 确认），门禁输出成为迁移进度实时度量；报告后豁免记账收尾（exit 0）。
+  // TS 恢复 fork 契约（2.0 迁移落地）后自动回到严格全量表对跑，无需改码。
+  let twoDomainReportMode = false;
   {
     const probe = await fetchT(`http://127.0.0.1:${nodePort}/api/v1/prompt-packs`).catch(() => null);
     if (!probe || !probe.ok) {
-      console.log("[diff] [688 豁免记账] 契约源检测：node 腿=上游 2.0（/api/v1/prompt-packs 404 实证）。");
-      console.log("[diff] [688 豁免记账] fork 契约字节级对跑在范式替换后整体失效，按 0 分歧收尾；");
-      console.log("[diff] [688 豁免记账] 分歧面清单=变更记录 688 号 §五（2.0 迁移欠账），非 Rust 回归。迁移落地后本守卫自动复活。");
-      throw new ProbeEarlyExit("688 契约源守卫：node 腿=上游 2.0，fork 契约对跑豁免记账收尾");
+      twoDomainReportMode = true;
+      console.log("[diff] [695 契约源守卫] node 腿=上游 2.0（/api/v1/prompt-packs 404 实证）→ 三域活体分歧报告模式。");
     }
   }
 
@@ -464,10 +465,20 @@ try {
   await new Promise((r) => setTimeout(r, 800));
 
   for (const engine of engines) {
-    execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), engine.root, engine.port], {
-      cwd: repoRoot,
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+    try {
+      execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), engine.root, engine.port], {
+        cwd: repoRoot,
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+    } catch (error) {
+      // 695 号：报告模式下 TS 腿（2.0 严格 schema）对 fork 段夹具的部分拒绝不致命
+      //——文件级播种（inkos.json/book.json/chapters）已先行落盘，共享面 GET 照常。
+      if (twoDomainReportMode) {
+        console.log(`[diff] [695 报告模式] ${engine.name} 腿 fixture 部分失败（预期内：2.0 严格 schema 拒 fork 段），继续三域报告。`);
+      } else {
+        throw error;
+      }
+    }
   }
 
   // ── 1.5 探测模式（684 号）：候选端点双端状态码对，入列前置协议 ──
@@ -511,6 +522,151 @@ try {
   ];
   let divergences = 0;
   let compared = 0;
+
+  // ── 3.0 三域活体分歧报告（695 号）：TS 腿=上游 2.0 时的迁移进度度量 ──
+  // 域定义（由 687 fork server 与 2.0 server 路由面机械比对生成，691 后现状）：
+  // ①共享面=双端在位的路由（缩减集，活体逐端点对比）；②fork-only=仅 Rust 在位
+  // （TS 已退役面=迁移回收清单，活体确认 Rust 有/TS 404；TS 复活即报「迁移进展」；
+  // 双缺=Rust 面回归须查）；③上游新增=仅 TS 在位（Rust 2.0 待办，反向同理）。
+  // 动态段以双端 /books 首个 id 实例化；报告后豁免记账收尾（exit 0）。
+  if (twoDomainReportMode) {
+    const booksNode = await nodeApi("/api/v1/books").then((r) => r.body).catch(() => null);
+    const booksRust = booksNode?.books?.length ? null : await rustApi("/api/v1/books").then((r) => r.body).catch(() => null);
+    const BOOK_ID = booksNode?.books?.[0]?.id ?? booksRust?.books?.[0]?.id ?? null;
+    const inst = (route) => route
+      .replaceAll(":id", encodeURIComponent(BOOK_ID ?? "b1"))
+      .replaceAll(":num", "1")
+      .replaceAll(":kind", "genre-base")
+      .replaceAll(":seriesId", "series-sample");
+    const probe = async (base, route) => {
+      const res = await fetchT(`${base}${inst(route)}`).catch(() => null);
+      if (!res) return -1;
+      const text = await res.text().catch(() => "");
+      // 404 二分：路由缺失 = Hono 默认纯文本「404 Not Found」；资源缺失 = 路由
+      // 在位的 typed JSON 错误体（{error:...}）。上游新增域靠它区分「TS 面回归」
+      // 与「集合为空的正常资源缺失」。
+      const routeLevel404 = res.status === 404 && text.trim().startsWith("404");
+      return { status: res.status, routeLevel404 };
+    };
+
+    // ① 共享面缩减集（双端在位、零或轻 fixture 依赖）
+    const SHARED_FACE = [
+      "/api/v1/books",
+      "/api/v1/sessions",
+      "/api/v1/skills",
+      "/api/v1/asset-library/genre-base",
+      "/api/v1/asset-library/progression-mode",
+      "/api/v1/asset-library/world-sample",
+      "/api/v1/project/notify",
+      "/api/v1/doctor",
+    ];
+    console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
+    let sharedDiffs = 0;
+    let sharedCompared = 0;
+    for (const endpoint of SHARED_FACE) {
+      const [n, r] = await Promise.all([nodeApi(endpoint), rustApi(endpoint)]);
+      sharedCompared += 1;
+      const same = n.status === r.status && JSON.stringify(n.body) === JSON.stringify(r.body);
+      if (same) {
+        console.log(`✓ 共享面 ${endpoint}（${n.status}）`);
+      } else {
+        sharedDiffs += 1;
+        console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(n.body, r.body) ?? "?"}` : ""}`);
+      }
+    }
+
+    // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
+    const FORK_ONLY_ROUTES = [
+      "/api/v1/backup/export", "/api/v1/backup/import",
+      "/api/v1/books/:id/anti-ai-rules", "/api/v1/books/:id/best-of-n",
+      "/api/v1/books/:id/chapter-review-mode", "/api/v1/books/:id/chapters/:num/approve",
+      "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
+      "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
+      "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
+      "/api/v1/books/:id/deconstruct", "/api/v1/books/:id/detect-all",
+      "/api/v1/books/:id/detect/:chapter", "/api/v1/books/:id/director",
+      "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
+      "/api/v1/books/:id/experience", "/api/v1/books/:id/experience/:entryId",
+      "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
+      "/api/v1/books/:id/plan", "/api/v1/books/:id/promises",
+      "/api/v1/books/:id/quality-debts", "/api/v1/books/:id/quality-trend",
+      "/api/v1/books/:id/repair-state/:chapter", "/api/v1/books/:id/roster-candidates",
+      "/api/v1/books/:id/roster/confirm", "/api/v1/books/:id/series-id",
+      "/api/v1/books/:id/style-binding", "/api/v1/books/:id/tension-curve",
+      "/api/v1/books/:id/timeline", "/api/v1/books/:id/timeline-auto-beats",
+      "/api/v1/context-meter", "/api/v1/debug/tools",
+      "/api/v1/director/directions", "/api/v1/genres", "/api/v1/genres/create",
+      "/api/v1/health", "/api/v1/interaction/session",
+      "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
+      "/api/v1/radar/analyze", "/api/v1/radar/rankings", "/api/v1/run-log",
+      "/api/v1/style-profiles", "/api/v1/task-routing",
+      "/api/v1/books/:id/series-backfill/apply", "/api/v1/books/:id/series-backfill/existing",
+      "/api/v1/books/:id/series-backfill/extract",
+      "/api/v1/series/:seriesId/canon",
+    ];
+    let forkOnlyConfirmed = 0;
+    const forkOnlyDrift = [];
+    for (const route of FORK_ONLY_ROUTES) {
+      const [tsP, rP] = await Promise.all([
+        probe(`http://127.0.0.1:${nodePort}`, route),
+        probe(`http://127.0.0.1:${rustPort}`, route),
+      ]);
+      const tsStatus = typeof tsP === "number" ? tsP : tsP.status;
+      const rustStatus = typeof rP === "number" ? rP : rP.status;
+      if (rustStatus >= 200 && rustStatus < 500 && tsStatus === 404) forkOnlyConfirmed += 1;
+      else if (tsStatus !== 404) forkOnlyDrift.push(`${route}: ts=${tsStatus} rust=${rustStatus}（TS 已复活=迁移进展）`);
+      else forkOnlyDrift.push(`${route}: ts=404 rust=404（双缺=Rust 面回归，须查）`);
+    }
+
+    // ③ 上游新增域（TS 有/Rust 404 = 声明确认；Rust 200 = 迁移进展；双缺 = TS 回归）
+    // 动态 :id 用父集合真实首 id（TS /works、/episodes 各取一枚；空集合回退静态声明）。
+    const firstId = async (path) => {
+      const body = await nodeApi(path).then((r) => r.body).catch(() => null);
+      return body?.works?.[0]?.id ?? body?.episodes?.[0]?.id ?? null;
+    };
+    const realWorkId = await firstId("/api/v1/works");
+    const realEpisodeId = await firstId("/api/v1/episodes");
+    const UPSTREAM_NEW_ROUTES = [
+      "/api/v1/works", "/api/v1/works/:id", "/api/v1/works/:id/artifacts",
+      "/api/v1/episodes", "/api/v1/episodes/:id",
+      "/api/v1/profiles", "/api/v1/profiles/:id",
+      "/api/v1/projects/:id/preview/html",
+      "/api/v1/skills/:skillId/documents",
+      "/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId",
+      "/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId/adopt",
+    ];
+    let upstreamNewConfirmed = 0;
+    const upstreamNewDrift = [];
+    let upstreamNewDeclared = 0;
+    for (const route of UPSTREAM_NEW_ROUTES) {
+      // 深链段（:artifactId/:revisionId）无真实工件必双 404——静态声明不计数，
+      // 随迁移面验收（有真实 works 后本探测自然可确认）。
+      if (route.includes(":artifactId") || route.includes(":revisionId")) {
+        upstreamNewDeclared += 1;
+        continue;
+      }
+      const resolved = route
+        .replaceAll(":id", encodeURIComponent(realWorkId ?? realEpisodeId ?? "probe-placeholder"));
+      const [tsP, rP] = await Promise.all([
+        probe(`http://127.0.0.1:${nodePort}`, resolved),
+        probe(`http://127.0.0.1:${rustPort}`, resolved),
+      ]);
+      const tsStatus = typeof tsP === "number" ? tsP : tsP.status;
+      const tsRouteMissing = typeof tsP === "object" && tsP.routeLevel404 === true;
+      const rustStatus = typeof rP === "number" ? rP : rP.status;
+      if (tsStatus >= 200 && tsStatus < 500 && rustStatus === 404) upstreamNewConfirmed += 1;
+      else if (rustStatus !== 404) upstreamNewDrift.push(`${route}: ts=${tsStatus} rust=${rustStatus}（Rust 已跟进=迁移进展）`);
+      else if (tsRouteMissing) upstreamNewDrift.push(`${route}: ts=404(路由缺失) rust=404（TS 面回归，须查）`);
+      else upstreamNewConfirmed += 1; // TS 404 typed = 路由在位、资源缺失（空集合常态）
+    }
+
+    console.log(`[diff] ── 度量：共享面 ${sharedCompared} 对比 / ${sharedDiffs} 分歧；fork-only ${forkOnlyConfirmed}/${FORK_ONLY_ROUTES.length} 声明确认；上游新增 ${upstreamNewConfirmed}/${UPSTREAM_NEW_ROUTES.length - upstreamNewDeclared} 声明确认（+${upstreamNewDeclared} 深链静态声明）`);
+    for (const d of forkOnlyDrift) console.log(`[diff] [fork-only 漂移] ${d}`);
+    for (const d of upstreamNewDrift) console.log(`[diff] [上游新增 漂移] ${d}`);
+    console.log("[diff] [695 豁免记账] fork 契约全量字节级对跑待 Rust 2.0 迁移落地后自动恢复（688 号 §五）；");
+    console.log("[diff] [695 豁免记账] 共享面分歧=真实迁移工项；两域漂移行=进度信号（复活/跟进）或回归（双缺）。");
+    throw new ProbeEarlyExit("695 三域活体分歧报告收尾（豁免记账 exit 0）");
+  }
 
   // ── 写后读对照（490 号）：481 号静态 body 审计的活体升级——变更端点
   // 双端写入同一载荷，断言状态码一致；持久化等价随后由 GET 差分面覆盖。
