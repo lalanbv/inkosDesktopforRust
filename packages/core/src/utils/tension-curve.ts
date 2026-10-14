@@ -19,6 +19,51 @@ export interface TensionRow {
   readonly revealLevel?: number;
 }
 
+/** chapter_summaries.md 表格行解析（697/701 号：原 story-markdown.ts 语义随
+ * 上游删除迁入本模块——路由层读真相源 chapter_summaries.md 的唯一解析入口）。 */
+function parseMarkdownTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+export function parseChapterSummariesMarkdown(markdown: string): ReadonlyArray<
+  TensionRow & {
+    readonly title: string;
+    readonly characters: string;
+    readonly events: string;
+    readonly stateChanges: string;
+    readonly hookActivity: string;
+    readonly mood: string;
+    readonly chapterType: string;
+  }
+> {
+  const lines = markdown.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("|"));
+  const rows = lines.map(parseMarkdownTableRow).filter((row) => /^\d+$/.test(row[0] ?? ""));
+
+  return rows.map((row) => ({
+    chapter: parseInt(row[0]!, 10),
+    title: row[1] ?? "",
+    characters: row[2] ?? "",
+    events: row[3] ?? "",
+    stateChanges: row[4] ?? "",
+    hookActivity: row[5] ?? "",
+    mood: row[6] ?? "",
+    chapterType: row[7] ?? "",
+    // R2/358 号：8 列旧表（无张力列）→ undefined；10 列新表解析并 clamp。
+    conflictLevel: parseTensionCell(row[8]),
+    revealLevel: parseTensionCell(row[9]),
+  }));
+}
+
+function parseTensionCell(cell: string | undefined): number | undefined {
+  if (cell === undefined || !/^\d+$/.test(cell)) return undefined;
+  return Math.min(10, Math.max(1, parseInt(cell, 10)));
+}
+
 export interface TensionPoint {
   readonly chapter: number;
   readonly conflictLevel: number;

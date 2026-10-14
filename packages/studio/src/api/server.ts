@@ -163,6 +163,15 @@ import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
 // 691 号：三库资产路由族重施（R4/363-366 号；store 模块 688 号随树保全，路由随 server 切 2.0 丢失）。
 import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
+// 701 号：fork 分析投影面回收第一批（零 SQLite 族）——承诺/张力/遥测/路由/写作统计。
+import {
+  ANTI_AI_RULE_SEEDS,
+  analyzeTensionCurve,
+  globalRunLog,
+  parseChapterSummariesMarkdown,
+  projectRunLog,
+  validateAntiAiRule,
+} from "@actalk/inkos-core";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints } from "@actalk/inkos-core";
 import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
@@ -4166,6 +4175,179 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       published.push({ materialId, kind: ref.kind, id: asset.id });
     }
     return c.json({ published });
+  });
+
+  // ── 701 号：fork-only GET 面批量回收第一批（零 SQLite 族；691 号模式批量复用）──
+  // 承诺/张力/遥测/路由/写作统计/反AI——后备引擎全部存活（promise-ledger/
+  // tension-curve/run-log/rule-experience-engine + state + studio lib）。
+
+  app.get("/api/v1/run-log", async (c) => {
+    try {
+      const limitRaw = Number(c.req.query("limit") ?? "");
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.trunc(limitRaw) : undefined;
+      const projection = projectRunLog(globalRunLog.snapshot(), limit);
+      return c.json(projection);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/tension-curve", async (c) => {
+    const id = c.req.param("id");
+    const summariesPath = join(root, "books", id, "story", "chapter_summaries.md");
+    if (!(await access(summariesPath).then(() => true).catch(() => false))) {
+      return c.json({ curve: { points: [], scoredChapters: 0, unscoredChapters: 0 }, warnings: [] });
+    }
+    try {
+      const markdown = await readFile(summariesPath, "utf-8");
+      const rows = parseChapterSummariesMarkdown(markdown);
+      const { curve, warnings } = analyzeTensionCurve(rows);
+      return c.json({ curve, warnings });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/task-routing", async (c) => {
+    const path = join(root, ".inkos", "task-routing.json");
+    try {
+      const routing = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ routing });
+    } catch {
+      return c.json({ routing: null });
+    }
+  });
+
+  app.put("/api/v1/task-routing", async (c) => {
+    const body = await c.req.json<{ routing?: unknown }>();
+    if (!body.routing || typeof body.routing !== "object" || Array.isArray(body.routing)) {
+      return c.json({ error: "routing must be an object" }, 400);
+    }
+    const dir = join(root, ".inkos");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "task-routing.json"), JSON.stringify(body.routing, null, 2), "utf-8");
+    return c.json({ ok: true, routing: body.routing });
+  });
+
+  app.get("/api/v1/style-profiles", async (c) => {
+    const dir = join(root, ".inkos", "style-profiles");
+    try {
+      await mkdir(dir, { recursive: true });
+      const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
+      const items = await Promise.all(files.map(async (file) => {
+        try {
+          const profile = JSON.parse(await readFile(join(dir, file), "utf-8"));
+          return { name: file.replace(/\.json$/, ""), profile };
+        } catch {
+          return null;
+        }
+      }));
+      return c.json({ profiles: items.filter(Boolean) });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/style-profiles", async (c) => {
+    const body = await c.req.json<{ name?: string; profile?: unknown }>();
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name || !body.profile || typeof body.profile !== "object") {
+      return c.json({ error: "name and profile are required" }, 400);
+    }
+    const dir = join(root, ".inkos", "style-profiles");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${name}.json`), JSON.stringify(body.profile, null, 2), "utf-8");
+    return c.json({ ok: true, name });
+  });
+
+  app.get("/api/v1/writing-stats", async (c) => {
+    try {
+      const books = await state.listBooks();
+      const rows: Array<{ bookId: string; updatedAt: string; wordCount: number; status: string; totalTokens?: number }> = [];
+      for (const bookId of books) {
+        try {
+          const index = await state.loadChapterIndex(bookId);
+          for (const meta of index) {
+            rows.push({
+              bookId,
+              updatedAt: meta.updatedAt,
+              wordCount: meta.wordCount,
+              // 2.0 ChapterMeta 无 status 章 — 行状态恒 active（列表面展示用）。
+              status: "active",
+              totalTokens: meta.tokenUsage?.totalTokens,
+            });
+          }
+        } catch {
+          // 单书索引缺失跳过
+        }
+      }
+      const stats = await import("../lib/writing-stats.js");
+      const aggregate = stats.aggregateWritingStats(rows, new Date().toISOString());
+      const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
+      return c.json({ ...aggregate, passRateByBook: perBook });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/best-of-n", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "book.json");
+    try {
+      const book = JSON.parse(await readFile(path, "utf-8"));
+      return c.json(book?.governance?.bestOfN ?? { enabled: false });
+    } catch {
+      return c.json({ enabled: false });
+    }
+  });
+
+  app.put("/api/v1/books/:id/best-of-n", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ enabled?: boolean; candidates?: number; minScore?: number }>();
+    const path = join(root, "books", id, "book.json");
+    try {
+      const book = JSON.parse(await readFile(path, "utf-8"));
+      book.governance = { ...(book.governance ?? {}), bestOfN: {
+        enabled: body.enabled === true,
+        ...(typeof body.candidates === "number" ? { candidates: body.candidates } : {}),
+        ...(typeof body.minScore === "number" ? { minScore: body.minScore } : {}),
+      } };
+      book.updatedAt = new Date().toISOString();
+      await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
+      return c.json(book.governance.bestOfN);
+    } catch {
+      return c.json({ error: "book not found" }, 404);
+    }
+  });
+
+  app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "anti_ai_rules.json");
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      if (Array.isArray(parsed.rules)) return c.json({ rules: parsed.rules, seeded: false });
+      return c.json({ rules: ANTI_AI_RULE_SEEDS, seeded: true });
+    } catch {
+      return c.json({ rules: ANTI_AI_RULE_SEEDS, seeded: true });
+    }
+  });
+
+  app.put("/api/v1/books/:id/anti-ai-rules", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ rules?: unknown[] }>();
+    if (!Array.isArray(body.rules)) return c.json({ error: "rules array required" }, 400);
+    const errors: string[] = [];
+    const valid: unknown[] = [];
+    body.rules.forEach((raw, index) => {
+      const result = validateAntiAiRule(raw);
+      if (result.rule) valid.push(result.rule);
+      else errors.push(...(result.errors ?? []).map((message) => `rules[${index}] ${message}`));
+    });
+    if (errors.length > 0) return c.json({ errors }, 400);
+    const dir = join(root, "books", id, "story");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "anti_ai_rules.json"), JSON.stringify({ rules: valid }, null, 2), "utf-8");
+    return c.json({ ok: true, rules: valid });
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {

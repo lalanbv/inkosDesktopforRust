@@ -609,6 +609,16 @@ export {
   type SessionBranchPointsResult,
 } from "./interaction/session-branch.js";
 
+// ── 701 号：fork 分析投影面回收（承诺账本/张力/遥测/反AI 种子——studio 路由消费）──
+export { globalRunLog, projectRunLog } from "./utils/run-log.js";
+export { analyzeTensionCurve, parseChapterSummariesMarkdown, buildTensionCurve, detectTensionWarnings } from "./utils/tension-curve.js";
+export {
+  ANTI_AI_RULE_SEEDS,
+  validateAntiAiRule,
+  type AntiAiRule,
+  type RuleValidateResult,
+} from "./utils/rule-experience-engine.js";
+
 // ── fork 资产库（G4/339 号系列；2.0 无此面，studio asset-library-store 消费）──
 export {
   assetContentHash,

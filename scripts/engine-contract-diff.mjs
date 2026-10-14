@@ -566,6 +566,14 @@ try {
       "/api/v1/asset-library/world-sample",
       "/api/v1/project/notify",
       "/api/v1/doctor",
+      // 701 号：fork-only 面回收第一批（零 SQLite 族，TS 侧路由已复活）。
+      // 注：run-log（684 备案+报告模式双腿执行深度差）与 /writing-stats
+      //（Rust 实际面为 /writing-stats-rows 互补成对，聚路面随 702 批次）不入选。
+      "/api/v1/books/:id/tension-curve",
+      "/api/v1/task-routing",
+      "/api/v1/style-profiles",
+      "/api/v1/books/:id/best-of-n",
+      "/api/v1/books/:id/anti-ai-rules",
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -605,7 +613,6 @@ try {
     // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
     const FORK_ONLY_ROUTES = [
       "/api/v1/backup/export", "/api/v1/backup/import",
-      "/api/v1/books/:id/anti-ai-rules", "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/chapter-review-mode", "/api/v1/books/:id/chapters/:num/approve",
       "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
       "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
@@ -619,14 +626,13 @@ try {
       "/api/v1/books/:id/quality-debts", "/api/v1/books/:id/quality-trend",
       "/api/v1/books/:id/repair-state/:chapter", "/api/v1/books/:id/roster-candidates",
       "/api/v1/books/:id/roster/confirm", "/api/v1/books/:id/series-id",
-      "/api/v1/books/:id/style-binding", "/api/v1/books/:id/tension-curve",
+      "/api/v1/books/:id/style-binding",
       "/api/v1/books/:id/timeline", "/api/v1/books/:id/timeline-auto-beats",
       "/api/v1/context-meter", "/api/v1/debug/tools",
       "/api/v1/director/directions", "/api/v1/genres", "/api/v1/genres/create",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
-      "/api/v1/radar/analyze", "/api/v1/radar/rankings", "/api/v1/run-log",
-      "/api/v1/style-profiles", "/api/v1/task-routing",
+      "/api/v1/radar/analyze", "/api/v1/radar/rankings",
       "/api/v1/books/:id/series-backfill/apply", "/api/v1/books/:id/series-backfill/existing",
       "/api/v1/books/:id/series-backfill/extract",
       "/api/v1/series/:seriesId/canon",

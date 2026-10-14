@@ -235,6 +235,15 @@ if (!forkContract) {
   console.log(`[walkthrough-fixture] resync = ${resync.status}${resync.status !== 200 ? ` ${JSON.stringify(resync.body).slice(0, 200)}` : ""}`);
   process.exit(0); // 顶层直线脚本（ESM 禁 return）——同 die() 的早退惯例，exit 0=播种成功。
 }
+// 698 号深度对称分支（fork 契约腿）：contract-diff 报告模式传
+// WALKTHROUGH_REPORT_MODE=1——fork 腿也只做 resync 进度注册（跳过 write-next），
+// 与 2.0 腿对称停在播种态（chaptersWritten 1=1）。严格对跑不设此 env，走 687 原流。
+if (process.env.WALKTHROUGH_REPORT_MODE === "1") {
+  console.log("[walkthrough-fixture] 报告模式（fork 腿）：POST resync/1（进度注册）后收尾，跳过 write-next（深度对称）。");
+  const resync = await api(`/api/v1/books/${encodeURIComponent(BOOK)}/resync/1`, { method: "POST" });
+  console.log(`[walkthrough-fixture] resync = ${resync.status}`);
+  process.exit(0);
+}
 const bookState = (await api(`/api/v1/books/${enc}`)).body;
 // 复用根（440）之上再分两种（442 号）：fixture 全链要求 run-log 同进程增长——
 // 而 env 重启后引擎内存 run-log 从零，跳过路径不得苛求该断言。
