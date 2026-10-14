@@ -161,6 +161,8 @@ import {
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
+// 691 号：三库资产路由族重施（R4/363-366 号；store 模块 688 号随树保全，路由随 server 切 2.0 丢失）。
+import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
 import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
@@ -4040,6 +4042,128 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     // R44/566 号（689 号重施）：skills:change 失效事件（同 import）。
     broadcast("skills:change", { reason: "deleted" });
     return c.json({ ok: true });
+  });
+
+  // ── 691 号：三库资产路由族重施（R4/363-366 号；fork server.ts → 2.0 架构移植）──
+  // 项目级 .inkos/asset-library/{kind}.json（种子兜底）；消费方 AssetLibraryPanel
+  // （BookDetail 渲染）。upsert/import 走 core validate/merge；export 走
+  // attachmentDisposition（684 号 RFC 6266/5987 契约）。
+
+  app.get("/api/v1/asset-library/:kind", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const snapshot = await listAssets(root, kind);
+    return c.json(snapshot);
+  });
+
+  app.put("/api/v1/asset-library/:kind/assets", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const body = await c.req.json<{ asset?: unknown }>();
+    const outcome = await upsertAsset(root, kind, body.asset);
+    if (outcome.errors) return c.json({ errors: outcome.errors }, 400);
+    return c.json(outcome.result);
+  });
+
+  app.delete("/api/v1/asset-library/:kind/assets/:id", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const outcome = await deleteAsset(root, kind, c.req.param("id"));
+    if (!outcome.ok) return c.json({ error: outcome.reason }, outcome.reason?.includes("builtin") ? 400 : 404);
+    return c.json({ ok: true, assets: outcome.assets });
+  });
+
+  app.get("/api/v1/asset-library/:kind/export", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const snapshot = await listAssets(root, kind);
+    return c.body(core.buildAssetLibraryExport(snapshot.assets), 200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": attachmentDisposition(`asset-library-${kind}.json`),
+    });
+  });
+
+  app.post("/api/v1/asset-library/:kind/import", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const raw = await c.req.text();
+    const parsed = core.parseAssetLibraryImport(raw);
+    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
+      return c.json({ errors: parsed.errors }, 400);
+    }
+    const snapshot = await listAssets(root, kind);
+    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
+    await saveAssets(root, kind, merged.merged);
+    return c.json({
+      added: merged.added,
+      skipped: merged.skipped,
+      overwritten: merged.overwritten,
+      errors: parsed.errors,
+      assets: merged.merged,
+    });
+  });
+
+  app.post("/api/v1/asset-library/:kind/import-preview", async (c) => {
+    const kind = c.req.param("kind");
+    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const raw = await c.req.text();
+    const parsed = core.parseAssetLibraryImport(raw);
+    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
+      return c.json({ errors: parsed.errors }, 400);
+    }
+    const snapshot = await listAssets(root, kind);
+    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
+    return c.json({
+      added: merged.added,
+      overwritten: merged.overwritten,
+      skipped: merged.skipped,
+      errors: parsed.errors,
+      samples: parsed.assets.map((asset) => ({ id: asset.id, name: asset.name, kind: asset.kind })),
+    });
+  });
+
+  // R4/364 号：库资产两段式采用（通用样本≠本书世界——写入本书材料池，进 G1 召回链）。
+  app.post("/api/v1/books/:id/adopt-library-assets", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      refs?: Array<{ kind: string; id: string }>;
+      language?: "zh" | "en";
+    }>().catch(() => ({}) as { refs?: Array<{ kind: string; id: string }>; language?: "zh" | "en" });
+    const refs = Array.isArray(body.refs) ? body.refs.slice(0, 12) : [];
+    if (refs.length === 0) return c.json({ error: "refs are required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const language = body.language === "en" ? "en" : "zh";
+    const materialsDir = join(root, ".inkos", "materials");
+    await mkdir(materialsDir, { recursive: true });
+    const published: Array<{ materialId: string; kind: string; id: string }> = [];
+    for (const ref of refs) {
+      if (!isLibraryKind(ref.kind)) continue;
+      const snapshot = await listAssets(root, ref.kind);
+      const asset = snapshot.assets.find((item) => item.id === ref.id);
+      if (!asset) continue;
+      const header = core.renderAdoptionHeader(asset, id, language);
+      const samplesBlock = asset.samples.length > 0
+        ? `\n## Samples\n\n${asset.samples.map((sample) => `- ${sample}`).join("\n")}\n`
+        : "";
+      const markdown = `${header}\n${asset.body}\n${samplesBlock}`;
+      const materialId = `lib-${ref.kind}-${asset.id}-${id}`.replace(/[^\w-]/g, "-").slice(0, 80);
+      await writeFile(join(materialsDir, `${materialId}.md`), markdown, "utf-8");
+      const manifest = {
+        id: materialId,
+        title: `${asset.name}（库资产）`,
+        kind: "text",
+        purpose: "reference",
+        source: "library",
+        mimeType: "text/markdown",
+        markdownPath: `.inkos/materials/${materialId}.md`,
+      };
+      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
+      published.push({ materialId, kind: ref.kind, id: asset.id });
+    }
+    return c.json({ published });
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {
