@@ -4319,19 +4319,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const id = c.req.param("id");
     const body = await c.req.json<{ enabled?: boolean; candidates?: number; minScore?: number }>();
     const path = join(root, "books", id, "book.json");
+    let book: Record<string, unknown> = {};
     try {
-      const book = JSON.parse(await readFile(path, "utf-8"));
-      book.governance = { ...(book.governance ?? {}), bestOfN: {
-        enabled: body.enabled === true,
-        ...(typeof body.candidates === "number" ? { candidates: body.candidates } : {}),
-        ...(typeof body.minScore === "number" ? { minScore: body.minScore } : {}),
-      } };
-      book.updatedAt = new Date().toISOString();
-      await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
-      return c.json(book.governance.bestOfN);
+      book = JSON.parse(await readFile(path, "utf-8"));
     } catch {
-      return c.json({ error: "book not found" }, 404);
+      book = {};
     }
+    // 704 号审查对齐 fork 契约：clamp 归一（candidates 2-3 截断 / minScore 0-100 截断），
+    // enabled 恒布尔归一——701 graft 缺此三面（活体审查捕获）。
+    const bestOfN: Record<string, unknown> = { enabled: Boolean(body.enabled) };
+    if (typeof body.candidates === "number") {
+      bestOfN.candidates = Math.min(3, Math.max(2, Math.trunc(body.candidates)));
+    }
+    if (typeof body.minScore === "number") {
+      bestOfN.minScore = Math.min(100, Math.max(0, Math.trunc(body.minScore)));
+    }
+    const governance = (book.governance as Record<string, unknown> | undefined) ?? {};
+    governance.bestOfN = bestOfN;
+    book.governance = governance;
+    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
+    return c.json(bestOfN);
   });
 
   app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
@@ -4360,7 +4367,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (errors.length > 0) return c.json({ errors }, 400);
     const dir = join(root, "books", id, "story");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "anti_ai_rules.json"), JSON.stringify({ rules: valid }, null, 2), "utf-8");
+    await writeFile(join(dir, "anti_ai_rules.json"), JSON.stringify({ version: 1, rules: valid }, null, 2), "utf-8");
     return c.json({ ok: true, rules: valid });
   });
 
