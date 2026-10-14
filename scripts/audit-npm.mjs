@@ -41,6 +41,11 @@ const ACCEPTED = new Map([
   // katex 0.16 线）；fork 阅读器渲染自有内容，原型污染需恶意 LaTeX 输入。
   // streamdown 升级 katex 线时移除本条即恢复拦截。
   ["katex", { reason: "low；补丁线 0.18.2 跨 major（streamdown 依赖 0.16 线）；渲染面需恶意输入方可触发", since: "688" }],
+  // 700 号：esbuild GHSA-g7r4-m6w7-qqqr（low，Windows dev server 任意读）——
+  // 补丁线 >=0.28.1 但 vite 6.4.1 与 esbuild 0.25 配对；esbuild@<0.28 override
+  // 强提 0.28 会破坏 vite:esbuild-transpile（studio client build 活体实证）。
+  // 升级随 vite bump（vite 7 线自带新 esbuild），到时移除本条即恢复拦截。
+  ["esbuild", { reason: "low；补丁线 >=0.28.1 与 vite 6.4.1 的 0.25 配对冲突（override 强提破坏 vite 构建，700 号活体实证）；dev server 面", since: "700" }],
 ]);
 
 const args = process.argv.slice(2);

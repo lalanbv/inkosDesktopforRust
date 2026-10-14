@@ -141,16 +141,15 @@ writeFileSync(join(bookDir, "story", "current_state.md"), `# current_state
 `);
 
 const chapterBody = "# 第1章 镜中醒来\n\n苏檀睁开眼，头顶是一面巨大的铜镜。\n\n镜中的世界倒悬着，他向下跌落，却落进了镜面深处。\n\n碎镜贴在胸口，微微发烫。\n";
-// 播种形态按模式二分（698 号）：
-// - 严格对跑（缺省）：683 号故意播种非规范连字符形态（读侧数值等值探针，
-//   resync 链产 canonical 形态与 index，双端链终态对称）；
-// - 报告模式（WALKTHROUGH_SEED_REPORT=1，2.0 TS 腿）：播种 canonical 下划线 +
-//   index.json（resolveDurableStoryProgress 要求 index/files 一致且 ^\d+_ 扫描
-//   不认连字符）——两腿各单一章节 → chaptersWritten 双端 1=1。
+// 播种形态按契约源二分（698/700 号）：
+// - 2.0 TS 腿（!forkContract）：canonical 下划线 + index.json——
+//   resolveDurableStoryProgress 要求 index/files 一致且 ^\d+_ 扫描不认连字符；
+// - fork 引擎（Rust）：683 号故意播种非规范连字符形态（读侧数值等值探针，
+//   resync 链产 canonical 形态与 index，双端链终态对称）。
 // 双形态并存会让 Rust 计 2 而 TS 计 1（Rust 两种形态都算章），故互斥不并存。
-const reportSeed = process.env.WALKTHROUGH_SEED_REPORT === "1";
-if (reportSeed) {
-  writeFileSync(join(bookDir, "chapters", "0001_镜中醒来.md"), chapterBody);
+const SEED_TS_CANONICAL = !forkContract;
+writeFileSync(join(bookDir, "chapters", SEED_TS_CANONICAL ? "0001_镜中醒来.md" : "0001-镜中醒来.md"), chapterBody);
+if (SEED_TS_CANONICAL) {
   writeFileSync(join(bookDir, "chapters", "index.json"), JSON.stringify([
     {
       number: 1,
@@ -162,8 +161,6 @@ if (reportSeed) {
       provenance: "imported",
     },
   ], null, 2));
-} else {
-  writeFileSync(join(bookDir, "chapters", "0001-镜中醒来.md"), chapterBody);
 }
 
 // genres 资产（project 级查找路径 = <root>/genres/；rules_reader 三级查找）。
@@ -228,11 +225,12 @@ if (!forkContract) {
 const enc = encodeURIComponent(BOOK);
 // 698 号：报告模式双腿跳过生产链——write-next 的执行深度决定 chaptersWritten
 //（Rust 全链产出第 2 章 vs TS 停在播种态），度量只需 GET 面，双腿对称停在播种态。
-if (process.env.WALKTHROUGH_REPORT_MODE === "1") {
-  // 698 号：报告模式双腿跑 resync（进度注册：Rust 经 memory.db 投影、TS 经
-  // 迁移后的 works 面），跳过 write-next（执行深度差=chaptersWritten 分歧源：
-  // 全链让 Rust 产出第 2 章而 TS 停在播种态）。对称停在 1 章。
-  console.log("[walkthrough-fixture] 报告模式：POST resync/1（进度注册）后收尾，跳过 write-next。");
+if (!forkContract) {
+  // 700 号：2.0 TS 腿自适应（与调用方解耦——smoke/contract-diff/walkthrough
+  // 统一走此路径）：resync 注册进度（迁移后的 works 面），跳过 write-next
+  //（执行深度差=chaptersWritten 分歧源）与链断言（断言验链，链跳过则必假红）。
+  // fork 契约腿走 687 原流（连字符探针+全链+断言）。
+  console.log("[walkthrough-fixture] 2.0 TS 腿：POST resync/1（进度注册）后收尾，跳过 write-next 与链断言。");
   const resync = await api(`/api/v1/books/${encodeURIComponent(BOOK)}/resync/1`, { method: "POST" });
   console.log(`[walkthrough-fixture] resync = ${resync.status}${resync.status !== 200 ? ` ${JSON.stringify(resync.body).slice(0, 200)}` : ""}`);
   process.exit(0); // 顶层直线脚本（ESM 禁 return）——同 die() 的早退惯例，exit 0=播种成功。

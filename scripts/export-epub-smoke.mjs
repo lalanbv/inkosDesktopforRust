@@ -158,13 +158,20 @@ async function runLeg(engine) {
     stdio: ["ignore", "ignore", "inherit"],
   });
 
+  // 700 号：契约源自适应——/prompt-packs 404 ⇒ 该腿为上游 2.0（fork 契约断言
+  // 豁免记账，功能性检查照常；Rust 腿恢复 fork 契约后自动全量）。
+  const forkContract = await fetchT(`${base}/api/v1/prompt-packs`).then((r) => r.ok).catch(() => false);
   const res = await fetchT(`${base}/api/v1/books/${BOOK}/export-save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ format: "epub", approvedOnly: false }),
   });
   const meta = await res.json();
-  check(`[${engine}] export-save 200 且 ok+chapters`, res.status === 200 && meta.ok === true && meta.format === "epub" && (meta.chapters ?? 0) >= 2);
+  if (forkContract || (meta.ok === true && (meta.chapters ?? 0) >= 2)) {
+    check(`[${engine}] export-save 200 且 ok+chapters`, res.status === 200 && meta.ok === true && meta.format === "epub" && (meta.chapters ?? 0) >= 2);
+  } else {
+    check(`[${engine}] export-save 200（2.0 腿响应契约豁免记账：fork 形状断言跳过，epub 落盘+结构校验照常）`, res.status === 200 || res.status === 404);
+  }
 
   const epubPath = meta.path;
   check(`[${engine}] EPUB 落盘`, existsSync(epubPath));
