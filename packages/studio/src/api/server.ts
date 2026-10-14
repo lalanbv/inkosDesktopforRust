@@ -4553,6 +4553,119 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ genres });
   });
 
+  // ── 703 号：genre 写面 + experience 读面回收（第三批；fork-only 清单 40→37）──
+  // genre 三写路由（create/PUT/copy）：项目级 genres/{id}.md 的 frontmatter 构建
+  // （yamlScalar = JSON.stringify 字符串引号转义，YAML 标量契约）。
+
+function yamlScalar(value: unknown): string {
+  return JSON.stringify(String(value ?? ""));
+}
+
+  app.post("/api/v1/genres/create", async (c) => {
+    const body = await c.req.json<{
+      id: string; name: string; language?: string;
+      chapterTypes?: string[]; fatigueWords?: string[];
+      numericalSystem?: boolean; powerScaling?: boolean; eraResearch?: boolean;
+      pacingRule?: string; satisfactionTypes?: string[]; auditDimensions?: number[];
+      body?: string;
+    }>();
+
+    if (!body.id || !body.name) {
+      return c.json({ error: "id and name are required" }, 400);
+    }
+    if (/[/\\\0]/.test(body.id) || body.id.includes("..")) {
+      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${body.id}"`);
+    }
+
+    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
+    const genresDir = join(root, "genres");
+    await mkdirFs(genresDir, { recursive: true });
+
+    const frontmatter = [
+      "---",
+      `name: ${yamlScalar(body.name)}`,
+      `id: ${yamlScalar(body.id)}`,
+      `language: ${yamlScalar(body.language ?? "zh")}`,
+      `chapterTypes: ${JSON.stringify(body.chapterTypes ?? [])}`,
+      `fatigueWords: ${JSON.stringify(body.fatigueWords ?? [])}`,
+      `numericalSystem: ${body.numericalSystem ?? false}`,
+      `powerScaling: ${body.powerScaling ?? false}`,
+      `eraResearch: ${body.eraResearch ?? false}`,
+      `pacingRule: ${yamlScalar(body.pacingRule ?? "")}`,
+      `satisfactionTypes: ${JSON.stringify(body.satisfactionTypes ?? [])}`,
+      `auditDimensions: ${JSON.stringify(body.auditDimensions ?? [])}`,
+      "---",
+      "",
+      body.body ?? "",
+    ].join("\n");
+
+    await writeFileFs(join(genresDir, `${body.id}.md`), frontmatter, "utf-8");
+    return c.json({ ok: true, id: body.id });
+  });
+
+  app.put("/api/v1/genres/:id", async (c) => {
+    const genreId = c.req.param("id");
+    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
+      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
+    }
+
+    const body = await c.req.json<{ profile: Record<string, unknown>; body: string }>();
+    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
+    const genresDir = join(root, "genres");
+    await mkdirFs(genresDir, { recursive: true });
+
+    const p = body.profile;
+    const frontmatter = [
+      "---",
+      `name: ${yamlScalar(p.name ?? genreId)}`,
+      `id: ${yamlScalar(p.id ?? genreId)}`,
+      `language: ${yamlScalar(p.language ?? "zh")}`,
+      `chapterTypes: ${JSON.stringify(p.chapterTypes ?? [])}`,
+      `fatigueWords: ${JSON.stringify(p.fatigueWords ?? [])}`,
+      `numericalSystem: ${p.numericalSystem ?? false}`,
+      `powerScaling: ${p.powerScaling ?? false}`,
+      `eraResearch: ${p.eraResearch ?? false}`,
+      `pacingRule: ${yamlScalar(p.pacingRule ?? "")}`,
+      `satisfactionTypes: ${JSON.stringify(p.satisfactionTypes ?? [])}`,
+      `auditDimensions: ${JSON.stringify(p.auditDimensions ?? [])}`,
+      "---",
+      "",
+      body.body ?? "",
+    ].join("\n");
+
+    await writeFileFs(join(genresDir, `${genreId}.md`), frontmatter, "utf-8");
+    return c.json({ ok: true, id: genreId });
+  });
+
+  app.post("/api/v1/genres/:id/copy", async (c) => {
+    const genreId = c.req.param("id");
+    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
+      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
+    }
+    try {
+      const { getBuiltinGenresDir } = await import("@actalk/inkos-core");
+      const { mkdir: mkdirFs, copyFile } = await import("node:fs/promises");
+      const builtinDir = getBuiltinGenresDir();
+      const projectGenresDir = join(root, "genres");
+      await mkdirFs(projectGenresDir, { recursive: true });
+      await copyFile(join(builtinDir, `${genreId}.md`), join(projectGenresDir, `${genreId}.md`));
+      return c.json({ ok: true, path: `genres/${genreId}.md` });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/experience", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "story", "experience.json");
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ entries: Array.isArray(parsed.entries) ? parsed.entries : [] });
+    } catch {
+      return c.json({ entries: [] });
+    }
+  });
+
   app.get("/api/v1/project/files/:file{.+}", async (c) => {
     const file = resolveProjectImageFile(root, c.req.param("file"));
 

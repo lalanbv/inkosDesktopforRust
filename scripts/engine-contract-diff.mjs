@@ -574,6 +574,11 @@ try {
       "/api/v1/style-profiles",
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
+      // 703 号：genre 写面 + experience 读面回收（第三批）。
+      { path: "/api/v1/genres/create", method: "POST" },
+      { path: "/api/v1/genres/:id", method: "PUT" },
+      { path: "/api/v1/genres/:id/copy", method: "POST" },
+      "/api/v1/books/:id/experience",
       "/api/v1/books/:id/promises",
       "/api/v1/books/:id/quality-trend",
       "/api/v1/books/:id/quality-debts",
@@ -583,8 +588,13 @@ try {
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
     let sharedCompared = 0;
-    for (const endpoint of SHARED_FACE) {
-      const [n, r] = await Promise.all([nodeApi(endpoint), rustApi(endpoint)]);
+    for (const endpointEntry of SHARED_FACE) {
+      const endpoint = typeof endpointEntry === "string" ? endpointEntry : endpointEntry.path;
+      const probeMethod = typeof endpointEntry === "string" ? "GET" : (endpointEntry.method ?? "GET");
+      const [n, r] = await Promise.all([
+        nodeApi(endpoint, { method: probeMethod }),
+        rustApi(endpoint, { method: probeMethod }),
+      ]);
       sharedCompared += 1;
       // 与严格比对同口径：prune 规范化（键排序 + VOLATILE 剔除）——
       // 裸 stringify 会把双端序列化键序差异误报为分歧。
@@ -604,7 +614,11 @@ try {
           cr = Object.fromEntries(rk.length ? Object.entries(pr).filter(([k]) => !rk.includes(k)) : Object.entries(pr));
         }
       }
-      const same = n.status === r.status && JSON.stringify(cn) === JSON.stringify(cr);
+      // 非 GET（写面）探针：状态码对比即可——空载荷的错误体形状属 fork/2.0
+      // 错误协议差（495 号 422 对齐面），非契约分歧；GET 面保持全 body 对比。
+      const same = probeMethod === "GET"
+        ? n.status === r.status && JSON.stringify(cn) === JSON.stringify(cr)
+        : n.status === r.status;
       if (same) {
         console.log(`✓ 共享面 ${endpoint}（${n.status}）${declaredKeys}`);
       } else {
@@ -625,7 +639,7 @@ try {
       "/api/v1/books/:id/deconstruct", "/api/v1/books/:id/detect-all",
       "/api/v1/books/:id/detect/:chapter", "/api/v1/books/:id/director",
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
-      "/api/v1/books/:id/experience", "/api/v1/books/:id/experience/:entryId",
+      "/api/v1/books/:id/experience/:entryId",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
       "/api/v1/books/:id/plan",
       "/api/v1/books/:id/repair-state/:chapter",
@@ -633,7 +647,7 @@ try {
       "/api/v1/books/:id/style-binding",
       "/api/v1/books/:id/timeline", "/api/v1/books/:id/timeline-auto-beats",
       "/api/v1/context-meter", "/api/v1/debug/tools",
-      "/api/v1/director/directions", "/api/v1/genres/create",
+      "/api/v1/director/directions",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
       "/api/v1/radar/analyze", "/api/v1/radar/rankings",
