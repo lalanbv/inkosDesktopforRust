@@ -599,6 +599,16 @@ export { compileStyleGuide } from "./agents/style-guide.js";
 export { LLM_API_FORMATS, isLLMApiFormat, toPiApi, type LLMApiFormat } from "./llm/api-format.js";
 export * from "./harness/index.js";
 
+// ── R36 会话树化（636-639 号；692 号重施——studio 分支切换器消费面）──
+export {
+  branchBookSession,
+  deriveSessionBranchPoints,
+  BranchTargetNotFoundError,
+  type BranchBookSessionResult,
+  type SessionBranchPoint,
+  type SessionBranchPointsResult,
+} from "./interaction/session-branch.js";
+
 // ── fork 资产库（G4/339 号系列；2.0 无此面，studio asset-library-store 消费）──
 export {
   assetContentHash,

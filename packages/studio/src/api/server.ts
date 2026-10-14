@@ -163,6 +163,8 @@ import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
 // 691 号：三库资产路由族重施（R4/363-366 号；store 模块 688 号随树保全，路由随 server 切 2.0 丢失）。
 import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
+// 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints } from "@actalk/inkos-core";
 import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
@@ -4682,6 +4684,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const aborted = abortAgentSession(root, sessionId) || taskAborted || chatRunning;
     broadcast("agent:aborted", { sessionId, aborted, scope: chatOnly ? "chat" : "all" });
     return c.json({ ok: true, aborted });
+  });
+
+  // ── 692 号：R36 会话树化重施（636-639 号；fork server → 2.0 架构移植）──
+  // 分支 = 追加 branch_moved 事件 + head 指针移动；toSeq 缺省/null = resetLeaf。
+  // 忙判定：2.0 面以 live chatRequest 为在飞判据（chatRequests Map）。
+  app.post("/api/v1/sessions/:sessionId/branch", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const body = await c.req.json<{ toSeq?: unknown }>().catch(() => ({}) as { toSeq?: unknown });
+    const rawToSeq = body.toSeq;
+    let toSeq: number | null;
+    if (rawToSeq === undefined || rawToSeq === null) {
+      toSeq = null;
+    } else if (typeof rawToSeq === "number" && Number.isInteger(rawToSeq) && rawToSeq >= 0) {
+      toSeq = rawToSeq;
+    } else {
+      throw new ApiError(400, "INVALID_BRANCH_TARGET", "toSeq must be a non-negative integer or null");
+    }
+    // 忙判定：轮进行中拒绝分支——保证单个请求的事件整体落在同一条链上。
+    if (chatRequests.has(sessionId)) {
+      throw new ApiError(409, "SESSION_BUSY", "Session has an in-flight request; abort it before branching");
+    }
+    let result: Awaited<ReturnType<typeof branchBookSession>>;
+    try {
+      result = await branchBookSession(root, sessionId, toSeq);
+    } catch (error) {
+      if (error instanceof BranchTargetNotFoundError) {
+        throw new ApiError(400, "INVALID_BRANCH_TARGET", error.message);
+      }
+      throw error;
+    }
+    if (!result) return c.json({ error: "Session not found" }, 404);
+    return c.json({ ok: true, head: result.head, branchCount: result.branchCount });
+  });
+
+  // R36 分支点读面（638 号）：可回退分支点清单（request_committed 全集 +
+  // preview + 是否在当前链上），供 studio 分支切换器渲染。
+  app.get("/api/v1/sessions/:sessionId/branches", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    const result = await deriveSessionBranchPoints(root, sessionId);
+    if (!result) return c.json({ error: "Session not found" }, 404);
+    return c.json(result);
   });
 
   app.use("/api/v1/agent", async (c, next) => {
