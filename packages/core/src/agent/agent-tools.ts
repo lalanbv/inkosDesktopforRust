@@ -42,7 +42,7 @@ import {
   type ActionPayload,
 } from "../interaction/action-envelope.js";
 import { ResearchSearchConfigSchema } from "../models/project.js";
-import { searchWeb } from "../utils/web-search.js";
+import { fetchUrl, searchWeb } from "../utils/web-search.js";
 import { runAsWorkflowTrajectory } from "../llm/agent-trajectory.js";
 import type { ActivatedSkillGuidance } from "./skill-tool.js";
 import {
@@ -793,6 +793,8 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
         depth: params.depth ?? "standard",
       }, {
         search: (query, maxResults) => searchWeb(query, maxResults, searchOptions),
+        // 560/635 号：SSRF 豁免随项目配置透传（与 Rust research_web 同构）。
+        fetch: (url) => fetchUrl(url, { allowPrivateEgress: searchConfig.allowPrivateEgress }),
       });
       const reportDir = join(projectRoot, ".inkos", "research");
       await mkdir(reportDir, { recursive: true });
@@ -869,6 +871,9 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
       onUpdate?.(textResult(params.sourceKind === "url"
         ? `Extracting URL: ${params.url ?? "(missing)"}`
         : `Extracting file: ${params.filePath ?? params.filename ?? "(missing)"}`));
+      // 635 号：SSRF 豁免从项目配置读（researchSearch.allowPrivateEgress）——
+      // 不从 LLM 工具参数来（防提示注入自开豁免）。
+      const allowPrivateEgress = (await readResearchSearchConfig(projectRoot)).allowPrivateEgress;
       const asset = await ingestMaterial(projectRoot, {
         sourceKind: params.sourceKind,
         url: params.url,
@@ -877,7 +882,7 @@ export function createIngestMaterialTool(projectRoot: string): AgentTool<typeof 
         mimeType: params.mimeType,
         title: params.title,
         purpose: params.purpose ?? "reference",
-      });
+      }, { allowPrivateEgress });
       return textResult(
         [
           `Material ingested: ${asset.markdownPath}`,

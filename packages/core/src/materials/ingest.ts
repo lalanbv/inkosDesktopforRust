@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { assertPublicEgressHost } from "../utils/egress-guard.js";
 import { basename, extname, join, relative } from "node:path";
 import { extractText, getDocumentProxy } from "unpdf";
 import { z } from "zod";
@@ -38,6 +39,8 @@ export type MaterialAsset = z.infer<typeof MaterialAssetSchema>;
 export interface IngestMaterialDeps {
   readonly fetch?: typeof fetch;
   readonly now?: () => Date;
+  /** 635 号：用户显式配置豁免（researchSearch.allowPrivateEgress 透传）——允许内网/本机文档源归档。 */
+  readonly allowPrivateEgress?: boolean;
 }
 
 const MAX_SOURCE_BYTES = 18 * 1024 * 1024;
@@ -103,7 +106,7 @@ async function readMaterialSource(
 ): Promise<MaterialSource> {
   if (input.sourceKind === "url") {
     if (!input.url) throw new Error("ingest_material.url is required for URL sources.");
-    return readUrlMaterial(input.url, deps.fetch ?? fetch);
+    return readUrlMaterial(input.url, deps.fetch ?? fetch, deps.allowPrivateEgress ?? false);
   }
   if (!input.filePath) throw new Error("ingest_material.filePath is required for file sources.");
   const safePath = safeChildPath(projectRoot, input.filePath);
@@ -120,10 +123,23 @@ async function readMaterialSource(
   });
 }
 
-async function readUrlMaterial(url: string, fetchImpl: typeof fetch): Promise<MaterialSource> {
+async function readUrlMaterial(
+  url: string,
+  fetchImpl: typeof fetch,
+  allowPrivateEgress: boolean,
+): Promise<MaterialSource> {
   const parsed = new URL(url);
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error(`Unsupported URL protocol: ${parsed.protocol}`);
+  }
+  // 635 号 SSRF 初判防线（与 engine-rs materials.rs 同水位对偶）：豁免来自
+  // researchSearch.allowPrivateEgress（与 research_web 同源，560 号形态）。
+  if (!allowPrivateEgress) {
+    try {
+      await assertPublicEgressHost(url);
+    } catch (e) {
+      throw new Error(`Fetch blocked: ${(e as Error).message}`);
+    }
   }
   const response = await fetchImpl(url, {
     headers: {

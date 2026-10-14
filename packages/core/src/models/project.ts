@@ -93,9 +93,13 @@ export const ResearchSearchConfigSchema = z.object({
   baseUrl: z.string().url().optional(),
   apiKey: z.string().optional(),
   apiKeyEnv: z.string().optional(),
+  // 635/684 号：SSRF 私网豁免的用户开关（Rust parse_research_search 镜像——
+  // 恒投影 default false；缺键则 GET 形状漂移且 PUT 往返静默清除用户显式配置）。
+  allowPrivateEgress: z.boolean().default(false),
 }).strict().default({
   enabled: false,
   provider: "tavily",
+  allowPrivateEgress: false,
 });
 
 export type ResearchSearchConfig = z.infer<typeof ResearchSearchConfigSchema>;

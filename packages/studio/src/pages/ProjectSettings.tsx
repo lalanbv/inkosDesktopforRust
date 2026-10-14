@@ -43,6 +43,8 @@ interface ResearchSearchDraft {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyEnv: string;
+  /** 635/689 号：SSRF 私网豁免（部署级开关；保存路径必须原样回传，防 PUT 往返静默清除——684 号同型）。 */
+  readonly allowPrivateEgress: boolean;
 }
 
 const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
@@ -51,6 +53,7 @@ const DEFAULT_RESEARCH_SEARCH: ResearchSearchDraft = {
   baseUrl: "",
   apiKey: "",
   apiKeyEnv: "TAVILY_API_KEY",
+  allowPrivateEgress: false,
 };
 
 // Smooth open/close via grid-template-rows (same trick as the sidebar).
@@ -466,6 +469,9 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
               ...(researchSearch.baseUrl.trim() ? { baseUrl: researchSearch.baseUrl.trim() } : {}),
               ...(researchSearch.apiKey.trim() ? { apiKey: researchSearch.apiKey.trim() } : {}),
               ...(researchSearch.apiKeyEnv.trim() ? { apiKeyEnv: researchSearch.apiKeyEnv.trim() } : {}),
+              // 684 号同型防线：豁免开关不在本卡编辑面（部署级配置），但保存必须
+              // 原样回传——漏带即 PUT 往返把用户显式配置静默打回 false。
+              allowPrivateEgress: researchSearch.allowPrivateEgress,
             };
             await putApi("/project/research-search", { researchSearch: next });
             await refetchResearchSearch();

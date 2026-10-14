@@ -2,8 +2,9 @@
  * Web search + URL fetch utilities.
  *
  * searchWeb(): Tavily API search (requires TAVILY_API_KEY env var).
- * fetchUrl(): Fetch a specific URL and return plain text.
+ * fetchUrl(): Fetch a specific URL and return plain text (SSRF egress guard, see ./egress-guard.js).
  */
+import { assertPublicEgressHost } from "./egress-guard.js";
 
 export interface SearchResult {
   readonly title: string;
@@ -65,8 +66,23 @@ export async function searchWeb(
 /**
  * Fetch a URL and return its complete text content.
  * HTML is stripped to plain text. Context budgeting happens at the consumer.
+ *
+ * 689 号：SSRF 初判防线重施（556/635 号；防线本体在 ./egress-guard.js，与
+ * engine-rs web_search.rs 同水位对偶）。allowPrivateEgress = 用户显式配置豁免
+ *（researchSearch.allowPrivateEgress 项目配置透传，自建网关/内网知识库部署
+ * 语义，与 Rust fetch_url 第三参同构）；缺省 false 走防线。
  */
-export async function fetchUrl(url: string): Promise<string> {
+export async function fetchUrl(
+  url: string,
+  options: { allowPrivateEgress?: boolean } = {},
+): Promise<string> {
+  if (!options.allowPrivateEgress) {
+    try {
+      await assertPublicEgressHost(url);
+    } catch (e) {
+      throw new Error(`Fetch blocked: ${(e as Error).message}`);
+    }
+  }
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
