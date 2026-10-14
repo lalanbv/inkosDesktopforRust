@@ -25,6 +25,19 @@ describe("legacy book work-migration boundary (696/697)", () => {
       createdAt: "2026-09-14T00:00:00.000Z", updatedAt: "2026-09-14T00:00:00.000Z",
     }));
     await writeFile(join(root, "books", BOOK, "chapters", "0001_第一节.md"), "# 第一节\n\n正文。");
+    // 699 号：进度链锁定——chaptersWritten = 持久化进度链（resolveDurableStoryProgress），
+    // 双端同语义（fork 487 = TS nextChapter-1 = Rust next-1）：index/files 一致 → 1。
+    await writeFile(join(root, "books", BOOK, "chapters", "index.json"), JSON.stringify([
+      {
+        number: 1,
+        title: "第一节",
+        wordCount: 6,
+        createdAt: "2026-09-14T00:00:00.000Z",
+        updatedAt: "2026-09-14T00:00:00.000Z",
+        observations: [],
+        provenance: "imported",
+      },
+    ]));
     await writeFile(join(root, "books", BOOK, "story", "current_state.md"), "# 当前状态\n");
     await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "walkthrough", version: "0.1.0", language: "zh" }));
   });
@@ -40,9 +53,12 @@ describe("legacy book work-migration boundary (696/697)", () => {
     const app = createStudioServer({} as never, root);
     const books = await app.request("/api/v1/books");
     expect(books.status).toBe(200);
-    const booksBody = await books.json() as { books: ReadonlyArray<{ id: string }> };
+    const booksBody = await books.json() as { books: ReadonlyArray<{ id: string; chaptersWritten?: number }> };
     expect(booksBody.books).toHaveLength(1);
     expect(booksBody.books[0]?.id).toBe(BOOK);
+    // 699 号：迁移后的书籍摘要保持持久化进度链语义（chaptersWritten=1），
+    // 与 Rust next-1 同源（487 号契约在迁移路径上不回退）。
+    expect(booksBody.books[0]?.chaptersWritten).toBe(1);
 
     const doctor = await app.request("/api/v1/doctor");
     const doctorBody = await doctor.json() as { bookCount?: number };
