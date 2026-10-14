@@ -20,6 +20,7 @@
     "agent:error",
     "session:title",
     "skills:change",
+    "session:target",
     "audit:start",
     "audit:complete",
     "audit:error",

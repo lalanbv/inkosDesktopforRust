@@ -185,6 +185,8 @@ describe("parsePendingHooks", () => {
       content: "初始世界状态：陈烬从噩梦惊醒，确认重生。",
       payoff: "第五卷中段",
       core: true,
+      // 2.0 合并后状态列在场即透出（fork 表状态列语义保留）。
+      status: "未正式推进",
     });
     expect(hooks[1].core).toBe(false);
     expect(hooks[1].payoff).toBe("第二卷中段");

@@ -46,6 +46,8 @@ export type MessagePart =
 
 export interface Message {
   readonly role: "user" | "assistant";
+  /** 2.0 消息类别（message/error；fork 存储不产，恒 undefined）。 */
+  readonly kind?: "message" | "error";
   readonly content: string;
   readonly thinking?: string;
   readonly thinkingStreaming?: boolean;
@@ -83,6 +85,9 @@ export interface SessionSummary {
   readonly bookId: string | null;
   readonly sessionKind?: ChatSessionKind;
   readonly playMode?: PlayMode;
+  /** 2.0 work 绑定面（fork 存储不产，恒 undefined）。 */
+  readonly workId?: string | null;
+  readonly profileId?: string | null;
   readonly title: string | null;
   readonly messageCount: number;
   readonly createdAt: number;
@@ -175,6 +180,9 @@ export interface SendMessageOptions {
   readonly disabledSkills?: ReadonlyArray<string>;
   readonly attachments?: ReadonlyArray<ChatAttachmentPayload>;
   readonly playMode?: PlayMode;
+  /** 2.0 work 绑定（work-chat 模式发送；fork 引擎忽略）。 */
+  readonly workId?: string;
+  readonly profileId?: string;
 }
 
 // 一次失败的聊天轮发送的原样参数（sendMessage 的 text 与 options），
@@ -217,6 +225,15 @@ export interface SessionRuntime {
   readonly chatAbortedAt?: number;
   // 仅前端存在、尚未持久化到磁盘的草稿会话。发送第一条消息时才调 POST /sessions 把它落盘。
   readonly isDraft: boolean;
+  // ── 2.0 work 绑定面（上游合并加法；fork 存储不产这些字段，恒 undefined）──
+  readonly workId?: string | null;
+  readonly profileId?: string | null;
+  readonly modelOverride?: string | null;
+  readonly serviceOverride?: string | null;
+  /** 上游 session:target 事件的目标 work（fork 引擎不发该事件，UI 恒走 fork 面板）。 */
+  readonly pendingWorkTarget?: { workId: string; profileId: string; fromWorkId?: string } | null;
+  /** 上游 detached chat 请求 id（2.0 chat-request-store 面；fork 存储不产）。 */
+  readonly detachedChatRequestId?: string | null;
 }
 
 export interface MessageState {
@@ -265,11 +282,14 @@ export interface MessageActions {
   loadSessionMessages: (sessionId: string, msgs: ReadonlyArray<SessionMessage>) => void;
   loadSessionList: (bookId: string | null) => Promise<ReadonlyArray<SessionSummary>>;
   createSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => Promise<string>;
-  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode) => string;
+  // 第 4 参双形态：fork proposalAction 选项 | 上游 2.0 work 绑定。
+  createDraftSession: (bookId: string | null, sessionKind?: ChatSessionKind, playMode?: PlayMode, opts?: { proposalAction?: ChatRequestedIntent } | { workId: string; profileId: string }) => string;
   setSessionPlayMode: (sessionId: string, playMode: PlayMode) => void;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  loadSessionDetail: (sessionId: string, opts?: { forceReplace?: boolean }) => Promise<void>;
+  // opts 兼容两种形态：fork { forceReplace? }；上游合并区传 boolean/第三参快照
+  //（2.0 reconcile 面，fork 存储忽略非 forceReplace 形态）。
+  loadSessionDetail: (sessionId: string, opts?: { forceReplace?: boolean } | boolean, snapshot?: unknown) => Promise<void>;
   // R36 分支切换（638 号）：branch 到指定提交点后强替重拉会话详情
   //（forceReplace：active 链投影整体替换本地消息，639 号 D1 修复——缺省
   // merge 守卫会把视图留在弃用路径上）。轮进行中服务端 409、目标非法

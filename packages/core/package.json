@@ -1,6 +1,6 @@
 {
   "name": "@actalk/inkos-core",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "InkOS pi-agent production harness for story creation, governed context, retrieval, review, and interactive worlds",
   "keywords": [
     "story-creation-ai-agent",
@@ -25,6 +25,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./forecast/schema": {
+      "types": "./dist/forecast/schema.d.ts",
+      "import": "./dist/forecast/schema.js"
+    },
     "./interactive-film/evaluator": {
       "types": "./dist/interactive-film/evaluator.d.ts",
       "import": "./dist/interactive-film/evaluator.js"
@@ -33,27 +37,26 @@
       "types": "./dist/interactive-film/graph-schema.d.ts",
       "import": "./dist/interactive-film/graph-schema.js"
     },
-    "./forecast/schema": {
-      "types": "./dist/forecast/schema.d.ts",
-      "import": "./dist/forecast/schema.js"
+    "./llm/api-format": {
+      "types": "./dist/llm/api-format.d.ts",
+      "import": "./dist/llm/api-format.js"
     },
-    "./utils/hook-kind": {
-      "types": "./dist/utils/hook-kind.d.ts",
-      "import": "./dist/utils/hook-kind.js"
+    "./utils/author-error-catalog": {
+      "types": "./dist/utils/author-error-catalog.d.ts",
+      "import": "./dist/utils/author-error-catalog.js"
     },
     "./utils/author-report": {
       "types": "./dist/utils/author-report.d.ts",
       "import": "./dist/utils/author-report.js"
     },
-    "./utils/author-error-catalog": {
-      "types": "./dist/utils/author-error-catalog.d.ts",
-      "import": "./dist/utils/author-error-catalog.js"
+    "./utils/hook-kind": {
+      "types": "./dist/utils/hook-kind.d.ts",
+      "import": "./dist/utils/hook-kind.js"
     }
   },
   "files": [
     "dist",
     "!dist/__tests__",
-    "genres",
     "skills"
   ],
   "license": "AGPL-3.0-only",
@@ -63,31 +66,37 @@
     "directory": "packages/core"
   },
   "scripts": {
-    "prepack": "node ../../scripts/prepare-package-for-publish.mjs",
+    "prepack": "npm run build && node ../../scripts/prepare-package-for-publish.mjs",
     "postpack": "node ../../scripts/restore-package-json.mjs",
     "prepublishOnly": "node ../../scripts/verify-no-workspace-protocol.mjs .",
-    "build": "tsc",
+    "build": "node ../../scripts/clean-package-dist.mjs && tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "eval": "vitest run src/__tests__/eval"
+    "test:flows": "vitest run src/__tests__/*.flow.test.ts",
+    "eval": "vitest run src/__tests__/eval",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.87.1",
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-telemetry": "0.87.1",
+    "@mariozechner/pi-agent-core": "0.67.1",
+    "@mariozechner/pi-ai": "0.67.1",
     "@sinclair/typebox": "^0.34.49",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
+    "js-yaml": "^4.1.1",
     "jszip": "3.10.1",
-    "js-yaml": "^4.3.2",
-    "undici": "6.28.1",
+    "undici": "6.21.3",
     "unpdf": "^1.6.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "typescript": "^5.8.0",
-    "vitest": "^5.0.0"
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.16.0"
   }
 }

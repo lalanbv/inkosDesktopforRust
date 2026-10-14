@@ -17,13 +17,18 @@ const BaseEventSchema = z.object({
    * null = 链根（含 reset-leaf 后新链首事件）。append 助手统一戳记，
    * 写入方不感知。 */
   parentSeq: z.number().int().nonnegative().nullable().optional(),
-});
+}).strict();
 
 export const SessionCreatedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_created"),
   bookId: z.string().nullable(),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
+  proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
+  modelOverride: z.string().min(1).optional(),
+  serviceOverride: z.string().min(1).optional(),
   title: z.string().nullable().default(null),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
@@ -33,7 +38,12 @@ export const SessionMetadataUpdatedEventSchema = BaseEventSchema.extend({
   type: z.literal("session_metadata_updated"),
   bookId: z.string().nullable().optional(),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
+  proposalAction: z.string().min(1).optional(),
   playMode: PlayModeSchema.optional(),
+  modelOverride: z.string().min(1).optional(),
+  serviceOverride: z.string().min(1).optional(),
   title: z.string().nullable().optional(),
   updatedAt: z.number().int().nonnegative(),
 });
@@ -42,6 +52,8 @@ export const RequestStartedEventSchema = BaseEventSchema.extend({
   type: z.literal("request_started"),
   requestId: z.string().min(1),
   sessionKind: SessionKindSchema.optional(),
+  profileId: z.string().min(1).optional(),
+  workId: z.string().min(1).nullable().optional(),
   input: z.string(),
 });
 
@@ -62,23 +74,29 @@ export const MessageEventSchema = BaseEventSchema.extend({
   uuid: z.string().min(1),
   parentUuid: z.string().min(1).nullable(),
   role: TranscriptRoleSchema,
+  visibility: z.enum(["conversation", "model"]).optional(),
   piTurnIndex: z.number().int().nonnegative().optional(),
   toolCallId: z.string().min(1).optional(),
   sourceToolAssistantUuid: z.string().min(1).optional(),
-  legacyDisplay: z.object({
+  display: z.object({
+    completion: z.object({
+      status: z.enum(["answered", "delivered", "needs_input", "blocked"]),
+      message: z.string(),
+    }).strict().optional(),
+    userInput: z.object({
+      text: z.string(),
+      language: z.enum(["zh", "en"]),
+      attachments: z.array(z.object({ filename: z.string() }).strict()),
+    }).strict().optional(),
     thinking: z.string().optional(),
     toolExecutions: z.array(z.unknown()).optional(),
-  }).optional(),
+  }).strict().optional(),
   message: z.unknown(),
 });
 
 /**
  * R32a 会话压缩条目（553 号）：恢复窗口从 `firstKeptUuid` 起，其前的对话以
- * `summary`（LLM 生成，迭代链式时已并入上一条摘要）替代。`firstKeptUuid`
- * 为 null 表示无保留段（全部对话被摘要，极端防线）。上游语义对应
- * pi-agent-core session `CompactionEntry`（firstKeptEntryId 等价物——R36
- * 树化后压缩沿 active 链解释：恢复时取 root→head 路径上最近一条 compaction，
- * message uuid 即定位；分支各自的压缩边界互不污染）。
+ * `summary`（LLM 生成，迭代链式时已并入上一条摘要）替代。
  */
 export const CompactionEventSchema = BaseEventSchema.extend({
   type: z.literal("compaction"),
@@ -91,9 +109,8 @@ export const CompactionEventSchema = BaseEventSchema.extend({
 
 /**
  * R36 会话树化（636 号）：分支指针移动事件（对齐 Pi branch 的 leaf 语义）。
- * `toSeq` = 新 head（null 等价 resetLeaf——head 置空，后续写入开新链根）；
- * `fromSeq` = 移动前 head（审计/桥接用）。branch_moved 自身不入任何对话链，
- * replay 时只改写 head 不延伸链。版本字面量保持 1：加法式扩展零版本增量。
+ * `toSeq` = 新 head（null 等价 resetLeaf）；`fromSeq` = 移动前 head。
+ * branch_moved 自身不入任何对话链，replay 时只改写 head 不延伸链。
  */
 export const BranchMovedEventSchema = BaseEventSchema.extend({
   type: z.literal("branch_moved"),

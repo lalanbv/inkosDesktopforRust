@@ -1,6 +1,6 @@
 {
   "name": "inkos",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Story Creation AI Agent for novels, short fiction, scripts, interactive worlds, and multilingual translation",
   "keywords": [
@@ -29,6 +29,8 @@
     "gate:ts": "node scripts/gate-ts.mjs",
     "gate:ts:fast": "node scripts/gate-ts.mjs --fast",
     "test": "pnpm -r test",
+    "test:flows": "pnpm -r --if-present test:flows",
+    "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "audit:semantic-patterns": "node scripts/audit-semantic-patterns.mjs",
     "verify:publish-manifests": "node scripts/verify-no-workspace-protocol.mjs packages/core packages/cli packages/studio",
@@ -44,7 +46,48 @@
     "review-matrix:rust": "node scripts/review-cycle-matrix.mjs --engine rust"
   },
   "engines": {
-    "node": ">=22.0.0",
+    "node": ">=22.16.0",
     "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@modelcontextprotocol/sdk": "^1.31.0",
+      "tinypool": "^2.2.0",
+      "hono": "^4.13.7",
+      "@hono/node-server": "^1.19.15",
+      "undici@<7": "^6.28.1",
+      "undici@7": "^7.29.1",
+      "vite@<7": "^6.4.3",
+      "vite@7": "^7.3.5",
+      "mermaid": "^11.16.1",
+      "protobufjs": "^7.6.5",
+      "@protobufjs/utf8": "^1.1.1",
+      "nanoid@<4": "^3.3.18",
+      "nanoid@>=4": "^5.1.16",
+      "ip-address": "^10.7.1",
+      "source-map-js": "^1.2.2",
+      "proxy-addr": "^2.0.8",
+      "postcss-selector-parser": "^7.1.6",
+      "js-yaml": "^4.3.2",
+      "picomatch@<4": "^3.0.2",
+      "picomatch@>=4": "^4.0.4",
+      "body-parser": "^2.3.0",
+      "esbuild@<0.28": "^0.28.1",
+      "brace-expansion@<3": "^2.1.7",
+      "brace-expansion@>=3": "^5.0.12",
+      "basic-ftp": "^6.2.1",
+      "browserslist": "^4.28.7",
+      "baseline-browser-mapping": "^2.11.0",
+      "@babel/core": "^7.29.6",
+      "dompurify": "^3.4.16",
+      "@ai-sdk/provider-utils": "^4.0.33",
+      "fast-uri@<4": "^3.1.8",
+      "postcss": "^8.5.23",
+      "qs@<7": "^6.16.0",
+      "ws": "^8.21.0",
+      "uuid@<12": "^11.1.1",
+      "fast-xml-parser": "^5.7.0",
+      "braces@<3.0.3": "^3.0.3"
+    }
   }
 }

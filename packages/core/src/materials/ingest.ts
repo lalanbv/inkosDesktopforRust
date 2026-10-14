@@ -1,11 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { basename, extname, join, relative } from "node:path";
 import { extractText, getDocumentProxy } from "unpdf";
+import { z } from "zod";
 import { safeChildPath } from "../utils/path-safety.js";
 import { toPosixPath } from "../utils/posix-path.js";
-import { assertPublicEgressHost } from "../utils/web-search.js";
+import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 
-export type MaterialPurpose = "reference" | "worldbuilding" | "script" | "storyboard" | "research" | "general";
+export type MaterialPurpose = string;
 export type MaterialSourceKind = "url" | "file";
 export type MaterialKind = "webpage" | "pdf" | "text";
 
@@ -19,29 +20,27 @@ export interface IngestMaterialInput {
   readonly purpose?: MaterialPurpose;
 }
 
-export interface MaterialAsset {
-  readonly id: string;
-  readonly title: string;
-  readonly kind: MaterialKind;
-  readonly purpose: MaterialPurpose;
-  readonly source: string;
-  readonly mimeType: string;
-  readonly markdownPath: string;
-  readonly manifestPath: string;
-  readonly charCount: number;
-  readonly excerpt: string;
-  readonly totalPages?: number;
-}
+export const MaterialAssetSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  kind: z.enum(["webpage", "pdf", "text"]),
+  purpose: z.string().trim().min(1),
+  source: z.string().min(1),
+  mimeType: z.string().min(1),
+  markdownPath: z.string().min(1),
+  manifestPath: z.string().min(1),
+  charCount: z.number().int().nonnegative(),
+  totalPages: z.number().int().positive().optional(),
+}).strict();
+
+export type MaterialAsset = z.infer<typeof MaterialAssetSchema>;
 
 export interface IngestMaterialDeps {
   readonly fetch?: typeof fetch;
   readonly now?: () => Date;
-  /** 635 号：用户显式配置豁免（researchSearch.allowPrivateEgress 透传）——允许内网/本机文档源归档。 */
-  readonly allowPrivateEgress?: boolean;
 }
 
 const MAX_SOURCE_BYTES = 18 * 1024 * 1024;
-const EXCERPT_CHARS = 1600;
 
 export async function ingestMaterial(
   projectRoot: string,
@@ -51,10 +50,9 @@ export async function ingestMaterial(
   const now = deps.now?.() ?? new Date();
   const purpose = input.purpose ?? "reference";
   const source = await readMaterialSource(projectRoot, input, deps);
-  const title = (input.title?.trim() || source.title || titleFromSource(input) || "material").slice(0, 120);
+  const title = input.title?.trim() || source.title || titleFromSource(input) || "material";
   const id = `${now.toISOString().replace(/[:.]/g, "-")}-${slug(title)}`;
   const materialsDir = join(projectRoot, ".inkos", "materials");
-  await mkdir(materialsDir, { recursive: true });
 
   const markdown = renderMaterialMarkdown({
     title,
@@ -67,8 +65,7 @@ export async function ingestMaterial(
   });
   const markdownPathAbs = join(materialsDir, `${id}.md`);
   const manifestPathAbs = join(materialsDir, `${id}.json`);
-  await writeFile(markdownPathAbs, markdown, "utf-8");
-  const asset: MaterialAsset = {
+  const asset = MaterialAssetSchema.parse({
     id,
     title,
     kind: source.kind,
@@ -78,10 +75,15 @@ export async function ingestMaterial(
     markdownPath: toPosixPath(relative(projectRoot, markdownPathAbs)),
     manifestPath: toPosixPath(relative(projectRoot, manifestPathAbs)),
     charCount: source.text.length,
-    excerpt: source.text.slice(0, EXCERPT_CHARS),
     ...(source.totalPages !== undefined ? { totalPages: source.totalPages } : {}),
-  };
-  await writeFile(manifestPathAbs, JSON.stringify(asset, null, 2), "utf-8");
+  });
+  await commitAtomicFileSet({
+    rootDir: projectRoot,
+    writes: [
+      { relativePath: asset.markdownPath, content: markdown },
+      { relativePath: asset.manifestPath, content: `${JSON.stringify(asset, null, 2)}\n` },
+    ],
+  });
   return asset;
 }
 
@@ -101,7 +103,7 @@ async function readMaterialSource(
 ): Promise<MaterialSource> {
   if (input.sourceKind === "url") {
     if (!input.url) throw new Error("ingest_material.url is required for URL sources.");
-    return readUrlMaterial(input.url, deps.fetch ?? fetch, deps.allowPrivateEgress ?? false);
+    return readUrlMaterial(input.url, deps.fetch ?? fetch);
   }
   if (!input.filePath) throw new Error("ingest_material.filePath is required for file sources.");
   const safePath = safeChildPath(projectRoot, input.filePath);
@@ -118,20 +120,10 @@ async function readMaterialSource(
   });
 }
 
-async function readUrlMaterial(
-  url: string,
-  fetchImpl: typeof fetch,
-  allowPrivateEgress: boolean,
-): Promise<MaterialSource> {
+async function readUrlMaterial(url: string, fetchImpl: typeof fetch): Promise<MaterialSource> {
   const parsed = new URL(url);
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error(`Unsupported URL protocol: ${parsed.protocol}`);
-  }
-  // 635 号：接线 556 号 SSRF 防线（与 Rust read_url_material 同批）——私网/
-  // 回环/链路本地 URL 在出站前拒绝，不再放行到连接层；豁免走项目配置
-  // researchSearch.allowPrivateEgress（与 research_web 同源，560 号形态）。
-  if (!allowPrivateEgress) {
-    await assertPublicEgressHost(url);
   }
   const response = await fetchImpl(url, {
     headers: {
@@ -257,7 +249,7 @@ function htmlToText(html: string): string {
 
 function extractHtmlTitle(html: string): string | undefined {
   const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  return match ? decodeHtml(match[1]).trim().slice(0, 120) : undefined;
+  return match ? decodeHtml(match[1]).trim() : undefined;
 }
 
 function decodeHtml(value: string): string {

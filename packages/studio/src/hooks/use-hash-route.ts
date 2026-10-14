@@ -6,7 +6,10 @@ export type HashRoute =
   | { page: "book"; bookId: string }
   | { page: "book-settings"; bookId: string }
   | { page: "book-timeline"; bookId: string }
+  | { page: "genres" }
   | { page: "book-create" }
+  | { page: "work"; workId: string }
+  | { page: "work-chat"; workId: string; profileId: string }
   | { page: "services" }
   | { page: "onboarding" }
   | { page: "project-settings" }
@@ -16,7 +19,6 @@ export type HashRoute =
   | { page: "truth"; bookId: string }
   | { page: "daemon" }
   | { page: "logs" }
-  | { page: "genres" }
   | { page: "style" }
   | { page: "translation" }
   | { page: "import"; tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill" }
@@ -44,6 +46,15 @@ function parseHash(hash: string): HashRoute {
   const importMatch = path.match(/^import\/(chapters|canon|fanfic|spinoff|imitation|backfill)$/);
   if (importMatch) return { page: "import", tab: importMatch[1] as "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill" };
   if (path === "book/new") return { page: "book-create" };
+
+  const workMatch = path.match(/^work\/([^/]+)$/);
+  if (workMatch) return { page: "work", workId: decodeURIComponent(workMatch[1]) };
+  const workChatMatch = path.match(/^work-chat\/([^/]+)\/([^/]+)$/);
+  if (workChatMatch) return {
+    page: "work-chat",
+    workId: decodeURIComponent(workChatMatch[1]),
+    profileId: decodeURIComponent(workChatMatch[2]),
+  };
 
   const serviceMatch = path.match(/^services\/([^/]+)$/);
   if (serviceMatch) return { page: "service-detail", serviceId: decodeURIComponent(serviceMatch[1]) };
@@ -129,6 +140,8 @@ const PAGE_SPEC: { readonly [K in HashRoute["page"]]: PageSpecFor<K> | null } = 
   translation: { toHash: () => "#/translation", writable: true, sample: { page: "translation" } },
   import: { toHash: (r) => (r.tab ? `#/import/${r.tab}` : "#/import"), writable: true, sample: { page: "import" } },
   "service-detail": { toHash: (r) => `#/services/${encodeURIComponent(r.serviceId)}`, writable: true, sample: { page: "service-detail", serviceId: "s1" } },
+  work: { toHash: (r) => `#/work/${encodeURIComponent(r.workId)}`, writable: true, sample: { page: "work", workId: "w1" } },
+  "work-chat": { toHash: (r) => `#/work-chat/${encodeURIComponent(r.workId)}/${encodeURIComponent(r.profileId)}`, writable: true, sample: { page: "work-chat", workId: "w1", profileId: "default" } },
   play: { toHash: (r) => `#/play/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "play", projectId: "p1" } },
   film: { toHash: (r) => `#/film/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "film", projectId: "p1" } },
   flow: { toHash: (r) => `#/flow/${encodeURIComponent(r.projectId)}`, writable: true, sample: { page: "flow", projectId: "p1" } },

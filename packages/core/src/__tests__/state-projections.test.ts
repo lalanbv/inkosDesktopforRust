@@ -30,36 +30,15 @@ describe("state projections", () => {
       ],
     }, "en");
 
-    // R23/408 号：第 14 列 kind（settle 落盘投影与 Rust render_hooks_projection 对齐）。
     expect(markdown).toBe([
       "# Pending Hooks",
       "",
-      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | payoff_timing | depends_on | pays_off_in_arc | core_hook | half_life | promoted | notes | kind |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | mid-arc | none |  | false |  |  | Old oath token resurfaces. |  |",
-      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | mid-arc | none |  | false |  |  | The seal is still broken. |  |",
+      "| hook_id | start_chapter | type | status | last_advanced_chapter | expected_payoff | notes |",
+      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| a-debt | 4 | relationship | progressing | 11 | Reveal the debt. | Old oath token resurfaces. |",
+      "| b-courier | 12 | mystery | open | 13 | Identify the courier. | The seal is still broken. |",
       "",
     ].join("\n"));
-  });
-
-  it("emits the canonical kind in column 14 when present (R23/408)", () => {
-    const markdown = renderHooksProjection({
-      hooks: [
-        {
-          hookId: "H01",
-          startChapter: 1,
-          type: "身世",
-          status: "open",
-          lastAdvancedChapter: 1,
-          expectedPayoff: "第10章",
-          notes: "镜中世界的来历真相。",
-          kind: "suspense",
-        },
-      ],
-    }, "zh");
-    expect(markdown).toContain(
-      "| H01 | 1 | 身世 | open | 1 | 第10章 | 中程 | 无 |  | 否 |  |  | 镜中世界的来历真相。 | suspense |",
-    );
   });
 
   it("renders chapter summaries projection with deterministic Chinese ordering", () => {
@@ -91,15 +70,15 @@ describe("state projections", () => {
     expect(markdown).toBe([
       "# 章节摘要",
       "",
-      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      "| 11 | 雨巷旧账 | 林月 | 林月查到旧账册断页 | 师债线被重新钉牢 | mentor-debt 推进 | 压抑 | 主线推进 |  |  |",
-      "| 12 | 河埠对账 | 林月 | 林月核对货单与誓令碎片 | 师债线索进一步收束 | mentor-debt 推进 | 紧绷 | 主线推进 |  |  |",
+      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| 11 | 雨巷旧账 | 林月 | 林月查到旧账册断页 | 师债线被重新钉牢 | mentor-debt 推进 | 压抑 | 主线推进 |",
+      "| 12 | 河埠对账 | 林月 | 林月核对货单与誓令碎片 | 师债线索进一步收束 | mentor-debt 推进 | 紧绷 | 主线推进 |",
       "",
     ].join("\n"));
   });
 
-  it("renders current state projection with placeholders and additional notes", () => {
+  it("renders current state as generic typed facts without semantic slots", () => {
     const markdown = renderCurrentStateProjection({
       chapter: 12,
       facts: [
@@ -133,18 +112,13 @@ describe("state projections", () => {
     expect(markdown).toBe([
       "# Current State",
       "",
-      "| Field | Value |",
-      "| --- | --- |",
-      "| Current Chapter | 12 |",
-      "| Current Location | (not set) |",
-      "| Protagonist State | (not set) |",
-      "| Current Goal | Track the mentor debt through the river-port ledger. |",
-      "| Current Constraint | (not set) |",
-      "| Current Alliances | (not set) |",
-      "| Current Conflict | Guild pressure keeps pulling against the debt trail. |",
+      "> Current chapter: 12",
       "",
-      "## Additional State",
-      "- Lin Yue still hides the broken oath token.",
+      "| Subject | Predicate | Object | Valid from | Source chapter |",
+      "| --- | --- | --- | --- | --- |",
+      "| current_state | note_1 | Lin Yue still hides the broken oath token. | 12 | 12 |",
+      "| protagonist | Current Conflict | Guild pressure keeps pulling against the debt trail. | 12 | 12 |",
+      "| protagonist | Current Goal | Track the mentor debt through the river-port ledger. | 12 | 12 |",
       "",
     ].join("\n"));
   });

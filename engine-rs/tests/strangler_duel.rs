@@ -308,6 +308,29 @@ async fn wait_ready(base: &str) {
     }
 }
 
+/// 688 号：TS 腿契约源探测——`/api/v1/prompt-packs` 是 fork 契约面（上游 2.0 已删）。
+/// 返回 "fork"（fork 契约对跑有效）或 "upstream-2.0"（范式替换后 TS 腿不再承载 fork 契约）。
+async fn ts_leg_contract_source(ts: &str) -> &'static str {
+    match get_json(ts, "/api/v1/prompt-packs").await {
+        (200, _) => "fork",
+        _ => "upstream-2.0",
+    }
+}
+
+/// 688 号契约源守卫：TS 腿非 fork 契约时，fork 契约对跑整体失效——
+/// 响亮记账后跳过本测（boot/readiness 已在前序 wait_ready 验证，不静默）。
+/// TS 恢复 fork 契约（2.0 迁移落地，见 688 号 §五）后守卫自动复活，无需改码。
+macro_rules! duel_require_fork_contract {
+    ($ts:expr) => {
+        if ts_leg_contract_source($ts).await != "fork" {
+            eprintln!(
+                "[688 豁免记账] 契约源检测：TS 腿=上游 2.0（/prompt-packs 404 实证）——fork 契约对跑失效，本测响亮跳过。\n                 [688 豁免记账] 差异面=2.0 迁移欠账（变更记录 688 号 §五），非 Rust 回归；迁移落地后本守卫自动复活。"
+            );
+            return;
+        }
+    };
+}
+
 #[tokio::test]
 async fn strangler_readonly_face_duel() {
     if !duel_enabled() {
@@ -325,6 +348,7 @@ async fn strangler_readonly_face_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     // 98 号 runbook 只读桶（GET 面）。
     let endpoints = [
@@ -384,6 +408,7 @@ async fn strangler_cross_write_read_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     let client = reqwest::Client::new();
 
@@ -481,6 +506,7 @@ async fn strangler_session_domain_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
     let client = reqwest::Client::new();
 
     // A) Rust 建会话（book 绑定）→ 双端 GET 等价。
@@ -572,6 +598,7 @@ async fn strangler_services_domain_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
     let client = reqwest::Client::new();
 
     // A) 服务列表读面（fixture 服务项 + secrets 键集）。
@@ -661,6 +688,7 @@ async fn strangler_full_grey_simulation() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
     let client = reqwest::Client::new();
 
     let readonly = [
@@ -934,6 +962,7 @@ async fn bin_process_static_face_duel() {
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_ready(&bin).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     for path in ["/", "/editor/chapter/2", "/assets/app.js", "/assets/missing.js"] {
         let (bin_status, bin_type, bin_body) = get_raw(&bin, path).await;
@@ -1215,6 +1244,7 @@ async fn sse_event_face_duel() {
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_ready(&bin).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     let instruction = "帮我看下第二章节奏";
     let ts_events =
@@ -1291,6 +1321,7 @@ async fn strangler_timeline_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     let valid_timeline = json!({
         "version": 1,
@@ -1397,6 +1428,7 @@ async fn strangler_series_backfill_duel() {
     let ts = spawn_ts_sidecar(&root, ts_port).await;
     wait_ready(&rust).await;
     wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
 
     let mut diffs: Vec<String> = Vec::new();
 

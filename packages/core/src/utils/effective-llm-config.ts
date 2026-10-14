@@ -1,22 +1,33 @@
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ProjectConfigSchema, type LLMConfig, type ProjectConfig } from "../models/project.js";
+import { LLMServiceEntrySchema, ProjectConfigSchema, type LLMConfig, type ProjectConfig } from "../models/project.js";
 import { loadSecrets } from "../llm/secrets.js";
 import { getEndpoint } from "../llm/providers/index.js";
 import { guessServiceFromBaseUrl, resolveServicePreset, resolveServiceProviderFamily } from "../llm/service-presets.js";
 import { isApiKeyOptionalForEndpoint } from "./llm-endpoint-auth.js";
-import { cliOverlayEnv, legacyEnv, studioIgnoredEnv, type LLMEnvLayers, type LLMEnvMap } from "./llm-env.js";
+import { mergedLLMEnv, studioIgnoredEnv, type LLMEnvLayers, type LLMEnvMap } from "./llm-env.js";
+import type { LLMApiFormat } from "../llm/api-format.js";
 
 export type LLMConsumer = "studio" | "cli" | "daemon" | "deploy";
-export type LLMConfigMode = "studio-project" | "cli-project" | "legacy-env";
+export type LLMConfigMode = "studio-project" | "cli-project" | "environment";
 export type LLMValueSource = "project" | "studio-secret" | "env" | "cli" | "default";
+
+export class LLMConfigurationError extends Error {
+  constructor(
+    readonly code: "MISSING_API_KEY" | "PROJECT_NOT_FOUND" | "INVALID_PROJECT_CONFIG",
+    message: string,
+  ) {
+    super(message);
+    this.name = "LLMConfigurationError";
+  }
+}
 
 export interface LLMConfigCliOverrides {
   readonly service?: string;
   readonly model?: string;
   readonly apiKeyEnv?: string;
   readonly baseUrl?: string;
-  readonly apiFormat?: "chat" | "responses";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
 }
 
@@ -48,8 +59,7 @@ interface ServiceConfigEntry {
   readonly baseUrl?: string;
   readonly models?: readonly string[];
   readonly temperature?: number;
-  readonly maxTokens?: number;
-  readonly apiFormat?: "chat" | "responses";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
 }
 
@@ -82,7 +92,6 @@ export async function resolveEffectiveLLMConfig(
 
   if (configMode === "studio-project") {
     warnIfStudioIgnoresEnv(input.envLayers, diagnostics);
-    warnIfStaleTopLevel(llm, services, diagnostics);
     await applyProjectServiceConfig(config, llm, services, input.projectRoot, diagnostics, {
       requireApiKey: input.requireApiKey,
       ignoreTopLevelModel: services.length > 0,
@@ -90,7 +99,7 @@ export async function resolveEffectiveLLMConfig(
   } else if (configMode === "cli-project") {
     await applyCliProjectConfig(config, llm, services, input, diagnostics);
   } else {
-    await applyLegacyEnvConfig(config, llm, input, diagnostics);
+    await applyEnvironmentConfig(config, llm, input, diagnostics);
   }
 
   if (input.requireApiKey === false) {
@@ -101,7 +110,8 @@ export async function resolveEffectiveLLMConfig(
   const baseUrl = typeof llm.baseUrl === "string" ? llm.baseUrl : undefined;
   const apiKey = typeof llm.apiKey === "string" ? llm.apiKey : "";
   if (!apiKey && input.requireApiKey !== false && !isApiKeyOptionalForEndpoint({ provider, baseUrl })) {
-    throw new Error(
+    throw new LLMConfigurationError(
+      "MISSING_API_KEY",
       configMode === "studio-project"
         ? "Studio LLM API key not set. Open Studio services and save an API key for the selected service."
         : "INKOS_LLM_API_KEY not set. Run 'inkos config set-global' or add it to project .env file.",
@@ -110,6 +120,16 @@ export async function resolveEffectiveLLMConfig(
 
   llm.apiKey = apiKey;
   config.llm = llm;
+
+  // 688 号 legacy 兼容：fork 时代 inkos.json 允许顶层 `services`（duel/contract-diff
+  // 夹具即此形态）。ProjectConfigSchema 为 strict，未知顶层键会拒——归一化进
+  // llm.services（llm.services 在场时以 llm 层优先，顶层仅作缺省回填）。
+  if (Array.isArray(config.services)) {
+    if (!Array.isArray(llm.services)) {
+      llm.services = config.services;
+    }
+    delete config.services; // strict schema 不容未知顶层键
+  }
 
   const parsed = ProjectConfigSchema.parse(config);
   return {
@@ -123,8 +143,10 @@ async function readProjectConfig(root: string): Promise<Record<string, unknown>>
   const configPath = join(root, "inkos.json");
   try {
     await access(configPath);
-  } catch {
-    throw new Error(
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    throw new LLMConfigurationError(
+      "PROJECT_NOT_FOUND",
       `inkos.json not found in ${root}.\nMake sure you are inside an InkOS project directory (cd into the project created by 'inkos init').`,
     );
   }
@@ -133,7 +155,10 @@ async function readProjectConfig(root: string): Promise<Record<string, unknown>>
   try {
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    throw new Error(`inkos.json in ${root} is not valid JSON. Check the file for syntax errors.`);
+    throw new LLMConfigurationError(
+      "INVALID_PROJECT_CONFIG",
+      `inkos.json in ${root} is not valid JSON. Check the file for syntax errors.`,
+    );
   }
 }
 
@@ -143,9 +168,9 @@ function resolveConfigMode(
   services: readonly ServiceConfigEntry[],
 ): LLMConfigMode {
   if (consumer === "studio") return "studio-project";
-  if (source === "env") return "legacy-env";
+  if (source === "env") return "environment";
   if (source === "studio" || services.length > 0) return "cli-project";
-  return "legacy-env";
+  return "environment";
 }
 
 async function applyProjectServiceConfig(
@@ -220,7 +245,7 @@ async function applyCliProjectConfig(
   input: ResolveEffectiveLLMConfigInput,
   diagnostics: MutableDiagnostics,
 ): Promise<void> {
-  const env = cliOverlayEnv(input.envLayers);
+  const env = mergedLLMEnv(input.envLayers);
   const envBaseUrl = stringValue(env.INKOS_LLM_BASE_URL);
   const envService = stringValue(env.INKOS_LLM_SERVICE) ?? (envBaseUrl ? guessServiceFromBaseUrl(envBaseUrl) : undefined);
   const envModel = stringValue(env.INKOS_LLM_MODEL);
@@ -246,13 +271,13 @@ async function applyCliProjectConfig(
   });
 }
 
-async function applyLegacyEnvConfig(
+async function applyEnvironmentConfig(
   config: Record<string, unknown>,
   llm: Record<string, unknown>,
   input: ResolveEffectiveLLMConfigInput,
   diagnostics: MutableDiagnostics,
 ): Promise<void> {
-  const env = legacyEnv(input.envLayers);
+  const env = mergedLLMEnv(input.envLayers);
   llm.configSource = "env";
 
   if (env.INKOS_LLM_SERVICE) {
@@ -316,7 +341,14 @@ function applyServiceEntry(llm: Record<string, unknown>, entry: ServiceConfigEnt
   if (entry.temperature !== undefined) llm.temperature = entry.temperature;
   if (entry.apiFormat !== undefined) llm.apiFormat = entry.apiFormat;
   else if (transportDefaults?.apiFormat !== undefined) llm.apiFormat = transportDefaults.apiFormat;
-  else llm.apiFormat = resolveServicePreset(entry.service)?.api.startsWith("openai-responses") ? "responses" : "chat";
+  else {
+    const presetApi = resolveServicePreset(entry.service)?.api;
+    llm.apiFormat = presetApi === "anthropic-messages"
+      ? "anthropic"
+      : presetApi === "openai-responses"
+        ? "responses"
+        : "chat";
+  }
   if (entry.stream !== undefined) llm.stream = entry.stream;
   else if (transportDefaults?.stream !== undefined) llm.stream = transportDefaults.stream;
 }
@@ -350,65 +382,32 @@ async function getStudioServiceApiKey(projectRoot: string, serviceKey: string): 
 }
 
 function normalizeServiceEntries(raw: unknown): ServiceConfigEntry[] {
-  if (Array.isArray(raw)) {
-    return raw
-      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
-      .map((entry) => ({
-        service: typeof entry.service === "string" && entry.service.length > 0 ? entry.service : "custom",
-        ...(typeof entry.name === "string" && entry.name.length > 0 ? { name: entry.name } : {}),
-        ...(typeof entry.baseUrl === "string" && entry.baseUrl.length > 0 ? { baseUrl: entry.baseUrl } : {}),
-        ...(Array.isArray(entry.models) ? { models: normalizeModelIds(entry.models) } : {}),
-        ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
-        ...(typeof entry.maxTokens === "number" ? { maxTokens: entry.maxTokens } : {}),
-        ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
-        ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
-      }));
+  if (raw === undefined) return [];
+  // 688 号 fork 双形态兼容：legacy 项目 / duel 夹具的 services 是 object-map
+  //（"custom:Duel": {...}）。先展平为数组再走严格 schema：map 键为服务身份，
+  // custom: 前缀键的语义名回填 name（serviceEntryKey 据此还原 custom:<name>，
+  // secrets 查找键保持一致）；非 custom 键回填 service。
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    return LLMServiceEntrySchema.array().parse(
+      Object.entries(raw as Record<string, unknown>)
+        .filter(([, value]) => value !== null && typeof value === "object")
+        .map(([key, value]) => {
+          const entry = { ...(value as Record<string, unknown>) };
+          if (key.startsWith("custom:")) {
+            if (typeof entry.name !== "string" || entry.name.length === 0) {
+              entry.name = decodeURIComponent(key.slice("custom:".length));
+            }
+            if (typeof entry.service !== "string" || entry.service.length === 0) {
+              entry.service = "custom";
+            }
+          } else if (typeof entry.service !== "string" || entry.service.length === 0) {
+            entry.service = key;
+          }
+          return entry;
+        }),
+    );
   }
-
-  if (raw && typeof raw === "object") {
-    return Object.entries(raw as Record<string, unknown>)
-      .filter(([, value]) => value && typeof value === "object")
-      .map(([serviceId, value]) => normalizeServiceEntryFromPatch(serviceId, value as Record<string, unknown>));
-  }
-
-  return [];
-}
-
-function normalizeServiceEntryFromPatch(serviceId: string, value: Record<string, unknown>): ServiceConfigEntry {
-  if (serviceId.startsWith("custom:")) {
-    return {
-      service: "custom",
-      name: decodeURIComponent(serviceId.slice("custom:".length)),
-      ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
-      ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
-      ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-      ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    };
-  }
-
-  if (serviceId === "custom") {
-    return {
-      service: "custom",
-      ...(typeof value.name === "string" && value.name.length > 0 ? { name: value.name } : {}),
-      ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
-      ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
-      ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-      ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    };
-  }
-
-  return {
-    service: serviceId,
-    ...(Array.isArray(value.models) ? { models: normalizeModelIds(value.models) } : {}),
-    ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-    ...(typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {}),
-    ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
-    ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-  };
+  return LLMServiceEntrySchema.array().parse(raw);
 }
 
 function selectServiceEntry(
@@ -470,20 +469,6 @@ function modelBelongsToService(entry: ServiceConfigEntry, model: string): boolea
   return endpoint.models.some((knownModel) => knownModel.id.toLowerCase() === model.toLowerCase());
 }
 
-function normalizeModelIds(value: readonly unknown[]): string[] {
-  const seen = new Set<string>();
-  const models: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string") continue;
-    const model = item.trim();
-    const key = model.toLowerCase();
-    if (!model || seen.has(key)) continue;
-    seen.add(key);
-    models.push(model);
-  }
-  return models;
-}
-
 /**
  * 这些服务的可用模型清单是动态的，静态 bank 必然滞后，
  * 所以用户显式配置的模型 id 直接透传，不做 bank 白名单校验（issue #300）：
@@ -522,17 +507,6 @@ function warnIfStudioIgnoresEnv(layers: LLMEnvLayers, diagnostics: MutableDiagno
   const ignored = studioIgnoredEnv(layers);
   if (Object.keys(ignored).some((key) => key.startsWith("INKOS_LLM_"))) {
     diagnostics.warnings.push("Studio 运行时不会使用 env 中的 INKOS_LLM_* 配置；请在服务配置页保存 Studio 配置。");
-  }
-}
-
-function warnIfStaleTopLevel(
-  llm: Record<string, unknown>,
-  services: readonly ServiceConfigEntry[],
-  diagnostics: MutableDiagnostics,
-): void {
-  if (services.length === 0) return;
-  if (["provider", "baseUrl", "model", "apiKey"].some((key) => typeof llm[key] === "string" && (llm[key] as string).length > 0)) {
-    diagnostics.warnings.push("检测到旧顶层 LLM 配置；Studio 模式以选中的 service/defaultModel/secrets 为准。");
   }
 }
 

@@ -7,11 +7,12 @@ import { useServiceStore } from "../store/service";
 import { WritingStatsCard } from "../components/WritingStatsCard";
 import { RunLogPanel } from "../components/RunLogPanel";
 import { BackupPanel } from "../components/BackupPanel";
-import type { SSEMessage } from "../hooks/use-sse";
+import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { deriveActiveBookIds, shouldRefetchBookCollections, writeTaskSessionId } from "../hooks/use-book-activity";
+import { tr } from "../lib/app-language";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { SkeletonCards } from "../components/skeletons";
@@ -49,6 +50,7 @@ interface Nav {
   toBookSettings: (id: string) => void;
   toAnalytics: (id: string) => void;
   toBookCreate: () => void;
+  toWork: (id: string) => void;
   toServices: () => void;
   toOnboarding: () => void;
   toImport: (tab?: "chapters" | "canon" | "fanfic" | "spinoff" | "imitation" | "backfill") => void;
@@ -140,6 +142,14 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
+  const worksQuery = useApi<{ works: ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly profileId: string;
+    readonly status: string;
+    readonly artifactCount: number;
+  }> }>("/works");
+  const otherWorks = (worksQuery.data?.works ?? []).filter((work) => work.profileId !== "longform-novel");
 
   // 180 号 C3-a：按 series 分组（纯函数见 dashboard-book-groups.ts）。
   const bookGroups = useMemo(
@@ -155,15 +165,14 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   const logEvents = sse.messages.filter((m) => m.event === "log").slice(-8);
   const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
 
-  useEffect(() => {
-    const recent = sse.messages.at(-1);
-    if (!recent) return;
+  useNewSSEMessages(sse.messages, (recent) => {
     if (shouldRefetchBookCollections(recent)) {
       refetch();
+      worksQuery.refetch();
     }
-  }, [refetch, sse.messages]);
+  });
 
-  if (loading && !data) return (
+  if ((loading || worksQuery.loading) && !data) return (
     <div data-loading="skeleton" className="space-y-12">
       <div className="flex items-end justify-between border-b border-border/40 pb-8">
         <div className="space-y-3">
@@ -176,15 +185,15 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
     </div>
   );
 
-  if (error) return (
+  if (error || worksQuery.error) return (
     <div className="flex flex-col items-center justify-center py-20 bg-destructive/5 border border-destructive/20 rounded-2xl">
       <AlertCircle className="text-destructive mb-4" size={32} />
       <h2 className="text-lg font-semibold text-destructive">Failed to load library</h2>
-      <p className="text-sm text-muted-foreground mt-1">{error}</p>
+      <p className="text-sm text-muted-foreground mt-1">{error ?? worksQuery.error}</p>
     </div>
   );
 
-  if (!data?.books.length) {
+  if (!data?.books.length && otherWorks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center fade-in">
         <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mb-8">
@@ -400,6 +409,29 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
           </div>
         ))}
       </div>
+
+      {otherWorks.length > 0 && (
+        <section className="space-y-4">
+          <div className="border-b border-border/40 pb-4">
+            <h2 className="font-serif text-3xl">{tr("其他创作", "Other creative Works")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{tr("短篇、剧本、分镜、互动世界、互动影游与翻译", "Short fiction, scripts, storyboards, interactive works, and translations")}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {otherWorks.map((work) => (
+              <button
+                key={work.id}
+                type="button"
+                onClick={() => nav.toWork(work.id)}
+                className="rounded-xl border border-border/55 bg-card p-5 text-left transition hover:border-primary/40 hover:bg-primary/[0.03]"
+              >
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{work.profileId}</div>
+                <div className="mt-2 truncate text-lg font-semibold">{work.title}</div>
+                <div className="mt-3 text-xs text-muted-foreground">{work.artifactCount} artifacts · {work.status}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Modern writing progress panel */}
       {writingBooks.size > 0 && logEvents.length > 0 && (

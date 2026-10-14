@@ -16,6 +16,7 @@ export default defineConfig({
       "@actalk/inkos-core/utils/hook-kind": resolve(__dirname, "../core/src/utils/hook-kind.ts"),
       "@actalk/inkos-core/utils/author-report": resolve(__dirname, "../core/src/utils/author-report.ts"),
       "@actalk/inkos-core/utils/author-error-catalog": resolve(__dirname, "../core/src/utils/author-error-catalog.ts"),
+      "@actalk/inkos-core/llm/api-format": resolve(__dirname, "../core/src/llm/api-format.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

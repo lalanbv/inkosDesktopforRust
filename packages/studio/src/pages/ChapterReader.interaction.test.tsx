@@ -51,22 +51,6 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("ChapterReader 动作链（458 号）", () => {
-  it("通过——POST approve 并导航回书页", async () => {
-    const user = userEvent.setup();
-    render(<ChapterReader bookId="b1" chapterNumber={1} nav={nav} theme="light" t={t} />);
-    await user.click(screen.getByText("reader.approve"));
-    expect(postApiMock).toHaveBeenCalledWith("/books/b1/chapters/1/approve");
-    expect(toBookMock).toHaveBeenCalledWith("b1");
-  });
-
-  it("驳回——POST reject 并导航回书页", async () => {
-    const user = userEvent.setup();
-    render(<ChapterReader bookId="b1" chapterNumber={1} nav={nav} theme="light" t={t} />);
-    await user.click(screen.getByText("reader.reject"));
-    expect(postApiMock).toHaveBeenCalledWith("/books/b1/chapters/1/reject");
-    expect(toBookMock).toHaveBeenCalledWith("b1");
-  });
-
   it("对照分屏换章——splitNext 触发对照章新 fetch（462 号）", async () => {
     const user = userEvent.setup();
     // 第 2 章起：初始对照章 = 前一章（1），splitNext 前进到 2

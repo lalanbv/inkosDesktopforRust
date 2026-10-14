@@ -15,6 +15,8 @@ export interface Nav {
   toBookSettings(bookId: string): void;
   toBookTimeline(bookId: string): void;
   toBookCreate(): void;
+  toWork(workId: string): void;
+  toWorkChat(workId: string, profileId: string): void;
   toChapter(bookId: string, chapterNumber: number): void;
   toAnalytics(bookId: string): void;
   toServices(): void;
@@ -46,6 +48,8 @@ export function createNav(navigate: (route: HashRoute) => void): Nav {
     toBookSettings: (bookId) => navigate({ page: "book-settings", bookId }),
     toBookTimeline: (bookId) => navigate({ page: "book-timeline", bookId }),
     toBookCreate: () => navigate({ page: "book-create" }),
+    toWork: (workId) => navigate({ page: "work", workId }),
+    toWorkChat: (workId, profileId) => navigate({ page: "work-chat", workId, profileId }),
     toChapter: (bookId, chapterNumber) => navigate({ page: "chapter", bookId, chapterNumber }),
     toAnalytics: (bookId) => navigate({ page: "analytics", bookId }),
     toServices: () => navigate({ page: "services" }),

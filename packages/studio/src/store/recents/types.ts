@@ -13,6 +13,9 @@ export interface RecentEntry {
   serviceId?: string;
   projectId?: string;
   tab?: string;
+  /** 2.0 work 面（work / work-chat 路由重建用）。 */
+  workId?: string;
+  profileId?: string;
 }
 
 export interface RecentsStore {

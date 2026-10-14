@@ -1,4 +1,4 @@
-import type { HookKind } from "../models/runtime-state.js";
+
 
 /**
  * R23 伏笔类型标注（393 号，四轮 P1；对标蛙趣 8 类伏笔生命周期的取精版）。
@@ -24,7 +24,8 @@ export const HOOK_KIND_IDS = [
 export type HookKindId = (typeof HOOK_KIND_IDS)[number];
 // 规范类型随本模块对外暴露（子路径消费者 `import { type HookKind }`）；
 // Rust 侧 hook_kind.rs 同样 re-export HookKind，双端同构。
-export type { HookKind } from "../models/runtime-state.js";
+// 上游 2.0 runtime-state 不再承载 HookKind，本模块成为单一事实源（ fork 双端契约不变）。
+export type HookKind = HookKindId;
 
 /** 别名表：小写化后精确匹配（zh 别名原样；en 大小写不敏感）。 */
 const KIND_ALIASES: Readonly<Record<string, HookKind>> = {

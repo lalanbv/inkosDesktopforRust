@@ -1,5 +1,5 @@
-import { Agent } from "@earendil-works/pi-agent-core";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Agent } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -7,18 +7,24 @@ import {
   type Context,
   type Message,
   type Model,
+  type Provider,
   type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+} from "@mariozechner/pi-ai";
 import type { Static, TSchema } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import {
   chatCompletion,
+  createStreamMonitor,
   type LLMClient,
   type LLMMessage,
   type LLMResponse,
   type OnStreamProgress,
 } from "../llm/provider.js";
-import { guardedPiStream } from "./pi-stream.js";
-import { stubWorkerStructuredResult } from "./llm-stub.js";
+import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
+import { toPiApi } from "../llm/api-format.js";
+import { recordExecutionEvidence } from "../harness/execution-evidence.js";
+import {decodeStructuredFields} from './structured-arguments.js';
+import { preserveToolArgumentTypes, toolArgumentIssues } from "./tool-arguments.js";
 
 export interface WorkerAgentOptions {
   readonly temperature?: number;
@@ -27,6 +33,7 @@ export interface WorkerAgentOptions {
   readonly onStreamProgress?: OnStreamProgress;
   readonly onTextDelta?: (text: string) => void;
   readonly signal?: AbortSignal;
+  readonly onUsage?: (usage: LLMResponse["usage"]) => void;
 }
 
 export interface WorkerResultTool<TParameters extends TSchema> {
@@ -34,6 +41,7 @@ export interface WorkerResultTool<TParameters extends TSchema> {
   readonly label: string;
   readonly description: string;
   readonly parameters: TParameters;
+  readonly validate?: (parameters: Static<TParameters>) => Static<TParameters> | Promise<Static<TParameters>>;
 }
 
 const EMPTY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -50,9 +58,8 @@ function workerModel(client: LLMClient, modelId: string, maxTokens?: number): Mo
   return {
     id: modelId,
     name: modelId,
-    api: (client.apiFormat === "responses" ? "openai-responses" : "openai-completions") as Api,
-    // 0.87 起 Model.provider 是 ProviderId（字符串），不再是 Provider 对象。
-    provider: client.provider,
+    api: toPiApi(client.apiFormat),
+    provider: client.provider as Provider,
     baseUrl: "",
     reasoning: false,
     input: ["text"],
@@ -126,11 +133,6 @@ function contextMessages(context: Context): LLMMessage[] {
     messages.push({ role: "system", content: context.systemPrompt });
   }
   for (const message of context.messages) {
-    if (message.role === "system") {
-      // 0.87 起 transcript 内 SystemMessage 携带中途指令——原样映射 system 面。
-      messages.push({ role: "system", content: textFromContent(message.content) });
-      continue;
-    }
     if (message.role === "user") {
       messages.push({ role: "user", content: textFromContent(message.content) });
       continue;
@@ -282,7 +284,9 @@ export async function runWorkerAgent(
     );
     if (!final) throw new Error("Worker Agent completed without an assistant response");
     if (final.stopReason === "error" || final.stopReason === "aborted") {
-      throw new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`);
+      throw Object.assign(new Error(final.errorMessage ?? `Worker Agent stopped: ${final.stopReason}`), {
+        code: (final as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
+      });
     }
     return {
       content: final.content
@@ -313,9 +317,6 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   options: WorkerAgentOptions = {},
 ): Promise<Static<TParameters>> {
   options.signal?.throwIfAborted();
-  // R45/567 号：stub 提供方实现内聚解析（含 env 判定）——Consumer 不分支于提供方身份。
-  const stubbed = stubWorkerStructuredResult(messages, modelId, resultTool);
-  if (stubbed !== undefined) return stubbed;
   if (!client._piModel) {
     throw new Error("Structured worker tools require a resolved Pi model");
   }
@@ -330,44 +331,135 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
   }
 
   let submitted: Static<TParameters> | undefined;
+  let modelTurns = 0;
+  let resultAttemptsExhausted = false;
+  let lastValidationError: (Error & {code?:string}) | undefined;
+  const maxResultTurns = 3;
+  const { validate, ...toolDefinition } = resultTool;
   const tool: AgentTool<TParameters, Static<TParameters>> = {
-    ...resultTool,
+    ...toolDefinition,
+    prepareArguments: (params) => {
+      const decodedPaths:string[]=[];
+      params=decodeStructuredFields(resultTool.parameters,params,decodedPaths) as typeof params;
+      if(decodedPaths.length)recordExecutionEvidence('worker-arguments-decoded',{resultTool:resultTool.name,paths:decodedPaths});
+      const issues = toolArgumentIssues(resultTool.parameters, params);
+      if (issues.length) {
+        const failure={code:'WORKER_SCHEMA_INVALID',resultTool:resultTool.name,issues};
+        recordExecutionEvidence('worker-result-invalid',failure);
+        lastValidationError=undefined;
+        throw new Error(JSON.stringify(failure));
+      }
+      return params as Static<TParameters>;
+    },
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
-      submitted = params;
+      const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
+      try {
+        submitted = validate ? await validate(parsed) : parsed;
+      } catch(error) {
+        lastValidationError=error instanceof Error?error:new Error(String(error));
+        recordExecutionEvidence('worker-result-invalid',{
+          code:lastValidationError.code??'WORKER_DOMAIN_INVALID',
+          resultTool:resultTool.name,
+          message:lastValidationError.message,
+        });
+        throw error;
+      }
       return {
-        content: [{ type: "text", text: "Structured result accepted by the host." }],
-        details: params,
+        content: [{ type: "text", text: "Structured result received by the host." }],
+        details: submitted,
       };
     },
   };
   const agent = new Agent({
     initialState: { model, systemPrompt, tools: [tool], messages: [] },
+    beforeToolCall: preserveToolArgumentTypes,
     toolExecution: "sequential",
-    streamFn: (streamModel, context, streamOptions) => submitted
-      ? localStopStream(streamModel)
-      : guardedPiStream(streamModel, context, {
+    streamFn: (streamModel, context, streamOptions) => {
+      if (submitted) return localStopStream(streamModel);
+      if (modelTurns >= maxResultTurns) {
+        resultAttemptsExhausted = true;
+        return localStopStream(streamModel);
+      }
+      modelTurns++;
+      const resultOptions = {
           ...streamOptions,
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
           signal: combineSignals(streamOptions?.signal, options.signal),
-        }),
+          // There is exactly one result tool, so required selects it without a
+          // provider-specific named-function envelope.
+          toolChoice: "required" as const,
+          onPayload: (payload: unknown) => payload && typeof payload === "object" ? { ...client.defaults.extra, ...payload } : payload,
+        };
+      return client.stream === false
+        ? guardedPiNonStreaming(streamModel, context, resultOptions, client.proxyUrl)
+        : guardedPiStream(streamModel, context, resultOptions, 1, {firstEventTimeoutMs:300_000,idleTimeoutMs:300_000});
+    },
     getApiKey: () => client._apiKey,
   });
   const abortAgent = () => agent.abort();
   options.signal?.addEventListener("abort", abortAgent, { once: true });
+  const monitor = createStreamMonitor(progress => {
+    options.onStreamProgress?.(progress);
+    recordExecutionEvidence("model-stream-progress", { resultTool: resultTool.name, ...progress });
+  });
+  const unsubscribeProgress = agent.subscribe(event => {
+    if (event.type !== "message_update") return;
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta" || update.type === "toolcall_delta") monitor.onChunk(update.delta);
+  });
 
   try {
     await agent.prompt(promptMessages);
     options.signal?.throwIfAborted();
+    if (resultAttemptsExhausted) throw Object.assign(new Error(lastValidationError?.message??'Structured result remained invalid after bounded correction attempts'), {
+      code:lastValidationError?.code??'WORKER_RESULT_INVALID',resultTool:resultTool.name,attempts:modelTurns,
+      lastToolError:[...agent.state.messages].reverse().find(message=>message.role==='toolResult'&&message.isError),
+    });
+    const initialResult = agent.state.messages.at(-1);
+    if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "length") {
+      throw Object.assign(new Error("Worker output reached the configured model output limit"), {
+        code: "MODEL_OUTPUT_LIMIT", resultTool: resultTool.name, stopReason: initialResult.stopReason,
+      });
+    }
+    if (!submitted && initialResult?.role === "assistant" && initialResult.stopReason === "error") {
+      throw Object.assign(new Error(initialResult.errorMessage ?? "Worker model request failed"), {
+        code: (initialResult as AssistantMessage & { errorCode?: string }).errorCode ?? "WORKER_MODEL_ERROR",
+        resultTool: resultTool.name, stopReason: initialResult.stopReason, attempts: modelTurns,
+      });
+    }
     if (!submitted) {
       await agent.prompt(`You did not call ${resultTool.name}. Call it now with the complete result.`);
       options.signal?.throwIfAborted();
     }
     if (!submitted) {
-      throw new Error(`Worker Agent completed without calling ${resultTool.name}`);
+      const last = [...agent.state.messages].reverse().find(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      throw Object.assign(new Error(last?.errorMessage || `Worker Agent completed without calling ${resultTool.name}`), {
+        code: (last as (AssistantMessage & { errorCode?: string }) | undefined)?.errorCode
+          ?? (resultAttemptsExhausted ? "WORKER_RESULT_INVALID" : last?.stopReason === "length" ? "MODEL_OUTPUT_LIMIT" : "WORKER_RESULT_MISSING"),
+        attempts: modelTurns,
+        resultTool: resultTool.name,
+        stopReason: last?.stopReason,
+        lastToolError: [...agent.state.messages].reverse().find((message)=>message.role==="toolResult"&&message.isError),
+        lastAssistantText: last?.content.filter((part)=>part.type==="text").map((part)=>part.text).join(""),
+      });
+    }
+    const usageMessage = [...agent.state.messages].reverse().find(
+      (message): message is AssistantMessage => message.role === "assistant" && message.usage.totalTokens > 0,
+    );
+    if (usageMessage) {
+      options.onUsage?.({
+        promptTokens: usageMessage.usage.input,
+        completionTokens: usageMessage.usage.output,
+        totalTokens: usageMessage.usage.totalTokens,
+      });
     }
     return submitted;
   } finally {
+    unsubscribeProgress();
+    monitor.stop();
     options.signal?.removeEventListener("abort", abortAgent);
   }
 }

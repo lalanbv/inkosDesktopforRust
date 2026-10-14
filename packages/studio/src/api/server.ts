@@ -1,46 +1,41 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-
-// 493 号：健康探针 version 来源（跟随包版本，不手抄）。
-const studioPkg = createRequire(import.meta.url)("../../package.json") as { version: string };
-import { createLoopbackGuardMiddleware, guardOptionsFromEnv, originIsAllowed } from "./loopback-guard.js";
-import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from "./asset-library-store.js";
+import { recoverSessionAfterAgentFailure, workSessionResponseMetadata } from "./work-session.js";
+import { ChatRequestStore } from "./chat-request-store.js";
+import type { ChatAttachmentPayload, StudioCompletionStatus } from "../shared/session-request.js";
 import {
   StateManager,
+  recoverAtomicFileSets,
+  commitAtomicFileSet,
   PipelineRunner,
   createLLMClient,
   createLogger,
-  createInteractionToolsFromDeps,
   computeAnalytics,
   loadProjectConfig,
-  loadProjectSession,
-  processProjectInteractionRequest,
-  resolveSessionActiveBook,
   listBookSessions,
   loadBookSession,
   appendManualSessionMessages,
+  readTranscriptEvents,
+  confirmedRequestInstruction,
   createAndPersistBookSession,
   renameBookSession,
   deleteBookSession,
-  migrateBookSession,
-  branchBookSession,
-  BranchTargetNotFoundError,
-  deriveSessionBranchPoints,
-  SessionAlreadyMigratedError,
+  transitionSessionToWork,
+  SessionAlreadyBoundError,
   abortAgentSession,
-  isAgentSessionBusy,
-  markPendingSessionAbort,
   runAgentSession,
   resolveServicePreset,
   resolveServiceProviderFamily,
   resolveServiceModelsBaseUrl,
   guessServiceFromBaseUrl,
   resolveServiceModel,
+  ServiceApiKeyNotFoundError,
+  LLMConfigurationError,
   loadSecrets,
   saveSecrets,
   listModelsForService,
@@ -50,18 +45,19 @@ import {
   fetchWithProxy,
   chatCompletion,
   runWorkerAgent,
+  appendActivatedSkillGuidance,
+  hydrateActivatedSkillGuidance,
   buildExportArtifact,
-  evaluateBookQuality,
-  ConsolidatorAgent,
+  ChapterExportSourceError,
   DetectionConfigSchema,
   ResearchSearchConfigSchema,
   GLOBAL_ENV_PATH,
   COVER_PROVIDER_PRESETS,
   createPlayDB,
   PlayStore,
-  buildPlayEntityImagePrompt,
-  buildPlaySceneImagePrompt,
-  generatePlayImage,
+  playSceneImageKey,
+  playImageContext,
+  createPlayImageTool,
   readPlayImageManifest,
   readPlayImageSettings,
   writePlayImageSettings,
@@ -76,24 +72,24 @@ import {
   normalizePlayMode as normalizeCorePlayMode,
   normalizeRequestedIntent as normalizeCoreRequestedIntent,
   normalizeSkillIdList as normalizeCoreSkillIdList,
-  inferLanguage,
+  isLLMApiFormat,
   ingestMaterial,
   createSkillRegistry,
   loadAvailableAgentSkills,
-  activatedSkillIds,
   mergeActivatedSkillGuidance,
-  resolveProductionSkillActivations,
+  resolveProfileSkillActivations,
+  confirmedCapabilityBinding,
+  capabilityActionId,
+  createBuiltInWorkProfileRegistry,
+  executeExplicitCapabilityTool,
+  createExportBookTool,
+  resolveSessionHarnessBinding,
   parseAgentSkillDocument,
-  getBuiltinPrompt,
-  listBuiltinPromptPacks,
-  listBuiltinPrompts,
-  loadPromptPackPrompt,
-  promptOverridePath,
   toPosixPath,
   type ActionPayload,
   type ActionSource,
   type AgentSkill,
-  type BuiltinPrompt,
+  type WorkManifest,
   createGenerateCoverTool,
   createInteractiveFilmCreationTool,
   createPlayStartTool,
@@ -101,35 +97,51 @@ import {
   createShortFictionRunTool,
   createStoryboardCreationTool,
   createTranslationCreateTool,
+  createTranslationRunTool,
+  createTranslationExportTool,
+  createReplaceWorkArtifactTool,
+  createAdoptWorkRevisionTool,
+  WorkProfileSchema,
   createFanficBookTool,
   createContinuationImportTool,
   createSpinoffBookTool,
   createImitationBookTool,
-  createSubAgentTool,
+  createBookFoundationTool,
+  createWriteChaptersTool,
+  createFoundationRevisionTool,
+  createReviewChapterTool,
+  createReviseChapterTool,
+  createGenerateStyleGuideTool,
+  createResyncChapterStateTool,
+  createImportChaptersTool,
+  createImportCanonTool,
+  createRefreshFanficCanonTool,
+  DEFAULT_REVISE_MODE,
   createDraftStructureTool,
   createConnectChoiceTool,
   createRemoveNodeTool,
-  createLLMTranslationModel,
   deleteLatestChapter,
   executeEditTransaction,
-  findChapterFileByNumber,
   listChapterVersions,
   readChapterPlanDocument,
   readChapterUserBrief,
   readChapterVersion,
   saveChapterUserBrief,
-  createTranslationProjectFromFile,
   loadTranslationChapter,
   loadTranslationManifest,
-  runTranslationProject,
-  writeTranslationExport,
+  translationProjectDir,
+  listWorkManifests,
+  loadWorkManifest,
+  CreativeEpisodeStore,
   filmLLMDepsFromClient,
   applyGraphDelta,
   loadStoryGraph,
+  storyGraphPath,
+  workDirectory,
+  safeChildPath,
   reviewStoryGraph,
   exportInk,
   buildPlayableHtml,
-  analyzeEmotionalArcs,
   analyzePathDistribution,
   generateNodeImage,
   defaultNodeImageDeps,
@@ -140,24 +152,20 @@ import {
   type ProjectConfig,
   type LogSink,
   type LogEntry,
+  type LLMApiFormat,
   type RequestedIntent,
   type SessionKind,
   type AgentSessionAttachment,
-  createFileSink,
-  isValidSeriesId as core_isValidSeriesId,
-  parseSeriesCanonFile as core_parseSeriesCanonFile,
-  buildChatToolCatalog,
-  type TokenMeterSnapshot,
+  type ActionResult,
+  type ConfirmedCapabilityBinding,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
-// 649 号：停止中性文案单一事实源（此前此处内联一份字面量，与 hooks 各持一份）。
-import { WRITE_STOPPED_MESSAGE } from "../shared/write-stopped.js";
-import { access, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
-import { buildStudioBookConfig } from "./book-create.js";
+import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
 import {
   deleteStudioTaskSnapshot,
   loadStudioTaskSnapshot,
@@ -177,6 +185,28 @@ function pick(lang: StudioLanguage, zh: string, en: string): string {
   return lang === "en" ? en : zh;
 }
 
+async function resolveStudioProfileSkills(
+  root: string,
+  profileId: string,
+  options: {
+    readonly includeRecommended?: boolean;
+    readonly extraSkillIds?: ReadonlyArray<string>;
+  } = {},
+) {
+  const available = await loadAvailableAgentSkills({ projectRoot: root });
+  const profiles = createBuiltInWorkProfileRegistry(root);
+  const profileSkills = resolveProfileSkillActivations(
+    available.skills,
+    profiles.require(profileId),
+    { includeRecommended: options.includeRecommended },
+  );
+  const extras = (options.extraSkillIds ?? []).flatMap((id) => {
+    const skill = available.skills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
+  return mergeActivatedSkillGuidance(profileSkills, extras);
+}
+
 // -- Pipeline stage definitions per agent type --
 
 interface BilingualLabel {
@@ -184,48 +214,11 @@ interface BilingualLabel {
   readonly en: string;
 }
 
-const PIPELINE_STAGES: Record<string, ReadonlyArray<BilingualLabel>> = {
-  writer: [
-    { zh: "准备章节输入", en: "Prepare chapter input" },
-    { zh: "撰写章节草稿", en: "Write chapter draft" },
-    { zh: "落盘最终章节", en: "Save final chapter" },
-    { zh: "生成最终真相文件", en: "Generate final truth files" },
-    { zh: "校验真相文件变更", en: "Validate truth file changes" },
-    { zh: "同步记忆索引", en: "Sync memory index" },
-    { zh: "更新章节索引与快照", en: "Update chapter index and snapshot" },
-  ],
-  architect: [
-    { zh: "生成基础设定", en: "Generate foundation" },
-    { zh: "保存书籍配置", en: "Save book config" },
-    { zh: "写入基础设定文件", en: "Write foundation files" },
-    { zh: "初始化控制文档", en: "Initialize control documents" },
-    { zh: "创建初始快照", en: "Create initial snapshot" },
-  ],
-  reviser: [
-    { zh: "加载修订上下文", en: "Load revision context" },
-    { zh: "修订章节", en: "Revise chapter" },
-    { zh: "落盘修订结果", en: "Save revision result" },
-    { zh: "更新索引与快照", en: "Update index and snapshot" },
-  ],
-  auditor: [{ zh: "审计章节", en: "Audit chapter" }],
-};
-
-function pipelineStages(agent: string, lang: StudioLanguage = "zh"): string[] | undefined {
-  return PIPELINE_STAGES[agent]?.map((stage) => pick(lang, stage.zh, stage.en));
-}
-
 function attachmentDisposition(fileName: string): string {
   const safeAscii = fileName.replace(/[^A-Za-z0-9._-]+/g, "_") || "download";
   return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
-const AGENT_LABELS: Record<string, BilingualLabel> = {
-  architect: { zh: "建书", en: "Book setup" },
-  writer: { zh: "写作", en: "Writing" },
-  auditor: { zh: "审计", en: "Audit" },
-  reviser: { zh: "修订", en: "Revision" },
-  exporter: { zh: "导出", en: "Export" },
-};
 const TOOL_LABELS: Record<string, BilingualLabel> = {
   read: { zh: "读取文件", en: "Read file" },
   edit: { zh: "编辑文件", en: "Edit file" },
@@ -245,17 +238,20 @@ const TOOL_LABELS: Record<string, BilingualLabel> = {
   play_edit: { zh: "编辑互动世界", en: "Edit interactive world" },
   play_start: { zh: "启动互动世界", en: "Start interactive world" },
   play_revise: { zh: "重做互动回合", en: "Redo interactive turn" },
+  generate: { zh: "生成当前作品", en: "Generate current work" },
   play_step: { zh: "推进互动世界", en: "Advance interactive world" },
+  create_book: { zh: "创建长篇", en: "Create long-form Work" },
+  revise_foundation: { zh: "重建设定", en: "Revise foundation" },
+  write_chapters: { zh: "写作章节", en: "Write chapters" },
+  review_chapter: { zh: "审查章节", en: "Review chapter" },
+  revise_chapter: { zh: "修订章节", en: "Revise chapter" },
+  export_book: { zh: "导出作品", en: "Export Work" },
   create_narrative_forecast: { zh: "剧情多线推演", en: "Narrative forecast" },
   get_narrative_forecast: { zh: "核验剧情推演", en: "Recheck forecast" },
   select_narrative_branch: { zh: "采用候选分支", en: "Select candidate branch" },
 };
 
-function resolveToolLabel(tool: string, agent?: string, lang: StudioLanguage = "zh"): string {
-  if (tool === "sub_agent" && agent) {
-    const label = AGENT_LABELS[agent];
-    return label ? pick(lang, label.zh, label.en) : agent;
-  }
+function resolveToolLabel(tool: string, _agent?: string, lang: StudioLanguage = "zh"): string {
   const label = TOOL_LABELS[tool];
   return label ? pick(lang, label.zh, label.en) : tool;
 }
@@ -444,7 +440,7 @@ function nonTextModelMessage(modelId: string, lang: StudioLanguage = "zh"): stri
 }
 
 function extractToolError(result: unknown): string {
-  return summarizeToolResult(result, 500);
+  return summarizeToolResult(result);
 }
 
 function resolveProjectImageFile(root: string, rawPath: string): { readonly resolved: string; readonly contentType: string } {
@@ -463,8 +459,8 @@ function resolveProjectImageFile(root: string, rawPath: string): { readonly reso
   ) {
     throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Invalid project file path");
   }
-  if (!relPath.startsWith("shorts/") && !relPath.startsWith("covers/") && !relPath.startsWith("interactive-films/")) {
-    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated shorts/, covers/, interactive-films/ images can be previewed");
+  if (!relPath.startsWith("works/")) {
+    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Only generated work images can be previewed");
   }
 
   const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
@@ -504,7 +500,7 @@ function normalizeProjectGeneratedPath(root: string, rawPath: string, code: stri
     throw new ApiError(400, code, "Invalid project artifact path");
   }
 
-  const allowedRoots = ["dramas/", "storyboards/", "interactive-films/", "shorts/", "covers/"];
+  const allowedRoots = ["works/"];
   if (!allowedRoots.some((prefix) => relPath.startsWith(prefix))) {
     throw new ApiError(400, code, "Only generated writing artifacts can be opened");
   }
@@ -534,37 +530,14 @@ function resolveProjectTextArtifactFile(root: string, rawPath: string): { readon
   return { ...file, contentType };
 }
 
-function isLikelyFailedToolResult(exec: CollectedToolExec): boolean {
-  if (exec.status === "error") return true;
-  const text = `${exec.error ?? ""}\n${exec.result ?? ""}`.toLowerCase();
-  return /\bfailed\b|\berror\b|失败|异常|出错/.test(text);
-}
-
-function hasSuccessfulSubAgentExec(
-  execs: ReadonlyArray<CollectedToolExec>,
-  agent: string,
-): boolean {
-  return execs.some((exec) =>
-    exec.tool === "sub_agent"
-    && exec.agent === agent
-    && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
-  );
-}
-
 function hasSuccessfulToolExec(
   execs: ReadonlyArray<CollectedToolExec>,
   tool: string,
 ): boolean {
   return execs.some((exec) =>
-    exec.tool === tool
+    exec.tool.split("__").at(-1) === tool.split("__").at(-1)
     && exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
   );
-}
-
-function hasSuccessfulToolResult(execs: ReadonlyArray<CollectedToolExec>): boolean {
-  return execs.some((exec) => exec.status === "completed" && !isLikelyFailedToolResult(exec));
 }
 
 function normalizeStudioSessionKind(value: unknown, fallback: SessionKind): SessionKind {
@@ -590,6 +563,23 @@ function normalizeStudioRequestedIntent(value: unknown): RequestedIntent | undef
   } catch {
     throw new ApiError(400, "INVALID_REQUESTED_INTENT", `Invalid requestedIntent: ${String(value)}`);
   }
+}
+
+const CREATION_ENTRY_PROPOSAL_ACTIONS: ReadonlySet<RequestedIntent> = new Set([
+  "fanfic_init",
+  "spinoff_create",
+  "style_imitation",
+  "continuation_import",
+  "translation_create",
+]);
+
+function normalizeStudioProposalAction(value: unknown): RequestedIntent | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const action = normalizeStudioRequestedIntent(value);
+  if (!action || !CREATION_ENTRY_PROPOSAL_ACTIONS.has(action)) {
+    throw new ApiError(400, "INVALID_PROPOSAL_ACTION", `Invalid proposalAction: ${String(value)}`);
+  }
+  return action;
 }
 
 function normalizeStudioActionPayload(value: unknown): ActionPayload | undefined {
@@ -626,7 +616,7 @@ type StudioAgentAttachmentPayload = {
 
 const MAX_AGENT_ATTACHMENTS = 8;
 const MAX_AGENT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
-const MAX_AGENT_ATTACHMENT_TEXT_CHARS = 120_000;
+const MAX_AGENT_INLINE_TEXT_CHARS = 120_000;
 const MAX_TRANSLATION_UPLOAD_BYTES = 80 * 1024 * 1024;
 const MAX_CANON_UPLOAD_BYTES = 18 * 1024 * 1024;
 const MAX_SKILL_IMPORT_FILES = 128;
@@ -716,16 +706,13 @@ async function normalizeAgentAttachments(
 
     if (isTextAttachment(filename, mimeType)) {
       const text = parsed.buffer.toString("utf-8");
-      if (text.length > MAX_AGENT_ATTACHMENT_TEXT_CHARS) {
-        throw new ApiError(413, "ATTACHMENT_TEXT_TOO_LARGE", `${filename} is too large to inject without semantic compaction`);
-      }
       out.push({
         id: payload.id || `${Date.now()}-${index}`,
         filename,
         mimeType,
         size: parsed.buffer.byteLength,
         storedPath: relPath,
-        text,
+        ...(text.length <= MAX_AGENT_INLINE_TEXT_CHARS ? { text } : {}),
       });
       continue;
     }
@@ -947,38 +934,10 @@ async function loadStudioSkills(root: string) {
   const configured = await loadAvailableAgentSkills({ projectRoot: root });
   const projectSkillIds = await listProjectSkillIds(root);
   const registry = createSkillRegistry({ skills: configured.skills });
-  // R44/566 号 invocation 双布尔：user-invocable=false 为模型专用技能，
-  // 用户面（studio 面板）不展示；模型面 resolveSkills 不受影响。
   return {
-    skills: registry.listSkills()
-      .filter((skill) => skill.userInvocable !== false)
-      .map((skill) => toStudioSkill(skill, root, projectSkillIds)),
+    skills: registry.listSkills().map((skill) => toStudioSkill(skill, root, projectSkillIds)),
     diagnostics: configured.diagnostics,
   };
-}
-
-async function toStudioPromptPackPrompt(root: string, prompt: BuiltinPrompt) {
-  const loaded = await loadPromptPackPrompt({ promptId: prompt.id, projectRoot: root });
-  const overridePath = promptOverridePath(root, prompt.id);
-  return {
-    id: prompt.id,
-    packId: prompt.packId,
-    title: prompt.title,
-    defaultContent: prompt.content,
-    content: loaded.content,
-    source: loaded.source,
-    overridden: loaded.source === "project",
-    // Windows 上 relative() 产生反斜杠，这个 path 会被前端展示/断言为 posix 相对路径
-    path: loaded.source === "project" ? toPosixPath(relative(root, overridePath)) : undefined,
-  };
-}
-
-function normalizeStudioPromptId(value: unknown): string {
-  const promptId = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!promptId || !getBuiltinPrompt(promptId)) {
-    throw new ApiError(404, "PROMPT_PACK_PROMPT_NOT_FOUND", `Prompt pack prompt not found: ${String(value)}`);
-  }
-  return promptId;
 }
 
 async function listProjectSkillIds(root: string): Promise<Set<string>> {
@@ -1018,138 +977,47 @@ function validateAgentActionExecution(args: {
   readonly language?: StudioLanguage;
 }): string | undefined {
   const lang = args.language ?? "zh";
-  const failedExec = args.collectedToolExecs.find(isLikelyFailedToolResult);
-  if (failedExec) {
-    const detail = failedExec.error ?? failedExec.result ?? pick(lang, "未知错误", "unknown error");
+  const binding = args.requestedIntent
+    ? confirmedCapabilityBinding(args.requestedIntent)
+    : undefined;
+  if (binding && !hasSuccessfulToolExec(args.collectedToolExecs, binding.actionId)) {
     return pick(
       lang,
-      `${failedExec.label} 执行失败：${detail}`,
-      `${failedExec.label} failed: ${detail}`,
-    );
-  }
-
-  if (
-    args.agentBookId
-    && args.requestedIntent === "write_next"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "writer")
-  ) {
-    return pick(
-      lang,
-      "模型声称已完成下一章，但没有实际调用写作工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "The model claimed the next chapter is done, but it never called the writing tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (
-    !args.agentBookId
-    && args.requestedIntent === "create_book"
-    && !hasSuccessfulSubAgentExec(args.collectedToolExecs, "architect")
-  ) {
-    return pick(
-      lang,
-      "已确认建书，但模型没有实际调用建书工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Book creation was confirmed, but the model never called the book setup tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "short_run" && !hasSuccessfulToolExec(args.collectedToolExecs, "short_fiction_run")) {
-    return pick(
-      lang,
-      "已确认生成短篇，但模型没有实际调用短篇生产工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Short fiction was confirmed, but the model never called the short fiction tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "play_start" && !hasSuccessfulToolExec(args.collectedToolExecs, "play_start")) {
-    return pick(
-      lang,
-      "已确认启动互动世界，但模型没有实际调用互动世界工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Starting the interactive world was confirmed, but the model never called the interactive world tool. Retry; if it keeps failing, check whether the model supports tool calls.",
-    );
-  }
-
-  if (args.requestedIntent === "generate_cover" && !hasSuccessfulToolExec(args.collectedToolExecs, "generate_cover")) {
-    return pick(
-      lang,
-      "已确认生成封面，但模型没有实际调用封面工具。请重试；如果仍失败，请检查模型是否支持工具调用。",
-      "Cover generation was confirmed, but the model never called the cover tool. Retry; if it keeps failing, check whether the model supports tool calls.",
+      `已确认动作 ${binding.actionId}，但模型没有执行对应 capability action。请重试或检查模型工具调用支持。`,
+      `Action ${binding.actionId} was confirmed, but the model did not execute the matching capability action. Retry or check model tool-call support.`,
     );
   }
 
   return undefined;
 }
 
-type AgentFailureKind = "busy" | "llm" | "internal" | "unknown";
-
-/**
- * 589 号提案 C 选项：零显式模型直发时，解析链可能落到不含用户配置的默认卡
- * 并报「No API key for provider: openai」——而 secrets 里明明有可用服务。
- * 此处尽力而为地把该形态错误改写为指认真实配置（不改变行为：仍报错、
- * 仍要求选择模型），消除「配置在场却被无视」的误导。
- */
-async function annotateConfiguredServiceHint(message: string, projectRoot: string): Promise<string> {
-  if (!/No API key for provider/i.test(message)) return message;
-  try {
-    const secrets = await loadSecrets(projectRoot);
-    const configured = Object.keys(secrets.services ?? {}).find(
-      (id) => typeof secrets.services[id]?.apiKey === "string" && secrets.services[id].apiKey.length > 0,
-    );
-    if (!configured) return message;
-    const label = configured.split(":").pop() || configured;
-    return `${message}（检测到已配置的服务「${label}」：请在聊天页上方选择该服务的模型，或在模型配置页将其设为默认）`;
-  } catch {
-    return message;
-  }
-}
-
-function classifyAgentFailure(message: string): AgentFailureKind {
-  const text = message.trim();
-  if (!text) return "unknown";
-  if (/BookWriteLockError|locked by an active InkOS write|BOOK_BUSY/i.test(text)) {
-    return "busy";
-  }
-  if (
-    /API\s*返回|上游|upstream|Bad Gateway|temporarily unavailable|rate limit|quota|API Key|unauthorized|forbidden|无法连接到 API|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|LLM returned empty response|Provider finish_reason|reasoning_content/i.test(text)
-  ) {
-    return "llm";
-  }
-  if (
-    /PlannerParseError|Architect output missing|required sections|missing YAML frontmatter|frontmatter delimiters|parseMemo|Book creation artifact is incomplete|Short-hit draft is incomplete|工具执行失败|执行失败|sub_agent|tool execution|RUNTIME_STATE_DELTA|JSON parse|解析失败/i.test(text)
-  ) {
-    return "internal";
-  }
-  return "unknown";
-}
-
 function formatAgentFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage = "zh",
+  origin: "model" | "host" = "host",
 ): { readonly code: string; readonly message: string; readonly status: 409 | 500 | 502 } {
-  const kind = classifyAgentFailure(message);
-  if (kind === "busy") {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof Error && error.name === "BookWriteLockError") {
     return { code: "BOOK_BUSY", message, status: 409 };
   }
-  if (kind === "llm") {
+  if (origin === "model") {
     return { code: "AGENT_LLM_ERROR", message, status: 502 };
   }
-  if (kind === "internal") {
-    return {
-      code: "AGENT_INTERNAL_ERROR",
-      message: pick(lang, `InkOS 内部流程错误：${message}`, `InkOS internal pipeline error: ${message}`),
-      status: 500,
-    };
-  }
-  return { code: "AGENT_ERROR", message, status: 500 };
+  return {
+    code: "INKOS_ACTION_ERROR",
+    message: pick(lang, `InkOS 动作失败：${message}`, `InkOS action failed: ${message}`),
+    status: 500,
+  };
 }
 
 function formatAgentActionFailure(
-  message: string,
+  error: unknown,
   lang: StudioLanguage,
-): { readonly code: string; readonly message: string; readonly status: 409 | 502 } {
-  const failure = formatAgentFailure(message, lang);
+): { readonly code: string; readonly message: string; readonly status: 409 | 500 } {
+  const failure = formatAgentFailure(error, lang, "host");
   return failure.code === "BOOK_BUSY"
     ? { code: failure.code, message: failure.message, status: 409 }
-    : { code: "AGENT_ACTION_FAILED", message, status: 502 };
+    : { code: failure.code, message: failure.message, status: 500 };
 }
 
 interface CollectedToolExec {
@@ -1181,21 +1049,17 @@ class ConfirmedActionExecutionError extends Error {
   }
 }
 
-function suppressManualTextForTool(exec: CollectedToolExec): boolean {
-  return exec.tool === "play_start"
-    || exec.tool === "play_step"
-    || exec.tool === "play_revise"
-    || exec.tool === "script_create"
-    || exec.tool === "storyboard_create"
-    || exec.tool === "interactive_film_create";
-}
-
 function hasSuccessfulToolOwnedResponse(execs: ReadonlyArray<CollectedToolExec>): boolean {
   return execs.some((exec) =>
     exec.status === "completed"
-    && !isLikelyFailedToolResult(exec)
-    && suppressManualTextForTool(exec)
+    && hasDomainOwnedResult(exec.details)
   );
+}
+
+function hasDomainOwnedResult(details: unknown): boolean {
+  if (!details || typeof details !== "object") return false;
+  const record = details as Record<string, unknown>;
+  return record.kind === "proposed_action" || record.presentation === "immersive-scene";
 }
 
 function manualToolAssistantMessage(
@@ -1206,7 +1070,7 @@ function manualToolAssistantMessage(
 ): any {
   return {
     role: "assistant",
-    content: [{ type: "text", text: suppressManualTextForTool(exec) ? "" : responseText }],
+    content: [{ type: "text", text: hasDomainOwnedResult(exec.details) ? "" : responseText }],
     api: "anthropic-messages",
     provider,
     model,
@@ -1225,11 +1089,11 @@ function manualToolAssistantMessage(
 
 function manualToolAppendOptions(sessionKind: SessionKind, exec: CollectedToolExec): {
   readonly sessionKind: SessionKind;
-  readonly legacyDisplay: { readonly toolExecutions: readonly CollectedToolExec[] };
+  readonly display: { readonly toolExecutions: readonly CollectedToolExec[] };
 } {
   return {
     sessionKind,
-    legacyDisplay: { toolExecutions: [exec] },
+    display: { toolExecutions: [exec] },
   };
 }
 
@@ -1263,7 +1127,11 @@ async function executeConfirmedProductionAction(args: {
   readonly sourceRequestId?: string;
   readonly signal: AbortSignal;
   readonly onTaskChange: (exec: CollectedToolExec) => Promise<void>;
-}): Promise<CollectedToolExec> {
+}): Promise<{
+  readonly execution: CollectedToolExec;
+  readonly actionResult: ActionResult;
+  readonly binding: ConfirmedCapabilityBinding;
+}> {
   const lang = args.language ?? "zh";
   const id = args.taskId;
   const actionPayload = args.actionPayload;
@@ -1273,13 +1141,21 @@ async function executeConfirmedProductionAction(args: {
     disabledSkills: args.disabledSkills,
   });
   const requestedSkillActivations = skillResolution.usedSkills.map((skill) => ({ skill, resources: [] }));
-  const productionSkills = (
-    capability: Parameters<typeof resolveProductionSkillActivations>[1],
-  ) => mergeActivatedSkillGuidance(
-    resolveProductionSkillActivations(skillResolution.availableSkills, capability),
+  const profileRegistry = createBuiltInWorkProfileRegistry(args.root);
+  const profileSkills = (profileId: string, includeRecommended = false) => mergeActivatedSkillGuidance(
+    resolveProfileSkillActivations(
+      skillResolution.availableSkills,
+      profileRegistry.require(profileId),
+      { includeRecommended },
+    ),
     requestedSkillActivations,
   );
-  let tool: ReturnType<typeof createSubAgentTool>
+  const namedSkills = (...skillIds: ReadonlyArray<string>) => skillIds.flatMap((id) => {
+    const skill = skillResolution.availableSkills.find((candidate) => candidate.id === id);
+    return skill ? [{ skill, resources: [] }] : [];
+  });
+  let tool: ReturnType<typeof createBookFoundationTool>
+    | ReturnType<typeof createWriteChaptersTool>
     | ReturnType<typeof createShortFictionRunTool>
     | ReturnType<typeof createGenerateCoverTool>
     | ReturnType<typeof createScriptCreationTool>
@@ -1295,18 +1171,16 @@ async function executeConfirmedProductionAction(args: {
     | ReturnType<typeof createConnectChoiceTool>
     | ReturnType<typeof createRemoveNodeTool>;
   let params: Record<string, unknown>;
-  let agent: string | undefined;
 
   if (args.requestedIntent === "create_book") {
     const payload = actionPayload?.createBook;
     const title = requirePayloadText(payload?.title, pick(lang, "确认建书缺少书名，请重新生成确认卡。", "The book creation confirmation is missing a title. Regenerate the confirmation card."));
-    tool = createSubAgentTool(args.pipeline, null, args.root, {
+    tool = createBookFoundationTool(args.pipeline, {
+      language: lang,
       actionPayload,
-      workerSkills: (worker) => worker === "architect" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => worker === "architect" ? profileSkills("longform-novel") : [],
     });
-    agent = "architect";
     params = {
-      agent,
       instruction: args.instruction,
       title,
       ...(payload?.genre ? { genre: payload.genre } : {}),
@@ -1322,7 +1196,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createShortFictionRunTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("shortWriting"),
+      defaultSkills: profileSkills("short-fiction"),
     });
     params = {
       direction,
@@ -1337,13 +1211,15 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "BOOK_ID_REQUIRED", pick(lang, "写下一章需要先打开一本书。", "Writing the next chapter requires an active book."));
     }
     const chapterCount = actionPayload?.writeNext?.chapterCount ?? 1;
-    tool = createSubAgentTool(args.pipeline, args.bookId, args.root, {
+    tool = createWriteChaptersTool(args.pipeline, args.bookId, {
       language: lang,
-      workerSkills: (worker) => worker === "writer" ? productionSkills("longWriting") : [],
+      workerSkills: (worker) => (
+        worker === "auditor" || worker === "reviser"
+          ? profileSkills("longform-novel", true)
+          : profileSkills("longform-novel")
+      ),
     });
-    agent = "writer";
     params = {
-      agent: "writer",
       bookId: args.bookId,
       instruction: args.instruction,
       chapterCount,
@@ -1365,7 +1241,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createScriptCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("script"),
+      defaultSkills: profileSkills("script"),
     });
     params = {
       title,
@@ -1378,7 +1254,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.episodeCount ? { episodeCount: payload.episodeCount } : {}),
       ...(payload?.episodeDuration ? { episodeDuration: payload.episodeDuration } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "storyboard_create") {
     const payload = actionPayload?.storyboardCreate;
@@ -1386,7 +1261,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createStoryboardCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("storyboard"),
+      defaultSkills: profileSkills("storyboard"),
     });
     params = {
       title,
@@ -1400,7 +1275,6 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.granularity ? { granularity: payload.granularity } : {}),
       ...(payload?.maxShots ? { maxShots: payload.maxShots } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "interactive_film_create") {
     const payload = actionPayload?.interactiveFilmCreate;
@@ -1408,7 +1282,7 @@ async function executeConfirmedProductionAction(args: {
     tool = createInteractiveFilmCreationTool(args.pipeline, args.root, {
       actionPayload,
       language: lang,
-      defaultSkills: productionSkills("interactiveFilm"),
+      defaultSkills: profileSkills("interactive-film"),
     });
     params = {
       title,
@@ -1423,16 +1297,16 @@ async function executeConfirmedProductionAction(args: {
       ...(payload?.budget ? { budget: payload.budget } : {}),
       ...(payload?.referenceMode ? { referenceMode: payload.referenceMode } : {}),
       ...(payload?.projectId ? { projectId: payload.projectId } : {}),
-      ...(payload?.outDir ? { outDir: payload.outDir } : {}),
     };
   } else if (args.requestedIntent === "translation_create") {
     const payload = actionPayload?.translationCreate;
-    const filePath = requirePayloadText(payload?.filePath, pick(lang, "确认创建翻译项目缺少文件路径，请重新生成确认卡。", "The translation confirmation is missing a file path. Regenerate the confirmation card."));
+    const filePath = payload?.filePath;
+    if (!filePath && !payload?.sourceText) throw new ApiError(400, "TRANSLATION_SOURCE_REQUIRED", "Provide source text or a source file");
     const sourceLanguage = requirePayloadText(payload?.sourceLanguage, pick(lang, "确认创建翻译项目缺少源语言，请重新生成确认卡。", "The translation confirmation is missing a source language. Regenerate the confirmation card."));
     const targetLanguage = requirePayloadText(payload?.targetLanguage, pick(lang, "确认创建翻译项目缺少目标语言，请重新生成确认卡。", "The translation confirmation is missing a target language. Regenerate the confirmation card."));
     tool = createTranslationCreateTool(args.root, { actionPayload });
     params = {
-      filePath,
+      filePath, sourceText: payload?.sourceText, glossary: payload?.glossary,
       sourceLanguage,
       targetLanguage,
       ...(payload?.title ? { title: payload.title } : {}),
@@ -1441,13 +1315,17 @@ async function executeConfirmedProductionAction(args: {
   } else if (args.requestedIntent === "fanfic_init") {
     const payload = actionPayload?.fanficCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建同人缺少书名，请补充后重新确认。", "The fanfiction confirmation is missing a title."));
-    if (!payload?.sourceText?.trim() && !payload?.sourcePath?.trim()) {
+    if (!payload?.source && !payload?.sourceText?.trim() && !payload?.sourcePath?.trim()) {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."));
     }
     tool = createFanficBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-fanfic-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       ...(payload.sourceText ? { sourceText: payload.sourceText } : {}),
       ...(payload.sourcePath ? { sourcePath: payload.sourcePath } : {}),
@@ -1467,12 +1345,17 @@ async function executeConfirmedProductionAction(args: {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."));
     }
     tool = createContinuationImportTool(args.pipeline, args.bookId, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-story-import", "inkos-continuation-writing"),
+      ),
     });
     params = {
+      ...payload,
       ...(targetBookId ? { bookId: targetBookId } : {}),
       ...(payload?.title ? { title: payload.title } : {}),
       sourcePath,
+      instruction: payload?.instruction?.trim() || args.instruction,
       ...(payload?.splitPattern ? { splitPattern: payload.splitPattern } : {}),
       ...(payload?.resumeFrom ? { resumeFrom: payload.resumeFrom } : {}),
       ...(payload?.genre ? { genre: payload.genre } : {}),
@@ -1486,9 +1369,13 @@ async function executeConfirmedProductionAction(args: {
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."));
     const parentBookId = requirePayloadText(payload?.parentBookId ?? args.bookId ?? undefined, pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."));
     tool = createSpinoffBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-spinoff-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       parentBookId,
       ...(payload?.direction ? { direction: payload.direction } : {}),
@@ -1502,13 +1389,17 @@ async function executeConfirmedProductionAction(args: {
     const payload = actionPayload?.imitationCreate;
     const title = requirePayloadText(payload?.title, pick(lang, "确认创建仿写缺少书名。", "The imitation confirmation is missing a title."));
     const storyIdea = requirePayloadText(payload?.storyIdea, pick(lang, "仿写需要一个原创故事方向。", "Style imitation requires an original story idea."));
-    if (!payload?.referenceText?.trim() && !payload?.referencePath?.trim()) {
+    if (!payload?.source && !payload?.referenceText?.trim() && !payload?.referencePath?.trim()) {
       throw new ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE", pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."));
     }
     tool = createImitationBookTool(args.pipeline, args.root, {
-      defaultSkills: productionSkills("longWriting"),
+      defaultSkills: mergeActivatedSkillGuidance(
+        profileSkills("longform-novel"),
+        namedSkills("inkos-imitation-writing"),
+      ),
     });
     params = {
+      ...payload,
       title,
       storyIdea,
       ...(payload.referenceText ? { referenceText: payload.referenceText } : {}),
@@ -1537,7 +1428,8 @@ async function executeConfirmedProductionAction(args: {
       : undefined;
     tool = createPlayStartTool(args.pipeline, args.root, args.sessionId, args.playMode, {
       actionPayload: confirmedActionPayload,
-      defaultSkills: productionSkills("play"),
+      language: lang,
+      defaultSkills: profileSkills("interactive-world"),
     });
     params = {
       title,
@@ -1554,7 +1446,7 @@ async function executeConfirmedProductionAction(args: {
     if (!projectId) throw new ApiError(400, "INVALID_ID", "interactive-film action requires a project id (bookId)");
     const agentCtx = args.pipeline.createAgentContext("film-authoring", projectId);
     const deps = filmLLMDepsFromClient(agentCtx.client, agentCtx.model, {
-      activatedSkills: () => productionSkills("interactiveFilm"),
+      activatedSkills: () => profileSkills("interactive-film"),
     });
     tool = createDraftStructureTool(args.root, projectId, deps, lang);
     params = {
@@ -1586,26 +1478,26 @@ async function executeConfirmedProductionAction(args: {
     throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
   }
 
+  const binding = confirmedCapabilityBinding(args.requestedIntent);
+  if (!binding) {
+    throw new ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION", `Unsupported confirmed action: ${args.requestedIntent}`);
+  }
+  const toolName = `${binding.capabilityId}__${binding.actionId}`;
   const exec: CollectedToolExec = {
     id,
-    tool: tool.name,
-    agent,
-    label: resolveToolLabel(tool.name, agent, lang),
+    tool: toolName,
+    label: resolveToolLabel(binding.actionId, undefined, lang),
     status: "running",
     args: params,
-    stages: agent ? pipelineStages(agent, lang)?.map(label => ({ label, status: "pending" as const })) : undefined,
+    stages: undefined,
     startedAt: Date.now(),
   };
 
   await args.onTaskChange(exec);
-
-  // background: true 标明这是后台生产任务的工具启动（聊天轮工具不带）。
-  // free-text 命中写章启发式时前端在发送时无法预知这轮会按任务执行，
-  // 收到这个标记后把该轮从聊天轮重分类为任务轮。
   broadcast("tool:start", {
     sessionId: args.streamSessionId,
     id,
-    tool: tool.name,
+    tool: toolName,
     args: params,
     stages: exec.stages?.map(stage => stage.label),
     background: true,
@@ -1613,34 +1505,48 @@ async function executeConfirmedProductionAction(args: {
   });
 
   try {
-    const result = await tool.execute(
-      id,
-      params as never,
-      args.signal,
-      (partialResult: unknown) => {
+    const actionResult = await executeExplicitCapabilityTool({
+      projectRoot: args.root,
+      binding,
+      tool,
+      parameters: params,
+      workId: args.bookId,
+      authorRequest: args.instruction,
+      episodeId: `episode-${id}`,
+      conversationId: args.sessionId,
+      signal: args.signal,
+      onUpdate: (partialResult) => {
         const progress = toolResultText(partialResult, lang);
         if (progress) exec.logs = [...(exec.logs ?? []), progress].slice(-80);
         void args.onTaskChange(exec).catch(() => undefined);
       },
-    );
-    // 工具可以在结果里带 isError=true 表示"执行完成但结果需要人工处理"
-    //（如写章完成但审稿未通过）：任务卡按错误态展示，请求仍按成功返回结果文本。
-    const resultIsError = Boolean((result as { isError?: boolean } | null | undefined)?.isError);
-    exec.status = resultIsError ? "error" : "completed";
+    });
+    exec.status = "completed";
     exec.completedAt = Date.now();
-    exec.result = toolResultText(result, lang);
-    exec.details = (result as { details?: unknown } | undefined)?.details;
+    exec.result = actionResult.content ?? actionResult.summary;
+    exec.details = {
+      ...(actionResult.data && typeof actionResult.data === "object"
+        ? actionResult.data as Record<string, unknown>
+        : { actionResult: actionResult.data ?? actionResult }),
+      requestedIntent: args.requestedIntent,
+    };
     exec.stages = exec.stages?.map(stage => ({ ...stage, status: "completed" as const }));
     await args.onTaskChange(exec);
+    const result = {
+      content: [{ type: "text", text: exec.result }],
+      details: exec.details,
+      isError: false,
+      harnessResult: actionResult,
+    };
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       details: exec.details,
-      isError: resultIsError,
+      isError: false,
     });
-    return exec;
+    return { execution: exec, actionResult, binding };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const result = { content: [{ type: "text", text: message }] };
@@ -1651,7 +1557,7 @@ async function executeConfirmedProductionAction(args: {
     broadcast("tool:end", {
       sessionId: args.streamSessionId,
       id,
-      tool: tool.name,
+      tool: toolName,
       result,
       isError: true,
     });
@@ -1674,20 +1580,6 @@ type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
 
-// ── R41/564 号：会话 token 计量观测面（与 Rust agent_route context_meter_registry
-// 同构）——sessionId → 末轮快照；cap 64 逐出最旧；内存观测面，重启即清。
-const CONTEXT_METER_REGISTRY_CAP = 64;
-const contextMeterRegistry = new Map<string, TokenMeterSnapshot>();
-
-function storeContextMeterSnapshot(sessionId: string, snapshot: TokenMeterSnapshot): void {
-  contextMeterRegistry.delete(sessionId); // Map 保序：删旧再插 = 最新在尾
-  if (contextMeterRegistry.size >= CONTEXT_METER_REGISTRY_CAP) {
-    const oldest = contextMeterRegistry.keys().next().value;
-    if (oldest !== undefined) contextMeterRegistry.delete(oldest);
-  }
-  contextMeterRegistry.set(sessionId, snapshot);
-}
-
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
 
@@ -1697,7 +1589,7 @@ interface ServiceConfigEntry {
   baseUrl?: string;
   models?: string[];
   temperature?: number;
-  apiFormat?: "chat" | "responses";
+  apiFormat?: LLMApiFormat;
   stream?: boolean;
 }
 
@@ -1727,7 +1619,7 @@ interface ServiceProbeResult {
   ok: boolean;
   models: Array<{ id: string; name: string }>;
   selectedModel?: string;
-  apiFormat?: "chat" | "responses";
+  apiFormat?: LLMApiFormat;
   stream?: boolean;
   baseUrl?: string;
   modelsSource?: "api" | "fallback";
@@ -1738,29 +1630,6 @@ function broadcast(event: string, data: unknown): void {
   for (const handler of subscribers) {
     handler(event, data);
   }
-}
-
-/** 498 号：建书完成点写导演灵感卡（354 号语义；已存在不覆盖；失败由调用方兜底）。 */
-export async function writeDirectorInspirationCard(
-  root: string,
-  bookId: string,
-  premise: string,
-): Promise<void> {
-  const dir = join(root, ".inkos", "director");
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, `${bookId}.json`);
-  let session: Record<string, unknown> = {};
-  try {
-    session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
-  } catch {
-    session = {};
-  }
-  if (session.inspiration !== undefined) return; // 已有灵感卡不覆盖
-  session.updatedAt = new Date().toISOString();
-  if (!session.bookId) session.bookId = bookId;
-  session.stage = session.stage ?? "directions";
-  session.inspiration = { premise, keywords: [] };
-  await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
 }
 
 function deriveBookIdFromTitle(title: string): string {
@@ -1774,17 +1643,12 @@ function deriveBookIdFromTitle(title: string): string {
 }
 
 async function completeBookExists(bookDir: string): Promise<boolean> {
-  try {
-    await access(join(bookDir, "book.json"));
-    await access(join(bookDir, "story", "story_bible.md"));
-    return true;
-  } catch {
-    return false;
-  }
+  const { isBookFoundationComplete } = await import("@actalk/inkos-core");
+  return isBookFoundationComplete(bookDir);
 }
 
-function resolveArchitectBookIdFromArgs(args?: Record<string, unknown>): string | null {
-  if (!args || args.agent !== "architect" || args.revise === true) return null;
+function resolveCreatedBookIdFromArgs(args?: Record<string, unknown>): string | null {
+  if (!args) return null;
   if (typeof args.bookId === "string" && args.bookId.trim()) return args.bookId.trim();
   if (typeof args.title === "string" && args.title.trim()) {
     return deriveBookIdFromTitle(args.title) || null;
@@ -1812,16 +1676,30 @@ function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknow
   return null;
 }
 
+function resolveCreatedWorkIdFromToolExec(exec: CollectedToolExec): string | null {
+  if (exec.status !== "completed" || !exec.details || typeof exec.details !== "object") return null;
+  const details = exec.details as Record<string, unknown>;
+  return typeof details.workId === "string" && details.workId.trim()
+    ? details.workId.trim()
+    : null;
+}
+
 async function loadStudioBookListSummary(
   state: StateManager,
   bookId: string,
 ): Promise<StudioBookListSummary> {
   const book = await state.loadBookConfig(bookId);
   const nextChapter = await state.getNextChapterNumber(bookId);
-  // 487 号：version 不入契约（对齐 Rust 列表形状——前端零消费，双端差分剔除）。
-  // version 由 book.json 透传（类型未声明），收窄后剔除。
-  const { version: _version, ...bookRest } = book as typeof book & { version?: number };
-  return { ...bookRest, chaptersWritten: nextChapter - 1 };
+  return { ...book, chaptersWritten: nextChapter - 1 };
+}
+
+async function loadWorkIfExists(root: string, workId: string): Promise<WorkManifest | null> {
+  try {
+    return await loadWorkManifest(root, workId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function isCustomServiceId(serviceId: string): boolean {
@@ -1859,7 +1737,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
       ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -1871,7 +1749,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
       ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-      ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+      ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
     };
   }
@@ -1880,7 +1758,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     service: serviceId,
     ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
-    ...(value.apiFormat === "chat" || value.apiFormat === "responses" ? { apiFormat: value.apiFormat } : {}),
+    ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
   };
 }
@@ -1899,7 +1777,7 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         ...(typeof entry.baseUrl === "string" && entry.baseUrl.length > 0 ? { baseUrl: entry.baseUrl } : {}),
         ...(Array.isArray(entry.models) ? { models: normalizeServiceModelIds(entry.models) } : {}),
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
-        ...(entry.apiFormat === "chat" || entry.apiFormat === "responses" ? { apiFormat: entry.apiFormat } : {}),
+        ...(isLLMApiFormat(entry.apiFormat) ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
       }));
   }
@@ -1925,6 +1803,30 @@ function mergeServiceConfig(existing: ServiceConfigEntry[], updates: ServiceConf
     });
   }
   return [...merged.values()];
+}
+
+function appendModelToServiceCatalog(
+  llm: Record<string, unknown>,
+  serviceId: string | undefined,
+  modelId: string,
+): void {
+  const trimmedService = serviceId?.trim() ?? "";
+  const trimmedModel = modelId.trim();
+  if (!trimmedService || !trimmedModel || !isTextChatModelId(trimmedModel)) return;
+
+  const existing = normalizeServiceConfig(llm.services);
+  const previous = existing.find((entry) => serviceConfigKey(entry) === trimmedService);
+  const nextEntry: ServiceConfigEntry = previous
+    ? { ...previous, models: mergeServiceModelIds(previous.models, [trimmedModel]) }
+    : isCustomServiceId(trimmedService)
+      ? {
+          service: "custom",
+          name: decodeURIComponent(trimmedService.slice("custom:".length)),
+          models: [trimmedModel],
+        }
+      : { service: trimmedService, models: [trimmedModel] };
+
+  llm.services = mergeServiceConfig(existing, [nextEntry]);
 }
 
 function normalizeCoverConfig(raw: unknown): { service: string; model: string; baseUrl?: string } | undefined {
@@ -1973,73 +1875,6 @@ async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
 
 async function saveRawConfig(root: string, config: Record<string, unknown>): Promise<void> {
   await writeFile(join(root, "inkos.json"), JSON.stringify(config, null, 2), "utf-8");
-}
-
-type ChapterReviewMode = "auto" | "manual";
-
-function normalizeChapterReviewMode(mode: unknown): ChapterReviewMode {
-  return mode === "manual" ? "manual" : "auto";
-}
-
-function readProjectChapterReviewMode(config: Record<string, unknown>): ChapterReviewMode {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeChapterReviewMode(writing.reviewMode);
-}
-
-function readBookChapterReviewMode(rawBook: Record<string, unknown>): ChapterReviewMode | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.reviewMode !== "manual" && writing.reviewMode !== "auto") return undefined;
-  return writing.reviewMode;
-}
-
-async function loadRawBookConfig(root: string, bookId: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(join(root, "books", bookId, "book.json"), "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-async function resolveBookChapterReviewMode(root: string, bookId: string | undefined, projectMode: ChapterReviewMode): Promise<ChapterReviewMode> {
-  if (!bookId || !isSafeBookId(bookId)) return projectMode;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookChapterReviewMode(rawBook) ?? projectMode;
-  } catch {
-    return projectMode;
-  }
-}
-
-type RevisionGateSetting = "strict" | "lenient" | "always";
-
-function normalizeRevisionGate(gate: unknown): RevisionGateSetting {
-  return gate === "lenient" || gate === "always" ? gate : "strict";
-}
-
-function readProjectRevisionGate(config: Record<string, unknown>): RevisionGateSetting {
-  const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
-    ? config.writing as Record<string, unknown>
-    : {};
-  return normalizeRevisionGate(writing.revisionGate);
-}
-
-function readBookRevisionGate(rawBook: Record<string, unknown>): RevisionGateSetting | undefined {
-  const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-    ? rawBook.writing as Record<string, unknown>
-    : undefined;
-  if (!writing || writing.revisionGate !== "strict" && writing.revisionGate !== "lenient" && writing.revisionGate !== "always") return undefined;
-  return writing.revisionGate;
-}
-
-async function resolveBookRevisionGate(root: string, bookId: string | undefined, projectGate: RevisionGateSetting): Promise<RevisionGateSetting> {
-  if (!bookId || !isSafeBookId(bookId)) return projectGate;
-  try {
-    const rawBook = await loadRawBookConfig(root, bookId);
-    return readBookRevisionGate(rawBook) ?? projectGate;
-  } catch {
-    return projectGate;
-  }
 }
 
 function unquoteEnvValue(value: string): string {
@@ -2151,12 +1986,12 @@ async function resolveConfiguredServiceEntry(root: string, serviceId: string): P
 }
 
 function buildProbePlans(
-  preferredApiFormat: "chat" | "responses" | undefined,
+  preferredApiFormat: LLMApiFormat | undefined,
   preferredStream: boolean | undefined,
-): Array<{ apiFormat: "chat" | "responses"; stream: boolean }> {
-  const candidates: Array<{ apiFormat: "chat" | "responses"; stream: boolean }> = [];
+): Array<{ apiFormat: LLMApiFormat; stream: boolean }> {
+  const candidates: Array<{ apiFormat: LLMApiFormat; stream: boolean }> = [];
   const seen = new Set<string>();
-  const push = (apiFormat: "chat" | "responses", stream: boolean) => {
+  const push = (apiFormat: LLMApiFormat, stream: boolean) => {
     const key = `${apiFormat}:${stream ? "1" : "0"}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -2276,15 +2111,13 @@ async function loadRadarHistory(root: string): Promise<Array<{
 
 function fallbackTextModelsForEndpoint(
   endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined,
-  preset: ReturnType<typeof resolveServicePreset> | undefined,
 ): Array<{ id: string; name: string }> {
   const endpointModels = endpoint?.models
     .filter((model) => model.enabled !== false)
     .filter((model) => isTextChatModelId(model.id))
     .map((model) => ({ id: model.id, name: model.id }))
     ?? [];
-  if (endpointModels.length > 0) return endpointModels;
-  return preset?.knownModels?.map((id) => ({ id, name: id })) ?? [];
+  return endpointModels;
 }
 
 function shouldTrustStaticModelsWhenLiveListUnavailable(endpoint: ReturnType<typeof getAllEndpoints>[number] | undefined): boolean {
@@ -2313,7 +2146,7 @@ function formatServiceProbeError(args: {
   readonly label?: string;
   readonly baseUrl: string;
   readonly model?: string;
-  readonly apiFormat?: "chat" | "responses";
+  readonly apiFormat?: LLMApiFormat;
   readonly stream?: boolean;
   readonly error: string;
   readonly language?: StudioLanguage;
@@ -2325,7 +2158,11 @@ function formatServiceProbeError(args: {
   const upstreamDetail = rawDetail.includes("上游详情：")
     ? rawDetail
     : "";
-  const protocol = args.apiFormat === "responses" ? "Responses" : "Chat / Completions";
+  const protocol = args.apiFormat === "anthropic"
+    ? "Anthropic Messages"
+    : args.apiFormat === "responses"
+      ? "Responses"
+      : "Chat / Completions";
   const streamSuffix = typeof args.stream === "boolean"
     ? pick(lang, `，${args.stream ? "流式" : "非流式"}`, `, ${args.stream ? "streaming" : "non-streaming"}`)
     : "";
@@ -2420,8 +2257,8 @@ async function fetchModelsFromServiceBaseUrl(
         models: [],
         error: pick(
           lang,
-          `服务商返回 ${res.status}: ${body.slice(0, 200)}`,
-          `Service returned ${res.status}: ${body.slice(0, 200)}`,
+          `服务商返回 ${res.status}: ${body}`,
+          `Service returned ${res.status}: ${body}`,
         ),
         authFailed: res.status === 401 || res.status === 403,
       };
@@ -2456,7 +2293,7 @@ async function probeServiceCapabilities(args: {
   service: string;
   apiKey: string;
   baseUrl: string;
-  preferredApiFormat?: "chat" | "responses";
+  preferredApiFormat?: LLMApiFormat;
   preferredStream?: boolean;
   preferredModel?: string;
   proxyUrl?: string;
@@ -2514,7 +2351,7 @@ async function probeServiceCapabilities(args: {
     };
   }
   if (shouldTrustStaticModelsWhenLiveListUnavailable(endpoint)) {
-    const models = fallbackTextModelsForEndpoint(endpoint, preset);
+    const models = fallbackTextModelsForEndpoint(endpoint);
     const selectedModel =
       endpoint?.checkModel && models.some((model) => model.id === endpoint.checkModel)
         ? endpoint.checkModel
@@ -2534,7 +2371,6 @@ async function probeServiceCapabilities(args: {
   // Prefer live /models results; if unavailable, probe with the service's own check model before global defaults.
   const serviceFirstModel =
     endpoint?.checkModel
-    ?? preset?.knownModels?.[0]
     ?? endpoint?.models.find((model) => model.enabled !== false)?.id;
   const useDynamicLocalModels = baseService === "ollama" || baseService === "lmstudio";
   const useEndpointCheckModel = !useDynamicLocalModels
@@ -2601,7 +2437,7 @@ async function probeServiceCapabilities(args: {
         );
         const models = discoveredModels.length > 0
           ? discoveredModels
-          : fallbackTextModelsForEndpoint(endpoint, preset);
+          : fallbackTextModelsForEndpoint(endpoint);
         return {
           ok: true,
           models: models.length > 0 ? models : [{ id: model, name: model }],
@@ -2635,17 +2471,39 @@ async function probeServiceCapabilities(args: {
 
 // --- Server factory ---
 
-export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps } = {}) {
+export function createStudioServer(initialConfig: ProjectConfig, root: string, overrides: { readonly nodeImageGenerator?: NodeImageDeps; readonly hostname?: string; readonly allowedOrigins?: readonly string[] } = {}) {
   const app = new Hono();
   const state = new StateManager(root);
+  const recoveryStore = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+  try {
+    const recovered = recoveryStore.recoverInterruptedEpisodes();
+    if (recovered > 0) {
+      console.warn(`[studio] Recovered ${recovered} interrupted creative episode${recovered === 1 ? "" : "s"}.`);
+    }
+  } finally {
+    recoveryStore.close();
+  }
   let cachedConfig = initialConfig;
   const activeConfirmedTasks = new Map<string, AbortController>();
-  // write-next 检查点（174 号 W-C5）：本进程活跃 write-next 任务（执行 id 集合）。
-  // 可停性已对齐 Rust（641 号）：write-next 的 AbortController 同时注册进
-  // activeConfirmedTasks（findRunningTaskController 命中），signal 经
-  // pipeline.runWithAbortSignal 直通管线安全点与 provider 层——本集合退居
-  // 对账面（重启对账把本集合视为 running 快照的第二个存活来源）。
-  const activeWriteNextTasks = new Set<string>();
+  // HTTP connectivity is not execution state. Retain the current chat request
+  // until its handler finishes so refresh/reconnect can observe and stop it.
+  const chatRequests = new Map<string, {
+    snapshot: import("../shared/session-request.js").StudioChatRequestSnapshot;
+    controller: AbortController;
+  }>();
+  const chatRequestStore = new ChatRequestStore(root);
+  const loadChatRequest = async (sessionId: string) => {
+    const live = chatRequests.get(sessionId);
+    if (live) return live.snapshot;
+    const saved = await chatRequestStore.load(sessionId);
+    // Recheck after I/O: a new request may have acquired the session meanwhile.
+    if (chatRequests.has(sessionId)) return chatRequests.get(sessionId)!.snapshot;
+    if (!saved || saved.status !== "running") return saved;
+    return { ...saved, status: "failed" as const, error: {
+      code: "CHAT_REQUEST_INTERRUPTED",
+      message: "Studio restarted before this request finished. Continue from the saved results.",
+    } };
+  };
   // 确认式生产任务的单任务名额（sessionId → taskId）。原来的检查是"await 读快照
   // → 之后才 set controller"的 check-then-act：两个并发确认请求都能通过检查，
   // 双任务同时启动、快照互相覆盖。这里在任何 await 之前同步占位，占位失败的
@@ -2699,10 +2557,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const task = await loadStudioTaskSnapshot(root, sessionId);
     if (!task) return null;
     const running = task.execution.status === "running" || task.execution.status === "processing";
-    // 存活双来源（174 号 W-C5）：确认任务看句柄表，write-next 看活跃集合。
-    const locallyRunning = activeConfirmedTasks.has(task.execution.id)
-      || activeWriteNextTasks.has(task.execution.id);
-    if (!running || locallyRunning) return task;
+    if (!running || activeConfirmedTasks.has(task.execution.id)) return task;
     // running 快照但本进程没有对应的 AbortController，只可能是任务运行期间
     // server 进程退出过（正常流程里 controller 先于首次持久化进入 Map、晚于
     // 终态持久化删除）。任务本体已随旧进程消失，这里把快照改写为终态并保存，
@@ -2747,72 +2602,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return task ? activeConfirmedTasks.get(task.execution.id) : undefined;
   };
 
-  // 回环守卫（170 号 W-A2）：注册在 cors() 之前——先守卫后 CORS，远端 Origin
-  // 在 CORS 放大面之前被 403 短路。与 engine-rs 同规则同 env 名（双端同水位）；
-  // INKOS_ENGINE_LOOPBACK_GUARD=0 可一键回退旧行为。
-  app.use("/*", createLoopbackGuardMiddleware(guardOptionsFromEnv(process.env)));
-  // CORS（173 号 W-A4a 收紧）：回环 Origin 反射——与 engine-rs sidecar_cors_layer
-  // 同规则（共享 loopback-guard 的 origin 判定，env 白名单同源）：回环主机或
-  // 白名单命中反射请求 Origin，其余（远端 / null / 无 Origin）不发 ACAO——
-  // 守卫关闭时 * 放大面也不复活。方法族/头镜像保持 Hono 默认参（与 Rust 侧
-  // 方法族、AllowHeaders::mirror_request 对齐）。
-  const corsGuardOptions = guardOptionsFromEnv(process.env);
-  const corsExtraOrigins = corsGuardOptions.extraOrigins ?? [];
-  app.use("/*", cors({
-    origin: (origin) => (originIsAllowed(origin, corsExtraOrigins) ? origin : null),
-  }));
-
-  // API 面禁缓存（483 号，对齐 Rust 445 号 api_no_store）：API 响应可被浏览器
-  // 启发式缓存时，回退端下 RunLogPanel/书列表等读面会间歇消失或陈旧。
-  app.use("/api/v1/*", async (c, next) => {
+  const loopbackHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+  const bindHostname = overrides.hostname?.trim().toLowerCase() || "127.0.0.1";
+  const allowedOrigins = new Set((overrides.allowedOrigins ?? []).map(origin => new URL(origin).origin));
+  const allowedHosts = new Set([...loopbackHosts, ...[...allowedOrigins].map(origin => new URL(origin).hostname)]);
+  app.use("/*", async (c, next) => {
+    const url = new URL(c.req.url);
+    // A loopback listener must not become an API for an arbitrary DNS name.
+    // Explicit network binding retains its configured network scope.
+    if (loopbackHosts.has(bindHostname) && !allowedHosts.has(url.hostname)) {
+      throw new ApiError(403, "STUDIO_HOST_FORBIDDEN", "This host is not allowed for the local Studio server.");
+    }
+    const origin = c.req.header("Origin");
+    if (origin && origin !== url.origin && !allowedOrigins.has(origin)) {
+      throw new ApiError(403, "STUDIO_ORIGIN_FORBIDDEN", "This browser origin is not allowed to access Studio.");
+    }
     await next();
-    c.header("Cache-Control", "no-store");
   });
-
-  // 健康探针（493 号，对齐 Rust 62 号超集端点）：{ok, version, backend} 同形，
-  // backend 标识区分引擎——监控/编排双端统一探 this 面。
-  app.get("/api/v1/health", (c) => {
-    return c.json({ ok: true, version: studioPkg.version, backend: "node-fallback" });
-  });
-
-  // 调试用工具目录（555 号，对齐 Rust debug/tools 裸数组形态）：书会话有效工具
-  // 投影（32 跨端名+node-only 13 名），条目 {name, description, parametersSha256}——
-  // schema 键规范化序 sha256，与 Rust serde BTreeMap 序同构，差分器 tool-catalog
-  // 维度活体对照的 node 腿。
-  app.get("/api/v1/debug/tools", (c) => {
-    return c.json(buildChatToolCatalog());
-  });
-
-  // R41/564 号：会话末轮 token 计量快照（与 Rust GET /api/v1/context-meter
-  // 同构：无记录 404 / 缺参 400；内存观测面，重启即清）。
-  app.get("/api/v1/context-meter", (c) => {
-    const sessionId = c.req.query("sessionId")?.trim();
-    if (!sessionId) {
-      return c.json(
-        { error: { code: "INVALID_SESSION_ID", message: "sessionId is required" } },
-        400,
-      );
-    }
-    const snapshot = contextMeterRegistry.get(sessionId);
-    if (!snapshot) {
-      return c.json(
-        { error: { code: "SESSION_NOT_FOUND", message: "no context meter snapshot for this session" } },
-        404,
-      );
-    }
-    return c.json(snapshot);
-  });
+  // Only origins admitted above receive CORS headers; rejected requests never
+  // reach readers, mutations or preflight handling.
+  app.use("/*", cors({ origin: origin => origin || undefined }));
 
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
     if (error instanceof ApiError) {
       return c.json({ error: { code: error.code, message: error.message } }, error.status as 400);
     }
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("LLM API key not set") || message.includes("INKOS_LLM_API_KEY not set")) {
-      return c.json({ error: { code: "LLM_CONFIG_ERROR", message } }, 400);
+    if (error instanceof LLMConfigurationError) {
+      return c.json({ error: { code: "LLM_CONFIG_ERROR", message: error.message } }, 400);
     }
-    console.error("[studio] Unexpected server error", error);
+    console.error("[studio] Unexpected server error", { method: c.req.method, path: new URL(c.req.url).pathname, aborted: c.req.raw.signal.aborted }, error);
     return c.json(
       { error: { code: "INTERNAL_ERROR", message: "Unexpected server error." } },
       500,
@@ -2831,24 +2650,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) {
       throw new ApiError(400, "INVALID_BOOK_ID", `Invalid book ID: "${bookId}"`);
-    }
-    await next();
-  });
-
-  // Projects id validation（201 号）：对齐 books 段守卫与 engine-rs
-  // segment_guard（projects 段同样以 id 拼 interactive-films/翻译项目路径）。
-  // 错误码沿用双端 story-graph 端点既有契约 INVALID_ID。
-  app.use("/api/v1/projects/:id/*", async (c, next) => {
-    const projectId = c.req.param("id");
-    if (!isSafeBookId(projectId)) {
-      throw new ApiError(400, "INVALID_ID", `Invalid project ID: "${projectId}"`);
-    }
-    await next();
-  });
-  app.use("/api/v1/projects/:id", async (c, next) => {
-    const projectId = c.req.param("id");
-    if (!isSafeBookId(projectId)) {
-      throw new ApiError(400, "INVALID_ID", `Invalid project ID: "${projectId}"`);
     }
     await next();
   });
@@ -2886,23 +2687,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return normalizeStudioLanguage(raw.language);
   }
 
-  /**
-   * 530 号：写作链装配变体——在 buildPipelineConfig 之上解析 longWriting
-   * 生产绑定（craft 方法）∩ 可用技能，写入 activatedSkills；write-next /
-   * draft 两个写作链路由专用。交集为空（无技能部署）→ 不带字段，行为与
-   * 基础装配一致。
-   */
-  async function buildPipelineConfigWithWritingChainSkills(
-    overrides?: Parameters<typeof buildPipelineConfig>[0],
-  ): Promise<PipelineConfig> {
-    const config = await buildPipelineConfig(overrides);
-    const configured = await loadAvailableAgentSkills({ projectRoot: config.projectRoot });
-    const activatedSkills = resolveProductionSkillActivations(configured.skills, "longWriting");
-    return activatedSkills.length > 0 ? { ...config, activatedSkills } : config;
-  }
-
   async function buildPipelineConfig(
-    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model" | "revisionGate">> & {
+    overrides?: Partial<Pick<PipelineConfig, "externalContext" | "client" | "model">> & {
       readonly currentConfig?: ProjectConfig;
       readonly sessionIdForSSE?: string;
       // 确认式生产任务的 execution id。给任务构建 pipeline 时传入，该 pipeline
@@ -2914,10 +2700,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     },
   ): Promise<PipelineConfig> {
     const currentConfig = overrides?.currentConfig ?? await loadCurrentProjectConfig();
-    const projectReviewMode = readProjectChapterReviewMode(currentConfig as unknown as Record<string, unknown>);
-    const chapterReviewMode = await resolveBookChapterReviewMode(root, overrides?.bookIdForSettings, projectReviewMode);
-    const projectRevisionGate = readProjectRevisionGate(currentConfig as unknown as Record<string, unknown>);
-    const revisionGate = await resolveBookRevisionGate(root, overrides?.bookIdForSettings, projectRevisionGate);
     const sseExecutionTag = overrides?.executionIdForSSE
       ? { executionId: overrides.executionIdForSSE }
       : {};
@@ -2934,19 +2716,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           },
         }
       : sseSink;
-    // 210 号：inkos.log 落盘通道（get_logs 读、LogViewer/doctor 展示——
-    // 此前该文件零写入方，日志面空转）。
-    const fileSink = createFileSink(join(root, "inkos.log"));
-    const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink, fileSink] });
+    const logger = createLogger({ tag: "studio", sinks: [scopedSseSink, consoleSink] });
     return {
       client: overrides?.client ?? createLLMClient(currentConfig.llm),
       model: overrides?.model ?? currentConfig.llm.model,
       projectRoot: root,
       defaultLLMConfig: currentConfig.llm,
-      foundationReviewRetries: currentConfig.foundation?.reviewRetries ?? 2,
-      writingReviewRetries: currentConfig.writing?.reviewRetries ?? 1,
-      chapterReviewMode,
-      revisionGate: overrides?.revisionGate ?? revisionGate,
       modelOverrides: currentConfig.modelOverrides,
       notifyChannels: currentConfig.notify,
       logger,
@@ -2973,923 +2748,153 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Books ---
 
+  app.get("/api/v1/works", async (c) => {
+    const profileId = c.req.query("profileId")?.trim() || undefined;
+    const works = await listWorkManifests(root, profileId);
+    return c.json({
+      works: works.map((work) => ({
+        ...work,
+        artifactCount: work.artifacts.length,
+      })),
+    });
+  });
+
+  app.get("/api/v1/works/:id", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+      try {
+        return c.json({
+          work,
+          episodes: episodes.listEpisodes({ workId: id, limit: 50 }),
+        });
+      } finally {
+        episodes.close();
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      return c.json({ workId: id, artifacts: work.artifacts });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.get("/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const work = await loadWorkManifest(root, id);
+      const artifact = work.artifacts.find((candidate) => candidate.id === c.req.param("artifactId"));
+      const revision = artifact?.revisions.find((candidate) => candidate.id === c.req.param("revisionId"));
+      if (!artifact || !revision) return c.json({ error: "Artifact revision not found" }, 404);
+      const bytes = await readFile(safeChildPath(workDirectory(root, id), revision.snapshotPath ?? revision.path));
+      if (`sha256:${createHash("sha256").update(bytes).digest("hex")}` !== revision.checksum) throw new ApiError(409, "ARTIFACT_SNAPSHOT_UNAVAILABLE", "Revision content does not match its recorded checksum");
+      const textLike = revision.contentType.startsWith("text/")
+        || revision.contentType === "application/json";
+      return c.json({
+        workId: id,
+        artifactId: artifact.id,
+        revision,
+        ...(textLike
+          ? { content: bytes.toString("utf-8") }
+          : { dataUrl: `data:${revision.contentType};base64,${bytes.toString("base64")}` }),
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, code === "ENOENT" ? 404 : 400);
+    }
+  });
+
+  app.post("/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId/adopt", async (c) => {
+    const workId = c.req.param("id");
+    const work = await loadWorkManifest(root, workId);
+    const body = await c.req.json<{ expectedCurrentRevisionId: string | null }>();
+    const action = await executeExplicitCapabilityTool({ projectRoot: root, workId,
+      binding: { capabilityId: "workspace", actionId: "adopt_work_revision", profileId: work.profileId, risk: "recoverable-write" },
+      tool: createAdoptWorkRevisionTool(root, workId),
+      parameters: { artifactId: c.req.param("artifactId"), revisionId: c.req.param("revisionId"), expectedCurrentRevisionId: body.expectedCurrentRevisionId },
+    });
+    return c.json({ action });
+  });
+
+  app.get("/api/v1/episodes/:id", async (c) => {
+    const store = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try { return c.json({ episode: store.requireEpisode(c.req.param("id")), events: store.listEvents(c.req.param("id")) }); }
+    finally { store.close(); }
+  });
+
+  app.get("/api/v1/profiles", async (c) => c.json({ profiles: createBuiltInWorkProfileRegistry(root).list() }));
+  app.post("/api/v1/profiles", async (c) => {
+    const profile = WorkProfileSchema.parse(await c.req.json());
+    if (createBuiltInWorkProfileRegistry(root).get(profile.id)) throw new ApiError(409, "PROFILE_EXISTS", "Choose a new profile ID");
+    await commitAtomicFileSet({ rootDir: root, writes: [{ relativePath: `.inkos/profiles/${profile.id}.json`, content: JSON.stringify(profile, null, 2) }] });
+    return c.json({ profile }, 201);
+  });
+
+  app.put("/api/v1/profiles/:id", async (c) => {
+    const profile = WorkProfileSchema.parse(await c.req.json());
+    if (profile.id !== c.req.param("id")) throw new ApiError(400, "PROFILE_ID_MISMATCH", "Profile identity cannot change");
+    await commitAtomicFileSet({ rootDir: root, writes: [{ relativePath: `.inkos/profiles/${profile.id}.json`, content: JSON.stringify(profile, null, 2) }] });
+    return c.json({ profile });
+  });
+
+  app.get("/api/v1/episodes", async (c) => {
+    const episodes = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    try {
+      const rawLimit = Number(c.req.query("limit") ?? "100");
+      const status = c.req.query("status")?.trim();
+      return c.json({
+        episodes: episodes.listEpisodes({
+          ...(c.req.query("workId")?.trim() ? { workId: c.req.query("workId")!.trim() } : {}),
+          ...(c.req.query("profileId")?.trim() ? { profileId: c.req.query("profileId")!.trim() } : {}),
+          ...(status ? { status: status as "running" | "completed" | "failed" | "cancelled" } : {}),
+          limit: Number.isFinite(rawLimit) ? rawLimit : 100,
+        }),
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    } finally {
+      episodes.close();
+    }
+  });
+
   app.get("/api/v1/books", async (c) => {
     const bookIds = await state.listBooks();
-    const books = await Promise.all(bookIds.map((id) => loadStudioBookListSummary(state, id)));
-    return c.json({ books });
-  });
-
-  // ── 书籍时间线（181 号 C4-b）：story/timeline.json 读写面 ──────────
-  // GET 缺文件/坏载荷一律 { timeline: null }（可选面不制造 404 噪音）；
-  // PUT 走 TimelineSchema 校验（version literal 1 + plotline id 唯一），
-  // 非法 400。生成端点默认关闭（待产品决策，179 号分解文档）。
-  // ── 系列书回填（184 号 C3-b）：抽取/应用，交互「预览+逐项勾选」 ──
-  const readSourceCanonFiles = async (sourceBookId: string): Promise<Array<{ name: string; content: string }>> => {
-    const bookDir = state.bookDir(sourceBookId);
-    const files: Array<{ name: string; content: string }> = [];
-    const rels = ["story/story_bible.md", "story/outline/story_frame.md"];
-    for (const rel of rels) {
+    const entries = await Promise.all(bookIds.map(async (id) => {
       try {
-        files.push({ name: rel, content: await readFile(join(bookDir, ...rel.split("/")), "utf-8") });
-      } catch { /* 缺失静默跳过 */ }
-    }
-    return files;
-  };
-
-  app.post("/api/v1/books/:id/series-backfill/extract", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ sourceBookId?: string }>().catch(() => ({ sourceBookId: undefined }));
-    if (!body.sourceBookId) return c.json({ error: "sourceBookId is required" }, 400);
-    if (body.sourceBookId === id) return c.json({ error: "Source and target books must differ" }, 400);
-    try {
-      await state.loadBookConfig(body.sourceBookId);
-    } catch {
-      return c.json({ error: "Source book not found" }, 400);
-    }
-    const sourceTitle = body.sourceBookId;
-    const canon = await readSourceCanonFiles(body.sourceBookId);
-    if (canon.length === 0) return c.json({ error: "Source book has no canon files" }, 400);
-    const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
-    const system = "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。";
-    let user = `以下是一部已完结系列作品《${sourceTitle}》的设定文件。请为同系列的新书抽取可迁移的设定，输出纯 JSON：{"items":[{"id":"it-1","category":"worldview","title":"标题","content":"50-200字描述"}]}；category 只能取 worldview/character/plot/style/faction/item/location（faction=势力组织，item=关键物品法宝，location=重要地点场景）；抽取 8-14 条。\n\n源书设定文件：\n`;
-    for (const file of canon) user += `\n--- ${file.name} ---\n${file.content}\n`;
-    const response = await chatCompletion(
-      pipelineConfig.client,
-      pipelineConfig.model,
-      [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      { temperature: 0.3, maxTokens: 2000 },
-    );
-    const content = response.content;
-    const start = content.indexOf("{");
-    const end = content.lastIndexOf("}");
-    if (start === -1 || end === -1) return c.json({ error: "LLM output contains no JSON object" }, 500);
-    let items: Array<{ id: string; category: string; title: string; content: string }>;
-    try {
-      items = (JSON.parse(content.slice(start, end + 1)) as { items: typeof items }).items;
-    } catch {
-      return c.json({ error: "LLM items JSON unparseable" }, 500);
-    }
-    if (!Array.isArray(items) || items.length === 0) return c.json({ error: "LLM returned zero backfill items" }, 500);
-    const draft = { version: 1, bookId: id, sourceBookId: body.sourceBookId, updatedAt: new Date().toISOString(), items };
-    const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
-    await mkdir(dirname(draftPath), { recursive: true });
-    // 199 号：原子替换写。
-    await writeFileAtomic(draftPath, `${JSON.stringify(draft, null, 2)}\n`);
-    return c.json({ draft });
-  });
-
-  app.get("/api/v1/books/:id/series-backfill/existing", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const content = await readFile(join(state.bookDir(id), "story", "series_backfill.md"), "utf-8");
-      return c.json({ content });
-    } catch {
-      return c.json({ content: null });
-    }
-  });
-
-  // 199 号：单文件原子替换（temp + rename）——截断的 book.json/timeline.json
-  // 会让整本书不可加载或时间线静默丢失，写面统一走此 helper。
-  // R29/404 号：委托 core writeTextAtomic——新增 Windows 文件锁（EPERM/EBUSY）
-  // 线性退避重试（WNW v6.2.1 思路），与 Rust write_file_atomic 同构。
-  const writeFileAtomic = async (path: string, content: string): Promise<void> => {
-    const { writeTextAtomic } = await import("@actalk/inkos-core");
-    return writeTextAtomic(path, content);
-  };
-
-  app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req
-      .json<{ itemIds?: string[]; mode?: string }>()
-      .catch(() => ({}) as { itemIds?: string[]; mode?: string });
-    const draftPath = join(state.bookDir(id), "story", "series_backfill_draft.json");
-    let draft: { sourceBookId: string; updatedAt: string; items: Array<{ id: string; category: string; title: string; content: string }> };
-    try {
-      draft = JSON.parse(await readFile(draftPath, "utf-8"));
-    } catch {
-      return c.json({ error: "No backfill draft found; run extract first" }, 400);
-    }
-    const items = body.itemIds ? draft.items.filter((item) => body.itemIds!.includes(item.id)) : draft.items;
-    if (items.length === 0) return c.json({ error: "No items selected" }, 400);
-    // 190 号：写入粒度——overwrite（默认，整体覆盖）| merge（保留既有条目，
-    // 勾选项按 (category, title) 去重后追加）。解析/合并/渲染与 Rust 逐字对齐。
-    const mode = body.mode ?? "overwrite";
-    let merged = items;
-    if (mode === "merge") {
-      const backfillPath = join(state.bookDir(id), "story", "series_backfill.md");
-      const existingItems: Array<{ id: string; category: string; title: string; content: string }> = [];
-      try {
-        const content = await readFile(backfillPath, "utf-8");
-        let current: { category: string; title: string; lines: string[] } | null = null;
-        for (const line of content.split("\n")) {
-          const match = /^## \[([^\]]*)\] (.*)$/.exec(line);
-          if (match) {
-            if (current) {
-              existingItems.push({
-                id: `existing-${existingItems.length + 1}`,
-                category: current.category,
-                title: current.title,
-                content: current.lines.join("\n").trim(),
-              });
-            }
-            current = { category: match[1], title: match[2], lines: [] };
-          } else if (current) {
-            current.lines.push(line);
-          }
-        }
-        if (current) {
-          existingItems.push({
-            id: `existing-${existingItems.length + 1}`,
-            category: current.category,
-            title: current.title,
-            content: current.lines.join("\n").trim(),
-          });
-        }
-      } catch { /* 无既有文件 → 空合并基线 */ }
-      merged = [...existingItems];
-      for (const item of items) {
-        const duplicate = merged.some((e) => e.category === item.category && e.title === item.title);
-        if (!duplicate) merged = [...merged, item];
+        return { book: await loadStudioBookListSummary(state, id) };
+      } catch (error) {
+        // A canonical Work can exist before its book foundation is written.
+        // Keep it in /works without making every initialized book unavailable.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return { incompleteWorkId: id };
+        throw error;
       }
-    }
-    const path = join(state.bookDir(id), "story", "series_backfill.md");
-    // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。199 号：原子替换写。
-    let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》（${draft.sourceBookId}） · 抽取于 ${draft.updatedAt} · 勾选 ${merged.length} 条\n\n`;
-    for (const item of merged) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
-    await writeFileAtomic(path, markdown);
-    return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
-  });
-
-  app.get("/api/v1/books/:id/timeline", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const raw = await readFile(join(state.bookDir(id), "story", "timeline.json"), "utf-8");
-      const { TimelineSchema } = await import("@actalk/inkos-core");
-      const parsed = TimelineSchema.safeParse(JSON.parse(raw));
-      if (!parsed.success) {
-        console.warn(`[timeline] ${id} timeline.json 不可解析，按无时间线处理`);
-        return c.json({ timeline: null });
-      }
-      return c.json({ timeline: parsed.data });
-    } catch {
-      return c.json({ timeline: null });
-    }
-  });
-
-  app.put("/api/v1/books/:id/timeline", async (c) => {
-    const id = c.req.param("id");
-    const { TimelineSchema } = await import("@actalk/inkos-core");
-    const body = await c.req.json().catch(() => null);
-    const parsed = TimelineSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: "Invalid timeline payload" }, 400);
-    }
-    if (parsed.data.bookId !== id) {
-      return c.json({ error: "Timeline bookId does not match the route" }, 400);
-    }
-    const path = join(state.bookDir(id), "story", "timeline.json");
-    await mkdir(dirname(path), { recursive: true });
-    // 199 号：timeline.json 损坏会被 GET 按「无时间线」静默吞掉——原子替换写。
-    await writeFileAtomic(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
-    return c.json({ ok: true });
-  });
-
-  // G5/351 号：统一拆书面——聚合 + 落盘 story/deconstruction/{name}.md。
-  app.post("/api/v1/books/:id/deconstruct", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      name?: string;
-      depth?: "brief" | "standard" | "deep" | "full";
-      language?: "zh" | "en";
-      topCharacters?: number;
-      chapters?: Array<{ chapter: number; characters: string[]; events: string; chapterType?: string; hookActivity?: string }>;
-      publish?: boolean;
-    }>();
-    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `decon-${Date.now()}`;
-    const chapters = Array.isArray(body.chapters) ? body.chapters : [];
-    if (chapters.length === 0) {
-      return c.json({ error: "chapters is required" }, 400);
-    }
-    const core = await import("@actalk/inkos-core");
-    const result = core.buildDeconstructionExport({
-      chapters,
-      ...(body.depth ? { depth: body.depth } : {}),
-      ...(body.language ? { language: body.language } : {}),
-      ...(typeof body.topCharacters === "number" ? { topCharacters: body.topCharacters } : {}),
-    });
-    const storyDir = join(root, "books", id, "story", "deconstruction");
-    await mkdir(storyDir, { recursive: true });
-    const outPath = join(storyDir, `${name}.md`);
-    await writeFile(outPath, result.markdown, "utf-8");
-
-    // 可选发布：产物写入项目材料池（.inkos/materials/），供参考资料绑定。
-    let publishedMaterialId: string | undefined;
-    if (body.publish) {
-      const materialId = `decon-${id}-${name}`.replace(/[^\w-]/g, "-").slice(0, 64);
-      const materialsDir = join(root, ".inkos", "materials");
-      await mkdir(materialsDir, { recursive: true });
-      await writeFile(join(materialsDir, `${materialId}.md`), result.markdown, "utf-8");
-      const manifest = {
-        id: materialId,
-        title: name,
-        kind: "text",
-        purpose: "reference",
-        source: "deconstruction",
-        mimeType: "text/markdown",
-        markdownPath: `.inkos/materials/${materialId}.md`,
-      };
-      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
-      publishedMaterialId = materialId;
-    }
-
+    }));
     return c.json({
-      dossiers: result.dossiers,
-      pacing: result.pacing,
-      markdown: result.markdown,
-      path: `.inkos/../books/${id}/story/deconstruction/${name}.md`,
-      ...(publishedMaterialId ? { publishedMaterialId } : {}),
+      books: entries.flatMap((entry) => entry.book ? [entry.book] : []),
+      incompleteWorkIds: entries.flatMap((entry) => entry.incompleteWorkId ? [entry.incompleteWorkId] : []),
     });
-  });
-
-  // G6/354 号：方向候选批量生成（灵感卡 → LLM → 候选数组）。
-  app.post("/api/v1/director/directions", async (c) => {
-    const body = await c.req.json<{
-      inspiration?: unknown;
-      count?: number;
-      excludeTitles?: string[];
-      language?: "zh" | "en";
-      assetRefs?: Array<{ kind: string; id: string }>;
-    }>().catch(() => ({}) as { inspiration?: unknown; count?: number; excludeTitles?: string[]; language?: "zh" | "en"; assetRefs?: Array<{ kind: string; id: string }> });
-    const inspiration = body.inspiration as { premise?: unknown } | undefined;
-    if (!inspiration || typeof inspiration.premise !== "string" || !inspiration.premise.trim()) {
-      return c.json({ error: "inspiration.premise is required" }, 400);
-    }
-    // R4/364 号：可选挂载三库资产 guidance（refs 命中库资产 → 渲染参考块）。
-    let assetGuidance: string | undefined;
-    if (Array.isArray(body.assetRefs) && body.assetRefs.length > 0) {
-      const core = await import("@actalk/inkos-core");
-      const matched: import("@actalk/inkos-core").LibraryAsset[] = [];
-      for (const ref of body.assetRefs.slice(0, 6)) {
-        if (!isLibraryKind(ref.kind)) continue;
-        const snapshot = await listAssets(root, ref.kind);
-        const hit = snapshot.assets.find((asset) => asset.id === ref.id);
-        if (hit) matched.push(hit);
-      }
-      assetGuidance = core.renderAssetGuidanceBlock(matched, body.language ?? "zh");
-    }
-    broadcast("director:start", {});
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const directions = await pipeline.generateDirections({
-        inspiration: inspiration as never,
-        count: body.count,
-        excludeTitles: body.excludeTitles,
-        language: body.language,
-        assetGuidance,
-      });
-      broadcast("director:complete", { count: directions.length });
-      return c.json({ directions });
-    } catch (e) {
-      broadcast("director:error", { error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // G6/353 号：导演会话持久化 + G9 续跑建议注入（拉模式闭环）。
-  app.get("/api/v1/books/:id/director", async (c) => {
-    const id = c.req.param("id");
-    const dir = join(root, ".inkos", "director");
-    const path = join(dir, `${id}.json`);
-    let session: Record<string, unknown> | null = null;
-    try {
-      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
-    } catch {
-      session = null;
-    }
-    let savedChapters = 0;
-    try {
-      savedChapters = (await state.loadChapterIndex(id)).length;
-    } catch {
-      savedChapters = 0;
-    }
-    const core = await import("@actalk/inkos-core");
-    const resumeAdvice = core.formatResumeHint(savedChapters, "en");
-    return c.json({ session, savedChapters, resumeAdvice });
-  });
-
-  app.put("/api/v1/books/:id/director", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ patch?: Record<string, unknown> }>();
-    // 478 号：客户端与 Rust 端均以 { patch } 包裹合并键——此前读顶层导致本回退端
-    // 保存静默 no-op（返回 ok 但什么都不合并）。对齐 patch 契约。
-    const patch = body.patch ?? {};
-    const runMode = patch.runMode;
-    if (runMode !== undefined && !["ready-stop", "range", "full-book"].includes(String(runMode))) {
-      return c.json({ error: "invalid runMode" }, 400);
-    }
-    const dir = join(root, ".inkos", "director");
-    await mkdir(dir, { recursive: true });
-    const path = join(dir, `${id}.json`);
-    let session: Record<string, unknown> = {};
-    try {
-      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
-    } catch {
-      session = { bookId: id };
-    }
-    for (const key of ["inspiration", "directions", "selectedDirection", "runMode", "stage", "plan"] as const) {
-      if (patch[key] !== undefined) session[key] = patch[key];
-    }
-    session.updatedAt = new Date().toISOString();
-    if (!session.bookId) session.bookId = id;
-    await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
-    return c.json({ ok: true, session });
-  });
-
-  // G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
-  app.post("/api/v1/books/:id/hybrid-search", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      query?: string;
-      k?: number;
-      embedding?: unknown;
-    }>().catch(() => ({}) as { query?: string; k?: number; embedding?: unknown });
-    const query = typeof body.query === "string" ? body.query : "";
-    if (!query.trim()) return c.json({ error: "query is required" }, 400);
-    const k = Math.max(1, Math.min(50, Math.floor(Number(body.k ?? 10) || 10)));
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ fts: [], semantic: [], fused: [], mode: "fts5-fallback" });
-    }
-    const core = await import("@actalk/inkos-core");
-    const { LocalSearchIndex, MemoryDB, topKBySimilarity, reciprocalRankFusion, createEmbeddingClient } = core;
-    const searchIndex = new LocalSearchIndex(dbPath);
-    try {
-      const fts = searchIndex.search(query, { scope: "story-memory", limit: k * 2 });
-      const ftsRanked = fts.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
-      let semanticRanked: Array<{ id: string; rank: number }> = [];
-      let mode: "semantic" | "fts5-fallback" = "fts5-fallback";
-      const client = createEmbeddingClient(body.embedding ?? null);
-      if (client) {
-        try {
-          // 545 号修复：MemoryDB 构造参数是书目录（内部再拼 story/memory.db），
-          // 此前误传 db 文件路径——实际打开 .../story/memory.db/story/memory.db
-          // 嵌套假库，语义分支恒读空。Rust 侧 MemoryDb::open(book_dir) 一直正确。
-          const memory = new MemoryDB(join(root, "books", id));
-          const chunks = memory.listChunkVectors();
-          const queryVector = (await client.embed([query]))[0] ?? [];
-          const scored = topKBySimilarity(
-            queryVector,
-            chunks.map((chunk) => ({ id: chunk.chunkId, vector: chunk.vector })),
-            k * 2,
-          );
-          semanticRanked = scored.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
-          mode = "semantic";
-        } catch {
-          mode = "fts5-fallback";
-        }
-      }
-      const fused = reciprocalRankFusion(ftsRanked, semanticRanked);
-      return c.json({
-        fts: fts.map((hit) => ({ id: hit.id, score: hit.score, source: hit.source, title: hit.title })),
-        semantic: semanticRanked,
-        fused,
-        mode,
-      });
-    } finally {
-      searchIndex.close?.();
-    }
-  });
-
-  // G16/346 号：项目级任务路由读写（.inkos/task-routing.json）。
-  app.get("/api/v1/task-routing", async (c) => {
-    const path = join(root, ".inkos", "task-routing.json");
-    try {
-      const routing = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ routing });
-    } catch {
-      return c.json({ routing: null });
-    }
-  });
-
-  app.put("/api/v1/task-routing", async (c) => {
-    const body = await c.req.json<{ routing?: unknown }>();
-    if (!body.routing || typeof body.routing !== "object" || Array.isArray(body.routing)) {
-      return c.json({ error: "routing must be an object" }, 400);
-    }
-    const dir = join(root, ".inkos");
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "task-routing.json"), JSON.stringify(body.routing, null, 2), "utf-8");
-    return c.json({ ok: true, routing: body.routing });
-  });
-
-  // G7b/343 号：名册候选确认卡（章摘要 characters 比对名册）。
-  app.get("/api/v1/books/:id/roster-candidates", async (c) => {
-    const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ cards: [], candidates: [], rosterExists: false, currentChapter: 0 });
-    }
-    try {
-      const core = await import("@actalk/inkos-core");
-      const { MemoryDB } = core;
-      const memory = new MemoryDB(join(root, "books", id));
-      const summaries = memory.getSummaries(1, 100_000);
-      const currentChapter = summaries.length > 0
-        ? summaries[summaries.length - 1]!.chapter + 1
-        : 1;
-      const candidates = core.extractCharacterCandidates(
-        summaries.map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" })),
-      );
-      let roster: import("@actalk/inkos-core").RosterEntity[] = [];
-      let rosterExists = false;
-      try {
-        const rosterRaw = await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8");
-        roster = core.parseEntityRoster(rosterRaw);
-        rosterExists = true;
-      } catch {
-        rosterExists = false;
-      }
-      const cards = core.resolveRosterCandidates(candidates, roster);
-      return c.json({ cards, candidates, rosterExists, currentChapter });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // G7b/343 号：确认三选动作 → 写回 story/entity_roster.md。
-  app.post("/api/v1/books/:id/roster/confirm", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      candidate?: string;
-      action?: string;
-      targetName?: string;
-      chapter?: number;
-    }>();
-    const candidate = typeof body.candidate === "string" ? body.candidate.trim() : "";
-    const action = body.action ?? "";
-    if (!candidate || !["new-entity", "alias", "typo"].includes(action)) {
-      return c.json({ error: "candidate and action (new-entity|alias|typo) are required" }, 400);
-    }
-    const rosterPath = join(root, "books", id, "story", "entity_roster.md");
-    const core = await import("@actalk/inkos-core");
-    let roster: import("@actalk/inkos-core").RosterEntity[] = [];
-    try {
-      roster = core.parseEntityRoster(await readFile(rosterPath, "utf-8"));
-    } catch {
-      roster = [];
-    }
-    const result = core.applyRosterConfirmation(roster, {
-      candidate,
-      action: action as "new-entity" | "alias" | "typo",
-      ...(typeof body.targetName === "string" ? { targetName: body.targetName } : {}),
-      ...(typeof body.chapter === "number" ? { chapter: body.chapter } : {}),
-    });
-    await mkdir(join(root, "books", id, "story"), { recursive: true });
-    await writeFile(rosterPath, core.renderEntityRoster(result.roster), "utf-8");
-    return c.json({ ok: true, applied: result.applied });
-  });
-
-  // R4/363 号：三库资产（项目级 .inkos/asset-library/{kind}.json；种子兜底）。
-  app.get("/api/v1/asset-library/:kind", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const snapshot = await listAssets(root, kind);
-    return c.json(snapshot);
-  });
-
-  app.put("/api/v1/asset-library/:kind/assets", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const body = await c.req.json<{ asset?: unknown }>();
-    const outcome = await upsertAsset(root, kind, body.asset);
-    if (outcome.errors) return c.json({ errors: outcome.errors }, 400);
-    return c.json(outcome.result);
-  });
-
-  app.delete("/api/v1/asset-library/:kind/assets/:id", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const outcome = await deleteAsset(root, kind, c.req.param("id"));
-    if (!outcome.ok) return c.json({ error: outcome.reason }, outcome.reason?.includes("builtin") ? 400 : 404);
-    return c.json({ ok: true, assets: outcome.assets });
-  });
-
-  app.get("/api/v1/asset-library/:kind/export", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const snapshot = await listAssets(root, kind);
-    return c.body(core.buildAssetLibraryExport(snapshot.assets), 200, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Content-Disposition": attachmentDisposition(`asset-library-${kind}.json`),
-    });
-  });
-
-  app.post("/api/v1/asset-library/:kind/import", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const raw = await c.req.text();
-    const parsed = core.parseAssetLibraryImport(raw);
-    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
-      return c.json({ errors: parsed.errors }, 400);
-    }
-    const snapshot = await listAssets(root, kind);
-    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
-    await saveAssets(root, kind, merged.merged);
-    return c.json({
-      added: merged.added,
-      skipped: merged.skipped,
-      overwritten: merged.overwritten,
-      errors: parsed.errors,
-      assets: merged.merged,
-    });
-  });
-
-  // R4/364 号：库资产两段式采用（通用样本≠本书世界——写入本书材料池，进 G1 召回链）。
-  app.post("/api/v1/books/:id/adopt-library-assets", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      refs?: Array<{ kind: string; id: string }>;
-      language?: "zh" | "en";
-    }>().catch(() => ({}) as { refs?: Array<{ kind: string; id: string }>; language?: "zh" | "en" });
-    const refs = Array.isArray(body.refs) ? body.refs.slice(0, 12) : [];
-    if (refs.length === 0) return c.json({ error: "refs are required" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const language = body.language === "en" ? "en" : "zh";
-    const materialsDir = join(root, ".inkos", "materials");
-    await mkdir(materialsDir, { recursive: true });
-    const published: Array<{ materialId: string; kind: string; id: string }> = [];
-    for (const ref of refs) {
-      if (!isLibraryKind(ref.kind)) continue;
-      const snapshot = await listAssets(root, ref.kind);
-      const asset = snapshot.assets.find((item) => item.id === ref.id);
-      if (!asset) continue;
-      const header = core.renderAdoptionHeader(asset, id, language);
-      const samplesBlock = asset.samples.length > 0
-        ? `\n## Samples\n\n${asset.samples.map((sample) => `- ${sample}`).join("\n")}\n`
-        : "";
-      const markdown = `${header}\n${asset.body}\n${samplesBlock}`;
-      const materialId = `lib-${ref.kind}-${asset.id}-${id}`.replace(/[^\w-]/g, "-").slice(0, 80);
-      await writeFile(join(materialsDir, `${materialId}.md`), markdown, "utf-8");
-      const manifest = {
-        id: materialId,
-        title: `${asset.name}（库资产）`,
-        kind: "text",
-        purpose: "reference",
-        source: "library",
-        mimeType: "text/markdown",
-        markdownPath: `.inkos/materials/${materialId}.md`,
-      };
-      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
-      published.push({ materialId, kind: ref.kind, id: asset.id });
-    }
-    return c.json({ published });
-  });
-
-  // R5/366 号：书级反AI规则（GET/PUT 全量表；PUT 校验非法 400）。
-  // R22/392 号：GET 种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子
-  // （seeded=true，内存态不落盘）；显式空规则 = 用户选择，不回填。
-  app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "anti_ai_rules.json");
-    const core = await import("@actalk/inkos-core");
-    try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
-      if (Array.isArray(parsed.rules)) return c.json({ rules: parsed.rules, seeded: false });
-      return c.json({ rules: core.ANTI_AI_RULE_SEEDS, seeded: true });
-    } catch {
-      return c.json({ rules: core.ANTI_AI_RULE_SEEDS, seeded: true });
-    }
-  });
-
-  app.put("/api/v1/books/:id/anti-ai-rules", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ rules?: unknown[] }>();
-    if (!Array.isArray(body.rules)) return c.json({ error: "rules array required" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const errors: string[] = [];
-    const valid: unknown[] = [];
-    body.rules.forEach((raw, index) => {
-      const result = core.validateAntiAiRule(raw);
-      if (result.rule) valid.push(result.rule);
-      else errors.push(...result.errors.map((message: string) => `rules[${index}] ${message}`));
-    });
-    if (errors.length > 0) return c.json({ errors }, 400);
-    const storyDir = join(root, "books", id, "story");
-    await mkdir(storyDir, { recursive: true });
-    await writeFile(join(storyDir, "anti_ai_rules.json"), JSON.stringify({ version: 1, rules: valid }, null, 2), "utf-8");
-    return c.json({ ok: true, rules: valid });
-  });
-
-  // R5/366 号：G13 经验条目（GET / PUT merge / DELETE 单条）。
-  app.get("/api/v1/books/:id/experience", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "experience.json");
-    try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ entries: Array.isArray(parsed.entries) ? parsed.entries : [] });
-    } catch {
-      return c.json({ entries: [] });
-    }
-  });
-
-  app.put("/api/v1/books/:id/experience", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ entries?: unknown[] }>();
-    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const path = join(root, "books", id, "story", "experience.json");
-    let existing: unknown[] = [];
-    try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
-      if (Array.isArray(parsed.entries)) existing = parsed.entries;
-    } catch {
-      existing = [];
-    }
-    let merged;
-    try {
-      // 495 号：条目级校验失败对齐 Rust typed-extractor 的 422（此前 500）。
-      merged = core.mergeExperienceEntries(existing as never, body.entries as never);
-    } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
-    }
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, JSON.stringify({ version: 1, entries: merged }, null, 2), "utf-8");
-    return c.json({ ok: true, entries: merged });
-  });
-
-  app.delete("/api/v1/books/:id/experience/:entryId", async (c) => {
-    const id = c.req.param("id");
-    const entryId = c.req.param("entryId");
-    const path = join(root, "books", id, "story", "experience.json");
-    let entries: Array<Record<string, unknown>> = [];
-    try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
-      if (Array.isArray(parsed.entries)) entries = parsed.entries;
-    } catch {
-      entries = [];
-    }
-    const remaining = entries.filter((entry) => entry.id !== entryId);
-    if (remaining.length === entries.length) return c.json({ error: `entry not found: ${entryId}` }, 404);
-    await writeFile(path, JSON.stringify({ version: 1, entries: remaining }, null, 2), "utf-8");
-    return c.json({ ok: true, entries: remaining });
-  });
-
-  // R15/384 号：市场包导入预览（零落盘——解析+预估新增/覆盖/跳过）。
-  app.post("/api/v1/asset-library/:kind/import-preview", async (c) => {
-    const kind = c.req.param("kind");
-    if (!isLibraryKind(kind)) return c.json({ error: "invalid kind" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const raw = await c.req.text();
-    const parsed = core.parseAssetLibraryImport(raw);
-    if (parsed.errors.length > 0 && parsed.assets.length === 0) {
-      return c.json({ errors: parsed.errors }, 400);
-    }
-    const snapshot = await listAssets(root, kind);
-    const merged = core.mergeAssetLibrary(snapshot.assets, parsed.assets);
-    return c.json({
-      added: merged.added,
-      overwritten: merged.overwritten,
-      skipped: merged.skipped,
-      errors: parsed.errors,
-      samples: parsed.assets.map((asset) => ({ id: asset.id, name: asset.name, kind: asset.kind })),
-    });
-  });
-
-  // G4/340 号：写法档案池（项目级 .inkos/style-profiles/）。
-  app.get("/api/v1/style-profiles", async (c) => {
-    const dir = join(root, ".inkos", "style-profiles");
-    try {
-      await mkdir(dir, { recursive: true });
-      const files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
-      const items = await Promise.all(files.map(async (file) => {
-        try {
-          const profile = JSON.parse(await readFile(join(dir, file), "utf-8"));
-          return { name: file.replace(/\.json$/, ""), profile };
-        } catch {
-          return null;
-        }
-      }));
-      return c.json({ profiles: items.filter(Boolean) });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/style-profiles", async (c) => {
-    const body = await c.req.json<{ name?: string; profile?: unknown }>();
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name || !body.profile || typeof body.profile !== "object") {
-      return c.json({ error: "name and profile are required" }, 400);
-    }
-    const dir = join(root, ".inkos", "style-profiles");
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${name}.json`), JSON.stringify(body.profile, null, 2), "utf-8");
-    return c.json({ ok: true, name });
-  });
-
-  // G4/340 号：书级写法绑定（style_binding.json）。
-  app.get("/api/v1/books/:id/style-binding", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "style_binding.json");
-    try {
-      const binding = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ binding });
-    } catch {
-      return c.json({ binding: null });
-    }
-  });
-
-  app.put("/api/v1/books/:id/style-binding", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      profileName?: string;
-      enabledIds?: string[];
-      disabledIds?: string[];
-      maxGuidanceChars?: number;
-    }>();
-    const profileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
-    if (!profileName) return c.json({ error: "profileName is required" }, 400);
-    const profilePath = join(root, ".inkos", "style-profiles", `${profileName}.json`);
-    const profileExists = await access(profilePath).then(() => true).catch(() => false);
-    if (!profileExists) return c.json({ error: "profile not found" }, 404);
-    const binding: Record<string, unknown> = { profileName };
-    if (Array.isArray(body.enabledIds) && body.enabledIds.length > 0) binding.enabledIds = body.enabledIds;
-    if (Array.isArray(body.disabledIds) && body.disabledIds.length > 0) binding.disabledIds = body.disabledIds;
-    if (typeof body.maxGuidanceChars === "number" && body.maxGuidanceChars > 0) binding.maxGuidanceChars = body.maxGuidanceChars;
-    const storyDir = join(root, "books", id, "story");
-    await mkdir(storyDir, { recursive: true });
-    await writeFile(join(storyDir, "style_binding.json"), JSON.stringify(binding, null, 2), "utf-8");
-    return c.json({ ok: true, binding });
-  });
-
-  // G10/338 号：承诺账本运营投影（时间线 + 节奏债 + 连续弱钩）。
-  app.get("/api/v1/books/:id/promises", async (c) => {
-    const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ timeline: [], pacingDebts: [], weakRuns: { runs: [], longestRun: 0 }, currentChapter: 0 });
-    }
-    try {
-      const core = await import("@actalk/inkos-core");
-      const { MemoryDB } = core;
-      const memory = new MemoryDB(join(root, "books", id));
-      const hooks = memory.getAllHooks();
-      // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
-      // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
-      const hooksMarkdown = await readFile(
-        join(root, "books", id, "story", "pending_hooks.md"),
-        "utf-8",
-      ).catch(() => "");
-      const kindById = new Map(
-        core
-          .parsePendingHooksMarkdown(hooksMarkdown)
-          .filter((hook) => hook.kind)
-          .map((hook) => [hook.hookId, hook.kind]),
-      );
-      const enrichedHooks = hooks.map((hook) => {
-        const kind = kindById.get(hook.hookId);
-        return kind ? { ...hook, kind } : hook;
-      });
-      const summaries = memory.getSummaries(1, 100_000);
-      const currentChapter = summaries.length > 0
-        ? summaries[summaries.length - 1]!.chapter + 1
-        : 1;
-      const timeline = core.buildPromiseTimeline(enrichedHooks, currentChapter);
-      const pacingDebts = core.detectPacingDebts({ hooks: enrichedHooks, currentChapter });
-      const weakRuns = core.detectWeakHookRuns({
-        summaries: summaries.map((s) => ({ chapter: s.chapter, hookActivity: s.hookActivity ?? "" })),
-      });
-      return c.json({ timeline, pacingDebts, weakRuns, currentChapter });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // R26/403 号：调用级运行遥测（进程内环形缓冲纯读投影；只记元数据，
-  // 不含 prompt/正文/错误原文）。?limit=N 取最近 N 条，缺省全量（上限 200）。
-  app.get("/api/v1/run-log", async (c) => {
-    try {
-      const core = await import("@actalk/inkos-core");
-      const limitRaw = Number(c.req.query("limit") ?? "");
-      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.trunc(limitRaw) : undefined;
-      const projection = core.projectRunLog(core.globalRunLog.snapshot(), limit);
-      return c.json(projection);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // R2/359 号：张力曲线（读 chapter_summaries.md 真相源；缺分章自动跳过，曲线是展示层）。
-  app.get("/api/v1/books/:id/tension-curve", async (c) => {
-    const id = c.req.param("id");
-    const summariesPath = join(root, "books", id, "story", "chapter_summaries.md");
-    if (!(await access(summariesPath).then(() => true).catch(() => false))) {
-      return c.json({ curve: { points: [], scoredChapters: 0, unscoredChapters: 0 }, warnings: [] });
-    }
-    try {
-      const core = await import("@actalk/inkos-core");
-      const markdown = await readFile(summariesPath, "utf-8");
-      const rows = core.parseChapterSummariesMarkdown(markdown);
-      const { curve, warnings } = core.analyzeTensionCurve(rows);
-      return c.json({ curve, warnings });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // R3/361 号：质量趋势（review_metrics 沉淀 + 承诺紧迫度汇总）。
-  app.get("/api/v1/books/:id/quality-trend", async (c) => {
-    const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ trend: { points: [], scoredChapters: 0, failingChapters: [] }, urgency: [], currentChapter: 0 });
-    }
-    try {
-      const core = await import("@actalk/inkos-core");
-      const { MemoryDB } = core;
-      const memory = new MemoryDB(join(root, "books", id));
-      const metrics = memory.listReviewMetrics();
-      const trend = core.buildQualityTrend(metrics);
-      const hooks = memory.getAllHooks();
-      const currentChapter = metrics.length > 0
-        ? metrics[metrics.length - 1]!.chapter + 1
-        : 1;
-      let targetChapters: number | undefined;
-      try {
-        const book = await state.loadBookConfig(id);
-        targetChapters = book?.targetChapters;
-      } catch {
-        targetChapters = undefined;
-      }
-      const urgency = hooks
-        .filter((hook) => !/^(resolved|closed|done|已回收|已解决)$/i.test((hook.status ?? "").trim()))
-        .map((hook) => core.resolvePromiseUrgency({
-          hook,
-          currentChapter,
-          ...(typeof targetChapters === "number" ? { targetChapters } : {}),
-        }))
-        .sort((a, b) => b.urgency - a.urgency || (a.hookId < b.hookId ? -1 : a.hookId > b.hookId ? 1 : 0));
-      return c.json({ trend, urgency, currentChapter });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // G3/337 号：质量债务清单（open/deferred/resolved；缺省全量）。
-  app.get("/api/v1/books/:id/quality-debts", async (c) => {
-    const id = c.req.param("id");
-    const status = c.req.query("status");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ debts: [] });
-    }
-    try {
-      const { MemoryDB } = await import("@actalk/inkos-core");
-      const memory = new MemoryDB(join(root, "books", id));
-      const valid = ["open", "deferred", "resolved"] as const;
-      const statusFilter = valid.find((s) => s === status);
-      const debts = memory.listDebts(undefined, statusFilter);
-      return c.json({ debts });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
   });
 
   app.get("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
     try {
       const book = await state.loadBookConfig(id);
-      // 487 号：version 不入契约（同 loadStudioBookListSummary，对齐 Rust 形状）。
-      const { version: _bookVersion, ...bookWithoutVersion } = book as typeof book & { version?: number };
       const chapters = await state.loadChapterIndex(id);
       const nextChapter = await state.getNextChapterNumber(id);
-      return c.json({ book: bookWithoutVersion, chapters, nextChapter });
+      return c.json({ book, chapters, nextChapter });
     } catch {
       return c.json({ error: `Book "${id}" not found` }, 404);
     }
-  });
-
-  // --- Genres ---
-
-  app.get("/api/v1/genres", async (c) => {
-    const { listAvailableGenres, readGenreProfile } = await import("@actalk/inkos-core");
-    const rawGenres = await listAvailableGenres(root);
-    const genres = await Promise.all(
-      rawGenres.map(async (g) => {
-        try {
-          const { profile } = await readGenreProfile(root, g.id);
-          return { ...g, language: profile.language ?? "zh" };
-        } catch {
-          return { ...g, language: "zh" };
-        }
-      }),
-    );
-    return c.json({ genres });
   });
 
   // --- Book Create ---
@@ -3921,46 +2926,53 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     bookCreateStatus.set(bookId, { status: "creating" });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig());
-    const tools = createInteractionToolsFromDeps(pipeline, state);
-    processProjectInteractionRequest({
-      projectRoot: root,
-      request: {
-        intent: "create_book",
+    const foundationSkills = await resolveStudioProfileSkills(root, "longform-novel");
+    const actionPayload: ActionPayload = {
+      createBook: {
         title: body.title,
-        genre: body.genre,
-        language: body.language === "en" ? "en" : body.language === "zh" ? "zh" : undefined,
-        platform: body.platform,
-        chapterWordCount: body.chapterWordCount,
-        targetChapters: body.targetChapters,
-        blurb: body.blurb,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
       },
-      tools,
+    };
+    const tool = createBookFoundationTool(pipeline, {
+      actionPayload,
+      language: body.language === "en" ? "en" : "zh",
+      workerSkills: () => foundationSkills,
+    });
+    const binding = confirmedCapabilityBinding("create_book")!;
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding,
+      tool,
+      parameters: {
+        instruction: body.blurb?.trim() || `Create ${body.title}`,
+        title: body.title,
+        ...(body.genre ? { genre: body.genre } : {}),
+        ...(body.platform ? { platform: normalizeStudioPlatform(body.platform) } : {}),
+        ...(body.language === "en" || body.language === "zh" ? { language: body.language } : {}),
+        ...(body.targetChapters ? { targetChapters: body.targetChapters } : {}),
+        ...(body.chapterWordCount ? { chapterWordCount: body.chapterWordCount } : {}),
+      },
     }).then(
-      async (result: {
-        readonly session: { readonly activeBookId?: string };
-        readonly details?: Readonly<Record<string, unknown>>;
-      }) => {
-        const createdBookId = resolveCreatedBookIdFromDetails(result.details);
+      async (result) => {
+        const details = result.data as Readonly<Record<string, unknown>> | undefined;
+        const createdBookId = resolveCreatedBookIdFromDetails(details);
         if (!createdBookId) {
           const error = "Book creation did not produce a completed book artifact.";
           bookCreateStatus.set(bookId, { status: "error", error });
           broadcast("book:error", { bookId, error });
           return;
         }
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, error });
           return;
         }
-        // 498 号：354 号语义回迁至现役建书完成点（原接线在已删除的 BookCreate
-        // 死页面内，从未生效）——建书成功即写导演灵感卡，失败不阻断。
-        try {
-          await writeDirectorInspirationCard(root, createdBookId, body.blurb ?? body.title);
-        } catch (error) {
-          console.error("[book:create] 导演灵感卡写入失败（不阻断）：", error);
-        }
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
       },
@@ -4001,8 +3013,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     try {
       const files = await readdir(chaptersDir);
-      // 682 号：与 core 索引同源定位——「能列出即可打开」+ 前缀碰撞根除
-      const match = findChapterFileByNumber(files, num);
+      const paddedNum = String(num).padStart(4, "0");
+      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
       if (!match) return c.json({ error: "Chapter not found" }, 404);
       const content = await readFile(join(chaptersDir, match), "utf-8");
       return c.json({ chapterNumber: num, filename: match, content });
@@ -4064,7 +3076,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const bookDir = state.bookDir(id);
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const chapterFile = findChapterFileByNumber(files, num);
+      const paddedNum = String(num).padStart(4, "0");
+      const chapterFile = files.find((file) => file.startsWith(paddedNum) && file.endsWith(".md"));
       if (!chapterFile) {
         return c.json({ error: "Chapter not found" }, 404);
       }
@@ -4077,25 +3090,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       ]);
       const language = book.language === "en" ? "en" : "zh";
       const requestedBrief = typeof body.brief === "string" ? body.brief.trim() : "";
+      const inspirationSkills = await hydrateActivatedSkillGuidance(
+        await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+        [requestedBrief || persistedBrief, plan, chapter].filter(Boolean).join("\n\n"),
+      );
       const response = await runWorkerAgent(
         pipelineConfig.client,
         pipelineConfig.model,
-        [
+        appendActivatedSkillGuidance([
           {
             role: "system",
             content: language === "en"
-              ? [
-                  "You are a fiction editor generating one optional inspiration card for a chapter rewrite.",
-                  "Offer a concrete alternative beat, evidence/action detail, and ending turn that fit the supplied canon.",
-                  "Do not rewrite the chapter, modify canon, or claim any file was changed.",
-                  "Return only a short, readable Markdown card.",
-                ].join("\n")
-              : [
-                  "你是小说编辑，只为本章重写生成一张可选的灵感卡。",
-                  "给出一个符合现有设定的具体替代场面、证据或行动细节，以及章尾转折。",
-                  "不要代写整章，不要改写既成事实，也不要声称已经修改文件。",
-                  "只返回简短、可读的 Markdown 灵感卡。",
-                ].join("\n"),
+              ? "Generate one optional Markdown inspiration card for revising the supplied chapter with the activated Skills. This is read-only advice: do not rewrite the chapter, alter canon, or claim persistence."
+              : "按已激活的 Skills，为所给章节生成一张可选的 Markdown 修订灵感卡。这是只读建议：不要代写整章、改变正典或声称已经落盘。",
           },
           {
             role: "user",
@@ -4109,7 +3116,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               `${language === "en" ? "Current chapter" : "当前章节"}:\n${chapter}`,
             ].filter(Boolean).join("\n\n"),
           },
-        ],
+        ], inspirationSkills),
         { temperature: 0.9, maxTokens: 600, signal: c.req.raw.signal },
       );
       const card = response.content.trim();
@@ -4218,39 +3225,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Truth files ---
 
-  // Flat-file whitelist — the pre-Phase-5 story root files plus dev's legacy
-  // editor targets (author_intent / current_focus / volume_outline).
-  //
-  // Phase 5 cleanup #3 moved the authoritative YAML frontmatter + outline prose
-  // into story/outline/ and character sheets into story/roles/. `story_bible.md`
-  // and `book_rules.md` now exist only as compat pointer shims — we still allow
-  // reading them so legacy books keep rendering, but the server-side writer
-  // (write_truth_file) no longer accepts them as edit targets.
   const TRUTH_FLAT_FILES = [
     "author_intent.md", "current_focus.md",
-    "story_bible.md", "book_rules.md", "volume_outline.md", "current_state.md",
-    "particle_ledger.md", "pending_hooks.md", "chapter_summaries.md",
-    "subplot_board.md", "emotional_arcs.md", "character_matrix.md",
+    "book_rules.md", "current_state.md", "pending_hooks.md", "chapter_summaries.md",
     "style_guide.md", "parent_canon.md", "fanfic_canon.md",
   ];
 
-  // Authoritative Phase 5 paths — prose outline + role sheets live under
-  // dedicated subdirectories of story/. The full path (relative to story/) is
-  // matched literally here. `节奏原则.md` / `rhythm_principles.md` is optional
-  // after Phase 5 consolidation (rhythm lives in volume_map's closing paragraph);
-  // the entries stay whitelisted for legacy books and manual overrides.
   const TRUTH_OUTLINE_FILES = [
     "outline/story_frame.md",
     "outline/volume_map.md",
-    "outline/节奏原则.md",
-    "outline/rhythm_principles.md",
   ];
 
-  // Pointer shims that the runtime no longer treats as authoritative. The
-  // GET handler tags them with `legacy: true` so the UI can surface that the
-  // edits won't land where the user expects.
-  const LEGACY_SHIM_FILES = new Set(["story_bible.md", "book_rules.md"]);
-  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.md|context\.json|rule-stack\.yaml|trace\.json)$/;
+  const RUNTIME_DIAGNOSTIC_FILE_RE = /^runtime\/chapter-\d{4}\.(?:intent\.md|plan\.json|context\.json|trace\.json)$/;
 
   /**
    * Validate a requested truth-file path:
@@ -4307,30 +3293,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "Invalid truth file" }, 400);
     }
 
-    // Phase 5: new-layout books keep the authoritative prose under outline/.
-    // A legacy book may only have story_bible.md / book_rules.md on disk —
-    // we still serve those for read-only display, but flag them so the UI
-    // can warn users their edits won't reach the runtime.
-    // Hotfix: only tag as legacy when the book actually HAS the new layout.
-    // Pre-Phase-5 books use story_bible/book_rules as the authoritative source.
-    const { isNewLayoutBook, tryParseBookRulesFrontmatter } = await import("@actalk/inkos-core");
-    const legacy = LEGACY_SHIM_FILES.has(file) && await isNewLayoutBook(bookDir);
-
     try {
       const content = await readFile(resolved, "utf-8");
-      // Files like outline/story_frame.md carry a YAML frontmatter block of
-      // structured fields (protagonist / genreLock / prohibitions / ...). Parse
-      // it here so the UI can render those as friendly cards instead of dumping
-      // raw YAML at the reader. `content` stays raw so the editor round-trips it
-      // unchanged; `body` is the prose with the frontmatter stripped.
-      const parsed = tryParseBookRulesFrontmatter(content);
-      const structured = parsed ? { frontmatter: parsed.rules, body: parsed.body } : {};
       const runtimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(file);
       return c.json({
         file,
         content,
-        ...structured,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     } catch {
@@ -4338,7 +3306,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({
         file,
         content: null,
-        ...(legacy ? { legacy: true } : {}),
         ...(runtimeDiagnostic ? { readonly: true, readonlyReason: "runtime-diagnostic" } : {}),
       });
     }
@@ -4360,178 +3327,44 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/write-next", async (c) => {
     const id = c.req.param("id");
-    // context（183 号）：规划输入，透传给 writeNextChapter 的 externalContext
-    // ——非空时替换自动 plan（时间线节拍「按此节拍写下一章」的出口）。
-    const body = await c.req.json<{ wordCount?: number; sessionId?: string; context?: string }>().catch(() => ({ wordCount: undefined, sessionId: undefined, context: undefined }));
+    const body = await c.req.json<{ wordCount?: number }>().catch(() => ({ wordCount: undefined }));
 
     broadcast("write:start", { bookId: id });
 
-    // Fire and forget — progress/completion/errors pushed via SSE
-    const pipeline = new PipelineRunner(await buildPipelineConfigWithWritingChainSkills({ bookIdForSettings: id }));
-    // 检查点（174 号 W-C5）：sessionId 给定时任务全程留痕——先占活跃集合再落
-    // Running 快照（对账窗口语义与确认任务一致），终态快照落盘后才释放。
-    const checkpoint = body.sessionId && !deletedSessionIds.has(body.sessionId)
-      ? {
-          sessionId: body.sessionId,
-          executionId: `write-next-${id}`,
-          startedAt: Date.now(),
-        }
-      : null;
-    // 641 号：write-next 可停性对齐 Rust（active_confirmed_tasks 注册 +
-    // check_aborted 安全点）——controller 进 findRunningTaskController 查的
-    // 同张表，signal 经 pipeline.runWithAbortSignal 直通管线
-    // throwIfOperationAborted 与 provider 层（confirmed 路径同通道）。此前
-    // 本任务对 abort 端点是 no-op（aborted:false，2640 注释的假停止问题）。
-    const writeNextController = checkpoint ? new AbortController() : null;
-    if (checkpoint && writeNextController) {
-      activeWriteNextTasks.add(checkpoint.executionId);
-      activeConfirmedTasks.set(checkpoint.executionId, writeNextController);
-      await saveStudioTaskSnapshot(root, {
-        version: 1,
-        sessionId: checkpoint.sessionId,
-        requestedIntent: "write_next",
-        updatedAt: checkpoint.startedAt,
-        execution: {
-          id: checkpoint.executionId,
-          tool: "pipeline",
-          label: `撰写下一章（${id}）`,
-          status: "running",
-          ...(body.wordCount !== undefined ? { args: { wordCount: body.wordCount } } : {}),
-          startedAt: checkpoint.startedAt,
-        },
-      });
-    }
-    const finishCheckpoint = async (status: "completed" | "error", error?: string): Promise<void> => {
-      if (!checkpoint) return;
-      if (!deletedSessionIds.has(checkpoint.sessionId)) {
-        await saveStudioTaskSnapshot(root, {
-          version: 1,
-          sessionId: checkpoint.sessionId,
-          requestedIntent: "write_next",
-          updatedAt: Date.now(),
-          execution: {
-            id: checkpoint.executionId,
-            tool: "pipeline",
-            label: `撰写下一章（${id}）`,
-            status,
-            ...(body.wordCount !== undefined ? { args: { wordCount: body.wordCount } } : {}),
-            startedAt: checkpoint.startedAt,
-            completedAt: Date.now(),
-            ...(error ? { error } : {}),
-          },
-        });
-      }
-      activeWriteNextTasks.delete(checkpoint.executionId);
-      activeConfirmedTasks.delete(checkpoint.executionId);
-    };
-    pipeline
-      .runWithAbortSignal(writeNextController?.signal, () =>
-        pipeline.writeNextChapter(id, body.wordCount, undefined, body.context),
-      )
-      .then(
-        async (result) => {
-          broadcast("write:complete", { bookId: id, chapterNumber: result.chapterNumber, status: result.status, title: result.title, wordCount: result.wordCount });
-          await finishCheckpoint("completed");
-        },
-        async (e) => {
-          // 641 号：用户停止的写作轮与 Rust 同文案中性收尾（write_next_route
-          // 「写作已按您的要求停止。」）——provider 层抛 signal.reason（无参
-          // abort 为 AbortError），经 signal.aborted 判定替换底层文案。
-          const abortedByUser = writeNextController?.signal.aborted ?? false;
-          const message = abortedByUser
-            ? WRITE_STOPPED_MESSAGE
-            : e instanceof Error
-              ? e.message
-              : String(e);
-          broadcast("write:error", { bookId: id, error: message });
-          await finishCheckpoint("error", message);
-        },
-      );
-
-    return c.json({ status: "writing", bookId: id });
-  });
-
-  app.post("/api/v1/books/:id/draft", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
-
-    broadcast("draft:start", { bookId: id });
-
-    const pipeline = new PipelineRunner(await buildPipelineConfigWithWritingChainSkills());
-    pipeline.writeDraft(id, body.context, body.wordCount).then(
+    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+    const [writingSkills, reviewSkills] = await Promise.all([
+      resolveStudioProfileSkills(root, "longform-novel"),
+      resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true }),
+    ]);
+    const tool = createWriteChaptersTool(pipeline, id, {
+      workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
+    });
+    executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: confirmedCapabilityBinding("write_next")!,
+      tool,
+      parameters: {
+        instruction: "Write the next chapter for the active Work.",
+        bookId: id,
+        chapterCount: 1,
+        ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
+      },
+      workId: id,
+    }).then(
       (result) => {
-        broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
+        const data = result.data as { chapters?: ReadonlyArray<{ chapterNumber: number; title: string; wordCount: number; observations?: unknown[] }> } | undefined;
+        const chapter = data?.chapters?.at(-1);
+        broadcast("write:complete", {
+          bookId: id,
+          ...(chapter ? { chapterNumber: chapter.chapterNumber, title: chapter.title, wordCount: chapter.wordCount, observationCount: chapter.observations?.length ?? 0 } : {}),
+        });
       },
       (e) => {
-        broadcast("draft:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+        broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
       },
     );
 
-    return c.json({ status: "drafting", bookId: id });
-  });
-
-  app.get("/api/v1/books/:id/eval", async (c) => {
-    const id = c.req.param("id");
-    const chapters = c.req.query("chapters");
-    try {
-      return c.json(await evaluateBookQuality({ state, bookId: id, chapters }));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/consolidate", async (c) => {
-    const id = c.req.param("id");
-    try {
-      const pipelineConfig = await buildPipelineConfig();
-      const consolidator = new ConsolidatorAgent({
-        client: pipelineConfig.client,
-        model: pipelineConfig.model,
-        projectRoot: root,
-      });
-      const result = await consolidator.consolidate(state.bookDir(id));
-      broadcast("consolidate:complete", { bookId: id, ...result });
-      return c.json(result);
-    } catch (e) {
-      broadcast("consolidate:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/plan", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.planChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/compose", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      return c.json(await pipeline.composeChapter(id, body.context));
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/repair-state/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.repairChapterState(id, chapterNum);
-      broadcast("repair-state:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
-    } catch (e) {
-      broadcast("repair-state:error", { bookId: id, chapter: chapterNum, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
+    return c.json({ status: "writing", bookId: id });
   });
 
   app.post("/api/v1/books/:id/foundation/revise", async (c) => {
@@ -4541,53 +3374,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: "feedback is required" }, 400);
     }
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.reviseFoundation(id, feedback.trim());
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel");
+      await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_foundation", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createFoundationRevisionTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: { instruction: feedback.trim(), bookId: id },
+        workId: id,
+      });
       broadcast("foundation:revised", { bookId: id });
       return c.json({ ok: true });
     } catch (e) {
       broadcast("foundation:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const updated = index.map((ch) =>
-        ch.number === num ? { ...ch, status: "approved" as const } : ch,
-      );
-      await state.saveChapterIndex(id, updated);
-      return c.json({ ok: true, chapterNumber: num, status: "approved" });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
-    const id = c.req.param("id");
-    const num = parseInt(c.req.param("num"), 10);
-
-    try {
-      const index = await state.loadChapterIndex(id);
-      const target = index.find((ch) => ch.number === num);
-      if (!target) {
-        return c.json({ error: `Chapter ${num} not found` }, 404);
-      }
-
-      const rollbackTarget = num - 1;
-      const discarded = await state.rollbackToChapter(id, rollbackTarget);
-      return c.json({
-        ok: true,
-        chapterNumber: num,
-        status: "rejected",
-        rolledBackTo: rollbackTarget,
-        discarded,
-      });
-    } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -4899,11 +3698,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/services/:service/test", async (c) => {
     const service = c.req.param("service");
-    const { apiKey, baseUrl, apiFormat, stream } = await c.req.json<{
+    const { apiKey, baseUrl, apiFormat, stream, preferredModel } = await c.req.json<{
       apiKey: string;
       baseUrl?: string;
-      apiFormat?: "chat" | "responses";
+      apiFormat?: LLMApiFormat;
       stream?: boolean;
+      preferredModel?: string;
     }>();
 
     const language = await currentProjectLanguage();
@@ -4934,6 +3734,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       service,
       apiKey: apiKey?.trim() ?? "",
       baseUrl: resolvedBaseUrl,
+      preferredModel: preferredModel?.trim() || undefined,
       preferredApiFormat: apiFormat,
       preferredStream: stream,
       proxyUrl: typeof llm.proxyUrl === "string" ? llm.proxyUrl : undefined,
@@ -5024,12 +3825,17 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return Boolean(secrets.services[ep.id]?.apiKey) || (optional && configured);
       });
 
+    const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
+    const defaultModel = typeof llm.defaultModel === "string" ? llm.defaultModel.trim() : "";
+    const defaultService = typeof llm.service === "string" ? llm.service.trim() : "";
+
     const groups = endpoints.map((ep) => {
       const staticModels = ep.models
         .filter((m) => m.enabled !== false)
         .filter((m) => isTextChatModelId(m.id));
       const configuredModels = configuredById.get(ep.id)?.models ?? [];
-      const models = mergeServiceModelIds(staticModels.map((model) => model.id), configuredModels)
+      const preferredModel = defaultService === ep.id && defaultModel ? [defaultModel] : [];
+      const models = mergeServiceModelIds(staticModels.map((model) => model.id), configuredModels, preferredModel)
         .map((id) => {
           const known = staticModels.find((model) => model.id.toLowerCase() === id.toLowerCase());
           return {
@@ -5060,6 +3866,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         id: `custom:${s.name ?? "Custom"}`,
         baseUrl: s.baseUrl ?? "",
         label: s.name ?? "Custom",
+        models: s.models ?? [],
+        apiFormat: s.apiFormat,
       }))
       .filter((s) => s.baseUrl && Boolean(secrets.services[s.id]?.apiKey));
 
@@ -5067,7 +3875,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       service: s.id,
       label: s.label,
       models: filterTextChatModels(
-        await probeModelsFromUpstream(s.baseUrl, secrets.services[s.id].apiKey, 10_000),
+        // Explicit model choices belong to this service/protocol. A shared
+        // gateway catalog may advertise models that this protocol cannot call.
+        s.models.length > 0
+          ? mergeServiceModelIds(s.models).map(id => ({ id, name: id }))
+          : await probeModelsFromUpstream(
+              s.apiFormat === "anthropic" && !/\/v1\/?$/.test(s.baseUrl)
+                ? `${s.baseUrl.replace(/\/$/, "")}/v1` : s.baseUrl,
+              secrets.services[s.id].apiKey, 10_000,
+            ),
       ),
     })));
 
@@ -5158,41 +3974,49 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json(result);
   });
 
-  app.get("/api/v1/prompt-packs", async (c) => {
-    const prompts = await Promise.all(
-      listBuiltinPrompts().map((prompt) => toStudioPromptPackPrompt(root, prompt)),
-    );
-    return c.json({
-      packs: listBuiltinPromptPacks(),
-      prompts,
-    });
+  app.get("/api/v1/skills/:skillId/documents", async (c) => {
+    const id = normalizeStudioSkillId(c.req.param("skillId"), "skillId");
+    const available = await loadAvailableAgentSkills({ projectRoot: root });
+    const skill = new Map(available.skills.map(skill => [skill.id, skill])).get(id);
+    if (!skill?.baseDir) throw new ApiError(404, "SKILL_NOT_FOUND", "Skill documents unavailable");
+    const documents: Array<{ path: string; content: string }> = [];
+    const visit = async (directory: string) => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isSymbolicLink()) continue;
+        if (entry.isDirectory()) await visit(path);
+        else if (entry.isFile() && [".md", ".txt"].some(extension => entry.name.endsWith(extension))) {
+          if ((await stat(path)).size > MAX_SKILL_IMPORT_FILE_BYTES) throw new ApiError(413, "SKILL_FILE_TOO_LARGE", "Skill file exceeds editor limit");
+          documents.push({ path: relative(skill.baseDir!, path).replaceAll("\\", "/"), content: await readFile(path, "utf8") });
+        }
+      }
+    };
+    await visit(skill.baseDir);
+    return c.json({ id, documents });
   });
 
-  app.put("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const payload = await c.req.json().catch(() => {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "Prompt pack payload must be JSON");
-    });
-    const content = payload && typeof payload === "object" && "content" in payload
-      ? (payload as { readonly content?: unknown }).content
-      : undefined;
-    if (typeof content !== "string") {
-      throw new ApiError(400, "INVALID_PROMPT_PACK_PAYLOAD", "content must be a string");
+  app.put("/api/v1/skills/:skillId/documents", async (c) => {
+    const id = normalizeStudioSkillId(c.req.param("skillId"), "skillId");
+    const body = await c.req.json<{ documents: Array<{ path: string; content: string }> }>();
+    const { files } = normalizeSkillImportFiles(body.documents.map(document => ({
+      path: document.path, dataUrl: `data:text/plain;base64,${Buffer.from(document.content, "utf8").toString("base64")}`,
+    })));
+    const manifest = files.find(file => file.path === "SKILL.md");
+    if (!manifest) throw new ApiError(400, "INVALID_SKILL_MANIFEST", "SKILL.md must be at the folder root");
+    const parsed = parseAgentSkillDocument(manifest.buffer.toString("utf8"), { skillPath: projectSkillPath(root, id), source: "project" });
+    if (parsed.id !== id) throw new ApiError(400, "SKILL_ID_MISMATCH", "Skill identity cannot change");
+    for (const file of files) {
+      let parent = projectSkillDir(root, id);
+      for (const part of ["", ...file.path.split("/")]) {
+        if (part) parent = join(parent, part);
+        try { if ((await lstat(parent)).isSymbolicLink()) throw new ApiError(400, "INVALID_SKILL_PATH", "Skill editor cannot follow symlinks"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
     }
-
-    const file = promptOverridePath(root, promptId);
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, content, "utf-8");
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
-  });
-
-  app.delete("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = normalizeStudioPromptId(c.req.param("promptId"));
-    const file = promptOverridePath(root, promptId);
-    await rm(file, { force: true });
-    const prompt = listBuiltinPrompts().find((item) => item.id === promptId);
-    return c.json({ prompt: await toStudioPromptPackPrompt(root, prompt!) });
+    await commitAtomicFileSet({ rootDir: root, writes: files.map(file => ({
+      relativePath: relative(root, join(projectSkillDir(root, id), file.path)), content: file.buffer,
+    })) });
+    return c.json({ id, saved: files.map(file => file.path) });
   });
 
   app.post("/api/v1/skills/import", async (c) => {
@@ -5200,8 +4024,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_SKILL_IMPORT", "Skill import payload must be JSON");
     });
     const skill = await importStudioSkillFolder(root, payload);
-    // R44/566 号：skills:change 失效事件——UI 打开中的技能面板热刷新。
-    broadcast("skills:change", { reason: "imported" });
     return c.json({ skill: toStudioSkill(skill, root, new Set([skill.id])) });
   });
 
@@ -5213,8 +4035,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(404, "SKILL_NOT_FOUND", `Project skill not found: ${id}`);
     }
     await rm(projectSkillDir(root, id), { recursive: true, force: true });
-    // R44/566 号：skills:change 失效事件（同 import）。
-    broadcast("skills:change", { reason: "deleted" });
     return c.json({ ok: true });
   });
 
@@ -5260,13 +4080,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_BODY", "content must be a string");
     }
 
-    await mkdir(dirname(file.resolved), { recursive: true });
-    await writeFile(file.resolved, content, "utf-8");
+    const [rootName, workId, ...workPathParts] = file.relPath.split("/");
+    if (rootName !== "works" || !workId || workPathParts.length === 0) {
+      throw new ApiError(400, "INVALID_PROJECT_ARTIFACT_PATH", "Artifact must belong to a Work");
+    }
+    const work = await loadWorkIfExists(root, workId);
+    if (!work) throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${workId}`);
+    const path = workPathParts.join("/");
+    const artifact = work.artifacts.find((candidate) => candidate.revisions.some((revision) => (
+      revision.id === candidate.currentRevisionId && revision.path === path
+    )));
+    if (!artifact) throw new ApiError(409, "ARTIFACT_NOT_REGISTERED", `Current artifact is not registered: ${path}`);
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "workspace", actionId: "replace_work_artifact", profileId: work.profileId, risk: "recoverable-write" },
+      tool: createReplaceWorkArtifactTool(root, workId),
+      workId,
+      parameters: { path, content, expectedRevisionId: (body as { expectedRevisionId?: string }).expectedRevisionId ?? artifact.currentRevisionId ?? undefined },
+    });
     return c.json({
       ok: true,
       path: file.relPath,
       contentType: file.contentType,
       size: Buffer.byteLength(content, "utf-8"),
+      action: result,
     });
   });
 
@@ -5335,21 +4172,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
     }
 
-    // Hotfix: only tag shim files as legacy when the book has the new layout.
-    const { isNewLayoutBook } = await import("@actalk/inkos-core");
-    const newLayout = await isNewLayoutBook(bookDir);
-
-    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } | null> {
+    async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly readonly?: true; readonly readonlyReason?: string } | null> {
       try {
         const content = await readFile(join(storyDir, relPath), "utf-8");
-        const isShim = LEGACY_SHIM_FILES.has(relPath) && newLayout;
         const isRuntimeDiagnostic = RUNTIME_DIAGNOSTIC_FILE_RE.test(relPath);
-        const entry: { readonly name: string; readonly size: number; readonly preview: string; readonly legacy?: true; readonly readonly?: true; readonly readonlyReason?: string } =
-          isShim
-            ? { name: relPath, size: content.length, preview: content.slice(0, 200), legacy: true }
-            : isRuntimeDiagnostic
-              ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true, readonlyReason: "runtime-diagnostic" }
-              : { name: relPath, size: content.length, preview: content.slice(0, 200) };
+        const entry = isRuntimeDiagnostic
+          ? { name: relPath, size: content.length, preview: content.slice(0, 200), readonly: true as const, readonlyReason: "runtime-diagnostic" }
+          : { name: relPath, size: content.length, preview: content.slice(0, 200) };
         return entry;
       } catch {
         return null;
@@ -5357,10 +4186,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     try {
-      // Flat story/ files (legacy + runtime logs)
-      const flatFiles = (await listDir(".")).filter((f) => !f.startsWith("outline") && !f.startsWith("roles"));
-      // Phase 5 outline/ files
-      const outlineFiles = (await listDir("outline")).map((f) => `outline/${f}`);
+      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file));
+      const outlineFiles = (await listDir("outline"))
+        .map((file) => `outline/${file}`)
+        .filter((file) => TRUTH_OUTLINE_FILES.includes(file));
       // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
       // English-locale equivalents so en-language books are visible.
       const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`);
@@ -5413,11 +4242,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         retryDelayMs: currentConfig.daemon.retryDelayMs,
         cooldownAfterChapterMs: currentConfig.daemon.cooldownAfterChapterMs,
         maxChaptersPerDay: currentConfig.daemon.maxChaptersPerDay,
-        // 540 号：daemon.qualityGates 接线——schema 既有面此前未传（Scheduler
-        // 落硬编码默认）；Rust daemon 同位读取，双引擎门控配置面一致。
-        qualityGates: currentConfig.daemon.qualityGates,
-        onChapterComplete: (bookId, chapter, status) => {
-          broadcast("daemon:chapter", { bookId, chapter, status });
+        onChapterComplete: (bookId, chapter) => {
+          broadcast("daemon:chapter", { bookId, chapter });
         },
         onError: (bookId, error) => {
           broadcast("daemon:error", { bookId, error: error.message });
@@ -5468,30 +4294,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // --- Agent chat ---
 
-  app.get("/api/v1/interaction/session", async (c) => {
-    const session = await loadProjectSession(root);
-    const activeBookId = await resolveSessionActiveBook(root, session);
-    return c.json({
-      session: activeBookId && session.activeBookId !== activeBookId
-        ? { ...session, activeBookId }
-        : session,
-      activeBookId,
-    });
-  });
-
-  // Play worlds are created and advanced by the play_start / play_step agent
-  // tools (worldId === sessionId). The HUD only needs to read a run's state,
-  // so just the run-detail endpoint remains; the old save-slot list/create
-  // endpoints were only used by the removed standalone play page.
+  // A world is a Work shared by any number of conversations. Reads never
+  // create a new run from a chat session ID.
   app.get("/api/v1/play/runs/:worldId/:runId", async (c) => {
     const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
     const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
     const store = new PlayStore(root);
+    const world = await store.loadWorld(worldId);
+    if (!world) return c.json({ error: { code: "PLAY_WORLD_NOT_FOUND" } }, 404);
+    try { await access(join(store.runDir(worldId, runId), "play.db")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return c.json({ error: { code: "PLAY_RUN_NOT_FOUND" } }, 404);
+      throw error;
+    }
     const db = createPlayDB(store.runDir(worldId, runId));
-    const [transcript, currentState, world] = await Promise.all([
+    const [transcript, currentState] = await Promise.all([
       store.readTranscript(worldId, runId),
       store.loadCurrentState(worldId, runId).catch(() => null),
-      store.loadWorld(worldId).catch(() => null),
     ]);
     const graph = db.snapshot();
     db.close?.();
@@ -5519,19 +4338,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     // Illustration of the current moment, if one was generated for this turn.
     const sceneTurn = (currentState as { turn?: number } | null)?.turn ?? 0;
-    const sceneEntry = manifest[`scene-turn-${sceneTurn}`];
+    const currentPresentation = await store.readPresentation(worldId, runId);
+    const sceneText = currentPresentation?.sceneText ?? await store.readProjection(worldId, runId, "projections/scene.md").catch(() => "");
+    const sceneEntry = manifest[playSceneImageKey(sceneTurn, sceneText, playImageContext(world ?? undefined,graph,currentState))];
     const sceneImageUrl = sceneEntry?.status === "ready" ? imageUrlFor(sceneEntry.file) : undefined;
+    // The current turn may have been replayed. Its old turn-only image cannot
+    // identify which prose variant it illustrates.
+    delete sceneImageUrls[`scene-turn-${sceneTurn}`];
 
     return c.json({
       worldId,
       runId,
       title: world?.title ?? null,
+      mode: world?.mode ?? null,
       transcript,
       currentState,
       graph: { ...graph, entities: entitiesWithImages },
       imageSettings,
       sceneImageUrls,
       ...(sceneImageUrl ? { sceneImageUrl } : {}),
+      currentSceneImage: { turn: sceneTurn, sceneText, url: sceneImageUrl ?? null },
+      currentPresentation,
+      ...(sceneEntry?.error ? { sceneImageError: sceneEntry.error } : {}),
     });
   });
 
@@ -5557,60 +4385,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     type GenerateImageBody = {
       target: "entity" | "scene";
       entityId?: string;
-      sceneText?: string;
-      sceneKey?: string;
     };
     const body = await c.req.json<GenerateImageBody>().catch(() => ({ target: "entity" } as GenerateImageBody));
 
-    const store = new PlayStore(root);
-    const runDir = store.runDir(worldId, runId);
-    const [world, currentState] = await Promise.all([
-      store.loadWorld(worldId).catch(() => null),
-      store.loadCurrentState(worldId, runId).catch(() => null),
-    ]);
-    const worldContext = world
-      ? {
-        premise: world.premise,
-        worldContract: world.worldContract,
-        visualContract: world.visualContract,
-      }
-      : undefined;
-
-    let key: string;
-    let prompt: string;
-    if (body.target === "scene") {
-      // The current moment defaults to the rendered scene projection so the UI
-      // can offer a one-tap "illustrate this moment" without re-sending prose.
-      const sceneText = (
-        (body.sceneText ?? "").trim()
-        || (await store.readProjection(worldId, runId, "projections/scene.md").catch(() => "")).trim()
-      );
-      if (!sceneText) return c.json({ error: "no current scene to illustrate" }, 400);
-      key = body.sceneKey?.trim() || `scene-turn-${(currentState as { turn?: number } | null)?.turn ?? 0}`;
-      prompt = buildPlaySceneImagePrompt(sceneText, worldContext);
-    } else {
-      const entityId = body.entityId?.trim();
-      if (!entityId) return c.json({ error: "entityId is required for an entity image" }, 400);
-      const db = createPlayDB(runDir);
-      const graph = db.snapshot();
-      db.close?.();
-      const entity = (graph.entities ?? []).find((e: { id: string }) => e.id === entityId) as
-        | { id: string; type: string; label: string; summary?: string }
-        | undefined;
-      if (!entity) return c.json({ error: `entity not found: ${entityId}` }, 404);
-      key = entity.id;
-      prompt = buildPlayEntityImagePrompt(entity, worldContext);
-    }
-
     try {
-      const entry = await generatePlayImage({ root, runDir, key, prompt });
-      const url = entry.status === "ready" && entry.file
-        ? `/api/v1/play/runs/${encodeURIComponent(worldId)}/${encodeURIComponent(runId)}/images/${encodeURIComponent(entry.file)}`
-        : undefined;
-      return c.json({ key, ok: entry.status === "ready", ...entry, ...(url ? { url } : {}) });
+      const result = await executeExplicitCapabilityTool({projectRoot:root,workId:worldId,conversationId:worldId,
+        binding:{capabilityId:"interactive-world",actionId:"generate_play_image",profileId:"interactive-world",risk:"recoverable-write"},
+        tool:createPlayImageTool(root,worldId,runId),parameters:body,signal:c.req.raw.signal});
+      return c.json(result.data ?? {});
     } catch (e) {
-      // Resolution failure = cover API not configured.
-      return c.json({ error: e instanceof Error ? e.message : String(e), needsCoverConfig: true }, 400);
+      return c.json({ error: e instanceof Error ? e.message : String(e), code:(e as {code?:string})?.code ?? "PLAY_IMAGE_FAILED" }, 400);
     }
   });
 
@@ -5646,26 +4430,60 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const session = await loadBookSession(root, sessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
     const task = await loadReconciledTaskSnapshot(sessionId);
-    return c.json({ session, ...(task ? { task } : {}) });
+    return c.json({ session, chatRequest: await loadChatRequest(sessionId), ...(task ? { task } : {}) });
   });
 
   app.post("/api/v1/sessions", async (c) => {
-    const body = await c.req.json<{ bookId?: string | null; sessionId?: string; sessionKind?: string; playMode?: string }>().catch(() => ({}));
+    type CreateSessionBody = {
+      bookId?: string | null;
+      workId?: string | null;
+      profileId?: string;
+      proposalAction?: string;
+      sessionId?: string;
+      sessionKind?: string;
+      playMode?: string;
+      modelOverride?: string;
+      serviceOverride?: string;
+    };
+    const body = await c.req.json<CreateSessionBody>().catch(() => ({} as CreateSessionBody));
     const bookId = normalizeApiBookId((body as { bookId?: unknown }).bookId, "bookId");
     const sessionKind = normalizeStudioSessionKind(
       (body as { sessionKind?: unknown }).sessionKind,
       bookId ? "book" : "chat",
     );
     const playMode = normalizeStudioPlayMode((body as { playMode?: unknown }).playMode);
+    const proposalAction = normalizeStudioProposalAction((body as { proposalAction?: unknown }).proposalAction);
+    const modelOverride = typeof body.modelOverride === "string" && body.modelOverride.trim()
+      ? body.modelOverride.trim()
+      : undefined;
+    const serviceOverride = typeof body.serviceOverride === "string" && body.serviceOverride.trim()
+      ? body.serviceOverride.trim()
+      : undefined;
     const sessionId = (body as { sessionId?: string }).sessionId;
     // sessionId 只允许 timestamp-random 格式；防止注入任意文件名
     const safeSessionId = sessionId && /^[0-9]+-[a-z0-9]+$/.test(sessionId) ? sessionId : undefined;
+    const resolvedSessionId = safeSessionId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const surfaceBinding = resolveSessionHarnessBinding({ sessionKind, bookId, sessionId: resolvedSessionId });
+    const requestedWorkId = (body as { workId?: unknown }).workId;
+    const workId = requestedWorkId === null
+      ? null
+      : typeof requestedWorkId === "string" && requestedWorkId.trim()
+        ? normalizeApiBookId(requestedWorkId, "workId")
+        : surfaceBinding.workId;
+    const boundWork = workId ? await loadWorkIfExists(root, workId) : null;
+    if (typeof requestedWorkId === "string" && requestedWorkId.trim() && !boundWork) {
+      return c.json({ error: `Work not found: ${requestedWorkId.trim()}` }, 404);
+    }
+    const requestedProfileId = (body as { profileId?: unknown }).profileId;
+    const profileId = boundWork?.profileId
+      ?? (typeof requestedProfileId === "string" && requestedProfileId.trim() ? requestedProfileId.trim() : surfaceBinding.profileId);
+    createBuiltInWorkProfileRegistry(root).require(profileId);
     const session = await createAndPersistBookSession(
       root,
       bookId,
-      safeSessionId,
+      resolvedSessionId,
       sessionKind,
-      ...(playMode ? [{ playMode }] as const : []),
+      { ...(playMode ? { playMode } : {}), profileId, workId, ...(proposalAction ? { proposalAction } : {}), ...(modelOverride ? { modelOverride } : {}), ...(serviceOverride ? { serviceOverride } : {}) },
     );
     // 客户端可以用同一个 sessionId 重新创建会话：移除删除标记，
     // 让新会话的生产任务可以正常持久化快照。
@@ -5686,7 +4504,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       existing.bookId,
       existing.sessionId,
       existing.sessionKind,
-      { playMode },
+      { playMode, ...(existing.profileId ? { profileId: existing.profileId } : {}), ...(existing.workId !== undefined ? { workId: existing.workId } : {}) },
     );
     return c.json({ session });
   });
@@ -5711,11 +4529,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     // 先标记删除，再中止任务：任务被中止后的错误持久化会检查这个标记，
     // 不会把已删除会话的快照文件重建出来。
     deletedSessionIds.add(sessionId);
+    chatRequests.get(sessionId)?.controller.abort();
+    abortAgentSession(root, sessionId);
+    chatRequests.delete(sessionId);
     const controller = await findRunningTaskController(sessionId);
     controller?.abort();
     await Promise.all([
       deleteBookSession(root, sessionId),
       deleteStudioTaskSnapshot(root, sessionId),
+      chatRequestStore.delete(sessionId),
     ]);
     return c.json({ ok: true });
   });
@@ -5726,56 +4548,75 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const controller = chatOnly ? undefined : await findRunningTaskController(sessionId);
     controller?.abort();
     const taskAborted = Boolean(controller);
-    const aborted = abortAgentSession(root, sessionId) || taskAborted;
-    // 640 号受理边界：会话忙（队列在飞或排队）即置 pending-abort 标记——
-    // 在飞轮由上面常规链中止；已入队未受理轮（agentCache 无条目，abort
-    // 对其 no-op）由受理点按入队序裁决受理即中止。空闲时置位无害：标记
-    // 在下一次受理时因入队序更新而未命中并自清除。
-    if (isAgentSessionBusy(root, sessionId)) markPendingSessionAbort(root, sessionId);
+    const chat = chatRequests.get(sessionId);
+    const chatRunning = chat?.snapshot.status === "running";
+    if (chatRunning) chat.controller.abort();
+    const aborted = abortAgentSession(root, sessionId) || taskAborted || chatRunning;
     broadcast("agent:aborted", { sessionId, aborted, scope: chatOnly ? "chat" : "all" });
     return c.json({ ok: true, aborted });
   });
 
-  // R36 会话树化（636 号）：分支 = 追加 branch_moved 事件 + head 指针移动。
-  // toSeq 缺省/null = resetLeaf（head 置空，后续写入开新链根）。
-  app.post("/api/v1/sessions/:sessionId/branch", async (c) => {
-    const sessionId = c.req.param("sessionId");
-    const body = await c.req.json<{ toSeq?: unknown }>().catch(() => ({}) as { toSeq?: unknown });
-    const rawToSeq = (body as { toSeq?: unknown }).toSeq;
-    let toSeq: number | null;
-    if (rawToSeq === undefined || rawToSeq === null) {
-      toSeq = null;
-    } else if (typeof rawToSeq === "number" && Number.isInteger(rawToSeq) && rawToSeq >= 0) {
-      toSeq = rawToSeq;
-    } else {
-      throw new ApiError(400, "INVALID_BRANCH_TARGET", "toSeq must be a non-negative integer or null");
-    }
-    // 忙判定：轮进行中拒绝分支——保证单个请求的事件整体落在同一条链上
-    //（聊天轮与生产任务走同一互斥队列/控制器注册表）。
-    const taskController = await findRunningTaskController(sessionId);
-    if (taskController || isAgentSessionBusy(root, sessionId)) {
-      throw new ApiError(409, "SESSION_BUSY", "Session has an in-flight request; abort it before branching");
-    }
-    let result: Awaited<ReturnType<typeof branchBookSession>>;
-    try {
-      result = await branchBookSession(root, sessionId, toSeq);
-    } catch (error) {
-      if (error instanceof BranchTargetNotFoundError) {
-        throw new ApiError(400, "INVALID_BRANCH_TARGET", error.message);
+  app.use("/api/v1/agent", async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    const body = await c.req.json().catch(() => ({}));
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+    const confirmed = isConfirmedProductionAction(
+      normalizeStudioActionSource(body.actionSource),
+      normalizeStudioRequestedIntent(body.requestedIntent),
+    );
+    if (!sessionId || confirmed) return next();
+    const previous = chatRequests.get(sessionId);
+    if (previous?.snapshot.status === "running") return c.json({
+      error: { code: "CHAT_REQUEST_ALREADY_RUNNING", message: "当前会话仍在运行，请等待完成或先停止。" },
+      chatRequest: previous.snapshot,
+    }, 409);
+    const request: NonNullable<ReturnType<typeof chatRequests.get>> = {
+      snapshot: {
+        sessionId,
+        requestId: typeof body.clientRequestId === "string" && body.clientRequestId.trim()
+          ? body.clientRequestId.trim().slice(0, 128) : randomUUID(),
+        startedAt: Date.now(),
+        status: "running" as "running" | "completed" | "failed" | "cancelled",
+      },
+      controller: new AbortController(),
+    };
+    chatRequests.set(sessionId, request);
+    if (body.retryOfRequestId !== undefined) {
+      try {
+        const saved = previous?.snapshot ?? await chatRequestStore.load(sessionId);
+        const interrupted = !previous && saved?.status === 'running';
+        if (!saved || typeof body.retryOfRequestId !== 'string' || saved.requestId !== body.retryOfRequestId
+          || (saved.status !== 'failed' && !interrupted) || saved.retry?.text !== body.instruction) {
+          throw new ApiError(409, 'CHAT_RETRY_CONFLICT', 'The failed submission no longer matches this retry. Reload the saved request.');
+        }
+        if (saved.baselineWork === undefined) throw new ApiError(409, 'CHAT_RETRY_BASELINE_UNAVAILABLE', 'The original revision inventory is unavailable for this older request. Send a new instruction against the current version.');
+        request.snapshot = { ...request.snapshot, baselineWork: saved.baselineWork };
+      } catch (error) {
+        if (previous) chatRequests.set(sessionId, previous); else chatRequests.delete(sessionId);
+        throw error;
       }
-      throw error;
     }
-    if (!result) return c.json({ error: "Session not found" }, 404);
-    return c.json({ ok: true, head: result.head, branchCount: result.branchCount });
-  });
-
-  // R36 分支点读面（638 号）：可回退分支点清单（request_committed 全集 +
-  // preview + 是否在当前链上），供 studio 分支切换器渲染。
-  app.get("/api/v1/sessions/:sessionId/branches", async (c) => {
-    const sessionId = c.req.param("sessionId");
-    const result = await deriveSessionBranchPoints(root, sessionId);
-    if (!result) return c.json({ error: "Session not found" }, 404);
-    return c.json(result);
+    try {
+      await chatRequestStore.save(request.snapshot);
+      await next();
+    } finally {
+      const response = await c.res.clone().json().catch(() => null) as { error?: string | { code?: string; message?: string }; completionStatus?: StudioCompletionStatus } | null;
+      const failure = response?.error;
+      const error = failure ? {
+        code: typeof failure === "object" ? failure.code ?? "CHAT_REQUEST_FAILED" : "CHAT_REQUEST_FAILED",
+        message: typeof failure === "string" ? failure : failure.message ?? "The request failed.",
+      } : c.res.status >= 400 ? { code: "CHAT_REQUEST_FAILED", message: `Request failed (HTTP ${c.res.status}).` } : undefined;
+      const { toolExecutions: _completedTools, ...identity } = request.snapshot;
+      request.snapshot = { ...identity,
+        status: request.controller.signal.aborted ? "cancelled" : error ? "failed" : "completed",
+        completedAt: Date.now(),
+        error,
+        completionStatus: response?.completionStatus,
+      };
+      if (request.snapshot.status !== "failed") request.snapshot = { ...request.snapshot, retry: undefined };
+      if (!deletedSessionIds.has(sessionId)) await chatRequestStore.save(request.snapshot);
+      broadcast("request:snapshot", request.snapshot);
+    }
   });
 
   app.post("/api/v1/agent", async (c) => {
@@ -5785,6 +4626,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId: reqSessionId,
       clientRequestId: reqClientRequestId,
       sessionKind: reqSessionKind,
+      profileId: reqProfileId,
+      workId: reqWorkId,
       actionSource: reqActionSource,
       requestedIntent: reqRequestedIntent,
       actionPayload: reqActionPayload,
@@ -5800,6 +4643,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       sessionId?: string;
       clientRequestId?: unknown;
       sessionKind?: string;
+      profileId?: string;
+      workId?: string | null;
       actionSource?: string;
       requestedIntent?: string;
       actionPayload?: unknown;
@@ -5835,6 +4680,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const playMode = normalizeStudioPlayMode(reqPlayMode);
 
     broadcast("agent:start", { instruction, activeBookId, sessionId, actionSource, requestedIntent, requestedSkills, attachments: attachments.length });
+    const collectedToolExecs: CollectedToolExec[] = [];
+    const chatRequest = requestedIntent && isConfirmedProductionAction(actionSource, requestedIntent)
+      ? undefined : chatRequests.get(sessionId);
+    if (chatRequest?.snapshot.status === "running") {
+      chatRequest.snapshot = { ...chatRequest.snapshot, toolExecutions: collectedToolExecs };
+    }
 
     try {
       // Load config + create LLM client (pipeline created after model resolution)
@@ -5846,6 +4697,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         throw new ApiError(404, "SESSION_NOT_FOUND", `Session not found: ${sessionId}`);
       }
       let bookSession = loadedBookSession;
+      const publishExecutionTarget = (session: typeof bookSession) => {
+        const previousWorkId = bookSession.workId ?? bookSession.bookId;
+        bookSession = session;
+        broadcast("session:target", { ...workSessionResponseMetadata(session), previousWorkId });
+      };
       const requestedActiveBookId = normalizeApiBookId(activeBookId, "activeBookId");
       const persistedBookId = normalizeApiBookId(bookSession.bookId, "session.bookId");
       if (
@@ -5853,33 +4709,96 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         && persistedBookId
         && persistedBookId !== requestedActiveBookId
       ) {
-        throw new ApiError(
-          409,
-          "SESSION_BOOK_MISMATCH",
-          `Session ${bookSession.sessionId} is bound to ${persistedBookId}, not ${requestedActiveBookId}`,
-        );
+        return c.json({ error: { code: "SESSION_BOOK_MISMATCH", message: `Session ${bookSession.sessionId} is bound to ${persistedBookId}, not ${requestedActiveBookId}` },
+          session: workSessionResponseMetadata(bookSession) }, 409);
       }
       const agentBookId = requestedActiveBookId ?? persistedBookId;
       const sessionKind = normalizeStudioSessionKind(
         reqSessionKind,
         bookSession.sessionKind ?? (agentBookId ? "book" : "chat"),
       );
-      if (bookSession.sessionKind !== sessionKind || (playMode && bookSession.playMode !== playMode)) {
+      const surfaceBinding = resolveSessionHarnessBinding({
+        sessionKind,
+        bookId: agentBookId,
+        sessionId: bookSession.sessionId,
+      });
+      const requestedWorkId = reqWorkId === null
+        ? null
+        : typeof reqWorkId === "string" && reqWorkId.trim()
+          ? normalizeApiBookId(reqWorkId, "workId")
+          : undefined;
+      const persistedWorkId = bookSession.workId ?? bookSession.bookId;
+      if (persistedWorkId && ((requestedWorkId !== undefined && requestedWorkId !== persistedWorkId)
+        || (requestedActiveBookId && requestedActiveBookId !== persistedWorkId))) {
+        return c.json({ error: { code: "SESSION_TARGET_CONFLICT", message: "This session has a different saved execution target." },
+          session: workSessionResponseMetadata(bookSession) }, 409);
+      }
+      const candidateWorkId = reqWorkId === null
+        ? null
+        : requestedWorkId ?? bookSession.workId ?? surfaceBinding.workId;
+      const boundWork = candidateWorkId
+        ? await loadWorkIfExists(root, candidateWorkId)
+        : null;
+      if (candidateWorkId && !boundWork && sessionKind !== "play") {
+        throw new ApiError(404, "WORK_NOT_FOUND", `Work not found: ${candidateWorkId}`);
+      }
+      const requestedProfileId = typeof reqProfileId === "string" && reqProfileId.trim()
+        ? reqProfileId.trim()
+        : undefined;
+      if (boundWork && requestedProfileId && boundWork.profileId !== requestedProfileId) {
+        return c.json({ error: { code: "WORK_PROFILE_MISMATCH", message: `Work ${boundWork.id} uses ${boundWork.profileId}, not ${requestedProfileId}` },
+          session: workSessionResponseMetadata(bookSession) }, 409);
+      }
+      const profileId = boundWork?.profileId ?? requestedProfileId ?? bookSession.profileId ?? surfaceBinding.profileId;
+      const workId = boundWork?.id ?? candidateWorkId;
+      if (chatRequest) {
+        // Keep the actual submission, including attachments and selected Skills;
+        // reconstructing it from displayed prose loses these execution inputs.
+        const retryAttachments: ChatAttachmentPayload[] = attachments.map((attachment, index) => ({
+          id: attachment.id, filename: attachment.filename, mediaType: attachment.mimeType,
+          size: attachment.size, dataUrl: (reqAttachments as Array<{ dataUrl: string }>)[index]!.dataUrl,
+        }));
+        chatRequest.snapshot = { ...chatRequest.snapshot,
+          baselineWork: chatRequest.snapshot.baselineWork === undefined ? boundWork : chatRequest.snapshot.baselineWork,
+          retry: { text: instruction, options: {
+          retryOfRequestId: chatRequest.snapshot.requestId,
+          activeBookId: agentBookId ?? undefined, sessionKind, profileId, workId,
+          actionSource, requestedIntent, actionPayload, requestedSkills, disabledSkills,
+          attachments: retryAttachments, playMode,
+        } } };
+        await chatRequestStore.save(chatRequest.snapshot);
+      }
+      const modelOverride = typeof reqModel === "string" && reqModel.trim()
+        ? reqModel.trim()
+        : bookSession.modelOverride;
+      const serviceOverride = typeof reqService === "string" && reqService.trim() ? reqService.trim() : bookSession.serviceOverride;
+      createBuiltInWorkProfileRegistry(root).require(profileId);
+      if (
+        bookSession.sessionKind !== sessionKind
+        || (playMode && bookSession.playMode !== playMode)
+        || bookSession.profileId !== profileId
+        || bookSession.workId !== workId
+        || bookSession.modelOverride !== modelOverride
+        || bookSession.serviceOverride !== serviceOverride
+      ) {
         const updatedSession = await createAndPersistBookSession(
           root,
           bookSession.bookId,
           bookSession.sessionId,
           sessionKind,
-          ...(playMode ? [{ playMode }] as const : []),
+          { ...(playMode ? { playMode } : {}), profileId, workId, ...(modelOverride ? { modelOverride } : {}), ...(serviceOverride ? { serviceOverride } : {}) },
         );
         bookSession = updatedSession;
       }
       let activeBookConfig: { readonly language?: string } | null = null;
-      if (agentBookId && sessionKind !== "interactive-film-authoring") {
+      if (boundWork && boundWork.profileId !== "longform-novel") {
+        activeBookConfig = { language: boundWork.language };
+      } else if (agentBookId && sessionKind !== "interactive-film-authoring") {
         try {
           activeBookConfig = await state.loadBookConfig(agentBookId);
         } catch {
-          throw new ApiError(404, "BOOK_NOT_FOUND", `Book not found: ${agentBookId}`);
+          if (boundWork) activeBookConfig = { language: boundWork.language };
+          else throw new ApiError(404, "BOOK_NOT_FOUND", `Book not found: ${agentBookId}`);
         }
       }
       const configLanguage = config.language === "en" ? "en" : "zh";
@@ -5887,7 +4806,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const requestedLanguage = actionPayload?.shortRun?.language ?? actionPayload?.createBook?.language;
       const surfaceLanguage = agentBookId
         ? (bookLanguage ?? configLanguage)
-        : (requestedLanguage ?? inferLanguage(instruction));
+        : (requestedLanguage ?? configLanguage);
       const streamSessionId = loadedBookSession.sessionId;
       const titleBeforeRun = bookSession.title;
       let sessionTitleBroadcasted = false;
@@ -5907,9 +4826,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // Resolve model — multi-service resolution
       let resolvedModel: ResolvedModel["model"] | undefined;
       let resolvedApiKey: string | undefined;
-      // 621 号：记录实际解析出模型的服务——stream 偏好从同一服务读取（对齐
-      // Rust AgentModelOverride.stream 的层内同源解析）。
-      let resolvedServiceId: string | undefined;
 
       if (reqService && reqModel) {
         // 1. Frontend explicitly selected a service+model — fail loudly if no key
@@ -5924,10 +4840,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
-          resolvedServiceId = reqService;
-        } catch (e: any) {
-          const msg = e?.message ?? String(e);
-          if (/API key/i.test(msg)) {
+        } catch (e: unknown) {
+          if (e instanceof ServiceApiKeyNotFoundError) {
             return c.json({
               error: pick(language, `请先为 ${reqService} 配置 API Key`, `Configure an API Key for ${reqService} first`),
               response: pick(
@@ -5958,7 +4872,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             );
             resolvedModel = resolved.model;
             resolvedApiKey = resolved.apiKey;
-            resolvedServiceId = serviceConfigKey(firstService);
           } catch { /* fall through */ }
         }
       }
@@ -5982,7 +4895,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 );
                 resolvedModel = resolved.model;
                 resolvedApiKey = resolved.apiKey;
-                resolvedServiceId = svcName;
                 break;
               }
             } catch { /* try next */ }
@@ -5991,7 +4903,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
 
       if (!resolvedModel) {
-        // 4. Legacy fallback: use createLLMClient
+        // 4. Use the already resolved effective project client.
         resolvedModel = client._piModel
           ? client._piModel
           : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model } as any;
@@ -6001,16 +4913,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const model = resolvedModel!;
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
-      // 607 号：服务「流式响应」开关（stream:false，108 号）在聊天兜底路径生效。
-      // 621 号：偏好跟随实际解析出模型的服务（resolvedServiceId）——607 号的
-      // 平行链（reqService ?? 首个有 key 服务）在层 2 命中或层 3 跳过无模型
-      // 服务时会读错服务的偏好；现与 Rust AgentModelOverride.stream 的层内
-      // 同源解析同构，606 号层 3 stream 双端分歧备案就此清偿。
-      const streamPreference = resolvedServiceId
-        ? (await resolveConfiguredServiceEntry(root, resolvedServiceId))?.stream
-        : undefined;
 
-      // Create pipeline with resolved model (so sub_agent tools use the frontend-selected model)
+      // Create pipeline with the frontend-selected model for capability workers.
       // Don't spread config.llm — its baseUrl/provider belong to the old service.
       // Let createLLMClient resolve baseUrl from the service preset.
       const pipelineClient = (reqService && reqModel && resolvedModel)
@@ -6097,13 +5001,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           // 刷新页面时，用户气泡能从 transcript 恢复；并行聊天随后写入的消息
           // 也会按真实时间排在指令之后。完成/失败路径只追加助手工具消息
           //（instruction 传空字符串），指令不会写第二遍。
+          const originalInstruction = confirmedRequestInstruction(
+            await readTranscriptEvents(root, bookSession.sessionId), confirmedIntent, instruction,
+          );
           await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [{
             role: "user",
             content: instruction,
             timestamp: Date.now(),
           }], instruction, { sessionKind });
 
-          const exec = await executeConfirmedProductionAction({
+          const confirmedOutcome = await executeConfirmedProductionAction({
             pipeline,
             root,
             sessionId: bookSession.sessionId,
@@ -6126,32 +5033,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
             ),
             ...(playMode ? { playMode } : {}),
           });
+          const exec = confirmedOutcome.execution;
 
           let createdBookId: string | null = null;
           if (exec.status === "completed") {
             createdBookId = resolveCreatedBookIdFromToolExecs([exec]);
             if (createdBookId) {
-              if (!await completeBookExists(join(root, "books", createdBookId))) {
+              if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
                 const message = pick(surfaceLanguage, "创作工具返回了建书结果，但磁盘上的书籍工件不完整。", "The creation tool returned a book result, but the on-disk book artifact is incomplete.");
                 bookCreateStatus.set(createdBookId, { status: "error", error: message });
                 broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error: message });
                 throw new ApiError(500, "BOOK_CREATION_INCOMPLETE", message);
               }
-              try {
-                const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-                if (migratedSession) {
-                  bookSession = migratedSession;
-                }
-              } catch (e) {
-                if (!(e instanceof SessionAlreadyMigratedError)) {
-                  throw e;
-                }
-              }
-              const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
-              // 508 号：灵感卡服务端写入（354 语义）——agent 确认建书完成点。
-              try {
-                await writeDirectorInspirationCard(root, createdBookId, book?.title ?? createdBookId);
-              } catch { /* 不阻断建书 */ }
+              publishExecutionTarget(await transitionSessionToWork(root, bookSession.sessionId, bookSession.workId ?? bookSession.bookId, createdBookId));
+              const book = await loadStudioBookListSummary(state, createdBookId);
               bookCreateStatus.delete(createdBookId);
               broadcast("book:created", {
                 bookId: createdBookId,
@@ -6159,33 +5054,139 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 ...(book ? { book } : {}),
               });
             }
+
+            if (!createdBookId) {
+              const createdWorkId = resolveCreatedWorkIdFromToolExec(exec);
+              if (createdWorkId) publishExecutionTarget(await transitionSessionToWork(root, bookSession.sessionId, bookSession.workId ?? bookSession.bookId, createdWorkId));
+            }
           }
 
-          const responseText = exec.result ?? pick(surfaceLanguage, "已完成。", "Done.");
-          const responseForUser = suppressManualTextForTool(exec) ? "" : responseText;
-          // 指令已在任务开始时写入 transcript，这里只补助手工具消息。
-          await appendSessionMessagesUnlessDeleted(root, bookSession.sessionId, [
-            manualToolAssistantMessage(
-              responseText,
-              exec,
-              configuredEntry?.service ?? reqService ?? config.llm.provider,
-              reqModel ?? config.llm.model,
-            ),
-          ], "", manualToolAppendOptions(sessionKind, exec));
+          const continuedToolExecs: CollectedToolExec[] = [];
+          taskController.signal.throwIfAborted();
+          exec.status = "running";
+          exec.completedAt = undefined;
+          exec.logs = [...(exec.logs ?? []), pick(surfaceLanguage, "继续完成确认请求中的剩余动作…", "Continuing the remaining confirmed request...")].slice(-80);
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const continuation = await runAgentSession({
+            onWorkTransition: publishExecutionTarget,
+            signal: taskController.signal,
+            model,
+            apiKey: agentApiKey,
+            stream: pipelineClient.stream,
+            proxyUrl: pipelineClient.proxyUrl,
+            pipeline,
+            projectRoot: root,
+            bookId: bookSession.bookId,
+            sessionKind: bookSession.sessionKind,
+            profileId: bookSession.profileId ?? confirmedOutcome.binding.profileId,
+            workId: bookSession.workId,
+            playMode: bookSession.playMode,
+            actionSource: "free-text",
+            requestedSkills,
+            disabledSkills,
+            attachments: [],
+            sessionId: bookSession.sessionId,
+            language: surfaceLanguage,
+            resumeAction: {
+              toolCallId: exec.id,
+              capabilityId: confirmedOutcome.binding.capabilityId,
+              actionId: confirmedOutcome.binding.actionId,
+              parameters: exec.args ?? {},
+              result: confirmedOutcome.actionResult,
+            },
+            onContextCompression: (event) => {
+              broadcast("context:compression", { sessionId: streamSessionId, ...event });
+            },
+            onEvent: (event) => {
+              if (event.type === "message_update") {
+                const update = event.assistantMessageEvent;
+                if (update.type === "text_delta") {
+                  broadcast("draft:delta", { sessionId: streamSessionId, text: update.delta });
+                } else if (update.type === "thinking_delta") {
+                  broadcast("thinking:delta", { sessionId: streamSessionId, text: (update as { delta?: string }).delta ?? "" });
+                } else if (update.type === "thinking_start") {
+                  broadcast("thinking:start", { sessionId: streamSessionId });
+                } else if (update.type === "thinking_end") {
+                  broadcast("thinking:end", { sessionId: streamSessionId });
+                }
+              }
+              if (event.type === "tool_execution_start") {
+                const actionId = capabilityActionId(event.toolName);
+                const toolExec: CollectedToolExec = {
+                  id: event.toolCallId,
+                  tool: actionId,
+                  label: resolveToolLabel(actionId, undefined, surfaceLanguage),
+                  status: "running",
+                  args: event.args as Record<string, unknown> | undefined,
+                  startedAt: Date.now(),
+                };
+                continuedToolExecs.push(toolExec);
+                exec.logs = [...(exec.logs ?? []), `${toolExec.label}…`].slice(-80);
+                void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                broadcast("tool:start", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  args: event.args,
+                  stages: [],
+                  background: true,
+                  ...(sourceRequestId ? { sourceRequestId } : {}),
+                });
+              }
+              if (event.type === "tool_execution_end") {
+                const toolExec = continuedToolExecs.find((candidate) => candidate.id === event.toolCallId);
+                if (toolExec) {
+                  toolExec.status = event.isError ? "error" : "completed";
+                  toolExec.completedAt = Date.now();
+                  if (event.isError) toolExec.error = extractToolError(event.result);
+                  else toolExec.result = summarizeToolResult(event.result);
+                  toolExec.details = (event.result as { details?: unknown } | undefined)?.details;
+                  exec.logs = [...(exec.logs ?? []), `${toolExec.label}: ${toolExec.status}`].slice(-80);
+                  void persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId).catch(() => undefined);
+                }
+                broadcast("tool:end", {
+                  sessionId: streamSessionId,
+                  id: event.toolCallId,
+                  tool: event.toolName,
+                  result: event.result,
+                  details: toolExec?.details,
+                  isError: event.isError,
+                });
+              }
+            },
+          }, originalInstruction === instruction ? instruction : `${originalInstruction}\n\nConfirmed action instruction:\n${instruction}`);
+          exec.status = "completed";
+          exec.completedAt = Date.now();
+          if (continuation.errorMessage) {
+            exec.logs = [
+              ...(exec.logs ?? []),
+              pick(surfaceLanguage, `后续对话不可用：${continuation.errorMessage}`, `Follow-up response unavailable: ${continuation.errorMessage}`),
+            ].slice(-80);
+            exec.details = {
+              ...(exec.details && typeof exec.details === "object" ? exec.details as Record<string, unknown> : {}),
+              continuationError: continuation.errorMessage,
+            };
+          }
+          await persistConfirmedTask(bookSession.sessionId, confirmedIntent, exec, sourceRequestId);
+          const responseText = continuation.responseText
+            || exec.result
+            || pick(surfaceLanguage, "已完成。", "Done.");
+          const responseForUser = continuation.responseText
+            ? continuation.responseText
+            : hasDomainOwnedResult(exec.details) ? "" : responseText;
           await refreshBookSessionFromTranscript();
-          broadcast("agent:complete", { instruction, activeBookId: createdBookId ?? agentBookId, sessionId: bookSession.sessionId, sessionKind });
+          broadcast("agent:complete", { instruction, activeBookId: bookSession.bookId, sessionId: bookSession.sessionId, sessionKind: bookSession.sessionKind });
           return c.json({
             response: responseForUser,
-            details: { toolExecutions: [exec] },
+            details: { toolExecutions: [exec, ...continuedToolExecs] },
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind,
-              ...(createdBookId ?? agentBookId ? { activeBookId: createdBookId ?? agentBookId } : {}),
+              ...workSessionResponseMetadata(bookSession),
+              ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
             },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const failure = formatAgentActionFailure(message, surfaceLanguage);
+          const failure = formatAgentActionFailure(error, surfaceLanguage);
           if (pendingBookId) {
             bookCreateStatus.set(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
@@ -6231,14 +5232,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       // 同时传 suppressProductionTools 在 host 层剔除会修改书籍/产物的
       // 生产工具（提示词只是软约束）。
       const backgroundTask = await findActiveRunningTask(bookSession.sessionId);
-      const collectedToolExecs: CollectedToolExec[] = [];
       const result = await runAgentSession(
         {
+          signal: chatRequest?.controller.signal,
+          baselineWork: chatRequest?.snapshot.baselineWork,
+          onWorkTransition: publishExecutionTarget,
           model,
           apiKey: agentApiKey,
+          stream: pipelineClient.stream,
+          proxyUrl: pipelineClient.proxyUrl,
           pipeline,
-          // 607 号：服务「流式响应」开关传递（stream:false → 非流式完成）。
-          streamPreference,
           ...(backgroundTask
             ? {
                 backgroundTaskContext: buildRunningTaskContextBlock(backgroundTask, surfaceLanguage),
@@ -6248,9 +5251,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           projectRoot: root,
           bookId: agentBookId,
           sessionKind,
+          profileId,
+          workId,
           playMode,
           actionSource,
           requestedIntent,
+          proposalAction: normalizeStudioProposalAction(bookSession.proposalAction),
           actionPayload,
           requestedSkills,
           disabledSkills,
@@ -6277,25 +5283,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               }
             }
             if (event.type === "tool_execution_start") {
+              const toolName = capabilityActionId(event.toolName);
               const args = event.args as Record<string, unknown> | undefined;
-              const agent = event.toolName === "sub_agent" ? (args?.agent as string | undefined) : undefined;
-              const stages = agent ? (pipelineStages(agent, language) ?? []) : [];
 
               collectedToolExecs.push({
                 id: event.toolCallId,
-                tool: event.toolName,
-                agent,
-                label: resolveToolLabel(event.toolName, agent, language),
+                tool: toolName,
+                label: resolveToolLabel(toolName, undefined, language),
                 status: "running",
                 args,
-                stages: stages.length > 0
-                  ? stages.map(l => ({ label: l, status: "pending" as const }))
-                  : undefined,
                 startedAt: Date.now(),
               });
 
-              if (!agentBookId && event.toolName === "sub_agent" && agent === "architect") {
-                const bookId = resolveArchitectBookIdFromArgs(args);
+              if (!agentBookId && toolName === "create_book") {
+                const bookId = resolveCreatedBookIdFromArgs(args);
                 if (bookId) {
                   const title = typeof args?.title === "string" && args.title.trim()
                     ? args.title.trim()
@@ -6308,9 +5309,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
               broadcast("tool:start", {
                 sessionId: streamSessionId,
                 id: event.toolCallId,
-                tool: event.toolName,
+                tool: toolName,
                 args,
-                stages,
+                stages: [],
               });
             }
             if (event.type === "tool_execution_end") {
@@ -6325,10 +5326,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
                 if (
                   event.isError &&
                   !agentBookId &&
-                  exec.tool === "sub_agent" &&
-                  exec.agent === "architect"
+                  exec.tool === "create_book"
                 ) {
-                  const bookId = resolveArchitectBookIdFromArgs(exec.args);
+                  const bookId = resolveCreatedBookIdFromArgs(exec.args);
                   if (bookId) {
                     const error = exec.error ?? "Book creation failed";
                     bookCreateStatus.set(bookId, { status: "error", error });
@@ -6350,13 +5350,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         instruction,
       );
 
-      // R41/564 号：末轮计量快照留痕（与 Rust agent_route 同点尽力而为——
-      // 观测面不阻断主链；错误路径无 result 自然缺席）。
-      if (result.contextMeter) {
-        storeContextMeterSnapshot(bookSession.sessionId, result.contextMeter);
-      }
+      bookSession = await loadBookSession(root, bookSession.sessionId) ?? bookSession;
 
-      if (result.responseText) {
+      if (result.responseText && result.completion?.status !== "blocked") {
         const actionExecutionError = validateAgentActionExecution({
           instruction,
           agentBookId,
@@ -6368,39 +5364,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           return c.json({
             error: { code: "AGENT_ACTION_NOT_EXECUTED", message: actionExecutionError },
             response: actionExecutionError,
+            session: workSessionResponseMetadata(bookSession),
           }, 502);
         }
       }
 
       let broadcastedCreatedBookId: string | null = null;
       const finalizeCreatedBook = async (): Promise<string | null> => {
-        if (agentBookId) return null;
         const createdBookId = resolveCreatedBookIdFromToolExecs(collectedToolExecs);
-        if (!createdBookId) return null;
+        if (!createdBookId || bookSession.workId !== createdBookId) return null;
         if (broadcastedCreatedBookId === createdBookId) return createdBookId;
-        if (!await completeBookExists(join(root, "books", createdBookId))) {
+        if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
           bookCreateStatus.set(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
-          return null;
+          throw new Error(error);
         }
 
-        try {
-          const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
-          if (migratedSession) {
-            bookSession = migratedSession;
-          }
-        } catch (e) {
-          if (!(e instanceof SessionAlreadyMigratedError)) {
-            throw e;
-          }
-        }
-
-        const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
-        // 508 号：灵感卡服务端写入（354 语义）——第二完成点同样覆盖。
-        try {
-          await writeDirectorInspirationCard(root, createdBookId, book?.title ?? createdBookId);
-        } catch { /* 不阻断建书 */ }
+        const book = await loadStudioBookListSummary(state, createdBookId);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", {
           bookId: createdBookId,
@@ -6411,6 +5392,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return createdBookId;
       };
 
+      if (result.completion?.status === "blocked") {
+        if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) await finalizeCreatedBook();
+        await refreshBookSessionFromTranscript();
+        return c.json({
+          error: { code: "AGENT_TASK_INCOMPLETE", message: result.completion.message },
+          completionStatus: result.completion.status,
+          response: result.completion.message,
+          session: workSessionResponseMetadata(bookSession),
+          details: { toolExecutions: collectedToolExecs },
+        }, 422);
+      }
+
       if (!result.responseText) {
         if (hasSuccessfulToolExec(collectedToolExecs, "propose_action")) {
           await refreshBookSessionFromTranscript();
@@ -6418,8 +5411,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           return c.json({
             response: "",
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind,
+              ...workSessionResponseMetadata(bookSession),
               ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
             },
             details: { toolExecutions: collectedToolExecs },
@@ -6430,12 +5422,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           if (resolveCreatedBookIdFromToolExecs(collectedToolExecs)) {
             await finalizeCreatedBook();
           }
-          // 590 号：589 提案 C——零配置误导错误指认真实配置（尽力而为）。
-          const annotated = await annotateConfiguredServiceHint(result.errorMessage, root);
-          const failure = formatAgentFailure(annotated, language);
+          const failure = formatAgentFailure(result.errorMessage, language, "model");
           return c.json({
             error: { code: failure.code, message: failure.message },
             response: failure.message,
+            session: workSessionResponseMetadata(bookSession),
+            details: { toolExecutions: collectedToolExecs },
           }, failure.status);
         }
 
@@ -6455,14 +5447,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
         await refreshBookSessionFromTranscript();
         const createdBookId = await finalizeCreatedBook();
-        if (requestedIntent || createdBookId || hasSuccessfulToolResult(collectedToolExecs)) {
+        if (requestedIntent || createdBookId || hasSuccessfulToolOwnedResponse(collectedToolExecs)) {
           const responseSessionKind = bookSession.sessionKind ?? sessionKind;
           broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId, sessionKind: responseSessionKind });
           return c.json({
             response: "",
             session: {
-              sessionId: bookSession.sessionId,
-              sessionKind: responseSessionKind,
+              ...workSessionResponseMetadata(bookSession),
               ...(createdBookId ?? bookSession.bookId ? { activeBookId: createdBookId ?? bookSession.bookId } : {}),
             },
             details: { toolExecutions: collectedToolExecs },
@@ -6487,54 +5478,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
       const responseSessionKind = bookSession.sessionKind ?? sessionKind;
       broadcast("agent:complete", { instruction, activeBookId, sessionId: bookSession.sessionId, sessionKind: responseSessionKind });
-      // R44/566 号：skills:change 失效事件——本轮成功执行过 author_skill
-      // （R37 写链落盘）即广播，UI 打开中的技能面板热刷新。
-      if (hasSuccessfulToolExec(collectedToolExecs, "author_skill")) {
-        broadcast("skills:change", { reason: "authored", sessionId: bookSession.sessionId });
-      }
 
       return c.json({
         response: hasSuccessfulToolOwnedResponse(collectedToolExecs) ? "" : result.responseText,
+        completionStatus: result.completion?.status,
+        details: { toolExecutions: collectedToolExecs },
         session: {
-          sessionId: bookSession.sessionId,
-          sessionKind: responseSessionKind,
+          ...workSessionResponseMetadata(bookSession),
           ...(bookSession.bookId ? { activeBookId: bookSession.bookId } : {}),
         },
-        // G8a/333 号 AI 实况：消息级 token + 首包/总耗时 + 思考流聚合文本。
-        ...(result.usage ? { usage: result.usage } : {}),
-        ...(result.thinking ? { thinking: result.thinking } : {}),
-        timings: result.timings,
       });
     } catch (e) {
       if (e instanceof ApiError) {
         throw e;
       }
-      if (e instanceof SessionAlreadyMigratedError) {
-        const migratedMessage = e instanceof Error ? e.message : String(e);
-        throw new ApiError(409, "SESSION_ALREADY_MIGRATED", migratedMessage);
+      if (e instanceof SessionAlreadyBoundError) {
+        const boundMessage = e instanceof Error ? e.message : String(e);
+        throw new ApiError(409, "SESSION_ALREADY_BOUND", boundMessage);
       }
       const msg = e instanceof Error ? e.message : String(e);
       broadcast("agent:error", { instruction, activeBookId, sessionId, sessionKind: reqSessionKind, error: msg });
 
-      // Agent busy — return 429 with user-friendly message
-      if (/already processing|prompt.*queue/i.test(msg)) {
-        return c.json({
-          error: {
-            code: "AGENT_BUSY",
-            message: pick(language, "正在处理中，请等待当前操作完成", "Still processing. Wait for the current operation to finish"),
-          },
-          response: pick(
-            language,
-            "正在处理中，请等待当前操作完成后再发送。",
-            "Still processing. Wait for the current operation to finish before sending again.",
-          ),
-        }, 429);
+      const failure = formatAgentFailure(e, language, "host");
+      let recoveredSession: Awaited<ReturnType<typeof loadBookSession>> = null;
+      try {
+        recoveredSession = await recoverSessionAfterAgentFailure(root, sessionId);
+      } catch {
+        // Keep the original failure authoritative when best-effort session
+        // recovery cannot be completed.
       }
-
-      // 590 号：同 6342 处——失败消息尽力指认真实配置（589 提案 C）。
-      const failure = formatAgentFailure(await annotateConfiguredServiceHint(msg, root), language);
       return c.json(
-        { error: { code: failure.code, message: failure.message } },
+        {
+          error: { code: failure.code, message: failure.message },
+          response: failure.message,
+          ...(recoveredSession ? {
+            session: {
+              ...workSessionResponseMetadata(recoveredSession),
+              ...(recoveredSession.bookId ? { activeBookId: recoveredSession.bookId } : {}),
+            },
+          } : {}),
+          ...(collectedToolExecs.length > 0 ? { details: { toolExecutions: collectedToolExecs } } : {}),
+        },
         failure.status,
       );
     }
@@ -6562,28 +5546,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/audit/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
     broadcast("audit:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const match = findChapterFileByNumber(files, chapterNum);
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const currentConfig = await loadCurrentProjectConfig();
-      const { ContinuityAuditor } = await import("@actalk/inkos-core");
-      const auditor = new ContinuityAuditor({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
         projectRoot: root,
-        bookId: id,
+        binding: { capabilityId: "longform", actionId: "review_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviewChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
       });
-      const result = await auditor.auditChapter(bookDir, content, chapterNum, book.genre);
-      broadcast("audit:complete", { bookId: id, chapter: chapterNum, passed: result.passed });
-      return c.json(result);
+      const result = action.data as { summary?: string; observations?: unknown[] } | undefined;
+      broadcast("review:complete", { bookId: id, chapter: chapterNum, observationCount: result?.observations?.length ?? 0 });
+      return c.json({ summary: result?.summary ?? action.summary, observations: result?.observations ?? [] });
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -6595,31 +5571,30 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.post("/api/v1/books/:id/revise/:chapter", async (c) => {
     const id = c.req.param("id");
     const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-    const body = await c.req
-      .json<{ mode?: string; brief?: string }>()
-      .catch(() => ({ mode: "spot-fix", brief: undefined }));
+    const body = await c.req.json<{ mode?: string; brief?: string }>();
 
     broadcast("revise:start", { bookId: id, chapter: chapterNum });
     try {
-      const book = await state.loadBookConfig(id);
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const match = findChapterFileByNumber(files, chapterNum);
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
         bookIdForSettings: id,
       }));
-      const normalizedMode = body.mode ?? "spot-fix";
-      const result = await pipeline.reviseDraft(
-        id,
-        chapterNum,
-        normalizedMode as "polish" | "rewrite" | "rework" | "spot-fix" | "anti-detect",
-      );
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const normalizedMode = body.mode ?? DEFAULT_REVISE_MODE;
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: {
+          instruction: body.brief?.trim() || "Revise the chapter using its current review observations.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: normalizedMode,
+        },
+        workId: id,
+      });
       broadcast("revise:complete", { bookId: id, chapter: chapterNum });
-      return c.json(result);
+      return c.json(action.data ?? action);
     } catch (e) {
       broadcast("revise:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -6631,12 +5606,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
     const format = (c.req.query("format") ?? "txt") as string;
-    const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
       const artifact = await buildExportArtifact(state, id, {
         format: format as "txt" | "md" | "epub",
-        approvedOnly,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -6644,13 +5617,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return new Response(responseBody, {
         headers: {
           "Content-Type": artifact.contentType,
-          // 684 号：非 ASCII 文件名裸入 Content-Disposition 会让 undici 在
-          // 响应头物化时抛 TypeError（中文书名导出必 500）——统一走 RFC 5987
-          // 助手（story-graph 家族既有约定）。
-          "Content-Disposition": attachmentDisposition(artifact.fileName),
+          "Content-Disposition": `attachment; filename="${artifact.fileName}"`,
         },
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ChapterExportSourceError) return c.json({error:error.message,code:error.code,details:error.details},409);
       return c.json({ error: "Export failed" }, 500);
     }
   });
@@ -6659,69 +5630,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, approvedOnly } = await c.req.json<{ format?: string; approvedOnly?: boolean }>().catch(() => ({ format: "txt", approvedOnly: false }));
+    const { format } = await c.req.json<{ format?: string }>().catch(() => ({ format: "txt" }));
     const fmt = format ?? "txt";
 
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const tools = createInteractionToolsFromDeps(pipeline, state);
       const bookDir = state.bookDir(id);
       const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
-      const result = await processProjectInteractionRequest({
+      const tool = createExportBookTool(state, id, { outputPath });
+      const result = await executeExplicitCapabilityTool({
         projectRoot: root,
-        request: {
-          intent: "export_book",
-          bookId: id,
-          format: fmt as "txt" | "md" | "epub",
-          approvedOnly,
-          outputPath,
+        binding: {
+          capabilityId: "longform",
+          actionId: "export_book",
+          profileId: "longform-novel",
+          risk: "recoverable-write",
         },
-        tools,
-        activeBookId: id,
+        tool,
+        workId: id,
+        parameters: {
+          format: fmt,
+        },
       });
+      const details = result.data as Readonly<Record<string, unknown>> | undefined;
       return c.json({
         ok: true,
-        path: (result.details?.outputPath as string | undefined) ?? outputPath,
+        path: (details?.outputPath as string | undefined) ?? outputPath,
         format: fmt,
-        chapters: (result.details?.chaptersExported as number | undefined) ?? 0,
+        chapters: (details?.chaptersExported as number | undefined) ?? 0,
       });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Genre detail + copy ---
-
-  app.get("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    // 632 号：读面与写面（copy/PUT）同款 id 校验——补对称缺口（`..%2Fdecoy`
-    // 解码后 `../decoy` 可直读项目根外任意 .md）。
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-    try {
-      const { readGenreProfile } = await import("@actalk/inkos-core");
-      const { profile, body } = await readGenreProfile(root, genreId);
-      return c.json({ profile, body });
-    } catch (e) {
-      return c.json({ error: String(e) }, 404);
-    }
-  });
-
-  app.post("/api/v1/genres/:id/copy", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-    try {
-      const { getBuiltinGenresDir } = await import("@actalk/inkos-core");
-      const { mkdir: mkdirFs, copyFile } = await import("node:fs/promises");
-      const builtinDir = getBuiltinGenresDir();
-      const projectGenresDir = join(root, "genres");
-      await mkdirFs(projectGenresDir, { recursive: true });
-      await copyFile(join(builtinDir, `${genreId}.md`), join(projectGenresDir, `${genreId}.md`));
-      return c.json({ ok: true, path: `genres/${genreId}.md` });
-    } catch (e) {
+      if (e instanceof ChapterExportSourceError) return c.json({error:e.message,code:e.code,details:e.details},409);
       return c.json({ error: String(e) }, 500);
     }
   });
@@ -6771,6 +5709,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (typeof body.service === "string" && body.service.trim()) {
       llm.service = body.service.trim();
     }
+    appendModelToServiceCatalog(
+      llm,
+      typeof llm.service === "string" ? llm.service : undefined,
+      defaultModel,
+    );
     syncTopLevelLlmMirror(llm);
     await saveRawConfig(root, raw);
     return c.json({
@@ -6796,481 +5739,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true, researchSearch });
   });
 
-  // --- Chapter review mode (C4a: auto pipeline vs manual checkpoint) ---
-
-  app.get("/api/v1/project/chapter-review-mode", async (c) => {
-    const raw = await loadRawConfig(root);
-    return c.json({ mode: readProjectChapterReviewMode(raw) });
-  });
-
-  app.put("/api/v1/project/chapter-review-mode", async (c) => {
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const next = normalizeChapterReviewMode(mode);
-    const raw = await loadRawConfig(root);
-    raw.writing = { ...(raw.writing ?? {}), reviewMode: next };
-    await saveRawConfig(root, raw);
-    return c.json({ ok: true, mode: next });
-  });
-
-  // R13/382 号：写作数据聚合（产出节奏/通过率/token 成本；纯索引聚合）。
-  app.get("/api/v1/writing-stats", async (c) => {
-    try {
-      const books = await state.listBooks();
-      const rows: Array<{ bookId: string; updatedAt: string; wordCount: number; status: string; totalTokens?: number }> = [];
-      for (const bookId of books) {
-        try {
-          const index = await state.loadChapterIndex(bookId);
-          for (const meta of index) {
-            rows.push({
-              bookId,
-              updatedAt: meta.updatedAt,
-              wordCount: meta.wordCount,
-              status: meta.status,
-              totalTokens: meta.tokenUsage?.totalTokens,
-            });
-          }
-        } catch {
-          // 单书索引缺失跳过
-        }
-      }
-      const stats = await import("../lib/writing-stats.js");
-      const aggregate = stats.aggregateWritingStats(rows, new Date().toISOString());
-      // R16/387 号：分书 quality-first 跑通率（G12 重评触发判定读数）。
-      const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
-      return c.json({ ...aggregate, passRateByBook: perBook });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // G11/373 号：书级 best-of-N 配置（governance.bestOfN 读写）。
-  app.get("/api/v1/books/:id/best-of-n", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "book.json");
-    try {
-      const book = JSON.parse(await readFile(path, "utf-8"));
-      return c.json(book?.governance?.bestOfN ?? { enabled: false });
-    } catch {
-      return c.json({ enabled: false });
-    }
-  });
-
-  app.put("/api/v1/books/:id/best-of-n", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{
-      enabled?: boolean;
-      candidates?: number;
-      minScore?: number;
-    }>();
-    const path = join(root, "books", id, "book.json");
-    let book: Record<string, unknown> = {};
-    try {
-      book = JSON.parse(await readFile(path, "utf-8"));
-    } catch {
-      book = {};
-    }
-    const bestOfN: Record<string, unknown> = { enabled: Boolean(body.enabled) };
-    if (typeof body.candidates === "number") {
-      bestOfN.candidates = Math.min(3, Math.max(2, Math.trunc(body.candidates)));
-    }
-    if (typeof body.minScore === "number") {
-      bestOfN.minScore = Math.min(100, Math.max(0, Math.trunc(body.minScore)));
-    }
-    const governance = (book.governance as Record<string, unknown> | undefined) ?? {};
-    governance.bestOfN = bestOfN;
-    book.governance = governance;
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
-    return c.json({ ok: true, bestOfN });
-  });
-
-  // R10/376 号：实体卡存储（story/entity_codex.json；GET/PUT 全量）。
-  app.get("/api/v1/books/:id/codex", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "entity_codex.json");
-    // R10/377 号：名册确认自动派生——文件缺失的实体从名册同源派生合并
-    // （文件卡优先，seeded 标注是否含派生卡）。
-    const core = await import("@actalk/inkos-core");
-    let fileCards: import("@actalk/inkos-core").EntityCodexCard[] = [];
-    try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
-      if (Array.isArray(parsed.cards)) fileCards = parsed.cards;
-    } catch {
-      fileCards = [];
-    }
-    const known = new Set(fileCards.map((card) => card.name));
-    const derived = core.deriveCodexCards(
-      core.parseEntityRoster(
-        await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8").catch(() => ""),
-      ),
-    ).filter((card) => !known.has(card.name));
-    // 487 号：seeded 不入契约（对齐 Rust 形状——前端只读 cards，零消费）。
-    return c.json({ cards: [...fileCards, ...derived] });
-  });
-
-  app.put("/api/v1/books/:id/codex", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ cards?: unknown[] }>();
-    if (!Array.isArray(body.cards)) return c.json({ error: "cards array required" }, 400);
-    const core = await import("@actalk/inkos-core");
-    const storyDir = join(root, "books", id, "story");
-    await mkdir(storyDir, { recursive: true });
-    await writeFile(
-      join(storyDir, "entity_codex.json"),
-      JSON.stringify({ version: 1, cards: body.cards }, null, 2),
-      "utf-8",
-    );
-    void core;
-    return c.json({ ok: true, cards: body.cards });
-  });
-
-  // R20/390 号：系列正典共享存储（.inkos/series/{seriesId}.json；全局级不带 bookId）。
-  app.get("/api/v1/series/:seriesId/canon", async (c) => {
-    const seriesId = c.req.param("seriesId");
-    if (!core_isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
-    const path = join(root, ".inkos", "series", `${seriesId}.json`);
-    try {
-      const parsed = core_parseSeriesCanonFile(JSON.parse(await readFile(path, "utf-8")));
-      return c.json(parsed ?? { version: 1, seriesId, entries: [] });
-    } catch {
-      return c.json({ version: 1, seriesId, entries: [] });
-    }
-  });
-
-  app.put("/api/v1/series/:seriesId/canon", async (c) => {
-    const seriesId = c.req.param("seriesId");
-    if (!core_isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
-    const body = await c.req.json<{ entries?: unknown[] }>();
-    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
-    const parsed = core_parseSeriesCanonFile({ version: 1, seriesId, entries: body.entries });
-    if (!parsed) return c.json({ error: "Invalid series canon payload" }, 400);
-    const dir = join(root, ".inkos", "series");
-    await mkdir(dir, { recursive: true });
-    await writeFile(
-      join(dir, `${seriesId}.json`),
-      JSON.stringify(parsed, null, 2),
-      "utf-8",
-    );
-    return c.json({ ok: true, entries: parsed.entries.length });
-  });
-
-  // R20/390 号：书级系列绑定（book.json seriesId 读写；null/缺省=解绑）。
-  app.get("/api/v1/books/:id/series-id", async (c) => {
-    const id = c.req.param("id");
-    const path = join(root, "books", id, "book.json");
-    try {
-      const book = JSON.parse(await readFile(path, "utf-8"));
-      return c.json({ seriesId: typeof book?.seriesId === "string" ? book.seriesId : null });
-    } catch {
-      return c.json({ seriesId: null });
-    }
-  });
-
-  app.put("/api/v1/books/:id/series-id", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json<{ seriesId?: string | null }>();
-    const path = join(root, "books", id, "book.json");
-    let book: Record<string, unknown> = {};
-    try {
-      book = JSON.parse(await readFile(path, "utf-8"));
-    } catch {
-      return c.json({ error: "Book not found" }, 404);
-    }
-    const raw = body.seriesId ?? null;
-    if (raw !== null) {
-      if (typeof raw !== "string" || !core_isValidSeriesId(raw)) {
-        return c.json({ error: "Invalid series id" }, 400);
-      }
-      book.seriesId = raw;
-    } else {
-      delete book.seriesId;
-    }
-    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
-    return c.json({ ok: true, seriesId: raw });
-  });
-
-  // R21/391 号：Context Lens——上下文装配透明回放（纯读，零写作链侵入；
-  // 消费 367 号 trace/context 留痕，token 口径复用 estimateTextTokens）。
-  app.get("/api/v1/books/:id/context-lens", async (c) => {
-    const id = c.req.param("id");
-    let names: string[] = [];
-    try {
-      names = await readdir(join(root, "books", id, "story", "runtime"));
-    } catch {
-      return c.json({ chapters: [] });
-    }
-    const chapters = names
-      .map((name) => /^chapter-(\d{4})\.trace\.json$/.exec(name)?.[1])
-      .filter((value): value is string => Boolean(value))
-      .map((value) => Number.parseInt(value, 10))
-      .sort((left, right) => left - right);
-    return c.json({ chapters });
-  });
-
-  app.get("/api/v1/books/:id/context-lens/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapter = Number.parseInt(c.req.param("chapter"), 10);
-    if (!Number.isInteger(chapter) || chapter < 1) {
-      return c.json({ error: "Invalid chapter" }, 400);
-    }
-    const runtimeDir = join(root, "books", id, "story", "runtime");
-    const slug = `chapter-${String(chapter).padStart(4, "0")}`;
-    let contextPackage: unknown;
-    let trace: unknown;
-    try {
-      contextPackage = JSON.parse(await readFile(join(runtimeDir, `${slug}.context.json`), "utf-8"));
-      trace = JSON.parse(await readFile(join(runtimeDir, `${slug}.trace.json`), "utf-8"));
-    } catch {
-      return c.json({ error: "Chapter runtime artifacts not found" }, 404);
-    }
-    const core = await import("@actalk/inkos-core");
-    const lens = core.buildContextLens({
-      contextPackage: core.ContextPackageSchema.parse(contextPackage),
-      trace: core.ChapterTraceSchema.parse(trace),
-    });
-    return c.json(lens);
-  });
-
-  // R18/386 号：云备份主链——全量 tar.gz 导出 + 两段式导入恢复（恢复前自动快照）。
-  // 范围：books/ + inkos.json + .inkos/（secrets 默认排除，includeSecrets=1 显式含）+ prompt/；
-  // sessions/ 默认排除。备份为本地 UI 面，Rust 端点书面决策仅 TS 承担（386 备忘 §4）。
-  const BACKUP_ROOT_ENTRIES = ["books", "inkos.json", ".inkos", "prompt"] as const;
-
-  app.get("/api/v1/backup/export", async (c) => {
-    const includeSecrets = c.req.query("includeSecrets") === "1";
-    const includeSessions = c.req.query("includeSessions") === "1";
-    const staging = join(root, ".inkos-backup-staging");
-    await rm(staging, { recursive: true, force: true });
-    await mkdir(staging, { recursive: true });
-    // 复制范围内条目（.inkos 排除 secrets.json 除非显式含）。
-    for (const entry of BACKUP_ROOT_ENTRIES) {
-      const source = join(root, entry);
-      if (!(await stat(source).then(() => true).catch(() => false))) continue;
-      if (entry !== ".inkos") {
-        await cp(source, join(staging, entry), { recursive: true });
-        continue;
-      }
-      const inkosDir = join(staging, ".inkos");
-      await mkdir(inkosDir, { recursive: true });
-      for (const child of await readdir(source)) {
-        if (child === "secrets.json" && !includeSecrets) continue;
-        await cp(join(source, child), join(inkosDir, child), { recursive: true });
-      }
-    }
-    let fileCount = 0;
-    let totalBytes = 0;
-    for (const file of await listArchiveFiles(staging)) {
-      fileCount += 1;
-      totalBytes += (await stat(join(staging, file))).size;
-    }
-    await writeFile(
-      join(staging, "backup-manifest.json"),
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        generator: "inkos-desktop",
-        scope: { includeSecrets, includeSessions },
-        fileCount,
-        totalBytes,
-      }, null, 2),
-      "utf-8",
-    );
-    const archive = gzipSync(await buildTarArchive(staging, "inkos-backup"));
-    await rm(staging, { recursive: true, force: true });
-    return new Response(new Uint8Array(archive), {
-      headers: {
-        "Content-Type": "application/gzip",
-        "Content-Disposition": 'attachment; filename="inkos-backup.tar.gz"',
-      },
-    });
-  });
-
-  app.post("/api/v1/backup/import", async (c) => {
-    const confirm = c.req.query("confirm") === "1";
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    const { untar } = await import("../lib/tar-read.js");
-    let entries: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
-    let rejected: ReadonlyArray<string>;
-    try {
-      const result = untar(bytes);
-      entries = result.entries;
-      rejected = result.rejected;
-    } catch (error) {
-      return c.json({ error: String(error) }, 400);
-    }
-    if (rejected.length > 0) {
-      return c.json({ error: `unsafe entries rejected: ${rejected.join(", ")}` }, 400);
-    }
-    // 444 号：manifest 查找与恢复路径按「能工作的契约」对齐 Rust 移植
-    // （backup_routes.rs）——导出以 `inkos-backup/` 为包根前缀，导入须剥前缀
-    // 落回项目根；此前裸名精确查找 + 原样写回 = 导出→导入端到端断裂。
-    const BACKUP_PACKAGE_ROOT = "inkos-backup";
-    const manifestName = `${BACKUP_PACKAGE_ROOT}/backup-manifest.json`;
-    const restoreName = (name: string): string =>
-      name.startsWith(`${BACKUP_PACKAGE_ROOT}/`) ? name.slice(BACKUP_PACKAGE_ROOT.length + 1) : name;
-    const manifestEntry = entries.find((entry) => entry.name === manifestName || entry.name === "backup-manifest.json");
-    if (!manifestEntry) return c.json({ error: "backup-manifest.json missing" }, 400);
-    try {
-      const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
-      if (manifest.version !== 1 || typeof manifest.generator !== "string"
-        || !manifest.generator.startsWith("inkos-desktop")) {
-        return c.json({ error: "unsupported backup generator/version" }, 400);
-      }
-    } catch {
-      return c.json({ error: "backup-manifest.json unreadable" }, 400);
-    }
-
-    // 将覆盖项 = root 下已存在的同名文件（剥包根前缀后的真实路径）。
-    const overwriting: string[] = [];
-    for (const entry of entries) {
-      const name = restoreName(entry.name);
-      if (await stat(join(root, name)).then(() => true).catch(() => false)) {
-        overwriting.push(name);
-      }
-    }
-    if (!confirm) {
-      return c.json({
-        preview: { fileCount: entries.length, overwriting, newFiles: entries.length - overwriting.length },
-      });
-    }
-
-    // 恢复前自动快照：将覆盖的现有文件打包留存（回滚保险）。
-    if (overwriting.length > 0) {
-      const snapshotFiles: Array<{ name: string; bytes: Uint8Array }> = [];
-      for (const name of overwriting) {
-        const data = await readFile(join(root, name)).catch(() => null);
-        if (data) snapshotFiles.push({ name, bytes: new Uint8Array(data) });
-      }
-      const backupsDir = join(root, "backups");
-      await mkdir(backupsDir, { recursive: true });
-      const chunks: Buffer[] = [];
-      for (const file of snapshotFiles) {
-        const header = Buffer.alloc(512, 0);
-        Buffer.from(file.name, "utf-8").copy(header, 0);
-        header.write(file.bytes.length.toString(8).padStart(11, "0"), 124);
-        header.write("0", 156);
-        chunks.push(header, Buffer.from(file.bytes));
-        const padding = (512 - (file.bytes.length % 512)) % 512;
-        if (padding > 0) chunks.push(Buffer.alloc(padding));
-      }
-      chunks.push(Buffer.alloc(1024));
-      const snapshotName = `pre-restore-${Date.now()}.tar`;
-      await writeFile(join(backupsDir, snapshotName), Buffer.concat(chunks), "utf-8");
-    }
-
-    // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数
-    // （与 Rust backup_routes.rs 同契约）。
-    let restored = 0;
-    for (const entry of entries) {
-      if (entry.name === manifestName || entry.name === "backup-manifest.json") continue;
-      const target = join(root, restoreName(entry.name));
-      await mkdir(join(target, ".."), { recursive: true });
-      await writeFile(target, entry.bytes);
-      restored += 1;
-    }
-    return c.json({ ok: true, restored, snapshot: overwriting.length > 0 });
-  });
-
-  app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
-  app.put("/api/v1/books/:id/chapter-review-mode", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    const { mode } = await c.req.json<{ mode?: string }>();
-    const rawBookPath = join(root, "books", bookId, "book.json");
-    try {
-      const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
-        loadRawBookConfig(root, bookId),
-      ]);
-      const projectMode = readProjectChapterReviewMode(projectConfig);
-      if (mode === "inherit") {
-        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-          ? { ...(rawBook.writing as Record<string, unknown>) }
-          : {};
-        delete writing.reviewMode;
-        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
-      } else {
-        rawBook.writing = {
-          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
-          reviewMode: normalizeChapterReviewMode(mode),
-        };
-      }
-      // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
-      await writeFileAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
-      const bookMode = readBookChapterReviewMode(rawBook);
-      return c.json({
-        ok: true,
-        mode: bookMode ?? projectMode,
-        bookMode: bookMode ?? null,
-        projectMode,
-      });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
-  // --- Timeline auto beats (189号: write-next 落盘后自动沉淀节拍，书籍级开关默认关) ---
-
-  app.get("/api/v1/books/:id/timeline-auto-beats", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    try {
-      const rawBook = await loadRawBookConfig(root, bookId);
-      const writing = rawBook.writing as Record<string, unknown> | undefined;
-      const bookEnabled = typeof writing?.autoTimelineBeats === "boolean" ? writing.autoTimelineBeats : null;
-      return c.json({ enabled: bookEnabled ?? false, bookEnabled });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
-  app.put("/api/v1/books/:id/timeline-auto-beats", async (c) => {
-    const bookId = c.req.param("id");
-    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
-    const { enabled } = await c.req.json<{ enabled?: boolean }>();
-    const next = enabled === true;
-    const rawBookPath = join(root, "books", bookId, "book.json");
-    try {
-      const rawBook = await loadRawBookConfig(root, bookId);
-      if (next) {
-        rawBook.writing = {
-          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
-          autoTimelineBeats: true,
-        };
-      } else {
-        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
-          ? { ...(rawBook.writing as Record<string, unknown>) }
-          : {};
-        delete writing.autoTimelineBeats;
-        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
-      }
-      // 199 号：原子替换写。
-      await writeFileAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
-      return c.json({ ok: true, enabled: next });
-    } catch {
-      return c.json({ error: `Book "${bookId}" not found` }, 404);
-    }
-  });
-
   // --- Notify channels ---
 
   app.get("/api/v1/project/notify", async (c) => {
@@ -7288,28 +5756,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ ok: true });
   });
 
-  // --- AIGC Detection ---
-
-  app.post("/api/v1/books/:id/detect/:chapter", async (c) => {
-    const id = c.req.param("id");
-    const chapterNum = parseInt(c.req.param("chapter"), 10);
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const match = findChapterFileByNumber(files, chapterNum);
-      if (!match) return c.json({ error: "Chapter not found" }, 404);
-
-      const content = await readFile(join(chaptersDir, match), "utf-8");
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-      const result = analyzeAITells(content);
-      return c.json({ chapterNumber: chapterNum, ...result });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
   // --- Truth file edit ---
 
   app.put("/api/v1/books/:id/truth/:file{.+}", async (c) => {
@@ -7320,18 +5766,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!resolved) {
       return c.json({ error: "Invalid truth file" }, 400);
     }
-    // Legacy pointer shims are read-only in new-layout books: writing
-    // story_bible.md or book_rules.md does nothing at runtime (the pipeline
-    // reads outline/ instead). For pre-Phase-5 books these ARE authoritative.
-    if (LEGACY_SHIM_FILES.has(file)) {
-      const { isNewLayoutBook } = await import("@actalk/inkos-core");
-      if (await isNewLayoutBook(bookDir)) {
-        return c.json(
-          { error: "Legacy compat shim; edit outline/story_frame.md instead" },
-          400,
-        );
-      }
-    }
     if (RUNTIME_DIAGNOSTIC_FILE_RE.test(file)) {
       return c.json({ error: "Runtime diagnostic files are read-only" }, 400);
     }
@@ -7340,6 +5774,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { dirname: dirnameFs } = await import("node:path");
     await mkdirFs(dirnameFs(resolved), { recursive: true });
     await writeFileFs(resolved, content, "utf-8");
+    if (file === "book_rules.md") {
+      const { rm } = await import("node:fs/promises");
+      await rm(join(bookDir, "story", "book_rules.json"), { force: true });
+    }
     return c.json({ ok: true });
   });
 
@@ -7405,17 +5843,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
-        revisionGate: "always",
         bookIdForSettings: id,
       }));
-      const result = await pipeline.reviseDraft(id, chapterNum, "rework");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", { includeRecommended: true });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "revise_chapter", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createReviseChapterTool(pipeline, id, { workerSkills: () => skills }),
+        parameters: {
+          instruction: body.brief?.trim() || "Rework this chapter while preserving current Work authority.",
+          bookId: id,
+          chapterNumber: chapterNum,
+          mode: "rework",
+        },
+        workId: id,
+      });
+      const result = action.data as { chapterNumber?: number; wordCount?: number; changed?: boolean } | undefined;
       broadcast("rewrite:complete", {
         bookId: id,
-        chapterNumber: result.chapterNumber,
-        wordCount: result.wordCount,
-        status: result.status,
+        chapterNumber: result?.chapterNumber ?? chapterNum,
+        wordCount: result?.wordCount,
+        changed: result?.changed,
       });
-      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result });
+      return c.json({ status: "complete", bookId: id, chapter: chapterNum, result: action.data ?? action });
     } catch (e) {
       broadcast("rewrite:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -7432,35 +5882,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig({
         externalContext: body.brief,
+        bookIdForSettings: id,
       }));
-      const result = await pipeline.resyncChapterArtifacts(id, chapterNum);
-      return c.json(result);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  // --- Detect All chapters ---
-
-  app.post("/api/v1/books/:id/detect-all", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-
-    try {
-      const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
-      const mdFiles = files.filter((f) => f.endsWith(".md") && /^\d{4}/.test(f)).sort();
-      const { analyzeAITells } = await import("@actalk/inkos-core");
-
-      const results = await Promise.all(
-        mdFiles.map(async (f) => {
-          const num = parseInt(f.slice(0, 4), 10);
-          const content = await readFile(join(chaptersDir, f), "utf-8");
-          const result = analyzeAITells(content);
-          return { chapterNumber: num, filename: f, ...result };
-        }),
-      );
-      return c.json({ bookId: id, results });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "resync_chapter_state", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createResyncChapterStateTool(pipeline, id),
+        parameters: { bookId: id, chapterNumber: chapterNum },
+        workId: id,
+      });
+      return c.json(action.data ?? action);
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -7481,114 +5912,24 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
-  // --- Genre Create ---
-
-  app.post("/api/v1/genres/create", async (c) => {
-    const body = await c.req.json<{
-      id: string; name: string; language?: string;
-      chapterTypes?: string[]; fatigueWords?: string[];
-      numericalSystem?: boolean; powerScaling?: boolean; eraResearch?: boolean;
-      pacingRule?: string; satisfactionTypes?: string[]; auditDimensions?: number[];
-      body?: string;
-    }>();
-
-    if (!body.id || !body.name) {
-      return c.json({ error: "id and name are required" }, 400);
-    }
-    if (/[/\\\0]/.test(body.id) || body.id.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${body.id}"`);
-    }
-
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(body.name)}`,
-      `id: ${yamlScalar(body.id)}`,
-      `language: ${yamlScalar(body.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(body.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(body.fatigueWords ?? [])}`,
-      `numericalSystem: ${body.numericalSystem ?? false}`,
-      `powerScaling: ${body.powerScaling ?? false}`,
-      `eraResearch: ${body.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(body.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(body.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(body.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${body.id}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: body.id });
-  });
-
-  // --- Genre Edit ---
-
-  app.put("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const body = await c.req.json<{ profile: Record<string, unknown>; body: string }>();
-    const { writeFile: writeFileFs, mkdir: mkdirFs } = await import("node:fs/promises");
-    const genresDir = join(root, "genres");
-    await mkdirFs(genresDir, { recursive: true });
-
-    const p = body.profile;
-    const frontmatter = [
-      "---",
-      `name: ${yamlScalar(p.name ?? genreId)}`,
-      `id: ${yamlScalar(p.id ?? genreId)}`,
-      `language: ${yamlScalar(p.language ?? "zh")}`,
-      `chapterTypes: ${JSON.stringify(p.chapterTypes ?? [])}`,
-      `fatigueWords: ${JSON.stringify(p.fatigueWords ?? [])}`,
-      `numericalSystem: ${p.numericalSystem ?? false}`,
-      `powerScaling: ${p.powerScaling ?? false}`,
-      `eraResearch: ${p.eraResearch ?? false}`,
-      `pacingRule: ${yamlScalar(p.pacingRule ?? "")}`,
-      `satisfactionTypes: ${JSON.stringify(p.satisfactionTypes ?? [])}`,
-      `auditDimensions: ${JSON.stringify(p.auditDimensions ?? [])}`,
-      "---",
-      "",
-      body.body ?? "",
-    ].join("\n");
-
-    await writeFileFs(join(genresDir, `${genreId}.md`), frontmatter, "utf-8");
-    return c.json({ ok: true, id: genreId });
-  });
-
-  // --- Genre Delete (project-level only) ---
-
-  app.delete("/api/v1/genres/:id", async (c) => {
-    const genreId = c.req.param("id");
-    if (/[/\\\0]/.test(genreId) || genreId.includes("..")) {
-      throw new ApiError(400, "INVALID_GENRE_ID", `Invalid genre ID: "${genreId}"`);
-    }
-
-    const filePath = join(root, "genres", `${genreId}.md`);
-    try {
-      const { rm } = await import("node:fs/promises");
-      await rm(filePath);
-      return c.json({ ok: true, id: genreId });
-    } catch (e) {
-      return c.json({ error: `Genre "${genreId}" not found in project` }, 404);
-    }
-  });
-
   // --- Style Analyze ---
 
   app.post("/api/v1/style/analyze", async (c) => {
-    const { text, sourceName } = await c.req.json<{ text: string; sourceName: string }>();
+    const { text, sourceName, language } = await c.req.json<{ text: string; sourceName: string; language?: "zh" | "en" }>();
     if (!text?.trim()) return c.json({ error: "text is required" }, 400);
 
     try {
-      const { analyzeStyle } = await import("@actalk/inkos-core");
-      const profile = analyzeStyle(text, sourceName ?? "unknown");
-      return c.json(profile);
+      const { compileStyleGuide } = await import("@actalk/inkos-core");
+      const config = await loadCurrentProjectConfig();
+      const guide = await compileStyleGuide({
+        client: createLLMClient(config.llm),
+        model: config.llm.model,
+        projectRoot: root,
+        referenceText: text,
+        sourceName: sourceName ?? "unknown",
+        language: language ?? (config.language === "en" ? "en" : "zh"),
+      });
+      return c.json({ guide });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
@@ -7603,10 +5944,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("style:start", { bookId: id });
     try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.generateStyleGuide(id, text, sourceName ?? "unknown");
+      const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-long-story-analysis", "inkos-imitation-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "generate_style_guide", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createGenerateStyleGuideTool(pipeline, id, { activeSkills: () => skills }),
+        workId: id,
+        parameters: { referenceText: text, sourceName: sourceName ?? "unknown" },
+        signal: c.req.raw.signal,
+      });
       broadcast("style:complete", { bookId: id });
-      return c.json({ ok: true, result });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("style:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -7622,11 +5973,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     broadcast("import:start", { bookId: id, type: "chapters" });
     try {
-      const { splitChapters } = await import("@actalk/inkos-core");
-      const chapters = [...splitChapters(text, splitRegex)];
-
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.importChapters({ bookId: id, chapters });
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_chapters", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportChaptersTool(pipeline, id, root, { defaultSkills: skills }),
+        workId: id,
+        parameters: { bookId: id, sourceText: text, sourceName: "Studio import", splitPattern: splitRegex },
+        signal: c.req.raw.signal,
+      });
+      const result = action.data as { readonly importedCount: number };
       broadcast("import:complete", { bookId: id, type: "chapters", count: result.importedCount });
       return c.json(result);
     } catch (e) {
@@ -7645,9 +6004,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("import:start", { bookId: id, type: "canon" });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importCanon(id, fromBookId);
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "import_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createImportCanonTool(pipeline, id),
+        workId: id,
+        parameters: { parentBookId: fromBookId },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon" });
-      return c.json({ ok: true });
+      return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("import:error", { bookId: id, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -7682,9 +6048,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       const sourceText = await readFile(join(root, material.markdownPath), "utf-8");
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, material.title, "canon");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "longform", actionId: "refresh_fanfic_canon", profileId: "longform-novel", risk: "recoverable-write" },
+        tool: createRefreshFanficCanonTool(pipeline, root, id, { defaultSkills: skills }),
+        workId: id,
+        parameters: { sourceText, sourceName: material.title, mode: "canon" },
+        signal: c.req.raw.signal,
+      });
       broadcast("import:complete", { bookId: id, type: "canon-file", materialId: material.id });
-      return c.json({ ok: true, material });
+      return c.json({ ok: true, material, result: action.data });
     } catch (error) {
       broadcast("import:error", { bookId: id, type: "canon-file", error: String(error) });
       return c.json({ error: String(error) }, 500);
@@ -7714,7 +6090,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       status: "outlining" as const,
       targetChapters: body.targetChapters ?? 100,
       chapterWordCount: body.chapterWordCount ?? 3000,
-      fanficMode: (body.mode ?? "canon") as "canon",
+      fanficMode: body.mode?.trim() || "canon",
       ...(body.language ? { language: body.language as "zh" | "en" } : {}),
       createdAt: now,
       updatedAt: now,
@@ -7723,9 +6099,28 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     broadcast("fanfic:start", { bookId, title: body.title });
     try {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.initFanficBook(bookConfig, body.sourceText, body.sourceName ?? "source", (body.mode ?? "canon") as "canon");
+      const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+        extraSkillIds: ["inkos-story-import", "inkos-fanfic-writing"],
+      });
+      const action = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "adaptation", actionId: "fanfic_create", profileId: "workspace-default", risk: "recoverable-write" },
+        tool: createFanficBookTool(pipeline, root, { defaultSkills: skills }),
+        parameters: {
+          title: bookConfig.title,
+          sourceText: body.sourceText,
+          sourceName: body.sourceName ?? "source",
+          mode: body.mode ?? "canon",
+          genre: bookConfig.genre,
+          platform: bookConfig.platform,
+          language: bookConfig.language,
+          targetChapters: bookConfig.targetChapters,
+          chapterWordCount: bookConfig.chapterWordCount,
+        },
+      });
+      const createdBookId = (action.data as { bookId?: string } | undefined)?.bookId ?? bookId;
       broadcast("fanfic:complete", { bookId });
-      return c.json({ ok: true, bookId });
+      return c.json({ ok: true, bookId: createdBookId });
     } catch (e) {
       broadcast("fanfic:error", { bookId, error: String(e) });
       return c.json({ error: String(e) }, 500);
@@ -7742,26 +6137,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ bookId: id, content });
     } catch {
       return c.json({ bookId: id, content: null });
-    }
-  });
-
-  // --- Fanfic Refresh ---
-
-  app.post("/api/v1/books/:id/fanfic/refresh", async (c) => {
-    const id = c.req.param("id");
-    const { sourceText, sourceName } = await c.req.json<{ sourceText: string; sourceName?: string }>();
-    if (!sourceText?.trim()) return c.json({ error: "sourceText is required" }, 400);
-
-    broadcast("fanfic:refresh:start", { bookId: id });
-    try {
-      const book = await state.loadBookConfig(id);
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      await pipeline.importFanficCanon(id, sourceText, sourceName ?? "source", (book.fanficMode ?? "canon") as "canon");
-      broadcast("fanfic:refresh:complete", { bookId: id });
-      return c.json({ ok: true });
-    } catch (e) {
-      broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
     }
   });
 
@@ -7804,8 +6179,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initSpinoffBook(bookConfig, body.parentBookId, body.direction);
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-spinoff-writing"],
+        });
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "spinoff_create", profileId: "workspace-default", risk: "recoverable-write" },
+          tool: createSpinoffBookTool(pipeline, root, { defaultSkills: skills }),
+          parameters: {
+            title: bookConfig.title,
+            parentBookId: body.parentBookId,
+            direction: body.direction,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("spinoff:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -7851,8 +6243,26 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
-        await pipeline.initImitationBook(bookConfig, body.referenceText, body.storyIdea, body.sourceName);
-        const book = await loadStudioBookListSummary(state, bookId).catch(() => undefined);
+        const skills = await resolveStudioProfileSkills(root, "longform-novel", {
+          extraSkillIds: ["inkos-imitation-writing"],
+        });
+        await executeExplicitCapabilityTool({
+          projectRoot: root,
+          binding: { capabilityId: "adaptation", actionId: "imitation_create", profileId: "workspace-default", risk: "recoverable-write" },
+          tool: createImitationBookTool(pipeline, root, { defaultSkills: skills }),
+          parameters: {
+            title: bookConfig.title,
+            referenceText: body.referenceText,
+            storyIdea: body.storyIdea,
+            sourceName: body.sourceName,
+            genre: bookConfig.genre,
+            platform: bookConfig.platform,
+            language: bookConfig.language,
+            targetChapters: bookConfig.targetChapters,
+            chapterWordCount: bookConfig.chapterWordCount,
+          },
+        });
+        const book = await loadStudioBookListSummary(state, bookId);
         bookCreateStatus.delete(bookId);
         broadcast("imitation:complete", { bookId });
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
@@ -7867,33 +6277,6 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   // --- Radar Scan ---
-
-  app.post("/api/v1/radar/rankings", async (c) => {
-    // G14a/335 号"选后再析"第一步：免费扫榜，不调 LLM、不落历史。
-    try {
-      const { fetchRankings } = await import("@actalk/inkos-core");
-      const rankings = await fetchRankings();
-      return c.json({ rankings });
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  app.post("/api/v1/radar/analyze", async (c) => {
-    // G14a/335 号第二步：勾选范围后分析（selection 可省 = 全量）。
-    const body = await c.req.json<{ selection?: { platforms?: string[]; categories?: string[]; titles?: string[] } }>().catch(() => ({ selection: undefined }));
-    broadcast("radar:start", {});
-    try {
-      const pipeline = new PipelineRunner(await buildPipelineConfig());
-      const result = await pipeline.runRadar({ selection: body?.selection });
-      await saveRadarScan(root, result);
-      broadcast("radar:complete", { result });
-      return c.json(result);
-    } catch (e) {
-      broadcast("radar:error", { error: String(e) });
-      return c.json({ error: String(e) }, 500);
-    }
-  });
 
   app.post("/api/v1/radar/scan", async (c) => {
     broadcast("radar:start", {});
@@ -7924,68 +6307,18 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const { existsSync } = await import("node:fs");
     const { GLOBAL_ENV_PATH } = await import("@actalk/inkos-core");
 
-    // G1/349 号：检索层健康——embedding 配置存在 → semantic 能力，否则 FTS5 降级。
-    const inkosRaw = await readFile(join(root, "inkos.json"), "utf-8").catch(() => "{}");
-    let embeddingConfigured = false;
-    try {
-      embeddingConfigured = Boolean(JSON.parse(inkosRaw)?.llm?.embedding);
-    } catch {
-      embeddingConfigured = false;
-    }
     const checks = {
       inkosJson: existsSync(join(root, "inkos.json")),
       projectEnv: existsSync(join(root, ".env")),
       globalEnv: existsSync(GLOBAL_ENV_PATH),
-      booksDir: existsSync(join(root, "books")),
+      booksDir: existsSync(join(root, "works")),
       llmConnected: false,
       bookCount: 0,
-      bookIssues: [] as Array<{ bookId: string; title: string; kind: string; chapter?: number }>,
-      retrieval: {
-        mode: embeddingConfigured ? "semantic" : "fts5-fallback",
-        embeddingConfigured,
-        // R12/381 号：向量引擎标注（决策表 380 号；探测封装见下）。
-        vectorEngine: "memory-cosine",
-        vecExtensionAvailable: false,
-        chunkCount: 0,
-      },
     };
 
     try {
       const books = await state.listBooks();
       checks.bookCount = books.length;
-      // R12/381 号：chunk 总量聚合（vectorEngine 决策输入；380 号阈值 5000）。
-      try {
-        const { MemoryDB } = await import("@actalk/inkos-core");
-        let chunkTotal = 0;
-        for (const bookIdItem of books) {
-          try {
-            chunkTotal += new MemoryDB(join(root, "books", bookIdItem)).chunkVectorCount;
-          } catch {
-            // 单书库损坏跳过
-          }
-        }
-        checks.retrieval.chunkCount = chunkTotal;
-      } catch {
-        // 聚合失败保留 0
-      }
-      // 195 号：书籍级写作阻塞预警——与 Rust get_doctor 对齐：最新章
-      // state-degraded 会让下一章 write-next 直接报错，doctor 需前置提示。
-      for (const bookId of books) {
-        try {
-          const index = await state.loadChapterIndex(bookId);
-          const latest = index.reduce<(typeof index)[number] | null>(
-            (acc, meta) => (acc === null || meta.number > acc.number ? meta : acc),
-            null,
-          );
-          if (latest && latest.status === "state-degraded") {
-            let title = bookId;
-            try {
-              title = (await state.loadBookConfig(bookId)).title;
-            } catch { /* 保留 bookId 兜底 */ }
-            checks.bookIssues.push({ bookId, title, kind: "state-degraded", chapter: latest.number });
-          }
-        } catch { /* 单书失败不拖垮诊断 */ }
-      }
     } catch { /* ignore */ }
 
     try {
@@ -8016,20 +6349,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/interactive-films", async (c) => {
-    const filmsDir = join(root, "interactive-films");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(filmsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const films: Array<{ projectId: string; title: string }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "interactive-film")) {
       try {
-        const graph = await loadStoryGraph(root, projectId);
-        if (graph) films.push({ projectId, title: graph.title || projectId });
+        const graph = await loadStoryGraph(root, work.id);
+        if (graph) films.push({ projectId: work.id, title: graph.title || work.title });
       } catch { /* skip dirs without valid story-graph */ }
     }
     films.sort((a, b) => a.title.localeCompare(b.title, "zh"));
@@ -8037,21 +6361,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/translations", async (c) => {
-    const translationsDir = join(root, "translations");
-    let entries: string[] = [];
-    try {
-      const dirents = await readdir(translationsDir, { withFileTypes: true });
-      entries = dirents.filter((d) => d.isDirectory()).map((d) => d.name);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
     const translations: Array<{ projectId: string; title: string; sourceLanguage: string; targetLanguage: string; chapters: number }> = [];
-    for (const projectId of entries) {
-      if (!isSafeBookId(projectId)) continue;
+    for (const work of await listWorkManifests(root, "translation")) {
       try {
-        const manifest = await loadTranslationManifest(root, projectId);
+        const manifest = await loadTranslationManifest(root, work.id);
         translations.push({
-          projectId,
+          projectId: work.id,
           title: manifest.title,
           sourceLanguage: manifest.sourceLanguage,
           targetLanguage: manifest.targetLanguage,
@@ -8085,17 +6400,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
       return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
     }
-    const result = await createTranslationProjectFromFile(root, {
-      filePath: body.filePath,
-      sourceLanguage: body.sourceLanguage,
-      targetLanguage: body.targetLanguage,
-      title: body.title,
-      segmentMaxChars: body.segmentMaxChars,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
+      tool: createTranslationCreateTool(root),
+      parameters: {
+        filePath: body.filePath,
+        sourceLanguage: body.sourceLanguage,
+        targetLanguage: body.targetLanguage,
+        title: body.title,
+        segmentMaxChars: body.segmentMaxChars,
+      },
     });
+    const details = result.data as {
+      manifest: { id: string; title: string };
+      manifestPath: string;
+      sourcePath: string;
+    };
     return c.json({
-      ...result,
-      projectId: result.manifest.id,
-      title: result.manifest.title,
+      ...details,
+      projectId: details.manifest.id,
+      title: details.manifest.title,
     });
   });
 
@@ -8106,7 +6431,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     try {
       const manifest = await loadTranslationManifest(root, id);
-      const reportPath = join(root, "translations", id, "review-report.md");
+      const reportPath = join(translationProjectDir(root, id), "review-report.md");
       const report = await readFile(reportPath, "utf-8").catch(() => "");
       const chapters = await Promise.all(manifest.chapters.map(async (chapter) => {
         const source = await loadTranslationChapter(root, chapter.sourcePath);
@@ -8118,7 +6443,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         return {
           number: chapter.number,
           title: chapter.title,
-          status: chapter.status,
+          translatedSegments: chapter.translatedSegments,
+          reviewSummary: chapter.reviewSummary,
+          observations: chapter.observations,
           segments: source.segments.map((segment) => ({
             index: segment.index,
             source: segment.source,
@@ -8143,28 +6470,27 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const body: { batchSize?: number; maxTokens?: number } = await c.req.json().catch(() => ({}));
     try {
-      const currentConfig = await loadCurrentProjectConfig();
       const configuredSkills = await loadAvailableAgentSkills({ projectRoot: root });
-      const activatedSkills = resolveProductionSkillActivations(configuredSkills.skills, "translation");
-      const model = createLLMTranslationModel({
-        client: createLLMClient(currentConfig.llm),
-        model: currentConfig.llm.model,
-        maxTokens: body.maxTokens,
-        activatedSkills,
+      const activatedSkills = resolveProfileSkillActivations(
+        configuredSkills.skills,
+        createBuiltInWorkProfileRegistry(root).require("translation"),
+      );
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_run", profileId: "translation", risk: "recoverable-write" },
+        tool: createTranslationRunTool(pipeline, root, id, { defaultSkills: activatedSkills }),
+        workId: id,
+        parameters: { batchSize: body.batchSize, maxTokens: body.maxTokens },
         signal: c.req.raw.signal,
       });
-      const result = await runTranslationProject(root, id, {
-        model,
-        batchSize: body.batchSize,
-      });
-      return c.json({ ...result, skillIds: activatedSkillIds(activatedSkills) });
+      return c.json(result.data);
     } catch (error) {
       if (error instanceof ApiError) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      const isUpstream = /API|LLM|provider|upstream|temporarily unavailable|rate limit|quota|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|503|502|504/i.test(message);
       throw new ApiError(
-        isUpstream ? 502 : 500,
-        "TRANSLATION_RUN_FAILED",
+        500,
+        "INKOS_TRANSLATION_ACTION_FAILED",
         message || "Translation run failed.",
       );
     }
@@ -8176,11 +6502,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ error: { code: "INVALID_ID", message: `invalid translation id: ${id}` } }, 400);
     }
     const body: { format?: "txt" | "md" | "epub"; outputPath?: string } = await c.req.json().catch(() => ({}));
-    const result = await writeTranslationExport(root, id, {
-      format: body.format ?? "md",
-      outputPath: body.outputPath,
+    const result = await executeExplicitCapabilityTool({
+      projectRoot: root,
+      binding: { capabilityId: "translation", actionId: "translation_export", profileId: "translation", risk: "recoverable-write" },
+      tool: createTranslationExportTool(root, id),
+      workId: id,
+      parameters: { format: body.format ?? "md", outputPath: body.outputPath },
     });
-    return c.json(result);
+    return c.json(result.data);
   });
 
   app.post("/api/v1/projects/:id/story-graph/delta", async (c) => {
@@ -8198,7 +6527,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const graphPath = join(root, "interactive-films", id, "story-graph.json");
+    const graphPath = storyGraphPath(root, id);
     try {
       const raw = await readFile(graphPath, "utf-8");
       return c.json(JSON.parse(raw));
@@ -8215,16 +6544,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) {
       return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     }
-    const projectDir = join(root, "interactive-films", id);
+    const projectDir = join(workDirectory(root, id), "source");
     try {
       await access(projectDir);
       const archive = gzipSync(await buildTarArchive(projectDir, id));
       return new Response(new Uint8Array(archive), {
         headers: {
           "Content-Type": "application/gzip",
-          // 684 号：quoted-string 内的 percent 编码不会被浏览器解码（落盘成
-          // 字面 %XX 名）——统一 attachmentDisposition（filename* 才是解码面）。
-          "Content-Disposition": attachmentDisposition(`${id}.tar.gz`),
+          "Content-Disposition": `attachment; filename="${encodeURIComponent(id)}.tar.gz"`,
         },
       });
     } catch (error) {
@@ -8252,7 +6579,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!isSafeBookId(id)) return c.json({ error: { code: "INVALID_ID", message: `invalid project id: ${id}` } }, 400);
     const graph = await loadStoryGraph(root, id);
     if (!graph) return c.json({ error: { code: "NOT_FOUND", message: `story graph not found for ${id}` } }, 404);
-    return c.json({ report: reviewStoryGraph(graph), arcs: analyzeEmotionalArcs(graph), distribution: analyzePathDistribution(graph) });
+    return c.json({ report: reviewStoryGraph(graph), distribution: analyzePathDistribution(graph) });
   });
 
   app.get("/api/v1/projects/:id/export/json", async (c) => {
@@ -8306,6 +6633,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     });
   });
 
+  app.get("/api/v1/projects/:id/preview/html",async(c)=>{
+    const response=await app.request(`/api/v1/projects/${encodeURIComponent(c.req.param('id'))}/export/html`);
+    const headers=new Headers(response.headers);headers.delete('Content-Disposition');
+    return new Response(response.body,{status:response.status,headers});
+  });
+
   app.post("/api/v1/projects/:id/nodes/:nodeId/image", async (c) => {
     const id = c.req.param("id");
     const nodeId = c.req.param("nodeId");
@@ -8331,11 +6664,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 export async function startStudioServer(
   root: string,
   port = 4567,
-  options?: { readonly staticDir?: string },
+  options?: { readonly staticDir?: string; readonly hostname?: string; readonly allowedOrigins?: readonly string[] },
 ): Promise<void> {
+  await recoverAtomicFileSets(root, true);
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
 
-  const app = createStudioServer(config, root);
+  const app = createStudioServer(config, root, { hostname: options?.hostname, allowedOrigins: options?.allowedOrigins });
 
   // Serve frontend static files — single process for API + frontend
   if (options?.staticDir) {
@@ -8358,12 +6692,7 @@ export async function startStudioServer(
           json: "application/json",
         };
         return new Response(content, {
-          headers: {
-            "Content-Type": contentTypes[ext] ?? "application/octet-stream",
-            // 514 号：vite 产物为内容哈希文件名——不可变长缓存，
-            // 用户重载只回源 index.html（no-store），资源全走本地缓存。
-            "Cache-Control": "public, max-age=31536000, immutable",
-          },
+          headers: { "Content-Type": contentTypes[ext] ?? "application/octet-stream" },
         });
       } catch {
         return c.notFound();
@@ -8372,19 +6701,16 @@ export async function startStudioServer(
 
     // SPA fallback — serve index.html for all non-API routes
     const indexPath = joinPath(options.staticDir!, "index.html");
-    // 507 号（对齐 Rust 449 号）：入口按请求时读而非启动缓存——前端重建后
-    // 旧入口引用的 hash 资源已不存在，启动期缓存会白屏到重启为止。
-    app.get("*", async (c) => {
-      if (c.req.path.startsWith("/api/v1/")) return c.notFound();
-      try {
-        const indexHtml = await readFileFs(joinPath(options.staticDir!, "index.html"), "utf-8");
-        return c.html(indexHtml, 200, { "Cache-Control": "no-store" });
-      } catch {
-        return c.notFound();
-      }
-    });
+    if (existsSync(indexPath)) {
+      const indexHtml = await readFileFs(indexPath, "utf-8");
+      app.get("*", (c) => {
+        if (c.req.path.startsWith("/api/v1/")) return c.notFound();
+        return c.html(indexHtml);
+      });
+    }
   }
 
-  console.log(`InkOS Studio running on http://localhost:${port}`);
-  serve({ fetch: app.fetch, port });
+  const hostname = options?.hostname?.trim() || "127.0.0.1";
+  console.log(`InkOS Studio running on http://${hostname}:${port}`);
+  serve({ fetch: app.fetch, port, hostname });
 }

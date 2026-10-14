@@ -209,6 +209,8 @@ export interface PendingHook {
   readonly payoff: string; // 回收卷 — where it pays off
   readonly core: boolean; // 核心 — load-bearing hook
   readonly promoted?: boolean; // 升级 — true means live hook debt; false means seed pool
+  /** 2.0 显式状态表别名兼容（状态/status 列；fork 14 列存量无此列 → 空串）。 */
+  readonly status?: string;
 }
 
 function splitTableRow(line: string): string[] {
@@ -226,12 +228,17 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
   const header = splitTableRow(rows[0]);
   const colOf = (...names: string[]) => header.findIndex((h) => names.includes(h));
   const idIdx = colOf("hook_id", "id");
-  const typeIdx = colOf("类型");
+  const typeIdx = colOf("类型", "type");
   const kindIdx = colOf("分类", "kind"); // R23/394 号：第 14 列（存量 13 列无此列）
-  const payoffIdx = colOf("回收卷");
+  const statusIdx = colOf("状态", "status");
+  // fork 表「回收卷」是读者文案、「预期回收」是数字列——colOf 按表头位置扫描，
+  // 别名顺序不影响命中，故两段查找：回收卷在场恒优先，2.0 表（无回收卷列）落到别名。
+  const payoffIdx = header.indexOf("回收卷") >= 0
+    ? header.indexOf("回收卷")
+    : colOf("预期回收", "expected_payoff");
   const coreIdx = colOf("核心");
   const promotedIdx = colOf("升级", "promoted");
-  const contentIdx = colOf("备注");
+  const contentIdx = colOf("备注", "notes");
 
   return rows
     .slice(1)
@@ -246,6 +253,8 @@ export function parsePendingHooks(md: string): ReadonlyArray<PendingHook> {
       payoff: payoffIdx >= 0 ? cells[payoffIdx] : "",
       core: coreIdx >= 0 && cells[coreIdx] === "是",
       promoted: promotedIdx >= 0 ? parsePromotedCell(cells[promotedIdx]) : undefined,
+      // 2.0 显式状态表（状态/status 列）仅在表头在场时产出；fork 14 列存量无此列，形状不变。
+      ...(statusIdx >= 0 ? { status: cells[statusIdx] ?? "" } : {}),
     }))
     .filter((hook) => hook.content.length > 0 || hook.id.length > 0);
 }

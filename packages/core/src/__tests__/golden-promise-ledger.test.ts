@@ -17,7 +17,7 @@ import {
   parseExpectedChapter,
 } from "../utils/promise-ledger.js";
 import { normalizeHookKind } from "../utils/hook-kind.js";
-import type { StoredHook } from "../state/memory-db.js";
+import type { StoredHook } from "../utils/promise-ledger.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(

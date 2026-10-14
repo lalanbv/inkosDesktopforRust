@@ -1,11 +1,12 @@
-//! C9 SSE 契约测：inkos `server.ts` broadcast 事件集合 ⊇ Rust `Router::default_table` 路由键。
+//! C9 SSE 契约测：双引擎 broadcast 事件集合之并 ⊇ Rust `Router::default_table` 路由键。
 //!
-//! 架构 §10 承诺 observer 与 inkos 通过 SSE 事件解耦耦合：若上游改事件名而 observer
+//! 架构 §10 承诺 observer 与引擎通过 SSE 事件解耦：若引擎改事件名而 observer
 //! 未跟进，observer 会**静默失活**——事件被 `dispatch` 当未知事件忽略，用户不再收到
-//! 通知/角标。本测试从 inkos 源（mono-repo `packages/studio/src/api/server.ts`）正则
-//! 提取所有 `broadcast("event", ...)` 调用的事件名，断言 default_table 的每个键都存在
-//! 于 inkos 集合。反向差异（inkos 有但 router 没路由的事件）打印供维护者参考——
-//! 未知事件被忽略是设计（架构 §6.2 容错），不算 fail。
+//! 通知/角标。688 号起桌面默认 Rust 引擎、Node 为回退，故契约源=**双引擎并集**：
+//! TS `packages/studio/src/api/server.ts` 与 Rust `engine-rs/src/server/**/*.rs`
+//! （两侧 `broadcast("event"` 字面形态一致，同一提取器通用）。任一引擎下 observer
+//! 路由键都必须可被该引擎（或另一引擎）发出，否则静默失活。反向差异（引擎有但
+//! router 没路由的事件）打印供维护者参考——未知事件被忽略是设计（架构 §6.2 容错）。
 //!
 //! 跑：
 //!     cd src-tauri && cargo test --test sse_contract
@@ -34,25 +35,47 @@ const INKOS_SERVER_TS_REL: &str = "../packages/studio/src/api/server.ts";
 /// 提取 inkos broadcast 事件名集合：扫描每行，匹配 `broadcast("<event>"` 模式。
 /// 用朴素状态机而非 regex crate（避免引入额外 dev-dep）；事件名仅 ASCII 字母+冒号+下划线。
 fn extract_broadcast_events(src: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    // ① 行级剥注释：整行注释（// 或 * 块注释延续行）直接跳过；行内尾注释保留
+    //（其位于匹配点之后，不影响提取，原始行为如此）。
+    // ② 空白归一化：Rust 侧调用常跨行（`hub.broadcast(\n "event",`），折叠空白后
+    // `broadcast("` 与 `broadcast( "` 两种形态统一扫描。
+    let mut joined = String::with_capacity(src.len());
     for line in src.lines() {
-        // 跳过注释行（避免提取注释里提到的事件名）。
         let trimmed = line.trim_start();
         if trimmed.starts_with("//") || trimmed.starts_with("*") {
             continue;
         }
-        // 在行内反复找 `broadcast("`，提取紧跟的 ASCII 字母/冒号/下划线序列。
+        joined.push_str(line);
+        joined.push(' ');
+    }
+    let mut norm = String::with_capacity(joined.len());
+    let mut prev_space = false;
+    for ch in joined.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                norm.push(' ');
+            }
+            prev_space = true;
+        } else {
+            norm.push(ch);
+            prev_space = false;
+        }
+    }
+    let text = norm;
+
+    let mut out = Vec::new();
+    for needle in ["broadcast(\"", "broadcast( \""] {
         let mut search_from = 0;
-        let bytes = line.as_bytes();
-        while let Some(rel) = line[search_from..].find("broadcast(\"") {
-            let start = search_from + rel + "broadcast(\"".len();
+        let bytes = text.as_bytes();
+        while let Some(rel) = text[search_from..].find(needle) {
+            let start = search_from + rel + needle.len();
             let end = bytes[start..]
                 .iter()
                 .position(|&b| !(b.is_ascii_alphanumeric() || b == b':' || b == b'_' || b == b'-'))
                 .map(|p| start + p)
-                .unwrap_or(line.len());
+                .unwrap_or(text.len());
             if end > start {
-                let name = &line[start..end];
+                let name = &text[start..end];
                 // 过滤模板字面量/空字符串：事件名至少含一个字母。
                 if name.chars().any(|c| c.is_ascii_alphabetic()) {
                     out.push(name.to_string());
@@ -66,34 +89,52 @@ fn extract_broadcast_events(src: &str) -> Vec<String> {
     out
 }
 
+
 #[test]
 fn default_table_keys_are_subset_of_inkos_broadcasts() {
-    // 锚定 src-tauri 目录，构造 inkos server.ts 的绝对路径。
+    // 锚定 src-tauri 目录：TS 契约源 = studio server.ts；Rust 契约源 = engine-rs/src/server 递归。
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let inkos_path = std::path::Path::new(manifest_dir).join(INKOS_SERVER_TS_REL);
+    let base = std::path::Path::new(manifest_dir);
+    let inkos_path = base.join(INKOS_SERVER_TS_REL);
+    let rust_server_dir = base.join("../engine-rs/src/server");
 
-    let src = match std::fs::read_to_string(&inkos_path) {
-        Ok(s) => s,
-        Err(e) => {
-            // inkos 源不可读：契约测失去信号源，skip 不 fail（CI 拆分仓库时常见）。
-            eprintln!(
-                "[sse_contract] skip: inkos 源不可读 ({}) — {}",
-                inkos_path.display(),
-                e
-            );
-            // `eprintln!` + return 即可——cargo 不把正常返回当 fail。
-            // 为了在 `cargo test -- --nocapture` 看到原因，上面已打印。
-            // 若要严格标记 skipped，需 nightly 特性；此处用 eprintln + 提前 return。
-            // 但为了避免无声通过，我们用一个 dummy assert 永远为 true，并在日志标 skip。
-            let _ = inkos_path; // suppress unused warning on err path
-            return;
+    let mut sources: Vec<(std::path::PathBuf, String)> = Vec::new();
+    if let Ok(s) = std::fs::read_to_string(&inkos_path) {
+        sources.push((inkos_path.clone(), s));
+    } else {
+        eprintln!("[sse_contract] TS 源不可读（{}），仅以 Rust 引擎为契约源", inkos_path.display());
+    }
+    // Rust 侧递归收集（server 目录全量 .rs——路由分文件持有各域 broadcast 面）。
+    fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    collect_rs(&p, out);
+                } else if p.extension().map(|e| e == "rs").unwrap_or(false) {
+                    out.push(p);
+                }
+            }
         }
-    };
+    }
+    let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
+    collect_rs(&rust_server_dir, &mut rs_files);
+    rs_files.sort();
+    for p in &rs_files {
+        if let Ok(s) = std::fs::read_to_string(p) {
+            sources.push((p.clone(), s));
+        }
+    }
 
-    let inkos_events = extract_broadcast_events(&src);
+    let mut inkos_events: Vec<String> = Vec::new();
+    for (_, src) in &sources {
+        inkos_events.extend(extract_broadcast_events(src));
+    }
+    inkos_events.sort();
+    inkos_events.dedup();
     assert!(
         !inkos_events.is_empty(),
-        "[sse_contract] inkos 源可读但提取到 0 个 broadcast 事件——正则失效或源被重构"
+        "[sse_contract] 双引擎源可读但提取到 0 个 broadcast 事件——正则失效或源被重构"
     );
 
     // 构造 default_table 并读取其路由键集合（C9：通过公开 `events()` API 而非硬编码）。

@@ -16,6 +16,8 @@ import { NotificationCenter } from "./components/NotificationCenter";
 import { useNotificationsStore } from "./store/notifications";
 import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
 import { Dashboard } from "./pages/Dashboard";
+import { WorkInspector } from "./pages/WorkInspector";
+import { GenreManager } from "./pages/GenreManager";
 import { ChatPage } from "./pages/ChatPage";
 import { BookDetail } from "./pages/BookDetail";
 import { BookTimeline } from "./pages/BookTimeline";
@@ -28,7 +30,6 @@ import { ProjectSettings } from "./pages/ProjectSettings";
 import { TruthFiles } from "./pages/TruthFiles";
 import { DaemonControl } from "./pages/DaemonControl";
 import { LogViewer } from "./pages/LogViewer";
-import { GenreManager } from "./pages/GenreManager";
 import { StyleManager } from "./pages/StyleManager";
 import { TranslationManager } from "./pages/TranslationManager";
 import { ImportManager } from "./pages/ImportManager";
@@ -593,6 +594,24 @@ export function App() {
           {view.page === "dashboard" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
               <Dashboard nav={nav} sse={sse} theme={theme} t={t} />
+            </div>
+          )}
+          {view.page === "work" && (
+            <div className="mx-auto w-full max-w-5xl px-6 py-12 md:px-12 lg:py-16 fade-in">
+              <WorkInspector workId={view.workId} onBack={nav.toDashboard} onChat={nav.toWorkChat} />
+            </div>
+          )}
+          {view.page === "work-chat" && (
+            <div className="absolute inset-0 flex min-w-0">
+              <ChatPage
+                activeWorkId={view.workId}
+                workProfileId={view.profileId}
+                mode="work"
+                nav={nav}
+                theme={theme}
+                t={t}
+                sse={sse}
+              />
             </div>
           )}
           {isBookCreateChatRoute(view) && (

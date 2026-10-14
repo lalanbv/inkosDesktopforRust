@@ -82,10 +82,10 @@ export function buildContextLens(params: {
       source: entry.source,
       tier,
       tierPrecedence: contextSourceTierDescriptor(tier).precedence,
-      protected: isProtectedContextSource(entry.source),
+      protected: isProtectedContextSource(entry),
       tokens: estimateContextLensSourceTokens(entry),
       compiled: compression?.compiledSource === entry.source,
-      rank: entry.rank ?? null,
+      rank: (entry as { rank?: ContextLensRank | null }).rank ?? null,
     };
   });
   return {
@@ -98,7 +98,7 @@ export function buildContextLens(params: {
           budgetTokens: compression.budgetTokens,
           protectedTokens: compression.protectedTokens,
           compressibleTokens: compression.compressibleTokens,
-          preCompressionSources: compression.sourceTokens,
+          preCompressionSources: (compression as { sourceTokens?: ContextLensCompression["preCompressionSources"] }).sourceTokens ?? [],
         }
       : null,
     notes: params.trace.notes,

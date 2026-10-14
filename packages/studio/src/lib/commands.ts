@@ -211,6 +211,10 @@ export function recentToRoute(entry: RecentEntry): HashRoute | null {
       return entry.projectId ? { page: "film-author", projectId: entry.projectId } : null;
     case "film-studio":
       return entry.projectId ? { page: "film-studio", projectId: entry.projectId } : null;
+    case "work":
+      return entry.workId ? { page: "work", workId: entry.workId } : null;
+    case "work-chat":
+      return entry.workId && entry.profileId ? { page: "work-chat", workId: entry.workId, profileId: entry.profileId } : null;
   }
 }
 

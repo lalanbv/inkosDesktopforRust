@@ -48,7 +48,9 @@ function die(message) {
 }
 
 // ── 0. 前置健康检查 ──
-const health = await api("/api/v1/run-log").catch(() => null);
+// 688 号：探活路由从 /api/v1/run-log（fork 独有，2.0 TS 侧已退役）换为
+// /api/v1/books（双端共享存活面）——探活语义不变（引擎可达即可播种）。
+const health = await api("/api/v1/books").catch(() => null);
 if (!health || health.status !== 200) {
   die(`引擎不可达（${base}）。请先启动 walkthrough-mock 与 inkos-engine-server（见文件头注释）。`);
 }

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useApi } from "../hooks/use-api";
-import type { SSEMessage } from "../hooks/use-sse";
+import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import { applyBookCollectionEvent, shouldRefetchBookCollections, shouldRefetchDaemonStatus } from "../hooks/use-book-activity";
 import type { TFunction } from "../hooks/use-i18n";
 import { tr } from "../lib/app-language";
 import { setProjectChatSessionId } from "../pages/chat-page-state";
 import { useChatStore } from "../store/chat";
+import type { ChatRequestedIntent } from "../store/chat/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   Dialog,
@@ -30,7 +31,6 @@ import {
   ScrollText,
   BookPlus,
   BookCopy,
-  Boxes,
   Feather,
   Wand2,
   FileInput,
@@ -49,6 +49,7 @@ import {
   Film,
   Languages,
   BookOpen,
+  Boxes,
 } from "lucide-react";
 import { InkosLogo } from "./InkosLogo";
 import { SkeletonRows, useDelayedVisible } from "./skeletons";
@@ -139,9 +140,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
     [activeSessionId, sessionIdsByBook, sessions],
   );
 
-  useEffect(() => {
-    const recent = sse.messages.at(-1);
-    if (!recent) return;
+  useNewSSEMessages(sse.messages, (recent) => {
     if (shouldRefetchBookCollections(recent)) {
       let appliedIncrementally = false;
       mutateBooks((current) => {
@@ -158,7 +157,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
     if (shouldRefetchDaemonStatus(recent)) {
       refetchDaemon();
     }
-  }, [mutateBooks, refetchBooks, refetchDaemon, sse.messages]);
+  });
 
   // bookDataVersion 变化（外部数据信号）时才重拉当前已展开书的 session 列表；
   // 展开/折叠本身不触发请求（展开由 toggleBook 驱动，已带"首次加载"判断）。
@@ -280,9 +279,14 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
     void loadSessionDetail(sessionId);
   };
 
-  const handleCreateProjectChatSession = () => {
+  const handleCreateProjectChatSession = (proposalAction?: ChatRequestedIntent) => {
     setProjectChatExpanded(true);
-    const sessionId = createDraftSession(null, "chat");
+    const sessionId = createDraftSession(
+      null,
+      "chat",
+      undefined,
+      proposalAction ? { proposalAction } : undefined,
+    );
     setProjectChatSessionId(sessionId);
     setInput("");
     nav.toChat();
@@ -354,11 +358,11 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
             <CreateItem icon={<Clapperboard size={16} />} label={t("nav.createScript")} onClick={() => launchProjectMode("script")} />
             <CreateItem icon={<Rows3 size={16} />} label={t("nav.createStoryboard")} onClick={() => launchProjectMode("storyboard")} />
             <CreateItem icon={<Film size={16} />} label={t("nav.createInteractiveFilm")} onClick={() => launchProjectMode("interactive-film")} />
-            <CreateItem icon={<Feather size={16} />} label={t("nav.createFanfic")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<BookCopy size={16} />} label={t("nav.createSpinoff")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<Wand2 size={16} />} label={t("nav.createImitation")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<FileInput size={16} />} label={t("nav.createContinuation")} onClick={handleCreateProjectChatSession} />
-            <CreateItem icon={<Languages size={16} />} label={t("nav.createTranslation")} onClick={handleCreateProjectChatSession} />
+            <CreateItem icon={<Feather size={16} />} label={t("nav.createFanfic")} onClick={() => handleCreateProjectChatSession("fanfic_init")} />
+            <CreateItem icon={<BookCopy size={16} />} label={t("nav.createSpinoff")} onClick={() => handleCreateProjectChatSession("spinoff_create")} />
+            <CreateItem icon={<Wand2 size={16} />} label={t("nav.createImitation")} onClick={() => handleCreateProjectChatSession("style_imitation")} />
+            <CreateItem icon={<FileInput size={16} />} label={t("nav.createContinuation")} onClick={() => handleCreateProjectChatSession("continuation_import")} />
+            <CreateItem icon={<Languages size={16} />} label={t("nav.createTranslation")} onClick={() => handleCreateProjectChatSession("translation_create")} />
             <CreateItem icon={<GitBranch size={16} />} label={t("nav.createBranching")} onClick={() => launchProjectMode("play", "guided")} />
             <CreateItem icon={<Gamepad2 size={16} />} label={t("nav.createFree")} onClick={() => launchProjectMode("play", "open")} />
           </div>
@@ -623,7 +627,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                   {projectChatSessions.length > 0 && (
                     <button
                       type="button"
-                      onClick={handleCreateProjectChatSession}
+                      onClick={() => handleCreateProjectChatSession()}
                       className="w-full flex items-center gap-2 pl-2 pr-2 py-[calc(var(--pad-y)*0.75)] text-[13px] text-muted-foreground/50 hover:text-foreground transition-colors"
                     >
                       <Plus size={12} />
@@ -825,7 +829,7 @@ function getSessionLabel(session: { sessionId: string; title: string | null; mes
   const firstUserMsg = session.messages.find((m) => m.role === "user")?.content?.trim();
   if (firstUserMsg) {
     const oneLine = firstUserMsg.replace(/\s+/g, " ");
-    return oneLine.length > 20 ? `${oneLine.slice(0, 20)}…` : oneLine;
+    return oneLine;
   }
   return tr("新会话", "New session");
 }

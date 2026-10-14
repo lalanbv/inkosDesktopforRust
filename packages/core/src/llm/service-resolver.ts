@@ -1,12 +1,12 @@
-// R30b 正统化：getBuiltinModel 为上游静态目录读的正统导出（providers/all），
-// 替代 deprecated ./compat 的 getModel 别名。
-import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import type { Model, Api } from "@earendil-works/pi-ai";
+import { getModel } from "@mariozechner/pi-ai";
+import type { Model, Api } from "@mariozechner/pi-ai";
 import { resolveServicePiProvider, resolveServicePreset } from "./service-presets.js";
 import { getServiceApiKey } from "./secrets.js";
 import { getEndpoint } from "./providers/index.js";
+import { lookupModel } from "./providers/lookup.js";
 import type { InkosEndpoint } from "./providers/types.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
+import { toPiApi, type LLMApiFormat } from "./api-format.js";
 
 export interface ResolvedModel {
   model: Model<Api>;
@@ -14,6 +14,13 @@ export interface ResolvedModel {
   writingTemperature?: number;
   temperatureRange?: readonly [number, number];
   temperatureHint?: string;
+}
+
+export class ServiceApiKeyNotFoundError extends Error {
+  constructor(readonly service: string) {
+    super(`API key not found for service "${service}". Add it in .inkos/secrets.json or set the environment variable.`);
+    this.name = "ServiceApiKeyNotFoundError";
+  }
 }
 
 function resolveProviderCompat(
@@ -32,23 +39,25 @@ export async function resolveServiceModel(
   modelId: string,
   projectRoot: string,
   customBaseUrl?: string,
-  customApiFormat?: "chat" | "responses",
+  customApiFormat?: LLMApiFormat,
 ): Promise<ResolvedModel> {
   // Determine pi-ai provider
   const baseService = service.startsWith("custom:") ? "custom" : service;
   const preset = resolveServicePreset(baseService);
   const endpoint = getEndpoint(baseService);
-  const piProvider = baseService === "ollama" ? "ollama" : resolveServicePiProvider(baseService) ?? "openai";
+  const piProvider = baseService === "ollama"
+    ? "ollama"
+    : service.startsWith("custom:") && customApiFormat === "anthropic"
+      ? "anthropic"
+      : resolveServicePiProvider(baseService) ?? "openai";
   const apiType = service.startsWith("custom:")
-    ? (customApiFormat === "responses" ? "openai-responses" : "openai-completions")
+    ? toPiApi(customApiFormat ?? "chat")
     : (preset?.api ?? "openai-completions");
   const configuredBaseUrl = customBaseUrl ?? preset?.baseUrl ?? "";
-  const endpointModel = baseService === "minimax"
-    ? endpoint?.models.find((model) => model.id === modelId || model.deploymentName === modelId)
-    : undefined;
+  const endpointModel = lookupModel(baseService, modelId);
 
   // Get pi-ai Model — may return undefined for model IDs not in the built-in registry
-  const piModel = getBuiltinModel(piProvider as any, modelId as any) as Model<Api> | undefined;
+  const piModel = getModel(piProvider as any, modelId as any) as Model<Api> | undefined;
   const effectiveBaseUrl = configuredBaseUrl || piModel?.baseUrl || "";
   const compat = apiType === "openai-completions"
     ? resolveProviderCompat(endpoint, effectiveBaseUrl)
@@ -64,9 +73,7 @@ export async function resolveServiceModel(
   // such as Ollama can be used without forcing a fake secret.
   const apiKey = await getServiceApiKey(projectRoot, service);
   if (!apiKey && !isApiKeyOptionalForEndpoint({ provider: preset?.providerFamily, baseUrl: effectiveBaseUrl })) {
-    throw new Error(
-      `API key not found for service "${service}". Add it in .inkos/secrets.json or set the environment variable.`,
-    );
+    throw new ServiceApiKeyNotFoundError(service);
   }
 
   const model: Model<Api> = {

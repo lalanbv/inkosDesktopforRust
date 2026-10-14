@@ -5,8 +5,8 @@ import { BaseAgent, type AgentContext } from "../agents/base.js";
 
 const chatCompletionMock = vi.hoisted(() => vi.fn());
 const guardedPiStreamMock = vi.hoisted(() => vi.fn());
+const guardedPiNonStreamingMock = vi.hoisted(() => vi.fn());
 
-// R26/403 号：model-chain 新增引用 isRetryableLLMError——mock 需透传真实现。
 vi.mock("../llm/provider.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../llm/provider.js")>(),
   chatCompletion: chatCompletionMock,
@@ -14,7 +14,11 @@ vi.mock("../llm/provider.js", async (importOriginal) => ({
 
 vi.mock("../agent/pi-stream.js", async () => {
   const actual = await vi.importActual<typeof import("../agent/pi-stream.js")>("../agent/pi-stream.js");
-  return { ...actual, guardedPiStream: guardedPiStreamMock };
+  return {
+    ...actual,
+    guardedPiStream: guardedPiStreamMock,
+    guardedPiNonStreaming: guardedPiNonStreamingMock,
+  };
 });
 
 function client(): AgentContext["client"] {
@@ -57,6 +61,7 @@ describe("Pi worker harness", () => {
   beforeEach(() => {
     chatCompletionMock.mockReset();
     guardedPiStreamMock.mockReset();
+    guardedPiNonStreamingMock.mockReset();
   });
 
   afterEach(() => {
@@ -139,7 +144,7 @@ describe("Pi worker harness", () => {
   });
 
   it("submits host-consumed state through one typed Pi tool call", async () => {
-    const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
     guardedPiStreamMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
       const stream = createAssistantMessageEventStream();
       const message = {
@@ -186,5 +191,59 @@ describe("Pi worker harness", () => {
 
     expect(result).toEqual({ label: "母亲", status: "等待退烧药" });
     expect(guardedPiStreamMock).toHaveBeenCalledTimes(1);
+    expect(guardedPiStreamMock.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: "required",
+    });
+  });
+
+  it("honors non-streaming transport for structured worker submissions", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    guardedPiNonStreamingMock.mockImplementation((model: AgentContext["client"]["_piModel"]) => {
+      const stream = createAssistantMessageEventStream();
+      const message = {
+        role: "assistant" as const,
+        content: [{
+          type: "toolCall" as const,
+          id: "state-2",
+          name: "submit_state",
+          arguments: { label: "灯塔", status: "亮灯", value: "0" },
+        }],
+        api: model?.api ?? "openai-completions",
+        provider: model?.provider ?? "openai",
+        model: model?.id ?? "test-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse" as const,
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "toolUse", message });
+      stream.end(message);
+      return stream;
+    });
+    const nonStreamingClient = { ...client(), stream: false };
+
+    const result = await runWorkerAgentTool(
+      nonStreamingClient,
+      "test-model",
+      [{ role: "user", content: "登记灯塔" }],
+      {
+        name: "submit_state",
+        label: "提交状态",
+        description: "提交状态。",
+        parameters: Type.Object({ label: Type.String(), status: Type.String(), value: Type.Union([Type.Number(), Type.String(), Type.Boolean()]) }),
+      },
+    );
+
+    expect(result).toEqual({ label: "灯塔", status: "亮灯", value: "0" });
+    expect(guardedPiNonStreamingMock).toHaveBeenCalledTimes(1);
+    expect(guardedPiNonStreamingMock.mock.calls[0]?.[2]).toMatchObject({
+      toolChoice: "required",
+    });
   });
 });

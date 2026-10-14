@@ -1,5 +1,24 @@
-import type { StoredHook } from "../state/memory-db.js";
-import type { HookKind } from "../models/runtime-state.js";
+import type { HookKind } from "./hook-kind.js";
+
+/** hooks 台账行形状（原 memory-db StoredHook；2.0 移除 SQLite 层后本模块自治）。 */
+export interface StoredHook {
+  readonly hookId: string;
+  readonly startChapter: number;
+  readonly type: string;
+  readonly status: string;
+  /** R23/394 号：规范类型分类（markdown 台账第 14 列往返；sqlite 投影不落）。 */
+  readonly kind?: HookKind;
+  readonly lastAdvancedChapter: number;
+  readonly expectedPayoff: string;
+  readonly payoffTiming?: string;
+  readonly notes: string;
+  readonly dependsOn?: ReadonlyArray<string>;
+  readonly paysOffInArc?: string;
+  readonly coreHook?: boolean;
+  readonly halfLifeChapters?: number;
+  readonly advancedCount?: number;
+  readonly promoted?: boolean;
+}
 
 /**
  * 承诺账本运营化（G10/338 号，Phase B 批次一收尾；WNW W7 承诺统一账本思想的采纳）。

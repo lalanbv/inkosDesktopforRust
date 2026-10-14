@@ -24,7 +24,24 @@ const REGISTRY = "https://registry.npmjs.org/";
 // parser（override 直达补丁线）、fast-xml-parser/provider-utils（override 出清，
 // 同 major 补丁线）、vitest/@vitest/mocker（482 号 vitest 5）全部修复。
 // 维护规则不变：新增条目必须给出定性理由与来源；移除条目即恢复拦截。
-const ACCEPTED = new Map([]);
+// 688 号：上游 2.0 合并带来依赖树整体换代（约 185 条 → override 直达补丁线
+// 消化至 5 条；30 键 override 见根 package.json pnpm.overrides），剩余为
+// 跨 major 决策/无补丁线/低危渲染面，逐条定性如下：
+const ACCEPTED = new Map([
+  // vitest/@vitest/mocker：补丁线在 vitest 4.1.11+，上游 2.0 pin ^3.0.0（版本对齐 2.0.0
+  // 是上游发布契约）——跨 major 升级须随上游动作，不在 fork 侧单独跳线。
+  // dev-only 暴露面：UI server（GHSA-5xrq）与 mocker redirect（GHSA-82fw）仅在
+  // 跑测试时监听/生效，不进生产产物。上游 vitest 升 4 时移除本条即恢复拦截。
+  ["vitest", { reason: "上游 2.0 pin ^3.0.0 跨 major 待随上游升级；dev-only（UI server 仅测试期监听）", since: "688" }],
+  ["@vitest/mocker", { reason: "同 vitest：补丁线 4.1.11+ 依赖 vitest 4；dev-only（mocker 仅测试期生效）", since: "688" }],
+  // braces GHSA-vfj7-8cjw-p6xm：patched <0.0.0（无补丁线，501 号同型先例——
+  // 无补丁线即当前最新为终态，跟进上游发版）。
+  ["braces", { reason: "无补丁线（patched <0.0.0），当前最新即终态，跟进上游", since: "688" }],
+  // katex GHSA-238p-pmpm-9mq7（low）：补丁线 >=0.18.2 为跨 major（streamdown 依赖
+  // katex 0.16 线）；fork 阅读器渲染自有内容，原型污染需恶意 LaTeX 输入。
+  // streamdown 升级 katex 线时移除本条即恢复拦截。
+  ["katex", { reason: "low；补丁线 0.18.2 跨 major（streamdown 依赖 0.16 线）；渲染面需恶意输入方可触发", since: "688" }],
+]);
 
 const args = process.argv.slice(2);
 const verbose = args.includes("--json");

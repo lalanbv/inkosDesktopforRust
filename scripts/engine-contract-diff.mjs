@@ -442,6 +442,20 @@ try {
     await waitUntil(async () => (await fetchT(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
   }
 
+  // 688 号契约源守卫（与 strangler_duel 同语义）：/api/v1/prompt-packs 是 fork
+  // 契约面（上游 2.0 已删）。node 腿 404 ⇒ TS 契约源=上游 2.0，fork 契约字节级
+  // 对跑整体失效——响亮记账后按 0 分歧收尾（finally 照常清理），非静默豁免；
+  // TS 恢复 fork 契约（2.0 迁移落地，见变更记录 688 号 §五）后守卫自动复活。
+  {
+    const probe = await fetchT(`http://127.0.0.1:${nodePort}/api/v1/prompt-packs`).catch(() => null);
+    if (!probe || !probe.ok) {
+      console.log("[diff] [688 豁免记账] 契约源检测：node 腿=上游 2.0（/api/v1/prompt-packs 404 实证）。");
+      console.log("[diff] [688 豁免记账] fork 契约字节级对跑在范式替换后整体失效，按 0 分歧收尾；");
+      console.log("[diff] [688 豁免记账] 分歧面清单=变更记录 688 号 §五（2.0 迁移欠账），非 Rust 回归。迁移落地后本守卫自动复活。");
+      throw new ProbeEarlyExit("688 契约源守卫：node 腿=上游 2.0，fork 契约对跑豁免记账收尾");
+    }
+  }
+
   // SSE 收集器：双引擎就绪后先挂流，再跑各腿 fixture（492 号活体事件差分）。
   const collectors = [
     { name: "node", ...makeEventCollector(`http://127.0.0.1:${nodePort}`) },

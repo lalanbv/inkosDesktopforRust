@@ -91,5 +91,9 @@ export function deriveBreadcrumb(
       return [home(), { label: t("bread.filmAuthor") }];
     case "film-studio":
       return [home(), { label: t("bread.filmStudio") }];
+    case "work":
+      return [home(), { label: t("bread.work") }];
+    case "work-chat":
+      return [home(), { label: t("bread.work") }];
   }
 }

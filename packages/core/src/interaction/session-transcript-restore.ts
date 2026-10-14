@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { activeChainEvents, readTranscriptEvents, transcriptHead } from "./session-transcript.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { readTranscriptEvents } from "./session-transcript.js";
 import {
   BookSessionSchema,
   type BookSession,
@@ -7,20 +7,10 @@ import {
   type ToolExecution,
   type PlayMode,
 } from "./session.js";
-import type { MessageEvent, CompactionEvent, SessionKind, TranscriptEvent } from "./session-transcript-schema.js";
+import type { MessageEvent, SessionKind, TranscriptEvent } from "./session-transcript-schema.js";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";
-}
-
-/**
- * transcript 反序列化域专用宽取：pi 0.87 的 Message union 与 Record guard
- * narrow 不兼容（interface 成员因无隐式索引签名被剔除、条件类型成员却保留，
- * narrow 结果恒为 ToolResultMessage|never）。运行时形状检查统一走本助手取
- * Record 域、出口处断言回 AgentMessage，行为与 0.73 时代完全一致。
- */
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return isObject(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function contentBlocks(message: Record<string, unknown>): unknown[] {
@@ -57,18 +47,17 @@ function isThinkingBlock(block: unknown): boolean {
 }
 
 function removeTrailingThinking(message: AgentMessage): AgentMessage {
-  const raw = asRecord(message);
-  if (!raw || raw.role !== "assistant" || !Array.isArray(raw.content)) {
+  if (!isObject(message) || message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
   }
 
-  const content = [...raw.content];
+  const content = [...message.content];
   while (content.length > 0 && isThinkingBlock(content[content.length - 1])) {
     content.pop();
   }
 
-  if (content.length === raw.content.length) return message;
-  return { ...raw, content } as AgentMessage;
+  if (content.length === message.content.length) return message;
+  return { ...message, content } as AgentMessage;
 }
 
 const emptyUsage = {
@@ -80,18 +69,8 @@ const emptyUsage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export const TOOL_RESULT_BRIDGE_TEXT = "I have processed the tool results.";
-const MAX_RESTORED_DIALOGUE_MESSAGES = 12;
-const MAX_RESTORED_TOOL_SUMMARY_ITEMS = 8;
+export const TOOL_RESULT_BRIDGE_TEXT = "[Completed tool-result boundary]";
 const EXPIRED_SKILL_RESULT_TEXT = "Skill instructions expired after their original turn.";
-const RESTORED_HISTORY_BOUNDARY_ZH =
-  "[已完成的历史上下文]\n" +
-  "以上是已经完成并提交的历史上下文，只能用于回忆，不代表当前轮已经执行了动作。\n" +
-  "当前轮必须优先遵循用户接下来输入的最新指令；如果最新输入是提问、讨论或确认，直接回答，不要因为历史工具结果跳过判断或继续执行旧动作。";
-const RESTORED_HISTORY_BOUNDARY_EN =
-  "[Completed history context]\n" +
-  "The messages above are completed and committed history. Use them only as memory; they do not mean any action has already run in the current turn.\n" +
-  "For the current turn, prioritize the next user instruction. If it is a question, discussion, or confirmation, answer directly instead of continuing an old tool action.";
 
 function toolResultBridgeMessage(timestamp: number): AgentMessage {
   return {
@@ -113,14 +92,12 @@ function addToolResultBridges(messages: AgentMessage[]): AgentMessage[] {
     const message = messages[i];
     bridged.push(message);
 
-    const raw = asRecord(message);
-    if (!raw || raw.role !== "toolResult") continue;
+    if (!isObject(message) || message.role !== "toolResult") continue;
 
     const next = messages[i + 1];
-    const nextRaw = asRecord(next);
-    if (nextRaw && (nextRaw.role === "toolResult" || nextRaw.role === "assistant")) continue;
+    if (isObject(next) && (next.role === "toolResult" || next.role === "assistant")) continue;
 
-    const timestamp = typeof raw.timestamp === "number" ? raw.timestamp + 1 : Date.now();
+    const timestamp = typeof message.timestamp === "number" ? message.timestamp + 1 : Date.now();
     bridged.push(toolResultBridgeMessage(timestamp));
   }
 
@@ -135,50 +112,28 @@ function systemMessage(content: string, timestamp: number): AgentMessage {
   } as unknown as AgentMessage;
 }
 
-export function appendRestoredHistoryBoundary(
-  messages: AgentMessage[],
-  language: string,
-): AgentMessage[] {
-  if (messages.length === 0) return messages;
-  const timestamp = messages.reduce((max, message) => {
-    if (isObject(message) && typeof message.timestamp === "number") {
-      return Math.max(max, message.timestamp);
-    }
-    return max;
-  }, 0) || Date.now();
-  return [
-    ...messages,
-    systemMessage(
-      language === "zh" ? RESTORED_HISTORY_BOUNDARY_ZH : RESTORED_HISTORY_BOUNDARY_EN,
-      timestamp + 1,
-    ),
-  ];
-}
-
 export function cleanRestoredAgentMessages(messages: AgentMessage[]): AgentMessage[] {
   const availableToolCalls = new Set<string>();
   for (const message of messages) {
-    const raw = asRecord(message);
-    if (raw && raw.role === "assistant") {
-      for (const id of toolCallIds(raw)) availableToolCalls.add(id);
+    if (isObject(message) && message.role === "assistant") {
+      for (const id of toolCallIds(message)) availableToolCalls.add(id);
     }
   }
 
   const cleaned = messages.filter((message) => {
-    const raw = asRecord(message);
-    if (!raw) return false;
-    if (raw.role === "toolResult") {
-      return typeof raw.toolCallId === "string" && availableToolCalls.has(raw.toolCallId);
+    if (!isObject(message)) return false;
+    if (message.role === "toolResult") {
+      return typeof message.toolCallId === "string" && availableToolCalls.has(message.toolCallId);
     }
-    if (raw.role === "assistant") {
-      return hasTextContent(raw) || hasToolCallContent(raw);
+    if (message.role === "assistant") {
+      return hasTextContent(message) || hasToolCallContent(message);
     }
-    return raw.role === "user" || raw.role === "system";
+    return message.role === "user" || message.role === "system";
   });
 
   if (cleaned.length === 0) return cleaned;
   const last = cleaned[cleaned.length - 1];
-  if (asRecord(last)?.role === "assistant") {
+  if (isObject(last) && last.role === "assistant") {
     cleaned[cleaned.length - 1] = removeTrailingThinking(last);
   }
 
@@ -249,25 +204,25 @@ export function adaptRestoredAgentMessagesForModel(
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const raw = asRecord(message);
-    if (!raw) continue;
+    if (!isObject(message)) continue;
 
-    if (raw.role === "assistant") {
-      const content = contentBlocks(raw);
+    if (message.role === "assistant") {
+      const content = contentBlocks(message);
       const isBridge = content.length === 1 &&
         isObject(content[0]) &&
         content[0].type === "text" &&
         typeof content[0].text === "string" &&
         content[0].text.trim() === TOOL_RESULT_BRIDGE_TEXT;
       const previous = adapted[adapted.length - 1];
-      const previousRaw = asRecord(previous);
-      const previousRole = previousRaw?.role;
+      const previousRole = isObject(previous)
+        ? (previous as Record<string, unknown>).role
+        : undefined;
       if (
         isBridge &&
-        previousRaw &&
+        isObject(previous) &&
         (previousRole === "user" || previousRole === "system") &&
-        typeof previousRaw.content === "string" &&
-        (previousRaw.content.startsWith("[Tool results]") || previousRaw.content.startsWith("[Historical tool results]"))
+        typeof previous.content === "string" &&
+        (previous.content.startsWith("[Tool results]") || previous.content.startsWith("[Historical tool results]"))
       ) {
         continue;
       }
@@ -283,13 +238,13 @@ export function adaptRestoredAgentMessagesForModel(
       );
 
       if (foreignToolCallIds.size === 0) {
-        if (Array.isArray(raw.content) && isSameAssistantModel(raw, target)) {
+        if (Array.isArray(message.content) && isSameAssistantModel(message, target)) {
           adapted.push(message);
           continue;
         }
         const rewritten = contentWithoutThinking.length === content.length
           ? message
-          : ({ ...raw, content: contentWithoutThinking } as AgentMessage);
+          : ({ ...message, content: contentWithoutThinking } as AgentMessage);
         if (
           contentWithoutThinking.some(
             (block) =>
@@ -312,19 +267,18 @@ export function adaptRestoredAgentMessagesForModel(
           block.text.trim().length > 0,
       );
       if (textContent.length > 0) {
-        adapted.push({ ...raw, content: textContent } as AgentMessage);
+        adapted.push({ ...message, content: textContent } as AgentMessage);
       }
 
       const toolResults: AgentMessage[] = [];
       let nextIndex = index + 1;
       while (nextIndex < messages.length) {
         const next = messages[nextIndex];
-        const nextRaw = asRecord(next);
         if (
-          !nextRaw ||
-          nextRaw.role !== "toolResult" ||
-          typeof nextRaw.toolCallId !== "string" ||
-          !foreignToolCallIds.has(nextRaw.toolCallId)
+          !isObject(next) ||
+          next.role !== "toolResult" ||
+          typeof next.toolCallId !== "string" ||
+          !foreignToolCallIds.has(next.toolCallId)
         ) {
           break;
         }
@@ -338,7 +292,7 @@ export function adaptRestoredAgentMessagesForModel(
       continue;
     }
 
-    if (raw.role === "toolResult") {
+    if (message.role === "toolResult") {
       pushToolResultsAsSystem([message]);
       continue;
     }
@@ -347,9 +301,8 @@ export function adaptRestoredAgentMessagesForModel(
   }
 
   const filtered = adapted.filter((message) => {
-    const raw = asRecord(message);
-    if (!raw || raw.role !== "assistant") return true;
-    return hasTextContent(raw) || hasToolCallContent(raw);
+    if (!isObject(message) || message.role !== "assistant") return true;
+    return hasTextContent(message) || hasToolCallContent(message);
   });
 
   return requiresAssistantAfterToolResult(target)
@@ -379,122 +332,18 @@ export function committedMessageEvents(events: TranscriptEvent[], sessionKind?: 
     .sort((a, b) => a.seq - b.seq);
 }
 
-function requestKindMap(events: TranscriptEvent[]): Map<string, SessionKind | undefined> {
-  return new Map(
-    events
-      .filter((event) => event.type === "request_started")
-      .map((event) => [event.requestId, event.sessionKind]),
-  );
-}
-
-function textOnlyAgentMessage(event: MessageEvent): AgentMessage | null {
-  const raw = event.message as Record<string, unknown>;
-  if (!isObject(raw) || event.role === "toolResult") return null;
-
-  if (event.role === "user" || event.role === "system") {
-    const content = textFromContent(raw.content);
-    return content ? { role: event.role, content, timestamp: event.timestamp } as AgentMessage : null;
-  }
-
-  if (event.role === "assistant") {
-    const textBlocks = contentBlocks(raw).filter(
-      (block): block is { type: "text"; text: string } =>
-        isObject(block) &&
-        block.type === "text" &&
-        typeof block.text === "string" &&
-        block.text.trim().length > 0,
-    );
-    if (textBlocks.length === 0) return null;
-    return {
-      ...raw,
-      role: "assistant",
-      content: textBlocks,
-      timestamp: event.timestamp,
-    } as AgentMessage;
-  }
-
-  return null;
-}
-
-function buildHistoricalToolSummary(
-  events: TranscriptEvent[],
-  sessionKind?: SessionKind,
-): AgentMessage | null {
-  const kinds = requestKindMap(events);
-  const committed = committedMessageEvents(events, sessionKind);
-  const calls = new Map<string, { tool: string; agent?: string; timestamp: number }>();
-  const summaries: Array<{ timestamp: number; line: string }> = [];
-
-  for (const event of committed) {
-    const requestKind = kinds.get(event.requestId);
-    if (sessionKind && requestKind !== sessionKind) {
-      continue;
-    }
-
-    const raw = event.message as Record<string, unknown>;
-    if (!isObject(raw)) continue;
-
-    if (event.role === "assistant") {
-      for (const block of contentBlocks(raw)) {
-        if (!isObject(block) || block.type !== "toolCall") continue;
-        const id = typeof block.id === "string" ? block.id : "";
-        if (!id) continue;
-        const tool = typeof block.name === "string" && block.name ? block.name : "tool";
-        const args = isObject(block.arguments) ? block.arguments : undefined;
-        const agent = typeof args?.agent === "string" ? args.agent : undefined;
-        calls.set(`${event.requestId}\0${id}`, {
-          tool,
-          ...(agent ? { agent } : {}),
-          timestamp: event.timestamp,
-        });
-      }
-      continue;
-    }
-
-    if (event.role !== "toolResult") continue;
-    const toolCallId = typeof raw.toolCallId === "string"
-      ? raw.toolCallId
-      : event.toolCallId ?? "";
-    const call = calls.get(`${event.requestId}\0${toolCallId}`);
-    const tool = typeof raw.toolName === "string" && raw.toolName
-      ? raw.toolName
-      : call?.tool ?? "tool";
-    const agent = call?.agent;
-    const status = raw.isError === true ? "failed" : "completed";
-    const text = tool === "use_skill"
-      ? "expired; instructions are not active for later turns"
-      : textFromContent(raw.content).replace(/\s+/g, " ").trim();
-    const trimmed = text.length > 180 ? `${text.slice(0, 180)}...` : text;
-    summaries.push({
-      timestamp: event.timestamp,
-      line: `- ${tool}${agent ? `:${agent}` : ""} ${status}${trimmed ? ` — ${trimmed}` : ""}`,
-    });
-  }
-
-  if (summaries.length === 0) return null;
-  const latest = summaries.slice(-MAX_RESTORED_TOOL_SUMMARY_ITEMS);
-  const timestamp = latest.reduce((max, item) => Math.max(max, item.timestamp), 0) || Date.now();
-  return systemMessage([
-    "[历史状态摘要]",
-    "以下是已经完成的历史工具动作摘要，只说明当前状态；不是当前用户的新指令，也不表示本轮已经执行。",
-    ...latest.map((item) => item.line),
-  ].join("\n"), timestamp);
-}
-
-function requestIdsWithToolActivity(events: ReadonlyArray<MessageEvent>): Set<string> {
-  const ids = new Set<string>();
-  for (const event of events) {
-    if (event.role === "toolResult") {
-      ids.add(event.requestId);
-      continue;
-    }
-    const raw = event.message as Record<string, unknown>;
-    if (!isObject(raw)) continue;
-    if (contentBlocks(raw).some((block) => isObject(block) && block.type === "toolCall")) {
-      ids.add(event.requestId);
-    }
-  }
-  return ids;
+function visibleMessageEvents(events: TranscriptEvent[]): MessageEvent[] {
+  return events.flatMap((event): MessageEvent[] => {
+    if (event.type === "message" && event.visibility === "model") return [];
+    if (event.type === "message") return [event];
+    if (event.type !== "request_failed") return [];
+    return [{
+      version: 1, sessionId: event.sessionId, seq: event.seq, timestamp: event.timestamp,
+      type: "message", requestId: event.requestId, uuid: `failure-${event.seq}`,
+      parentUuid: null, role: "system",
+      message: { role: "system", content: event.error, timestamp: event.timestamp },
+    }];
+  }).sort((a,b)=>a.seq-b.seq);
 }
 
 function requestIdsUsingSkill(events: ReadonlyArray<MessageEvent>): Set<string> {
@@ -514,104 +363,50 @@ function requestIdsUsingSkill(events: ReadonlyArray<MessageEvent>): Set<string> 
   return ids;
 }
 
-/**
- * 恢复对话扫描（R32a，553 号）：committed 消息 + 平行 uuid + 会话压缩窗口。
- *
- * 压缩窗口应用（对齐上游 structural.js 的 newest-compaction 守卫语义——最新
- * compaction 事件遮蔽更早的）：取 seq 最大的 compaction 事件，对话只回放
- * `firstKeptUuid` 起（含）的 committed 消息；`firstKeptUuid=null` 表示无保留段。
- * 找不到定位 uuid（事件损坏/跨版本清理）时忽略该 compaction——全量恢复的安全网，
- * 防误删全部历史。
- */
-export interface CommittedDialogueScan {
-  /** 窗口化后的对话消息（text-only，未做条数裁剪）。 */
-  messages: AgentMessage[];
-  /** 与 messages 平行的 transcript 定位 uuid（commit 事件恒有 uuid）。 */
-  uuids: string[];
-  /** 生效的最新 compaction 条目（恢复端须以其 summary 作头部 system 消息）。 */
-  activeCompaction: CompactionEvent | null;
-  /** 窗口化后的事件流（工具历史摘要基于它，避免摘要复述已压缩掉的旧动作）。 */
-  windowedEvents: TranscriptEvent[];
-}
-
-export function restoreCommittedDialogueScan(
-  rawEvents: TranscriptEvent[],
-  sessionKind?: SessionKind,
-): CommittedDialogueScan {
-  // R36 树化（636 号）：入口先做 active 链过滤——恢复只看 root→head 路径上
-  // 的事件，弃用分支整体剪除；纯 legacy 文件过滤退化为全量（零行为变更）。
-  // compaction 随链生效：分支各自的压缩边界互不污染（546 施工图 §3.4）。
-  const events = activeChainEvents(rawEvents);
-  let activeCompaction: CompactionEvent | null = null;
-  for (const event of events) {
-    if (event.type === "compaction") activeCompaction = event;
-  }
-
-  let committed = committedMessageEvents(events, sessionKind);
-  if (activeCompaction) {
-    const keptIndex = activeCompaction.firstKeptUuid
-      ? committed.findIndex((event) => event.uuid === activeCompaction!.firstKeptUuid)
-      : -1;
-    if (keptIndex >= 0) {
-      committed = committed.slice(keptIndex);
-    } else if (activeCompaction.firstKeptUuid === null) {
-      committed = [];
-    } else {
-      activeCompaction = null;
-    }
-  }
-
-  const windowedEvents = events.filter(
-    (event) => event.type !== "message" || committed.includes(event as MessageEvent),
-  );
-
-  const toolRequestIds = requestIdsWithToolActivity(committed);
-  const kinds = requestKindMap(events);
-  const pairs: Array<{ message: AgentMessage; uuid: string }> = [];
-  for (const event of committed) {
-    if (toolRequestIds.has(event.requestId)) {
-      // Legacy events have no sessionKind. Keep the user's own words as
-      // conversation memory, but do not replay the old tool call/result.
-      if (!(sessionKind && kinds.get(event.requestId) === undefined && event.role === "user")) {
-        continue;
-      }
-    }
-    const message = textOnlyAgentMessage(event);
-    if (message) pairs.push({ message, uuid: event.uuid });
-  }
-
-  return {
-    messages: pairs.map((pair) => pair.message),
-    uuids: pairs.map((pair) => pair.uuid),
-    activeCompaction,
-    windowedEvents,
-  };
-}
-
 export async function restoreAgentMessagesFromTranscript(
   projectRoot: string,
   sessionId: string,
   sessionKind?: SessionKind,
 ): Promise<AgentMessage[]> {
   const events = await readTranscriptEvents(projectRoot, sessionId);
-  const scan = restoreCommittedDialogueScan(events, sessionKind);
-  const summary = buildHistoricalToolSummary(scan.windowedEvents, sessionKind);
-  const dialogue = scan.messages.slice(-MAX_RESTORED_DIALOGUE_MESSAGES);
+  const committed = committedMessageEvents(events, sessionKind);
+  const requestKinds = new Map(
+    events
+      .filter((event) => event.type === "request_started")
+      .map((event) => [event.requestId, event.sessionKind]),
+  );
+  return cleanRestoredAgentMessages(
+    committed
+      .filter((event) => {
+        if (!sessionKind || requestKinds.get(event.requestId) !== undefined) return true;
+        if (event.role === "toolResult") return false;
+        const raw = event.message as Record<string, unknown>;
+        return event.role !== "assistant" || !contentBlocks(raw).some(
+          (block) => isObject(block) && block.type === "toolCall",
+        );
+      })
+      .map((event) => sanitizeRestoredSkillMessage(event.message as AgentMessage)),
+  );
+}
 
-  return [
-    ...(scan.activeCompaction
-      ? [systemMessage(
-          [
-            "[历史对话摘要]",
-            "以下是更早对话的结构化摘要（会话压缩生成）；它概述此前进展，不是当前用户的新指令。",
-            scan.activeCompaction.summary,
-          ].join("\n"),
-          scan.activeCompaction.timestamp,
-        )]
-      : []),
-    ...(summary ? [summary] : []),
-    ...dialogue,
-  ];
+function sanitizeRestoredSkillMessage(message: AgentMessage): AgentMessage {
+  if (!isObject(message)) return message;
+  if (message.role === "toolResult" && message.toolName === "use_skill") {
+    return {
+      ...message,
+      content: [{ type: "text", text: EXPIRED_SKILL_RESULT_TEXT }],
+      details: { kind: "skill_expired" },
+    } as AgentMessage;
+  }
+  if (message.role === "assistant" && contentBlocks(message).some(
+    (block) => isObject(block) && block.type === "toolCall" && block.name === "use_skill",
+  )) {
+    return {
+      ...message,
+      content: contentBlocks(message).filter((block) => !isThinkingBlock(block)),
+    } as AgentMessage;
+  }
+  return message;
 }
 
 function textFromContent(content: unknown): string {
@@ -647,7 +442,7 @@ function firstUserMessageTitle(messages: InteractionMessage[]): string | null {
     if (message.role !== "user") continue;
     const oneLine = message.content.trim().replace(/\s+/g, " ");
     if (!oneLine) return null;
-    return oneLine.length > 20 ? `${oneLine.slice(0, 20)}…` : oneLine;
+    return oneLine;
   }
   return null;
 }
@@ -663,24 +458,26 @@ function messageEventToInteractionMessage(
   if (event.role === "toolResult") return null;
 
   if (event.role === "user") {
-    const content = textFromContent(raw.content);
+    const input = event.display?.userInput;
+    const content = input ? [input.text, "", input.language === "en" ? "Attachments:" : "附件：",
+      ...input.attachments.map(attachment => `- ${attachment.filename}`)].join("\n") : textFromContent(raw.content);
     return content ? { role: "user", content, timestamp: event.timestamp } : null;
   }
 
   if (event.role === "assistant") {
-    const rawText = textFromContent(raw.content);
-    const content = options.suppressAssistantText ? "" : rawText;
+    const rawText = event.display?.completion?.message ?? textFromContent(raw.content);
+    const content = event.display?.completion?.message ?? (options.suppressAssistantText ? "" : rawText);
     const thinking = options.suppressThinking
       ? undefined
       : joinThinking([
           ...(restoredThinking ?? []),
           thinkingFromContent(raw.content),
-          event.legacyDisplay?.thinking,
+          event.display?.thinking,
           options.suppressAssistantText ? rawText : undefined,
         ]);
     const toolExecutions = restoredToolExecutions?.length
       ? restoredToolExecutions
-      : event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
+      : event.display?.toolExecutions as ToolExecution[] | undefined;
     if (!content && !thinking && !toolExecutions?.length) return null;
     if (!content && !toolExecutions?.length) return null;
     return {
@@ -708,13 +505,6 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     timestamp: number;
   };
 
-  const agentLabels: Record<string, string> = {
-    architect: "建书",
-    writer: "写作",
-    auditor: "审计",
-    reviser: "修订",
-    exporter: "导出",
-  };
   const toolLabels: Record<string, string> = {
     read: "读取文件",
     edit: "编辑文件",
@@ -730,6 +520,12 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     create_narrative_forecast: "剧情多线推演",
     get_narrative_forecast: "核验剧情推演",
     select_narrative_branch: "采用候选分支",
+    create_book: "创建长篇",
+    revise_foundation: "重建设定",
+    write_chapters: "写作章节",
+    review_chapter: "审查章节",
+    revise_chapter: "修订章节",
+    export_book: "导出作品",
   };
 
   const messages: InteractionMessage[] = [];
@@ -784,15 +580,16 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     }
   };
 
-  const resolveToolLabel = (tool: string, agent?: string): string => {
-    if (tool === "sub_agent" && agent) return agentLabels[agent] ?? agent;
-    return toolLabels[tool] ?? tool;
+  const resolveToolLabel = (tool: string): string => {
+    const action = tool.includes("__") ? tool.slice(tool.indexOf("__") + 2) : tool;
+    return toolLabels[action] ?? action;
   };
 
-  const hasCompletedPlayTool = (executions: ReadonlyArray<ToolExecution>): boolean =>
+  const hasCompletedImmersiveScene = (executions: ReadonlyArray<ToolExecution>): boolean =>
     executions.some((execution) =>
       execution.status === "completed"
-      && (execution.tool === "play_start" || execution.tool === "play_step" || execution.tool === "play_revise")
+      && isObject(execution.details)
+      && execution.details.presentation === "immersive-scene"
     );
 
   const rememberToolCalls = (event: MessageEvent, raw: Record<string, unknown>) => {
@@ -824,28 +621,25 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
     const tool = typeof raw.toolName === "string" && raw.toolName
       ? raw.toolName
       : call?.tool ?? "tool";
+    const action = tool.includes("__") ? tool.slice(tool.indexOf("__") + 2) : tool;
     const args = call?.args;
-    const agent = tool === "sub_agent" && typeof args?.agent === "string"
-      ? args.agent
-      : undefined;
     const text = textFromContent(raw.content).trim();
     const isError = raw.isError === true;
     const details = raw.details;
-    const expiredSkill = tool === "use_skill";
+    const expiredSkill = action === "use_skill";
 
     return {
       id: toolCallId,
-      tool,
-      ...(agent ? { agent } : {}),
-      label: resolveToolLabel(tool, agent),
+      tool: action,
+      label: resolveToolLabel(action),
       status: isError ? "error" : "completed",
       ...(args ? { args } : {}),
       ...(isError
-        ? { error: text.slice(0, 500) || "Tool execution failed" }
+        ? { error: text || "Tool execution failed" }
         : expiredSkill
           ? { result: EXPIRED_SKILL_RESULT_TEXT }
           : text
-          ? { result: text.slice(0, 200) }
+          ? { result: text }
           : {}),
       ...(expiredSkill
         ? { details: { kind: "skill_expired" } }
@@ -870,17 +664,18 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
       const isSkillRequest = skillRequestIds.has(event.requestId);
       const currentThinking = isSkillRequest ? undefined : thinkingFromContent(raw.content);
       const currentText = textFromContent(raw.content).trim();
-      const legacyToolExecutions = event.legacyDisplay?.toolExecutions as ToolExecution[] | undefined;
-      const hasLegacyDisplay = !!currentThinking
-        || (!isSkillRequest && !!event.legacyDisplay?.thinking)
-        || !!legacyToolExecutions?.length;
+      const displayedToolExecutions = event.display?.toolExecutions as ToolExecution[] | undefined;
+      const hasDisplay = !!currentThinking
+        || !!event.display?.completion
+        || (!isSkillRequest && !!event.display?.thinking)
+        || !!displayedToolExecutions?.length;
       if (
         pendingToolExecutions.length > 0
-        && !hasCompletedPlayTool(pendingToolExecutions)
+        && !hasCompletedImmersiveScene(pendingToolExecutions)
         && !currentText
         && !currentThinking
         && !hasToolCallContent(raw)
-        && !hasLegacyDisplay
+        && !hasDisplay
       ) {
         // Empty terminal assistant messages only close the model turn. Keep
         // non-play tool results pending so they attach to the previous prose
@@ -892,7 +687,7 @@ function messageEventsToInteractionMessages(events: MessageEvent[]): Interaction
         pendingToolExecutions.length > 0 ? pendingToolExecutions : undefined,
         pendingThinking.length > 0 ? pendingThinking : undefined,
         {
-          suppressAssistantText: hasCompletedPlayTool(pendingToolExecutions),
+          suppressAssistantText: hasCompletedImmersiveScene(pendingToolExecutions),
           suppressThinking: isSkillRequest,
         },
       );
@@ -930,7 +725,12 @@ export async function deriveBookSessionFromTranscript(
   const created = events.find((event) => event.type === "session_created");
   let bookId = created?.type === "session_created" ? created.bookId : null;
   let sessionKind = created?.type === "session_created" ? created.sessionKind : undefined;
+  let profileId = created?.type === "session_created" ? created.profileId : undefined;
+  let workId = created?.type === "session_created" ? created.workId : undefined;
+  let proposalAction = created?.type === "session_created" ? created.proposalAction : undefined;
   let playMode: PlayMode | undefined = created?.type === "session_created" ? created.playMode : undefined;
+  let modelOverride = created?.type === "session_created" ? created.modelOverride : undefined;
+  let serviceOverride = created?.type === "session_created" ? created.serviceOverride : undefined;
   let title = created?.type === "session_created" ? created.title : null;
   const createdAt = created?.type === "session_created"
     ? created.createdAt
@@ -950,14 +750,19 @@ export async function deriveBookSessionFromTranscript(
     if (event.type !== "session_metadata_updated") continue;
     if ("bookId" in event && event.bookId !== undefined) bookId = event.bookId;
     if ("sessionKind" in event && event.sessionKind !== undefined) sessionKind = event.sessionKind;
+    if ("profileId" in event && event.profileId !== undefined) profileId = event.profileId;
+    if ("workId" in event && event.workId !== undefined) workId = event.workId;
+    if ("proposalAction" in event && event.proposalAction !== undefined) proposalAction = event.proposalAction;
     if ("playMode" in event && event.playMode !== undefined) playMode = event.playMode;
+    if ("modelOverride" in event && event.modelOverride !== undefined) modelOverride = event.modelOverride;
+    if ("serviceOverride" in event && event.serviceOverride !== undefined) serviceOverride = event.serviceOverride;
     if ("title" in event && event.title !== undefined) title = event.title;
     updatedAt = Math.max(updatedAt, event.updatedAt);
   }
 
-  const messages = messageEventsToInteractionMessages(
-    committedMessageEvents(activeChainEvents(events)),
-  );
+  // Failed or interrupted requests remain visible to the author. Model replay
+  // separately uses committedMessageEvents to avoid replaying unfinished calls.
+  const messages = messageEventsToInteractionMessages(visibleMessageEvents(events));
 
   if (title === null) {
     title = firstUserMessageTitle(messages);
@@ -967,15 +772,14 @@ export async function deriveBookSessionFromTranscript(
     sessionId,
     bookId,
     sessionKind,
+    profileId,
+    workId: workId ?? bookId,
+    proposalAction,
     playMode,
+    modelOverride,
+    serviceOverride,
     title,
     messages,
-    draftRounds: [],
-    events: [],
-    // R36 树化（636 号）：head/branchCount 随 derive 透出（GET 详情与列表
-    // 共用）；legacy json 路径不经此函数，字段缺省。
-    head: transcriptHead(events),
-    branchCount: events.filter((event) => event.type === "branch_moved").length,
     createdAt,
     updatedAt,
   });

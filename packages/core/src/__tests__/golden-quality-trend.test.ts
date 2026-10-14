@@ -16,7 +16,7 @@ import {
   type ReviewMetricRow,
 } from "../utils/quality-trend.js";
 import { resolvePromiseUrgency } from "../utils/promise-ledger.js";
-import type { StoredHook } from "../state/memory-db.js";
+import type { StoredHook } from "../utils/promise-ledger.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vectors = JSON.parse(

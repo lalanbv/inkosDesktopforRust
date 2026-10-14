@@ -1,54 +1,27 @@
-import { readFile, readdir, mkdir } from "node:fs/promises";
+import { readFile, mkdir, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BaseAgent } from "./base.js";
+import { SemanticContextCompilerAgent } from "./semantic-context-compiler.js";
+import type { ContextFragment } from "../harness/context-compiler.js";
+import { semanticInputBudget, splitTextByEstimatedTokens } from "../llm/semantic-input.js";
 import type { BookConfig } from "../models/book.js";
-import type { HookKind } from "../models/runtime-state.js";
 import {
   ContextPackageSchema,
   type ChapterTrace,
   type ContextPackage,
-  type RuleStack,
 } from "../models/input-governance.js";
 import type { PlanChapterOutput } from "./planner.js";
 import {
-  parseChapterSummariesMarkdown,
   retrieveMemorySelection,
+  type MemorySelection,
   type MemoryRetrievalTrace,
   type MemorySemanticSelectionRequest,
   type MemorySemanticSelector,
 } from "../utils/memory-retrieval.js";
 import {
-  buildGovernedRuleStack,
   buildGovernedTrace,
   isProtectedContextSource,
 } from "../utils/context-assembly.js";
-import { enforceContextPriorityOrder } from "../utils/context-source-tier.js";
-import {
-  composeStyleGuidance,
-  resolveStyleBinding,
-  type StyleBinding,
-} from "../utils/style-feature-engine.js";
-import { hookActivityStrength } from "../utils/promise-ledger.js";
-import { buildOpeningHint, rankEntriesForComposition } from "../utils/context-ranker.js";
-import {
-  composeAntiAiGuidance,
-  renderExperienceGuidance,
-  resolveAntiAiRulesWithSeeds,
-  validateAntiAiRule,
-  type AntiAiRule,
-  type ExperienceEntry,
-} from "../utils/rule-experience-engine.js";
-import {
-  matchCodexCards,
-  normalizeCodexCards,
-  renderCodexBlock,
-  type EntityCodexCard,
-} from "../utils/entity-codex.js";
-import {
-  mergeCodexLayers,
-  parseSeriesCanonFile,
-  renderSeriesCodexBlock,
-} from "../utils/series-canon.js";
 import { writeGovernedRuntimeArtifacts } from "../utils/runtime-writer.js";
 import { estimateTextTokens, type LLMClient } from "../llm/provider.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
@@ -57,6 +30,9 @@ import type {
   BookReferenceSelectionTask,
   ReferenceSectionSelectionRequest,
 } from "../references/reference-context.js";
+import { Type } from "@sinclair/typebox";
+import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
+import { recordExecutionEvidence } from "../harness/execution-evidence.js";
 
 export interface ComposeChapterInput {
   readonly book: BookConfig;
@@ -69,8 +45,6 @@ export interface ComposeChapterInput {
   readonly referenceContextProvider?: BookReferenceContextProvider;
   readonly memorySemanticSelector?: MemorySemanticSelector;
   readonly onContextCompression?: ContextCompressionCallback;
-  /** R20/390 号：系列正典文件路径（book.seriesId 存在时由调用方解析，缺省不注入）。 */
-  readonly seriesCanonFile?: string;
 }
 
 export type BookReferenceContextProvider = (
@@ -95,7 +69,7 @@ export type CompressibleContextCompiler = (request: CompressibleContextCompileRe
 
 export interface OutlineSectionSelectionRequest {
   readonly fileName: string;
-  readonly kind: "story-frame" | "volume-map";
+  readonly kind: "story-frame" | "volume-map" | "role-card" | "current-state";
   readonly chapterNumber: number;
   readonly goal: string;
   readonly outlineNode: string;
@@ -111,49 +85,32 @@ export type OutlineSectionSelector = (request: OutlineSectionSelectionRequest) =
 
 export interface ComposeChapterOutput {
   readonly contextPackage: ContextPackage;
-  readonly ruleStack: RuleStack;
   readonly trace: ChapterTrace;
   readonly contextPath: string;
-  readonly ruleStackPath: string;
   readonly tracePath: string;
 }
 
 export async function composeGovernedChapter(input: ComposeChapterInput): Promise<ComposeChapterOutput> {
   const storyDir = join(input.bookDir, "story");
-  const runtimeDir = join(storyDir, "runtime");
-  await mkdir(runtimeDir, { recursive: true });
-
   const baseContext = await collectSelectedContext(
     storyDir,
     input.plan,
-    input.book.language ?? "zh",
+    input.book.language,
     input.outlineSectionSelector,
     input.memorySemanticSelector,
   );
   const referenceContext = await loadReferenceContext(input);
-  // G2：组装序固化 == 优先级契约（事实 > 规划 > 记忆 > 参考资料 > 临时），
-  // 参考资料/更低层永远排在章纲与事实之后，不得在提示词里抢占比它们更高的权威。
-  const styleBindingEntry = await loadStyleBindingEntry(input.bookDir);
-  // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
-  const ruleExperienceEntries = await loadRuleExperienceEntries(input.bookDir);
-  // R10/376 号：实体卡场景命中注入（source=codex/<name>，user-reference 层）；
-  // R20/390 号：系列正典双层注入（source=codex-series/<name>，同名 book 覆盖）。
-  const codexEntries = await loadCodexEntries(
-    input.bookDir,
-    input.plan.intent.chapter,
-    input.plan.intent.goal,
-    input.plan.memo.body,
-    input.seriesCanonFile,
-  );
-  // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
-  // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
-  const selectedContext = rankEntriesForComposition([
-    ...baseContext.entries,
-    ...referenceContext.entries,
-    ...(styleBindingEntry ? [styleBindingEntry] : []),
-    ...ruleExperienceEntries,
-    ...codexEntries,
-  ]).map((ranked) => ranked.entry);
+  return persistComposedContext(input, baseContext, referenceContext);
+}
+
+async function persistComposedContext(
+  input: ComposeChapterInput,
+  baseContext: Awaited<ReturnType<typeof collectSelectedContext>>,
+  referenceContext: BookReferenceContextSelection,
+): Promise<ComposeChapterOutput> {
+  const runtimeDir = join(input.bookDir, "story", "runtime");
+  await mkdir(runtimeDir, { recursive: true });
+  const selectedContext = [...baseContext.entries, ...referenceContext.entries];
   const initialContextPackage = ContextPackageSchema.parse({
     chapter: input.chapterNumber,
     selectedContext,
@@ -162,14 +119,13 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     contextPackage: initialContextPackage,
     chapterNumber: input.chapterNumber,
     goal: input.plan.intent.goal,
-    language: input.book.language ?? "zh",
+    language: input.book.language,
     contextBudget: input.contextBudget,
     compiler: input.compressibleContextCompiler,
     onContextCompression: input.onContextCompression,
   });
   const contextPackage = budgeted.contextPackage;
 
-  const ruleStack = buildGovernedRuleStack(input.plan, input.chapterNumber);
   const trace = buildGovernedTrace({
     chapterNumber: input.chapterNumber,
     plan: input.plan,
@@ -180,30 +136,25 @@ export async function composeGovernedChapter(input: ComposeChapterInput): Promis
     retrieval: {
       engine: baseContext.retrievalTrace.engine,
       query: baseContext.retrievalTrace.query,
+      selectionMode: baseContext.retrievalTrace.selectionMode,
       candidates: baseContext.retrievalTrace.candidates.map((candidate) => ({ ...candidate })),
-      ...(baseContext.retrievalTrace.semanticSelectedIds
-        ? { semanticSelectedIds: [...baseContext.retrievalTrace.semanticSelectedIds] }
-        : {}),
+      semanticSelectedIds: [...baseContext.retrievalTrace.semanticSelectedIds],
     },
   });
   const {
     contextPath,
-    ruleStackPath,
     tracePath,
   } = await writeGovernedRuntimeArtifacts({
     runtimeDir,
     chapterNumber: input.chapterNumber,
     contextPackage,
-    ruleStack,
     trace,
   });
 
   return {
     contextPackage,
-    ruleStack,
     trace,
     contextPath,
-    ruleStackPath,
     tracePath,
   };
 }
@@ -233,8 +184,8 @@ async function applyContextBudgetIfNeeded(params: {
     return { contextPackage: params.contextPackage, notes: [] };
   }
 
-  const protectedEntries = selectedContext.filter((entry) => isProtectedContextSource(entry.source));
-  const compressibleEntries = selectedContext.filter((entry) => !isProtectedContextSource(entry.source));
+  const protectedEntries = selectedContext.filter((entry) => isProtectedContextSource(entry));
+  const compressibleEntries = selectedContext.filter((entry) => !isProtectedContextSource(entry));
   const protectedTokens = estimateSelectedContextTokens(protectedEntries);
   if (protectedTokens > availableInputTokens) {
     params.onContextCompression?.({
@@ -332,6 +283,7 @@ async function applyContextBudgetIfNeeded(params: {
           source: "runtime/compiled-compressible-context",
           reason: "Semantic compilation of lower-priority context after protected context exceeded the input budget.",
           excerpt: compiled,
+          protection: "compressible",
         },
       ],
     }),
@@ -343,11 +295,6 @@ async function applyContextBudgetIfNeeded(params: {
       protectedTokens,
       compressibleTokens,
       budgetTokens: compileBudget,
-      // R6/367 号：压缩留痕——压缩前逐源 token 估算（可压缩源）。
-      sourceTokens: compressibleEntries.map((entry) => ({
-        source: entry.source,
-        tokens: estimateTextTokens([entry.source, entry.reason, entry.excerpt].filter(Boolean).join("\n")),
-      })),
     },
   };
 }
@@ -358,190 +305,6 @@ function estimateSelectedContextTokens(entries: ContextPackage["selectedContext"
   ), 0);
 }
 
-function renderContextEntries(entries: ContextPackage["selectedContext"]): string {
-  return entries.map((entry) =>
-    [
-      `### ${entry.source}`,
-      `Reason: ${entry.reason}`,
-      entry.excerpt ? entry.excerpt : "(no excerpt)",
-    ].join("\n"),
-  ).join("\n\n");
-}
-
-/**
- * G4/340 号：书级写法绑定 → Selected Context 的 style-asset 条目。
- * 绑定文件缺失/档案缺失/解析失败一律返回 null（零打扰）；
- * source 前缀 `style/` 在上下文来源分层中即 style-asset（20，垫底参考层）。
- */
-export async function loadStyleBindingEntry(
-  bookDir: string,
-): Promise<ContextPackage["selectedContext"][number] | null> {
-  try {
-    const raw = await readFile(join(bookDir, "story", "style_binding.json"), "utf-8");
-    const binding = JSON.parse(raw) as StyleBinding;
-    if (!binding?.profileName) return null;
-    const profilesRaw = await readFile(
-      join(bookDir, "story", "style-profiles", `${binding.profileName}.json`),
-      "utf-8",
-    );
-    const profile = JSON.parse(profilesRaw);
-    const resolution = resolveStyleBinding([profile], binding);
-    if (!resolution || resolution.enabled.length === 0) return null;
-    const guidance = composeStyleGuidance(resolution.enabled, "zh", binding.maxGuidanceChars);
-    if (!guidance) return null;
-    return {
-      source: `style/${binding.profileName}`,
-      reason: "Bound style profile (feature pool selection).",
-      excerpt: guidance,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * R5/366 号：书级反AI规则禁则块 + G13 经验条目 → Selected Context 条目。
- * 文件缺失/解析失败一律返回空数组（零打扰）；source 前缀 `rules/`、
- * `experience/` 在上下文来源分层中与写法同层（style-asset=20）。
- */
-export async function loadRuleExperienceEntries(
-  bookDir: string,
-): Promise<ContextPackage["selectedContext"]> {
-  const entries: ContextPackage["selectedContext"] = [];
-  // R22/392 号：种子兜底——文件缺失/损坏/rules 键缺失 → 内置种子（内存态
-  // 不落盘）；文件可解析 → 用户规则空间（显式空规则=关闭防线，不回填）。
-  let userRules: AntiAiRule[] | undefined;
-  try {
-    const raw = await readFile(join(bookDir, "story", "anti_ai_rules.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { rules?: AntiAiRule[] };
-    if (Array.isArray(parsed.rules)) {
-      userRules = parsed.rules
-        .map((rule) => validateAntiAiRule(rule).rule)
-        .filter((rule): rule is AntiAiRule => Boolean(rule));
-    }
-  } catch {
-    userRules = undefined;
-  }
-  const resolvedRules = resolveAntiAiRulesWithSeeds(userRules);
-  if (resolvedRules.rules.length > 0) {
-    const guidance = composeAntiAiGuidance(resolvedRules.rules, "zh");
-    if (guidance) {
-      entries.push({
-        source: "rules/anti-ai",
-        reason: resolvedRules.seeded
-          ? "Built-in anti-AI baseline rules (seeded)."
-          : "Bound anti-AI rules.",
-        excerpt: guidance,
-      });
-    }
-  }
-  try {
-    const raw = await readFile(join(bookDir, "story", "experience.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { entries?: ExperienceEntry[] };
-    if (Array.isArray(parsed.entries) && parsed.entries.length > 0) {
-      const guidance = renderExperienceGuidance(parsed.entries, "zh");
-      if (guidance) {
-        entries.push({
-          source: "experience/proven",
-          reason: "Proven techniques learned from this book.",
-          excerpt: guidance,
-        });
-      }
-    }
-  } catch {
-    // 零打扰
-  }
-  return entries;
-}
-
-/**
- * R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
- * 读 story/entity_codex.json 与（seriesCanonFile 提供时）.inkos/series/
- * {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文为场景文本
- * 命中卡片：book 卡渲染「## 实体卡」（source=codex/<name>）；series 幸存
- * 条目（book 同名覆盖后）渲染「## 系列实体卡」（source=codex-series/<name>，
- * user-reference 层 40）。
- */
-export async function loadCodexEntries(
-  bookDir: string,
-  chapterNumber: number,
-  goal: string,
-  memoBody?: string,
-  seriesCanonFile?: string,
-): Promise<ContextPackage["selectedContext"]> {
-  const entries: ContextPackage["selectedContext"] = [];
-  void chapterNumber;
-  const sceneText = [goal, memoBody ?? ""].filter(Boolean).join("\n");
-  let bookCards: EntityCodexCard[] = [];
-  try {
-    const raw = await readFile(join(bookDir, "story", "entity_codex.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { cards?: unknown[] };
-    // 518 号：磁盘卡归一化（对齐 Rust serde(default)）——缺 aliases 的卡
-    // 在 matchCodexCards 展开即崩（差分器实证）。
-    if (Array.isArray(parsed.cards)) bookCards = normalizeCodexCards(parsed.cards);
-  } catch {
-    // 零打扰
-  }
-  if (bookCards.length > 0) {
-    const matches = matchCodexCards(sceneText, bookCards).slice(0, 8);
-    const block = renderCodexBlock(matches, "zh");
-    if (block) {
-      entries.push({
-        source: `codex/${matches[0]!.card.name}`,
-        reason: "Entity cards detected in this scene (canon facts).",
-        excerpt: block,
-      });
-    }
-  }
-  if (seriesCanonFile) {
-    try {
-      const raw = await readFile(seriesCanonFile, "utf-8");
-      const parsed = parseSeriesCanonFile(JSON.parse(raw));
-      if (parsed && parsed.entries.length > 0) {
-        // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
-        const { series } = mergeCodexLayers(bookCards, [...parsed.entries]);
-        const seriesMatches = matchCodexCards(sceneText, series).slice(0, 8);
-        const seriesBlock = renderSeriesCodexBlock(seriesMatches, "zh");
-        if (seriesBlock) {
-          entries.push({
-            source: `codex-series/${seriesMatches[0]!.card.name}`,
-            reason: "Series canon cards detected in this scene (cross-book canon facts).",
-            excerpt: seriesBlock,
-          });
-        }
-      }
-    } catch {
-      // 零打扰
-    }
-  }
-  return entries;
-}
-
-function parseSelectedSources(raw: string): string[] {
-  const trimmed = raw.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  const parse = (value: string): unknown => JSON.parse(value);
-  let parsed: unknown;
-  try {
-    parsed = parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start < 0 || end <= start) return [];
-    try {
-      parsed = parse(trimmed.slice(start, end + 1));
-    } catch {
-      return [];
-    }
-  }
-  if (!parsed || typeof parsed !== "object") return [];
-  const values = (parsed as { selectedSources?: unknown }).selectedSources;
-  if (!Array.isArray(values)) return [];
-  return values.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-}
-
 export class ComposerAgent extends BaseAgent {
   get name(): string {
     return "composer";
@@ -549,219 +312,269 @@ export class ComposerAgent extends BaseAgent {
 
   async composeChapter(input: ComposeChapterInput): Promise<ComposeChapterOutput> {
     const contextBudget = input.contextBudget ?? contextBudgetFromClient(this.ctx.client);
-    return composeGovernedChapter({
+    const configured: ComposeChapterInput = {
       ...input,
       contextBudget,
       compressibleContextCompiler: input.compressibleContextCompiler
         ?? (contextBudget ? (request) => this.compileCompressibleContext(request) : undefined),
       outlineSectionSelector: input.outlineSectionSelector ?? ((request) => this.selectOutlineSections(request)),
       memorySemanticSelector: input.memorySemanticSelector ?? ((request) => this.selectMemoryCandidates(request)),
+    };
+    if (contextBudget && !input.outlineSectionSelector && !input.memorySemanticSelector) {
+      const reference = await loadReferenceContext(configured);
+      const complete = await this.completeContextWithinBudget(input.bookDir, input.plan, input.book.language, contextBudget, reference.entries);
+      if (complete) return persistComposedContext(configured, complete, reference);
+      const selected = await collectSelectedContext(join(input.bookDir, "story"), input.plan, input.book.language,
+        configured.outlineSectionSelector, configured.memorySemanticSelector);
+      return persistComposedContext(configured, selected, reference);
+    }
+    return composeGovernedChapter(configured);
+  }
+
+  async selectTaskContext(input: {
+    readonly bookDir: string;
+    readonly chapterNumber: number;
+    readonly goal: string;
+    readonly language: "zh" | "en";
+    readonly contextBudget?: ContextBudget;
+  }): Promise<ContextPackage> {
+    const plan: PlanChapterOutput = {
+      intent: { chapter: input.chapterNumber, goal: input.goal },
+      memo: {
+        chapter: input.chapterNumber,
+        goal: input.goal,
+        body: input.goal,
+        threadRefs: [],
+      },
+      intentMarkdown: input.goal,
+      runtimePath: "runtime/task-context",
+      plannerInputs: [],
+    };
+    const budget = input.contextBudget ?? contextBudgetFromClient(this.ctx.client);
+    const complete = budget ? await this.completeContextWithinBudget(input.bookDir, plan, input.language, budget) : undefined;
+    const selected = complete ?? await collectSelectedContext(
+      join(input.bookDir, "story"),
+      plan,
+      input.language,
+      (request) => this.selectOutlineSections(request),
+      (request) => this.selectMemoryCandidates(request),
+    );
+    return ContextPackageSchema.parse({
+      chapter: input.chapterNumber,
+      selectedContext: selected.entries,
     });
   }
 
+  private async completeContextWithinBudget(
+    bookDir: string, plan: PlanChapterOutput, language: "zh" | "en", budget: ContextBudget,
+    references: ContextPackage["selectedContext"] = [],
+  ): Promise<Awaited<ReturnType<typeof collectSelectedContext>> | undefined> {
+    // Reserve the other half for the consumer's instructions, methods, current
+    // manuscript and protocol. This is a context allocation, not a prose limit.
+    const contextAllowance = Math.floor((budget.contextWindowTokens - Math.max(0, budget.reservedOutputTokens)) / 2);
+    if (contextAllowance <= 0) return undefined;
+    const complete = await collectSelectedContext(join(bookDir, "story"), plan, language,
+      async request => request.candidates.map(candidate => candidate.source),
+      async request => request.candidates.map(candidate => candidate.id));
+    const tokens = estimateSelectedContextTokens([...complete.entries, ...references]);
+    if (tokens > contextAllowance) return undefined;
+    recordExecutionEvidence("context-selection", {scope:"story_context",mode:"complete",estimatedTokens:tokens,budgetTokens:contextAllowance,
+      sourceCount:complete.entries.length,modelCalls:0});
+    return {...complete,retrievalTrace:{...complete.retrievalTrace,selectionMode:"complete",semanticSelectedIds:[]}};
+  }
+
   async selectMemoryCandidates(request: MemorySemanticSelectionRequest): Promise<ReadonlyArray<string>> {
-    const candidates = request.candidates.map((candidate, index) => [
-      `#${index + 1} ${candidate.id}`,
-      `kind: ${candidate.kind}`,
-      `source: ${candidate.source}`,
-      `title: ${candidate.title}`,
+    const budget = semanticInputBudget(this.ctx.client, {
+      reservedOutputTokens: 2048,
+      promptOverheadTokens: 2048,
+    });
+    const groups = groupMemoryCandidates(request.candidates, budget);
+    const selected = new Set<string>();
+    for (const group of groups) {
+      const candidates = group.map((entry) => [
+        `id: ${entry.selectionId}`,
+        `kind: ${entry.candidate.kind}`,
+        `source: ${entry.candidate.source}`,
+        `title: ${entry.candidate.title}`,
+        entry.excerpt,
+      ].join("\n")).join("\n\n");
+      const ids = await this.submitSelectedSources([
+        {
+          role: "system",
+          content: "Select story-memory candidates that materially help the current chapter task. Understand corrections, causality, aliases, and paraphrases. An empty selection is valid.",
+        },
+        {
+          role: "user",
+          content: [`Chapter: ${request.chapterNumber}`, "Current task:", request.query, "", "Candidates:", candidates].join("\n"),
+        },
+      ], new Set(group.map((entry) => entry.selectionId)), 2048);
+      for (const id of ids) {
+        const entry = group.find((candidate) => candidate.selectionId === id);
+        if (entry) selected.add(entry.candidate.id);
+      }
+    }
+    return [...selected];
+  }
+
+  async selectOutlineSections(request: OutlineSectionSelectionRequest): Promise<ReadonlyArray<string>> {
+    if (request.candidates.length <= 1) return request.candidates.map((candidate) => candidate.source);
+    const candidates = request.candidates.map((candidate) => [
+      `source_id: ${candidate.source}`,
+      `heading: ${candidate.heading}`,
       candidate.excerpt,
     ].join("\n")).join("\n\n");
-    const response = await this.chat([
+    return this.submitSelectedSources([
       {
         role: "system",
-        content: [
-          "You are InkOS's semantic story-memory selector.",
-          "Select only candidate memories that materially help the current chapter task. Understand negation, corrections, causal relationships, aliases, and paraphrases; do not rank by keyword overlap.",
-          "Established current-state facts and active hook lifecycle are protected separately by the host, so do not invent ids or retain unrelated candidates just to be safe.",
-          "Return strict JSON only: {\"selectedSources\":[\"candidate-id\"]}.",
-        ].join("\n"),
+        content: request.language === "en"
+          ? `Select the ${semanticCandidateLabel(request.kind, "en")} needed for the current chapter.`
+          : `选择当前章节需要的${semanticCandidateLabel(request.kind, "zh")}。`,
       },
       {
         role: "user",
         content: [
-          `Chapter: ${request.chapterNumber}`,
-          "Current task:",
-          request.query,
-          "",
-          "BM25 candidates:",
-          candidates,
-        ].join("\n"),
-      },
-    ], {
-      temperature: 0.1,
-      maxTokens: 2048,
-    });
-    const allowed = new Set(request.candidates.map((candidate) => candidate.id));
-    return parseSelectedSources(response.content).filter((id) => allowed.has(id));
-  }
-
-  async selectOutlineSections(request: OutlineSectionSelectionRequest): Promise<ReadonlyArray<string>> {
-    if (request.candidates.length <= 1) {
-      return request.candidates.map((candidate) => candidate.source);
-    }
-    const isEn = request.language === "en";
-    const candidates = request.candidates.map((candidate, index) => [
-      `#${index + 1} ${candidate.source}`,
-      `heading: ${candidate.heading}`,
-      candidate.excerpt,
-    ].join("\n")).join("\n\n");
-    const system = isEn
-      ? [
-          "You are InkOS's semantic outline-section selector.",
-          "Select only the outline sections needed for the current chapter. Prefer semantic relevance over keyword overlap.",
-          "Return strict JSON only: {\"selectedSources\":[\"...\"]}. Use exact source ids from the candidates. If uncertain, include the safest relevant anchors rather than inventing ids.",
-        ].join("\n")
-      : [
-          "你是 InkOS 的语义大纲选段器。",
-          "只选择当前章节真正需要的大纲段落。按语义相关性判断，不要按关键词重合机械选择。",
-          "只返回严格 JSON：{\"selectedSources\":[\"...\"]}。必须使用候选里的精确 source id；不确定时选最安全的相关锚点，不要编造 id。",
-        ].join("\n");
-    const user = isEn
-      ? [
           `File: ${request.fileName}`,
           `Chapter: ${request.chapterNumber}`,
           `Goal: ${request.goal}`,
-          `Outline node: ${request.outlineNode}`,
           "",
-          "Candidates:",
           candidates,
-        ].join("\n")
-      : [
-          `文件：${request.fileName}`,
-          `章节：第${request.chapterNumber}章`,
-          `目标：${request.goal}`,
-          `大纲节点：${request.outlineNode}`,
-          "",
-          "候选段落：",
-          candidates,
-        ].join("\n");
-    const response = await this.chat([
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ], {
-      temperature: 0.1,
-      maxTokens: 1024,
-    });
-    const allowed = new Set(request.candidates.map((candidate) => candidate.source));
-    return parseSelectedSources(response.content).filter((source) => allowed.has(source));
+        ].join("\n"),
+      },
+    ], new Set(request.candidates.map((candidate) => candidate.source)), 1024);
   }
 
   async selectReferenceSections(request: ReferenceSectionSelectionRequest): Promise<ReadonlyArray<string>> {
-    const isEn = request.language === "en";
-    const candidates = request.candidates.map((candidate, index) => [
-      `#${index + 1} ${candidate.source}`,
+    const candidates = request.candidates.map((candidate) => [
+      `source_id: ${candidate.source}`,
       `title: ${candidate.title}`,
       `heading: ${candidate.heading}`,
       `user-defined uses: ${candidate.uses.join("; ")}`,
       candidate.note ? `user note: ${candidate.note}` : undefined,
     ].filter(Boolean).join("\n")).join("\n\n");
-    const system = isEn
-      ? [
-          "You are InkOS's semantic reference-section selector.",
-          "The user explicitly bound these reference assets to this book and described how each may be used.",
-          "Select only sections useful for the current chapter task. References are creative guidance, never canon and never stronger than author intent or established facts.",
-          "Return strict JSON only: {\"selectedSources\":[\"...\"]}. Use exact candidate source ids. An empty list is valid when no section is relevant.",
-        ].join("\n")
-      : [
-          "你是 InkOS 的参考资产语义选段器。",
-          "用户已把这些参考资产绑定到本书，并明确说明每份资料可以借鉴什么。",
-          "只选择当前章节任务真正需要的段落。参考资料只是创作借鉴，不能成为正典，也不能压过作者意图和既成事实。",
-          "只返回严格 JSON：{\"selectedSources\":[\"...\"]}。必须使用候选中的精确 source id；没有相关段落时可以返回空数组。",
-        ].join("\n");
-    const user = isEn
-      ? [
-          `Chapter: ${request.chapterNumber}`,
-          `Goal: ${request.goal}`,
-          `Outline node: ${request.outlineNode}`,
-          `Must keep: ${request.mustKeep.join("; ") || "(none)"}`,
-          "",
-          "Candidates (headings only; selected sections will be loaded verbatim by the host):",
-          candidates,
-        ].join("\n")
-      : [
-          `章节：第${request.chapterNumber}章`,
-          `目标：${request.goal}`,
-          `大纲节点：${request.outlineNode}`,
-          `必须保留：${request.mustKeep.join("；") || "（无）"}`,
-          "",
-          "候选段落（这里只给标题；宿主会把选中的段落原文完整载入）：",
-          candidates,
-        ].join("\n");
-    const response = await this.chat([
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ], {
-      temperature: 0.1,
-      maxTokens: 2048,
-    });
-    const allowed = new Set(request.candidates.map((candidate) => candidate.source));
-    return parseSelectedSources(response.content).filter((source) => allowed.has(source));
+    return this.submitSelectedSources([
+      {
+        role: "system",
+        content: request.language === "en"
+          ? "Select user-bound reference sections useful for the current task. References are guidance, not canon."
+          : "选择当前任务需要的用户绑定参考段落。参考资料不是正典。",
+      },
+      {
+        role: "user",
+        content: [`Chapter: ${request.chapterNumber}`, `Goal: ${request.goal}`, "", candidates].join("\n"),
+      },
+    ], new Set(request.candidates.map((candidate) => candidate.source)), 2048);
   }
 
+  private async submitSelectedSources(
+    messages: ReadonlyArray<{ readonly role: "system" | "user"; readonly content: string }>,
+    allowed: ReadonlySet<string>,
+    maxTokens: number,
+  ): Promise<ReadonlyArray<string>> {
+    const allowedIds = [...allowed];
+    if (allowedIds.length === 0) return [];
+    const selectedSourcesToolSchema = Type.Object({
+      selectedIndices: Type.Array(Type.Integer({minimum:1,maximum:allowedIds.length}), { uniqueItems: true }),
+    });
+    const { result } = await this.submitStructured(
+      [...messages,{role:'user',content:JSON.stringify({candidateIndex:allowedIds.map((sourceId,index)=>({number:index+1,sourceId})),instruction:'Submit the selected candidate numbers in selectedIndices. The host resolves them to exact source identifiers; do not rewrite identifiers or names.'})}],
+      {
+        name: "submit_selected_sources",
+        label: "Submit selected sources",
+        description: "Submit the numbers of the selected entries in candidateIndex.",
+        parameters: selectedSourcesToolSchema,
+      },
+      { temperature: 0.1, maxTokens },
+    );
+    return result.selectedIndices.map(index=>allowedIds[index-1]!);
+  }
   async compileCompressibleContext(request: CompressibleContextCompileRequest): Promise<string> {
-    const isEn = request.language === "en";
-    const protectedBlock = renderContextEntries(request.protectedEntries);
-    const compressibleBlock = renderContextEntries(request.compressibleEntries);
-    const system = isEn
-      ? [
-          "You are InkOS's semantic context compiler.",
-          "Only compile the COMPRESSIBLE CONTEXT. The PROTECTED CONTEXT is binding reference material and must not be rewritten, summarized as a substitute, or weakened.",
-          "Output concise Markdown with source pointers. Preserve names, unresolved promises, evidence, timing, and constraints that may affect the next chapter. Drop low-relevance noise.",
-        ].join("\n")
-      : [
-          "你是 InkOS 的语义上下文编译器。",
-          "只能编译【可压缩上下文】。【受保护上下文】是绑定参照，不得改写、不得替代总结、不得削弱。",
-          "输出简洁 Markdown，保留来源指针。保留会影响下一章的人名、未兑现承诺、证据、时间点和约束，丢弃低相关噪声。",
-        ].join("\n");
-    const user = isEn
-      ? [
-          `Chapter: ${request.chapterNumber}`,
-          `Goal: ${request.goal}`,
-          `Target budget for compiled context: <= ${request.maxInputTokens} estimated input tokens`,
-          "",
-          "## Protected Context (reference only, do not compile)",
-          protectedBlock || "(none)",
-          "",
-          "## Compressible Context (compile this)",
-          compressibleBlock || "(none)",
-        ].join("\n")
-      : [
-          `章节：第${request.chapterNumber}章`,
-          `目标：${request.goal}`,
-          `压缩后目标预算：不超过 ${request.maxInputTokens} 估算输入 tokens`,
-          "",
-          "## 受保护上下文（只作为参照，不要编译它）",
-          protectedBlock || "（无）",
-          "",
-          "## 可压缩上下文（只编译这一部分）",
-          compressibleBlock || "（无）",
-        ].join("\n");
-
-    const response = await this.chat([
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ], {
-      temperature: 0.2,
-      maxTokens: Math.min(8192, Math.max(512, request.maxInputTokens)),
+    const fragments: ContextFragment[] = request.compressibleEntries.map((entry, index) => ({
+      id: `chapter-${request.chapterNumber}-compressible-${index + 1}`,
+      source: entry.source,
+      content: entry.excerpt ?? entry.reason,
+      protection: "compressible",
+      priority: 0,
+      pointer: entry.source,
+    }));
+    const result = await new SemanticContextCompilerAgent(this.ctx).compile({
+      intent: request.goal,
+      maxTokens: request.maxInputTokens,
+      fragments,
+      language: request.language,
     });
-    return response.content.trim();
+    return result.content;
   }
+}
+
+function semanticCandidateLabel(
+  kind: OutlineSectionSelectionRequest["kind"],
+  language: "zh" | "en",
+): string {
+  if (language === "en") {
+    if (kind === "role-card") return "role cards";
+    if (kind === "current-state") return "current-state facts";
+    return "outline sections";
+  }
+  if (kind === "role-card") return "角色卡";
+  if (kind === "current-state") return "当前状态事实";
+  return "大纲段落";
+}
+
+interface MemorySelectionChunk {
+  readonly selectionId: string;
+  readonly candidate: MemorySemanticSelectionRequest["candidates"][number];
+  readonly excerpt: string;
+}
+
+function groupMemoryCandidates(
+  candidates: MemorySemanticSelectionRequest["candidates"],
+  budgetTokens: number | undefined,
+): MemorySelectionChunk[][] {
+  if (candidates.length === 0) return [];
+  const chunks = candidates.flatMap((candidate): MemorySelectionChunk[] => {
+    if (budgetTokens === undefined) return [{ selectionId: candidate.id, candidate, excerpt: candidate.excerpt }];
+    const metadata = [candidate.id, candidate.kind, candidate.source, candidate.title].join("\n");
+    const excerptBudget = Math.max(1, budgetTokens - estimateTextTokens(metadata) - 64);
+    const excerpts = splitTextByEstimatedTokens(candidate.excerpt, excerptBudget);
+    return excerpts.map((excerpt, index) => ({
+      selectionId: excerpts.length === 1 ? candidate.id : `${candidate.id}:part-${index + 1}`,
+      candidate,
+      excerpt,
+    }));
+  });
+  if (budgetTokens === undefined) return [chunks];
+  const groups: MemorySelectionChunk[][] = [];
+  let current: MemorySelectionChunk[] = [];
+  let currentTokens = 0;
+  for (const entry of chunks) {
+    const tokens = estimateTextTokens([
+      entry.selectionId,
+      entry.candidate.kind,
+      entry.candidate.source,
+      entry.candidate.title,
+      entry.excerpt,
+    ].join("\n"));
+    if (current.length > 0 && currentTokens + tokens > budgetTokens) {
+      groups.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(entry);
+    currentTokens += tokens;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
 }
 
 async function loadReferenceContext(input: ComposeChapterInput): Promise<BookReferenceContextSelection> {
   if (!input.referenceContextProvider) return { entries: [], notes: [] };
-  try {
-    return await input.referenceContextProvider({
-      chapterNumber: input.chapterNumber,
-      goal: input.plan.intent.goal,
-      outlineNode: input.plan.intent.outlineNode ?? "",
-      mustKeep: input.plan.intent.mustKeep,
-      language: input.book.language ?? "zh",
-    });
-  } catch {
-    return { entries: [], notes: ["book-reference-context-unavailable"] };
-  }
+  return input.referenceContextProvider({
+    chapterNumber: input.chapterNumber,
+    goal: input.plan.intent.goal,
+    outlineNode: "",
+    mustKeep: [],
+    language: input.book.language,
+  });
 }
 
 export function contextBudgetFromClient(client: LLMClient): ContextBudget | undefined {
@@ -793,14 +606,15 @@ async function collectSelectedContext(
           reason: "Carry the planner's chapter memo into governed writing.",
           excerpt: [
             `goal=${plan.memo.goal}`,
-            plan.memo.isGoldenOpening ? "golden-opening=true" : undefined,
             memoBodyExcerpt,
           ].filter(Boolean).join(" | "),
+          protection: "protected" as const,
         }]
       : [{
           source: "runtime/chapter_memo",
           reason: "Carry the planner's chapter memo into governed writing.",
           excerpt: `goal=${plan.memo.goal}`,
+          protection: "protected" as const,
         }];
 
     const entries = await Promise.all([
@@ -808,23 +622,27 @@ async function collectSelectedContext(
         storyDir,
         "current_focus.md",
         "Current task focus for this chapter.",
+        "protected",
       ),
       maybeContextSource(
         storyDir,
         "author_intent.md",
         "User's long-term authorial intent and direction — binding, overrides model defaults.",
+        "protected",
       ),
       maybeContextSource(
         storyDir,
-        "audit_drift.md",
-        "Carry forward audit drift guidance from the previous chapter without polluting hard state facts.",
-      ),
-      maybeContextSource(
-        storyDir,
-        "current_state.md",
-        "Preserve hard state facts referenced by the active chapter brief or hard constraints.",
+        "style_guide.md",
+        "User-approved style guidance for this Work.",
+        "protected",
       ),
     ]);
+    const currentStateEntries = await selectCurrentStateEntries({
+      storyDir,
+      plan,
+      language,
+      selector: outlineSectionSelector,
+    });
     const outlineEntries = [
       ...await maybeOutlineSectionSources(
         storyDir,
@@ -850,27 +668,31 @@ async function collectSelectedContext(
         storyDir,
         "parent_canon.md",
         "Preserve parent canon constraints for governed continuation or fanfic writing.",
+        "protected",
       ),
       maybeContextSource(
         storyDir,
         "fanfic_canon.md",
         "Preserve extracted fanfic canon constraints for governed writing.",
+        "protected",
       ),
     ]);
-    const trailEntries = await buildRecentChapterTrailEntries(storyDir, plan.intent.chapter);
-
+    const roleEntries = await selectRoleCardEntries({
+      storyDir,
+      plan,
+      language,
+      selector: outlineSectionSelector,
+    });
     const memorySelection = await retrieveMemorySelection({
       bookDir: dirname(storyDir),
       chapterNumber: plan.intent.chapter,
-      goal: plan.intent.goal,
-      outlineNode: plan.intent.outlineNode,
-      mustKeep: retrievalHints,
+      goal: retrievalHints.join("\n"),
       semanticSelector: memorySemanticSelector,
     });
-    const hookDebtEntries = await buildHookDebtEntries(
-      storyDir,
+    const referencedHookEntries = await buildReferencedHookEntries(
       plan,
-      memorySelection.activeHooks,
+      memorySelection.lookupHooks,
+      memorySelection.lookupSummaries,
       language,
     );
 
@@ -880,39 +702,32 @@ async function collectSelectedContext(
       excerpt: [summary.title, summary.events, summary.stateChanges, summary.hookActivity]
         .filter(Boolean)
         .join(" | "),
-      // R6/367 号：层内排序特征——近因（10 章窗口线性衰减）+ 钩子动静加成。
-      rank: {
-        recency: Math.max(0, 1 - (plan.intent.chapter - summary.chapter) / 10),
-        ...(summary.hookActivity ? { hookBonus: hookActivityStrength(summary.hookActivity) === "strong" ? 1 : 0 } : {}),
-      },
-    }));
-    const factEntries = memorySelection.facts.map((fact) => ({
-      source: `story/current_state.md#${toFactAnchor(fact.predicate)}`,
-      reason: "Relevant current-state fact retrieved for the current chapter goal.",
-      excerpt: `${fact.predicate} | ${fact.object}`,
+      protection: "compressible" as const,
     }));
     const hookEntries = memorySelection.hooks.map((hook) => ({
       source: `story/pending_hooks.md#${hook.hookId}`,
       reason: "Carry forward unresolved hooks that match the chapter focus.",
-      excerpt: [hook.kind ? `kind=${hook.kind}` : "", hook.type, hook.status, hook.expectedPayoff, hook.payoffTiming, hook.notes]
+      excerpt: [hook.type, hook.status, hook.expectedPayoff, hook.notes]
         .filter(Boolean)
         .join(" | "),
+      protection: "compressible" as const,
     }));
     const volumeSummaryEntries = memorySelection.volumeSummaries.map((summary) => ({
       source: `story/volume_summaries.md#${summary.anchor}`,
       reason: "Carry forward long-span arc memory compressed from earlier volumes.",
       excerpt: `${summary.heading} | ${summary.content}`,
+      protection: "compressible" as const,
     }));
 
     return {
       entries: [
         ...chapterMemoEntry,
         ...entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+        ...currentStateEntries,
         ...outlineEntries,
         ...canonEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
-        ...trailEntries,
-        ...hookDebtEntries,
-        ...factEntries,
+        ...roleEntries,
+        ...referencedHookEntries,
         ...summaryEntries,
         ...volumeSummaryEntries,
         ...hookEntries,
@@ -921,150 +736,115 @@ async function collectSelectedContext(
     };
 }
 
+async function selectCurrentStateEntries(params: {
+  readonly storyDir: string;
+  readonly plan: PlanChapterOutput;
+  readonly language: "zh" | "en";
+  readonly selector?: OutlineSectionSelector;
+}): Promise<ContextPackage["selectedContext"]> {
+  const snapshot = await loadRuntimeStateSnapshot(dirname(params.storyDir));
+  const candidates = snapshot.currentState.facts.map((fact, index) => ({
+    source: `runtime/current_state#${index + 1}-${slugifyAnchor(`${fact.subject}-${fact.predicate}`)}`,
+    heading: `${fact.subject} / ${fact.predicate}`,
+    excerpt: [
+      `subject: ${fact.subject}`,
+      `predicate: ${fact.predicate}`,
+      `object: ${fact.object}`,
+      `validFromChapter: ${fact.validFromChapter}`,
+      fact.validUntilChapter === null ? "validUntilChapter: current" : `validUntilChapter: ${fact.validUntilChapter}`,
+    ].join("\n"),
+  }));
+  if (candidates.length === 0) return [];
+  if (!params.selector) throw new Error("Current-state semantic selector is required.");
+  const selected = new Set(await params.selector({
+    fileName: "state/current_state.json",
+    kind: "current-state",
+    chapterNumber: params.plan.intent.chapter,
+    goal: [params.plan.intent.goal, params.plan.memo.body].filter(Boolean).join("\n"),
+    outlineNode: "",
+    language: params.language,
+    candidates,
+  }));
+  const known = new Set(candidates.map((candidate) => candidate.source));
+  for (const source of selected) {
+    if (!known.has(source)) throw new Error(`Current-state selector returned an unknown source: ${source}`);
+  }
+  return candidates.filter((candidate) => selected.has(candidate.source)).map((candidate) => ({
+    source: candidate.source,
+    reason: "Current-state fact selected for the current chapter task.",
+    excerpt: candidate.excerpt,
+    protection: "protected" as const,
+  }));
+}
+
+async function selectRoleCardEntries(params: {
+  readonly storyDir: string;
+  readonly plan: PlanChapterOutput;
+  readonly language: "zh" | "en";
+  readonly selector?: OutlineSectionSelector;
+}): Promise<ContextPackage["selectedContext"]> {
+  const candidates: Array<{ source: string; heading: string; excerpt: string }> = [];
+  for (const tier of ["主要角色", "次要角色", "major", "minor"]) {
+    const directory = join(params.storyDir, "roles", tier);
+    let files: string[];
+    try {
+      files = (await readdir(directory)).filter((file) => file.endsWith(".md")).sort();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const file of files) {
+      const source = `story/roles/${tier}/${file}`;
+      candidates.push({
+        source,
+        heading: file.slice(0, -3),
+        excerpt: (await readFile(join(directory, file), "utf-8")).trim(),
+      });
+    }
+  }
+  if (candidates.length === 0) return [];
+  if (!params.selector) throw new Error("Role-card semantic selector is required.");
+  const selected = new Set(await params.selector({
+    fileName: "roles",
+    kind: "role-card",
+    chapterNumber: params.plan.intent.chapter,
+    goal: [params.plan.intent.goal, params.plan.memo.body].filter(Boolean).join("\n"),
+    outlineNode: "",
+    language: params.language,
+    candidates,
+  }));
+  const knownSources = new Set(candidates.map((candidate) => candidate.source));
+  for (const source of selected) {
+    if (!knownSources.has(source)) throw new Error(`Role-card selector returned an unknown source: ${source}`);
+  }
+  return candidates.filter((candidate) => selected.has(candidate.source)).map((candidate) => ({
+    source: candidate.source,
+    reason: "Role canon selected for the current chapter task.",
+    excerpt: candidate.excerpt,
+    protection: "protected" as const,
+  }));
+}
+
 function deriveRetrievalHints(plan: PlanChapterOutput): string[] {
   return [
     plan.intent.goal,
-    plan.intent.outlineNode,
+    plan.memo.body,
     ...plan.memo.threadRefs,
   ].filter((value): value is string => Boolean(value));
 }
 
-async function buildRecentChapterTrailEntries(
-  storyDir: string,
-  chapterNumber: number,
-): Promise<ContextPackage["selectedContext"]> {
-    const content = await readFileOrDefault(join(storyDir, "chapter_summaries.md"));
-    if (!content || content === "(文件尚未创建)") {
-      return [];
-    }
-
-    const recentSummaries = parseChapterSummariesMarkdown(content)
-      .filter((summary) => summary.chapter < chapterNumber)
-      .sort((left, right) => right.chapter - left.chapter)
-      .slice(0, 5);
-    if (recentSummaries.length === 0) {
-      return [];
-    }
-
-    const entries: ContextPackage["selectedContext"] = [];
-    const recentTitles = recentSummaries
-      .map((summary) => [summary.chapter, summary.title].filter(Boolean).join(": "))
-      .filter(Boolean)
-      .join(" | ");
-    if (recentTitles) {
-      entries.push({
-        source: "story/chapter_summaries.md#recent_titles",
-        reason: "Keep recent title history visible to avoid repetitive chapter naming.",
-        excerpt: recentTitles,
-      });
-    }
-
-    const moodTrail = recentSummaries
-      .filter((summary) => summary.mood || summary.chapterType)
-      .map((summary) => `${summary.chapter}: ${summary.mood || "(none)"} / ${summary.chapterType || "(none)"}`)
-      .join(" | ");
-    if (moodTrail) {
-      entries.push({
-        source: "story/chapter_summaries.md#recent_mood_type_trail",
-        reason: "Keep recent mood and chapter-type cadence visible before writing the next chapter.",
-        excerpt: moodTrail,
-      });
-    }
-
-    const endingTrail = await buildRecentEndingTrail(storyDir, chapterNumber);
-    if (endingTrail) {
-      entries.push({
-        source: "story/chapters#recent_endings",
-        reason: "Show how recent chapters ended so the writer avoids structural repetition (e.g. 3 consecutive collapse endings).",
-        excerpt: endingTrail,
-      });
-    }
-
-    // R6/367 号：openingHint——上章结尾承接约束（上一章正文尾部 200 码元）。
-    const openingHint = await buildOpeningHintEntry(storyDir, chapterNumber);
-    if (openingHint) {
-      entries.push({
-        source: "story/chapters#opening_hint",
-        reason: "Hard constraint: the opening must carry over the previous chapter ending.",
-        excerpt: openingHint,
-      });
-    }
-
-    return entries;
-}
-
-async function buildOpeningHintEntry(
-  storyDir: string,
-  chapterNumber: number,
-): Promise<string | undefined> {
-  if (chapterNumber <= 1) return undefined;
-  const chaptersDir = join(dirname(storyDir), "chapters");
-  try {
-    const files = await readdir(chaptersDir);
-    const prevFile = files
-      .filter((file) => file.endsWith(".md"))
-      .map((file) => ({ file, num: parseInt(file.slice(0, 4), 10) }))
-      .filter((entry) => Number.isFinite(entry.num) && entry.num === chapterNumber - 1)
-      .sort((a, b) => b.num - a.num)[0];
-    if (!prevFile) return undefined;
-    const content = await readFile(join(chaptersDir, prevFile.file), "utf-8");
-    return buildOpeningHint(content, "zh") ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function buildRecentEndingTrail(
-  storyDir: string,
-  chapterNumber: number,
-): Promise<string | undefined> {
-    const chaptersDir = join(dirname(storyDir), "chapters");
-    try {
-      const files = await readdir(chaptersDir);
-      const chapterFiles = files
-        .filter((file) => file.endsWith(".md"))
-        .map((file) => ({ file, num: parseInt(file.slice(0, 4), 10) }))
-        .filter((entry) => Number.isFinite(entry.num) && entry.num < chapterNumber)
-        .sort((a, b) => b.num - a.num)
-        .slice(0, 3);
-
-      const endings: string[] = [];
-      for (const entry of chapterFiles.reverse()) {
-        const content = await readFile(join(chaptersDir, entry.file), "utf-8");
-        const lastLine = extractLastMeaningfulSentence(content);
-        if (lastLine) {
-          endings.push(`ch${entry.num}: ${lastLine}`);
-        }
-      }
-      return endings.length >= 2 ? endings.join(" | ") : undefined;
-    } catch {
-      return undefined;
-    }
-}
-
-function extractLastMeaningfulSentence(content: string): string | undefined {
-    const lines = content.split("\n").map((line) => line.trim()).filter((line) =>
-      line.length > 5 && !line.startsWith("#") && !line.startsWith("|") && !line.startsWith("==="),
-    );
-    const last = lines.at(-1);
-    if (!last) return undefined;
-    return last.length > 60 ? last.slice(0, 57) + "..." : last;
-}
-
-async function buildHookDebtEntries(
-  storyDir: string,
+async function buildReferencedHookEntries(
   plan: PlanChapterOutput,
-  activeHooks: ReadonlyArray<{
+  lookupHooks: ReadonlyArray<{
       readonly hookId: string;
       readonly startChapter: number;
       readonly type: string;
-      readonly kind?: HookKind;
       readonly status: string;
       readonly lastAdvancedChapter: number;
       readonly expectedPayoff: string;
-      readonly payoffTiming?: string;
       readonly notes: string;
     }>,
+  summaries: MemorySelection["lookupSummaries"],
   language: "zh" | "en",
 ): Promise<ContextPackage["selectedContext"]> {
     const targetHookIds = [...new Set(plan.memo.threadRefs)];
@@ -1072,50 +852,42 @@ async function buildHookDebtEntries(
       return [];
     }
 
-    const summaries = parseChapterSummariesMarkdown(
-      await readFileOrDefault(join(storyDir, "chapter_summaries.md")),
-    );
-
     return targetHookIds.flatMap((hookId) => {
-      const hook = activeHooks.find((entry) => entry.hookId === hookId);
+      const hook = lookupHooks.find((entry) => entry.hookId === hookId);
       if (!hook) {
         return [];
       }
 
       const seedSummary = findHookSummary(summaries, hook.hookId, hook.startChapter, "seed");
       const latestSummary = findHookSummary(summaries, hook.hookId, hook.lastAdvancedChapter, "latest");
-      const role = language === "en" ? "memo-referenced debt" : "备忘引用旧债";
-      // R23/396 号：类型标注随行（英文 id；无 kind 省略段）。
-      const kindText = hook.kind
-        ? (language === "en" ? `, kind=${hook.kind}` : `，kind=${hook.kind}`)
-        : "";
+      const role = language === "en" ? "memo-referenced hook" : "备忘引用伏笔";
       const promise = hook.expectedPayoff || (language === "en" ? "(unspecified)" : "（未写明）");
       const seedBeat = seedSummary
-        ? renderHookDebtBeat(seedSummary)
+        ? renderHookTraceBeat(seedSummary)
         : (hook.notes || promise);
       const latestBeat = latestSummary && latestSummary !== seedSummary
-        ? renderHookDebtBeat(latestSummary)
+        ? renderHookTraceBeat(latestSummary)
         : undefined;
-      const age = Math.max(0, plan.intent.chapter - Math.max(1, hook.startChapter));
 
       return [{
-        source: `runtime/hook_debt#${hook.hookId}`,
+        source: `runtime/referenced_hook#${hook.hookId}`,
         reason: language === "en"
-          ? "Narrative debt brief with original seed text for this hook agenda target."
-          : "含原始种子文本的叙事债务简报。",
+          ? "Traceable history for a hook referenced by the chapter memo."
+          : "章节备忘引用伏笔的可追溯历史。",
         excerpt: language === "en"
           ? [
-              `${hook.hookId} (${hook.type}${kindText}, ${role}, open ${age} chapters)`,
+              `${hook.hookId} (${hook.type}, ${role}, status=${hook.status})`,
               `reader promise: ${promise}`,
               `original seed (ch${hook.startChapter}): ${seedBeat}`,
               latestBeat ? `latest turn (ch${hook.lastAdvancedChapter}): ${latestBeat}` : undefined,
             ].filter(Boolean).join(" | ")
           : [
-              `${hook.hookId}（${hook.type}${kindText}，${role}，已开${age}章）`,
+              `${hook.hookId}（${hook.type}，${role}，状态=${hook.status}）`,
               `读者承诺：${promise}`,
               `种于第${hook.startChapter}章：${seedBeat}`,
               latestBeat ? `推进于第${hook.lastAdvancedChapter}章：${latestBeat}` : undefined,
             ].filter(Boolean).join(" | "),
+        protection: "protected" as const,
       }];
     });
 }
@@ -1124,31 +896,18 @@ async function maybeContextSource(
   storyDir: string,
   fileName: string,
   reason: string,
+  protection: "protected" | "compressible",
 ): Promise<ContextPackage["selectedContext"][number] | null> {
     const path = join(storyDir, fileName);
-    let content = await readFileOrDefault(path);
-    let resolvedFileName = fileName;
+    const content = await readFileOrDefault(path);
 
-    if ((!content || content === "(文件尚未创建)")) {
-      // Phase 5 back-compat: the new outline/ files may be absent on legacy
-      // books. Fall back to the deprecated paths transparently.
-      const legacyFallback = outlineFallback(fileName);
-      if (legacyFallback) {
-        const legacyPath = join(storyDir, legacyFallback);
-        const legacyContent = await readFileOrDefault(legacyPath);
-        if (legacyContent && legacyContent !== "(文件尚未创建)") {
-          content = legacyContent;
-          resolvedFileName = legacyFallback;
-        }
-      }
-    }
-
-    if (!content || content === "(文件尚未创建)") return null;
+    if (!content) return null;
 
     return {
-      source: `story/${resolvedFileName}`,
+      source: `story/${fileName}`,
       reason,
       excerpt: content.trim(),
+      protection,
     };
 }
 
@@ -1164,21 +923,7 @@ async function maybeOutlineSectionSources(
     const path = join(storyDir, fileName);
     const content = await readFileOrDefault(path);
 
-    if (!content || content === "(文件尚未创建)") {
-      const legacyFallback = outlineFallback(fileName);
-      if (!legacyFallback) return [];
-      const legacyContent = await readFileOrDefault(join(storyDir, legacyFallback));
-      if (!legacyContent || legacyContent === "(文件尚未创建)") return [];
-      return await selectOutlineSectionEntries({
-        fileName: legacyFallback,
-        content: legacyContent,
-        reason,
-        plan,
-        kind,
-        language,
-        outlineSectionSelector,
-      });
-    }
+    if (!content) return [];
 
     return await selectOutlineSectionEntries({
       fileName,
@@ -1200,59 +945,38 @@ async function selectOutlineSectionEntries(params: {
   readonly language: "zh" | "en";
   readonly outlineSectionSelector?: OutlineSectionSelector;
 }): Promise<ContextPackage["selectedContext"]> {
-    const sections = splitMarkdownSections(params.content);
-    if (sections.length === 0) {
-      return [{
-        source: `story/${params.fileName}#document`,
-        reason: params.reason,
-        excerpt: params.content.trim(),
-      }];
-    }
-
-    const hints = deriveOutlineSelectionHints(params.plan);
-    const selected = sections.filter((section) =>
-      params.kind === "story-frame"
-        ? isRelevantStoryFrameSection(section, hints)
-        : isRelevantVolumeMapSection(section, hints, params.plan.intent.chapter),
-    );
-    const finalSections = selected.length > 0 ? selected : fallbackOutlineSections(sections, params.kind, params.plan.intent.chapter);
-    const candidates = sections.map((section) => ({
+  const sections = splitMarkdownSections(params.content);
+  const candidates = sections.length > 0
+    ? sections.map((section) => ({
       source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
       heading: section.heading,
       excerpt: section.raw.trim(),
-    }));
-    if (params.outlineSectionSelector) {
-      try {
-        const selectedSources = await params.outlineSectionSelector({
-          fileName: params.fileName,
-          kind: params.kind,
-          chapterNumber: params.plan.intent.chapter,
-          goal: params.plan.intent.goal,
-          outlineNode: params.plan.intent.outlineNode ?? "",
-          language: params.language,
-          candidates,
-        });
-        const selectedSourceSet = new Set(selectedSources);
-        const llmSections = sections.filter((section) =>
-          selectedSourceSet.has(`story/${params.fileName}#${slugifyAnchor(section.heading)}`),
-        );
-        if (llmSections.length > 0) {
-          return dedupeBySource(llmSections.map((section) => ({
-            source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
-            reason: params.reason,
-            excerpt: section.raw.trim(),
-          })));
-        }
-      } catch {
-        // Semantic section selection is quality guidance, not a hard dependency.
-        // If the provider flakes or returns malformed JSON, keep the deterministic
-        // fallback so chapter production does not stall.
-      }
-    }
-    return dedupeBySource(finalSections.map((section) => ({
-      source: `story/${params.fileName}#${slugifyAnchor(section.heading)}`,
+    }))
+    : [{
+      source: `story/${params.fileName}#document`,
+      heading: params.fileName,
+      excerpt: params.content.trim(),
+    }];
+  if (!params.outlineSectionSelector) throw new Error("Outline semantic selector is required.");
+  const selectedSources = await params.outlineSectionSelector({
+    fileName: params.fileName,
+    kind: params.kind,
+    chapterNumber: params.plan.intent.chapter,
+    goal: [params.plan.intent.goal, params.plan.memo.body].filter(Boolean).join("\n"),
+    outlineNode: "",
+    language: params.language,
+    candidates,
+  });
+  const selectedSourceSet = new Set(selectedSources);
+  const knownSources = new Set(candidates.map((candidate) => candidate.source));
+  for (const source of selectedSourceSet) {
+    if (!knownSources.has(source)) throw new Error(`Outline selector returned an unknown source: ${source}`);
+  }
+  return dedupeBySource(candidates.filter((candidate) => selectedSourceSet.has(candidate.source)).map((candidate) => ({
+      source: candidate.source,
       reason: params.reason,
-      excerpt: section.raw.trim(),
+      excerpt: candidate.excerpt,
+      protection: "protected" as const,
     })));
 }
 
@@ -1291,104 +1015,6 @@ function splitMarkdownSections(content: string): MarkdownSection[] {
       .filter((section) => section.raw.length > 0);
 }
 
-function deriveOutlineSelectionHints(plan: PlanChapterOutput): string[] {
-    return [
-      plan.intent.goal,
-      plan.intent.outlineNode,
-      plan.intent.arcContext,
-      ...plan.intent.mustKeep,
-      ...plan.intent.mustAvoid,
-      ...plan.intent.styleEmphasis,
-      plan.memo.goal,
-      plan.memo.body,
-      ...plan.memo.threadRefs,
-    ].filter((value): value is string => Boolean(value && value.trim()));
-}
-
-function isRelevantStoryFrameSection(section: MarkdownSection, hints: ReadonlyArray<string>): boolean {
-    const heading = normalizeForMatch(section.heading);
-    const sectionText = normalizeForMatch(section.raw);
-    const hardHeadingSignals = [
-      "世界观",
-      "底色",
-      "铁律",
-      "规则",
-      "核心冲突",
-      "终局",
-      "world",
-      "tonal",
-      "rule",
-      "core conflict",
-      "endgame",
-    ];
-    if (hardHeadingSignals.some((signal) => heading.includes(normalizeForMatch(signal)))) {
-      return true;
-    }
-    return matchesOutlineHints(sectionText, hints);
-}
-
-function isRelevantVolumeMapSection(
-  section: MarkdownSection,
-  hints: ReadonlyArray<string>,
-  chapterNumber: number,
-): boolean {
-    const heading = normalizeForMatch(section.heading);
-    if (headingMentionsChapter(heading, chapterNumber)) {
-      return true;
-    }
-    return matchesOutlineHints(normalizeForMatch(section.raw), hints);
-}
-
-function matchesOutlineHints(sectionText: string, hints: ReadonlyArray<string>): boolean {
-    for (const hint of hints) {
-      const terms = extractMatchTerms(hint);
-      if (terms.length === 0) continue;
-      const hits = terms.filter((term) => sectionText.includes(term));
-      if (hits.length >= Math.min(2, terms.length)) {
-        return true;
-      }
-    }
-    return false;
-}
-
-function fallbackOutlineSections(
-  sections: ReadonlyArray<MarkdownSection>,
-  kind: "story-frame" | "volume-map",
-  chapterNumber: number,
-): ReadonlyArray<MarkdownSection> {
-    if (kind === "volume-map") {
-      const chapterHit = sections.find((section) =>
-        headingMentionsChapter(normalizeForMatch(section.heading), chapterNumber),
-      );
-      if (chapterHit) return [chapterHit];
-    }
-    return sections.slice(0, 1);
-}
-
-function extractMatchTerms(value: string): string[] {
-    const normalized = normalizeForMatch(value);
-    const terms = new Set<string>();
-    for (const term of normalized.match(/[a-z0-9]{3,}/g) ?? []) {
-      terms.add(term);
-    }
-    for (const term of normalized.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
-      terms.add(term);
-    }
-    return [...terms].filter((term) => term.length >= 2);
-}
-
-function normalizeForMatch(value: string): string {
-    return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function headingMentionsChapter(normalizedHeading: string, chapterNumber: number): boolean {
-    return normalizedHeading.includes(`chapter ${chapterNumber}`)
-      || normalizedHeading.includes(`chapter${chapterNumber}`)
-      || normalizedHeading.includes(`ch.${chapterNumber}`)
-      || normalizedHeading.includes(`ch${chapterNumber}`)
-      || normalizedHeading.includes(`第${chapterNumber}章`);
-}
-
 function slugifyAnchor(value: string): string {
     return value
       .trim()
@@ -1407,31 +1033,17 @@ function dedupeBySource(entries: ContextPackage["selectedContext"]): ContextPack
     });
 }
 
-function outlineFallback(fileName: string): string | null {
-    if (fileName === "outline/story_frame.md") return "story_bible.md";
-    if (fileName === "outline/volume_map.md") return "volume_outline.md";
-    return null;
-}
-
-function toFactAnchor(predicate: string): string {
-    return predicate
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      || "fact";
-}
-
 async function readFileOrDefault(path: string): Promise<string> {
   try {
     return await readFile(path, "utf-8");
-  } catch {
-    return "(文件尚未创建)";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
   }
 }
 
 function findHookSummary(
-  summaries: ReadonlyArray<ReturnType<typeof parseChapterSummariesMarkdown>[number]>,
+  summaries: MemorySelection["lookupSummaries"],
   hookId: string,
   chapter: number,
   mode: "seed" | "latest",
@@ -1450,7 +1062,7 @@ function findHookSummary(
 }
 
 function summaryMentionsHook(
-  summary: ReturnType<typeof parseChapterSummariesMarkdown>[number],
+  summary: MemorySelection["lookupSummaries"][number],
   hookId: string,
 ): boolean {
   return [
@@ -1461,8 +1073,8 @@ function summaryMentionsHook(
   ].some((text) => text.includes(hookId));
 }
 
-function renderHookDebtBeat(
-  summary: ReturnType<typeof parseChapterSummariesMarkdown>[number],
+function renderHookTraceBeat(
+  summary: MemorySelection["lookupSummaries"][number],
 ): string {
   return `ch${summary.chapter} ${summary.title} - ${summary.events || summary.hookActivity || summary.stateChanges || "(none)"}`;
 }
