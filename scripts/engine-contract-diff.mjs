@@ -566,12 +566,16 @@ try {
     for (const endpoint of SHARED_FACE) {
       const [n, r] = await Promise.all([nodeApi(endpoint), rustApi(endpoint)]);
       sharedCompared += 1;
-      const same = n.status === r.status && JSON.stringify(n.body) === JSON.stringify(r.body);
+      // 与严格比对同口径：prune 规范化（键排序 + VOLATILE 剔除）——
+      // 裸 stringify 会把双端序列化键序差异误报为分歧。
+      const same = n.status === r.status && JSON.stringify(prune(n.body)) === JSON.stringify(prune(r.body));
       if (same) {
         console.log(`✓ 共享面 ${endpoint}（${n.status}）`);
       } else {
         sharedDiffs += 1;
         console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(n.body, r.body) ?? "?"}` : ""}`);
+        console.log(`    node : ${JSON.stringify(n.body).slice(0, 300)}`);
+        console.log(`    rust : ${JSON.stringify(r.body).slice(0, 300)}`);
       }
     }
 

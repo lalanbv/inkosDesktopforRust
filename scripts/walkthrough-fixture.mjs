@@ -67,17 +67,26 @@ if (!mockModels) {
 // 序列（如 "45,55,91"）驱动 chapter-review-cycle 的多轮修复与未净提升分支活体。
 const reviewRetries = Math.max(0, Math.floor(Number(process.env.WALKTHROUGH_REVIEW_RETRIES ?? "1")) || 1);
 mkdirSync(join(root, ".inkos"), { recursive: true });
-writeFileSync(join(root, "inkos.json"), JSON.stringify({
+// 696 号：契约源自适应——/api/v1/prompt-packs 是 fork 契约面（2.0 已删）。
+// fork 引擎：inkos.json 带顶层 writing.reviewRetries（写作评审循环重试参数，
+// engine-rs 契约）；上游 2.0：ProjectConfigSchema strict 无此键，写入即
+// INVALID_PROJECT_CONFIG（/books 0 书与 /doctor bookCount 分歧的根因）。
+const forkContract = await fetch(`${base}/api/v1/prompt-packs`)
+  .then((r) => r.ok)
+  .catch(() => false);
+const inkosConfig = {
   name: "walkthrough",
   version: "0.1.0",
   language: "zh",
-  writing: { reviewRetries },
+  ...(forkContract ? { writing: { reviewRetries } } : {}),
   llm: {
     service: "custom:Mock",
     defaultModel: "lm-mock-model",
     services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }],
   },
-}, null, 2));
+};
+if (!forkContract) console.log("[walkthrough-fixture] TS 腿=上游 2.0（prompt-packs 404）——inkos.json 省略 writing 段（2.0 无评审重试旋钮）。");
+writeFileSync(join(root, "inkos.json"), JSON.stringify(inkosConfig, null, 2));
 writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({
   services: { "custom:Mock": { apiKey: "sk-mock" } },
 }));

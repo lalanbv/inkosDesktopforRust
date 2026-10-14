@@ -473,14 +473,23 @@ pub fn library_file_path(project_root: &std::path::Path, kind: AssetKind) -> std
 /// 读取库快照：文件缺失/损坏/版本或 kind 不符 → 内置种子兜底（`seeded=true`，
 /// 不自动落盘——用户数据文件只在首次写入时创建）。
 pub fn list_assets(project_root: &std::path::Path, kind: AssetKind) -> std::io::Result<(Vec<LibraryAsset>, bool)> {
+    // 696 号：种子兜底与 TS store `sortAssets([...seedsFor(kind)])` 同序镜像——
+    // genre_base_seeds 源码序（urban→xuanhuan→mystery）≠ TS 排序（id 序，
+    // mystery 最先），兜底面不排序则 /assets/0 双端错位（contract-diff 共享面
+    // 活体捕获）。本函数内排序，不影响 genre_base_seeds() 源码序的既有测试。
+    let sorted_seeds = |kind: AssetKind| {
+        let mut seeds = seeds_for(kind);
+        sort_assets(&mut seeds);
+        seeds
+    };
     let path = library_file_path(project_root, kind);
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
-        Err(_) => return Ok((seeds_for(kind), true)),
+        Err(_) => return Ok((sorted_seeds(kind), true)),
     };
     let parsed: Value = match serde_json::from_str(&raw) {
         Ok(value) => value,
-        Err(_) => return Ok((seeds_for(kind), true)),
+        Err(_) => return Ok((sorted_seeds(kind), true)),
     };
     let version_ok = parsed.get("version").and_then(Value::as_i64) == Some(ASSET_LIBRARY_VERSION);
     let kind_ok = parsed
@@ -490,7 +499,7 @@ pub fn list_assets(project_root: &std::path::Path, kind: AssetKind) -> std::io::
         .is_some_and(|parsed_kind| parsed_kind == kind);
     let items = parsed.get("assets").and_then(Value::as_array);
     if !version_ok || !kind_ok || items.is_none() {
-        return Ok((seeds_for(kind), true));
+        return Ok((sorted_seeds(kind), true));
     }
     let mut assets: Vec<LibraryAsset> = Vec::new();
     for item in items.unwrap_or(&Vec::new()) {
