@@ -20,7 +20,7 @@
       "expected": {
         "points": [
           { "chapter": 1, "overallScore": 70, "passed": false, "issueCount": 2 },
-          { "chapter": 2, "overallScore": null, "passed": true, "issueCount": 1 },
+          { "chapter": 2, "passed": true, "issueCount": 1 },
           { "chapter": 3, "overallScore": 82, "passed": true, "issueCount": 3 },
           { "chapter": 5, "overallScore": 90, "passed": true, "issueCount": 0 }
         ],
@@ -37,11 +37,10 @@
       ],
       "expected": {
         "points": [
-          { "chapter": 1, "overallScore": null, "passed": true, "issueCount": 2 },
-          { "chapter": 2, "overallScore": null, "passed": true, "issueCount": 3 }
+          { "chapter": 1, "passed": true, "issueCount": 2 },
+          { "chapter": 2, "passed": true, "issueCount": 3 }
         ],
         "scoredChapters": 0,
-        "averageScore": null,
         "failingChapters": []
       }
     },
@@ -51,7 +50,6 @@
       "expected": {
         "points": [],
         "scoredChapters": 0,
-        "averageScore": null,
         "failingChapters": []
       }
     }

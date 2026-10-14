@@ -35,7 +35,9 @@ pub struct ReviewMetricRow {
 #[serde(rename_all = "camelCase")]
 pub struct QualityTrendPoint {
     pub chapter: i64,
-    /// 缺分序列化为 null（golden 期望侧用 null 表示缺失）。
+    /// 缺分省键（skip 序列化镜像 fork TS JSON.stringify undefined 语义；
+    /// 705 号：显式 null 键与 TS HTTP 面分叉，contract-diff 真实 id 活体实证）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub overall_score: Option<i64>,
     pub passed: bool,
     pub issue_count: i64,
@@ -48,7 +50,8 @@ pub struct QualityTrendPoint {
 pub struct QualityTrend {
     pub points: Vec<QualityTrendPoint>,
     pub scored_chapters: usize,
-    /// 有分章均值一位小数（×10 取整后 ÷10）；全部缺分为 null。
+    /// 有分章均值一位小数（×10 取整后 ÷10）；全部缺分省键（镜像 fork TS）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub average_score: Option<f64>,
     pub failing_chapters: Vec<i64>,
 }

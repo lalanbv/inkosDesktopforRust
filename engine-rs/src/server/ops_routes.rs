@@ -978,8 +978,13 @@ pub async fn post_deconstruct(
     // 可选发布：产物写入项目材料池（.inkos/materials/），供参考资料绑定。
     let mut published_material_id: Option<String> = None;
     if body.publish {
-        let material_id = format!("decon-{book_id}-{name}")
-            .replace(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'), "-");
+        // 705 号：清洗语义镜像 fork TS 正则 [^\w-]（\w=ASCII 词字符）——
+        // is_alphanumeric 的 Unicode 口径会保留 CJK，材料 id 跨端分叉
+        // （同名发布落盘文件名不一致），中文书名场景为常态输入。
+        let material_id = format!("decon-{book_id}-{name}").replace(
+            |c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "-",
+        );
         let trimmed: String = material_id.chars().take(64).collect();
         let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
         let _ = std::fs::create_dir_all(&materials_dir);
@@ -1000,15 +1005,19 @@ pub async fn post_deconstruct(
         published_material_id = Some(trimmed);
     }
 
-    let result_value = serde_json::to_value(&result).unwrap_or(json!(null));
+    // 705 号：响应包络镜像 fork TS 原实现——顶层 dossiers/pacing/markdown
+    // （不含 index 内部字段），publishedMaterialId 缺省省键非显式 null
+    // （DeconstructPanel 消费顶层 markdown/publishedMaterialId；
+    // 此前 {result} 嵌套+恒 null 键为无消费方背书的私自形状）。
     let mut payload = json!({
-        "result": result_value,
-        "path": format!("books/{book_id}/story/deconstruction/{name}.md"),
+        "dossiers": serde_json::to_value(&result.dossiers).unwrap_or(Value::Array(Vec::new())),
+        "pacing": serde_json::to_value(&result.pacing).unwrap_or(json!(null)),
+        "markdown": result.markdown,
+        "path": format!(".inkos/../books/{book_id}/story/deconstruction/{name}.md"),
     });
-    payload["publishedMaterialId"] = match &published_material_id {
-        Some(id) => json!(id),
-        None => Value::Null,
-    };
+    if let Some(id) = &published_material_id {
+        payload["publishedMaterialId"] = json!(id);
+    }
     (StatusCode::OK, Json(payload)).into_response()
 }
 
@@ -1589,10 +1598,11 @@ pub async fn get_quality_trend(
     let book_dir = runtime.state.project_root().join("books").join(&book_id);
     let db_path = book_dir.join("story").join("memory.db");
     if !db_path.exists() {
+        // 705 号：averageScore 省键镜像 fork TS（JSON.stringify undefined 语义）。
         return (
             StatusCode::OK,
             Json(json!({
-                "trend": { "points": [], "scoredChapters": 0, "averageScore": null, "failingChapters": [] },
+                "trend": { "points": [], "scoredChapters": 0, "failingChapters": [] },
                 "urgency": [],
                 "currentChapter": 0
             })),
@@ -2571,11 +2581,8 @@ pub async fn put_experience_entries(
         &path,
         serde_json::to_string_pretty(&json!({ "version": 1, "entries": merged.merged })).unwrap_or_default(),
     ) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "entries": merged.merged, "added": merged.added })),
-        )
-            .into_response(),
+        // 705 号：响应镜像 fork TS（{ok, entries}；added 计数键无消费方无测试锁定，省键）。
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": merged.merged }))).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }

@@ -579,6 +579,16 @@ try {
       { path: "/api/v1/genres/:id", method: "PUT" },
       { path: "/api/v1/genres/:id/copy", method: "POST" },
       "/api/v1/books/:id/experience",
+      // 705 号：experience 写/删面 + deconstruct 写面回收（第四批）。
+      // 带 body 的探针走双端 200 快乐路径（合法 ExperienceEntry / 最小 chapters
+      // 满足 Rust typed-extractor 必填字段；空载荷探针会打出 TS 500 vs Rust 422
+      // 的错误协议差伪影）。写面探针只比状态码（响应体形状 fork/2.0 协议差）。
+      {
+        path: "/api/v1/books/:id/experience", method: "PUT",
+        body: { entries: [{ id: "probe_1", chapter: 0, kind: "technique", text: "contract-diff probe", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }] },
+      },
+      { path: "/api/v1/books/:id/experience/:entryId", method: "DELETE" },
+      { path: "/api/v1/books/:id/deconstruct", method: "POST", body: { chapters: [{ chapter: 1, characters: ["甲"], events: "事件" }] } },
       "/api/v1/books/:id/promises",
       "/api/v1/books/:id/quality-trend",
       "/api/v1/books/:id/quality-debts",
@@ -591,9 +601,26 @@ try {
     for (const endpointEntry of SHARED_FACE) {
       const endpoint = typeof endpointEntry === "string" ? endpointEntry : endpointEntry.path;
       const probeMethod = typeof endpointEntry === "string" ? "GET" : (endpointEntry.method ?? "GET");
+      // 705 号：body 支持——快乐路径探针（避开 TS untyped json() 500 vs Rust
+      // typed-extractor 422 的错误协议差伪影，见 SHARED_FACE 表内备案）。
+      const probeInit = typeof endpointEntry === "object" && endpointEntry.body !== undefined
+        ? {
+          method: probeMethod,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(endpointEntry.body),
+        }
+        : { method: probeMethod };
+      // 705 号：动态段以真实 BOOK_ID 实例化——字面 ":id" 会被 2.0 腿
+      // INVALID_BOOK_ID 中间件整体拦成 400，book 域共享面此前只对比到
+      // 双端 400 错误体（弱证据）；真实 id 让 GET 面做真实数据全 body
+      // 对比、写面走 200 快乐路径。:entryId 用 PUT 探针刚播种的条目 id，
+      // DELETE 走命中路径（200 落盘删除）而非 404 未命中路径。
+      const instShared = (route) => route
+        .replaceAll(":id", encodeURIComponent(BOOK_ID ?? "b1"))
+        .replaceAll(":entryId", "probe_1");
       const [n, r] = await Promise.all([
-        nodeApi(endpoint, { method: probeMethod }),
-        rustApi(endpoint, { method: probeMethod }),
+        nodeApi(instShared(endpoint), probeInit),
+        rustApi(instShared(endpoint), probeInit),
       ]);
       sharedCompared += 1;
       // 与严格比对同口径：prune 规范化（键排序 + VOLATILE 剔除）——
@@ -636,10 +663,9 @@ try {
       "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
       "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
       "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
-      "/api/v1/books/:id/deconstruct", "/api/v1/books/:id/detect-all",
+      "/api/v1/books/:id/detect-all",
       "/api/v1/books/:id/detect/:chapter", "/api/v1/books/:id/director",
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
-      "/api/v1/books/:id/experience/:entryId",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
       "/api/v1/books/:id/plan",
       "/api/v1/books/:id/repair-state/:chapter",

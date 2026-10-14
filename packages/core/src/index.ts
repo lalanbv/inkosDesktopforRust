@@ -631,6 +631,36 @@ export {
   type AntiAiRule,
   type RuleValidateResult,
 } from "./utils/rule-experience-engine.js";
+// ── 705 号：fork 导出恢复（G5/351 拆书 + G13 经验合并；2.0 合并时模块存活而 index 导出被裁，
+// studio 写面路由经 @actalk/inkos-core 动态导入消费）──
+export {
+  analyzePacingStats,
+  buildDeconstructionExport,
+  buildEvidenceIndex,
+  deriveCharacterDossier,
+  renderDeconstructionExport,
+  DECONSTRUCTION_DEPTHS,
+  type DeconstructionDepth,
+  type DeconChapter,
+  type PacingStats,
+} from "./utils/deconstruction.js";
+export {
+  antiAiRuleCanonicalForm,
+  antiAiRuleContentHash,
+  antiAiRulePackHash,
+  composeAntiAiGuidance,
+  mergeExperienceEntries,
+  renderAntiAiFixGuidance,
+  renderExperienceGuidance,
+  resolveAntiAiRulesWithSeeds,
+  scanAntiAiRules,
+  type AntiAiHit,
+  type AntiAiRuleType,
+  type AntiAiRulesWithSeeds,
+  type AntiAiSeverity,
+  type ExperienceEntry,
+  type ExperienceKind,
+} from "./utils/rule-experience-engine.js";
 
 // ── fork 资产库（G4/339 号系列；2.0 无此面，studio asset-library-store 消费）──
 export {

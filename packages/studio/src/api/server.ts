@@ -4673,6 +4673,109 @@ function yamlScalar(value: unknown): string {
     }
   });
 
+  // ── 705 号：experience 写/删面 + deconstruct 写面回收（第四批；fork-only 清单 37→35）──
+  // G13 经验条目（PUT merge / DELETE 单条）与 G5/351 统一拆书面，
+  // fork 原实现逐字对齐（engine-rs ops_routes.rs 同水位对偶）。
+
+  app.put("/api/v1/books/:id/experience", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ entries?: unknown[] }>();
+    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
+    const core = await import("@actalk/inkos-core");
+    const path = join(root, "books", id, "story", "experience.json");
+    let existing: unknown[] = [];
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      if (Array.isArray(parsed.entries)) existing = parsed.entries;
+    } catch {
+      existing = [];
+    }
+    let merged;
+    try {
+      // 495 号：条目级校验失败对齐 Rust typed-extractor 的 422（此前 500）。
+      merged = core.mergeExperienceEntries(existing as never, body.entries as never);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
+    }
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, JSON.stringify({ version: 1, entries: merged }, null, 2), "utf-8");
+    return c.json({ ok: true, entries: merged });
+  });
+
+  app.delete("/api/v1/books/:id/experience/:entryId", async (c) => {
+    const id = c.req.param("id");
+    const entryId = c.req.param("entryId");
+    const path = join(root, "books", id, "story", "experience.json");
+    let entries: Array<Record<string, unknown>> = [];
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      if (Array.isArray(parsed.entries)) entries = parsed.entries;
+    } catch {
+      entries = [];
+    }
+    const remaining = entries.filter((entry) => entry.id !== entryId);
+    if (remaining.length === entries.length) return c.json({ error: `entry not found: ${entryId}` }, 404);
+    await writeFile(path, JSON.stringify({ version: 1, entries: remaining }, null, 2), "utf-8");
+    return c.json({ ok: true, entries: remaining });
+  });
+
+  // G5/351 号：统一拆书面——聚合 + 落盘 story/deconstruction/{name}.md。
+  app.post("/api/v1/books/:id/deconstruct", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      name?: string;
+      depth?: "brief" | "standard" | "deep" | "full";
+      language?: "zh" | "en";
+      topCharacters?: number;
+      chapters?: Array<{ chapter: number; characters: string[]; events: string; chapterType?: string; hookActivity?: string }>;
+      publish?: boolean;
+    }>();
+    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `decon-${Date.now()}`;
+    const chapters = Array.isArray(body.chapters) ? body.chapters : [];
+    if (chapters.length === 0) {
+      return c.json({ error: "chapters is required" }, 400);
+    }
+    const core = await import("@actalk/inkos-core");
+    const result = core.buildDeconstructionExport({
+      chapters,
+      ...(body.depth ? { depth: body.depth } : {}),
+      ...(body.language ? { language: body.language } : {}),
+      ...(typeof body.topCharacters === "number" ? { topCharacters: body.topCharacters } : {}),
+    });
+    const storyDir = join(root, "books", id, "story", "deconstruction");
+    await mkdir(storyDir, { recursive: true });
+    const outPath = join(storyDir, `${name}.md`);
+    await writeFile(outPath, result.markdown, "utf-8");
+
+    // 可选发布：产物写入项目材料池（.inkos/materials/），供参考资料绑定。
+    let publishedMaterialId: string | undefined;
+    if (body.publish) {
+      const materialId = `decon-${id}-${name}`.replace(/[^\w-]/g, "-").slice(0, 64);
+      const materialsDir = join(root, ".inkos", "materials");
+      await mkdir(materialsDir, { recursive: true });
+      await writeFile(join(materialsDir, `${materialId}.md`), result.markdown, "utf-8");
+      const manifest = {
+        id: materialId,
+        title: name,
+        kind: "text",
+        purpose: "reference",
+        source: "deconstruction",
+        mimeType: "text/markdown",
+        markdownPath: `.inkos/materials/${materialId}.md`,
+      };
+      await writeFile(join(materialsDir, `${materialId}.json`), JSON.stringify(manifest, null, 2), "utf-8");
+      publishedMaterialId = materialId;
+    }
+
+    return c.json({
+      dossiers: result.dossiers,
+      pacing: result.pacing,
+      markdown: result.markdown,
+      path: `.inkos/../books/${id}/story/deconstruction/${name}.md`,
+      ...(publishedMaterialId ? { publishedMaterialId } : {}),
+    });
+  });
+
   app.get("/api/v1/project/files/:file{.+}", async (c) => {
     const file = resolveProjectImageFile(root, c.req.param("file"));
 
