@@ -566,7 +566,7 @@ try {
       "/api/v1/asset-library/world-sample",
       "/api/v1/project/notify",
       "/api/v1/doctor",
-      // 701 号：fork-only 面回收第一批（零 SQLite 族，TS 侧路由已复活）。
+      // 701/702 号：fork-only 面回收（第一批零 SQLite 族 + 第二批 MemoryDB 只读族，TS 侧路由已复活）。
       // 注：run-log（684 备案+报告模式双腿执行深度差）与 /writing-stats
       //（Rust 实际面为 /writing-stats-rows 互补成对，聚路面随 702 批次）不入选。
       "/api/v1/books/:id/tension-curve",
@@ -574,6 +574,11 @@ try {
       "/api/v1/style-profiles",
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
+      "/api/v1/books/:id/promises",
+      "/api/v1/books/:id/quality-trend",
+      "/api/v1/books/:id/quality-debts",
+      "/api/v1/books/:id/roster-candidates",
+      "/api/v1/genres",
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -622,14 +627,13 @@ try {
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
       "/api/v1/books/:id/experience", "/api/v1/books/:id/experience/:entryId",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
-      "/api/v1/books/:id/plan", "/api/v1/books/:id/promises",
-      "/api/v1/books/:id/quality-debts", "/api/v1/books/:id/quality-trend",
-      "/api/v1/books/:id/repair-state/:chapter", "/api/v1/books/:id/roster-candidates",
-      "/api/v1/books/:id/roster/confirm", "/api/v1/books/:id/series-id",
+      "/api/v1/books/:id/plan",
+      "/api/v1/books/:id/repair-state/:chapter",
+      "/api/v1/books/:id/series-id",
       "/api/v1/books/:id/style-binding",
       "/api/v1/books/:id/timeline", "/api/v1/books/:id/timeline-auto-beats",
       "/api/v1/context-meter", "/api/v1/debug/tools",
-      "/api/v1/director/directions", "/api/v1/genres", "/api/v1/genres/create",
+      "/api/v1/director/directions", "/api/v1/genres/create",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
       "/api/v1/radar/analyze", "/api/v1/radar/rankings",

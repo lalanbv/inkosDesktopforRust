@@ -609,8 +609,21 @@ export {
   type SessionBranchPointsResult,
 } from "./interaction/session-branch.js";
 
+// ── 702 号：只读 MemoryDB Mini 端口（legacy memory.db SELECT 面）──
+export { MemoryDBReadonly, type StoredSummary, type StoredReviewMetric, type StoredQualityDebt } from "./state/memory-db-readonly.js";
+export { extractCharacterCandidates, parseEntityRoster, resolveRosterCandidates, renderEntityRoster, applyRosterConfirmation, type RosterEntity } from "./utils/entity-roster.js";
+
 // ── 701 号：fork 分析投影面回收（承诺账本/张力/遥测/反AI 种子——studio 路由消费）──
 export { globalRunLog, projectRunLog } from "./utils/run-log.js";
+export {
+  buildPromiseTimeline,
+  detectPacingDebts,
+  detectWeakHookRuns,
+  resolvePromiseUrgency,
+} from "./utils/promise-ledger.js";
+export { buildQualityTrend } from "./utils/quality-trend.js";
+export { listAvailableGenres, readGenreProfile, getBuiltinGenresDir } from "./agents/genre-reader.js";
+export type { GenreProfile } from "./models/genre-profile.js";
 export { analyzeTensionCurve, parseChapterSummariesMarkdown, buildTensionCurve, detectTensionWarnings } from "./utils/tension-curve.js";
 export {
   ANTI_AI_RULE_SEEDS,

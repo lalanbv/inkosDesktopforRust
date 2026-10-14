@@ -167,11 +167,25 @@ import { deleteAsset, isLibraryKind, listAssets, saveAssets, upsertAsset } from 
 import {
   ANTI_AI_RULE_SEEDS,
   analyzeTensionCurve,
+  applyRosterConfirmation,
+  buildPromiseTimeline,
+  buildQualityTrend,
+  detectPacingDebts,
+  detectWeakHookRuns,
+  extractCharacterCandidates,
   globalRunLog,
+  MemoryDBReadonly,
   parseChapterSummariesMarkdown,
+  parseEntityRoster,
   projectRunLog,
+  renderEntityRoster,
+  resolvePromiseUrgency,
+  resolveRosterCandidates,
+  listAvailableGenres,
+  readGenreProfile,
   validateAntiAiRule,
 } from "@actalk/inkos-core";
+import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints } from "@actalk/inkos-core";
 import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
@@ -4348,6 +4362,195 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "anti_ai_rules.json"), JSON.stringify({ rules: valid }, null, 2), "utf-8");
     return c.json({ ok: true, rules: valid });
+  });
+
+  // ── 702 号：fork-only 面回收第二批（MemoryDB 只读 Mini 端口族 + genre 读面）──
+  // promises/quality-trend/quality-debts/roster-candidates/roster-confirm：legacy
+  // memory.db 的只读 SELECT（MemoryDBReadonly，state/memory-db-readonly.ts）；
+  // genres：genre-reader（697 迁移保留的 packages/core/genres 内置种子）。
+
+  app.get("/api/v1/books/:id/promises", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ timeline: [], pacingDebts: [], weakRuns: { runs: [], longestRun: 0 }, currentChapter: 0 });
+    }
+    try {
+      const memory = new MemoryDBReadonly(join(root, "books", id));
+      const hooks = memory.getAllHooks();
+      // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
+      // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
+      const hooksMarkdown = await readFile(
+        join(root, "books", id, "story", "pending_hooks.md"),
+        "utf-8",
+      ).catch(() => "");
+      const kindById = new Map(
+        parsePendingHooks(hooksMarkdown)
+          .filter((hook) => hook.kind)
+          .map((hook) => [hook.id, hook.kind]),
+      );
+      const enrichedHooks = hooks.map((hook) => {
+        const kind = kindById.get(hook.hookId);
+        return kind ? { ...hook, kind } : hook;
+      });
+      const summaries = memory.getSummaries(1, 100_000);
+      const currentChapter = summaries.length > 0
+        ? summaries[summaries.length - 1]!.chapter + 1
+        : 1;
+      const timeline = buildPromiseTimeline(enrichedHooks, currentChapter);
+      const pacingDebts = detectPacingDebts({ hooks: enrichedHooks, currentChapter });
+      const weakRuns = detectWeakHookRuns({
+        summaries: summaries.map((s) => ({ chapter: s.chapter, hookActivity: s.hookActivity ?? "" })),
+      });
+      return c.json({ timeline, pacingDebts, weakRuns, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/quality-trend", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ trend: { points: [], scoredChapters: 0, failingChapters: [] }, urgency: [], currentChapter: 0 });
+    }
+    try {
+      const memory = new MemoryDBReadonly(join(root, "books", id));
+      const metrics = memory.listReviewMetrics();
+      const trend = buildQualityTrend(metrics);
+      const hooks = memory.getAllHooks();
+      const currentChapter = metrics.length > 0
+        ? metrics[metrics.length - 1]!.chapter + 1
+        : 1;
+      let targetChapters: number | undefined;
+      try {
+        const book = await state.loadBookConfig(id);
+        targetChapters = book?.targetChapters;
+      } catch {
+        targetChapters = undefined;
+      }
+      const urgency = hooks
+        .filter((hook) => !/^(resolved|closed|done|已回收|已解决)$/i.test((hook.status ?? "").trim()))
+        .map((hook) => resolvePromiseUrgency({
+          hook,
+          currentChapter,
+          ...(typeof targetChapters === "number" ? { targetChapters } : {}),
+        }))
+        .sort((a, b) => b.urgency - a.urgency || (a.hookId < b.hookId ? -1 : a.hookId > b.hookId ? 1 : 0));
+      return c.json({ trend, urgency, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/quality-debts", async (c) => {
+    const id = c.req.param("id");
+    const status = c.req.query("status");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ debts: [] });
+    }
+    try {
+      const memory = new MemoryDBReadonly(join(root, "books", id));
+      const valid = ["open", "deferred", "resolved"] as const;
+      const statusFilter = valid.find((s) => s === status);
+      const debts = memory.listDebts(undefined, statusFilter);
+      return c.json({ debts });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/books/:id/roster-candidates", async (c) => {
+    const id = c.req.param("id");
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (!(await access(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ cards: [], candidates: [], rosterExists: false, currentChapter: 0 });
+    }
+    try {
+      const memory = new MemoryDBReadonly(join(root, "books", id));
+      const summaries = memory.getSummaries(1, 100_000);
+      const currentChapter = summaries.length > 0
+        ? summaries[summaries.length - 1]!.chapter + 1
+        : 1;
+      const candidates = extractCharacterCandidates(
+        summaries.map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" })),
+      );
+      let roster: import("@actalk/inkos-core").RosterEntity[] = [];
+      let rosterExists = false;
+      try {
+        const rosterRaw = await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8");
+        roster = parseEntityRoster(rosterRaw);
+        rosterExists = true;
+      } catch {
+        rosterExists = false;
+      }
+      const cards = resolveRosterCandidates(candidates, roster);
+      return c.json({ cards, candidates, rosterExists, currentChapter });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.get("/api/v1/genres", async (c) => {
+    const rawGenres = await listAvailableGenres(root);
+    const genres = await Promise.all(
+      rawGenres.map(async (g) => {
+        try {
+          const { profile } = await readGenreProfile(root, g.id);
+          return { ...g, language: profile.language ?? "zh" };
+        } catch {
+          return { ...g, language: "zh" };
+        }
+      }),
+    );
+    return c.json({ genres });
+  });
+
+  app.post("/api/v1/books/:id/roster/confirm", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      candidate?: string;
+      action?: string;
+      targetName?: string;
+      chapter?: number;
+    }>();
+    const candidate = typeof body.candidate === "string" ? body.candidate.trim() : "";
+    const action = body.action ?? "";
+    if (!candidate || !["new-entity", "alias", "typo"].includes(action)) {
+      return c.json({ error: "candidate and action (new-entity|alias|typo) are required" }, 400);
+    }
+    const rosterPath = join(root, "books", id, "story", "entity_roster.md");
+    let roster: import("@actalk/inkos-core").RosterEntity[] = [];
+    try {
+      roster = parseEntityRoster(await readFile(rosterPath, "utf-8"));
+    } catch {
+      roster = [];
+    }
+    const result = applyRosterConfirmation(roster, {
+      candidate,
+      action: action as "new-entity" | "alias" | "typo",
+      ...(typeof body.targetName === "string" ? { targetName: body.targetName } : {}),
+      ...(typeof body.chapter === "number" ? { chapter: body.chapter } : {}),
+    });
+    await mkdir(join(root, "books", id, "story"), { recursive: true });
+    await writeFile(rosterPath, renderEntityRoster(result.roster), "utf-8");
+    return c.json({ ok: true, applied: result.applied });
+  });
+
+  app.get("/api/v1/genres", async (c) => {
+    const rawGenres = await listAvailableGenres(root);
+    const genres = await Promise.all(
+      rawGenres.map(async (g) => {
+        try {
+          const { profile } = await readGenreProfile(root, g.id);
+          return { ...g, language: profile.language ?? "zh" };
+        } catch {
+          return { ...g, language: "zh" };
+        }
+      }),
+    );
+    return c.json({ genres });
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {

@@ -6,7 +6,7 @@
 // (getAppLanguage / tr); the default stays "zh" so existing behavior and tests
 // are unchanged.
 
-import { getAppLanguage, tr } from "./app-language";
+import { getAppLanguage, tr } from "./app-language.js";
 
 export interface TruthFrontmatter {
   readonly protagonist?: { readonly name?: string; readonly personalityLock?: ReadonlyArray<string> };
