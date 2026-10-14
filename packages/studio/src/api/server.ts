@@ -4024,6 +4024,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(400, "INVALID_SKILL_IMPORT", "Skill import payload must be JSON");
     });
     const skill = await importStudioSkillFolder(root, payload);
+    // R44/566 号（689 号重施）：skills:change 失效事件——UI 打开中的技能面板热刷新。
+    broadcast("skills:change", { reason: "imported" });
     return c.json({ skill: toStudioSkill(skill, root, new Set([skill.id])) });
   });
 
@@ -4035,6 +4037,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       throw new ApiError(404, "SKILL_NOT_FOUND", `Project skill not found: ${id}`);
     }
     await rm(projectSkillDir(root, id), { recursive: true, force: true });
+    // R44/566 号（689 号重施）：skills:change 失效事件（同 import）。
+    broadcast("skills:change", { reason: "deleted" });
     return c.json({ ok: true });
   });
 
