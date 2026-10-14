@@ -8,7 +8,9 @@ interface ChapterMeta {
   number: number;
   title: string;
   wordCount: number;
-  observations: ReadonlyArray<unknown>;
+  // 706 号：observations 是上游 2.0 加法字段（fork 引擎章节索引无此键，
+  // 直解引用让书详情侧栏整页崩溃）——可选化 + 兜底空数组。
+  observations?: ReadonlyArray<unknown>;
 }
 
 interface ChaptersSectionProps {
@@ -35,7 +37,7 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
       ) : (
         <ul className="space-y-1 max-h-52 overflow-y-auto overflow-x-hidden">
           {chapters.map((ch) => {
-            const ind = ch.observations.length > 0
+            const ind = (ch.observations?.length ?? 0) > 0
               ? { symbol: "◆", color: "text-amber-500" }
               : { symbol: "●", color: "text-emerald-500" };
             return (

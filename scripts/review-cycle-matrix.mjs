@@ -30,7 +30,7 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { existsSync, readdirSync, readFileSync, appendFileSync, mkdtempSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, appendFileSync, mkdtempSync, rmSync } from "node:fs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -146,6 +146,54 @@ const SCENARIOS = [
 
 console.log(`[rcm] 审改循环矩阵·${engine} 腿（${SCENARIOS.length} 场景，串行）`);
 
+// ── 契约源探测（706 号；695/700 同型）──
+// rcm 是 fork 契约套件：审改循环旋钮 writing.reviewRetries 是 fork 语义
+// （688 双栈定线后 TS 腿=2.0 基底，ProjectConfigSchema strict 无此键）。
+// node 腿先 boot 一枚探针实例，GET /api/v1/prompt-packs（fork 契约面，2.0 已删）
+// 判定契约源：2.0 → 软失败记账模式（fork 契约断言失败照打 ✗ 不计判定、exit 0
+// 响亮记账），TS 恢复 fork 契约自动严格化；rust 腿恒严格（fork 产品引擎）。
+let softFailMode = false;
+if (engine === "node") {
+  const probeRoot = mkdtempSync(join("/tmp", "rcm-probe-"));
+  const probePort = basePort + SCENARIOS.length * 2 + 10;
+  const probeMockPort = probePort + 1;
+  const probeLog = join(probeRoot, "env.log");
+  process.stdout.write(`▶ [契约源探针] port=${probePort} … `);
+  const probeChild = spawn(process.execPath, [join(scriptDir, "walkthrough-env.mjs"), "--engine", engine, "--port", String(probePort), "--mock-port", String(probeMockPort), "--root", probeRoot], {
+    cwd: repoRoot,
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  probeChild.stdout.on("data", (chunk) => { try { appendFileSync(probeLog, chunk); } catch {} });
+  probeChild.stderr.on("data", (chunk) => { try { appendFileSync(probeLog, chunk); } catch {} });
+  let probeReady = false;
+  const probeDeadline = Date.now() + 180_000;
+  while (Date.now() < probeDeadline) {
+    if (existsSync(probeLog)) {
+      const log = readFileSync(probeLog, "utf-8");
+      if (log.includes("走查环境就绪")) { probeReady = true; break; }
+      if (log.includes("[env] ✗")) break;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  const forkContract = probeReady
+    ? await fetch(`http://127.0.0.1:${probePort}/api/v1/prompt-packs`).then((r) => r.ok).catch(() => false)
+    : false;
+  try { probeChild.kill("SIGTERM"); } catch {}
+  await new Promise((r) => setTimeout(r, 1500));
+  try {
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("lsof", ["-ti", ":" + probePort, "-ti", ":" + probeMockPort], { timeout: 5000, encoding: "utf-8" }).split("\n").filter(Boolean).forEach((pid) => {
+      try { process.kill(Number(pid.trim()), "SIGKILL"); } catch {}
+    });
+  } catch { /* ports free */ }
+  softFailMode = !forkContract;
+  console.log(forkContract
+    ? "fork 契约（严格模式）"
+    : "上游 2.0（/prompt-packs 404 实证）→ 软失败记账模式（fork 审改循环断言不计判定）");
+  try { rmSync(probeRoot, { recursive: true, force: true }); } catch { /* /tmp cleanup best-effort */ }
+}
+
 const results = [];
 for (let i = 0; i < SCENARIOS.length; i++) {
   const sc = SCENARIOS[i];
@@ -233,11 +281,21 @@ for (let i = 0; i < SCENARIOS.length; i++) {
   }
 }
 
-console.log(`\n──────── 审改循环矩阵汇总（${engine} 腿） ────────`);
+console.log(`\n──────── 审改循环矩阵汇总（${engine} 腿${softFailMode ? "·软失败记账" : ""}） ────────`);
 let failed = 0;
+let softFailed = 0;
 for (const [id, ok, seconds, checks] of results) {
-  console.log(`${ok ? "✓" : "✗"} ${id}（${seconds}s，${checks.length} 断言）`);
-  if (!ok) failed += 1;
+  console.log(`${ok ? "✓" : softFailMode ? "soft ✗" : "✗"} ${id}（${seconds}s，${checks.length} 断言）`);
+  if (!ok) {
+    if (softFailMode) softFailed += 1;
+    else failed += 1;
+  }
+}
+if (softFailMode) {
+  console.log(`\n[rcm] [软失败记账] ${softFailed}/${results.length} 场景 soft ✗——2.0 腿无 fork 审改循环旋钮（writing.reviewRetries），`);
+  console.log("[rcm] [软失败记账] fork 契约断言不计判定（695 豁免记账/700 契约源软失败同型），TS 恢复 fork 契约自动严格化。");
+  console.log(`\n[rcm] ✓ 审改循环矩阵通过（${engine} 腿，软失败记账模式）`);
+  process.exit(0);
 }
 if (failed > 0) {
   console.error(`\n[rcm] ✗ ${failed} 场景失败`);

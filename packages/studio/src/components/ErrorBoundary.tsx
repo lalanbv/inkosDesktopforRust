@@ -7,6 +7,7 @@ interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   readonly error: Error | null;
+  readonly componentStack?: string;
 }
 
 /**
@@ -24,15 +25,19 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   componentDidCatch(error: Error, info: ErrorInfo) {
     // 保留控制台现场供排障；通知中心等后续面可经 props 注入回调扩展。
     console.error("[InkOS] unhandled render error:", error, info.componentStack);
+    // 705 验收临时诊断：组件栈直出错误卡（定位 Rust 引擎书详情崩溃源后移除）。
+    this.setState({ componentStack: info.componentStack ?? undefined });
   }
 
   render() {
     if (this.state.error) {
+      const stack = this.state.componentStack;
       return (
         <div className="flex min-h-screen items-center justify-center p-8" data-testid="error-boundary">
           <div className="max-w-md space-y-3 rounded-xl border border-destructive/30 bg-destructive/5 p-6">
             <h1 className="text-lg font-bold text-destructive">界面遇到了问题</h1>
             <p className="break-all text-sm text-muted-foreground">{this.state.error.message}</p>
+            {stack && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-[10px] text-muted-foreground">{stack}</pre>}
             <button
               type="button"
               data-testid="error-boundary-retry"

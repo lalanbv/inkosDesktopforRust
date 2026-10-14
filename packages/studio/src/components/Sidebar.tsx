@@ -132,8 +132,10 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
         .map((sessionId) => sessions[sessionId])
         .filter((session): session is NonNullable<(typeof sessions)[string]> => {
           if (!session) return false;
+          // 706 号：messages 在类型上可选拒绝 undefined 兜底缺失的会话运行时
+          // （Rust 引擎会话面省键场景实测让书详情侧栏整页崩溃）。
           return Boolean(session.title)
-            || session.messages.length > 0
+            || (session.messages?.length ?? 0) > 0
             || session.isDraft
             || session.sessionId === activeSessionId;
         }),
@@ -822,11 +824,11 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
   );
 }
 
-function getSessionLabel(session: { sessionId: string; title: string | null; messages: ReadonlyArray<{ role: string; content: string }> }): string {
+function getSessionLabel(session: { sessionId: string; title: string | null; messages?: ReadonlyArray<{ role: string; content: string }> }): string {
   if (session.title) return session.title;
   // 后端会在第一条用户消息发送时立即把消息内容持久化为占位标题。
   // 这里处理的是"已有消息但标题还没同步回来"的短暂中间态（乐观显示）。
-  const firstUserMsg = session.messages.find((m) => m.role === "user")?.content?.trim();
+  const firstUserMsg = session.messages?.find((m) => m.role === "user")?.content?.trim();
   if (firstUserMsg) {
     const oneLine = firstUserMsg.replace(/\s+/g, " ");
     return oneLine;

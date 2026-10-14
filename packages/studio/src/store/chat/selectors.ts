@@ -20,7 +20,8 @@ export const chatSelectors = {
   activeSessionWriteNextRunning: (s: ChatState) => {
     const session = s.activeSessionId ? s.sessions[s.activeSessionId] : undefined;
     if (!session) return false;
-    return session.messages.some((m) =>
+    // 706 号：messages 可选字段防守（同 Sidebar.tsx 会话运行时缺键场景）。
+    return (session.messages ?? []).some((m) =>
       (m.parts ?? []).some((p) =>
         p.type === "tool"
         && p.execution.id.startsWith("direct-write_next-")

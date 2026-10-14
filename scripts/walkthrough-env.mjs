@@ -141,17 +141,15 @@ let backend;
 if (args.engine === "node") {
   // node 回退端启动要求 root 已有项目配置（510 号启动检查）——先写与 fixture
   // 同形的最小配置（fixture 随后幂等重写），LLM 走 custom:Mock → walkthrough-mock。
+  // 706 号：不再带 writing 段——2.0 ProjectConfigSchema strict 无此键，
+  // 写入即 boot 崩（resolveEffectiveLLMConfig ZodError；696/698 同型契约源自适应，
+  // env 先于后端启动无法探测，按 688 双栈定线 node 腿=2.0 基底硬适配；
+  // fork-node 契约恢复时本段随 walkthrough-fixture 的 forkContract 分支一并恢复）。
   mkdirSync(join(args.root, ".inkos"), { recursive: true });
   writeFileSync(join(args.root, "inkos.json"), JSON.stringify({
     name: "walkthrough",
     version: "0.1.0",
     language: "zh",
-    // 655 号：与 walkthrough-fixture 同源透传 WALKTHROUGH_REVIEW_RETRIES——
-    // server 起时即读入 currentConfig（fixture 随后幂等重写同值），多轮修复
-    // 序列注入才对 write-next 生效。
-    writing: {
-      reviewRetries: Math.max(0, Math.floor(Number(process.env.WALKTHROUGH_REVIEW_RETRIES ?? "1")) || 1),
-    },
     llm: {
       service: "custom:Mock",
       defaultModel: "lm-mock-model",

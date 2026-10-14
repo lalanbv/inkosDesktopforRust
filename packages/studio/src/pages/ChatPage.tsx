@@ -606,7 +606,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
         const state = useChatStore.getState();
         const session = state.sessions[existingId];
-        if (session && session.bookId === null && (mode !== "project-chat" || session.messages.length > 0)) {
+        if (session && session.bookId === null && (mode !== "project-chat" || (session.messages?.length ?? 0) > 0)) {
           activateSession(existingId);
           return;
         }

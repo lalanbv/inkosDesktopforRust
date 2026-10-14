@@ -588,7 +588,9 @@ try {
         body: { entries: [{ id: "probe_1", chapter: 0, kind: "technique", text: "contract-diff probe", enabled: true, createdAt: "2026-01-01T00:00:00.000Z" }] },
       },
       { path: "/api/v1/books/:id/experience/:entryId", method: "DELETE" },
-      { path: "/api/v1/books/:id/deconstruct", method: "POST", body: { chapters: [{ chapter: 1, characters: ["甲"], events: "事件" }] } },
+      // 705 审查补强：固定 name——缺省名含 Date.now() 双腿各生成不同文件名，
+      // 未来严格模式恢复时破坏工件树可比性。
+      { path: "/api/v1/books/:id/deconstruct", method: "POST", body: { name: "probe", chapters: [{ chapter: 1, characters: ["甲"], events: "事件" }] } },
       "/api/v1/books/:id/promises",
       "/api/v1/books/:id/quality-trend",
       "/api/v1/books/:id/quality-debts",

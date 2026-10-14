@@ -104,6 +104,23 @@ describe("write-face recycle routes (705: genre/experience/deconstruct)", () => 
     });
     expect(bad.status).toBe(400);
 
+    // PUT：缺 id 条目 → 422（镜像 Rust typed-extractor 必填面，705 审查补强——
+    // 此前 200 落盘无 id 不可删除条目）
+    const missingId = await app.request("/api/v1/books/b1/experience", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: [{ chapter: 0, kind: "technique", text: "无 id", createdAt: "2026-10-15T00:00:00.000Z" }] }),
+    });
+    expect(missingId.status).toBe(422);
+
+    // PUT：kind 非法值 → 422（Rust lowercase 枚举四值镜像）
+    const badKind = await app.request("/api/v1/books/b1/experience", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: [{ ...validEntry, kind: "nope" }] }),
+    });
+    expect(badKind.status).toBe(422);
+
     // PUT：首次沉淀 → 200 {ok, entries}
     const put1 = await app.request("/api/v1/books/b1/experience", {
       method: "PUT",

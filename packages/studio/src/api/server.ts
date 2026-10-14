@@ -4693,6 +4693,21 @@ function yamlScalar(value: unknown): string {
     let merged;
     try {
       // 495 号：条目级校验失败对齐 Rust typed-extractor 的 422（此前 500）。
+      // 705 审查补强：逐条镜像 Rust serde 必填面（id/chapter 整数/kind 四值/
+      // text/createdAt，enabled 缺省 true）——此前缺 text 靠 trim() TypeError
+      // 兜底，缺其余必填字段会 200 落盘无 id 不可删除条目。
+      for (const entry of body.entries) {
+        const e = entry as Record<string, unknown> | null;
+        if (!e || typeof e !== "object") throw new Error("entry must be an object");
+        if (typeof e.id !== "string") throw new Error("entry.id must be a string");
+        if (typeof e.chapter !== "number" || !Number.isInteger(e.chapter)) throw new Error("entry.chapter must be an integer");
+        if (e.kind !== "technique" && e.kind !== "hook" && e.kind !== "pacing" && e.kind !== "dialogue") {
+          throw new Error("entry.kind must be one of technique|hook|pacing|dialogue");
+        }
+        if (typeof e.text !== "string") throw new Error("entry.text must be a string");
+        if (typeof e.createdAt !== "string") throw new Error("entry.createdAt must be a string");
+        if (e.enabled !== undefined && typeof e.enabled !== "boolean") throw new Error("entry.enabled must be a boolean");
+      }
       merged = core.mergeExperienceEntries(existing as never, body.entries as never);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
