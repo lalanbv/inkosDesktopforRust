@@ -1463,6 +1463,39 @@ mod books48_e2e {
         assert!(index.contains("\"approved\""));
     }
 
+    // 687 号：读侧数值等值定位（TS findChapterFileByNumber 逐字镜像）——
+    // 「能列出即可打开」+ 前缀碰撞（num=7 误配 00071_）根除 + 同号多形态
+    // padded 类内字典序确定性（与 chapter_filename 单测互补，锁路由行为）。
+    #[tokio::test]
+    async fn chapter_read_numeric_equivalence() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture48(&root);
+        let chapters = root.join("books").join("b1").join("chapters");
+        // 非规范单数字前导号（682 号考题形态：列出可见，旧码打开 404）。
+        std::fs::write(chapters.join("7_手记.md"), "# 第7章 手记\n\n非规范名。").unwrap();
+        // 前缀碰撞形态：00071 是 71 章，与 7 无关。
+        std::fs::write(chapters.join("00071_长名.md"), "# 第71章 长名").unwrap();
+        // 同号双形态（walkthrough 夹具 0001- 种子 + resync 0001_ 并存）。
+        std::fs::write(chapters.join("0001-风起.md"), "# 第1章 风起\n\n种子版。").unwrap();
+
+        // 单数字形态可打开（旧码 padded "0007" 前缀匹配 → 404）。
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/7", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["filename"], "7_手记.md");
+        assert!(parsed["content"].as_str().unwrap().contains("非规范名"));
+
+        // 前缀碰撞根除：71 章归 71，7 章不误配。
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/71", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["filename"], "00071_长名.md");
+
+        // 同号双形态：同属 padded-4 类，类内字典序（'-' < '_'），与 TS 一致。
+        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/1", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["filename"], "0001-风起.md");
+    }
+
     #[tokio::test]
     async fn reject_rolls_back_discarding_later_chapters() {
         let dir = tempfile::tempdir().unwrap();

@@ -582,23 +582,11 @@ async fn run_detection(
     chapter_number: u32,
 ) -> Result<(), String> {
     let book_dir = runtime.state.book_dir(book_id);
-    // readChapterContent：chapters/NNNN*.md。
-    let padded = format!("{:04}", chapter_number);
+    // readChapterContent：687 号数值等值定位（TS findChapterFileByNumber 镜像）。
     let chapters_dir = book_dir.join("chapters");
-    let mut entries = tokio::fs::read_dir(&chapters_dir)
+    let chapter_file = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
         .await
-        .map_err(|e| e.to_string())?;
-    let mut chapter_file: Option<String> = None;
-    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            chapter_file = Some(name);
-            break;
-        }
-    }
-    let Some(chapter_file) = chapter_file else {
-        return Err(format!("chapter {chapter_number} file not found"));
-    };
+        .ok_or_else(|| format!("chapter {chapter_number} file not found"))?;
     let chapter_content =
         tokio::fs::read_to_string(chapters_dir.join(&chapter_file))
             .await

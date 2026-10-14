@@ -720,21 +720,11 @@ pub(crate) async fn run_revise_chain(
         _ => crate::utils::language::WritingLanguage::Zh,
     };
 
-    // 章节正文（缺文件 → Node 404 "Chapter not found"）。
+    // 章节正文（缺文件 → Node 404 "Chapter not found"）。687 号数值等值定位。
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{chapter_number:04}");
-    let mut entries = tokio::fs::read_dir(&chapters_dir)
+    let file_name = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
         .await
-        .map_err(|_| ReviseChainError::NotFound("Chapter not found".to_string()))?;
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            matched = Some(name);
-            break;
-        }
-    }
-    let file_name = matched.ok_or_else(|| ReviseChainError::NotFound("Chapter not found".to_string()))?;
+        .ok_or_else(|| ReviseChainError::NotFound("Chapter not found".to_string()))?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
         .await
         .map_err(|_| ReviseChainError::NotFound("Chapter not found".to_string()))?;
@@ -1492,21 +1482,11 @@ async fn run_repair_state(
         ));
     }
 
-    // 章节正文。
+    // 章节正文。687 号数值等值定位（TS findChapterFileByNumber 镜像）。
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{target:04}");
-    let mut entries = tokio::fs::read_dir(&chapters_dir)
+    let file_name = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, target)
         .await
-        .map_err(|e| e.to_string())?;
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            matched = Some(name);
-            break;
-        }
-    }
-    let file_name = matched.ok_or_else(|| "Chapter not found".to_string())?;
+        .ok_or_else(|| "Chapter not found".to_string())?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(file_name))
         .await
         .map_err(|e| e.to_string())?;
@@ -1740,19 +1720,9 @@ pub(crate) async fn run_resync_chain(
         ));
     }
 
-    // 章节正文（去标题行）+ 旧真相。
+    // 章节正文（去标题行）+ 旧真相。687 号数值等值定位。
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{chapter_number:04}");
-    let mut matched: Option<String> = None;
-    if let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&padded) && name.ends_with(".md") {
-                matched = Some(name);
-                break;
-            }
-        }
-    }
+    let matched = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await;
     let file_name = matched.ok_or_else(|| "Chapter not found".to_string())?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
         .await

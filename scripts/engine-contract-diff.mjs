@@ -264,6 +264,10 @@ const ENDPOINTS = [
   "/api/v1/asset-library/world-sample",
   "/api/v1/doctor",
   `/api/v1/books/${BOOK}/chapters/2`,
+  // 687 号：双形态同号面（fixture 故意播种 0001-连字符种子 + resync 产
+  // 0001_规范名并存）——读侧数值等值定位（findChapterFileByNumber 双端镜像）
+  // 的字节级回归锁：filename+content 双腿恒等（padded 类内字典序 '-'<'_'）。
+  `/api/v1/books/${BOOK}/chapters/1`,
   `/api/v1/books/${BOOK}/context-lens/2`,
   `/api/v1/books/${BOOK}/roster-candidates`,
   // 634 号扩容（488 号协议第二轮：活体探测双端 200 后入列）：

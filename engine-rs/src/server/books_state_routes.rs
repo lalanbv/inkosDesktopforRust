@@ -302,24 +302,14 @@ pub async fn read_chapter(
     Path((book_id, chapter)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
-    // TS parseInt 失败 → NaN → 无文件匹配 → 404（同样落 404，无 400 分支）。
+    // TS parseInt 失败 → NaN → find 无候选 → 404（同样落 404，无 400 分支）。
     let Ok(number) = chapter.parse::<u32>() else {
         return not_found();
     };
+    // 687 号：数值等值定位（TS findChapterFileByNumber 逐字镜像）——「能列出
+    // 即可打开」+ 前缀碰撞（num=7 误配 00071_）根除。
     let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
-    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
-        return not_found();
-    };
-    let padded = format!("{number:04}");
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            matched = Some(name);
-            break;
-        }
-    }
-    let Some(file_name) = matched else {
+    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
         return not_found();
     };
     let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
@@ -752,18 +742,8 @@ pub async fn post_workspace_inspiration(
 
     let book_dir = runtime.state.book_dir(&book_id);
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{number:04}");
-    let mut matched: Option<String> = None;
-    if let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&padded) && name.ends_with(".md") {
-                matched = Some(name);
-                break;
-            }
-        }
-    }
-    let Some(file_name) = matched else {
+    // 687 号：数值等值定位（TS findChapterFileByNumber 镜像）。
+    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
     };
     let Ok(chapter_content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
@@ -1007,31 +987,20 @@ pub async fn detect_stats(
 
 // ── POST /api/v1/books/:id/detect/:chapter ───────────────────────
 
-/// 单章 AI 痕迹检测（server.ts L5892；parseInt NaN → padded "NaN" 无匹配 → 404）。
+/// 单章 AI 痕迹检测（server.ts L7293；findChapterFileByNumber 数值等值——
+/// parseInt NaN/负数 → 无候选 → 404）。
 pub async fn detect_chapter(
     State(runtime): State<BooksRuntime>,
     Path((book_id, chapter)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
-    let padded = match chapter.parse::<i64>() {
-        Ok(number) if number >= 0 => format!("{number:04}"),
-        // TS String(-1).padStart(4, "0") = "00-1"；NaN → "NaN"。
-        Ok(negative) => format!("{negative:0>4}"),
-        Err(_) => "NaN".to_string(),
-    };
-    let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
-    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
+    // 687 号：负数/NaN 无前导号等值候选，统一落 404（旧 padded "00-1"/"NaN"
+    // 形态随 startsWith 匹配一并退役）。
+    let Ok(number) = chapter.parse::<u32>() else {
         return not_found();
     };
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            matched = Some(name);
-            break;
-        }
-    }
-    let Some(file_name) = matched else {
+    let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
+    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
         return not_found();
     };
     let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {

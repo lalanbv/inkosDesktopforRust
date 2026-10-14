@@ -113,21 +113,13 @@ pub(crate) async fn run_audit_flow(
         .map_err(|e| AuditFlowError::Book(e.to_string()))?;
     let book_dir = runtime.state.book_dir(book_id);
 
-    // 章节文件：NNNN*.md 首匹配（对齐 Node readdir+find）。
+    // 章节文件：687 号数值等值定位（TS findChapterFileByNumber 镜像，683 号
+    // 读侧统一的引擎侧收口）。
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{chapter_number:04}");
-    let mut entries = tokio::fs::read_dir(&chapters_dir)
-        .await
-        .map_err(|_| AuditFlowError::ChapterNotFound)?;
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            matched = Some(name);
-            break;
-        }
-    }
-    let file_name = matched.ok_or(AuditFlowError::ChapterNotFound)?;
+    let file_name =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
+            .await
+            .ok_or(AuditFlowError::ChapterNotFound)?;
     let content = tokio::fs::read_to_string(chapters_dir.join(file_name))
         .await
         .map_err(|_| AuditFlowError::ChapterNotFound)?;
