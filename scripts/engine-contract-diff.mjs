@@ -468,6 +468,13 @@ try {
     try {
       execFileSync("node", [join(scriptDir, "walkthrough-fixture.mjs"), engine.root, engine.port], {
         cwd: repoRoot,
+        // 698 号：报告模式下 TS 腿播种 canonical 形态 + index（2.0 进度链语义，
+        // 双腿各单一章节 → chaptersWritten 对称）；严格模式两腿保持 687 原播种。
+        env: {
+          ...process.env,
+          ...(twoDomainReportMode ? { WALKTHROUGH_REPORT_MODE: "1" } : {}),
+          ...(twoDomainReportMode && engine.name === "node" ? { WALKTHROUGH_SEED_REPORT: "1" } : {}),
+        },
         stdio: ["ignore", "ignore", "inherit"],
       });
     } catch (error) {
@@ -568,14 +575,30 @@ try {
       sharedCompared += 1;
       // 与严格比对同口径：prune 规范化（键排序 + VOLATILE 剔除）——
       // 裸 stringify 会把双端序列化键序差异误报为分歧。
-      const same = n.status === r.status && JSON.stringify(prune(n.body)) === JSON.stringify(prune(r.body));
+      // 698 号：超集键声明——TS 超集（2.0 加法字段，fork 契约面无此键）与
+      // Rust 超集（fork 诊断扩展）取交集键对比，超集键打印声明不拦截。
+      const pn = prune(n.body);
+      const pr = prune(r.body);
+      let declaredKeys = "";
+      let cn = pn;
+      let cr = pr;
+      if (pn && pr && typeof pn === "object" && typeof pr === "object" && !Array.isArray(pn) && !Array.isArray(pr)) {
+        const nk = Object.keys(pn).filter((k) => !(k in pr));
+        const rk = Object.keys(pr).filter((k) => !(k in pn));
+        if (nk.length || rk.length) {
+          declaredKeys = `（声明超集键：node=[${nk.join(",")}] rust=[${rk.join(",")}]）`;
+          cn = Object.fromEntries(nk.length ? Object.entries(pn).filter(([k]) => !nk.includes(k)) : Object.entries(pn));
+          cr = Object.fromEntries(rk.length ? Object.entries(pr).filter(([k]) => !rk.includes(k)) : Object.entries(pr));
+        }
+      }
+      const same = n.status === r.status && JSON.stringify(cn) === JSON.stringify(cr);
       if (same) {
-        console.log(`✓ 共享面 ${endpoint}（${n.status}）`);
+        console.log(`✓ 共享面 ${endpoint}（${n.status}）${declaredKeys}`);
       } else {
         sharedDiffs += 1;
-        console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(n.body, r.body) ?? "?"}` : ""}`);
-        console.log(`    node : ${JSON.stringify(n.body).slice(0, 300)}`);
-        console.log(`    rust : ${JSON.stringify(r.body).slice(0, 300)}`);
+        console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(cn, cr) ?? "?"}` : ""}${declaredKeys}`);
+        console.log(`    node : ${JSON.stringify(cn).slice(0, 300)}`);
+        console.log(`    rust : ${JSON.stringify(cr).slice(0, 300)}`);
       }
     }
 
