@@ -184,6 +184,20 @@ writeFileSync(join(root, "radar", "scan-20260914-walkthrough.json"), JSON.string
   ],
 }, null, 2));
 
+// ── 2.5 work 迁移（697 号；仅 2.0 TS 腿）──
+// 2.0 的 /books 列表走 works 清单（listWorkManifests），legacy books/<id> 目录
+// 必须经 migrateLegacyWorks 注册才可见（fork 引擎原生列 books 目录，无需迁移）。
+if (!forkContract) {
+  // scripts/ 不在 workspace 依赖链上——直接导入 core 构建产物（contract-diff
+  // 前置 gate 已 build core；缺失时给出可行动指引）。
+  const core = await import(join(repoRoot, "packages", "core", "dist", "index.js"))
+    .catch((error) => die(`无法加载 packages/core/dist（先执行 pnpm --filter @actalk/inkos-core build）：${error.message}`));
+  const results = await core.migrateLegacyWorks(root, { apply: true });
+  for (const item of results) {
+    console.log(`[walkthrough-fixture] work migrate: ${item.source} | ${item.status}${item.error ? ` | ${item.error}` : ""}`);
+  }
+}
+
 // ── 3. resync（settle→validate 链 → memory.db 前置）+ write-next（全链）──
 // 复用根守卫（440 号）：write-next 章已落盘（nextChapter ≥ 3）时 resync/1 会被
 // 「Only the latest persisted chapter can be synced safely」拒绝——而 env 缺省
