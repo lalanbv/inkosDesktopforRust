@@ -689,6 +689,17 @@ try {
       { path: "/api/v1/books/:id/detect/1", method: "POST" },
       { path: "/api/v1/books/:id/detect-all", method: "POST" },
       { path: "/api/v1/books/:id/draft", method: "POST", body: { wordCount: 800 } },
+      // 718 号：面板族尾批三路由回收（3 条目 7→4）。style-binding GET 基线
+      // （binding:null 双端）+ PUT 空载荷 400（profileName required 双端同
+      // 护栏，非 GET 状态码口径）；hybrid-search/fanfic refresh 空载荷 400
+      // 同护栏（query/sourceText required）。
+      "/api/v1/books/:id/style-binding",
+      // PUT 探针载荷=profileName 在而 profile 缺失 → 双端 404 同构（profileName
+      // 缺失的空载荷会打 TS untyped 400 vs Rust typed-extractor 422 的错误
+      // 协议差伪影——705 号同类，备案不走该探针）。
+      { path: "/api/v1/books/:id/style-binding", method: "PUT", body: { profileName: "probe-missing" } },
+      { path: "/api/v1/books/:id/hybrid-search", method: "POST", body: {} },
+      { path: "/api/v1/books/:id/fanfic/refresh", method: "POST", body: {} },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -762,12 +773,10 @@ try {
     // 714 号章节管线五条目续收（approve/reject/plan/compose/repair-state →15；
     // 715 号 consolidate 单条目续收（story-markdown/hook-lifecycle/hook-policy/
     // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）；
-    // 717 号写作质量面四条目续收（draft/eval/detect/:chapter/detect-all →7；
-    // ai-tells+book-eval+production-bindings 连片移植）。剩 fanfic/hybrid-
-    // search/style-binding 面板族与低优先五面。
+    // 718 号面板族尾批三条目续收（style-binding/hybrid-search/fanfic refresh
+    // →4）。**fork-only 有界面全部清偿**——余 4 条=debug/tools+health（Rust
+    // 超集声明域）+interaction/session+prompt-packs（无 UI 消费方，低优先）。
     const FORK_ONLY_ROUTES = [
-      "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
-      "/api/v1/books/:id/style-binding",
       "/api/v1/debug/tools",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/prompt-packs",

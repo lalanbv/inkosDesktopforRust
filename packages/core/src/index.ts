@@ -783,3 +783,11 @@ export {
   type ProductionSkillCapability,
 } from "./skills/production-bindings.js";
 export { findChapterFileByNumber } from "./state/chapter-filename.js";
+
+// ── 718 号：混合检索面（RecallTestCard 召回测试消费）——FTS 索引当前演进版
+//    在树 + RRF 融合/向量相似度/嵌入客户端；MemoryDB 语义缓存 2.0 未接线
+//    （hybrid-search 路由语义面降级 fts5-fallback，接线后自动升级）。──
+export { LocalSearchIndex, tokenizeSearchText, type SearchDocument, type SearchHit } from "./retrieval/local-search.js";
+export { createEmbeddingClient, type EmbeddingConfig } from "./retrieval/embedding-client.js";
+export type { EmbeddingClient } from "./retrieval/semantic-retrieval.js";
+export { topKBySimilarity, reciprocalRankFusion } from "./retrieval/semantic-retrieval.js";

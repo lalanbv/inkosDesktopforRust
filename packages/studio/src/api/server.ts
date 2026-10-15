@@ -5620,6 +5620,128 @@ function yamlScalar(value: unknown): string {
     }
   });
 
+  // ── 718 号：面板族尾批三路由回收（RecallTestCard/写法绑定面板/同人面板
+  // 活消费；fork-only 7→4）。fork 逐字 + 路径正典化（state.bookDir）+
+  // hybrid-search 语义面降级适配（2.0 无 MemoryDB 写链 → chunk 向量恒空，
+  // mode 恒 fts5-fallback；FTS 面走当前演进版 LocalSearchIndex）。
+
+  app.post("/api/v1/books/:id/hybrid-search", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{
+      query?: string;
+      k?: number;
+      embedding?: unknown;
+    }>().catch(() => ({}) as { query?: string; k?: number; embedding?: unknown });
+    const query = typeof body.query === "string" ? body.query : "";
+    if (!query.trim()) return c.json({ error: "query is required" }, 400);
+    const k = Math.max(1, Math.min(50, Math.floor(Number(body.k ?? 10) || 10)));
+    const dbPath = join(state.bookDir(id), "story", "memory.db");
+    if (!(await stat(dbPath).then(() => true).catch(() => false))) {
+      return c.json({ fts: [], semantic: [], fused: [], mode: "fts5-fallback" });
+    }
+    const core = await import("@actalk/inkos-core");
+    const { LocalSearchIndex, createEmbeddingClient, topKBySimilarity, reciprocalRankFusion } = core;
+    const searchIndex = new LocalSearchIndex(dbPath);
+    try {
+      const fts = searchIndex.search(query, { scope: "story-memory", limit: k * 2 });
+      const ftsRanked = fts.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
+      let semanticRanked: Array<{ id: string; rank: number }> = [];
+      let mode: "semantic" | "fts5-fallback" = "fts5-fallback";
+      const client = createEmbeddingClient(body.embedding ?? null);
+      if (client) {
+        try {
+          // 718 号：语义面降级适配——2.0 无 MemoryDB 写链（chunk 向量写入随
+          // fork 链退役），listChunkVectors 无数据源 → 语义恒空。FTS 面完整
+          // 可用；语义缓存接线后本分支自动升级（fork 路由逐字形状保持）。
+          const chunks: ReadonlyArray<{ chunkId: string; vector: ReadonlyArray<number> }> = [];
+          const queryVector = (await client.embed([query]))[0] ?? [];
+          const scored = topKBySimilarity(
+            queryVector,
+            chunks.map((chunk) => ({ id: chunk.chunkId, vector: chunk.vector })),
+            k * 2,
+          );
+          semanticRanked = scored.map((hit, index) => ({ id: hit.id, rank: index + 1 }));
+          mode = "semantic";
+        } catch {
+          mode = "fts5-fallback";
+        }
+      }
+      const fused = reciprocalRankFusion(ftsRanked, semanticRanked, k);
+      const byId = new Map(fts.map((hit) => [hit.id, hit]));
+      return c.json({
+        results: fused.map((entry) => {
+          const hit = byId.get(entry.id);
+          return {
+            id: entry.id,
+            score: entry.score,
+            title: hit?.title ?? "",
+            excerpt: hit?.body ?? "",
+            source: hit?.scope ?? "story-memory",
+          };
+        }),
+        mode,
+      });
+    } finally {
+      searchIndex.close();
+    }
+  });
+
+  app.get("/api/v1/books/:id/style-binding", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const path = join(state.bookDir(id), "story", "style_binding.json");
+    try {
+      const binding = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ binding });
+    } catch {
+      return c.json({ binding: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/style-binding", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{
+      profileName?: string;
+      enabledIds?: string[];
+      disabledIds?: string[];
+      maxGuidanceChars?: number;
+    }>();
+    const profileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
+    if (!profileName) return c.json({ error: "profileName is required" }, 400);
+    const profilePath = join(root, ".inkos", "style-profiles", `${profileName}.json`);
+    const profileExists = await stat(profilePath).then(() => true).catch(() => false);
+    if (!profileExists) return c.json({ error: "profile not found" }, 404);
+    const binding: Record<string, unknown> = { profileName };
+    if (Array.isArray(body.enabledIds) && body.enabledIds.length > 0) binding.enabledIds = body.enabledIds;
+    if (Array.isArray(body.disabledIds) && body.disabledIds.length > 0) binding.disabledIds = body.disabledIds;
+    if (typeof body.maxGuidanceChars === "number" && body.maxGuidanceChars > 0) binding.maxGuidanceChars = body.maxGuidanceChars;
+    const storyDir = join(state.bookDir(id), "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(join(storyDir, "style_binding.json"), JSON.stringify(binding, null, 2), "utf-8");
+    return c.json({ ok: true, binding });
+  });
+
+  app.post("/api/v1/books/:id/fanfic/refresh", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const { sourceText, sourceName } = await c.req.json<{ sourceText: string; sourceName?: string }>();
+    if (!sourceText?.trim()) return c.json({ error: "sourceText is required" }, 400);
+
+    broadcast("fanfic:refresh:start", { bookId: id });
+    try {
+      const book = await state.loadBookConfig(id);
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      await pipeline.importFanficCanon(id, sourceText, sourceName ?? "source", (book.fanficMode ?? "canon") as "canon");
+      broadcast("fanfic:refresh:complete", { bookId: id });
+      return c.json({ ok: true });
+    } catch (e) {
+      broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──
   // BackupPanel 活消费（export=浏览器下载，import=两段式 preview→confirm）。
   // Rust backup_routes.rs 为 443 号逐字移植——本嫁接后双端线格式对齐。
