@@ -5337,6 +5337,92 @@ function yamlScalar(value: unknown): string {
     return c.json(snapshot);
   });
 
+  // ── 714 号：章节管线五面回收（BookDetail 活消费；fork-only 20→16）──────
+  // plan/compose/repair-state=LLM 管线面（Runner 三方法），approve/reject=
+  // 审改流域（纯状态流转）。Rust 对偶 books_routes.rs（run_plan/run_compose/
+  // run_repair_state）与 books_state_routes.rs（approve/reject_chapter）。
+  // consolidate 留 fork-only（715 批随 story-markdown/hook-lifecycle/
+  // hook-promotion 三 util 连片恢复后接 ConsolidatorAgent）。
+
+  app.post("/api/v1/books/:id/plan", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      return c.json(await pipeline.planChapter(id, body.context));
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/compose", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{ context?: string }>().catch(() => ({ context: undefined }));
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      return c.json(await pipeline.composeChapter(id, body.context));
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/repair-state/:chapter", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await pipeline.repairChapterState(id, chapterNum);
+      broadcast("repair-state:complete", { bookId: id, chapter: chapterNum });
+      return c.json(result);
+    } catch (e) {
+      broadcast("repair-state:error", { bookId: id, chapter: chapterNum, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/chapters/:num/approve", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const num = parseInt(c.req.param("num"), 10);
+    try {
+      const index = await state.loadChapterIndex(id);
+      const updated = index.map((ch) =>
+        ch.number === num ? { ...ch, status: "approved" as const } : ch,
+      );
+      await state.saveChapterIndex(id, updated);
+      return c.json({ ok: true, chapterNumber: num, status: "approved" });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/chapters/:num/reject", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const num = parseInt(c.req.param("num"), 10);
+    try {
+      const index = await state.loadChapterIndex(id);
+      const target = index.find((ch) => ch.number === num);
+      if (!target) {
+        return c.json({ error: `Chapter ${num} not found` }, 404);
+      }
+      const rollbackTarget = num - 1;
+      const discarded = await state.rollbackToChapter(id, rollbackTarget);
+      return c.json({
+        ok: true,
+        chapterNumber: num,
+        status: "rejected",
+        rolledBackTo: rollbackTarget,
+        discarded,
+      });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──
   // BackupPanel 活消费（export=浏览器下载，import=两段式 preview→confirm）。
   // Rust backup_routes.rs 为 443 号逐字移植——本嫁接后双端线格式对齐。

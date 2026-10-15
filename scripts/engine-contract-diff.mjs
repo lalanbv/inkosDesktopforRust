@@ -651,6 +651,22 @@ try {
       // 会话 404 同形。均 GET 全 body 对比。
       "/api/v1/context-meter",
       { path: "/api/v1/context-meter?sessionId=contract-diff-probe" },
+      // 714 号：章节管线五面回收（BookDetail 活消费，4 条目 20→15）。
+      // plan/compose=LLM 管线面（mock 已有「创作总编」Rust planner 文本支 +
+      // 714 新增 TS submit_chapter_memo 工具支——双腿分派各自保真）；写面
+      // 状态码口径。:num/:chapter 不在 instShared 替换表——字面写死 fixture
+      // 第 1 章。
+      { path: "/api/v1/books/:id/plan", method: "POST" },
+      { path: "/api/v1/books/:id/compose", method: "POST" },
+      // repair-state 护栏探针：fixture 第 1 章非 state-degraded → 双端同护栏
+      // 500（Rust run_repair_state 与 fork 逐字同门槛）。
+      { path: "/api/v1/books/:id/repair-state/1", method: "POST" },
+      // approve 先于 reject：approve 置 approved（200 落盘）；reject 命中第
+      // 1 章 → rollbackTo 0（快照 0 缺失双端同护栏 500——快乐路径留走查造第
+      // 2 章后活体）；未命中第 2 章双端 404（typed 错误体）。
+      { path: "/api/v1/books/:id/chapters/1/approve", method: "POST" },
+      { path: "/api/v1/books/:id/chapters/1/reject", method: "POST" },
+      { path: "/api/v1/books/:id/chapters/2/reject", method: "POST" },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -720,18 +736,17 @@ try {
     // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
     // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）；
     // 708 号 radar 两面、709 号 review-mode 双条目、710 号 backup 双条目续收（→23）；
-    // 713 号导演域双条目 + context-meter 单条目续收（→20）。
+    // 713 号导演域双条目 + context-meter 单条目续收（→20）；
+    // 714 号章节管线五条目续收（approve/reject/plan/compose/repair-state →15；
+    // consolidate 留守=715 批随 story-markdown 三 util 连片恢复）。
     const FORK_ONLY_ROUTES = [
-      "/api/v1/books/:id/chapters/:num/approve",
-      "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
-      "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
+      "/api/v1/books/:id/codex",
+      "/api/v1/books/:id/consolidate",
       "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
       "/api/v1/books/:id/detect-all",
       "/api/v1/books/:id/detect/:chapter",
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
-      "/api/v1/books/:id/plan",
-      "/api/v1/books/:id/repair-state/:chapter",
       "/api/v1/books/:id/style-binding",
       "/api/v1/debug/tools",
       "/api/v1/health", "/api/v1/interaction/session",

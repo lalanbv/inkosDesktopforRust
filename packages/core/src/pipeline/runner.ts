@@ -152,6 +152,24 @@ export interface ChapterPipelineResult {
   readonly contextTrace?: ChapterContextTraceSummary;
 }
 
+// ── 714 号：章节管线三面回收（fork 契约形状，Rust books_routes.rs 线格式同源）──
+
+/** POST /books/:id/plan 响应面（Rust PlanChapterResult 同形 camelCase）。 */
+export interface PlanChapterResult {
+  readonly bookId: string;
+  readonly chapterNumber: number;
+  readonly intentPath: string;
+  readonly goal: string;
+  readonly conflicts: ReadonlyArray<string>;
+}
+
+/** POST /books/:id/compose 响应面（Rust ComposeChapterResult 同形 9 键）。 */
+export interface ComposeChapterResult extends PlanChapterResult {
+  readonly contextPath: string;
+  readonly ruleStackPath: string;
+  readonly tracePath: string;
+}
+
 export interface WriteChaptersOptions {
   readonly startChapterNumber?: number;
   readonly wordCount?: number;
@@ -468,6 +486,96 @@ export class PipelineRunner {
       this.agentCtxFor("director"),
     );
     return director.generateDirections(params);
+  }
+
+  // ── 714 号：章节管线三面回收（fork BookDetail 活消费）────────────────
+  // plan/compose = fork 逐字（createGovernedArtifacts 2.0 同签名在树）；
+  // repair-state = fork 公共壳逐字（book 锁 + state-degraded/latest 双护栏，
+  // 与 Rust run_repair_state 1452 行同构），settle 内核复用 2.0 进化形态
+  // _resyncChapterArtifactsLocked（fork 私有 _repairChapterStateLocked 的
+  // settle 链在 2.0 已被 withStateProjectionContext/reconcile 进化覆盖）。
+
+  /** 714 号：规划下一章意图（POST /books/:id/plan 消费面）。 */
+  async planChapter(bookId: string, context?: string): Promise<PlanChapterResult> {
+    await this.state.ensureControlDocuments(bookId);
+    const book = await this.state.loadBookConfig(bookId);
+    const bookDir = this.state.bookDir(bookId);
+    const chapterNumber = await this.state.getNextChapterNumber(bookId);
+    const stageLanguage = await this.resolveBookLanguage(book);
+    this.logStage(stageLanguage, { zh: "规划下一章意图", en: "planning next chapter intent" });
+    const { plan } = await this.createGovernedArtifacts(
+      book,
+      bookDir,
+      chapterNumber,
+      context ?? this.config.externalContext,
+      { reuseExistingIntentWhenContextMissing: false },
+    );
+
+    return {
+      bookId,
+      chapterNumber,
+      intentPath: relativeToBookDir(bookDir, plan.runtimePath),
+      goal: plan.intent.goal,
+      conflicts: [],
+    };
+  }
+
+  /** 714 号：组装章节运行时上下文（POST /books/:id/compose 消费面）。 */
+  async composeChapter(bookId: string, context?: string): Promise<ComposeChapterResult> {
+    await this.state.ensureControlDocuments(bookId);
+    const book = await this.state.loadBookConfig(bookId);
+    const bookDir = this.state.bookDir(bookId);
+    const chapterNumber = await this.state.getNextChapterNumber(bookId);
+    const stageLanguage = await this.resolveBookLanguage(book);
+    this.logStage(stageLanguage, { zh: "组装章节运行时上下文", en: "composing chapter runtime context" });
+    const { plan, composed } = await this.createGovernedArtifacts(
+      book,
+      bookDir,
+      chapterNumber,
+      context ?? this.config.externalContext,
+      { reuseExistingIntentWhenContextMissing: true },
+    );
+
+    return {
+      bookId,
+      chapterNumber,
+      intentPath: relativeToBookDir(bookDir, plan.runtimePath),
+      goal: plan.intent.goal,
+      conflicts: [],
+      contextPath: relativeToBookDir(bookDir, composed.contextPath),
+      // 2.0 composer 无独立规则栈产物（Rust composer.rs rule_stack_path 对应
+      // 面被 trace 体系吸收）——字段保形（Rust 线格式 9 键），诚实填空串。
+      ruleStackPath: "",
+      tracePath: relativeToBookDir(bookDir, composed.tracePath),
+    };
+  }
+
+  /** 714 号：修复章节状态结算（POST /books/:id/repair-state/:chapter 消费面）。 */
+  async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
+    // 护栏与 Rust run_repair_state（books_routes.rs:1452）逐字同构：仅最新章
+    // 且 status=state-degraded 可修（fork _repairChapterStateLocked 同门槛）。
+    const index = [...(await this.state.loadChapterIndex(bookId))];
+    if (index.length === 0) {
+      throw new Error(`Book "${bookId}" has no persisted chapters to repair.`);
+    }
+    const targetChapter = chapterNumber ?? index[index.length - 1]!.number;
+    const targetMeta = index.find((chapter) => chapter.number === targetChapter);
+    if (!targetMeta) {
+      throw new Error(`Chapter ${targetChapter} not found in "${bookId}".`);
+    }
+    const latestChapter = Math.max(...index.map((chapter) => chapter.number));
+    if (targetMeta.status !== "state-degraded") {
+      throw new Error(`Chapter ${targetChapter} is not state-degraded.`);
+    }
+    if (targetChapter !== latestChapter) {
+      throw new Error(`Only the latest state-degraded chapter can be repaired safely (latest is ${latestChapter}).`);
+    }
+    const releaseLock = await this.state.acquireBookLock(bookId);
+    try {
+      return await this._resyncChapterArtifactsLocked(bookId, targetChapter);
+    } finally {
+      await releaseLock();
+    }
   }
 
   // 707 号：选后再析（G14a/335）双路径——selection 在位走 fork 原版「免费扫榜

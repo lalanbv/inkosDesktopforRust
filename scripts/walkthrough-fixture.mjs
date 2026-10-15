@@ -216,6 +216,16 @@ if (!forkContract) {
   for (const item of results) {
     console.log(`[walkthrough-fixture] work migrate: ${item.source} | ${item.status}${item.error ? ` | ${item.error}` : ""}`);
   }
+  // 714 号：TS 腿结构化 runtime 四件套初始化（manifest/current_state/hooks/
+  // chapter_summaries，lastAppliedChapter:0 与播种单章态一致）——plan/compose/
+  // repair-state 管线面的读取前提（缺 manifest 时 planChapter 链 ENOENT 恒
+  // 500，contract-diff 双腿不对称实锤后补）。createInitialRuntimeState=store
+  // 官方初始化函数，schema 演进随真源走，不手写 JSON。
+  const worksSourceDir = join(root, "works", BOOK, "source");
+  if (existsSync(worksSourceDir)) {
+    await core.createInitialRuntimeState({ bookDir: worksSourceDir, language: "zh" });
+    console.log(`[walkthrough-fixture] runtime state init: works/${BOOK}/source`);
+  }
 }
 
 // ── 3. resync（settle→validate 链 → memory.db 前置）+ write-next（全链）──

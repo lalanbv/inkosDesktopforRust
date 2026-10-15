@@ -180,11 +180,15 @@ http.createServer((req, res) => {
       let sys = "";
       let msgs = [];
       let wantStream = true;
+      let toolNames = [];
       try {
         const p = JSON.parse(body);
         sys = p?.messages?.[0]?.content ?? "";
         msgs = p?.messages ?? [];
         wantStream = p?.stream !== false;
+        // 714 号：TS planner 工具协议识别（submitStructured submit_chapter_memo）
+        // ——见下方分派支；解析与 persona 特征同源同块，避免块级作用域引用。
+        toolNames = (p?.tools ?? []).map((t) => t?.function?.name ?? t?.name ?? "");
       } catch {}
       // 622 号：协议保真——按请求 stream 旗标返回形态。此前恒返 SSE，Rust
       // 非流式线上路径（stream:false → 整体 JSON 解析，streaming_client 108 号）
@@ -237,6 +241,26 @@ http.createServer((req, res) => {
         res.on("close", () => clearInterval(timer));
       };
       const lastRole = msgs.length ? msgs[msgs.length - 1].role : "user";
+      // 714 号：TS planner 工具协议分派（submitStructured submit_chapter_memo）
+      // ——此前落 lastRole=user 的 propose_action 支，pi-ai worker 收未注册工具
+      // 流失败（713 号 directions 同因）。Rust planner 系统提示词含「创作总编」
+      // 走既有 PLANNER 文本支（parse_memo 可解析），本支只截 TS 工具调用形态。
+      if (toolNames.includes("submit_chapter_memo")) {
+        const args = JSON.stringify({
+          goal: "主角初次交锋夺得玉符，并在冲突中初窥镜界异象的一角。",
+          body: PLANNER,
+          threadRefs: ["H01"],
+        });
+        const toolCall = { id: `call_memo_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_chapter_memo", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
       let content;
       if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) {
         if (FAIL_ARCHITECT) {
