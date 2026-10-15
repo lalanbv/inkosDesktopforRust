@@ -618,6 +618,12 @@ try {
       { path: "/api/v1/books/:id/series-backfill/extract", method: "POST", body: {} },
       // apply 空载荷探针=无草稿守卫（400/400）——草稿落盘属 extract 快乐路径。
       { path: "/api/v1/books/:id/series-backfill/apply", method: "POST", body: {} },
+      // 707 号：选后再析两面回收（G14a/335，UI 活消费）。rankings 榜单源双端
+      // 容错（网络失败静默跳过恒 resolve）→ 200/200 稳定；analyze 带
+      // {selection:{}} 走嫁接分析路径，mock 无市场分析师分派 → 回退文本无
+      // JSON 双端解析失败 500/500（状态码对称=路由在位，703 号写面口径）。
+      { path: "/api/v1/radar/rankings", method: "POST" },
+      { path: "/api/v1/radar/analyze", method: "POST", body: { selection: {} } },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -700,7 +706,6 @@ try {
       "/api/v1/director/directions",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
-      "/api/v1/radar/analyze", "/api/v1/radar/rankings",
     ];
     let forkOnlyConfirmed = 0;
     const forkOnlyDrift = [];

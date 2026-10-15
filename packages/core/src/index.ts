@@ -412,7 +412,9 @@ export { ArchitectAgent, type ArchitectOutput } from "./agents/architect.js";
 export { WriterAgent, type WriteChapterInput, type WriteChapterOutput, type TokenUsage } from "./agents/writer.js";
 export { ContinuityAuditor, type AuditResult } from "./agents/continuity.js";
 export { ReviserAgent, DEFAULT_REVISE_MODE, type ReviseOutput, type ReviseMode } from "./agents/reviser.js";
-export { RadarAgent, type RadarResult, type RadarRecommendation } from "./agents/radar.js";
+// 707 号：选后再析恢复（G14a/335）——fetchRankings/filterRankingsBySelection/
+// RadarSelection 随 radar 域回收补齐（2.0 合并裁撤、Rust radar.rs 全量保留）。
+export { RadarAgent, fetchRankings, filterRankingsBySelection, type RadarResult, type RadarRecommendation, type RadarSelection } from "./agents/radar.js";
 export { FanqieRadarSource, QidianRadarSource, TextRadarSource, type RadarSource, type PlatformRankings, type RankingEntry } from "./agents/radar-source.js";
 export { readBookRules } from "./agents/rules-reader.js";
 export { buildWriterSystemPrompt } from "./agents/writer-prompts.js";

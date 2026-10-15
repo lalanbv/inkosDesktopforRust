@@ -455,7 +455,16 @@ export class PipelineRunner {
   // Atomic operations (composable by OpenClaw or agent mode)
   // ---------------------------------------------------------------------------
 
-  async runRadar(): Promise<RadarResult> {
+  // 707 号：选后再析（G14a/335）双路径——selection 在位走 fork 原版「免费扫榜
+  // （/radar/rankings 已完成）+ 范围 LLM 分析」（自带系统提示词，无 skill 门槛，
+  // 与 Rust run_radar_analyze 同水位）；缺省保持 2.0 harness 全量扫描
+  // （submitStructured 证据落地 + 市场 Skill 激活，daemon/tick 路径）不变。
+  async runRadar(options: { selection?: import("../agents/radar.js").RadarSelection } = {}): Promise<RadarResult> {
+    if (options.selection) {
+      const radar = new RadarAgent(this.agentCtxFor("radar"), this.config.radarSources);
+      const rankings = await radar.scanRankings();
+      return radar.analyzeRankings(rankings, options.selection);
+    }
     const available = await loadAvailableAgentSkills({ projectRoot: this.config.projectRoot });
     const marketSkill = [...available.skills].reverse().find((skill) => skill.id === "inkos-long-market-research");
     if (!marketSkill) throw new Error("Radar requires unavailable skill: inkos-long-market-research");

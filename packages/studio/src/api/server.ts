@@ -7406,6 +7406,36 @@ function yamlScalar(value: unknown): string {
     }
   });
 
+  // ── 707 号：选后再析两面回收（G14a/335；fork-only 清单 29→27）──
+  // UI（RadarView）在位消费本两面——node 回退腿此前 404 断链。
+
+  app.post("/api/v1/radar/rankings", async (c) => {
+    // G14a/335 号"选后再析"第一步：免费扫榜，不调 LLM、不落历史。
+    try {
+      const { fetchRankings } = await import("@actalk/inkos-core");
+      const rankings = await fetchRankings();
+      return c.json({ rankings });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/radar/analyze", async (c) => {
+    // G14a/335 号第二步：勾选范围后分析（selection 可省 = 全量）。
+    const body = await c.req.json<{ selection?: { platforms?: string[]; categories?: string[]; titles?: string[] } }>().catch(() => ({ selection: undefined }));
+    broadcast("radar:start", {});
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const result = await pipeline.runRadar({ selection: body?.selection });
+      await saveRadarScan(root, result);
+      broadcast("radar:complete", { result });
+      return c.json(result);
+    } catch (e) {
+      broadcast("radar:error", { error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   app.get("/api/v1/radar/history", async (c) => {
     try {
       const items = await loadRadarHistory(root);
