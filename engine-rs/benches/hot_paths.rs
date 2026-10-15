@@ -436,6 +436,58 @@ fn bench_export_artifact(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_backup_export(c: &mut Criterion) {
+    // 725 号 0GC 第五选点：backup 导出链基线（staging 复制 + tar + gzip
+    // level 6；12 章 × ~1600 字书稿 + inkos.json + .inkos 结构；回归闸资产）。
+    let rt = tokio::runtime::Runtime::new().expect("tokio rt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let book_dir = root.join("books").join("b1");
+    std::fs::create_dir_all(book_dir.join("chapters")).expect("mkdir");
+    std::fs::write(
+        book_dir.join("book.json"),
+        r#"{"id":"b1","title":"镜花缘","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":12,"chapterWordCount":3000,"language":"zh","createdAt":"2026-10-16T00:00:00.000Z","updatedAt":"2026-10-16T00:00:00.000Z"}"#,
+    )
+    .expect("book.json");
+    let paragraph = "坊市的喧嚣在身后渐渐远去，山道上的风带着初秋的凉意，祖符玉佩在他掌心微微发烫。";
+    let body: String = (0..24).map(|_| paragraph).collect::<Vec<_>>().join("\n\n");
+    let mut index_rows = Vec::new();
+    for i in 1..=12 {
+        let title = format!("第{i}章 山道");
+        std::fs::write(
+            book_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            format!("# {}\n\n{}\n", title, body),
+        )
+        .expect("chapter");
+        index_rows.push(serde_json::json!({
+            "number": i, "title": title, "wordCount": 1600,
+            "createdAt": "2026-10-16T00:00:00.000Z", "updatedAt": "2026-10-16T00:00:00.000Z",
+            "observations": [], "provenance": "generated",
+        }));
+    }
+    std::fs::write(book_dir.join("chapters").join("index.json"), serde_json::to_string(&index_rows).expect("index")).expect("write");
+    std::fs::write(
+        root.join("inkos.json"),
+        r#"{"name":"probe","version":"0.1.0","language":"zh"}"#,
+    )
+    .expect("inkos.json");
+    std::fs::create_dir_all(root.join(".inkos")).expect("inkos dir");
+
+    let mut group = c.benchmark_group("backup_export");
+    group.sample_size(30);
+    group.bench_function("run_export_12ch", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                std::hint::black_box(
+                    inkos_engine::server::backup_routes::run_export(&root, false, false)
+                        .expect("backup export"),
+                )
+            })
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
@@ -444,6 +496,7 @@ criterion_group!(
     bench_tool_registry,
     bench_sse_parse,
     bench_story_markdown_render,
-    bench_export_artifact
+    bench_export_artifact,
+    bench_backup_export
 );
 criterion_main!(benches);

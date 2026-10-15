@@ -112,7 +112,9 @@ pub async fn export(
     }
 }
 
-fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) -> std::io::Result<Vec<u8>> {
+// 725 号 0GC：pub 化供 bench 消费（hot_paths backup_export 组基线——staging
+// 复制为 443 号契约面语义保持，gzip level 6 为合理档位不做压缩级别调参）。
+pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) -> std::io::Result<Vec<u8>> {
     let _ = include_sessions; // scope 记录用；打包范围与 TS 一致不含 sessions/
     let staging = root.join(".inkos-backup-staging");
     let _ = std::fs::remove_dir_all(&staging);
