@@ -12,6 +12,8 @@
 
 use regex::Regex;
 use serde::Serialize;
+use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -985,10 +987,13 @@ pub fn detect_paragraph_length_drift(
 /// 热点（bench title_dedup 活体）。索引一次构建，探测面只做借用比较；
 /// 匹配语义与旧逐字循环逐例等价（顺序 / 空跳过 / 首中即断）。
 struct TitleIndex<'a> {
-    /// trim + lowercase 且非空者（保序）。
-    lower: Vec<String>,
-    /// 与 lower 平行的 strip_punct 形态。
-    strip: Vec<String>,
+    /// trim + lowercase 且非空者（保序）。711 号 0GC：无大写字符时借用原串
+    /// （CJK 标题常态），免 200 次 to_lowercase 中间分配。
+    lower: Vec<Cow<'a, str>>,
+    /// 与 lower 平行的 strip 形态——711 号 0GC：惰性逐项计算（OnceCell 逐项
+    /// memo）。精确命中在近重复探测之前断掉的迭代（bench hit 形态）只为已
+    /// 访问项付 regex/分配成本；交错语义逐字保持（strip 仍在每次比较时消费）。
+    strip: Vec<OnceCell<String>>,
     /// 与 lower 平行的原始标题引用（violation 文案回显原始形态——语义保持）。
     original: Vec<&'a String>,
 }
@@ -999,11 +1004,16 @@ impl<'a> TitleIndex<'a> {
         let mut strip = Vec::with_capacity(existing_titles.len());
         let mut original = Vec::with_capacity(existing_titles.len());
         for existing in existing_titles {
-            let norm = existing.trim().to_lowercase();
-            if norm.is_empty() {
+            let trimmed = existing.trim();
+            if trimmed.is_empty() {
                 continue;
             }
-            strip.push(strip_punct(&norm));
+            let norm = if trimmed.chars().any(|c| c.is_uppercase()) {
+                Cow::Owned(trimmed.to_lowercase())
+            } else {
+                Cow::Borrowed(trimmed)
+            };
+            strip.push(OnceCell::new());
             lower.push(norm);
             original.push(existing);
         }
@@ -1022,14 +1032,9 @@ fn detect_duplicate_title_indexed(new_title: &str, index: &TitleIndex) -> Vec<Po
     let mut violations = Vec::new();
     let mut strip_new_memo: Option<String> = None;
 
-    for (existing_norm, existing_strip, existing_original) in index
-        .lower
-        .iter()
-        .zip(index.strip.iter())
-        .zip(index.original.iter())
-        .map(|((n, s), o)| (n, s, *o))
-    {
-        if normalized == *existing_norm {
+    for i in 0..index.lower.len() {
+        let existing_norm = index.lower[i].as_ref();
+        if normalized == existing_norm {
             violations.push(PostWriteViolation {
                 rule: "duplicate-title".to_string(),
                 severity: ViolationSeverity::Warning,
@@ -1039,11 +1044,12 @@ fn detect_duplicate_title_indexed(new_title: &str, index: &TitleIndex) -> Vec<Po
             break;
         }
         let strip_new = strip_new_memo.get_or_insert_with(|| strip_punct(&normalized));
-        if *strip_new == *existing_strip {
+        let existing_strip = index.strip[i].get_or_init(|| strip_punct(existing_norm));
+        if *strip_new == existing_strip.as_str() {
             violations.push(PostWriteViolation {
                 rule: "near-duplicate-title".to_string(),
                 severity: ViolationSeverity::Warning,
-                description: format!("章节标题\"{new_title}\"与已有标题\"{existing_original}\"高度相似"),
+                description: format!("章节标题\"{new_title}\"与已有标题\"{}\"高度相似", index.original[i]),
                 suggestion: "避免使用相似的章节标题".to_string(),
             });
             break;
@@ -1246,7 +1252,16 @@ fn extract_english_title_qualifier(
     existing_titles: &[String],
     content: &str,
 ) -> Option<String> {
-    let joined = format!("{base_title} {}", existing_titles.join(" "));
+    // 711 号 0GC：join(" ")+format! 双重分配 → 单缓冲构建（200 标题连接体
+    // ~5KB/次的中间串消除；产物与 format!("{base} {}", join) 逐字节等价）。
+    let mut joined = String::with_capacity(
+        base_title.len() + existing_titles.iter().map(|t| t.len() + 1).sum::<usize>(),
+    );
+    joined.push_str(base_title);
+    for title in existing_titles {
+        joined.push(' ');
+        joined.push_str(title);
+    }
     let blocked = extract_english_title_terms(&joined);
 
     let mut words: Vec<String> = Vec::new();
@@ -1276,31 +1291,46 @@ fn extract_chinese_title_qualifier(
     existing_titles: &[String],
     content: &str,
 ) -> Option<String> {
-    let joined = format!("{base_title}{}", existing_titles.join(""));
+    // 711 号 0GC 三则（语义逐字保持）：
+    // ①join("")+format! 双重分配 → 单缓冲构建；
+    // ②segments 全量 Vec<String> collect → 惰性借用迭代（首个命中即返回，
+    //   collect 是纯前置浪费）；③候选逐次 String 分配 → 复用缓冲（685 号
+    //   英文侧同型收尾）——段内字符来自 CJK 正则，trim 以 &str 裁剪保持。
+    let mut joined = String::with_capacity(
+        base_title.len() + existing_titles.iter().map(|t| t.len()).sum::<usize>(),
+    );
+    joined.push_str(base_title);
+    for title in existing_titles {
+        joined.push_str(title);
+    }
     let blocked = extract_chinese_title_terms(&joined);
-    let segments: Vec<String> = cjk_segment_re().find_iter(content).map(|m| m.as_str().to_string()).collect();
 
-    for segment in &segments {
-        let chars: Vec<char> = segment.chars().collect();
+    let mut chars: Vec<char> = Vec::new();
+    let mut candidate_buf = String::new();
+    for matched in cjk_segment_re().find_iter(content) {
+        chars.clear();
+        chars.extend(matched.as_str().chars());
         for start in 0..chars.len() {
             for size in 2..=4usize {
                 if start + size > chars.len() {
                     break;
                 }
-                let candidate: String = chars[start..start + size].iter().collect::<String>().trim().to_string();
-                if utf16_len(&candidate) < 2 {
+                candidate_buf.clear();
+                candidate_buf.extend(chars[start..start + size].iter());
+                let candidate = candidate_buf.trim();
+                if utf16_len(candidate) < 2 {
                     continue;
                 }
-                if CHINESE_TITLE_STOP_WORDS.contains(&candidate.as_str()) {
+                if CHINESE_TITLE_STOP_WORDS.contains(&candidate) {
                     continue;
                 }
                 if candidate.chars().any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c)) {
                     continue;
                 }
-                if blocked.contains(&candidate) {
+                if blocked.contains(candidate) {
                     continue;
                 }
-                return Some(candidate);
+                return Some(candidate.to_string());
             }
         }
     }

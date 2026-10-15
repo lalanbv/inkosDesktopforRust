@@ -936,6 +936,11 @@ async fn bin_process_static_face_duel() {
     // sidecar 起动时自写 dist/index.html；资产预先放入（按请求读，两侧同源）。
     let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
+    // 711 号：契约源守卫前置到 bin spawn 之前——守卫只探测 TS 腿，豁免早退
+    // 路径不再起动引擎子进程（clippy zombie_processes：spawn 后 early return
+    // 无 wait 的丢弃路径消除；跳过态还省一次引擎冷启）。
+    wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
     let dist = repo_root()
         .join("packages")
         .join("studio")
@@ -961,8 +966,6 @@ async fn bin_process_static_face_duel() {
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_ready(&bin).await;
-    wait_ready(&ts).await;
-    duel_require_fork_contract!(&ts);
 
     for path in ["/", "/editor/chapter/2", "/assets/app.js", "/assets/missing.js"] {
         let (bin_status, bin_type, bin_body) = get_raw(&bin, path).await;
@@ -1227,6 +1230,10 @@ async fn sse_event_face_duel() {
 
     let ts_port = next_sidecar_port().await;
     let ts = spawn_ts_sidecar(&root, ts_port).await;
+    // 711 号：契约源守卫前置到 bin spawn 之前（zombie_processes 早退丢弃路径
+    // 消除，与 static_face 同型；守卫只探测 TS 腿，语义等价）。
+    wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
     let bin_port = next_sidecar_port().await;
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
         .env("INKOS_PROJECT_ROOT", &root)
@@ -1243,8 +1250,6 @@ async fn sse_event_face_duel() {
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_ready(&bin).await;
-    wait_ready(&ts).await;
-    duel_require_fork_contract!(&ts);
 
     let instruction = "帮我看下第二章节奏";
     let ts_events =
