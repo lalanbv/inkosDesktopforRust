@@ -162,8 +162,10 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
   useEffect(() => { void fetchServices(); }, [fetchServices]);
   const hasServices = serviceStoreServices.some((s) => s.connected);
 
-  const logEvents = sse.messages.filter((m) => m.event === "log").slice(-8);
-  const progressEvent = sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0];
+  // 723 号渲染卫生：sse 消息投影 useMemo 化（messages 引用每消息更新即变，
+  // 组件体裸 filter 会在每次渲染重算——cap 100 下成本 µs 级，卫生级收敛）。
+  const logEvents = useMemo(() => sse.messages.filter((m) => m.event === "log").slice(-8), [sse.messages]);
+  const progressEvent = useMemo(() => sse.messages.filter((m) => m.event === "llm:progress").slice(-1)[0], [sse.messages]);
 
   useNewSSEMessages(sse.messages, (recent) => {
     if (shouldRefetchBookCollections(recent)) {

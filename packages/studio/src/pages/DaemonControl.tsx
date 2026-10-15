@@ -1,5 +1,5 @@
 import { useApi, postApi } from "../hooks/use-api";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -21,9 +21,14 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
     void refetch();
   }, [refetch, sse.messages]);
 
-  const daemonEvents = sse.messages
-    .filter((m) => m.event.startsWith("daemon:") || m.event === "log")
-    .slice(-20);
+  // 723 号渲染卫生：同 Dashboard——sse 消息投影 useMemo 化。
+  const daemonEvents = useMemo(
+    () =>
+      sse.messages
+        .filter((m) => m.event.startsWith("daemon:") || m.event === "log")
+        .slice(-20),
+    [sse.messages],
+  );
 
   const handleStart = async () => {
     setLoading(true);
