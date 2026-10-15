@@ -185,6 +185,11 @@ import {
   listAvailableGenres,
   readGenreProfile,
   validateAntiAiRule,
+  // 707 号：timeline 域 + series 域回收（第五批）——模型/工具在树，index 导出补齐。
+  TimelineSchema,
+  isValidSeriesId,
+  parseSeriesCanonFile,
+  writeTextAtomic,
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
@@ -4800,6 +4805,291 @@ function yamlScalar(value: unknown): string {
       path: `.inkos/../books/${id}/story/deconstruction/${name}.md`,
       ...(publishedMaterialId ? { publishedMaterialId } : {}),
     });
+  });
+
+  // ── 707 号：timeline 域 + series 域回收（第五批；fork-only 清单 35→24）──
+  // 181 号 C4-b 书籍时间线读写 + 189 号 auto-beats 开关 + R20/390 系列正典/
+  // 书级绑定 + 184 号 C3-b 系列回填三面；fork 原实现逐字对齐（engine-rs
+  // books_state_routes.rs / ops_routes.rs / series_backfill_routes.rs 同水位对偶）。
+
+  // fork server 同名 helper：原始 book.json 直读（loadBookConfig 强类型投影会
+  // 裁掉 writing.autoTimelineBeats / seriesId 等未建模字段）。
+  const loadRawBookConfig = async (bookId: string): Promise<Record<string, unknown>> => {
+    const raw = await readFile(join(root, "books", bookId, "book.json"), "utf-8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  };
+
+  app.get("/api/v1/books/:id/timeline", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const raw = await readFile(join(root, "books", id, "story", "timeline.json"), "utf-8");
+      const parsed = TimelineSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success) {
+        console.warn(`[timeline] ${id} timeline.json 不可解析，按无时间线处理`);
+        return c.json({ timeline: null });
+      }
+      return c.json({ timeline: parsed.data });
+    } catch {
+      return c.json({ timeline: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/timeline", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json().catch(() => null);
+    const parsed = TimelineSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid timeline payload" }, 400);
+    }
+    if (parsed.data.bookId !== id) {
+      return c.json({ error: "Timeline bookId does not match the route" }, 400);
+    }
+    const path = join(root, "books", id, "story", "timeline.json");
+    await mkdir(dirname(path), { recursive: true });
+    // 199 号：timeline.json 损坏会被 GET 按「无时间线」静默吞掉——原子替换写。
+    await writeTextAtomic(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
+    return c.json({ ok: true });
+  });
+
+  // --- Timeline auto beats (189号: write-next 落盘后自动沉淀节拍，书籍级开关默认关) ---
+
+  app.get("/api/v1/books/:id/timeline-auto-beats", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    try {
+      const rawBook = await loadRawBookConfig(bookId);
+      const writing = rawBook.writing as Record<string, unknown> | undefined;
+      const bookEnabled = typeof writing?.autoTimelineBeats === "boolean" ? writing.autoTimelineBeats : null;
+      return c.json({ enabled: bookEnabled ?? false, bookEnabled });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
+  app.put("/api/v1/books/:id/timeline-auto-beats", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    const { enabled } = await c.req.json<{ enabled?: boolean }>();
+    const next = enabled === true;
+    const rawBookPath = join(root, "books", bookId, "book.json");
+    try {
+      const rawBook = await loadRawBookConfig(bookId);
+      if (next) {
+        rawBook.writing = {
+          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
+          autoTimelineBeats: true,
+        };
+      } else {
+        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
+          ? { ...(rawBook.writing as Record<string, unknown>) }
+          : {};
+        delete writing.autoTimelineBeats;
+        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
+      }
+      // 199 号：原子替换写（截断的 book.json = 整本书不可加载）。
+      await writeTextAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
+      return c.json({ ok: true, enabled: next });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
+  // R20/390 号：书级系列绑定（book.json seriesId 读写；null/缺省=解绑）。
+  app.get("/api/v1/books/:id/series-id", async (c) => {
+    const id = c.req.param("id");
+    const path = join(root, "books", id, "book.json");
+    try {
+      const book = JSON.parse(await readFile(path, "utf-8"));
+      return c.json({ seriesId: typeof book?.seriesId === "string" ? book.seriesId : null });
+    } catch {
+      return c.json({ seriesId: null });
+    }
+  });
+
+  app.put("/api/v1/books/:id/series-id", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ seriesId?: string | null }>();
+    const path = join(root, "books", id, "book.json");
+    let book: Record<string, unknown> = {};
+    try {
+      book = JSON.parse(await readFile(path, "utf-8"));
+    } catch {
+      return c.json({ error: "Book not found" }, 404);
+    }
+    const raw = body.seriesId ?? null;
+    if (raw !== null) {
+      if (typeof raw !== "string" || !isValidSeriesId(raw)) {
+        return c.json({ error: "Invalid series id" }, 400);
+      }
+      book.seriesId = raw;
+    } else {
+      delete book.seriesId;
+    }
+    // 199 号：原子替换写（Rust put_series_id write_file_atomic 同构；fork 时代
+    // 为普通 writeFile，契约面不可观测，向 Rust 侧收敛）。
+    await writeTextAtomic(path, JSON.stringify(book, null, 2));
+    return c.json({ ok: true, seriesId: raw });
+  });
+
+  // R20/390 号：系列正典共享存储（.inkos/series/{seriesId}.json；全局级不带 bookId）。
+  app.get("/api/v1/series/:seriesId/canon", async (c) => {
+    const seriesId = c.req.param("seriesId");
+    if (!isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
+    const path = join(root, ".inkos", "series", `${seriesId}.json`);
+    try {
+      const parsed = parseSeriesCanonFile(JSON.parse(await readFile(path, "utf-8")));
+      return c.json(parsed ?? { version: 1, seriesId, entries: [] });
+    } catch {
+      return c.json({ version: 1, seriesId, entries: [] });
+    }
+  });
+
+  app.put("/api/v1/series/:seriesId/canon", async (c) => {
+    const seriesId = c.req.param("seriesId");
+    if (!isValidSeriesId(seriesId)) return c.json({ error: "Invalid series id" }, 400);
+    const body = await c.req.json<{ entries?: unknown[] }>();
+    if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
+    const parsed = parseSeriesCanonFile({ version: 1, seriesId, entries: body.entries });
+    if (!parsed) return c.json({ error: "Invalid series canon payload" }, 400);
+    const dir = join(root, ".inkos", "series");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, `${seriesId}.json`),
+      JSON.stringify(parsed, null, 2),
+      "utf-8",
+    );
+    return c.json({ ok: true, entries: parsed.entries.length });
+  });
+
+  // ── 系列书回填（184 号 C3-b）：抽取/应用，交互「预览+逐项勾选」 ──
+  const readSourceCanonFiles = async (sourceBookId: string): Promise<Array<{ name: string; content: string }>> => {
+    const bookDir = join(root, "books", sourceBookId);
+    const files: Array<{ name: string; content: string }> = [];
+    const rels = ["story/story_bible.md", "story/outline/story_frame.md"];
+    for (const rel of rels) {
+      try {
+        files.push({ name: rel, content: await readFile(join(bookDir, ...rel.split("/")), "utf-8") });
+      } catch { /* 缺失静默跳过 */ }
+    }
+    return files;
+  };
+
+  app.post("/api/v1/books/:id/series-backfill/extract", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ sourceBookId?: string }>().catch(() => ({ sourceBookId: undefined }));
+    if (!body.sourceBookId) return c.json({ error: "sourceBookId is required" }, 400);
+    if (body.sourceBookId === id) return c.json({ error: "Source and target books must differ" }, 400);
+    try {
+      await state.loadBookConfig(body.sourceBookId);
+    } catch {
+      return c.json({ error: "Source book not found" }, 400);
+    }
+    const sourceTitle = body.sourceBookId;
+    const canon = await readSourceCanonFiles(body.sourceBookId);
+    if (canon.length === 0) return c.json({ error: "Source book has no canon files" }, 400);
+    const pipelineConfig = await buildPipelineConfig({ bookIdForSettings: id });
+    const system = "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。";
+    let user = `以下是一部已完结系列作品《${sourceTitle}》的设定文件。请为同系列的新书抽取可迁移的设定，输出纯 JSON：{"items":[{"id":"it-1","category":"worldview","title":"标题","content":"50-200字描述"}]}；category 只能取 worldview/character/plot/style/faction/item/location（faction=势力组织，item=关键物品法宝，location=重要地点场景）；抽取 8-14 条。\n\n源书设定文件：\n`;
+    for (const file of canon) user += `\n--- ${file.name} ---\n${file.content}\n`;
+    const response = await chatCompletion(
+      pipelineConfig.client,
+      pipelineConfig.model,
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      { temperature: 0.3, maxTokens: 2000 },
+    );
+    const content = response.content;
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    if (start === -1 || end === -1) return c.json({ error: "LLM output contains no JSON object" }, 500);
+    let items: Array<{ id: string; category: string; title: string; content: string }>;
+    try {
+      items = (JSON.parse(content.slice(start, end + 1)) as { items: typeof items }).items;
+    } catch {
+      return c.json({ error: "LLM items JSON unparseable" }, 500);
+    }
+    if (!Array.isArray(items) || items.length === 0) return c.json({ error: "LLM returned zero backfill items" }, 500);
+    const draft = { version: 1, bookId: id, sourceBookId: body.sourceBookId, updatedAt: new Date().toISOString(), items };
+    const draftPath = join(root, "books", id, "story", "series_backfill_draft.json");
+    await mkdir(dirname(draftPath), { recursive: true });
+    // 199 号：原子替换写（抽取草稿是 apply 的唯一数据源）。
+    await writeTextAtomic(draftPath, `${JSON.stringify(draft, null, 2)}\n`);
+    return c.json({ draft });
+  });
+
+  app.get("/api/v1/books/:id/series-backfill/existing", async (c) => {
+    const id = c.req.param("id");
+    try {
+      const content = await readFile(join(root, "books", id, "story", "series_backfill.md"), "utf-8");
+      return c.json({ content });
+    } catch {
+      return c.json({ content: null });
+    }
+  });
+
+  app.post("/api/v1/books/:id/series-backfill/apply", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req
+      .json<{ itemIds?: string[]; mode?: string }>()
+      .catch(() => ({}) as { itemIds?: string[]; mode?: string });
+    const draftPath = join(root, "books", id, "story", "series_backfill_draft.json");
+    let draft: { sourceBookId: string; updatedAt: string; items: Array<{ id: string; category: string; title: string; content: string }> };
+    try {
+      draft = JSON.parse(await readFile(draftPath, "utf-8"));
+    } catch {
+      return c.json({ error: "No backfill draft found; run extract first" }, 400);
+    }
+    const items = body.itemIds ? draft.items.filter((item) => body.itemIds!.includes(item.id)) : draft.items;
+    if (items.length === 0) return c.json({ error: "No items selected" }, 400);
+    // 190 号：写入粒度——overwrite（默认，整体覆盖）| merge（保留既有条目，
+    // 勾选项按 (category, title) 去重后追加）。解析/合并/渲染与 Rust 逐字对齐。
+    const mode = body.mode ?? "overwrite";
+    let merged = items;
+    if (mode === "merge") {
+      const backfillPath = join(root, "books", id, "story", "series_backfill.md");
+      const existingItems: Array<{ id: string; category: string; title: string; content: string }> = [];
+      try {
+        const content = await readFile(backfillPath, "utf-8");
+        let current: { category: string; title: string; lines: string[] } | null = null;
+        for (const line of content.split("\n")) {
+          const match = /^## \[([^\]]*)\] (.*)$/.exec(line);
+          if (match) {
+            if (current) {
+              existingItems.push({
+                id: `existing-${existingItems.length + 1}`,
+                category: current.category,
+                title: current.title,
+                content: current.lines.join("\n").trim(),
+              });
+            }
+            current = { category: match[1], title: match[2], lines: [] };
+          } else if (current) {
+            current.lines.push(line);
+          }
+        }
+        if (current) {
+          existingItems.push({
+            id: `existing-${existingItems.length + 1}`,
+            category: current.category,
+            title: current.title,
+            content: current.lines.join("\n").trim(),
+          });
+        }
+      } catch { /* 无既有文件 → 空合并基线 */ }
+      merged = [...existingItems];
+      for (const item of items) {
+        const duplicate = merged.some((e) => e.category === item.category && e.title === item.title);
+        if (!duplicate) merged = [...merged, item];
+      }
+    }
+    const path = join(root, "books", id, "story", "series_backfill.md");
+    // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。199 号：原子替换写。
+    let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》（${draft.sourceBookId}） · 抽取于 ${draft.updatedAt} · 勾选 ${merged.length} 条\n\n`;
+    for (const item of merged) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
+    await writeTextAtomic(path, markdown);
+    return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {

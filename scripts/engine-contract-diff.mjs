@@ -596,6 +596,28 @@ try {
       "/api/v1/books/:id/quality-debts",
       "/api/v1/books/:id/roster-candidates",
       "/api/v1/genres",
+      // 707 号：timeline 域 + series 域回收（第五批，7 条路由 36→29）。
+      // GET 先于 PUT 排列：GET 比对缺省基线，PUT 走状态码对比（写面协议差）。
+      "/api/v1/books/:id/timeline",
+      {
+        path: "/api/v1/books/:id/timeline", method: "PUT",
+        // bookId 用真实 BOOK_ID 动态构造——静态假 id 会双双打出
+        // 「bookId 与路由不符」400 掩盖快乐路径。
+        body: { version: 1, bookId: BOOK_ID ?? "b1", updatedAt: "2026-01-01T00:00:00.000Z", plotlines: [{ id: "probe", name: "probe", cells: [] }] },
+      },
+      "/api/v1/books/:id/timeline-auto-beats",
+      // enabled:false + 键缺省 = 双端零净写入的幂等探针（enabled:true 会把
+      // 夹具 book.json 置位，污染后续 auto-beats GET 基线）。
+      { path: "/api/v1/books/:id/timeline-auto-beats", method: "PUT", body: { enabled: false } },
+      "/api/v1/books/:id/series-id",
+      { path: "/api/v1/books/:id/series-id", method: "PUT", body: { seriesId: null } },
+      "/api/v1/series/:seriesId/canon",
+      { path: "/api/v1/series/:seriesId/canon", method: "PUT", body: { entries: [{ name: "probe", kind: "person", summary: "contract-diff probe" }] } },
+      "/api/v1/books/:id/series-backfill/existing",
+      // extract 空载荷探针只打守卫链（400/400）——真实载荷会触发 LLM 调用。
+      { path: "/api/v1/books/:id/series-backfill/extract", method: "POST", body: {} },
+      // apply 空载荷探针=无草稿守卫（400/400）——草稿落盘属 extract 快乐路径。
+      { path: "/api/v1/books/:id/series-backfill/apply", method: "POST", body: {} },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -619,7 +641,8 @@ try {
       // DELETE 走命中路径（200 落盘删除）而非 404 未命中路径。
       const instShared = (route) => route
         .replaceAll(":id", encodeURIComponent(BOOK_ID ?? "b1"))
-        .replaceAll(":entryId", "probe_1");
+        .replaceAll(":entryId", "probe_1")
+        .replaceAll(":seriesId", "series_sample");
       const [n, r] = await Promise.all([
         nodeApi(instShared(endpoint), probeInit),
         rustApi(instShared(endpoint), probeInit),
@@ -659,6 +682,7 @@ try {
     }
 
     // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
+    // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）。
     const FORK_ONLY_ROUTES = [
       "/api/v1/backup/export", "/api/v1/backup/import",
       "/api/v1/books/:id/chapter-review-mode", "/api/v1/books/:id/chapters/:num/approve",
@@ -671,17 +695,12 @@ try {
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
       "/api/v1/books/:id/plan",
       "/api/v1/books/:id/repair-state/:chapter",
-      "/api/v1/books/:id/series-id",
       "/api/v1/books/:id/style-binding",
-      "/api/v1/books/:id/timeline", "/api/v1/books/:id/timeline-auto-beats",
       "/api/v1/context-meter", "/api/v1/debug/tools",
       "/api/v1/director/directions",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
       "/api/v1/radar/analyze", "/api/v1/radar/rankings",
-      "/api/v1/books/:id/series-backfill/apply", "/api/v1/books/:id/series-backfill/existing",
-      "/api/v1/books/:id/series-backfill/extract",
-      "/api/v1/series/:seriesId/canon",
     ];
     let forkOnlyConfirmed = 0;
     const forkOnlyDrift = [];

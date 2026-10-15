@@ -6,6 +6,9 @@ export { type ProjectConfig, type LLMConfig, type NotifyChannel, type DetectionC
 export { type BookRules, type ParsedBookRules, BookRulesSchema } from "./models/book-rules.js";
 export { type DetectionHistoryEntry, type DetectionStats } from "./models/detection.js";
 export { type LengthCountingMode, type LengthSpec, type LengthTelemetry, LengthCountingModeSchema, LengthSpecSchema, LengthTelemetrySchema } from "./models/length-governance.js";
+// 707 号：timeline 域回收——模型在树（181 号 C4-b），2.0 合并时 index 导出被裁，
+// studio 动态导入消费倒查补齐（705 号同型）。
+export { type Timeline, type TimelinePlotline, type TimelineCell, TimelineSchema } from "./models/timeline.js";
 export {
   type RuntimeStateLanguage,
   type StateManifest,
@@ -187,6 +190,8 @@ export {
   resolveProxyUrl,
 } from "./utils/proxy-fetch.js";
 export { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "./utils/book-id.js";
+// 707 号：series 域回收——R20/390 号契约真源（Rust series_canon.rs 1:1 镜像）。
+export { SERIES_CANON_VERSION, isValidSeriesId, parseSeriesCanonFile, type SeriesCanonFile } from "./utils/series-canon.js";
 export { safeChildPath } from "./utils/path-safety.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
@@ -443,6 +448,9 @@ export { arbitrateRuntimeStateDeltaHooks, type HookArbiterDecision } from "./uti
 // Pipeline
 export { PipelineRunner, type PipelineConfig, type ChapterPipelineResult, type WriteChaptersOptions, type ReviseResult, type ImportChaptersInput, type ImportChaptersResult, type TokenUsageSummary } from "./pipeline/runner.js";
 export { commitAtomicFileSet, recoverAtomicFileSets } from "./utils/atomic-file-set.js";
+// 707 号：timeline/series 域回收——199 号单文件原子替换 helper（Rust
+// write_file_atomic 同构；2.0 合并时 index 导出被裁）。
+export { writeTextAtomic } from "./utils/atomic-write.js";
 export { Scheduler, type SchedulerConfig } from "./pipeline/scheduler.js";
 export { detectChapter, loadDetectionHistory, type DetectChapterResult } from "./pipeline/detection-runner.js";
 export { runScriptCreation, runStoryboardCreation, runInteractiveFilmCreation, createStoryboardAssetsManifest, type ScriptCreationRunOptions, type ScriptCreationRunResult, type StoryboardAssetsManifest, type StoryboardCreationRunOptions, type StoryboardCreationRunResult, type InteractiveFilmCreationRunOptions, type InteractiveFilmCreationRunResult, type StoryboardImageAsset, type StoryboardImageAssetVariant } from "./pipeline/script-storyboard-runner.js";
