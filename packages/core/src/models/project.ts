@@ -134,6 +134,18 @@ export const ProjectConfigSchema = z.object({
     cooldownAfterChapterMs: 10_000,
     maxChaptersPerDay: 50,
   }),
+  // ── 709 号：writing 段复位（Rust WritingConfig 镜像，models/project.rs）──
+  // 2.0 strict 化时裁掉的 fork 段。Rust 引擎把 reviewMode/revisionGate/
+  // reviewRetries 写进 inkos.json（project chapter-review-mode PUT 等），
+  // strict 根拒收 = TS 回退腿对 Rust 触碰过的项目 loadProjectConfig 即崩
+  //（706 号 walkthrough-env boot 崩同型）——跨引擎配置投毒的收敛修复。
+  // 子键全部可选：Rust 侧 serde default（retries=1/mode=auto/gate=strict）。
+  writing: z.object({
+    /** R14/686 号：审改循环重试上限旋钮（rcm 矩阵腿）。 */
+    reviewRetries: z.number().int().min(0).optional(),
+    reviewMode: z.enum(["auto", "manual"]).optional(),
+    revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
+  }).optional(),
 }).strict();
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

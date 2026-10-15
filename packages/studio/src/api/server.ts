@@ -5092,6 +5092,103 @@ function yamlScalar(value: unknown): string {
     return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
   });
 
+  // ── 709 号：章节审核模式四路由回收（118 号三态；fork-only 清单 27→23）──
+  // 前置=schema 收敛：BookConfigSchema/ProjectConfigSchema 补 writing 族可选键
+  // （写键自由）——strict 根不再拒收写面落盘键，701 best-of-n / 707 auto-beats、
+  // series-id 的「写入后 loadBookConfig/loadProjectConfig ZodError」潜伏自毁键
+  // 随之清偿。fork 原实现逐字（engine-rs project_config_routes.rs /
+  // books_state_routes.rs review-mode 同水位对偶）。
+
+  // fork 同名 helper：normalize 仅 manual 精确命中（Rust normalize_review_mode 镜像）。
+  const normalizeChapterReviewMode = (mode: unknown): "auto" | "manual" =>
+    mode === "manual" ? "manual" : "auto";
+
+  const readProjectChapterReviewMode = (config: Record<string, unknown>): "auto" | "manual" => {
+    const writing = config.writing && typeof config.writing === "object" && !Array.isArray(config.writing)
+      ? config.writing as Record<string, unknown>
+      : {};
+    return normalizeChapterReviewMode(writing.reviewMode);
+  };
+
+  const readBookChapterReviewMode = (rawBook: Record<string, unknown>): "auto" | "manual" | undefined => {
+    const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
+      ? rawBook.writing as Record<string, unknown>
+      : undefined;
+    if (!writing || writing.reviewMode !== "manual" && writing.reviewMode !== "auto") return undefined;
+    return writing.reviewMode;
+  };
+
+  app.get("/api/v1/project/chapter-review-mode", async (c) => {
+    const raw = await loadRawConfig(root);
+    return c.json({ mode: readProjectChapterReviewMode(raw) });
+  });
+
+  app.put("/api/v1/project/chapter-review-mode", async (c) => {
+    const { mode } = await c.req.json<{ mode?: string }>();
+    const next = normalizeChapterReviewMode(mode);
+    const raw = await loadRawConfig(root);
+    raw.writing = { ...((raw.writing as Record<string, unknown> | undefined) ?? {}), reviewMode: next };
+    await saveRawConfig(root, raw);
+    return c.json({ ok: true, mode: next });
+  });
+
+  app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    try {
+      const [projectConfig, rawBook] = await Promise.all([
+        loadRawConfig(root),
+        loadRawBookConfig(bookId),
+      ]);
+      const projectMode = readProjectChapterReviewMode(projectConfig);
+      const bookMode = readBookChapterReviewMode(rawBook);
+      return c.json({
+        mode: bookMode ?? projectMode,
+        bookMode: bookMode ?? null,
+        projectMode,
+      });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
+  app.put("/api/v1/books/:id/chapter-review-mode", async (c) => {
+    const bookId = c.req.param("id");
+    if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
+    const { mode } = await c.req.json<{ mode?: string }>();
+    const rawBookPath = join(root, "books", bookId, "book.json");
+    try {
+      const [projectConfig, rawBook] = await Promise.all([
+        loadRawConfig(root),
+        loadRawBookConfig(bookId),
+      ]);
+      const projectMode = readProjectChapterReviewMode(projectConfig);
+      if (mode === "inherit") {
+        const writing = rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing)
+          ? { ...(rawBook.writing as Record<string, unknown>) }
+          : {};
+        delete writing.reviewMode;
+        rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
+      } else {
+        rawBook.writing = {
+          ...(rawBook.writing && typeof rawBook.writing === "object" && !Array.isArray(rawBook.writing) ? rawBook.writing as Record<string, unknown> : {}),
+          reviewMode: normalizeChapterReviewMode(mode),
+        };
+      }
+      // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
+      await writeTextAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
+      const bookMode = readBookChapterReviewMode(rawBook);
+      return c.json({
+        ok: true,
+        mode: bookMode ?? projectMode,
+        bookMode: bookMode ?? null,
+        projectMode,
+      });
+    } catch {
+      return c.json({ error: `Book "${bookId}" not found` }, 404);
+    }
+  });
+
   app.get("/api/v1/project/files/:file{.+}", async (c) => {
     const file = resolveProjectImageFile(root, c.req.param("file"));
 

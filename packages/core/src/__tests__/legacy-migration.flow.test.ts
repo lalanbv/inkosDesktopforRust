@@ -78,7 +78,9 @@ it("previews and migrates legacy works with readable chapters and translations w
   expect(applied.map((x) => x.status)).toEqual(Array(7).fill("migrated"));
   const config=await new StateManager(root).loadBookConfig('novel');
   expect(config).toMatchObject({targetChapters:200,chapterWordCount:3000,language:'en'});
-  expect('writing' in config).toBe(false);
+  // 709 号：writing 族可选键收敛进 BookConfigSchema（Rust BookConfig 镜像）——
+  // strip() 不再剥已知键，迁移保留用户审核模式设置（此前 2.0 化会静默丢弃）。
+  expect(config.writing).toMatchObject({reviewMode:'manual',revisionGate:'lenient'});
   const rules=await readBookRules(join(root,'works/novel/source'));
   expect(rules.rules).toMatchObject({version:'2',protagonist:{name:'Ada',personalityLock:[],behavioralConstraints:[]},prohibitions:['Keep the established promise.']});
   const runtime=await loadRuntimeStateSnapshot(join(root,'works/novel/source'));

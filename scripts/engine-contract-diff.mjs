@@ -624,6 +624,13 @@ try {
       // JSON 双端解析失败 500/500（状态码对称=路由在位，703 号写面口径）。
       { path: "/api/v1/radar/rankings", method: "POST" },
       { path: "/api/v1/radar/analyze", method: "POST", body: { selection: {} } },
+      // 709 号：章节审核模式双路径回收（118 号三态，4 HTTP 路由=2 条目，27→25）。
+      // GET 先于 PUT：GET 比缺省基线全 body（三态投影 auto/null/auto 双端一致）；
+      // PUT 走状态码（写面协议差），enabled 值取幂等（auto 写入=键归一，无净变化）。
+      "/api/v1/project/chapter-review-mode",
+      { path: "/api/v1/project/chapter-review-mode", method: "PUT", body: { mode: "auto" } },
+      "/api/v1/books/:id/chapter-review-mode",
+      { path: "/api/v1/books/:id/chapter-review-mode", method: "PUT", body: { mode: "inherit" } },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -691,7 +698,7 @@ try {
     // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）。
     const FORK_ONLY_ROUTES = [
       "/api/v1/backup/export", "/api/v1/backup/import",
-      "/api/v1/books/:id/chapter-review-mode", "/api/v1/books/:id/chapters/:num/approve",
+      "/api/v1/books/:id/chapters/:num/approve",
       "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
       "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
       "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
@@ -705,7 +712,7 @@ try {
       "/api/v1/context-meter", "/api/v1/debug/tools",
       "/api/v1/director/directions",
       "/api/v1/health", "/api/v1/interaction/session",
-      "/api/v1/project/chapter-review-mode", "/api/v1/prompt-packs",
+      "/api/v1/prompt-packs",
     ];
     let forkOnlyConfirmed = 0;
     const forkOnlyDrift = [];
