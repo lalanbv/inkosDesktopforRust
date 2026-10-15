@@ -3,6 +3,14 @@
 > 目标线：自主持续开发。候选方向「上游 2.0 新分支合并巡检」执行轮；
 > 前次全量清账（41ca307e，2026-10-16）后的增量巡检。
 
+> **⚠️ 722 号勘误**：本报告「feature/interactive-fiction 15 独有提交挖出」
+> 系判读错误——15 提交是相对**上游 master** 的独有，而该分支**早已并入
+> 我们 master**（41ca307e 全量清账时代，merge-base --is-ancestor 实证
+> IS-ANCESTOR；影游域 interactive-film sessionKind 即其来源）。正确巡检
+> 结论=全部上游分支对我们零落后，722 号勘误批次已归档。方法论教训：
+> 分支独有性必须对比**双 master**（上游 master 与我方 master），只比上游
+> master 会把「我方已并而上游未并」误判为待合并。
+
 ## 一、巡检事实（git 实证）
 
 1. **upstream/master 完全对齐**：merge-base = 8fc2ae57 = upstream/master HEAD
