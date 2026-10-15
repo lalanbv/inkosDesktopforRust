@@ -285,6 +285,40 @@ fn bench_story_markdown_render(c: &mut Criterion) {
             .expect("hook seed 反序列化失败")
         })
         .collect();
+    // 720 号 0GC 第三选点：settle 投影族全貌排查（每章 settle 落盘三投影）。
+    let proj_hooks_val = serde_json::json!({ "hooks": hooks });
+    let proj_hooks: inkos_engine::models::runtime_state::HooksState =
+        serde_json::from_value(proj_hooks_val).expect("hooks state seed");
+    let summary_rows: Vec<inkos_engine::models::runtime_state::ChapterSummaryRow> = (1..=100)
+        .map(|i| serde_json::from_value(json!({
+            "chapter": i,
+            "title": format!("第{i}章 风起"),
+            "characters": "林动，苏檀",
+            "events": format!("第{i}场冲突与推进"),
+            "stateChanges": "修为精进",
+            "hookActivity": format!("H{:02} 推进", i % 20),
+            "mood": "紧张",
+            "chapterType": "冲突",
+        })).expect("summary row seed"))
+        .collect();
+    let summaries_state = inkos_engine::models::runtime_state::ChapterSummariesState {
+        rows: summary_rows,
+    };
+    let facts: Vec<inkos_engine::models::runtime_state::CurrentStateFact> = (1..=100)
+        .map(|i| serde_json::from_value(json!({
+            "subject": format!("实体{i}"),
+            "predicate": "持有",
+            "object": format!("信物{i}"),
+            "validFromChapter": i,
+            "validUntilChapter": null,
+            "sourceChapter": i,
+        })).expect("fact seed"))
+        .collect();
+    let current_state = inkos_engine::models::runtime_state::CurrentStateState {
+        chapter: 100,
+        facts,
+    };
+
     let mut group = c.benchmark_group("story_markdown_render");
     group.sample_size(30);
     group.bench_function("render_hook_snapshot_100", |b| {
@@ -312,6 +346,31 @@ fn bench_story_markdown_render(c: &mut Criterion) {
                     Some(&hook.notes),
                 ));
             }
+        })
+    });
+    group.bench_function("projections_hooks_100", |b| {
+        b.iter(|| {
+            inkos_engine::state::projections::render_hooks_projection(
+                &proj_hooks,
+                WritingLanguage::Zh,
+                Some(100),
+            )
+        })
+    });
+    group.bench_function("projections_summaries_100", |b| {
+        b.iter(|| {
+            inkos_engine::state::projections::render_chapter_summaries_projection(
+                &summaries_state,
+                WritingLanguage::Zh,
+            )
+        })
+    });
+    group.bench_function("projections_current_state_100", |b| {
+        b.iter(|| {
+            inkos_engine::state::projections::render_current_state_projection(
+                &current_state,
+                WritingLanguage::Zh,
+            )
         })
     });
     group.finish();

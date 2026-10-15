@@ -201,15 +201,20 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
 
 /// 统计 word 在 content 中的出现次数。英文大小写不敏感（对齐 TS `gi` flag）。
 fn count_word(content: &str, word: &str, case_insensitive: bool) -> usize {
-    let pattern = if case_insensitive {
-        format!("(?i){}", regex::escape(word))
+    // 720 号 0GC：子串计数免正则编译（TS `new RegExp(word, "gi")` 同语义——
+    // 无词边界、大小写不敏感非重叠计数；此前每次调用动态 Regex::new，
+    // dim21/22 每词每章各一次，eval 全书扫描乘法放大）。词表纯 ASCII，
+    // str::to_lowercase 的 unicode 折叠与 (?i) 在此等价。
+    if word.is_empty() {
+        return 0;
+    }
+    if case_insensitive {
+        let haystack = content.to_lowercase();
+        let needle = word.to_lowercase();
+        haystack.match_indices(&needle).count()
     } else {
-        regex::escape(word)
-    };
-    Regex::new(&pattern)
-        .expect("count_word regex")
-        .find_iter(content)
-        .count()
+        content.match_indices(word).count()
+    }
 }
 
 fn sentence_split_en_re() -> &'static Regex {

@@ -551,7 +551,12 @@ pub struct SplitSectionsInput<'a> {
 
 /// `extractMaterialContent`：`## Extracted content` 标记之后为正文；无标记全文 trim。
 pub fn extract_material_content(markdown: &str) -> String {
-    let marker = regex::Regex::new(r"(?m)^## Extracted content\s*$").expect("extract marker regex");
+    // 720 号 0GC：正则预编译提为进程级静态（OnceLock 惯用）——素材提取面
+    // 每次调用编译一次，量大时乘法放大。
+    static MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let marker = MARKER.get_or_init(|| {
+        regex::Regex::new(r"(?m)^## Extracted content\s*$").expect("extract marker regex")
+    });
     match marker.find(markdown) {
         Some(found) => markdown[found.end()..].trim().to_string(),
         None => markdown.trim().to_string(),
