@@ -774,8 +774,20 @@ try {
     // 715 号 consolidate 单条目续收（story-markdown/hook-lifecycle/hook-policy/
     // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）；
     // 718 号面板族尾批三条目续收（style-binding/hybrid-search/fanfic refresh
-    // →4）。**fork-only 有界面全部清偿**——余 4 条=debug/tools+health（Rust
-    // 超集声明域）+interaction/session+prompt-packs（无 UI 消费方，低优先）。
+    // →4）。**fork-only 有界面全部清偿**（707-718 十二批 36→4）。
+    // 719 号：余 4 条正式豁免裁决（逐条理由备查，非「低优先待办」）——
+    //   ① /api/v1/debug/tools：Rust 超集声明域（fork chat tool-catalog 对跑
+    //     面；2.0 工具目录走 harness 体系无此 HTTP 面，零 UI 消费方）——豁免。
+    //   ② /api/v1/health：Rust loopback-guard 内部面；2.0 健康面由
+    //     /api/v1/doctor 承担（超集等价）——豁免（等价面在位）。
+    //   ③ /api/v1/interaction/session：交互影游惰性建会话面；2.0 影游创作走
+    //     agent sessionKind（sessionKind="interactive-film-authoring"），
+    //     fork HTTP 面无 UI 消费方——豁免（2.0 harness 会话面覆盖）。
+    //   ④ /api/v1/prompt-packs：fork 提示包库 HTTP 面；studio 全仓 grep 零
+    //     UI 消费方（708/709 号两次跳过先例）——豁免（零消费方；若后续
+    //     提示包产品化再接管）。
+    // 豁免≠删除：Rust 面保留原样（产品引擎功能不受影响）；TS 侧不接管；
+    // fork-only 域表保留此 4 条作为声明域常驻哨（漂移行活体监测 Rust 回归）。
     const FORK_ONLY_ROUTES = [
       "/api/v1/debug/tools",
       "/api/v1/health", "/api/v1/interaction/session",

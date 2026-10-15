@@ -299,34 +299,75 @@ pub fn render_hook_snapshot(
         ]
     };
 
-    let mut lines: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    // 719 号 0GC：单缓冲直写（711 号 resolve_duplicate_title 同法）——此前
+    // 每行 14 格 clone/to_string → escaped Vec<String> → join → format 四段
+    // 中间分配；改为 String::with_capacity 直写，单元格写时探测转义（无 '|'
+    // 零分配路径）。表头为静态串直接 push_str。
+    use std::fmt::Write as _;
+
+    fn push_escaped_cell(out: &mut String, value: &str) {
+        let trimmed = value.trim();
+        if !trimmed.contains('|') {
+            out.push_str(trimmed);
+            return;
+        }
+        let mut first = true;
+        for part in trimmed.split('|') {
+            if !first {
+                out.push_str("\\|");
+            }
+            out.push_str(part);
+            first = false;
+        }
+    }
+
+    let mut out = String::with_capacity(320 + hooks.len() * 224);
+    out.push_str(headers[0]);
+    out.push('\n');
+    out.push_str(headers[1]);
     for hook in hooks {
         let timing = resolve_hook_payoff_timing(
             hook.payoff_timing.map(hook_payoff_timing_str),
             Some(&hook.expected_payoff),
             Some(&hook.notes),
         );
-        let cells = [
-            hook.hook_id.clone(),
-            hook.start_chapter.to_string(),
-            hook.hook_type.clone(),
-            crate::utils::hook_lifecycle::hook_status_text(hook).to_string(),
-            hook.last_advanced_chapter.to_string(),
-            hook.expected_payoff.clone(),
-            localize_hook_payoff_timing(timing, language).to_string(),
-            render_depends_on_cell(hook.depends_on.as_deref(), language),
-            hook.pays_off_in_arc.clone().unwrap_or_default(),
-            render_core_hook_cell(hook.core_hook == Some(true), language),
-            render_half_life_cell(hook.half_life_chapters),
-            render_promoted_cell(hook.promoted, language),
-            hook.notes.clone(),
-            // R23/393 号：第 14 列 kind（规范 id，无 kind 空单元格）。
-            hook.kind.map(crate::utils::hook_kind::hook_kind_id).unwrap_or_default().to_string(),
-        ];
-        let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
-        lines.push(format!("| {} |", escaped.join(" | ")));
+        out.push_str("\n| ");
+        push_escaped_cell(&mut out, &hook.hook_id);
+        out.push_str(" | ");
+        let _ = write!(out, "{}", hook.start_chapter);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, &hook.hook_type);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, crate::utils::hook_lifecycle::hook_status_text(hook));
+        out.push_str(" | ");
+        let _ = write!(out, "{}", hook.last_advanced_chapter);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, &hook.expected_payoff);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, localize_hook_payoff_timing(timing, language));
+        out.push_str(" | ");
+        let depends = render_depends_on_cell(hook.depends_on.as_deref(), language);
+        push_escaped_cell(&mut out, &depends);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, hook.pays_off_in_arc.as_deref().unwrap_or_default());
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, &render_core_hook_cell(hook.core_hook == Some(true), language));
+        out.push_str(" | ");
+        let half_life = render_half_life_cell(hook.half_life_chapters);
+        push_escaped_cell(&mut out, &half_life);
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, &render_promoted_cell(hook.promoted, language));
+        out.push_str(" | ");
+        push_escaped_cell(&mut out, &hook.notes);
+        out.push_str(" | ");
+        // R23/393 号：第 14 列 kind（规范 id，无 kind 空单元格）。
+        push_escaped_cell(
+            &mut out,
+            hook.kind.map(crate::utils::hook_kind::hook_kind_id).unwrap_or_default(),
+        );
+        out.push_str(" |");
     }
-    lines.join("\n")
+    out
 }
 
 fn hook_payoff_timing_str(t: crate::models::runtime_state::HookPayoffTiming) -> &'static str {

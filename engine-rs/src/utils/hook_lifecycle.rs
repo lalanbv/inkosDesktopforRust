@@ -124,16 +124,24 @@ pub fn normalize_hook_payoff_timing(value: Option<&str>) -> Option<HookPayoffTim
     if normalized.is_empty() {
         return None;
     }
-    // TIMING_ALIASES（按序匹配）
-    let patterns: [(&str, &str); 5] = [
-        ("immediate", r"(?i)^(立即|马上|当章|本章|下一章|immediate|instant|next(?:\s+chapter|\s+beat)?|right\s+away)$"),
-        ("near-term", r"(?i)^(近期|近几章|短线|soon|short(?:\s+run)?|near(?:\s*-\s*|\s+)term|current\s+sequence)$"),
-        ("mid-arc", r"(?i)^(中程|中期|卷中|mid(?:\s*-\s*|\s+)arc|mid(?:\s*-\s*|\s+)book|middle)$"),
-        ("slow-burn", r"(?i)^(慢烧|长线|后续|later|late(?:r)?|long(?:\s*-\s*|\s+)arc|slow(?:\s*-\s*|\s+)burn)$"),
-        ("endgame", r"(?i)^(终局|终章|大结局|最终|climax|finale|endgame|late\s+book)$"),
-    ];
-    for (timing, pat) in patterns {
-        if Regex::new(pat).unwrap().is_match(normalized) {
+    // TIMING_ALIASES（按序匹配）。719 号 0GC：正则预编译提为进程级静态
+    // （同 infer 信号词处理）——显式 timing 路径每次调用编译 5 条正则
+    // （resolve_timing_x100 bench 实证 7.5ms/100 次 ≈ 95% 耗于此）。
+    static TIMING_ALIAS_REGEXES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+    let patterns = TIMING_ALIAS_REGEXES.get_or_init(|| {
+        [
+            ("immediate", r"(?i)^(立即|马上|当章|本章|下一章|immediate|instant|next(?:\s+chapter|\s+beat)?|right\s+away)$"),
+            ("near-term", r"(?i)^(近期|近几章|短线|soon|short(?:\s+run)?|near(?:\s*-\s*|\s+)term|current\s+sequence)$"),
+            ("mid-arc", r"(?i)^(中程|中期|卷中|mid(?:\s*-\s*|\s+)arc|mid(?:\s*-\s*|\s+)book|middle)$"),
+            ("slow-burn", r"(?i)^(慢烧|长线|后续|later|late(?:r)?|long(?:\s*-\s*|\s+)arc|slow(?:\s*-\s*|\s+)burn)$"),
+            ("endgame", r"(?i)^(终局|终章|大结局|最终|climax|finale|endgame|late\s+book)$"),
+        ]
+        .into_iter()
+        .map(|(timing, pat)| (timing, Regex::new(pat).expect("timing 别名正则编译失败")))
+        .collect()
+    });
+    for (timing, regex) in patterns {
+        if regex.is_match(normalized) {
             return Some(parse_timing(timing));
         }
     }
@@ -162,17 +170,26 @@ pub fn infer_hook_payoff_timing(expected_payoff: Option<&str>, notes: Option<&st
         return HookPayoffTiming::MidArc;
     }
     let combined = parts.join(" ");
-    // SIGNAL_PATTERNS（按优先级：endgame 先）
-    let signals: [(HookPayoffTiming, &str); 5] = [
-        (HookPayoffTiming::Endgame, r"(?i)(终局|终章|大结局|最终揭晓|最终摊牌|climax|finale|endgame|final reveal|last act)"),
-        (HookPayoffTiming::Immediate, r"(?i)(当章|本章|下一章|马上|立刻|即刻|immediate|next chapter|right away|at once)"),
-        (HookPayoffTiming::NearTerm, r"(?i)(近期|近几章|很快|短线|soon|near-term|short run|current sequence)"),
-        (HookPayoffTiming::MidArc, r"(?i)(中期|卷中|本卷中段|mid-book|mid arc|middle of the arc)"),
-        (HookPayoffTiming::SlowBurn, r"(?i)(长线|慢烧|后续发酵|慢慢揭开|later|slow burn|long arc|long tail)"),
-    ];
-    for (timing, pat) in signals {
-        if Regex::new(pat).unwrap().is_match(&combined) {
-            return timing;
+    // SIGNAL_PATTERNS（按优先级：endgame 先）。719 号 0GC：正则预编译提为
+    // 进程级静态（OnceLock 惯用同 status_resolved_re）——此前每次调用编译
+    // 5 条正则（render_hook_snapshot 每行钩子各一次，100 行台账 ≈ 500 次
+    // Regex::new ≈ 毫秒级热点，bench render_hook_snapshot_100 实证占比 >90%）。
+    static SIGNAL_REGEXES: OnceLock<Vec<(HookPayoffTiming, Regex)>> = OnceLock::new();
+    let signals = SIGNAL_REGEXES.get_or_init(|| {
+        [
+            (HookPayoffTiming::Endgame, r"(?i)(终局|终章|大结局|最终揭晓|最终摊牌|climax|finale|endgame|final reveal|last act)"),
+            (HookPayoffTiming::Immediate, r"(?i)(当章|本章|下一章|马上|立刻|即刻|immediate|next chapter|right away|at once)"),
+            (HookPayoffTiming::NearTerm, r"(?i)(近期|近几章|很快|短线|soon|near-term|short run|current sequence)"),
+            (HookPayoffTiming::MidArc, r"(?i)(中期|卷中|本卷中段|mid-book|mid arc|middle of the arc)"),
+            (HookPayoffTiming::SlowBurn, r"(?i)(长线|慢烧|后续发酵|慢慢揭开|later|slow burn|long arc|long tail)"),
+        ]
+        .into_iter()
+        .map(|(timing, pat)| (timing, Regex::new(pat).expect("信号词正则编译失败")))
+        .collect()
+    });
+    for (timing, regex) in signals {
+        if regex.is_match(&combined) {
+            return *timing;
         }
     }
     HookPayoffTiming::MidArc

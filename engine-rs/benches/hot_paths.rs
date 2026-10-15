@@ -259,12 +259,71 @@ fn bench_sse_parse(c: &mut Criterion) {
     group.finish();
 }
 
+const TIMINGS: [&str; 5] = ["immediate", "near-term", "mid-arc", "slow-burn", "endgame"];
+
+fn bench_story_markdown_render(c: &mut Criterion) {
+    // 719 号 0GC：台账渲染热路径（每章 settle 调用）——100 条钩子的
+    // render_hook_snapshot，全字段形态（timing/depends_on/core/half_life/promoted/kind）。
+    let hooks: Vec<inkos_engine::models::runtime_state::HookRecord> = (1..=100)
+        .map(|i| {
+            serde_json::from_value(json!({
+                "hookId": format!("H{i:02}"),
+                "startChapter": i,
+                "type": if i % 3 == 0 { "main" } else { "sub" },
+                "status": if i % 4 == 0 { "progressing" } else { "open" },
+                "lastAdvancedChapter": i % 20,
+                "expectedPayoff": format!("第{}0章", i % 9 + 1),
+                "payoffTiming": TIMINGS[i % 5],
+                "dependsOn": if i % 5 == 0 { vec![format!("H{:02}", i - 1)] } else { vec![] },
+                "paysOffInArc": if i % 2 == 0 { "一卷" } else { "" },
+                "coreHook": i % 7 == 0,
+                "halfLifeChapters": if i % 6 == 0 { 5 } else { 0 },
+                "promoted": i % 2 == 0,
+                "notes": format!("第{i}条伏笔种子——长线叙事的承重桩，需要持续追踪其推进节奏与兑现时机。"),
+                "kind": if i % 3 == 0 { "promise" } else { "suspense" },
+            }))
+            .expect("hook seed 反序列化失败")
+        })
+        .collect();
+    let mut group = c.benchmark_group("story_markdown_render");
+    group.sample_size(30);
+    group.bench_function("render_hook_snapshot_100", |b| {
+        b.iter(|| {
+            inkos_engine::utils::story_markdown::render_hook_snapshot(
+                &hooks,
+                WritingLanguage::Zh,
+            )
+        })
+    });
+    // 719 号分段定位：settle 结算链全貌（resolve→normalize→infer 推导与渲染
+    // 分离计时——正则预编译改动的收益归因）。
+    group.bench_function("resolve_timing_x100", |b| {
+        b.iter(|| {
+            for hook in std::iter::once(&hooks[0]).cycle().take(100) {
+                std::hint::black_box(inkos_engine::utils::hook_lifecycle::resolve_hook_payoff_timing(
+                    hook.payoff_timing.as_ref().map(|t| match t {
+                        inkos_engine::models::runtime_state::HookPayoffTiming::Immediate => "immediate",
+                        inkos_engine::models::runtime_state::HookPayoffTiming::NearTerm => "near-term",
+                        inkos_engine::models::runtime_state::HookPayoffTiming::MidArc => "mid-arc",
+                        inkos_engine::models::runtime_state::HookPayoffTiming::SlowBurn => "slow-burn",
+                        inkos_engine::models::runtime_state::HookPayoffTiming::Endgame => "endgame",
+                    }),
+                    Some(&hook.expected_payoff),
+                    Some(&hook.notes),
+                ));
+            }
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
     bench_sse_broadcast,
     bench_write_next_hot_paths,
     bench_tool_registry,
-    bench_sse_parse
+    bench_sse_parse,
+    bench_story_markdown_render
 );
 criterion_main!(benches);
