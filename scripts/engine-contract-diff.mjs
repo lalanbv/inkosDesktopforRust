@@ -637,6 +637,20 @@ try {
       // 荷探针=无 manifest 守卫（400/400），不传真实归档。
       { path: "/api/v1/backup/export", statusOnly: true },
       { path: "/api/v1/backup/import", method: "POST", body: {} },
+      // 713 号：导演域三面 + context-meter 双探针回收（G6/353-354 + R41/564，
+      // 3 条目 23→20）。GET 先于 PUT：GET 比缺省基线全 body（session=null,
+      // resumeAdvice 双端 golden 同源，savedChapters 在 VOLATILE）；PUT 走状态
+      // 码（写面协议差；patch 幂等 stage 值，updatedAt 已 VOLATILE 剔除）。
+      "/api/v1/books/:id/director",
+      { path: "/api/v1/books/:id/director", method: "PUT", body: { patch: { stage: "inspiration" } } },
+      // directions=LLM 面：mock 无导演分派 → 回退文本无 JSON 块双端解析为空
+      // 数组 200/200（若 mock 未配则双端 500/500）——状态码对称=路由在位（708
+      // 号 radar analyze 同口径）。
+      { path: "/api/v1/director/directions", method: "POST", body: { inspiration: { premise: "contract-diff probe inspiration" } } },
+      // context-meter：缺参 400 typed 错误体双端同形（fork 逐字嫁接）；未知
+      // 会话 404 同形。均 GET 全 body 对比。
+      "/api/v1/context-meter",
+      { path: "/api/v1/context-meter?sessionId=contract-diff-probe" },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -705,21 +719,21 @@ try {
 
     // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
     // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）；
-    // 708 号 radar 两面、709 号 review-mode 双条目、710 号 backup 双条目续收（→23）。
+    // 708 号 radar 两面、709 号 review-mode 双条目、710 号 backup 双条目续收（→23）；
+    // 713 号导演域双条目 + context-meter 单条目续收（→20）。
     const FORK_ONLY_ROUTES = [
       "/api/v1/books/:id/chapters/:num/approve",
       "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
       "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
       "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
       "/api/v1/books/:id/detect-all",
-      "/api/v1/books/:id/detect/:chapter", "/api/v1/books/:id/director",
+      "/api/v1/books/:id/detect/:chapter",
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
       "/api/v1/books/:id/plan",
       "/api/v1/books/:id/repair-state/:chapter",
       "/api/v1/books/:id/style-binding",
-      "/api/v1/context-meter", "/api/v1/debug/tools",
-      "/api/v1/director/directions",
+      "/api/v1/debug/tools",
       "/api/v1/health", "/api/v1/interaction/session",
       "/api/v1/prompt-packs",
     ];

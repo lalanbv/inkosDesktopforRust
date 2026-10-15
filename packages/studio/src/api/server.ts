@@ -159,6 +159,7 @@ import {
   type AgentSessionConfig,
   type ActionResult,
   type ConfirmedCapabilityBinding,
+  type TokenMeterSnapshot,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -1613,6 +1614,21 @@ interface StudioBookListSummary {
 type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
+
+// ── R41/564 号（713 号回收）：会话 token 计量观测面（与 Rust agent_route
+// context_meter_registry 同构）——sessionId → 末轮快照；cap 64 逐出最旧；
+// 内存观测面，重启即清。
+const CONTEXT_METER_REGISTRY_CAP = 64;
+const contextMeterRegistry = new Map<string, TokenMeterSnapshot>();
+
+function storeContextMeterSnapshot(sessionId: string, snapshot: TokenMeterSnapshot): void {
+  contextMeterRegistry.delete(sessionId); // Map 保序：删旧再插 = 最新在尾
+  if (contextMeterRegistry.size >= CONTEXT_METER_REGISTRY_CAP) {
+    const oldest = contextMeterRegistry.keys().next().value;
+    if (oldest !== undefined) contextMeterRegistry.delete(oldest);
+  }
+  contextMeterRegistry.set(sessionId, snapshot);
+}
 
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
 const modelListCache = new Map<string, { models: Array<{ id: string; name: string }>; at: number }>();
@@ -5189,6 +5205,138 @@ function yamlScalar(value: unknown): string {
     }
   });
 
+  // ── 713 号：导演域三面回收（G6/353-354 号；DirectorPanel 活消费，fork-only 23→20）──
+  // GET/PUT 与 Rust ops_routes.rs get_director/put_director 线格式对齐（patch
+  // 六键白名单合并；updatedAt 对齐 Rust utc_now_ms 数字毫秒）；directions 为
+  // LLM 面（DirectorAgent chat 编排，Runner.generateDirections）。
+
+  app.post("/api/v1/director/directions", async (c) => {
+    const body = await c.req.json<{
+      inspiration?: unknown;
+      count?: number;
+      excludeTitles?: string[];
+      language?: "zh" | "en";
+      assetRefs?: Array<{ kind: string; id: string }>;
+    }>().catch(() => ({}) as { inspiration?: unknown; count?: number; excludeTitles?: string[]; language?: "zh" | "en"; assetRefs?: Array<{ kind: string; id: string }> });
+    const inspiration = body.inspiration as { premise?: unknown } | undefined;
+    if (!inspiration || typeof inspiration.premise !== "string" || !inspiration.premise.trim()) {
+      return c.json({ error: "inspiration.premise is required" }, 400);
+    }
+    // 713 号（709 写键教训同型）：prompt 构建消费 schema 态 InspirationCard
+    // （keywords 缺省 []）——fork 旧版 `as never` 裸传跳过归一，keywords 缺席
+    // 的载荷在 buildDirectionCandidatesPrompt 读 .length 即炸（UI 恒带 keywords
+    // 掩盖；Rust serde default 同键容忍=双腿状态不对称的根因）。
+    const core = await import("@actalk/inkos-core");
+    const card = core.InspirationCardSchema.parse(inspiration);
+    // R4/364 号：可选挂载三库资产 guidance（refs 命中库资产 → 渲染参考块）。
+    let assetGuidance: string | undefined;
+    if (Array.isArray(body.assetRefs) && body.assetRefs.length > 0) {
+      const matched: import("@actalk/inkos-core").LibraryAsset[] = [];
+      for (const ref of body.assetRefs.slice(0, 6)) {
+        if (!isLibraryKind(ref.kind)) continue;
+        const snapshot = await listAssets(root, ref.kind);
+        const hit = snapshot.assets.find((asset) => asset.id === ref.id);
+        if (hit) matched.push(hit);
+      }
+      assetGuidance = core.renderAssetGuidanceBlock(matched, body.language ?? "zh");
+    }
+    broadcast("director:start", {});
+    try {
+      const pipeline = new PipelineRunner(await buildPipelineConfig());
+      const directions = await pipeline.generateDirections({
+        inspiration: card,
+        count: body.count,
+        excludeTitles: body.excludeTitles,
+        language: body.language,
+        assetGuidance,
+      });
+      broadcast("director:complete", { count: directions.length });
+      return c.json({ directions });
+    } catch (e) {
+      broadcast("director:error", { error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // G6/353 号：导演会话持久化 + G9 续跑建议注入（拉模式闭环）。
+  app.get("/api/v1/books/:id/director", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const dir = join(root, ".inkos", "director");
+    const path = join(dir, `${id}.json`);
+    let session: Record<string, unknown> | null = null;
+    try {
+      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      session = null;
+    }
+    let savedChapters = 0;
+    try {
+      savedChapters = (await state.loadChapterIndex(id)).length;
+    } catch {
+      savedChapters = 0;
+    }
+    const core = await import("@actalk/inkos-core");
+    const resumeAdvice = core.formatResumeHint(savedChapters, "en");
+    return c.json({ session, savedChapters, resumeAdvice });
+  });
+
+  app.put("/api/v1/books/:id/director", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{ patch?: Record<string, unknown> }>();
+    // 478 号：客户端与 Rust 端均以 { patch } 包裹合并键——此前读顶层导致本回退端
+    // 保存静默 no-op（返回 ok 但什么都不合并）。对齐 patch 契约。
+    // 713 号对齐 Rust put_director：patch 非对象跳过合并与 updatedAt（仍落盘
+    // 现值）；updatedAt 对齐 utc_now_ms 数字毫秒（fork 旧版 ISO 串，线格式以
+    // Rust 产品引擎为真源）。
+    const patch = body.patch && typeof body.patch === "object" && !Array.isArray(body.patch)
+      ? body.patch
+      : null;
+    const runMode = patch?.runMode;
+    if (runMode !== undefined && !["ready-stop", "range", "full-book"].includes(String(runMode))) {
+      return c.json({ error: "invalid runMode" }, 400);
+    }
+    const dir = join(root, ".inkos", "director");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}.json`);
+    let session: Record<string, unknown> = {};
+    try {
+      session = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+    } catch {
+      session = { bookId: id };
+    }
+    if (patch) {
+      for (const key of ["inspiration", "directions", "selectedDirection", "runMode", "stage", "plan"] as const) {
+        if (patch[key] !== undefined) session[key] = patch[key];
+      }
+      session.updatedAt = Date.now();
+      if (!session.bookId) session.bookId = id;
+    }
+    await writeFile(path, JSON.stringify(session, null, 2), "utf-8");
+    return c.json({ ok: true, session });
+  });
+
+  // R41/564 号（713 号回收）：会话末轮 token 计量快照（与 Rust GET
+  // /api/v1/context-meter 同构：无记录 404 / 缺参 400；内存观测面，重启即清）。
+  app.get("/api/v1/context-meter", (c) => {
+    const sessionId = c.req.query("sessionId")?.trim();
+    if (!sessionId) {
+      return c.json(
+        { error: { code: "INVALID_SESSION_ID", message: "sessionId is required" } },
+        400,
+      );
+    }
+    const snapshot = contextMeterRegistry.get(sessionId);
+    if (!snapshot) {
+      return c.json(
+        { error: { code: "SESSION_NOT_FOUND", message: "no context meter snapshot for this session" } },
+        404,
+      );
+    }
+    return c.json(snapshot);
+  });
+
   // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──
   // BackupPanel 活消费（export=浏览器下载，import=两段式 preview→confirm）。
   // Rust backup_routes.rs 为 443 号逐字移植——本嫁接后双端线格式对齐。
@@ -6703,6 +6851,12 @@ function yamlScalar(value: unknown): string {
         },
         instruction,
       );
+
+      // R41/564 号（713 号回收）：末轮计量快照留痕（与 Rust agent_route 同点
+      // 尽力而为——观测面不阻断主链；错误路径无 result 自然缺席）。
+      if (result.contextMeter) {
+        storeContextMeterSnapshot(bookSession.sessionId, result.contextMeter);
+      }
 
       bookSession = await loadBookSession(root, bookSession.sessionId) ?? bookSession;
 

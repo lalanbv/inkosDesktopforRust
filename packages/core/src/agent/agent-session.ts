@@ -50,6 +50,7 @@ import type { BookSession } from "../interaction/session.js";
 import { transitionSessionToWork } from "../interaction/book-session-store.js";
 import type { ActionPayload, ActionSource, RequestedIntent } from "../interaction/action-envelope.js";
 import type { ContextCompressionCallback } from "../models/context-compression.js";
+import { TokenMeter, type TokenMeterSnapshot } from "../utils/token-meter.js";
 import {
   applyRequiredProfileSkills,
   applyRequiredWorkSkills,
@@ -179,6 +180,12 @@ export interface AgentSessionResult {
   profileId: string;
   /** Work bound to this turn, if any. */
   workId: string | null;
+  /**
+   * R41/564 号（713 号 TS 回收）：会话末轮 token 计量快照（启发式/usage 锚点
+   * 双口径）。观测面尽力而为：usage 缺失走纯启发式；计量内部异常静默缺席。
+   * 消费面 = studio GET /api/v1/context-meter（fork server 同点留痕）。
+   */
+  contextMeter?: TokenMeterSnapshot;
 }
 
 export interface AgentSessionAttachment {
@@ -557,6 +564,30 @@ function lastAssistantMessage(messages: AgentMessage[]): AssistantMessage | unde
     }
   }
   return undefined;
+}
+
+/**
+ * R41 计量投影（564/713 号）：各 AgentMessage 形态的文本面（user 字符串/内容
+ * 分组、assistant 文本块；toolResult 等其余形态尽力取 text 分组）——缺省
+ * 空串不抛（计量尽力而为，不阻断主链）。
+ */
+function extractMessageMeterText(message: AgentMessage): string {
+  const candidate = message as { role?: string; content?: unknown };
+  if (candidate.role === "assistant") {
+    return extractTextFromAssistant(message as AssistantMessage);
+  }
+  const content = candidate.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        const text = (part as { text?: unknown })?.text;
+        return typeof text === "string" ? text : "";
+      })
+      .join("");
+  }
+  return "";
 }
 
 const ZERO_PI_USAGE: AssistantMessage["usage"] = {
@@ -1555,6 +1586,30 @@ async function runAgentSessionUnlocked(
   errorMessage ??= assistantErrorMessage(finalAssistant);
   const responseText = errorMessage ? "" : (canCompletePlayScene(cached)?cached.completedPlayScene:undefined) ?? completion?.message ?? (finalAssistant ? extractTextFromAssistant(finalAssistant) : "");
 
+  // R41 计量面（564 号，713 号 TS 回收；与 Rust run_agent_loop 挂线同构）：
+  // 全量消息回放入表（state.messages 已含本轮 assistant 回复 = 下一轮请求面），
+  // usage 入锚。尽力而为：usage 缺失时纯启发式（锚点缺席），观测不阻断。
+  let contextMeter: TokenMeterSnapshot | undefined;
+  try {
+    // 581 号：窗口兜底 128k（与 provider.ts 模型卡 miss 兜底同源）——无模型卡
+    // 模型的 contextWindow 经服务端模型列表组装为 0（>0 才带字段），此前直传
+    // → 计量窗口 0 → 超窗告警面永不触发。非正数一律按缺省窗口计。
+    const meter = new TokenMeter(model.contextWindow > 0 ? model.contextWindow : 128_000);
+    for (const message of allMessages) {
+      meter.append(extractMessageMeterText(message));
+    }
+    // 锚点模型身份 = 本轮请求侧 model.id（usage 归属请求模型）。
+    meter.noteUsage(
+      model.id ?? null,
+      finalAssistant?.usage?.input ?? 0,
+      finalAssistant?.usage?.output ?? 0,
+      finalAssistant?.usage?.totalTokens ?? 0,
+    );
+    contextMeter = meter.measure();
+  } catch {
+    contextMeter = undefined;
+  }
+
   return {
     responseText,
     messages: allMessages.slice(),
@@ -1562,6 +1617,7 @@ async function runAgentSessionUnlocked(
     workId: cached.workId,
     ...(completion ? { completion } : {}),
     ...(cached.pendingWorkTransition ? { workTransition: cached.pendingWorkTransition } : {}),
+    ...(contextMeter ? { contextMeter } : {}),
     ...(errorMessage ? { errorMessage } : {}),
   };
 }

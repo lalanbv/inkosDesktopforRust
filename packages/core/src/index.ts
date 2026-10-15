@@ -693,3 +693,40 @@ export {
   type AssetValidateResult,
   type LibraryAsset,
 } from "./utils/asset-library.js";
+
+// ── 自动导演产品化契约（G6/352 号系列；DirectorPanel/directions 面消费）──
+export {
+  InspirationCardSchema,
+  buildDirectionCandidatesPrompt,
+  parseDirectionCandidates,
+  resolveDirectorRunPlan,
+  nextDirectorStage,
+  DIRECTOR_CONTRACT,
+  DIRECTOR_RUN_MODES,
+  DIRECTOR_STAGES,
+  type DirectionCandidate,
+  type DirectorContract,
+  type DirectorRunMode,
+  type DirectorRunPlan,
+  type DirectorStage,
+  type InspirationCard,
+} from "./models/director.js";
+
+// ── 续跑建议（G9/344 号；GET /books/:id/director 的 resumeAdvice 消费面）──
+export {
+  formatResumeHint,
+  resolveResumeAdvice,
+  RESUME_ACTIONS,
+  type ResumeAction,
+  type ResumeAdvice,
+  type ResumeAdviceInput,
+} from "./utils/resume-advice.js";
+
+// R41/564 号：token 计量服务（TS 镜像，563 号 Rust 侧同批语义；双端共享 golden）。
+export { TokenMeter } from "./utils/token-meter.js";
+export type {
+  MeterSource,
+  SurfaceNode,
+  UsageAnchor,
+  TokenMeterSnapshot,
+} from "./utils/token-meter.js";

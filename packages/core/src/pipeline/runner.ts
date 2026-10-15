@@ -455,6 +455,21 @@ export class PipelineRunner {
   // Atomic operations (composable by OpenClaw or agent mode)
   // ---------------------------------------------------------------------------
 
+  // G6/354 号（713 号回收）：方向候选批量生成——prompt/解析均为 352 号契约
+  // 纯函数（models/director），本方法只负责 DirectorAgent chat 编排。
+  async generateDirections(params: {
+    readonly inspiration: import("../models/director.js").InspirationCard;
+    readonly count?: number;
+    readonly excludeTitles?: ReadonlyArray<string>;
+    readonly language?: "zh" | "en";
+    readonly assetGuidance?: string;
+  }): Promise<import("../models/director.js").DirectionCandidate[]> {
+    const director = new (await import("../agents/director-agent.js")).DirectorAgent(
+      this.agentCtxFor("director"),
+    );
+    return director.generateDirections(params);
+  }
+
   // 707 号：选后再析（G14a/335）双路径——selection 在位走 fork 原版「免费扫榜
   // （/radar/rankings 已完成）+ 范围 LLM 分析」（自带系统提示词，无 skill 门槛，
   // 与 Rust run_radar_analyze 同水位）；缺省保持 2.0 harness 全量扫描

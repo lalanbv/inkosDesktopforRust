@@ -247,6 +247,25 @@ http.createServer((req, res) => {
         content = ARCHITECT;
       }
       else if (sys.includes("资深小说编辑")) content = REVIEW;
+      // 713 号：导演方向候选分派（G6/354）——此前无分派落 lastRole=user 的
+      // propose_action 工具调用支：Rust 侧读 content 空串解析空数组（伪 200），
+      // TS pi-ai worker 收未注册工具调用流解析失败（伪 500）——contract-diff
+      // directions 面双腿状态不对称实锤后补的真分派。返回 prompt 请求的
+      // {"directions":[...]} 契约形态（2 候选，confidence 降序素材）。
+      else if (sys.includes("故事导演")) {
+        content = JSON.stringify({ directions: [
+          {
+            id: "d1", title: "镜中藏书楼", hook: "每本借出的书都会改写借书人的一天。",
+            genre: "奇幻轻小说", synopsis: "大学生林晚接手祖传旧书店，发现每本借出的书都会在归还时改写借书人的一天，而书店账本记录着所有未被归还的「人生」。",
+            differentiator: "以「借书必改写一日」的规则驱动单元剧与长线账本之谜，避开常见穿越金手指套路。", confidence: 0.82,
+          },
+          {
+            id: "d2", title: "坊市拾遗人", hook: "他回收的不是旧物，是别人抛弃的记忆。",
+            genre: "都市异闻", synopsis: "拾遗人陈拾能从旧物中读出原主舍弃的记忆，每一次回收都是一段人生补完，直到他收到一件属于自己母亲的遗物。",
+            differentiator: "单元回忆拼长线身世，情感驱动而非系统流，同题材多走悬疑惊悚此处走温情群像。", confidence: 0.74,
+          },
+        ] });
+      }
       else if (sys.includes("素材分析师") || sys.includes("同人")) content = CANON;
       else if (sys.includes("创作总编")) content = PLANNER;
       else if (sys.includes("作家") || sys.includes("写手")) content = WRITER;
