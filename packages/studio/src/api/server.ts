@@ -5341,8 +5341,28 @@ function yamlScalar(value: unknown): string {
   // plan/compose/repair-state=LLM 管线面（Runner 三方法），approve/reject=
   // 审改流域（纯状态流转）。Rust 对偶 books_routes.rs（run_plan/run_compose/
   // run_repair_state）与 books_state_routes.rs（approve/reject_chapter）。
-  // consolidate 留 fork-only（715 批随 story-markdown/hook-lifecycle/
-  // hook-promotion 三 util 连片恢复后接 ConsolidatorAgent）。
+  // 715 号：consolidate 面接通（ConsolidatorAgent + story-markdown 族连片
+  // 移植后嫁接；fork-only 清单 15→14）。
+
+  app.post("/api/v1/books/:id/consolidate", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    try {
+      const pipelineConfig = await buildPipelineConfig();
+      const core = await import("@actalk/inkos-core");
+      const consolidator = new core.ConsolidatorAgent({
+        client: pipelineConfig.client,
+        model: pipelineConfig.model,
+        projectRoot: root,
+      });
+      const result = await consolidator.consolidate(state.bookDir(id));
+      broadcast("consolidate:complete", { bookId: id, ...result });
+      return c.json(result);
+    } catch (e) {
+      broadcast("consolidate:error", { bookId: id, error: String(e) });
+      return c.json({ error: String(e) }, 500);
+    }
+  });
 
   app.post("/api/v1/books/:id/plan", async (c) => {
     const id = c.req.param("id");

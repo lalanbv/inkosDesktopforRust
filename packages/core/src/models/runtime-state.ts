@@ -15,6 +15,17 @@ export type StateManifest = z.infer<typeof StateManifestSchema>;
 export const HookStatusSchema = z.enum(["open", "progressing", "deferred", "resolved", "superseded"]);
 export type HookStatus = z.infer<typeof HookStatusSchema>;
 
+// 715 号：回收时序枚举（fork 逐字）——hook-lifecycle/hook-policy 消费面
+// （resolveHookPayoffTiming/inferHookPayoffTiming/localizeHookPayoffTiming）。
+export const HookPayoffTimingSchema = z.enum([
+  "immediate",
+  "near-term",
+  "mid-arc",
+  "slow-burn",
+  "endgame",
+]);
+export type HookPayoffTiming = z.infer<typeof HookPayoffTimingSchema>;
+
 export const HookRecordSchema = z.object({
   hookId: z.string().min(1),
   startChapter: z.number().int().min(0),

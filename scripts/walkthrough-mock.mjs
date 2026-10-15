@@ -271,6 +271,14 @@ http.createServer((req, res) => {
         content = ARCHITECT;
       }
       else if (sys.includes("资深小说编辑")) content = REVIEW;
+      // 715 号：卷级归并分派（ConsolidatorAgent narrative summarizer）——完成卷
+      // 的章节摘要压缩为单段叙事（<500 词），写 volume_summaries。
+      else if (sys.includes("narrative summarizer")) {
+        content = "本卷自坊市对峙始，林动当众夺回祖符玉佩，于冲突余波中初窥镜界异象，由此踏上修炼路。"
+          + "复仇的种子与身世的谜团同时埋下：玉符深处的脉动、宗门背后的黑手、婚约誓言的重量，"
+          + "三条线索在卷尾交汇成出城远行的抉择。人物上，林动完成了从隐忍到亮剑的转变，"
+          + "同伴与对手的立场亦随实力揭晓而重新洗牌。";
+      }
       // 713 号：导演方向候选分派（G6/354）——此前无分派落 lastRole=user 的
       // propose_action 工具调用支：Rust 侧读 content 空串解析空数组（伪 200），
       // TS pi-ai worker 收未注册工具调用流解析失败（伪 500）——contract-diff

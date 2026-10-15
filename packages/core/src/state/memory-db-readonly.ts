@@ -23,6 +23,11 @@ export interface StoredSummary {
   readonly hookActivity: string;
   readonly mood: string;
   readonly chapterType: string;
+  // 715 号：张力评分列（R2/358 号；Rust memory_db.rs StoredSummary 同字段
+  // serde default None——story-markdown renderSummarySnapshot 渲染消费，
+  // 缺分章 undefined 渲染空单元格保持旧表消费者无感）。
+  readonly conflictLevel?: number;
+  readonly revealLevel?: number;
 }
 
 export interface StoredReviewMetric {

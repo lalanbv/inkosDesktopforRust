@@ -730,3 +730,16 @@ export type {
   UsageAnchor,
   TokenMeterSnapshot,
 } from "./utils/token-meter.js";
+
+// ── 715 号：卷级归并 + story 台账 Markdown 族（ConsolidatorAgent 消费面；
+//    双端对照 leaf.json render_*_snapshot 向量）──
+export { ConsolidatorAgent, type ConsolidationResult } from "./agents/consolidator.js";
+// parseChapterSummariesMarkdown 不在此重复导出——tension-curve.js 已有同构
+// 版本在导出面（2.0 独立演进），story-markdown 内部版本供模块族自洽。
+export {
+  renderSummarySnapshot,
+  renderHookSnapshot,
+  parsePendingHooksMarkdown,
+  parseCurrentStateFacts,
+} from "./utils/story-markdown.js";
+export { rerunPromotionPass, type PromotionPassResult } from "./utils/hook-promotion.js";

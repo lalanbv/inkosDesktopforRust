@@ -667,6 +667,9 @@ try {
       { path: "/api/v1/books/:id/chapters/1/approve", method: "POST" },
       { path: "/api/v1/books/:id/chapters/1/reject", method: "POST" },
       { path: "/api/v1/books/:id/chapters/2/reject", method: "POST" },
+      // 715 号：卷级归并回收（ConsolidatorAgent，单条目 15→14）。fixture 无
+      // volume_map → 双端幂等零归档分支（不打 LLM）200/200 稳定。
+      { path: "/api/v1/books/:id/consolidate", method: "POST" },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -738,10 +741,10 @@ try {
     // 708 号 radar 两面、709 号 review-mode 双条目、710 号 backup 双条目续收（→23）；
     // 713 号导演域双条目 + context-meter 单条目续收（→20）；
     // 714 号章节管线五条目续收（approve/reject/plan/compose/repair-state →15；
-    // consolidate 留守=715 批随 story-markdown 三 util 连片恢复）。
+    // 715 号 consolidate 单条目续收（story-markdown/hook-lifecycle/hook-policy/
+    // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）。
     const FORK_ONLY_ROUTES = [
       "/api/v1/books/:id/codex",
-      "/api/v1/books/:id/consolidate",
       "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
       "/api/v1/books/:id/detect-all",
       "/api/v1/books/:id/detect/:chapter",
