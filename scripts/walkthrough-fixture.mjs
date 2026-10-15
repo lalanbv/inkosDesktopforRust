@@ -225,6 +225,22 @@ if (!forkContract) {
   if (existsSync(worksSourceDir)) {
     await core.createInitialRuntimeState({ bookDir: worksSourceDir, language: "zh" });
     console.log(`[walkthrough-fixture] runtime state init: works/${BOOK}/source`);
+    // 717 号：book_rules 双文件补播（writeChapter 管线前置——readBookRules 硬读
+    // story/book_rules.{md,json}；完备书目录必备件，建书链产物形态）。缺省时
+    // draft/write 链 ENOENT 恒败（走查 draft:error 实锤后补）。
+    const rulesJson = {
+      version: "2",
+      protagonist: { name: "苏檀", personalityLock: [], behavioralConstraints: [] },
+      genreLock: { primary: "xuanhuan", forbidden: [] },
+      prohibitions: [],
+      enableFullCastTracking: false,
+      allowedDeviations: [],
+    };
+    writeFileSync(join(worksSourceDir, "story", "book_rules.json"), `${JSON.stringify(rulesJson, null, 2)}\n`);
+    if (!existsSync(join(worksSourceDir, "story", "book_rules.md"))) {
+      writeFileSync(join(worksSourceDir, "story", "book_rules.md"), "# 本书规则\n\n（fixture 缺省：无附加禁则。）\n");
+    }
+    console.log("[walkthrough-fixture] book_rules seeded");
   }
 }
 

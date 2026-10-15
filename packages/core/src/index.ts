@@ -764,3 +764,22 @@ export {
   type ContextLensEntry,
   type ContextLensRank,
 } from "./utils/context-lens.js";
+
+// ── 717 号：写作质量面（BookDetail 重修设定/质量评估/反检测消费）——
+//    ai-tells 结构规则检测（零 LLM）+ book-eval 启发式质量评估 + 生产能力
+//    绑定表（draft 管线激活透传）。双端对偶 ai_tells.rs / book_eval.rs。──
+export { analyzeAITells, type AITellIssue, type AITellResult } from "./agents/ai-tells.js";
+export {
+  evaluateBookQuality,
+  computeChapterEvalScore,
+  type ChapterEval,
+  type BookEval,
+  type EvaluateBookQualityOptions,
+} from "./utils/book-eval.js";
+export {
+  resolveProductionSkillActivations,
+  PRODUCTION_SKILL_IDS,
+  NON_LONG_PRODUCTION_CAPABILITIES,
+  type ProductionSkillCapability,
+} from "./skills/production-bindings.js";
+export { findChapterFileByNumber } from "./state/chapter-filename.js";

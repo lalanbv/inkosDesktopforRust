@@ -170,6 +170,17 @@ export interface ComposeChapterResult extends PlanChapterResult {
   readonly tracePath: string;
 }
 
+/** POST /books/:id/draft 异步产物面（fork DraftResult 同形；717 号）。 */
+export interface DraftResult {
+  readonly bookId: string;
+  readonly chapterNumber: number;
+  readonly title: string;
+  readonly wordCount: number;
+  readonly filePath: string;
+  readonly lengthWarnings?: ReadonlyArray<string>;
+  readonly lengthTelemetry?: LengthTelemetry;
+}
+
 export interface WriteChaptersOptions {
   readonly startChapterNumber?: number;
   readonly wordCount?: number;
@@ -550,9 +561,143 @@ export class PipelineRunner {
     };
   }
 
+  // ── 717 号：草稿管线回收（BookDetail「重修设定」消费面）────────────────
+  // 壳与输入段 = fork 逐字（book 锁 + 530 号激活透传 + prepareWriteInput +
+  // WriterAgent.writeChapter）；落盘段 = 2.0 形态（writer.saveChapter 四参
+  // 一体 truth/索引；fork 的 legacy structured state 与叙事记忆 sqlite 同步
+  // 在 2.0 由 runtime-state 体系取代）；篇幅告警按 2.0 LengthSpec bounds 语义
+  // （minChapterLength/maxChapterLength 可选）改写——fork hardMin/hardMax
+  // 五区间 schema 为有意演进不回滚。
+
+  /** POST /books/:id/draft 响应面（fork DraftResult 同形）。 */
+  async writeDraft(bookId: string, context?: string, wordCount?: number): Promise<DraftResult> {
+    const releaseLock = await this.state.acquireBookLock(bookId);
+    try {
+      // 530 号：draft 链与 write-next 同款激活透传——2.0 激活经
+      // operationContext 注入（server 侧 runWithAgentContext 包裹；无包裹
+      // 时取当前栈值=空，行为与 write-next 裸调同水位）。
+      return await this.runWithAgentContext(
+        { activatedSkills: this.currentActivatedSkills("writer") },
+        async () => {
+          await this.state.ensureControlDocuments(bookId);
+          const book = await this.state.loadBookConfig(bookId);
+          const bookDir = this.state.bookDir(bookId);
+          const chapterNumber = await this.state.getNextChapterNumber(bookId);
+          const stageLanguage = await this.resolveBookLanguage(book);
+          this.logStage(stageLanguage, { zh: "准备章节输入", en: "preparing chapter inputs" });
+          const writeInput = await this.prepareWriteInput(
+            book,
+            bookDir,
+            chapterNumber,
+            context ?? this.config.externalContext,
+          );
+
+          // 717 号：2.0 无独立 genre profile 加载——语言面直接取 book.language
+          //（fork gp.language 回退语义同源；LengthSpec bounds 按显式 wordCount 收紧）。
+          const draftLanguage: "zh" | "en" = book.language === "en" ? "en" : "zh";
+          const lengthSpec = buildLengthSpec(
+            wordCount ?? book.chapterWordCount,
+            draftLanguage,
+            wordCount ? { minChapterLength: wordCount, maxChapterLength: wordCount } : {},
+          );
+
+          const writer = new WriterAgent(this.agentCtxFor("writer", bookId));
+          this.logStage(stageLanguage, { zh: "撰写章节草稿", en: "writing chapter draft" });
+          const output = await writer.writeChapter({
+            book,
+            bookDir,
+            chapterNumber,
+            ...writeInput,
+            lengthSpec,
+            ...(wordCount ? { wordCountOverride: wordCount } : {}),
+          });
+          const writerCount = countChapterLength(output.content, lengthSpec.countingMode);
+          const totalUsage: TokenUsageSummary = output.tokenUsage ?? {
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+          };
+          const draftOutput: WriteChapterOutput = {
+            ...output,
+            wordCount: writerCount,
+            tokenUsage: totalUsage,
+          };
+          const lengthWarnings = this.buildDraftLengthWarnings(
+            chapterNumber,
+            draftOutput.wordCount,
+            lengthSpec,
+          );
+          const lengthTelemetry = this.buildLengthTelemetry({
+            lengthSpec,
+            writerCount,
+            postReviseCount: 0,
+            finalCount: draftOutput.wordCount,
+            repairApplied: false,
+          });
+
+          // 落盘（2.0 形态：saveChapter 四参一体 truth/索引更新）。
+          this.logStage(stageLanguage, { zh: "落盘草稿与真相文件", en: "persisting draft and truth files" });
+          const existingIndex = await this.state.loadChapterIndex(bookId);
+          const now = new Date().toISOString();
+          const newEntry: ChapterMeta = {
+            number: chapterNumber,
+            title: draftOutput.title,
+            status: "drafted",
+            wordCount: draftOutput.wordCount,
+            createdAt: now,
+            updatedAt: now,
+            observations: [],
+            provenance: "generated",
+          };
+          const existingIdx = existingIndex.findIndex((entry) => entry.number === chapterNumber);
+          const updatedIndex = existingIdx >= 0
+            ? existingIndex.map((entry, idx) => (idx === existingIdx ? newEntry : entry))
+            : [...existingIndex, newEntry];
+          await writer.saveChapter(bookDir, draftOutput, draftLanguage, updatedIndex);
+
+          return {
+            bookId,
+            chapterNumber,
+            title: draftOutput.title,
+            wordCount: draftOutput.wordCount,
+            filePath: join(bookDir, "chapters"),
+            lengthWarnings: lengthWarnings.length > 0 ? lengthWarnings : undefined,
+            lengthTelemetry,
+          };
+        },
+      );
+    } finally {
+      await releaseLock();
+    }
+  }
+
+  /**
+   * 717 号：草稿篇幅告警（fork buildLengthWarnings 的 2.0 bounds 语义改写——
+   * LengthSpec.minChapterLength/maxChapterLength 可选，缺省不判）。
+   */
+  private buildDraftLengthWarnings(
+    chapterNumber: number,
+    finalCount: number,
+    lengthSpec: LengthSpec,
+  ): string[] {
+    const { minChapterLength: min, maxChapterLength: max } = lengthSpec;
+    if ((min === undefined || finalCount >= min) && (max === undefined || finalCount <= max)) {
+      return [];
+    }
+    const range = min !== undefined && max !== undefined
+      ? `${min}-${max}`
+      : min !== undefined ? `≥${min}` : `≤${max}`;
+    const language = this.languageFromLengthSpec(lengthSpec);
+    return [
+      this.localize(language, {
+        zh: `第${chapterNumber}章未达到篇幅预算（${range}，实际 ${finalCount}）。`,
+        en: `Chapter ${chapterNumber} is outside its length budget (${range}, actual ${finalCount}).`,
+      }),
+    ];
+  }
+
   /** 714 号：修复章节状态结算（POST /books/:id/repair-state/:chapter 消费面）。 */
-  async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {
-    // 护栏与 Rust run_repair_state（books_routes.rs:1452）逐字同构：仅最新章
+  async repairChapterState(bookId: string, chapterNumber?: number): Promise<ChapterPipelineResult> {    // 护栏与 Rust run_repair_state（books_routes.rs:1452）逐字同构：仅最新章
     // 且 status=state-degraded 可修（fork _repairChapterStateLocked 同门槛）。
     const index = [...(await this.state.loadChapterIndex(bookId))];
     if (index.length === 0) {

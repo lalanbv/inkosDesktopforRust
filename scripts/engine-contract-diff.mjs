@@ -681,6 +681,14 @@ try {
       { path: "/api/v1/books/:id/codex", method: "PUT", body: { cards: [{ name: "苏檀", aliases: ["苏少爷"], kind: "person", summary: "probe card", facts: [], relationships: [] }] } },
       "/api/v1/books/:id/context-lens",
       { path: "/api/v1/books/:id/context-lens/2", statusOnly: true },
+      // 717 号：写作质量面四路由回收（4 条目 11→7）。eval/detect 零 LLM
+      // （启发式/结构规则，fixture 第 1 章同文双端同构 → 全 body 对比，真
+      // 阈值漂移当场暴露）；draft 放表尾（fire-and-forget 后台写第 2 章，
+      // 防污染同轮后续 GET 基线）状态码口径。
+      "/api/v1/books/:id/eval",
+      { path: "/api/v1/books/:id/detect/1", method: "POST" },
+      { path: "/api/v1/books/:id/detect-all", method: "POST" },
+      { path: "/api/v1/books/:id/draft", method: "POST", body: { wordCount: 800 } },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -754,13 +762,10 @@ try {
     // 714 号章节管线五条目续收（approve/reject/plan/compose/repair-state →15；
     // 715 号 consolidate 单条目续收（story-markdown/hook-lifecycle/hook-policy/
     // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）；
-    // 716 号实体卡+透视三条目续收（codex/context-lens 双路由 →11；
-    // detect 族/draft/eval 留守=detect 无 UI 消费方（708 教训）、draft/eval
-    // 依赖 ai-tells 连片——717 同域「写作质量面」批）。
+    // 717 号写作质量面四条目续收（draft/eval/detect/:chapter/detect-all →7；
+    // ai-tells+book-eval+production-bindings 连片移植）。剩 fanfic/hybrid-
+    // search/style-binding 面板族与低优先五面。
     const FORK_ONLY_ROUTES = [
-      "/api/v1/books/:id/detect-all",
-      "/api/v1/books/:id/detect/:chapter",
-      "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",
       "/api/v1/books/:id/fanfic/refresh", "/api/v1/books/:id/hybrid-search",
       "/api/v1/books/:id/style-binding",
       "/api/v1/debug/tools",

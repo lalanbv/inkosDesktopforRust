@@ -160,6 +160,7 @@ import {
   type ActionResult,
   type ConfirmedCapabilityBinding,
   type TokenMeterSnapshot,
+  findChapterFileByNumber,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -5527,6 +5528,96 @@ function yamlScalar(value: unknown): string {
       trace: core.ChapterTraceSchema.parse(trace),
     });
     return c.json(lens);
+  });
+
+  // ── 717 号：写作质量面四路由回收（BookDetail 重修设定/质量评估/反检测；
+  // fork-only 11→7）。detect 双路由零 LLM（ai-tells 结构规则）；eval 零 LLM
+  // （book-eval 启发式）；draft 为 LLM 管线（fire-and-forget + SSE 广播，
+  // 激活经 runWithAgentContext 注入 production 绑定）。
+
+  app.post("/api/v1/books/:id/draft", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{ wordCount?: number; context?: string }>().catch(() => ({ wordCount: undefined, context: undefined }));
+
+    broadcast("draft:start", { bookId: id });
+
+    const pipeline = new PipelineRunner(await buildPipelineConfig({ bookIdForSettings: id }));
+    const core = await import("@actalk/inkos-core");
+    // R44/566 号：生产能力绑定激活（longWriting）经 operationContext 注入
+    // draft 链（2.0 激活语义；fork 走 config 字段承载为旧形态）。
+    const activatedSkills = core.resolveProductionSkillActivations(
+      (await loadAvailableAgentSkills({ projectRoot: root })).skills,
+      "longWriting",
+    );
+    pipeline.runWithAgentContext({ activatedSkills }, () => pipeline.writeDraft(id, body.context, body.wordCount)).then(
+      (result) => {
+        broadcast("draft:complete", { bookId: id, chapterNumber: result.chapterNumber, title: result.title, wordCount: result.wordCount });
+      },
+      (e) => {
+        broadcast("draft:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
+      },
+    );
+
+    return c.json({ status: "drafting", bookId: id });
+  });
+
+  app.get("/api/v1/books/:id/eval", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const chapters = c.req.query("chapters");
+    try {
+      const core = await import("@actalk/inkos-core");
+      return c.json(await core.evaluateBookQuality({ state, bookId: id, chapters }));
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/detect/:chapter", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const chapterNum = parseInt(c.req.param("chapter"), 10);
+    const bookDir = state.bookDir(id);
+
+    try {
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const match = findChapterFileByNumber(files, chapterNum);
+      if (!match) return c.json({ error: "Chapter not found" }, 404);
+
+      const content = await readFile(join(chaptersDir, match), "utf-8");
+      const { analyzeAITells } = await import("@actalk/inkos-core");
+      const result = analyzeAITells(content);
+      return c.json({ chapterNumber: chapterNum, ...result });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  app.post("/api/v1/books/:id/detect-all", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const bookDir = state.bookDir(id);
+
+    try {
+      const chaptersDir = join(bookDir, "chapters");
+      const files = await readdir(chaptersDir);
+      const mdFiles = files.filter((f) => f.endsWith(".md") && /^\d{4}/.test(f)).sort();
+      const { analyzeAITells } = await import("@actalk/inkos-core");
+
+      const results = await Promise.all(
+        mdFiles.map(async (f) => {
+          const num = parseInt(f.slice(0, 4), 10);
+          const content = await readFile(join(chaptersDir, f), "utf-8");
+          const result = analyzeAITells(content);
+          return { chapterNumber: num, filename: f, ...result };
+        }),
+      );
+      return c.json({ bookId: id, results });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
   });
 
   // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──

@@ -189,6 +189,7 @@ http.createServer((req, res) => {
         // 714 号：TS planner 工具协议识别（submitStructured submit_chapter_memo）
         // ——见下方分派支；解析与 persona 特征同源同块，避免块级作用域引用。
         toolNames = (p?.tools ?? []).map((t) => t?.function?.name ?? t?.name ?? "");
+        if (toolNames.length > 0) console.log(`[mock] tools=${toolNames.join(",")} sys=${String(sys).slice(0, 40)}`);
       } catch {}
       // 622 号：协议保真——按请求 stream 旗标返回形态。此前恒返 SSE，Rust
       // 非流式线上路径（stream:false → 整体 JSON 解析，streaming_client 108 号）
@@ -252,6 +253,56 @@ http.createServer((req, res) => {
           threadRefs: ["H01"],
         });
         const toolCall = { id: `call_memo_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_chapter_memo", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
+      // 717 号：draft 管线 writer 协议分派（submitStructured submit_chapter_draft）
+      // ——2.0 writeChapter 为工具调用形态（下方「作家/写手」纯文本支是
+      // write-next 内链 persona 分派，与本支并存：本支按 tools 精确匹配只截
+      // draft 链）。正文复用 WRITER 常量（规避 ai-tells 全表的走查正文）。
+      if (toolNames.includes("submit_chapter_draft")) {
+        const args = JSON.stringify({
+          title: "玉符异动",
+          content: WRITER_BODY_PARAGRAPHS.join("\n\n"),
+        });
+        const toolCall = { id: `call_draft_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_chapter_draft", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
+      // 717 号：settle 结算协议分派（submitStructured submit_runtime_state_delta）
+      // ——writeChapter 落盘前的真相结算工具（factOps/hookOps/章摘要）。合法
+      // 最小 delta：单事实推进 + 空钩子操作 + 单行章摘要（对齐
+      // SettlementToolSchema 契约形态；write-next 内链的「状态追踪分析师」
+      // 文本支是 setterDelta 文本协议，与本工具支并存互不截胡）。
+      if (toolNames.includes("submit_runtime_state_delta")) {
+        const args = JSON.stringify({
+          postSettlement: "本章林动夺回祖符并初窥镜界异象，正式踏上修炼路。",
+          factOps: { upsert: [{ subject: "林动", predicate: "持有", object: "祖符玉佩" }], expire: [] },
+          hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          newHookCandidates: [],
+          chapterSummary: {
+            title: "玉符异动",
+            characters: "林动",
+            events: "坊市对峙夺回祖符，玉符异象初显",
+            stateChanges: "正式踏上修炼路",
+            hookActivity: "H01 推进",
+            mood: "紧张",
+            chapterType: "冲突",
+          },
+        });
+        const toolCall = { id: `call_settle_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_runtime_state_delta", arguments: args } };
         if (!wantStream) {
           emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
           return;

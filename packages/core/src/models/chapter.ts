@@ -31,6 +31,9 @@ export const ChapterMetaSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   observations: z.array(ObservationSchema),
+  // 717 号：审查问题清单（Rust ChapterMeta.audit_issues serde default 空 vec
+  // 镜像；book-eval 质量评估消费，存量索引文件无此键完全兼容）。
+  auditIssues: z.array(z.string()).optional(),
   provenance: z.enum(["generated", "imported", "edited"]),
   lengthTelemetry: LengthTelemetrySchema.optional(),
   lengthSpec: LengthSpecSchema.optional(),
