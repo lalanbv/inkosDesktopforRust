@@ -670,6 +670,17 @@ try {
       // 715 号：卷级归并回收（ConsolidatorAgent，单条目 15→14）。fixture 无
       // volume_map → 双端幂等零归档分支（不打 LLM）200/200 稳定。
       { path: "/api/v1/books/:id/consolidate", method: "POST" },
+      // 716 号：实体卡 + 上下文透视四路由回收（3 条目 14→11）。codex GET 先
+      // 于 PUT：GET 比派生合并基线全 body（fixture 无名册 → cards:[] 双端一
+      // 致）；PUT 走状态码（写面协议差）。context-lens 列表放 plan/compose
+      // 探针之后（plan 落盘 chapter-0002 trace → chapters:[2] 双端一致）；
+      // 详情面 statusOnly——lens entries 随双腿管线装配深度差而不同（node 3
+      // vs rust 14，698 号「执行深度是比对第一变量」同类），状态对称=投影
+      // 可计算且路由在位。
+      "/api/v1/books/:id/codex",
+      { path: "/api/v1/books/:id/codex", method: "PUT", body: { cards: [{ name: "苏檀", aliases: ["苏少爷"], kind: "person", summary: "probe card", facts: [], relationships: [] }] } },
+      "/api/v1/books/:id/context-lens",
+      { path: "/api/v1/books/:id/context-lens/2", statusOnly: true },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -742,10 +753,11 @@ try {
     // 713 号导演域双条目 + context-meter 单条目续收（→20）；
     // 714 号章节管线五条目续收（approve/reject/plan/compose/repair-state →15；
     // 715 号 consolidate 单条目续收（story-markdown/hook-lifecycle/hook-policy/
-    // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）。
+    // hook-promotion 四 util 连片恢复 + ConsolidatorAgent →14）；
+    // 716 号实体卡+透视三条目续收（codex/context-lens 双路由 →11；
+    // detect 族/draft/eval 留守=detect 无 UI 消费方（708 教训）、draft/eval
+    // 依赖 ai-tells 连片——717 同域「写作质量面」批）。
     const FORK_ONLY_ROUTES = [
-      "/api/v1/books/:id/codex",
-      "/api/v1/books/:id/context-lens", "/api/v1/books/:id/context-lens/:chapter",
       "/api/v1/books/:id/detect-all",
       "/api/v1/books/:id/detect/:chapter",
       "/api/v1/books/:id/draft", "/api/v1/books/:id/eval",

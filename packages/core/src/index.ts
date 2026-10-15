@@ -743,3 +743,24 @@ export {
   parseCurrentStateFacts,
 } from "./utils/story-markdown.js";
 export { rerunPromotionPass, type PromotionPassResult } from "./utils/hook-promotion.js";
+
+// ── 716 号：实体卡 Codex 化（R10/375 系；CodexPanel 消费面）+ Context Lens
+//    （R21/391 上下文装配透明投影；ContextLensPanel 消费面）——模块在树导出被裁。──
+export {
+  deriveCodexCards,
+  matchCodexCards,
+  renderCodexBlock,
+  reviseCodexCard,
+  CODEX_LIMITS,
+  type CodexMatch,
+  type CodexRelationship,
+  type EntityCodexCard,
+} from "./utils/entity-codex.js";
+export {
+  buildContextLens,
+  CONTEXT_LENS_VERSION,
+  type ContextLens,
+  type ContextLensCompression,
+  type ContextLensEntry,
+  type ContextLensRank,
+} from "./utils/context-lens.js";

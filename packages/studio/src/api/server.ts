@@ -5443,6 +5443,92 @@ function yamlScalar(value: unknown): string {
     }
   });
 
+  // ── 716 号：实体卡 + 上下文透视四路由回收（CodexPanel/ContextLensPanel
+  // 活消费；fork-only 14→10）。fork 逐字 + 路径正典化：story 文件走
+  // state.bookDir（works/{id}/source 正典树）而非 fork 硬编码 books/ legacy
+  // （697 号迁移边界——books/ 是 legacy 副本，正典读面必须走 works 树）。
+
+  app.get("/api/v1/books/:id/codex", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    // R10/377 号：名册确认自动派生——文件缺失的实体从名册同源派生合并
+    // （文件卡优先，seeded 标注是否含派生卡）。
+    const core = await import("@actalk/inkos-core");
+    const storyDir = join(state.bookDir(id), "story");
+    let fileCards: import("@actalk/inkos-core").EntityCodexCard[] = [];
+    try {
+      const parsed = JSON.parse(await readFile(join(storyDir, "entity_codex.json"), "utf-8"));
+      if (Array.isArray(parsed.cards)) fileCards = parsed.cards;
+    } catch {
+      fileCards = [];
+    }
+    const known = new Set(fileCards.map((card) => card.name));
+    const derived = core.deriveCodexCards(
+      core.parseEntityRoster(
+        await readFile(join(storyDir, "entity_roster.md"), "utf-8").catch(() => ""),
+      ),
+    ).filter((card) => !known.has(card.name));
+    // 487 号：seeded 不入契约（对齐 Rust 形状——前端只读 cards，零消费）。
+    return c.json({ cards: [...fileCards, ...derived] });
+  });
+
+  app.put("/api/v1/books/:id/codex", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req.json<{ cards?: unknown[] }>();
+    if (!Array.isArray(body.cards)) return c.json({ error: "cards array required" }, 400);
+    const storyDir = join(state.bookDir(id), "story");
+    await mkdir(storyDir, { recursive: true });
+    await writeFile(
+      join(storyDir, "entity_codex.json"),
+      JSON.stringify({ version: 1, cards: body.cards }, null, 2),
+      "utf-8",
+    );
+    return c.json({ ok: true, cards: body.cards });
+  });
+
+  app.get("/api/v1/books/:id/context-lens", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    let names: string[] = [];
+    try {
+      names = await readdir(join(state.bookDir(id), "story", "runtime"));
+    } catch {
+      return c.json({ chapters: [] });
+    }
+    const chapters = names
+      .map((name) => /^chapter-(\d{4})\.trace\.json$/.exec(name)?.[1])
+      .filter((value): value is string => Boolean(value))
+      .map((value) => Number.parseInt(value, 10))
+      .sort((left, right) => left - right);
+    return c.json({ chapters });
+  });
+
+  app.get("/api/v1/books/:id/context-lens/:chapter", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const chapter = Number.parseInt(c.req.param("chapter"), 10);
+    if (!Number.isInteger(chapter) || chapter < 1) {
+      return c.json({ error: "Invalid chapter" }, 400);
+    }
+    const runtimeDir = join(state.bookDir(id), "story", "runtime");
+    const slug = `chapter-${String(chapter).padStart(4, "0")}`;
+    let contextPackage: unknown;
+    let trace: unknown;
+    try {
+      contextPackage = JSON.parse(await readFile(join(runtimeDir, `${slug}.context.json`), "utf-8"));
+      trace = JSON.parse(await readFile(join(runtimeDir, `${slug}.trace.json`), "utf-8"));
+    } catch {
+      return c.json({ error: "Chapter runtime artifacts not found" }, 404);
+    }
+    const core = await import("@actalk/inkos-core");
+    const lens = core.buildContextLens({
+      contextPackage: core.ContextPackageSchema.parse(contextPackage),
+      trace: core.ChapterTraceSchema.parse(trace),
+    });
+    return c.json(lens);
+  });
+
   // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──
   // BackupPanel 活消费（export=浏览器下载，import=两段式 preview→confirm）。
   // Rust backup_routes.rs 为 443 号逐字移植——本嫁接后双端线格式对齐。
