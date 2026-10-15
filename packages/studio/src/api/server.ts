@@ -194,7 +194,7 @@ import {
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints } from "@actalk/inkos-core";
-import { access, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
@@ -5187,6 +5187,149 @@ function yamlScalar(value: unknown): string {
     } catch {
       return c.json({ error: `Book "${bookId}" not found` }, 404);
     }
+  });
+
+  // ── 710 号：备份双端点回收（R18/386 → 443/444 号契约；fork-only 清单 25→23）──
+  // BackupPanel 活消费（export=浏览器下载，import=两段式 preview→confirm）。
+  // Rust backup_routes.rs 为 443 号逐字移植——本嫁接后双端线格式对齐。
+  // staging 聚合 books/ + inkos.json + .inkos/（secrets 默认排除）+ prompt/ +
+  // manifest → inkos-backup/ 前缀 tar.gz；sessions/ 默认排除（scope 仅记录）。
+
+  const BACKUP_ROOT_ENTRIES = ["books", "inkos.json", ".inkos", "prompt"] as const;
+
+  app.get("/api/v1/backup/export", async (c) => {
+    const includeSecrets = c.req.query("includeSecrets") === "1";
+    const includeSessions = c.req.query("includeSessions") === "1";
+    const staging = join(root, ".inkos-backup-staging");
+    await rm(staging, { recursive: true, force: true });
+    await mkdir(staging, { recursive: true });
+    // 复制范围内条目（.inkos 排除 secrets.json 除非显式含）。
+    for (const entry of BACKUP_ROOT_ENTRIES) {
+      const source = join(root, entry);
+      if (!(await stat(source).then(() => true).catch(() => false))) continue;
+      if (entry !== ".inkos") {
+        await cp(source, join(staging, entry), { recursive: true });
+        continue;
+      }
+      const inkosDir = join(staging, ".inkos");
+      await mkdir(inkosDir, { recursive: true });
+      for (const child of await readdir(source)) {
+        if (child === "secrets.json" && !includeSecrets) continue;
+        await cp(join(source, child), join(inkosDir, child), { recursive: true });
+      }
+    }
+    let fileCount = 0;
+    let totalBytes = 0;
+    for (const file of await listArchiveFiles(staging)) {
+      fileCount += 1;
+      totalBytes += (await stat(join(staging, file))).size;
+    }
+    await writeFile(
+      join(staging, "backup-manifest.json"),
+      JSON.stringify({
+        version: 1,
+        createdAt: new Date().toISOString(),
+        generator: "inkos-desktop",
+        scope: { includeSecrets, includeSessions },
+        fileCount,
+        totalBytes,
+      }, null, 2),
+      "utf-8",
+    );
+    const archive = gzipSync(await buildTarArchive(staging, "inkos-backup"));
+    await rm(staging, { recursive: true, force: true });
+    return new Response(new Uint8Array(archive), {
+      headers: {
+        "Content-Type": "application/gzip",
+        "Content-Disposition": 'attachment; filename="inkos-backup.tar.gz"',
+      },
+    });
+  });
+
+  app.post("/api/v1/backup/import", async (c) => {
+    const confirm = c.req.query("confirm") === "1";
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    const { untar } = await import("../lib/tar-read.js");
+    let entries: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
+    let rejected: ReadonlyArray<string>;
+    try {
+      const result = untar(bytes);
+      entries = result.entries;
+      rejected = result.rejected;
+    } catch (error) {
+      return c.json({ error: String(error) }, 400);
+    }
+    if (rejected.length > 0) {
+      return c.json({ error: `unsafe entries rejected: ${rejected.join(", ")}` }, 400);
+    }
+    // 444 号：manifest 查找与恢复路径按「能工作的契约」对齐 Rust 移植
+    // （backup_routes.rs）——导出以 `inkos-backup/` 为包根前缀，导入须剥前缀
+    // 落回项目根；此前裸名精确查找 + 原样写回 = 导出→导入端到端断裂。
+    const BACKUP_PACKAGE_ROOT = "inkos-backup";
+    const manifestName = `${BACKUP_PACKAGE_ROOT}/backup-manifest.json`;
+    const restoreName = (name: string): string =>
+      name.startsWith(`${BACKUP_PACKAGE_ROOT}/`) ? name.slice(BACKUP_PACKAGE_ROOT.length + 1) : name;
+    const manifestEntry = entries.find((entry) => entry.name === manifestName || entry.name === "backup-manifest.json");
+    if (!manifestEntry) return c.json({ error: "backup-manifest.json missing" }, 400);
+    try {
+      const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
+      if (manifest.version !== 1 || typeof manifest.generator !== "string"
+        || !manifest.generator.startsWith("inkos-desktop")) {
+        return c.json({ error: "unsupported backup generator/version" }, 400);
+      }
+    } catch {
+      return c.json({ error: "backup-manifest.json unreadable" }, 400);
+    }
+
+    // 将覆盖项 = root 下已存在的同名文件（剥包根前缀后的真实路径）。
+    const overwriting: string[] = [];
+    for (const entry of entries) {
+      const name = restoreName(entry.name);
+      if (await stat(join(root, name)).then(() => true).catch(() => false)) {
+        overwriting.push(name);
+      }
+    }
+    if (!confirm) {
+      return c.json({
+        preview: { fileCount: entries.length, overwriting, newFiles: entries.length - overwriting.length },
+      });
+    }
+
+    // 恢复前自动快照：将覆盖的现有文件打包留存（回滚保险）。
+    if (overwriting.length > 0) {
+      const snapshotFiles: Array<{ name: string; bytes: Uint8Array }> = [];
+      for (const name of overwriting) {
+        const data = await readFile(join(root, name)).catch(() => null);
+        if (data) snapshotFiles.push({ name, bytes: new Uint8Array(data) });
+      }
+      const backupsDir = join(root, "backups");
+      await mkdir(backupsDir, { recursive: true });
+      const chunks: Buffer[] = [];
+      for (const file of snapshotFiles) {
+        const header = Buffer.alloc(512, 0);
+        Buffer.from(file.name, "utf-8").copy(header, 0);
+        header.write(file.bytes.length.toString(8).padStart(11, "0"), 124);
+        header.write("0", 156);
+        chunks.push(header, Buffer.from(file.bytes));
+        const padding = (512 - (file.bytes.length % 512)) % 512;
+        if (padding > 0) chunks.push(Buffer.alloc(padding));
+      }
+      chunks.push(Buffer.alloc(1024));
+      const snapshotName = `pre-restore-${Date.now()}.tar`;
+      await writeFile(join(backupsDir, snapshotName), Buffer.concat(chunks), "utf-8");
+    }
+
+    // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数
+    // （与 Rust backup_routes.rs 同契约）。
+    let restored = 0;
+    for (const entry of entries) {
+      if (entry.name === manifestName || entry.name === "backup-manifest.json") continue;
+      const target = join(root, restoreName(entry.name));
+      await mkdir(join(target, ".."), { recursive: true });
+      await writeFile(target, entry.bytes);
+      restored += 1;
+    }
+    return c.json({ ok: true, restored, snapshot: overwriting.length > 0 });
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {

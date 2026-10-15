@@ -631,6 +631,12 @@ try {
       { path: "/api/v1/project/chapter-review-mode", method: "PUT", body: { mode: "auto" } },
       "/api/v1/books/:id/chapter-review-mode",
       { path: "/api/v1/books/:id/chapter-review-mode", method: "PUT", body: { mode: "inherit" } },
+      // 710 号：备份双面回收（R18/386→443/444，2 条目 25→23）。export=二进制
+      // gzip 容器面（双腿压缩器不同，字节级 body 对比不可行——STATUS_ONLY 口径
+      // 与 686 号 film 便携包同型，statusOnly 标记跳过 body 对比）；import 空载
+      // 荷探针=无 manifest 守卫（400/400），不传真实归档。
+      { path: "/api/v1/backup/export", statusOnly: true },
+      { path: "/api/v1/backup/import", method: "POST", body: {} },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;
@@ -681,7 +687,10 @@ try {
       }
       // 非 GET（写面）探针：状态码对比即可——空载荷的错误体形状属 fork/2.0
       // 错误协议差（495 号 422 对齐面），非契约分歧；GET 面保持全 body 对比。
-      const same = probeMethod === "GET"
+      // 710 号：statusOnly 标记=二进制容器面（gzip/tar）扩展——双腿压缩器不同，
+      // 字节级 body 对比不可行，与严格模式 STATUS_ONLY_ENDPOINTS（686 号）同口径。
+      const statusOnly = typeof endpointEntry === "object" && endpointEntry.statusOnly === true;
+      const same = probeMethod === "GET" && !statusOnly
         ? n.status === r.status && JSON.stringify(cn) === JSON.stringify(cr)
         : n.status === r.status;
       if (same) {
@@ -695,9 +704,9 @@ try {
     }
 
     // ② fork-only 域（Rust 有/TS 404 = 声明确认；TS 200 = 迁移进展；双缺 = Rust 回归）
-    // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）。
+    // 707 号：timeline 域 + series 域回收第五批移出 7 条（36→29）；
+    // 708 号 radar 两面、709 号 review-mode 双条目、710 号 backup 双条目续收（→23）。
     const FORK_ONLY_ROUTES = [
-      "/api/v1/backup/export", "/api/v1/backup/import",
       "/api/v1/books/:id/chapters/:num/approve",
       "/api/v1/books/:id/chapters/:num/reject", "/api/v1/books/:id/codex",
       "/api/v1/books/:id/compose", "/api/v1/books/:id/consolidate",
