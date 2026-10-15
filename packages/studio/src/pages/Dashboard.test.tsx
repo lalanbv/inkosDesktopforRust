@@ -64,4 +64,38 @@ describe("Dashboard loading skeleton", () => {
     expect(html).not.toContain('data-loading="skeleton"');
     expect(html).toContain("dash.noBooks");
   });
+
+  it("keeps the dashboard body reachable when the works domain fails (712号)", () => {
+    // 712 号：Rust 生产腿 /works 404（上游新增未迁域）此前把 worksQuery.error
+    // 并入致命早退——书卡/写作数据/运行遥测/备份恢复面板在 Rust 腿整页不可达
+    //（模拟真人走查实锤）。works 域失败须降级为无 otherWorks 分组。
+    useApiMock.mockImplementation((path: string) =>
+      path === "/works"
+        ? { data: null, error: "404 Not Found", loading: false, refetch: vi.fn() }
+        : {
+          data: { books: [{ id: "b1", title: "镜花水月", genre: "玄幻", status: "active", chaptersWritten: 2 }] },
+          error: null,
+          loading: false,
+          refetch: vi.fn(),
+        },
+    );
+
+    const html = renderToString(<Dashboard nav={nav as never} sse={sse} theme="light" t={t} />);
+    expect(html).not.toContain("Failed to load library");
+    expect(html).toContain("镜花水月");
+    // 备份恢复面板（R18/386）随主体在位
+    expect(html).not.toContain("dash.noBooks");
+  });
+
+  it("still shows the library error when /books itself fails", () => {
+    // 核心数据面失败仍致命（与降级面区分锁定）
+    useApiMock.mockImplementation((path: string) =>
+      path === "/works"
+        ? { data: { works: [] }, error: null, loading: false, refetch: vi.fn() }
+        : { data: null, error: "boom", loading: false, refetch: vi.fn() },
+    );
+
+    const html = renderToString(<Dashboard nav={nav as never} sse={sse} theme="light" t={t} />);
+    expect(html).toContain("Failed to load library");
+  });
 });

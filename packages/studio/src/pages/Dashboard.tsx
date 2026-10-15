@@ -185,11 +185,17 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
     </div>
   );
 
-  if (error || worksQuery.error) return (
+  // 712 号：works 域失败降级不短路——Rust 生产腿 /works 404（695 声明的
+  // 上游新增未迁域）此前把 worksQuery.error 并入致命早退，Dashboard 整个
+  // 主体（书卡/写作数据/运行遥测/备份恢复面板）在 Rust 腿全部不可达（706
+  // 号备案只记了「首页预览 404」，模拟真人走查实锤影响面为整页）。核心
+  // 数据面 /books 失败才致命；works 域按 706 号「按最弱引擎 defensively
+  // 类型化」教训优雅降级为无 otherWorks 分组。
+  if (error) return (
     <div className="flex flex-col items-center justify-center py-20 bg-destructive/5 border border-destructive/20 rounded-2xl">
       <AlertCircle className="text-destructive mb-4" size={32} />
       <h2 className="text-lg font-semibold text-destructive">Failed to load library</h2>
-      <p className="text-sm text-muted-foreground mt-1">{error ?? worksQuery.error}</p>
+      <p className="text-sm text-muted-foreground mt-1">{error}</p>
     </div>
   );
 
