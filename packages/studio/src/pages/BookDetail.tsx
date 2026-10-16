@@ -834,6 +834,7 @@ export function BookDetail({
           </button>
           <div className="flex items-center gap-2">
             <select
+              aria-label={t("common.exportFormat")}
               value={exportFormat}
               onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
               className="px-2 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg border border-border/50 outline-none"
@@ -877,8 +878,9 @@ export function BookDetail({
         <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">{t("book.settings")}</h2>
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
+            <label htmlFor="settings-word-count" className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.wordsPerChapter")}</label>
             <input
+              id="settings-word-count"
               type="number"
               value={currentWordCount}
               onChange={(e) => setSettingsWordCount(Number(e.target.value))}
@@ -886,8 +888,9 @@ export function BookDetail({
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.targetChapters")}</label>
+            <label htmlFor="settings-target-chapters" className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("create.targetChapters")}</label>
             <input
+              id="settings-target-chapters"
               type="number"
               value={currentTargetChapters}
               onChange={(e) => setSettingsTargetChapters(Number(e.target.value))}
@@ -895,8 +898,9 @@ export function BookDetail({
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.status")}</label>
+            <label htmlFor="settings-status" className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{t("book.status")}</label>
             <select
+              id="settings-status"
               value={currentStatus}
               onChange={(e) => setSettingsStatus(e.target.value as BookStatus)}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
