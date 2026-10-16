@@ -9,15 +9,9 @@ use std::path::Path;
 pub struct ProjectDetector;
 
 impl ProjectDetector {
-    /// 检测项目类型（基于特征文件）
+    /// 检测项目类型并提取项目名称（基于特征文件）
     ///
     /// 优先级：Node.js > Python > Rust > Go > Java > .NET > Generic
-    pub fn detect(path: &Path) -> Result<ProjectType> {
-        let (project_type, _) = Self::detect_with_name(path)?;
-        Ok(project_type)
-    }
-
-    /// 检测项目类型并提取项目名称
     ///
     /// 返回：(ProjectType, 项目名称)
     /// 名称来源：
@@ -63,11 +57,6 @@ impl ProjectDetector {
         // Generic（无特征文件）
         let name = Self::extract_dir_name(path);
         Ok((ProjectType::Generic, name))
-    }
-
-    /// 验证是否是有效的项目根目录
-    pub fn is_valid_project_root(path: &Path) -> bool {
-        Self::detect(path).is_ok() && Self::detect(path).unwrap() != ProjectType::Generic
     }
 
     /// 检测 Node.js 项目
@@ -460,17 +449,8 @@ go 1.19
     }
 
     #[test]
-    fn test_is_valid_project_root() {
-        let nodejs_temp = create_test_project(vec![("package.json", "{}")]);
-        assert!(ProjectDetector::is_valid_project_root(nodejs_temp.path()));
-
-        let generic_temp = TempDir::new().unwrap();
-        assert!(!ProjectDetector::is_valid_project_root(generic_temp.path()));
-    }
-
-    #[test]
     fn test_detect_invalid_path() {
-        let result = ProjectDetector::detect(Path::new("/nonexistent/path"));
+        let result = ProjectDetector::detect_with_name(Path::new("/nonexistent/path"));
         assert!(result.is_err());
     }
 }

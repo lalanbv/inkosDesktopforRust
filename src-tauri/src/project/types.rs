@@ -3,6 +3,15 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// 当前 Unix 秒。时钟早于纪元（手动改钟/VM 漂移）时回退 0 而非 panic——
+/// 对齐 engine-rs `utils/utc_time` 的既定安全形态。
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// 项目类型枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectType {
@@ -81,10 +90,7 @@ pub struct ProjectMeta {
 impl ProjectMeta {
     /// 创建新项目元数据
     pub fn new(name: String, path: PathBuf, project_type: ProjectType) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_unix_secs();
 
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -103,10 +109,7 @@ impl ProjectMeta {
 
     /// 标记为已打开（更新 last_opened_at）
     pub fn mark_opened(&mut self) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_unix_secs();
         self.last_opened_at = Some(now);
     }
 
@@ -211,10 +214,7 @@ pub struct ProjectHealth {
 impl ProjectHealth {
     /// 创建新的健康检查结果
     pub fn new(project_id: String) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = now_unix_secs();
 
         Self {
             project_id,
