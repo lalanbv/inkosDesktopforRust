@@ -118,6 +118,10 @@ export function DeconstructPanel({ bookId }: { bookId: string }) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         rows={4}
+        aria-label={tr(
+          "每行一章：章号 | 出场人物 | 事件梗概 | 章型 | 伏笔动静",
+          "One chapter per line: no | characters | events | type | hooks",
+        )}
         placeholder={tr(
           "每行一章：章号 | 出场人物 | 事件梗概 | 章型 | 伏笔动静",
           "One chapter per line: no | characters | events | type | hooks",
@@ -128,6 +132,7 @@ export function DeconstructPanel({ bookId }: { bookId: string }) {
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
+          aria-label={tr("产物名称（可选）", "export name (optional)")}
           placeholder={tr("产物名称（可选）", "export name (optional)")}
           className="text-xs border border-border rounded-md px-2 py-1.5 bg-background"
         />

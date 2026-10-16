@@ -149,10 +149,12 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         <input
           value={premise}
           onChange={(event) => setPremise(event.target.value)}
+          aria-label={tr("一句话灵感…", "One-line premise…")}
           placeholder={tr("一句话灵感…", "One-line premise…")}
           className="flex-1 min-w-48 text-xs border border-border rounded-md px-2 py-1.5 bg-background"
         />
         <select
+          aria-label={tr("运行模式", "Run mode")}
           value={runMode}
           onChange={(event) => setRunMode(event.target.value as DirectorSessionRunMode)}
           className="text-xs border border-border rounded-md px-2 py-1.5 bg-background"

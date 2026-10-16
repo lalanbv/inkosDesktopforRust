@@ -180,23 +180,27 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
           <input
             value={ruleForm.pattern}
             onChange={(event) => setRuleForm((prev) => ({ ...prev, pattern: event.target.value }))}
+            aria-label={tr("匹配模式（文本或正则）", "Pattern (text or regex)")}
             placeholder={tr("匹配模式（文本或正则）", "Pattern (text or regex)")}
             className={inputClass}
           />
           <input
             value={ruleForm.message}
             onChange={(event) => setRuleForm((prev) => ({ ...prev, message: event.target.value }))}
+            aria-label={tr("告警文案", "Message")}
             placeholder={tr("告警文案", "Message")}
             className={inputClass}
           />
           <input
             value={ruleForm.replacement}
             onChange={(event) => setRuleForm((prev) => ({ ...prev, replacement: event.target.value }))}
+            aria-label={tr("建议改法（可选）", "Suggested rewrite (optional)")}
             placeholder={tr("建议改法（可选）", "Suggested rewrite (optional)")}
             className={inputClass}
           />
           <div className="flex items-center gap-2">
             <select
+              aria-label={tr("严重级别", "Severity")}
               value={ruleForm.severity}
               onChange={(event) => setRuleForm((prev) => ({ ...prev, severity: event.target.value as AntiAiRule["severity"] }))}
               className="flex-1 text-xs border border-border rounded-md px-2 py-1.5 bg-background"
@@ -247,6 +251,7 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
             onKeyDown={(event) => {
               if (event.key === "Enter") void saveEntry();
             }}
+            aria-label={tr("沉淀一条有效手法…", "Learn a technique…")}
             placeholder={tr("沉淀一条有效手法…", "Learn a technique…")}
             className="flex-1 text-xs border border-border rounded-md px-2 py-1.5 bg-background"
           />

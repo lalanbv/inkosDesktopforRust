@@ -228,12 +228,14 @@ export function AssetLibraryPanel({ bookId }: { bookId?: string }) {
         <input
           value={form.name}
           onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+          aria-label={tr("名称（新增/覆盖同 id）", "Name (new entry / overwrite by id)")}
           placeholder={tr("名称（新增/覆盖同 id）", "Name (new entry / overwrite by id)")}
           className={inputClass}
         />
         <textarea
           value={form.body}
           onChange={(event) => setForm((prev) => ({ ...prev, body: event.target.value }))}
+          aria-label={tr("正文：核心引擎/范式说明", "Body: core engine / paradigm notes")}
           placeholder={tr("正文：核心引擎/范式说明", "Body: core engine / paradigm notes")}
           rows={2}
           className={inputClass}
@@ -241,6 +243,7 @@ export function AssetLibraryPanel({ bookId }: { bookId?: string }) {
         <textarea
           value={form.expectations}
           onChange={(event) => setForm((prev) => ({ ...prev, expectations: event.target.value }))}
+          aria-label={tr("读者期待（每行一条）", "Expectations (one per line)")}
           placeholder={tr("读者期待（每行一条）", "Expectations (one per line)")}
           rows={2}
           className={inputClass}
@@ -248,6 +251,7 @@ export function AssetLibraryPanel({ bookId }: { bookId?: string }) {
         <textarea
           value={form.taboos}
           onChange={(event) => setForm((prev) => ({ ...prev, taboos: event.target.value }))}
+          aria-label={tr("禁忌（每行一条）", "Taboos (one per line)")}
           placeholder={tr("禁忌（每行一条）", "Taboos (one per line)")}
           rows={2}
           className={inputClass}

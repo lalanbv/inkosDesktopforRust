@@ -115,6 +115,7 @@ export function CodexPanel({ bookId }: { bookId: string }) {
               <textarea
                 value={summary}
                 onChange={(event) => setSummary(event.target.value)}
+                aria-label={tr("卡片摘要：谁/什么（≤300 字）", "Summary: who/what (≤300 chars)")}
                 placeholder={tr("卡片摘要：谁/什么（≤300 字）", "Summary: who/what (≤300 chars)")}
                 rows={2}
                 className="w-full text-xs border border-border rounded-md px-2 py-1.5 bg-background"
@@ -122,6 +123,7 @@ export function CodexPanel({ bookId }: { bookId: string }) {
               <textarea
                 value={facts}
                 onChange={(event) => setFacts(event.target.value)}
+                aria-label={tr("正典事实（每行一条，写作时注入）", "Canon facts (one per line, injected while writing)")}
                 placeholder={tr("正典事实（每行一条，写作时注入）", "Canon facts (one per line, injected while writing)")}
                 rows={3}
                 className="w-full text-xs border border-border rounded-md px-2 py-1.5 bg-background"

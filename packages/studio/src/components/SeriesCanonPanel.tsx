@@ -171,6 +171,7 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
         <input
           value={seriesIdInput}
           onChange={(event) => setSeriesIdInput(event.target.value)}
+          aria-label={tr("系列 ID（如 wu_dong_qian_kun）", "Series id (e.g. wu_dong_qian_kun)")}
           placeholder={tr("系列 ID（如 wu_dong_qian_kun）", "Series id (e.g. wu_dong_qian_kun)")}
           className="flex-1 text-xs border border-border rounded-md px-2 py-1.5 bg-background"
         />
@@ -219,12 +220,14 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
                 <input
                   value={aliases}
                   onChange={(event) => setAliases(event.target.value)}
+                  aria-label={tr("别名（逗号分隔，场景命中计入）", "Aliases (comma-separated, counted in scene matches)")}
                   placeholder={tr("别名（逗号分隔，场景命中计入）", "Aliases (comma-separated, counted in scene matches)")}
                   className="w-full text-xs border border-border rounded-md px-2 py-1.5 bg-background"
                 />
                 <textarea
                   value={summary}
                   onChange={(event) => setSummary(event.target.value)}
+                  aria-label={tr("条目摘要：谁/什么（≤300 字）", "Summary: who/what (≤300 chars)")}
                   placeholder={tr("条目摘要：谁/什么（≤300 字）", "Summary: who/what (≤300 chars)")}
                   rows={2}
                   className="w-full text-xs border border-border rounded-md px-2 py-1.5 bg-background"
@@ -232,6 +235,7 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
                 <textarea
                   value={facts}
                   onChange={(event) => setFacts(event.target.value)}
+                  aria-label={tr("跨书正典事实（每行一条，写作时注入）", "Cross-book canon facts (one per line, injected while writing)")}
                   placeholder={tr("跨书正典事实（每行一条，写作时注入）", "Cross-book canon facts (one per line, injected while writing)")}
                   rows={3}
                   className="w-full text-xs border border-border rounded-md px-2 py-1.5 bg-background"

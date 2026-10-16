@@ -52,6 +52,7 @@ export function RecallTestCard({ bookId }: { bookId: string }) {
           onKeyDown={(event) => {
             if (event.key === "Enter") void run();
           }}
+          aria-label={tr("输入测试查询…", "Type a test query…")}
           placeholder={tr("输入测试查询…", "Type a test query…")}
           className="flex-1 text-xs border border-border rounded-md px-2 py-1.5 bg-background"
         />
