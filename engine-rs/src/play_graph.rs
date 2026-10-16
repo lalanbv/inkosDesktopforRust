@@ -436,7 +436,8 @@ fn persist_file(path: &Path, data: &FileData) -> Result<(), String> {
         "stateSlots": to_record(&data.state_slots),
         "events": to_record(&data.events),
     });
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&payload).unwrap_or_default()))
+    let serialized = format!("{}\n", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    crate::utils::atomic_file_set::write_file_atomic_sync(path, serialized.as_bytes())
         .map_err(|e| e.to_string())
 }
 

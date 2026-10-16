@@ -441,7 +441,8 @@ pub(crate) async fn write_director_inspiration_card(
     obj.entry("stage").or_insert_with(|| json!("directions"));
     obj.insert("inspiration".into(), json!({ "premise": premise, "keywords": [] }));
     obj.insert("updatedAt".into(), json!(crate::interaction::session::utc_now_ms()));
-    tokio::fs::write(&path, serde_json::to_string_pretty(&session).unwrap_or_default()).await?;
+    let serialized = serde_json::to_string_pretty(&session).unwrap_or_default();
+    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await?;
     Ok(())
 }
 

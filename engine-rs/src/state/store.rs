@@ -65,7 +65,7 @@ impl StateStore for FsStateStore {
     }
 
     async fn write_string(&self, path: &str, content: &str) -> Result<()> {
-        tokio::fs::write(path, content).await?;
+        crate::utils::atomic_file_set::write_file_atomic(std::path::Path::new(path), content).await?;
         Ok(())
     }
 

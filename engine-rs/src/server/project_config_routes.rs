@@ -724,8 +724,7 @@ pub async fn post_language(
             obj.remove("language");
         }
     }
-    let serialized = serde_json::to_string_pretty(&raw).unwrap_or_default();
-    if tokio::fs::write(root.join("inkos.json"), serialized).await.is_err() {
+    if !save_raw_config(root, &raw).await {
         return flat_internal("inkos.json write failed".to_string());
     }
     ok_json(response)

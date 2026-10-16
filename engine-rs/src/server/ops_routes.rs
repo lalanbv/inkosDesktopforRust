@@ -1193,7 +1193,8 @@ pub async fn put_director(
             .entry("bookId".to_string())
             .or_insert_with(|| json!(book_id));
     }
-    if let Err(error) = std::fs::write(&path, serde_json::to_string_pretty(&session).unwrap_or_default()) {
+    let serialized = serde_json::to_string_pretty(&session).unwrap_or_default();
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     (StatusCode::OK, Json(json!({ "ok": true, "session": session }))).into_response()
@@ -1352,14 +1353,14 @@ pub async fn put_task_routing(
         return flat_error(StatusCode::BAD_REQUEST, String::from("routing must be an object"));
     }
     let dir = runtime.state.project_root().join(".inkos");
-    if let Err(error) = std::fs::create_dir_all(&dir) {
+    if let Err(error) = tokio::fs::create_dir_all(&dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let raw = match serde_json::to_string_pretty(routing) {
         Ok(raw) => raw,
         Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
-    match std::fs::write(dir.join("task-routing.json"), raw) {
+    match crate::utils::atomic_file_set::write_file_atomic(&dir.join("task-routing.json"), &raw).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "routing": routing }))).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }

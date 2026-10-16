@@ -1622,7 +1622,7 @@ pub(crate) async fn persist_audit_drift_guidance(
         .trim_end()
         .to_string();
     if sanitized_state != current_state {
-        tokio::fs::write(&state_path, sanitized_state).await?;
+        crate::utils::atomic_file_set::write_file_atomic(&state_path, &sanitized_state).await?;
     }
 
     if issues.is_empty() {

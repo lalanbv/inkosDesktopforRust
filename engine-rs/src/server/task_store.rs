@@ -182,7 +182,7 @@ pub async fn save_studio_task_snapshot(
     let mut serialized = serde_json::to_string_pretty(snapshot)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
     serialized.push('\n');
-    tokio::fs::write(&path, serialized).await
+    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await
 }
 
 /// 读取快照（等待在途写；缺失/坏载荷 → None）。

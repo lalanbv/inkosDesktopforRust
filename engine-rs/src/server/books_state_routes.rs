@@ -883,7 +883,7 @@ pub async fn write_truth_file(
             return internal_error_shape();
         }
     }
-    match tokio::fs::write(&resolved, content).await {
+    match crate::utils::atomic_file_set::write_file_atomic(&resolved, content).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(_) => internal_error_shape(),
     }

@@ -146,13 +146,13 @@ impl StateManager {
                 if !existing.contains("写作方法论") && !existing.contains("Writing Methodology") {
                     let updated =
                         format!("{existing}\n\n{}", build_writing_methodology_section(language));
-                    tokio::fs::write(&style_guide_path, updated).await?;
+                    crate::utils::atomic_file_set::write_file_atomic(&style_guide_path, &updated).await?;
                 }
             }
             Err(_) => {
-                tokio::fs::write(
+                crate::utils::atomic_file_set::write_file_atomic(
                     &style_guide_path,
-                    build_writing_methodology_section(language),
+                    &build_writing_methodology_section(language),
                 )
                 .await?;
             }
@@ -363,7 +363,7 @@ impl StateManager {
             let Ok(content) = tokio::fs::read_to_string(snapshot_dir.join(file)).await else {
                 return false;
             };
-            if tokio::fs::write(story_dir.join(file), content).await.is_err() {
+            if crate::utils::atomic_file_set::write_file_atomic(&story_dir.join(file), &content).await.is_err() {
                 return false;
             }
         }
@@ -371,7 +371,7 @@ impl StateManager {
             let target = story_dir.join(file);
             match tokio::fs::read_to_string(snapshot_dir.join(file)).await {
                 Ok(content) => {
-                    let _ = tokio::fs::write(&target, content).await;
+                    let _ = crate::utils::atomic_file_set::write_file_atomic(&target, &content).await;
                 }
                 Err(_) => {
                     let _ = tokio::fs::remove_file(&target).await;
@@ -392,7 +392,7 @@ impl StateManager {
                 let _ = tokio::fs::create_dir_all(&state_dir).await;
                 for path in files {
                     if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                        let _ = tokio::fs::write(state_dir.join(path.file_name().unwrap_or_default()), content).await;
+                        let _ = crate::utils::atomic_file_set::write_file_atomic(&state_dir.join(path.file_name().unwrap_or_default()), &content).await;
                     }
                 }
             }

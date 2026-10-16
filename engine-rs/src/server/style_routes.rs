@@ -176,7 +176,7 @@ async fn generate_style_guide(
     let profile = analyze_style(sample, source_name, language, Some(&utc_now_iso()));
     let profile_json = serde_json::to_string_pretty(&profile)
         .map_err(|e| e.to_string())?;
-    tokio::fs::write(story_dir.join("style_profile.json"), profile_json)
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("style_profile.json"), &profile_json)
         .await
         .map_err(|e| e.to_string())?;
 

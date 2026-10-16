@@ -118,7 +118,7 @@ async fn write_snapshot(project_root: &Path, project_id: &str, rev: i64, graph: 
         return;
     }
     let payload = format!("{}\n", serde_json::to_string_pretty(graph).unwrap_or_default());
-    let _ = tokio::fs::write(dir.join(format!("{rev}.json")), payload).await;
+    let _ = crate::utils::atomic_file_set::write_file_atomic(&dir.join(format!("{rev}.json")), &payload).await;
     let mut entries = match tokio::fs::read_dir(&dir).await {
         Ok(entries) => entries,
         Err(_) => return,
@@ -190,7 +190,7 @@ pub async fn apply_graph_delta(
             return Err("failed to create project dir".to_string());
         }
         let payload = format!("{}\n", serde_json::to_string_pretty(&next_state).unwrap_or_default());
-        tokio::fs::write(authoring_state_path(project_root, project_id), payload)
+        crate::utils::atomic_file_set::write_file_atomic(&authoring_state_path(project_root, project_id), &payload)
             .await
             .map_err(|e| e.to_string())?;
         Ok((graph, next_rev))

@@ -267,16 +267,7 @@ pub fn atomic_write_error_kind(error: &std::io::Error) -> Option<&'static str> {
 /// 适用于配置/索引类小文件（book.json / index.json / timeline.json）；
 /// 多文件事务仍走 [`commit_atomic_file_set`]。
 pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQ: AtomicU64 = AtomicU64::new(0);
-
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".to_string());
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = dir.join(format!(".{}.tmp-{}-{}", file_name, std::process::id(), seq));
+    let tmp = atomic_tmp_path(path);
     tokio::fs::write(&tmp, content).await?;
     let mut attempt: u32 = 0;
     loop {
@@ -296,6 +287,48 @@ pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()
             }
         }
     }
+}
+
+/// [`write_file_atomic`] 的同步形态：供无法 `.await` 的同步事务闭包使用
+/// （play_graph File 后端的 `with_transaction`/`flush` 在 rusqlite 同款同步
+/// 接口内持久化）。临时文件命名、重试决策与清理语义与 async 版共用同一实现，
+/// 仅退避改为 `std::thread::sleep`。
+pub fn write_file_atomic_sync(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let tmp = atomic_tmp_path(path);
+    std::fs::write(&tmp, content)?;
+    let mut attempt: u32 = 0;
+    loop {
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let kind = atomic_write_error_kind(&error);
+                if !atomic_write_retry_decision(kind, attempt, ATOMIC_WRITE_MAX_RETRIES) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(error);
+                }
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(
+                    ATOMIC_WRITE_RETRY_DELAY_MS * u64::from(attempt),
+                ));
+            }
+        }
+    }
+}
+
+/// 同目录唯一临时文件路径 `.{name}.tmp-{pid}-{seq}`。async/sync 两形态共用
+/// 一个进程级序号：并发写同一目标时各自的临时文件不会互相覆盖；同目录
+/// 保证 rename 不跨文件系统。
+fn atomic_tmp_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(".{}.tmp-{}-{}", file_name, std::process::id(), seq))
 }
 
 #[cfg(test)]
@@ -517,5 +550,42 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert!(leftovers.is_empty(), "失败路径不应留下临时文件");
+    }
+
+    #[test]
+    fn write_file_atomic_sync_replaces_target_with_full_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("graph.json");
+        std::fs::write(&target, "旧内容").unwrap();
+        write_file_atomic_sync(&target, "{ \"完整新内容\" }".as_bytes()).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{ \"完整新内容\" }");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn write_file_atomic_sync_cleans_up_when_parent_missing() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("nested").join("graph.json");
+        assert!(write_file_atomic_sync(&target, b"x").is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(leftovers.is_empty(), "失败路径不应留下临时文件");
+    }
+
+    #[test]
+    fn atomic_tmp_path_stays_in_target_dir_and_is_unique_per_call() {
+        let target = Path::new("/some/dir/state.json");
+        let first = atomic_tmp_path(target);
+        let second = atomic_tmp_path(target);
+        assert_eq!(first.parent(), Some(Path::new("/some/dir")));
+        assert!(first.file_name().unwrap().to_string_lossy().starts_with(".state.json.tmp-"));
+        assert_ne!(first, second, "同目标连续两次取临时路径必须不同");
     }
 }

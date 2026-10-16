@@ -51,7 +51,9 @@ pub async fn settle_beats_for_chapter(
     }
     let mut serialized = serde_json::to_string_pretty(&timeline).map_err(|e| e.to_string())?;
     serialized.push('\n');
-    tokio::fs::write(&path, serialized).await.map_err(|e| format!("timeline.json 写入失败: {e}"))?;
+    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized)
+        .await
+        .map_err(|e| format!("timeline.json 写入失败: {e}"))?;
     Ok(Some(applied))
 }
 

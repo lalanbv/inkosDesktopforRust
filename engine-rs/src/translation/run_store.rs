@@ -41,7 +41,7 @@ pub async fn save_translation_manifest(
 ) -> std::io::Result<()> {
     let path = translation_manifest_path(project_root, &manifest.id);
     let payload = format!("{}\n", serde_json::to_string_pretty(manifest).unwrap_or_default());
-    tokio::fs::write(&path, payload).await
+    crate::utils::atomic_file_set::write_file_atomic(&path, &payload).await
 }
 
 pub async fn load_translation_chapter(
@@ -60,7 +60,7 @@ pub async fn save_translation_chapter(
     chapter: &TranslationChapterFile,
 ) -> Result<(), String> {
     let payload = format!("{}\n", serde_json::to_string_pretty(chapter).unwrap_or_default());
-    tokio::fs::write(project_root.join(chapter_path), payload)
+    crate::utils::atomic_file_set::write_file_atomic(&project_root.join(chapter_path), &payload)
         .await
         .map_err(|e| e.to_string())
 }
@@ -156,9 +156,9 @@ pub async fn save_translation_glossary(
         "{}\n",
         serde_json::to_string_pretty(&serde_json::json!({ "terms": merged })).unwrap_or_default()
     );
-    tokio::fs::write(
-        translation_project_dir(project_root, project_id).join("glossary.json"),
-        payload,
+    crate::utils::atomic_file_set::write_file_atomic(
+        &translation_project_dir(project_root, project_id).join("glossary.json"),
+        &payload,
     )
     .await
     .map_err(|e| e.to_string())

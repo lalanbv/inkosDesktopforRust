@@ -1055,7 +1055,7 @@ pub(crate) async fn run_revise_chain(
     if is_latest {
         let story_dir = book_dir.join("story");
         if !settled.updated_state.is_empty() {
-            let _ = tokio::fs::write(story_dir.join("current_state.md"), &settled.updated_state).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &settled.updated_state).await;
         }
         if !settled.updated_ledger.is_empty() {
             let _ = tokio::fs::write(story_dir.join("particle_ledger.md"), &settled.updated_ledger).await;
@@ -1582,7 +1582,7 @@ async fn run_repair_state(
 
     // 真相回写 + 快照。
     if repaired.updated_state != "(状态卡未更新)" {
-        let _ = tokio::fs::write(story_dir.join("current_state.md"), &repaired.updated_state).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &repaired.updated_state).await;
     }
     if repaired.updated_hooks != "(伏笔池未更新)" {
         let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &repaired.updated_hooks).await;

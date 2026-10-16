@@ -35,7 +35,7 @@ fn intent_path(book_dir: &Path, chapter_number: u32) -> PathBuf {
 /// 保存治理计划（markdown 渲染 + 落盘）。
 pub async fn save_persisted_plan(book_dir: &Path, plan: &PlanChapterOutput) -> std::io::Result<()> {
     let content = render_persisted_plan_markdown(&plan.intent, &plan.memo, &plan.planner_inputs);
-    tokio::fs::write(plan_path(book_dir, plan.memo.chapter), content).await
+    crate::utils::atomic_file_set::write_file_atomic(&plan_path(book_dir, plan.memo.chapter), &content).await
 }
 
 /// 读取治理计划；任何解析失败返回 None（调用方重规划）。
