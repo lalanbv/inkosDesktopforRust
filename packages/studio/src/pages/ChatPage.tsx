@@ -238,6 +238,7 @@ function SkillPickerPanel({
               ref={folderInputRef}
               type="file"
               multiple
+              aria-label={isZh ? "导入章节文件夹" : "Import chapter folder"}
               className="hidden"
               {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
               onChange={(event) => {
@@ -1124,6 +1125,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                 type="file"
                 multiple
                 accept={CHAT_ATTACHMENT_ACCEPT}
+                aria-label={isZh ? "上传附件文件" : "Upload attachment files"}
                 className="hidden"
                 onChange={(event) => {
                   if (event.currentTarget.files) addAttachedFiles(event.currentTarget.files);
