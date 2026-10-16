@@ -1214,6 +1214,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                   type="button"
                   onClick={() => void onSend(input)}
                   disabled={(!input.trim() && attachedFiles.length === 0 && !loading) || !activeSessionId || !sessionMatchesRoute || creatingWorkSession}
+                  aria-label={isZh ? "发送" : "Send"}
                   className="w-8 h-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all disabled:opacity-20 disabled:scale-100 shadow-sm shadow-primary/20"
                   title={loading && !input.trim() && attachedFiles.length === 0 ? (isZh ? "停止当前回复" : "Stop") : undefined}
                 >

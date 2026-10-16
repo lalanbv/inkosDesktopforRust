@@ -289,6 +289,7 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
     <>
       <button
         onClick={() => setOpen(true)}
+        aria-label={t("nav.openContextPanel")}
         className="fixed right-3 top-[72px] z-20 lg:hidden w-8 h-8 rounded-lg bg-card border border-border/40 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
       >
         <PanelRightOpen size={14} />

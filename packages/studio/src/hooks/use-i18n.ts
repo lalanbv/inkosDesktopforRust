@@ -243,6 +243,8 @@ const strings = {
     zh: "手动审查：写完即停，由你点 审稿/修订/通过（更快、更可控）。点此切回自动。",
     en: "Manual review: stop after the draft; you run audit / revise / approve (faster, more control). Click to switch back to auto.",
   },
+  "nav.openContextPanel": { zh: "打开上下文面板", en: "Open context panel" },
+  "book.moreActions": { zh: "更多操作", en: "More actions" },
   "book.autoBeatsHint": {
     zh: "开启后，每次「写下一章」完成时会按既有情节线自动为该章生成节拍并写入时间线（默认关闭）。",
     en: "When enabled, each finished chapter automatically gets beats added to the timeline per plotline (off by default).",
