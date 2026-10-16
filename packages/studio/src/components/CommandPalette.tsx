@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Command,
   CommandDialog,
@@ -176,10 +176,25 @@ export function CommandPalette({ open, onOpenChange, ctx, lang }: {
 }) {
   const recents = useRecentsStore((state) => state.recents);
   const [query, setQuery] = useState("");
+  // 732 号：弹层焦点归还（WCAG 2.4.3）——打开时快照触发前焦点，关闭时
+  // restore（Esc/选择命令/onOpenChange 全路径）。cmdk Dialog 关闭默认掉
+  // body，键盘用户 Tab 断链；快照时机=onOpenChange(true) 回调（cmdk
+  // autofocus 尚未发生，快照的是真实触发前元素）。
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
+
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+    } else if (lastFocusedRef.current) {
+      lastFocusedRef.current.focus?.();
+      lastFocusedRef.current = null;
+    }
+    onOpenChange(next);
+  };
 
   const allCommands = useMemo(
     () => [...buildNavigationCommands(), ...buildActionCommands()],
@@ -218,7 +233,7 @@ export function CommandPalette({ open, onOpenChange, ctx, lang }: {
   return (
     <CommandDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title={tr("命令面板", "Command Palette")}
       description={tr("搜索或输入命令…", "Search or type a command…")}
     >
