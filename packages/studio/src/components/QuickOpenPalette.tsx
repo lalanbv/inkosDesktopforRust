@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 import {
   Command,
   CommandDialog,
@@ -47,6 +47,18 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNaviga
   sessions: ReadonlyArray<QuickOpenSession>;
   onNavigate: (route: HashRoute) => void;
 }) {
+  // 734 号：弹层焦点归还（732 号模式复用，WCAG 2.4.3）——打开快照触发前
+  // 焦点（onOpenChange 回调时机防 autofocus 污染），关闭 restore。
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+    } else if (lastFocusedRef.current) {
+      lastFocusedRef.current.focus?.();
+      lastFocusedRef.current = null;
+    }
+    onOpenChange(next);
+  };
   const [query, setQuery] = useState("");
   const [films, setFilms] = useState<ReadonlyArray<QuickOpenFilm>>([]);
   const [chaptersByBook, setChaptersByBook] = useState<Record<string, ReadonlyArray<QuickOpenChapterMeta>>>({});
@@ -114,7 +126,7 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNaviga
   return (
     <CommandDialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title={tr("快速打开", "Quick Open")}
       description={tr("跳转到书、章节、影游或会话…", "Jump to a book, chapter, film or session…")}
     >

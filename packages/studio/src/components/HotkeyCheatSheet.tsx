@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,19 @@ export function HotkeyCheatSheet({ open, onOpenChange, defs, lang, isMac }: {
   lang: PaletteLang;
   isMac: boolean;
 }) {
+
+  // 734 号：弹层焦点归还（732 号模式复用，WCAG 2.4.3）——打开快照触发前
+  // 焦点（onOpenChange 回调时机防 autofocus 污染），关闭 restore。
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+    } else if (lastFocusedRef.current) {
+      lastFocusedRef.current.focus?.();
+      lastFocusedRef.current = null;
+    }
+    onOpenChange(next);
+  };
   const rows = useMemo(() => {
     const commandRows = [
       ...buildNavigationCommands(),
@@ -60,7 +74,7 @@ export function HotkeyCheatSheet({ open, onOpenChange, defs, lang, isMac }: {
   }, [defs, isMac, lang]);
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md" data-slot="hotkey-cheatsheet">
         <DialogHeader>
           <DialogTitle>{tr("快捷键速查", "Keyboard Shortcuts")}</DialogTitle>
