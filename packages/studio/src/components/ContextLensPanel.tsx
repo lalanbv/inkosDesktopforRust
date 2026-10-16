@@ -135,6 +135,7 @@ export function ContextLensPanel({ bookId }: { bookId: string }) {
           {tr("上下文透视", "Context lens")}
         </h3>
         <select
+          aria-label={tr("透视章节", "Lens chapter")}
           value={chapter}
           onChange={(event) => setChapter(Number(event.target.value))}
           className="text-xs border border-border rounded-md px-2 py-1 bg-background"

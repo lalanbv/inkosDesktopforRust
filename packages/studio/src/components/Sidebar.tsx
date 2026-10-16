@@ -447,7 +447,10 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                             </button>
 
                             <DropdownMenu>
-                              <DropdownMenuTrigger className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
+                              <DropdownMenuTrigger
+                              aria-label={tr("会话操作", "Session actions")}
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                            >
                                 <MoreHorizontal size={14} />
                               </DropdownMenuTrigger>
                               <DropdownMenuContent side="right" align="start" className="w-36">
@@ -591,7 +594,10 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
                         </button>
 
                         <DropdownMenu>
-                          <DropdownMenuTrigger className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity">
+                          <DropdownMenuTrigger
+                            aria-label={tr("会话操作", "Session actions")}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded opacity-0 group-hover/session:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                          >
                             <MoreHorizontal size={14} />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent side="right" align="start" className="w-36">
