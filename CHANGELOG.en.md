@@ -6,16 +6,35 @@
 
 ### Added
 
-- Agent Skills: import standard SKILL.md capability packs (AgentSkills / OpenClaw compatible); imports and deletes hot-refresh across all open views; model-only skills stay out of the user list
+- Director cockpit: book detail page now has inspiration card editing, LLM-powered direction candidate generation, run mode selection, and session persistence; selected directions can be applied and read back
 - Chat input now shows a context-meter badge (estimated / real-usage dual source, over-window warning, hover details)
+- Entity codex panel: roster-derived cards + author-editable extensions (summary / canon facts / relationships), injected per-scene during writing
+- Context lens panel: replays per-chapter context assembly manifests (source list + protection markers + token budget)
+- Agent Skills: import standard SKILL.md capability packs (AgentSkills / OpenClaw compatible); imports and deletes hot-refresh across all open views; model-only skills stay out of the user list
 - Model config: the custom-services section is pinned to the top of the provider list; Test Connection auto-discovers models and matches protocol / streaming
 
 ### Changed
 
+- Chapter status badges: chapter list now shows status pills (ready-for-review / approved / draft and 11 more states); batch approve and reject buttons appear conditionally by status
 - Sending without a selected model now points the error at your configured service (no more unrelated provider errors)
 - Session event logs are persisted write-ahead: the user message survives process interruption
 - Zero-config direct send parity: with a configured service and key, messages sent without a selected model work on both the Rust engine and the Node fallback
 - The service-level "streaming" toggle (stream: false) is now honored on the chat path: messages for that service wait for the complete reply and appear at once (previously streaming was forced)
+
+### Accessibility
+
+- Global overlays (command palette / quick open / hotkey cheatsheet) now return focus to the triggering element on close (previously focus dropped to body, breaking keyboard navigation)
+- Icon buttons and file inputs now have aria-labels / accessible names (Send / Attach files / More actions / Context panel toggle, etc.)
+- Chapter settings controls (words per chapter / target chapters / status) now have explicit label-for associations
+- Panel placeholder controls now have aria-labels (recall test / anti-AI rules / series canon / deconstruct workbench / director cockpit / asset library / entity codex)
+- html lang attribute corrected from en to zh (matches content language for screen reader pronunciation)
+- Market radar "lexical fallback" empty state and recall test "no hits" empty state render correctly
+
+### Security
+
+- quinn-proto 0.11.16 → 0.11.19 (RUSTSEC HIGH 7.5 × 2 resolved)
+- rustls 0.23.45 → 0.23.46 (RUSTSEC MEDIUM + LOW × 2 resolved)
+- src-tauri rustls family synchronized (hyper-rustls / rustls-native-certs / rustls-platform-verifier / tokio-rustls)
 
 ## v1.8.0
 
