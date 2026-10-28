@@ -1000,12 +1000,19 @@ function ExportDownloadPreview({ exec }: { exec: ToolExecution }) {
   const artifacts = exec.status === "completed" ? exportedRevisionDownloads(exec.details) : [];
   if (!artifacts.length) return null;
   return <div className="mx-3 mb-3 mt-1 flex flex-wrap gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-3">
-    {artifacts.map((artifact) => <a key={`${artifact.workId}/${artifact.artifactId}/${artifact.revisionId}`}
-      href={buildApiUrl(`/works/${encodeURIComponent(artifact.workId)}/artifacts/${encodeURIComponent(artifact.artifactId)}/revisions/${encodeURIComponent(artifact.revisionId)}?download=1`)}
-      download={artifact.path.split("/").pop()} className="inline-flex items-center gap-2 rounded-md border border-primary/30 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
-      <Download size={16} />{artifact.package ? tr("下载交付包", "Download package") : tr("下载文件", "Download file")}
-      {artifacts.length > 1 && <span>{artifact.path.split("/").pop()}</span>}
-    </a>)}
+    {artifacts.map((artifact) => {
+      // fork 的 buildApiUrl 带 string|null 签名（use-api.ts:11）——恒非空模板
+      // 下 null 分支不可达，仍按同文件既有惯例显式守卫。
+      const href = buildApiUrl(`/works/${encodeURIComponent(artifact.workId)}/artifacts/${encodeURIComponent(artifact.artifactId)}/revisions/${encodeURIComponent(artifact.revisionId)}?download=1`);
+      if (!href) return null;
+      const fileName = artifact.path.split("/").pop();
+      return <a key={`${artifact.workId}/${artifact.artifactId}/${artifact.revisionId}`}
+        href={href}
+        download={fileName} className="inline-flex items-center gap-2 rounded-md border border-primary/30 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10">
+        <Download size={16} />{artifact.package ? tr("下载交付包", "Download package") : tr("下载文件", "Download file")}
+        {artifacts.length > 1 && <span>{fileName}</span>}
+      </a>;
+    })}
   </div>;
 }
 

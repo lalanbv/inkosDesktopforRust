@@ -46,6 +46,19 @@ const ACCEPTED = new Map([
   // 强提 0.28 会破坏 vite:esbuild-transpile（studio client build 活体实证）。
   // 升级随 vite bump（vite 7 线自带新 esbuild），到时移除本条即恢复拦截。
   ["esbuild", { reason: "low；补丁线 >=0.28.1 与 vite 6.4.1 的 0.25 配对冲突（override 强提破坏 vite 构建，700 号活体实证）；dev server 面", since: "700" }],
+  // 758 号：deepmerge GHSA-gcqx-w48m-w2h4（low，mergeObject 原型污染）——
+  // patched <0.0.0（advisory 明示无修复版，4.3.1 即最新终态，501 号 braces
+  // 同型先例）。消费面=streamdown→rehype-sanitize→hast-util-sanitize 渲染链
+  // （Markdown 安全过滤配置合并，均为静态配置非用户可控源），跟进上游发版
+  // 后移除本条即恢复拦截。
+  ["deepmerge", { reason: "low；无补丁线（patched <0.0.0，4.3.1 即最新终态）；streamdown→rehype-sanitize 渲染链静态配置合并面", since: "758" }],
+  // 758 号：zod GHSA-mrhx-c7xc-m3w5（high，超大受限集合校验内存耗尽 DoS）——
+  // 补丁线 4.6.6（3.x 无补丁线），树内 3.25.76 是 @modelcontextprotocol/sdk /
+  // @anthropic-ai/sdk / zod-to-json-schema 的 peer 契约（688 号 vitest 同型：
+  // 跨 major 升级须随上游 SDK 动作）。暴露面定性=单机桌面应用，zod 校验输入
+  // 来自本地 LLM provider 与用户内容，无远程攻击者可控入口；上游 MCP SDK 升
+  // zod 4 契约时移除本条即恢复拦截。
+  ["zod", { reason: "high；补丁线 4.6.6 跨 major（3.x 无补丁线），MCP/Anthropic SDK peer 契约待随上游升级；单机桌面无远程攻击面", since: "758" }],
 ]);
 
 const args = process.argv.slice(2);
