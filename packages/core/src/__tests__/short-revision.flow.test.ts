@@ -17,10 +17,191 @@ import { createBuiltInWorkProfileRegistry } from "../harness/builtin-profiles.js
 import { actionObservation } from "../harness/action-observation.js";
 import { withExecutionEvidence } from "../harness/execution-evidence.js";
 import {createLLMClient} from '../llm/provider.js';
+import {PipelineRunner} from '../pipeline/runner.js';
+import {createArtifactMethodTools} from '../harness/tools/artifact-methods.js';
+import {createShortProductionStageTools} from '../harness/tools/short-production.js';
+import {Value} from '@sinclair/typebox/value';
 
 const roots:string[]=[];
 beforeEach(()=>{vi.spyOn(ShortFictionDraftReviewerAgent.prototype,'reviewPackage').mockResolvedValue({summary:'Reviewed package facts.',observations:[]});});
 afterEach(async()=>{vi.restoreAllMocks();await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
+
+it('renames only an authorized book title, resumes its saved candidate, and preserves prose and earlier delivery assets',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'inkos-title-revision-'));roots.push(root);
+  const base='works/short/source',oldTitle='The Quiet Gate',newTitle='The Returned Key';
+  const draft={storyTitle:oldTitle,openingHook:'A key waits on the counter.',rawContent:'',chapters:[
+    {number:1,title:'Arrival',content:'Nora finds a key under the counter and asks Eli who lost it.',charCount:14},
+    {number:2,title:'Return',content:'Eli recognizes his key. Nora hands it back, and they close the shop.',charCount:14},
+  ]};
+  const protectedFiles=new Map([
+    ['outline/v001.md','Nora finds a key and returns it to Eli.'],
+    ['final/sales-package.json',JSON.stringify({title:oldTitle,intro:'Original copy.'})],
+    ['final/sales-package.md','Original sales copy.'],['final/cover-prompt.md','Original cover brief.'],
+    ['final/cover.png','original-image'],['exports/delivery.zip','original-export'],
+  ]);
+  const raw=JSON.stringify(draft),markdown=renderShortFictionDraftMarkdown(draft,'en');
+  const writes=[...[...protectedFiles].map(([path,content])=>({relativePath:base+'/'+path,content})),
+    {relativePath:base+'/final/short-story.json',content:raw},{relativePath:base+'/final/full.md',content:markdown},
+    {relativePath:base+`/final/${oldTitle}.md`,content:markdown},
+    {relativePath:base+'/production-state.json',content:JSON.stringify({version:2,intent:'A lost key returns to its owner.',target:{title:oldTitle,chapterCount:2,charsPerChapter:14,minChapterLength:1,maxChapterLength:30,coverRequired:true,language:'en'},stages:{package:{status:'completed',inputHash:'older-manuscript',updatedAt:'2026-01-01T00:00:00.000Z',observations:[{code:'OLD_PACKAGE_NOTICE',assessment:'observation',category:'quality',summary:'An earlier package observation.',evidence:[]}]}}})},
+  ];
+  await commitAtomicFileSet({rootDir:root,writes:[...writes,createInitialWorkManifestWrite({workId:'short',title:oldTitle,profileId:'short-fiction',language:'en',writes}).write]});
+  const baseline=await syncWorkSourceArtifacts({projectRoot:root,workId:'short',accept:true});
+  let allowTitle=true,requestedTitle=newTitle,controller=new AbortController();const calls:string[]=[];
+  const server=createServer(async(req,res)=>{
+    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
+    const body=JSON.parse(Buffer.concat(chunks).toString()),name=body.tools[0].function.name;calls.push(name);
+    const args=name==='submit_short_author_scope'?{wholeManuscript:!allowTitle,storyTitle:allowTitle,chapterNumbers:allowTitle?[]:[1,2],opening:false,outline:false}
+      :name==='submit_short_revision_plan'?{revisionBrief:'Revise the book title only.',storyTitle:allowTitle?requestedTitle:'Unauthorized title'}
+      :name==='submit_short_package'?{title:requestedTitle,intro:'Nora returns a lost key.',sellingPoints:['A quiet choice.'],coverPrompt:'The owner receives a key.'}:undefined;
+    res.writeHead(args?200:400,{'Content-Type':'application/json'});res.end(JSON.stringify(args?{choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'title-'+calls.length,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}:{error:{message:'Unexpected fixture operation'}}));
+  });server.listen(0,'127.0.0.1');await once(server,'listening');
+  try{
+    const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:false,thinkingBudget:0});
+    const runtime={client,model:'fixture',projectRoot:root};
+    const request='Only rename the book to match the actual story. Keep the opening, chapter titles, prose, outline and existing delivery assets unchanged.';
+    const pipeline=new PipelineRunner({projectRoot:root,client,model:'fixture'});
+    const generic=createArtifactMethodTools(pipeline,root,'short')[1]!;
+    for(const path of ['source/final/short-story.json','source/final/full.md',`source/final/${oldTitle}.md`]){
+      const artifact=baseline.artifacts.find(a=>a.revisions.some(r=>r.path===path))!;
+      await expect(generic.execute('generic',{artifactId:artifact.id,instruction:request})).rejects.toMatchObject({code:'ARTIFACT_DOMAIN_ACTION_REQUIRED',recovery:{action:'short-fiction__revise_short_fiction'}});
+    }
+    expect(calls).toHaveLength(0);
+    const options={projectRoot:root,storyId:'short',direction:request,runtimes:{planner:runtime,writer:runtime,draftReview:runtime,package:runtime}};
+    const review=vi.spyOn(ShortFictionDraftReviewerAgent.prototype,'reviewDraft').mockImplementationOnce(async()=>{controller.abort();throw controller.signal.reason;}).mockResolvedValue({summary:'Reviewed renamed manuscript.',observations:[]});
+    await expect(withExecutionEvidence(()=>{},()=>reviseShortFictionProduction({...options,signal:controller.signal}),undefined,baseline,request)).rejects.toMatchObject({name:'AbortError'});
+    const checkpoint=JSON.parse(await readFile(join(root,'.inkos/short-revisions/short.json'),'utf8'));
+    expect(checkpoint.finalization.result.draft.storyTitle).toBe(newTitle);
+    expect((await loadWorkManifest(root,'short')).title).toBe(oldTitle);
+    expect(await readFile(join(root,base,'final/short-story.json'),'utf8')).toBe(raw);
+    controller=new AbortController();
+    const result=await withExecutionEvidence(()=>{},()=>reviseShortFictionProduction({...options,direction:'',signal:controller.signal,resumeOperationId:checkpoint.operationId}),undefined,baseline,'Continue the saved operation.');
+    const current=await loadWorkManifest(root,'short'),saved=JSON.parse(await readFile(join(root,base,'final/short-story.json'),'utf8'));
+    expect(current.title).toBe(newTitle);expect(saved.storyTitle).toBe(newTitle);
+    expect(saved.chapters).toEqual(draft.chapters);expect(saved.openingHook).toBe(draft.openingHook);
+    expect(result.revisionChanges).toEqual({chapterNumbers:[],openingChanged:false,titleChanged:true,outlineChanged:false});
+    expect(result.delivery?.target).toMatchObject({title:newTitle,coverRequired:true});
+    expect(result.observations.map(o=>o.code)).not.toContain('OLD_PACKAGE_NOTICE');
+    expect(JSON.parse(await readFile(join(root,base,'production-state.json'),'utf8')).stages.package.observations).toMatchObject([{code:'OLD_PACKAGE_NOTICE'}]);
+    expect(review.mock.calls.at(-1)![0]).toMatchObject({title:newTitle,draft:{storyTitle:newTitle},comparison:{draft:{storyTitle:oldTitle}}});
+    expect(calls.filter(name=>name==='submit_short_revision_plan')).toHaveLength(1);
+    const oldNamed=baseline.artifacts.find(a=>a.revisions.some(r=>r.path===`source/final/${oldTitle}.md`))!;
+    expect(current.artifacts.find(a=>a.id===oldNamed.id)!.currentRevisionId).toBeNull();
+    expect(await readFile(join(root,'works/short',oldNamed.revisions[0]!.snapshotPath!),'utf8')).toBe(markdown);
+    await expect(readFile(join(root,base,`final/${oldTitle}.md`))).rejects.toMatchObject({code:'ENOENT'});
+    expect(await readFile(join(root,base,`final/${newTitle}.md`))).toEqual(await readFile(join(root,base,'final/full.md')));
+    for(const [path,content]of protectedFiles){
+      expect(await readFile(join(root,base,path),'utf8')).toBe(content);
+      const old=baseline.artifacts.find(a=>a.revisions.some(r=>r.path==='source/'+path))!;
+      expect(current.artifacts.find(a=>a.id===old.id)!.currentRevisionId).toBe(old.currentRevisionId);
+    }
+    allowTitle=false;
+    await expect(withExecutionEvidence(()=>{},()=>reviseShortFictionProduction({...options,direction:'Revise the prose only. Keep the book title.'}),undefined,current,'Revise the prose only. Keep the book title.')).rejects.toMatchObject({code:'WORKER_SCHEMA_INVALID'});
+    expect((await loadWorkManifest(root,'short')).title).toBe(newTitle);
+    expect(JSON.parse(await readFile(join(root,base,'final/short-story.json'),'utf8'))).toEqual(saved);
+    allowTitle=true;requestedTitle='sales-package';
+    await withExecutionEvidence(()=>{},()=>reviseShortFictionProduction({...options,restartPendingRevision:true}),undefined,current,request);
+    expect((await loadWorkManifest(root,'short')).title).toBe(requestedTitle);
+    expect(JSON.parse(await readFile(join(root,base,'final/short-story.json'),'utf8')).chapters).toEqual(saved.chapters);
+    expect(await readFile(join(root,base,'final/sales-package.md'),'utf8')).toBe(protectedFiles.get('final/sales-package.md'));
+    const stages=createShortProductionStageTools(pipeline,root,'short'),args={workId:'short',direction:'Package the current manuscript.'};
+    expect(Value.Check(stages.find(tool=>tool.name==='plan_short_fiction')!.parameters,{workId:'short'})).toBe(false);
+    for(const name of ['draft_short_fiction','review_short_fiction','package_short_fiction'])expect(Value.Check(stages.find(tool=>tool.name===name)!.parameters,{workId:'short'})).toBe(true);
+    const packaged=await stages.find(tool=>tool.name==='package_short_fiction')!.execute('package',args);
+    expect(packaged.details).toMatchObject({stageStatus:'completed',delivery:{target:{title:requestedTitle,chapterCount:2,minChapterLength:1,maxChapterLength:30,coverRequired:true}}});
+    expect(JSON.parse(await readFile(join(root,base,'final/short-story.json'),'utf8')).chapters).toEqual(saved.chapters);
+    expect(JSON.parse(await readFile(join(root,base,'final/sales-package.json'),'utf8')).title).toBe(requestedTitle);
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+},20000);
+
+it('preserves inline author permission through a broad manuscript flag, length failure and resume',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'inkos-short-inline-'));roots.push(root);
+  const request='只把第2章该册修复年份改成2031，其余正文、标点和标题保持原样；第3章仅把标题改成归档。';
+  const draft={storyTitle:'旧馆',openingHook:'灯还亮着。',rawContent:'',chapters:[
+    {number:1,title:'原始档案',content:'她在2031年登记了这本旧书。',charCount:0},
+    {number:2,title:'核对',content:'“别动旁边的记录。”他说。\n\n该册修复于1999年，评级三级。\n\n她收好台账，关上柜门。\n\n1999年那册的修复档，她明天再来取。',charCount:0},
+    {number:3,title:'旧标题',content:'“档案已经收好了。”她说。',charCount:0},
+  ]};
+  const base='works/short/source';const raw=JSON.stringify(draft);
+  const writes=[{relativePath:base+'/outline/v001.md',content:'核对同一册书的修复日期。'},
+    {relativePath:base+'/final/short-story.json',content:raw},
+    {relativePath:base+'/production-state.json',content:JSON.stringify({version:2,intent:'核对旧档案',target:{chapterCount:3,charsPerChapter:50,minChapterLength:1,maxChapterLength:draft.chapters[1]!.content.replace(/\s/g,'').length,language:'zh'},stages:{}})}];
+  const initial=createInitialWorkManifestWrite({workId:'short',title:draft.storyTitle,profileId:'short-fiction',language:'zh',writes});
+  await commitAtomicFileSet({rootDir:root,writes:[...writes,initial.write]});
+  const baseline=await syncWorkSourceArtifacts({projectRoot:root,workId:'short',accept:true});
+  const calls:Array<{name:string;body:any}>=[];let allowCompletion=false;
+  const server=createServer(async(req,res)=>{
+    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
+    const body=JSON.parse(Buffer.concat(chunks).toString());const name=body.tools[0].function.name;calls.push({name,body});
+    if(name==='submit_author_target_scopes')expect(JSON.parse(body.messages.find((m:any)=>m.role==='user').content)).toMatchObject({authorRequest:request,documentIdentity:{kind:'chapter',chapterNumber:2,title:'核对'}});
+    const args=name==='submit_short_author_scope'?{wholeManuscript:true,chapterNumbers:[2],chapterTitleNumbers:[3],opening:false,outline:false}
+      :name==='submit_short_revision_plan'?{revisionBrief:'Correct the year and add its cause.',chapter_2_instruction:'Correct the year; add an explanation and polish dialogue.',chapter_3_instruction:'Rename the title.'}
+      :name==='submit_edit_location'?{kind:'reference',boundary:'none',count:0,targets:[{quote:JSON.parse(body.messages.find((m:any)=>m.role==='user').content).authorRequest,target:'Only the repair year in chapter 2.'}]}
+      :name==='submit_author_target_scopes'?{target_0:{selections:[{unitId:'p2.l1',text:'1999'},{unitId:'p4.l1',text:'1999'}],reason:'Only the two references to the repair year are editable.'}}
+      :name==='submit_chapter_range_replacements'?{selection_0_text:allowCompletion?'2031':'2031年，因为发生了额外事件',selection_1_text:'2031'}
+      :name==='submit_short_revision_title'?{title:'归档'}
+      :name==='submit_short_fiction_review'?{summary:'Reviewed current sources.',observationCodes:[]}
+      :name==='submit_short_package'?{title:draft.storyTitle,intro:'她核对了一册旧书。',sellingPoints:['旧档案'],coverPrompt:'一本旧书'}:undefined;
+    res.writeHead(args?200:400,{'Content-Type':'application/json'});res.end(JSON.stringify(args?{choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'inline-'+calls.length,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}:{error:{message:'Unexpected operation'}}));
+  });server.listen(0,'127.0.0.1');await once(server,'listening');
+  try{
+    const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:false,thinkingBudget:0});
+    const runtime={client,model:'fixture',projectRoot:root};
+    const options={projectRoot:root,storyId:'short',direction:request,cover:false,runtimes:{planner:runtime,writer:runtime,draftReview:runtime,package:runtime}};
+    await expect(withExecutionEvidence(()=>{},()=>reviseShortFictionProduction(options),undefined,baseline,request)).rejects.toMatchObject({code:'CHAPTER_LENGTH_OUT_OF_RANGE'});
+    expect(await readFile(join(root,base,'final/short-story.json'),'utf8')).toBe(raw);
+    const checkpoint=JSON.parse(await readFile(join(root,'.inkos/short-revisions/short.json'),'utf8'));
+    expect(checkpoint.progress.completed).toEqual([]);
+    expect(checkpoint.authorSource.revisionId).toBe(baseline.artifacts.find(a=>a.revisions.some(r=>r.path==='source/final/short-story.json'))!.currentRevisionId);
+    allowCompletion=true;
+    await withExecutionEvidence(()=>{},()=>reviseShortFictionProduction({...options,direction:'',resumeOperationId:checkpoint.operationId}),undefined,baseline,'Continue the saved operation.');
+    const result=JSON.parse(await readFile(join(root,base,'final/short-story.json'),'utf8'));
+    expect(result.chapters.map((c:any)=>({number:c.number,title:c.title,content:c.content}))).toEqual(draft.chapters.map(c=>({number:c.number,title:c.number===3?'归档':c.title,content:c.number===2?c.content.replaceAll('1999','2031'):c.content})));
+    expect(result.openingHook).toBe(draft.openingHook);expect(result.storyTitle).toBe(draft.storyTitle);
+    expect(calls.filter(c=>c.name==='submit_edit_location')).toHaveLength(1);
+    expect(calls.filter(c=>c.name==='submit_author_target_scopes')).toHaveLength(1);
+    const replacements=calls.filter(c=>c.name==='submit_chapter_range_replacements');
+    for(const {body}of replacements)expect(Object.keys(body.tools[0].function.parameters.properties)).toEqual(['selection_0_text','selection_1_text']);
+    const finalInput=replacements.at(-1)!.body.messages.filter((m:any)=>m.role==='user').map((m:any)=>{try{return JSON.parse(m.content);}catch{return null;}}).find((m:any)=>m?.instruction===request);
+    const planningInput=JSON.parse(calls.find(c=>c.name==='submit_short_revision_plan')!.body.messages.find((m:any)=>m.role==='user').content);
+    expect(planningInput.userRequest).toBe(request);
+    expect(planningInput.revisionGuidance.authority).toBe('advice_within_author_scope');
+    expect(finalInput.instruction).toBe(request);
+    expect(finalInput.references.map((reference:any)=>reference.source)).toEqual(['original-manuscript']);
+    expect(finalInput.revisionGuidance).toBeUndefined();
+    expect(calls.filter(c=>c.name==='submit_short_revision_title')).toHaveLength(1);
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+},20000);
+
+it('requires package and manuscript evidence before accepting a package issue',async()=>{
+  vi.mocked(ShortFictionDraftReviewerAgent.prototype.reviewPackage).mockRestore();
+  const root=await mkdtemp(join(tmpdir(),'inkos-package-sources-'));roots.push(root);
+  const draft={storyTitle:'The receipt',rawContent:'',chapters:[{number:1,title:'Return',content:'Nora returns the receipt to Eli.',charCount:6}]};
+  const sales={title:draft.storyTitle,intro:'Nora burns the receipt.',sellingPoints:['A choice'],coverPrompt:'A receipt',rawContent:''};
+  const requests:any[]=[];
+  const finding={code:'PACKAGE_EVENT',assessment:'issue',category:'quality',summary:'The package describes a different action.'};
+  const manuscript={sourceId:'manuscript',startLine:5,endLine:5};
+  const packageRef={sourceId:'package',startLine:5,endLine:5};
+  const server=createServer(async(req,res)=>{
+    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
+    const body=JSON.parse(Buffer.concat(chunks).toString());requests.push(body);
+    const step=requests.length;
+    const name=step<4?'record_review_observation':'submit_short_package_review';
+    const args=step<4?{...finding,sourceRefs:step===1?[manuscript]:step===2?[packageRef]:[packageRef,manuscript]}:{summary:'One factual package mismatch.',observationCodes:[finding.code]};
+    res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{finish_reason:'tool_calls',message:{tool_calls:[{id:'package-'+step,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}]}));
+  });server.listen(0,'127.0.0.1');await once(server,'listening');
+  try{
+    const client=createLLMClient({service:'custom',provider:'openai',configSource:'studio',model:'fixture',apiKey:'fixture',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiFormat:'chat',stream:false,thinkingBudget:0});
+    const before=JSON.stringify({draft,sales});
+    const evidence:Array<{type:string;payload:Record<string,unknown>}>=[];
+    const result=await withExecutionEvidence((type,payload)=>evidence.push({type,payload}),()=>new ShortFictionDraftReviewerAgent({client,model:'fixture',projectRoot:root}).reviewPackage({draft,sales,language:'en'}));
+    expect(evidence.filter(event=>event.type==='skills-applied').map(event=>event.payload.skills)).toEqual([[]]);
+    const feedback=requests.at(-1).messages.filter((message:any)=>message.role==='tool').map((message:any)=>JSON.parse(message.content));
+    expect(feedback.map((value:any)=>value.code)).toEqual(['SHORT_PACKAGE_REVIEW_PAIR_REQUIRED','SHORT_PACKAGE_REVIEW_PAIR_REQUIRED',finding.code]);
+    expect(result.observations).toMatchObject([{...finding,sourceRefs:[{sourceId:'package',quote:sales.intro},{sourceId:'manuscript',quote:draft.chapters[0]!.content}]}]);
+    expect(JSON.stringify({draft,sales})).toBe(before);
+  }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+},20000);
 
 it('resumes the closest unfinished opening without rewriting saved chapters',async()=>{
   const root=await mkdtemp(join(tmpdir(),'inkos-opening-recovery-'));roots.push(root);
@@ -249,11 +430,11 @@ it('packages the current manuscript while preserving its separate delivery issue
   const candidate=withCandidate.artifacts.find(a=>a.revisions.some(r=>r.path==="source/notes.md"))!;
   const pipeline={createAgentContext:()=>runtime,runWithAgentContext:async(_context:unknown,task:()=>Promise<unknown>)=>task()};
   const registry=createProductionCapabilityRegistry({pipeline:pipeline as never,projectRoot:root,sessionId:"stage-scope",profileId:"short-fiction",work:withCandidate,language:"en",playWorldExists:false,sameSessionProposal:false,allowSystemFileRead:false});
-  await registry.invoke("short-fiction","review_short_fiction",{projectRoot:root,episodeId:"stage-scope",work:withCandidate,profile:createBuiltInWorkProfileRegistry(root).require("short-fiction")},{workId:"short"});
+  await registry.invoke("short-fiction","review_short_fiction",{projectRoot:root,episodeId:"stage-scope",work:withCandidate,profile:createBuiltInWorkProfileRegistry(root).require("short-fiction")},{workId:"short",minChapterLength:null,maxChapterLength:null,openingHookChars:null,coverRequired:null});
   expect((await loadWorkManifest(root,"short")).artifacts.find(a=>a.id===candidate.id)?.currentRevisionId).toBeNull();
 });
 
-it("exposes the outline and partial draft during generation without marking them final", async () => {
+it("exposes the completed outline for review while preserving partial draft recovery", async () => {
   const root = await mkdtemp(join(tmpdir(), "inkos-short-discovery-")); roots.push(root);
   const complete = { storyTitle: "Story", rawContent: "", chapters: [1, 2].map(number => ({
     number, title: `Chapter ${number}`, content: Array(40).fill("word").join(" "), charCount: 40,
@@ -267,12 +448,12 @@ it("exposes the outline and partial draft during generation without marking them
   vi.spyOn(ShortFictionOutlineAgent.prototype, "createOutline").mockResolvedValue({ storyTitle: "Story", rawContent: "Complete outline" });
   vi.spyOn(ShortFictionWriterAgent.prototype, "writeDraft").mockImplementationOnce(async input => {
     expect((await inspect()).artifacts).toContainEqual(expect.objectContaining({
-      path: "works/short/source/outline/v001.md", status: "candidate",
+      path: "works/short/source/outline/v001.md", status: "current",
     }));
     await input.onBatchComplete?.({ ...complete, chapters: [complete.chapters[0]!, { number: 2, title: "", content: "", charCount: 0 }] }, [1]);
     const partial = (await inspect()).artifacts;
     expect(partial).toContainEqual(expect.objectContaining({ path: "works/short/source/drafts/v001-partial/draft.json", status: "candidate" }));
-    expect(partial.every(artifact => artifact.status === "candidate")).toBe(true);
+    expect(partial.filter(artifact=>artifact.path.startsWith('works/short/source/drafts/')).every(artifact => artifact.status === "candidate")).toBe(true);
     throw Object.assign(new Error("model interrupted"), { code: "MODEL_STREAM_IDLE" });
   });
   vi.spyOn(ShortFictionWriterAgent.prototype, "continueDraft").mockResolvedValue(complete);
@@ -281,11 +462,26 @@ it("exposes the outline and partial draft during generation without marking them
   const context = { projectRoot: root, model: "test", client: { defaults: { maxTokens: 4096 } } } as never;
   const options = { projectRoot: root, storyId: "short", direction: "Write a story", language: "en" as const, chapterCount: 2, charsPerChapter: 40, cover: false, runtimes: { planner: context, writer: context, draftReview: context, package: context } };
   await runShortFictionStage({...options,stage:"outline"});
-  await expect(runShortFictionStage({...options,stage:"draft"})).rejects.toMatchObject({ code: "MODEL_STREAM_IDLE", recovery:{workId:"short",path:"works/short/source/drafts/v001-partial/draft.json",persistedChapterNumbers:[1],validChapterNumbers:[1],incompleteChapterNumbers:[2],requestedChapterCount:2} });
+  const outlinePath=join(root,'works/short/source/outline/v001.md'),savedOutline=await readFile(outlinePath);
+  await writeFile(outlinePath,'Unregistered outline edit.');
+  await expect(runShortFictionStage({...options,stage:'draft'})).rejects.toMatchObject({code:'DRAFT_SOURCE_CHANGED'});
+  expect(ShortFictionWriterAgent.prototype.writeDraft).not.toHaveBeenCalled();
+  await writeFile(outlinePath,savedOutline);
+  let recoveryParameters:unknown;
+  await expect(runShortFictionStage({...options,stage:"draft"}).catch(error=>{
+    recoveryParameters=error.recovery?.parameters;throw error;
+  })).rejects.toMatchObject({ code: "MODEL_STREAM_IDLE", recovery:{workId:"short",path:"works/short/source/drafts/v001-partial/draft.json",persistedChapterNumbers:[1],validChapterNumbers:[1],incompleteChapterNumbers:[2],requestedChapterCount:2} });
   await expect(reviseShortFictionProduction(options)).rejects.toMatchObject({
-    code:"SHORT_MANUSCRIPT_NOT_READY",recovery:{action:"short-fiction__draft_short_fiction",parameters:{workId:"short"}},
+    code:"SHORT_MANUSCRIPT_NOT_READY",recovery:{action:"short-fiction__draft_short_fiction",parameters:{workId:"short",minChapterLength:null,maxChapterLength:null,openingHookChars:null,coverRequired:null}},
   });
-  await runShortFictionProduction({...options,retryStages:["review","package"]});
+  const work=await loadWorkManifest(root,'short');
+  const pipeline={createAgentContext:()=>context,runWithAgentContext:async(_context:unknown,task:()=>Promise<unknown>)=>task()};
+  const registry=createProductionCapabilityRegistry({pipeline:pipeline as never,projectRoot:root,sessionId:'partial-recovery',profileId:work.profileId,work,language:'en',playWorldExists:false,sameSessionProposal:false,allowSystemFileRead:false});
+  await registry.invoke('short-fiction','draft_short_fiction',{projectRoot:root,episodeId:'partial-recovery',work,profile:createBuiltInWorkProfileRegistry(root).require(work.profileId)},recoveryParameters);
+  for(const action of ['review_short_fiction','package_short_fiction']){
+    const current=await loadWorkManifest(root,'short');
+    await registry.invoke('short-fiction',action,{projectRoot:root,episodeId:'partial-recovery',work:current,profile:createBuiltInWorkProfileRegistry(root).require(current.profileId)},recoveryParameters);
+  }
   expect(ShortFictionWriterAgent.prototype.continueDraft).toHaveBeenCalledOnce();
   expect((await inspect()).artifacts).toContainEqual(expect.objectContaining({ path: "works/short/source/final/short-story.json", status: "current" }));
   const revisions = (await loadWorkManifest(root,"short")).artifacts.flatMap(artifact=>artifact.revisions);
@@ -297,6 +493,11 @@ it("exposes the outline and partial draft during generation without marking them
 
 it.each(["resume", "restart", "finalize"] as const)("%s preserves revision ownership through changed retry wording and retains the prior manuscript",async(mode)=>{
   const root=await mkdtemp(join(tmpdir(),"inkos-short-revision-"));roots.push(root);
+  const protectedFiles=new Map([
+    ['source/final/sales-package.json',JSON.stringify({title:'Story',intro:'Original synopsis',sellingPoints:['Original point'],coverPrompt:'Original cover'})],
+    ['source/final/sales-package.md','Original sales package.'],['source/final/cover-prompt.md','Original cover prompt.'],
+    ['source/final/cover.png','saved-image-bytes'],['source/exports/delivery.zip','saved-export-bytes'],
+  ]);
   const draft={storyTitle:"Story",chapters:[1,2].map(number=>({number,title:`Chapter ${number}`,content:Array(40).fill("word").join(" "),charCount:40})),rawContent:""};
   const changed={...draft,chapters:draft.chapters.map(chapter=>({...chapter,content:Array(40).fill("revised").join(" ")}))};
   const initial=createInitialWorkManifestWrite({workId:"short",title:"Story",profileId:"short-fiction",language:"en",writes:[
@@ -305,6 +506,7 @@ it.each(["resume", "restart", "finalize"] as const)("%s preserves revision owner
     {relativePath:"works/short/source/final/full.md",content:renderShortFictionDraftMarkdown(draft,"en")},
   ]});
   await commitAtomicFileSet({rootDir:root,writes:[
+    ...[...protectedFiles].map(([path,content])=>({relativePath:`works/short/${path}`,content})),
     {relativePath:"works/short/source/production-state.json",content:JSON.stringify({version:2,intent:"Original intent",target:{chapterCount:2,charsPerChapter:40,maxChapterLength:60,language:"en"},stages:{}})},
     {relativePath:"works/short/source/outline/v001.md",content:"Original outline"},
     {relativePath:"works/short/source/final/short-story.json",content:JSON.stringify(draft)},
@@ -388,7 +590,7 @@ it.each(["resume", "restart", "finalize"] as const)("%s preserves revision owner
   expect(reviewState.comparison).toEqual({scope:reviewInput.comparison!.scope,before:reviewInput.comparison!.before,after:reviewInput.comparison!.after});
   expect((result.data as {kind:string}).kind).toBe("short_fiction_revised");
   expect(actionObservation(result).facts.revisionChanges).toEqual({chapterNumbers:[1,2],openingChanged:false,titleChanged:false,outlineChanged:true});
-  expect(pack.mock.calls[0]?.[0].draft.chapters).toEqual(changed.chapters);
+  expect(pack).not.toHaveBeenCalled();
   const after=await loadWorkManifest(root,"short");
   const artifact=after.artifacts.find(a=>a.id===original.id)!;
   expect(artifact.currentRevisionId).not.toBe(original.currentRevisionId);
@@ -396,5 +598,11 @@ it.each(["resume", "restart", "finalize"] as const)("%s preserves revision owner
   const bytes=await readFile(join(root,"works/short/source/final/full.md"));
   expect(`sha256:${createHash("sha256").update(bytes).digest("hex")}`).toBe(artifact.revisions.find(r=>r.id===artifact.currentRevisionId)?.checksum);
   expect(`sha256:${createHash("sha256").update(await readFile(join(root,"works/short",previous.snapshotPath!))).digest("hex")}`).toBe(previous.checksum);
-  expect(result.artifacts.some(a=>a.path==="source/final/sales-package.json")).toBe(true);
+  for(const [path,content]of protectedFiles){
+    expect(await readFile(join(root,'works/short',path),'utf8')).toBe(content);
+    const original=before.artifacts.find(a=>a.revisions.some(r=>r.path===path))!;
+    expect(after.artifacts.find(a=>a.id===original.id)!.currentRevisionId).toBe(original.currentRevisionId);
+    expect(result.artifacts.some(a=>a.path===path)).toBe(false);
+  }
+  expect(result.data).not.toHaveProperty('salesPackagePath');
 });

@@ -999,14 +999,7 @@ async function runAgentSessionUnlocked(
 
   if (!cached) {
     const restoredHistory = await restoreAgentMessagesFromTranscript(projectRoot, sessionId, sessionKind);
-    const restoredMessages = adaptRestoredAgentMessagesForModel(restoredHistory, model);
-    const restoredSystemContext = restoredMessages.flatMap((message) => {
-      const raw = message as unknown as { readonly role?: unknown; readonly content?: unknown };
-      return raw.role === "system" && typeof raw.content === "string" ? [raw.content] : [];
-    });
-    const initialAgentMessages = restoredMessages.filter((message) => (
-      (message as unknown as { readonly role?: unknown }).role !== "system"
-    ));
+    const initialAgentMessages = adaptRestoredAgentMessagesForModel(restoredHistory, model);
     const turnSkills = new Map<string, ActivatedSkillGuidance>(
       effectiveSkillResolution.usedSkills.map((skill) => [skill.id, { skill, resources: [] }]),
     );
@@ -1095,6 +1088,11 @@ async function runAgentSessionUnlocked(
         cached.activeActions++;
         try {
           if(capabilities.resolve(capabilityId,actionId).action.risk!=='read')await cached.ensureDelivery(signal);
+          const draftSources=capabilities.resolve(capabilityId,actionId).action.draftSourcePaths;
+          if(draftSources?.length&&cached.workId){
+            try{await cached.requestDelivery.requireBeforeDraft(projectRoot,cached.workId,draftSources);}
+            finally{await cached.persistDelivery();}
+          }
           await cached.artifactDeliveries.requireOperations(projectRoot, cached.workId, capabilityId, actionId, parameters);
           const result = await cached.harnessRuntime.executeAction({
             handle,
@@ -1160,25 +1158,22 @@ async function runAgentSessionUnlocked(
         : {}),
       ...(config.resumeAction ? { resumeAfterAction: true } : {}),
     });
-    const restoredContextBlock = restoredSystemContext.length > 0
-      ? `\n\n## Restored execution context\n${restoredSystemContext.join("\n\n")}`
-      : "";
     const agent = new Agent({
       beforeToolCall: preserveToolArgumentTypes,
       toolExecution: 'sequential',
       initialState: {
         model,
-        systemPrompt: [baseSystemPrompt, TURN_COMPLETION_GUIDANCE, restoredContextBlock, config.backgroundTaskContext]
+        systemPrompt: [baseSystemPrompt, TURN_COMPLETION_GUIDANCE, config.backgroundTaskContext]
           .filter(Boolean)
           .join("\n\n"),
         tools: [...visibleTools,createDeliveryRequirementsTool({root:projectRoot,ledger:()=>cached!.requestDelivery,ensure:signal=>cached!.ensureDelivery(signal),save:()=>cached!.persistDelivery()}), createTurnCompletionTool({
           state: () => cached ?? { activeActions: 0, hasDelivery: false, deliveryFailed: false },
           complete: result => { if (!cached) throw new Error("Session unavailable"); cached.turnCompletion = result; },
-          qualityFindings:()=>cached!.artifactDeliveries.qualityFindings(),
+          qualityFindings:()=>cached!.artifactDeliveries.qualityFindings(projectRoot),
           language,
           validateDelivery: async signal => {
             await cached!.ensureDelivery(signal);
-            await cached!.artifactDeliveries.validate(projectRoot);
+            await cached!.artifactDeliveries.validate(projectRoot,cached!.requestDelivery.requiresCover,cached!.workId);
             await cached!.requestDelivery.validate(projectRoot);
           },
         })],
@@ -1188,7 +1183,7 @@ async function runAgentSessionUnlocked(
         projectRoot,
         work,
         profile,
-        requestDelivery:()=>{const {declared,steps,receipts}=cached!.requestDelivery.snapshot();return{declared,steps,receipts};},
+        requestDelivery:()=>{const {declared,coverQuote,steps,receipts}=cached!.requestDelivery.snapshot();return{declared,coverQuote,steps,receipts};},
         budgetTokens: agentContextBudget(model),
         semanticCompiler: async (request) => ({
           content: await compileHarnessContextText({

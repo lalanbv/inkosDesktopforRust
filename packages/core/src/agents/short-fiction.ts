@@ -1,5 +1,7 @@
-import { BaseAgent } from "./base.js";
+import { BaseAgent, type AgentContext } from "./base.js";
 import { ReviserAgent } from "./reviser.js";
+import {createStoryIntervalTool} from './story-interval.js';
+import {createReviewCalculationTool} from './review-calculation.js';
 import {shortAuthorScopeRequest, type ShortAuthorScope} from './short-revision-scope.js';
 import { z } from "zod";
 import { Type, type Static } from "@sinclair/typebox";
@@ -10,6 +12,7 @@ import {
 } from "../utils/length-metrics.js";
 import {
   type ShortFictionLanguage,
+  type ShortFictionReferencePromptInput,
   buildShortFictionDraftReviewSystemPrompt,
   buildShortFictionDraftReviewUserPrompt,
   buildShortFictionOutlineSystemPrompt,
@@ -104,7 +107,7 @@ export interface ShortRevisionProgress {
   readonly completed: ReadonlyArray<number>;
 }
 
-export interface ShortFictionReference {
+export interface ShortFictionReference extends ShortFictionReferencePromptInput {
   readonly path?: string;
   readonly text: string;
 }
@@ -131,6 +134,10 @@ export interface ShortFictionDraftInput {
   readonly language?: ShortFictionLanguage;
   readonly chapterNumbers?: readonly number[];
   readonly authorScope?: ShortAuthorScope;
+  readonly authorSource?: {
+    readonly workId:string; readonly artifactId:string; readonly revisionId:string;
+    readonly request:string; readonly draft:ShortFictionBatchDraft;
+  };
   readonly onBatchComplete?: (
     draft: ShortFictionBatchDraft,
     completedChapterNumbers: ReadonlyArray<number>,
@@ -138,6 +145,7 @@ export interface ShortFictionDraftInput {
 }
 
 export interface ShortFictionDraftReviewInput extends ShortFictionDraftInput {
+  readonly reference?: ShortFictionReference;
   readonly revisionRequest?: string;
   readonly reviewScope?: string;
   readonly draft: ShortFictionBatchDraft;
@@ -173,6 +181,7 @@ export class ShortFictionOutlineAgent extends BaseAgent {
         label: "Submit short-fiction outline",
         description: "Submit the story title and complete readable plan.",
         parameters: shortOutlineToolSchema(input.chapterCount,input.title),
+        supportingTools:[createStoryIntervalTool(),createReviewCalculationTool()],
       }, {  maxTokens: Math.min(8192, safeShortFictionOutputBudget(this.ctx.client.defaults.maxTokens)) });
 
     return {
@@ -185,6 +194,7 @@ export class ShortFictionOutlineAgent extends BaseAgent {
 }
 
 export class ShortFictionWriterAgent extends BaseAgent {
+  constructor(ctx:AgentContext,private readonly planningContext?:AgentContext){super(ctx);}
   get name(): string {
     return "short-fiction-writer";
   }
@@ -200,15 +210,16 @@ export class ShortFictionWriterAgent extends BaseAgent {
     readonly resume?: ShortRevisionProgress;
     readonly onRevisionProgress?: (progress: ShortRevisionProgress) => Promise<void>;
   }): Promise<{draft:ShortFictionBatchDraft;outlineMarkdown:string}> {
-    const submittedPlan: Static<typeof ShortRevisionPlanSchema> = input.resume?.plan ?? (input.chapterNumbers?.length === 1 && !input.authorScope?.opening && !input.authorScope?.outline ? {
+    const submittedPlan: Static<typeof ShortRevisionPlanSchema> = input.resume?.plan ?? (input.chapterNumbers?.length === 1 && !input.authorScope?.opening && !input.authorScope?.outline && !input.authorScope?.storyTitle ? {
       revisionBrief:input.direction,chapters:input.chapterNumbers.map(number=>({number,instruction:input.direction})),
-    } : await this.planRevision(input));
+    } : await (this.planningContext?new ShortFictionWriterAgent(this.planningContext):this).planRevision(input));
     const plan={...submittedPlan,outlineMarkdown:submittedPlan.outlineMarkdown??input.outlineMarkdown};
     return this.applyRevisionPlan(input,plan);
   }
 
   private async planRevision(input:ShortFictionDraftInput & {readonly draft:ShortFictionBatchDraft;readonly review:string}):Promise<Static<typeof ShortRevisionPlanSchema>> {
     const normalize = (result: Record<string, unknown>): Static<typeof ShortRevisionPlanSchema> => ({
+      storyTitle:typeof result.storyTitle==='string'?result.storyTitle.trim():undefined,
       revisionBrief:result.revisionBrief as string,
       outlineMarkdown:typeof result.outlineMarkdown==="string"?result.outlineMarkdown:undefined,
       openingHook:result.openingHook as string|undefined,
@@ -218,24 +229,29 @@ export class ShortFictionWriterAgent extends BaseAgent {
       }).filter(chapter=>(chapter.sourceNumber!==undefined&&chapter.sourceNumber!==chapter.number)||chapter.instruction!==undefined),
     });
     const {result}=await this.submitStructured([
-      {role:"system",content:"Plan only the changes required by the author's current request. Omit unchanged chapter fields, the opening scene and the outline. An opening-only edit needs no chapter edits. Chapter fields refer to FINAL slots: sourceNumber copies an original chapter unchanged, and an instruction revises that slot. Use sourceNumber 0 and a writing instruction for a new scene. When restructuring, provide the updated complete outline and map every displaced slot; each unchanged source scene can appear once. Use the supplied final chapter count, which includes the author's explicit updates. Preserve all other author constraints, chronology and scope. Reviewer suggestions are diagnosis, not permission to change the author's requirements."},
-      {role:"user",content:JSON.stringify({title:input.draft.storyTitle,direction:input.direction,requiredChapterCount:input.chapterCount,allowedChapterNumbers:input.chapterNumbers,outline:input.outlineMarkdown,review:input.review,originalManuscript:input.draft.chapters,openingHook:input.draft.openingHook,...(input.openingHookChars?{openingHookTarget:openingHookLengthContract(input.openingHookChars,input.language)}:{})})},
-    ],{name:"submit_short_revision_plan",label:"Plan requested revision",description:"Submit only affected chapters, opening scene or outline.",parameters:shortRevisionPlanSubmissionSchema(input.chapterCount,input.draft.chapters.length),validate:(plan)=>{
+      {role:"system",content:"Plan only the changes required by the author's current request. Omit unchanged chapter fields, the opening scene and the outline. An opening-only edit needs no chapter edits. Chapter fields refer to FINAL slots: sourceNumber copies an original chapter unchanged, and an instruction revises that slot. Use sourceNumber 0 and a writing instruction for a new scene. When restructuring, provide the updated complete outline and map every displaced slot; each unchanged source scene can appear once. Use the supplied final chapter count, which includes the author's explicit updates. Preserve all other author constraints, chronology and scope. Reviewer and coordinator suggestions are candidate diagnoses, not permission or established story facts. Verify their proposed corrections against the original manuscript and the author's request before using them."},
+      {role:"user",content:JSON.stringify({title:input.draft.storyTitle,userRequest:input.authorSource?.request??input.direction,allowedParts:input.authorScope,
+        ...(input.authorSource?{revisionGuidance:{source:'coordinator',instruction:input.direction,authority:'advice_within_author_scope'}}:{}),
+        requiredChapterCount:input.chapterCount,allowedChapterNumbers:input.chapterNumbers,outline:input.outlineMarkdown,review:input.review,originalManuscript:input.draft.chapters,openingHook:input.draft.openingHook,...(input.openingHookChars?{openingHookTarget:openingHookLengthContract(input.openingHookChars,input.language)}:{})})},
+    ],{name:"submit_short_revision_plan",label:"Plan requested revision",description:"Submit only authorized changes to the book title, chapters, opening scene or outline.",parameters:shortRevisionPlanSubmissionSchema(input.chapterCount,input.draft.chapters.length,input.authorScope?.storyTitle),maxTurns:6,supportingTools:[createStoryIntervalTool(),createReviewCalculationTool()],validate:(plan)=>{
       this.validateRevisionPlan(normalize(plan),input);
       return plan;
     }},
-    {maxTokens:Math.min(8192,this.ctx.client.defaults.maxTokens)});
+    {maxTokens:Math.min(16384,this.ctx.client.defaults.maxTokens)});
     return normalize(result);
   }
 
   private validateRevisionPlan(plan:Static<typeof ShortRevisionPlanSchema>,input:ShortFictionDraftInput & {draft:ShortFictionBatchDraft}):void {
     const sourceCount=input.draft.chapters.length;
+    if(plan.storyTitle!==undefined&&!plan.storyTitle.trim())throw Object.assign(new Error('A revised book title must contain text.'),{code:'SHORT_REVISION_PLAN_INVALID'});
+    if(plan.storyTitle!==undefined&&plan.storyTitle!==input.draft.storyTitle&&!input.authorScope?.storyTitle)throw Object.assign(new Error('The book title is outside the author-authorized scope.'),{code:'SHORT_REVISION_OUT_OF_SCOPE'});
     if(input.chapterNumbers&&plan.chapters.some(chapter=>!input.chapterNumbers!.includes(chapter.number)))throw Object.assign(new Error("The plan changes a chapter outside the author's selected scope."),{code:"SHORT_REVISION_OUT_OF_SCOPE"});
     if(input.chapterNumbers?.length&&!input.authorScope?.opening&&plan.openingHook!==undefined&&plan.openingHook.trim()!==(input.draft.openingHook??""))throw Object.assign(new Error("The opening is outside the selected chapter scope."),{code:"SHORT_REVISION_OUT_OF_SCOPE"});
     if(input.openingHookChars&&plan.openingHook!==undefined&&plan.openingHook.trim()!==(input.draft.openingHook??""))validateOpeningHook(plan.openingHook,input.openingHookChars,input.language);
     if(!plan.chapters.length&&input.chapterCount===sourceCount
+      &&(plan.storyTitle===undefined||plan.storyTitle===input.draft.storyTitle)
       &&(plan.openingHook===undefined||plan.openingHook.trim()===(input.draft.openingHook??""))
-      &&(plan.outlineMarkdown===undefined||plan.outlineMarkdown===input.outlineMarkdown))throw Object.assign(new Error("Select a changed chapter, opening scene or outline."),{code:"SHORT_REVISION_PLAN_EMPTY"});
+      &&(plan.outlineMarkdown===undefined||plan.outlineMarkdown===input.outlineMarkdown))throw Object.assign(new Error("Select an authorized change to the book title, chapters, opening scene or outline."),{code:"SHORT_REVISION_PLAN_EMPTY"});
     if(new Set(plan.chapters.map(chapter=>chapter.number)).size!==plan.chapters.length
       ||plan.chapters.some(chapter=>chapter.number<1||chapter.number>input.chapterCount
         ||(chapter.sourceNumber!==undefined&&(chapter.sourceNumber<0||chapter.sourceNumber>sourceCount))
@@ -258,18 +274,58 @@ export class ShortFictionWriterAgent extends BaseAgent {
     let draft=input.resume?.draft ?? input.draft;
     if(draft.chapters.length!==input.chapterCount)draft={...draft,chapters:Array.from({length:input.chapterCount},(_,index)=>draft.chapters.find(chapter=>chapter.number===index+1)??{number:index+1,title:"",content:"",charCount:0})};
     const completed=[...(input.resume?.completed ?? [])];
+    const restructuring=input.chapterCount!==input.draft.chapters.length||plan.chapters.some(chapter=>chapter.sourceNumber!==undefined&&chapter.sourceNumber!==chapter.number);
+    const scoped=Boolean(input.authorSource&&input.authorScope&&(!input.authorScope.wholeManuscript||!restructuring));
     await input.onRevisionProgress?.({plan,draft,completed});
     for(const chapterPlan of plan.chapters) {
       if(completed.includes(chapterPlan.number)) continue;
       const chapter=draft.chapters.find(item=>item.number===chapterPlan.number)!;
       const originalChapter=chapterPlan.sourceNumber===0?undefined:input.draft.chapters.find(item=>item.number===(chapterPlan.sourceNumber??chapter.number))!;
-      if(!chapterPlan.instruction?.trim()) {
+      if(!chapterPlan.instruction?.trim()&&!scoped) {
         draft={...draft,chapters:draft.chapters.map(item=>item.number===chapter.number?{...originalChapter!,number:chapter.number}:item)};
         completed.push(chapter.number);
         await input.onRevisionProgress?.({plan,draft,completed});
         continue;
       }
       const otherChapters=draft.chapters.filter(item=>item.number!==chapter.number);
+      if(scoped&&input.authorSource&&input.authorScope){
+        const original=input.authorSource.draft.chapters.find(item=>item.number===chapter.number);
+        if(!original)throw Object.assign(new Error('The authorized chapter is absent from the original manuscript.'),{code:'SHORT_REVISION_OUT_OF_SCOPE'});
+        let content=chapter.content,title=chapter.title;
+        if(input.authorScope.chapterNumbers.includes(chapter.number)||(input.authorScope.wholeManuscript&&input.authorScope.chapterNumbers.length===0)){
+          const revised=await new ReviserAgent(this.ctx).reviseChapter('',content,chapter.number,[],'spot-fix',undefined,{
+            language:input.language??'zh',chapterTitle:original.title,
+            instruction:JSON.stringify({revisionBrief:plan.revisionBrief,chapterInstruction:chapterPlan.instruction}),
+            authorSource:{...input.authorSource,content:original.content},
+            contextPackage:{chapter:chapter.number,selectedContext:[
+              {source:'original-manuscript',reason:'Preserve established facts in the other chapters.',excerpt:JSON.stringify(otherChapters),protection:'protected'},
+            ]},
+            lengthSpec:buildLengthSpec(input.charsPerChapter,input.language,{minChapterLength:input.minChapterLength??1,maxChapterLength:input.maxChapterLength}),
+            onCandidate:async candidate=>{
+              const distance=(text:string)=>{const count=countChapterLength(text,resolveLengthCountingMode(input.language));return Math.max(0,(input.minChapterLength??1)-count,count-(input.maxChapterLength??Infinity));};
+              const current=draft.chapters.find(item=>item.number===chapter.number)!;
+              if(current.content===original.content||distance(candidate)<distance(current.content)){
+                draft=mergeShortFictionBatch(draft,asShortDraftBatch({storyTitle:input.draft.storyTitle,number:chapter.number,title:original.title,content:candidate}),input.chapterCount,input.language);
+                await input.onRevisionProgress?.({plan,draft,completed});
+              }
+            },
+          });
+          content=revised.revisedContent;
+        }
+        if(input.authorScope.chapterTitleNumbers?.includes(chapter.number)){
+          const result=await this.submitStructured([
+            {role:'system',content:'Revise only this chapter title as requested by the author. Keep its promise grounded in the supplied chapter.'},
+            {role:'user',content:JSON.stringify({authorRequest:input.authorSource.request,chapterNumber:chapter.number,currentTitle:title,content})},
+          ],{name:'submit_short_revision_title',label:'Revise an authorized chapter title',description:'Submit only the requested chapter title.',parameters:Type.Object({title:Type.String({minLength:1})},{additionalProperties:false})});
+          title=result.result.title;
+        }else title=original.title;
+        const bound={storyTitle:input.draft.storyTitle,number:chapter.number,title,content};
+        validateRequestedShortChapter(bound,[chapter.number],{...input,openingHookChars:undefined},true);
+        draft=mergeShortFictionBatch(draft,asShortDraftBatch(bound),input.chapterCount,input.language);
+        completed.push(chapter.number);
+        await input.onRevisionProgress?.({plan,draft,completed});
+        continue;
+      }
       const compressCandidate=async()=>{
         const pending=draft.chapters.find(item=>item.number===chapter.number)!;
         // Preserve the developed candidate. Mechanical compression uses the
@@ -305,6 +361,7 @@ export class ShortFictionWriterAgent extends BaseAgent {
           : "按已激活的 Skill、用户修改要求与修订方案修改指定章节，提交本章标题和完整正文，并满足给定篇幅范围。把修改落实为故事中的行动与对白；章号引用、审稿意见和修改说明留在方案中，不写进故事正文。"},
         {role:"user",content:JSON.stringify({storyTitle:input.draft.storyTitle,userRequest:input.direction,chapterNumber:chapter.number,currentLength:countChapterLength(chapterPlan.sourceNumber===0&&!retainedCandidate?"":chapter.content,resolveLengthCountingMode(input.language)),targetLength:input.charsPerChapter,minLength:input.minChapterLength,maxLength:input.maxChapterLength,lengthUnit:input.language==="en"?"words":"non-whitespace characters including punctuation",corrections:plan.revisionBrief,outline:plan.outlineMarkdown,instruction:chapterPlan.instruction,...(chapterPlan.sourceNumber!==undefined&&chapterPlan.sourceNumber!==chapter.number?{originalChapter}:{}),currentChapter:chapterPlan.sourceNumber===0&&!retainedCandidate?undefined:chapter,otherChapters})},
       ],{name:"submit_short_revision_chapter",label:"Revise one chapter",description:`Submit the title and prose for chapter ${chapter.number}.`,parameters:ShortRevisionChapterToolSchema,
+        supportingTools:[createStoryIntervalTool(),createReviewCalculationTool()],
         validate:async(result)=>{
           const bound = {...result,storyTitle:input.draft.storyTitle,number:chapter.number};
           validateRequestedShortChapter(bound,[chapter.number],{...input,openingHookChars:undefined});
@@ -338,7 +395,7 @@ export class ShortFictionWriterAgent extends BaseAgent {
       completed.push(chapter.number);
       await input.onRevisionProgress?.({plan,draft,completed});
     }
-    draft={...draft,openingHook:plan.openingHook===undefined?draft.openingHook:plan.openingHook.trim()||undefined};
+    draft={...draft,storyTitle:plan.storyTitle??draft.storyTitle,openingHook:plan.openingHook===undefined?draft.openingHook:plan.openingHook.trim()||undefined};
     return {draft:{...draft,rawContent:renderShortFictionDraftMarkdown(draft,input.language)},outlineMarkdown:plan.outlineMarkdown};
   }
 
@@ -520,7 +577,8 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
           comparison,
           measurements: measureShortFictionDraft(input.draft,input.language),
           outlineMarkdown: numberReviewSource(input.outlineMarkdown),
-          draftMarkdown: [...sources].filter(([id]) => id !== "outline").map(([id, text]) => `## Source: ${id}\n${numberReviewSource(text)}`).join("\n\n"),
+          reference: input.reference ? {...input.reference,text:numberReviewSource(input.reference.text)} : undefined,
+          draftMarkdown: [...sources].filter(([id]) => id !== "outline" && id !== "reference-material").map(([id, text]) => `## Source: ${id}\n${numberReviewSource(text)}`).join("\n\n"),
         }, input.language) },
       ], sources, {
         name: "submit_short_fiction_review",
@@ -531,6 +589,8 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
   }
 
   async reviewPackage(input: {draft: ShortFictionBatchDraft; sales: ShortFictionSalesPackage; language?: ShortFictionLanguage}): Promise<ShortFictionDraftReview> {
+    // This operation compares claims with the finished manuscript. Writing
+    // methodology and production instructions are not evidence for that check.
     const language=input.language??'zh';
     const sources=new Map([
       ['package',renderShortFictionSalesPackage(input.sales,language)],
@@ -542,7 +602,16 @@ export class ShortFictionDraftReviewerAgent extends BaseAgent {
         : '核对销售包装对完整成稿的事实承诺：人物、行动、时间、关系与结果。只要仍然服务这本故事，允许商业化压缩、情绪隐喻和象征性封面构图。区分已经发生的事件、意图与未来可能。只有包装确实作出无依据或冲突的事实承诺时才报硬伤，同时引用包装原句与相关正文依据。不要审正文质量，也不要把不确定推断当作事实。只登记问题和实质性的不确定之处，符合正文的陈述无需逐条登记。只审稿，不改写。'},
       {role:'user',content:[...sources].map(([id,text])=>`## Source: ${id}\n${numberReviewSource(text)}`).join('\n\n')},
     ],sources,{name:'submit_short_package_review',label:'Review package fidelity',description:'Submit source-grounded findings about the package factual promises.'},
-    {maxTokens:Math.min(4096,safeShortFictionOutputBudget(this.ctx.client.defaults.maxTokens)),categoryRequired:true});
+    {maxTokens:Math.min(4096,safeShortFictionOutputBudget(this.ctx.client.defaults.maxTokens)),professionalGuidance:false,categoryRequired:true,validateObservations:observations=>{
+      const unpaired=observations.filter(observation=>observation.assessment==='issue'&&(
+        !observation.sourceRefs.some(reference=>reference.sourceId==='package')||
+        !observation.sourceRefs.some(reference=>reference.sourceId==='manuscript')
+      )).map(observation=>observation.code);
+      if(unpaired.length)throw Object.assign(new Error(JSON.stringify({
+        code:'SHORT_PACKAGE_REVIEW_PAIR_REQUIRED',observationCodes:unpaired,
+        instruction:'Cite the sales-package claim and manuscript evidence establishing each package issue, or withdraw it. A manuscript-only critique is outside this review.',
+      })),{code:'SHORT_PACKAGE_REVIEW_PAIR_REQUIRED'});
+    }});
     return response.result;
   }
 }
@@ -791,6 +860,7 @@ export function shortReviewSources(input: ShortFictionDraftReviewInput): Map<str
     ...(input.draft.openingHook ? [["manuscript-opening", input.draft.openingHook] as [string, string]] : []),
     ...input.draft.chapters.map(chapter => [`manuscript-chapter-${chapter.number}`, chapter.title + "\n" + chapter.content] as [string, string]),
   ]);
+  if(input.reference?.text.trim())sources.set('reference-material',input.reference.text);
   if (input.comparison) {
     const before = input.comparison.draft;
     sources.set("baseline-manuscript-title", before.storyTitle);

@@ -1,5 +1,7 @@
 import {authorTextScopeContract,authorEditPermission} from './author-edit-scope.js';
 import {SourceLocatorAgent} from './source-locator.js';
+import {createStoryIntervalTool} from './story-interval.js';
+import {createReviewCalculationTool} from './review-calculation.js';
 import {currentExecutionAuthorRequest,currentExecutionBaselineWork,currentExecutionWork} from '../harness/execution-evidence.js';
 import {resolveAuthorTextPermission} from '../harness/author-text-permission.js';
 import {readArtifactRevision} from '../harness/artifact-reader.js';
@@ -48,6 +50,11 @@ export class ReviserAgent extends BaseAgent {
       readonly instruction?:string;
       readonly targetText?:string;
       readonly candidateText?:string;
+      /** Host-resolved immutable source for a chapter stored inside another artifact. */
+      readonly authorSource?: {
+        readonly workId:string; readonly artifactId:string; readonly revisionId:string;
+        readonly content:string; readonly request:string;
+      };
       readonly contextPackage: ContextPackage;
       readonly lengthSpec?: LengthSpec;
       /** Observe a complete source-bound candidate without adopting it. */
@@ -74,7 +81,7 @@ export class ReviserAgent extends BaseAgent {
           : `\n## 篇幅要求\n${JSON.stringify({...options.lengthSpec,currentCount:countChapterLength(chapterContent,options.lengthSpec.countingMode),unit:"正文非空白字符，含标点，不含标题"})}`)
       : "";
     const systemPrompt = buildRevisionProtocol(mode, options.language);
-    const authorRequest=currentExecutionAuthorRequest();
+    const authorRequest=options.authorSource?.request??currentExecutionAuthorRequest();
     const baseline=currentExecutionBaselineWork();
     const work=currentExecutionWork();
     const prefix=`source/chapters/${String(chapterNumber).padStart(4,'0')}_`;
@@ -82,24 +89,27 @@ export class ReviserAgent extends BaseAgent {
     const predatesRequest=baseline===undefined||Boolean(originalArtifact);
     let authorized:ReturnType<typeof authorTextScopeContract>|undefined;
     let scopeSource=chapterContent;
-    if(authorRequest&&predatesRequest){
+    if(authorRequest&&(options.authorSource||predatesRequest)){
       const select=(source:string,request:string)=>new SourceLocatorAgent(this.ctx).select(source,request,{kind:'chapter',chapterNumber,title:options.chapterTitle});
-      if(originalArtifact?.currentRevisionId&&baseline){
+      if(options.authorSource){
+        scopeSource=body(options.authorSource.content);
+        authorized=await resolveAuthorTextPermission({projectRoot:this.ctx.projectRoot,...options.authorSource,
+          originalContent:scopeSource,currentContent:chapterContent,authorRequest,selectorVersion:7,select});
+      }else if(originalArtifact?.currentRevisionId&&baseline){
         const original=await readArtifactRevision({projectRoot:this.ctx.projectRoot,workId:baseline.id,artifactId:originalArtifact.id,revisionId:originalArtifact.currentRevisionId});
         scopeSource=body(original.bytes.toString('utf8'));
-        authorized=await resolveAuthorTextPermission({projectRoot:this.ctx.projectRoot,workId:baseline.id,artifactId:originalArtifact.id,revisionId:original.revision.id,originalContent:scopeSource,currentContent:chapterContent,authorRequest,selectorVersion:2,select});
+        authorized=await resolveAuthorTextPermission({projectRoot:this.ctx.projectRoot,workId:baseline.id,artifactId:originalArtifact.id,revisionId:original.revision.id,originalContent:scopeSource,currentContent:chapterContent,authorRequest,selectorVersion:7,select});
       }else authorized=authorTextScopeContract(chapterContent,await select(chapterContent,authorRequest));
     }
-    const scopedAuthorRequest = authorRequest && authorized && 'startOffset' in authorized.ranges[0]!
+    const scopedAuthorRequest = authorRequest && authorized
       ? authorRequest : undefined;
     const source=mode==='spot-fix'||authorized?numberReviewSource(chapterContent):chapterContent;
     const userPrompt = scopedAuthorRequest ? JSON.stringify({
       instruction: scopedAuthorRequest,
       chapterNumber,
-      // The coordinator can refine a failed attempt without changing the
-      // author's permission. Keep its advice separate from factual references;
-      // the original source selections below still enforce the edit boundary.
-      ...(options.instruction?.trim() ? {revisionGuidance: {
+      // A localized edit executes the original request directly. A second
+      // creative plan can substitute a different subject within the same bytes.
+      ...(options.instruction?.trim() && !('startOffset' in authorized!.ranges[0]!) ? {revisionGuidance: {
         source: 'coordinator',
         instruction: options.instruction,
         authority: 'advice_within_author_scope',
@@ -122,7 +132,7 @@ export class ReviserAgent extends BaseAgent {
     if(options.candidateText)messages.push({role:'user',content:JSON.stringify({unfinishedCandidate:body(options.candidateText),instruction:'Continue improving this unfinished candidate toward the original request. The original chapter remains authoritative for facts and protected text. Return only the requested replacement fields or complete revision; do not restart from the original when this candidate already addresses part of the task.'})});
     const outputBudget = Math.min(this.ctx.client.defaults.maxTokens, Math.max(8192, Math.ceil((options.lengthSpec?.target ?? chapterContent.length) * 4) + 8192));
     const output = authorized || mode === "spot-fix" || options.targetText!==undefined
-      ? await this.submitSpotFix(messages, scopeSource, outputBudget, options.lengthSpec,options.targetText,options.onCandidate,authorized)
+      ? await this.submitSpotFix(messages, chapterContent, outputBudget, options.lengthSpec,options.targetText,options.onCandidate,authorized)
       : await this.submitRewrite(messages, outputBudget, options.lengthSpec,body,options.onCandidate);
     const wordCount = options.lengthSpec
       ? countChapterLength(output.revisedContent, options.lengthSpec.countingMode)
@@ -163,11 +173,18 @@ export class ReviserAgent extends BaseAgent {
       ...(lengthSpec.maxChapterLength===undefined?{}:{maximum:lengthSpec.maxChapterLength-fixedLength}),
     }:undefined;
     if(replacementBudget?.maximum!==undefined&&replacementBudget.maximum<0)throw Object.assign(new Error('The protected text alone exceeds the chapter maximum. These edit ranges cannot satisfy both scope and length constraints.'),{code:'CHAPTER_EDIT_SCOPE_CONFLICT',replacementBudget});
-    const { result, usage } = await this.submitStructured([...messages,{role:'user',content:JSON.stringify({editableRanges:contract.ranges,replacementBudget,instruction:'Submit only replacement text in each named field. These selections identify the original authorized source, even if the current revision split a selection into multiple paragraphs. Continue improving the current prose within that same permission. The replacement budget is shared by all fields, not per field. For non-whitespace-characters, punctuation, Latin letters and digits also count; only whitespace is excluded. Keep the original trailing newline when present. Preserve all source bytes outside the selected ranges.'})}], {
+    const replacementFields=Object.keys(contract.parameters.properties);
+    const fieldLengths=(replacements:Record<string,string>)=>lengthSpec
+      ? replacementFields.map((field,index)=>({field,
+          originalCount:countChapterLength(contract.ranges[index]!.content,lengthSpec.countingMode),
+          submittedCount:countChapterLength(replacements[field]!,lengthSpec.countingMode)}))
+      : undefined;
+    const { result, usage } = await this.submitStructured([...messages,{role:'user',content:JSON.stringify({editableRanges:contract.ranges,replacementBudget,instruction:'Submit only replacement text in each named field. These selections identify the original authorized source, even if the current revision split a selection into multiple paragraphs. Continue improving the current prose within that same permission. The replacement budget is shared by all fields, not per field. Allocate it across the selections before writing. Rephrase redundant wording to make room for the requested change while preserving established facts. For non-whitespace-characters, punctuation, Latin letters and digits also count; only whitespace is excluded. Keep the original trailing newline when present. Preserve all source bytes outside the selected ranges.'})}], {
       name: "submit_chapter_range_replacements",
       label: "Submit chapter range replacements",
       description: "Submit replacement prose only within the author-authorized source selections, using their named fields.",
       parameters: contract.parameters,
+      supportingTools:[createStoryIntervalTool(),createReviewCalculationTool()],
       validate: async result => {
         const candidate=contract.apply(result);
         await onCandidate?.(candidate);
@@ -178,12 +195,13 @@ export class ReviserAgent extends BaseAgent {
           const sourceLength=lengthSpec?countChapterLength(originalChapter,lengthSpec.countingMode):undefined;
           const submittedLength=lengthSpec&&fixedLength!==undefined?countChapterLength(candidate,lengthSpec.countingMode)-fixedLength:undefined;
           const measuredBudget=replacementBudget&&submittedLength!==undefined?{...replacementBudget,submittedLength,
+            increaseByAtLeast:Math.max(0,replacementBudget.minimum-submittedLength),
             ...(replacementBudget.maximum===undefined?{}:{reduceByAtLeast:Math.max(0,submittedLength-replacementBudget.maximum)})}:replacementBudget;
-          throw Object.assign(new Error(JSON.stringify({code:failure.code,...failure.delivery,scope:'selected_ranges',replacementBudget:measuredBudget,source:{length:sourceLength,unchangedByThisAttempt:true},candidateCommitted:false,instruction:'The rejected replacement has not changed the source chapter. Adjust only the selected replacement fields to their combined budget. submittedLength measures their actual added length; reduceByAtLeast is the minimum reduction needed to fit. Do not include or rewrite protected surrounding text.'})),{code:failure.code,delivery:failure.delivery,replacementBudget:measuredBudget});
+          throw Object.assign(new Error(JSON.stringify({code:failure.code,...failure.delivery,scope:'selected_ranges',replacementBudget:measuredBudget,fieldLengths:fieldLengths(result),source:{length:sourceLength,unchangedByThisAttempt:true},candidateCommitted:false,instruction:'Revise only the named replacement fields. Their individual counts locate the excess or shortage; the assembled chapter measurement is authoritative. Meet the entire measured reduction or increase in the next submission, not just part of it. Rephrase the selected passages when small deletions cannot recover enough space; preserve facts and the requested creative effect. Do not repeat the rejected wording unchanged or modify protected surrounding text.'})),{code:failure.code,delivery:failure.delivery,replacementBudget:measuredBudget});
         }
         return result;
       },
-    }, {  maxTokens });
+    }, {maxTokens,professionalGuidance:!(authorized&&'startOffset' in authorized.ranges[0]!)});
     const revisedContent = contract.apply(result);
     return {
       revisedContent,

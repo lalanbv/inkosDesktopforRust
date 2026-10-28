@@ -5,6 +5,7 @@ import type { PipelineRunner } from "../pipeline/runner.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
 import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
+import {createHash} from 'node:crypto';
 import { StateManager } from "../state/manager.js";
 import { deleteLatestChapter } from "../state/chapter-delete.js";
 import { assertSafeBookId, deriveBookIdFromTitle } from "../utils/book-id.js";
@@ -1816,12 +1817,12 @@ export function createShortFictionRunTool(
 const ShortRevisionParams = Type.Object({
   instruction: Type.Optional(Type.String({minLength:1,description:"New revision instruction. Omit when resuming a saved operation."})),
   resumeOperationId: Type.Optional(Type.String({minLength:1,description:"Continue the saved operation returned in recovery. Supply this alone; its instructions, scope and completed chapters are restored."})),
-  restartPendingRevision: Type.Optional(Type.Boolean({description:"Explicitly replace a pending revision with new instructions and archive its checkpoint. Omit during recovery."})),chapterCount:Type.Optional(Type.Integer({minimum:1,description:"Set only when the author explicitly changes the final chapter count. Omit to preserve it. Requires whole-manuscript scope."})),charsPerChapter:Type.Optional(Type.Integer({minimum:1})),maxChapterLength:Type.Optional(Type.Integer({minimum:1,description:"Explicit new maximum; omit to preserve the Work's existing length limit."})),chapterNumbers:Type.Optional(Type.Array(Type.Integer({minimum:1}),{description:"Only these chapters may change. Use [] to preserve every chapter while revising the independent opening or outline. Omit for whole-manuscript scope."}))});
+  restartPendingRevision: Type.Optional(Type.Boolean({description:"Explicitly replace a pending revision with new instructions and archive its checkpoint. Omit during recovery."})),chapterCount:Type.Optional(Type.Integer({minimum:1,description:"Set only when the author explicitly changes the final chapter count. Omit to preserve it. Requires whole-manuscript scope."})),charsPerChapter:Type.Optional(Type.Integer({minimum:1})),maxChapterLength:Type.Optional(Type.Integer({minimum:1,description:"Explicit new maximum; omit to preserve the Work's existing length limit."})),chapterNumbers:Type.Optional(Type.Array(Type.Integer({minimum:1}),{description:"Only these chapters may change. Use [] to preserve every chapter while revising the book title, independent opening or outline. Omit for whole-manuscript scope."}))});
 
 export function createShortFictionReviseTool(pipeline:PipelineRunner,projectRoot:string,workId:string,options:SkillAwareProductionOptions={}) {
   return {
     name:"revise_short_fiction",label:"Revise short fiction",
-    description:"Revise an existing complete short-fiction Work from its persisted review and user direction, then review and update its sales package.",
+    description:"Revise an existing complete short-fiction Work within the author's requested scope, including book-title-only, opening-only or selected chapter changes, then review the revised manuscript. Use this action for manuscript changes instead of replacing its JSON or rendered copies. Existing sales packages, cover prompts, images and exports remain unchanged. When the author also requests updated packaging or delivery, perform those separately on the revised manuscript using package_short_fiction, the visual action and export_work_package.",
     parameters:ShortRevisionParams,
     async execute(_id:string,params:Static<typeof ShortRevisionParams>,signal?:AbortSignal,onUpdate?:AgentToolUpdateCallback) {
       const skills=resolveProductionToolSkills(options);
@@ -3078,12 +3079,12 @@ export function createReadTool(
   const description = options.allowSystemPaths
     ? "Read a file. Relative paths resolve under works/; absolute paths read from the system filesystem."
     : options.scope === "project"
-      ? "Read a UTF-8 file inside the current InkOS project. Path is relative to the project root."
+      ? "Read UTF-8 text or a PNG/JPEG image inside the current InkOS project. Path is relative to the project root."
     : "Read a file from the Work store. Path is relative to works/.";
 
   return {
     name: "read",
-    description: "Read a registered artifact by ID (defaults to the bound Work and accepted revision). Returns full-document measurements and JSON collection counts alongside a page of text with exact 1-based line numbers. If contentScope is page_excerpt, follow nextRead before claiming content is absent; the page is not the complete document or a parseable JSON replacement. Line-number prefixes are addresses, not part of the source. For external inputs only: " + description,
+    description: "Read a registered artifact by ID (defaults to the bound Work and accepted revision). PNG/JPEG images return the actual pixels with verified source identity for visual inspection. Text returns full-document measurements and JSON collection counts alongside a page with exact 1-based line numbers. If contentScope is page_excerpt, follow nextRead before claiming content is absent; the page is not the complete document or a parseable JSON replacement. Line-number prefixes are addresses, not part of the source. For external inputs only: " + description,
     label: "Read File",
     parameters: ReadParams,
     async execute(
@@ -3097,6 +3098,13 @@ export function createReadTool(
         const workId = params.workId ?? options.workId;
         if (!workId) throw Object.assign(new Error("Select a Work from workspace__list_works."), { code: "WORK_REQUIRED" });
         const { artifact, revision, bytes } = await readArtifactRevision({ projectRoot, workId, artifactId: params.artifactId, revisionId: params.revisionId });
+        if (revision.contentType === 'image/png' || revision.contentType === 'image/jpeg') {
+          if(params.startLine!==undefined||params.lineCount!==undefined)throw Object.assign(new Error('Read the complete image without text pagination.'),{code:'ARTIFACT_IMAGE_PAGINATION'});
+          if(bytes.length>10*1024*1024)throw Object.assign(new Error('The registered image exceeds the 10 MiB visual observation limit.'),{code:'ARTIFACT_IMAGE_TOO_LARGE',byteLength:bytes.length});
+          const details={kind:'artifact_image_read',workId,artifactId:artifact.id,revisionId:revision.id,path:revision.path,
+            status:revision.status,checksum:revision.checksum,mimeType:revision.contentType,byteLength:bytes.length,contentScope:'full_artifact'};
+          return {content:[{type:'text',text:JSON.stringify(details)},{type:'image',mimeType:revision.contentType,data:bytes.toString('base64')}],details};
+        }
         if (!revision.contentType.startsWith("text/") && !["application/json", "application/yaml"].includes(revision.contentType)) {
           throw Object.assign(new Error("Use the artifact viewer for this binary revision."), { code: "ARTIFACT_NOT_TEXT" });
         }
@@ -3116,9 +3124,9 @@ export function createReadTool(
         });
       }
       const filePath = resolveReadPath(readRoot, params.path!, options);
-      let content: string;
+      let bytes: Buffer;
       try {
-        content = await readFile(filePath, "utf-8");
+        bytes = await readFile(filePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           throw new WorkFileNotFoundError(params.path!);
@@ -3131,7 +3139,23 @@ export function createReadTool(
         }
         throw error;
       }
-      return textResult(content);
+      const checksum=`sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+      const mimeType=bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png'
+        :bytes[0]===255&&bytes[1]===216&&bytes[2]===255?'image/jpeg':undefined;
+      const details={kind:mimeType?'file_image_read':'file_read',path:params.path,checksum,byteLength:bytes.length,contentScope:'full_file'};
+      if(mimeType){
+        if(bytes.length>10*1024*1024)throw Object.assign(new Error('The image exceeds the 10 MiB visual observation limit.'),{code:'FILE_IMAGE_TOO_LARGE',byteLength:bytes.length});
+        const imageDetails={...details,mimeType};
+        return{content:[{type:'text',text:JSON.stringify(imageDetails)},{type:'image',mimeType,data:bytes.toString('base64')}],details:imageDetails};
+      }
+      let content:string;
+      try{
+        if(bytes.includes(0))throw new Error('Binary zero byte');
+        content=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      }catch{
+        throw Object.assign(new Error('This file is not UTF-8 text or a supported image. Use its import or artifact viewer instead of reading binary bytes as prose.'),{code:'WORK_FILE_NOT_TEXT',path:params.path,byteLength:bytes.length});
+      }
+      return textResult(content,details);
     },
   };
 }
