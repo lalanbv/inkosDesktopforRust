@@ -180,6 +180,13 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
   };
 
   // 768 号决策①A：外部来源信任确认/撤销（载入闸读同一信任库）。
+  const trustSourceFromDiagnostic = async (path: string) => {
+    await runSave(`skill-trust-add:${path}`, async () => {
+      await postApi("/skills/trust", { path });
+      await Promise.all([refetchSkillTrust(), refetchSkills()]);
+    }, isZh ? "外部 Skill 来源已信任" : "External skill source trusted");
+  };
+
   const addSkillTrust = async () => {
     const path = skillTrustPath.trim();
     if (!path) return;
@@ -253,11 +260,35 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
           {skillsData?.diagnostics?.length ? (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               <div className="font-semibold">{isZh ? "部分外部 Skill 未加载" : "Some external skills were not loaded"}</div>
-              {skillsData.diagnostics.slice(0, 8).map((item, index) => (
-                <div key={`${item.path ?? "skill"}-${index}`} className="mt-1 break-all">
-                  {item.path ? `${item.path}: ` : ""}{item.message ?? (isZh ? "格式无效" : "Invalid format")}
-                </div>
-              ))}
+              {skillsData.diagnostics.slice(0, 8).map((item, index) => {
+                // 769 号：待信任来源一键确认（768 号信任门 UX 闭环——
+                // 此前须手工重敲路径；此处直接复用 POST /skills/trust 校验链）。
+                const pendingTrustPath = item.message?.includes("pending trust confirmation") === true
+                  && typeof item.path === "string"
+                  && item.path.length > 0
+                  ? item.path
+                  : null;
+                const pendingTrust = pendingTrustPath !== null;
+                return (
+                  <div key={`${item.path ?? "skill"}-${index}`} className="mt-1 flex items-center justify-between gap-2 break-all">
+                    <span className="min-w-0 flex-1">
+                      {item.path ? `${item.path}: ` : ""}{item.message ?? (isZh ? "格式无效" : "Invalid format")}
+                    </span>
+                    {pendingTrust && pendingTrustPath ? (
+                      <button
+                        type="button"
+                        onClick={() => void trustSourceFromDiagnostic(pendingTrustPath)}
+                        disabled={saving === `skill-trust-add:${item.path}`}
+                        className="shrink-0 rounded-lg border border-amber-600/40 bg-background px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-40 dark:text-amber-300"
+                      >
+                        {saving === `skill-trust-add:${item.path}`
+                          ? (isZh ? "确认中..." : "Confirming...")
+                          : (isZh ? "信任此来源" : "Trust source")}
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-secondary/20 p-3">
