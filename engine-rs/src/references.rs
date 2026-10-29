@@ -471,7 +471,9 @@ pub async fn select_book_reference_context(
             continue;
         };
         let markdown_path = safe_child_path(&project_root.to_string_lossy(), &asset.markdown_path)?;
-        let markdown = std::fs::read_to_string(&markdown_path).map_err(|e| e.to_string())?;
+        let markdown = tokio::fs::read_to_string(&markdown_path)
+            .await
+            .map_err(|e| e.to_string())?;
         let content = extract_material_content(&markdown);
         sections.extend(split_reference_sections(&SplitSectionsInput {
             material_id: &reference.material_id,

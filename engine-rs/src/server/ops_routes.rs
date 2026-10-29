@@ -967,11 +967,11 @@ pub async fn post_deconstruct(
         .join(&book_id)
         .join("story")
         .join("deconstruction");
-    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+    if let Err(error) = tokio::fs::create_dir_all(&story_dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let out_path = story_dir.join(format!("{name}.md"));
-    if let Err(error) = std::fs::write(&out_path, &result.markdown) {
+    if let Err(error) = tokio::fs::write(&out_path, &result.markdown).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
 
@@ -987,8 +987,8 @@ pub async fn post_deconstruct(
         );
         let trimmed: String = material_id.chars().take(64).collect();
         let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
-        let _ = std::fs::create_dir_all(&materials_dir);
-        let _ = std::fs::write(materials_dir.join(format!("{trimmed}.md")), &result.markdown);
+        let _ = tokio::fs::create_dir_all(&materials_dir).await;
+        let _ = tokio::fs::write(materials_dir.join(format!("{trimmed}.md")), &result.markdown).await;
         let manifest = json!({
             "id": trimmed,
             "title": name,
@@ -998,10 +998,11 @@ pub async fn post_deconstruct(
             "mimeType": "text/markdown",
             "markdownPath": format!(".inkos/materials/{trimmed}.md"),
         });
-        let _ = std::fs::write(
+        let _ = tokio::fs::write(
             materials_dir.join(format!("{trimmed}.json")),
             serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        )
+        .await;
         published_material_id = Some(trimmed);
     }
 
@@ -1131,7 +1132,8 @@ pub async fn get_director(
         .join(".inkos")
         .join("director")
         .join(format!("{book_id}.json"));
-    let session = std::fs::read_to_string(&path)
+    let session = tokio::fs::read_to_string(&path)
+        .await
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
     let saved_chapters = runtime
@@ -1174,11 +1176,12 @@ pub async fn put_director(
         }
     }
     let dir = runtime.state.project_root().join(".inkos").join("director");
-    if let Err(error) = std::fs::create_dir_all(&dir) {
+    if let Err(error) = tokio::fs::create_dir_all(&dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let path = dir.join(format!("{book_id}.json"));
-    let mut session: Value = std::fs::read_to_string(&path)
+    let mut session: Value = tokio::fs::read_to_string(&path)
+        .await
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| json!({ "bookId": book_id }));
@@ -1332,7 +1335,7 @@ pub async fn post_hybrid_search(
 /// G16/346 号：读项目级任务路由（.inkos/task-routing.json；缺省 null）。
 pub async fn get_task_routing(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let path = runtime.state.project_root().join(".inkos").join("task-routing.json");
-    match std::fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(raw) => match serde_json::from_str::<Value>(&raw) {
             Ok(routing) => (StatusCode::OK, Json(json!({ "routing": routing }))).into_response(),
             Err(_) => (StatusCode::OK, Json(json!({ "routing": Value::Null }))).into_response(),
@@ -1380,6 +1383,13 @@ pub async fn get_roster_candidates(
         )
             .into_response();
     }
+    // 763 号：名册读取不依赖 db 结果，提到同步闭包前异步读（闭包内保留的
+    // MemoryDb/rusqlite 同步访问属 sqlite 同步访问面，另轮定性）。
+    let roster_path = book_dir.join("story").join("entity_roster.md");
+    let (roster, roster_exists) = match tokio::fs::read_to_string(&roster_path).await {
+        Ok(raw) => (crate::utils::entity_roster::parse_entity_roster(&raw), true),
+        Err(_) => (Vec::new(), false),
+    };
     let result = (|| {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let summaries = db.get_summaries(1, 100_000)?;
@@ -1390,11 +1400,6 @@ pub async fn get_roster_candidates(
                 .map(|s| (s.chapter, s.characters.clone()))
                 .collect::<Vec<_>>(),
         );
-        let roster_path = book_dir.join("story").join("entity_roster.md");
-        let (roster, roster_exists) = match std::fs::read_to_string(&roster_path) {
-            Ok(raw) => (crate::utils::entity_roster::parse_entity_roster(&raw), true),
-            Err(_) => (Vec::new(), false),
-        };
         let cards = crate::utils::entity_roster::resolve_roster_candidates(&candidates, &roster);
         Ok::<_, crate::EngineError>(serde_json::json!({
             "cards": cards,
@@ -1441,7 +1446,7 @@ pub async fn post_roster_confirm(
         .join(&book_id)
         .join("story");
     let roster_path = story_dir.join("entity_roster.md");
-    let roster = match std::fs::read_to_string(&roster_path) {
+    let roster = match tokio::fs::read_to_string(&roster_path).await {
         Ok(raw) => crate::utils::entity_roster::parse_entity_roster(&raw),
         Err(_) => Vec::new(),
     };
@@ -1452,11 +1457,11 @@ pub async fn post_roster_confirm(
         chapter: body.chapter,
     };
     let (roster, applied) = crate::utils::entity_roster::apply_roster_confirmation(&roster, &confirmation);
-    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+    if let Err(error) = tokio::fs::create_dir_all(&story_dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let rendered = crate::utils::entity_roster::render_entity_roster(&roster);
-    if let Err(error) = std::fs::write(&roster_path, rendered) {
+    if let Err(error) = tokio::fs::write(&roster_path, rendered).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let applied_value = serde_json::to_value(&applied).unwrap_or(json!(null));
@@ -1466,16 +1471,22 @@ pub async fn post_roster_confirm(
 /// G4/340 号：写法档案池列表（项目级 .inkos/style-profiles/）。
 pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = tokio::fs::create_dir_all(&dir).await;
     let mut profiles: Vec<Value> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        loop {
+            // 对齐 std `flatten()`：坏条目跳过而非终止遍历。
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => continue,
+            };
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
             let Some(name) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-            if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(raw) = tokio::fs::read_to_string(&path).await {
                 if let Ok(profile) = serde_json::from_str::<Value>(&raw) {
                     profiles.push(json!({ "name": name, "profile": profile }));
                 }
@@ -1501,10 +1512,10 @@ pub async fn save_style_profile(
         return flat_error(StatusCode::BAD_REQUEST, String::from("name is required"));
     }
     let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join(format!("{name}.json"));
     match serde_json::to_string_pretty(&body.profile) {
-        Ok(raw) => match std::fs::write(&path, raw) {
+        Ok(raw) => match tokio::fs::write(&path, raw).await {
             Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name }))).into_response(),
             Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         },
@@ -1524,7 +1535,7 @@ pub async fn get_style_binding(
         .join(&book_id)
         .join("story")
         .join("style_binding.json");
-    match std::fs::read_to_string(&path) {
+    match tokio::fs::read_to_string(&path).await {
         Ok(raw) => match serde_json::from_str::<Value>(&raw) {
             Ok(binding) => (StatusCode::OK, Json(json!({ "binding": binding }))).into_response(),
             Err(_) => (StatusCode::OK, Json(json!({ "binding": Value::Null }))).into_response(),
@@ -1580,12 +1591,12 @@ pub async fn save_style_binding(
         .join("books")
         .join(&book_id)
         .join("story");
-    if let Err(error) = std::fs::create_dir_all(&story_dir) {
+    if let Err(error) = tokio::fs::create_dir_all(&story_dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let path = story_dir.join("style_binding.json");
     let raw = serde_json::to_string_pretty(&binding).unwrap_or_default();
-    match std::fs::write(&path, raw) {
+    match tokio::fs::write(&path, raw).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "binding": binding }))).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
@@ -1700,9 +1711,11 @@ pub async fn get_tension_curve(
         )
             .into_response();
     }
+    let read = tokio::fs::read_to_string(&summaries_path)
+        .await
+        .map_err(crate::EngineError::Io);
     let result = (|| {
-        let markdown = std::fs::read_to_string(&summaries_path)
-            .map_err(crate::EngineError::Io)?;
+        let markdown = read?;
         let summaries = crate::utils::story_markdown::parse_chapter_summaries_markdown(&markdown);
         let rows: Vec<crate::utils::tension_curve::TensionRow> = summaries
             .iter()
@@ -1747,13 +1760,15 @@ pub async fn get_promises(
         )
             .into_response();
     }
+    // 763 号：台账读取不依赖 db 结果，提到同步闭包前异步读（缺文件降级语义不变）。
+    let hooks_markdown = tokio::fs::read_to_string(book_dir.join("story").join("pending_hooks.md"))
+        .await
+        .unwrap_or_default();
     let result = (|| {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let hooks = db.get_all_hooks()?;
         // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
         // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
-        let hooks_markdown = std::fs::read_to_string(book_dir.join("story").join("pending_hooks.md"))
-            .unwrap_or_default();
         let mut kind_by_id: std::collections::HashMap<String, crate::models::runtime_state::HookKind> =
             std::collections::HashMap::new();
         for hook in crate::utils::story_markdown::parse_pending_hooks_markdown(&hooks_markdown) {
@@ -1863,7 +1878,8 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     let books = runtime.state.list_books().await;
     checks["bookCount"] = json!(books.len());
     // G1/349 号：检索层健康——embedding 配置存在 → semantic 能力，否则 FTS5 降级。
-    let embedding_configured = std::fs::read_to_string(root.join("inkos.json"))
+    let embedding_configured = tokio::fs::read_to_string(root.join("inkos.json"))
+        .await
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .and_then(|config| {

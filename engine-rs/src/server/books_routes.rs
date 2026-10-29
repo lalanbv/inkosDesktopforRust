@@ -129,9 +129,10 @@ impl BooksRuntime {
                     // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
                     let hub = self.hub.clone();
                     // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
-                    let task_routing = std::fs::read_to_string(
+                    let task_routing = tokio::fs::read_to_string(
                         root.join(".inkos").join("task-routing.json")
                     )
+                    .await
                     .ok()
                     .and_then(|raw| serde_json::from_str(&raw).ok());
                     Arc::new(

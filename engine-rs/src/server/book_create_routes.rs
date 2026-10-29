@@ -427,7 +427,8 @@ pub(crate) async fn write_director_inspiration_card(
     let dir = project_root.join(".inkos").join("director");
     tokio::fs::create_dir_all(&dir).await?;
     let path = dir.join(format!("{book_id}.json"));
-    let mut session: Value = std::fs::read_to_string(&path)
+    let mut session: Value = tokio::fs::read_to_string(&path)
+        .await
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| json!({}));

@@ -94,14 +94,23 @@ pub async fn export(
     let include_secrets = params.get("includeSecrets").map(|v| v == "1").unwrap_or(false);
     let include_sessions = params.get("includeSessions").map(|v| v == "1").unwrap_or(false);
     let root = runtime.state.project_root().to_path_buf();
-    match run_export(&root, include_secrets, include_sessions) {
-        Ok(bytes) => (
+    // 763 号：整书 staging 复制 + tar + gzip 是秒级阻塞工作，移出 runtime
+    // 线程（run_export 本体保持同步签名——725 号 bench 契约面语义不变）。
+    let result = tokio::task::spawn_blocking(move || run_export(&root, include_secrets, include_sessions))
+        .await;
+    match result {
+        Ok(Ok(bytes)) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "application/gzip"),
                 (header::CONTENT_DISPOSITION, "attachment; filename=\"inkos-backup.tar.gz\""),
             ],
             bytes,
+        )
+            .into_response(),
+        Ok(Err(error)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
         )
             .into_response(),
         Err(error) => (
@@ -220,9 +229,16 @@ pub async fn import(
 ) -> impl IntoResponse {
     let root = runtime.state.project_root().to_path_buf();
     let confirm = params.get("confirm").map(|v| v == "1").unwrap_or(false);
-    match run_import(&root, &body, confirm) {
-        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+    // 763 号：同 export——整包解析 + 逐条目落盘移出 runtime 线程。
+    let result = tokio::task::spawn_blocking(move || run_import(&root, &body, confirm)).await;
+    match result {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
     }
 }
 
