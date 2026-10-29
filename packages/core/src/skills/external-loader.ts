@@ -1,4 +1,16 @@
+/**
+ * 外部技能加载（external-loader）——契约 v1 正式冻结面（768 号，决策③A）。
+ *
+ * 公开契约：SKILL.md frontmatter `name`（≤64 字符必填）/`description`
+ * （≤1024 字符必填）/`disable-model-invocation`（可选治理键）/
+ * `min-engine-version`（可选兼容键，不满足 → 该份技能 diagnostic 降级，
+ * 比较基准 {@link SKILL_CONTRACT_VERSION} 经 golden 双端锁）；manifest
+ * ≤2MB。semver：破坏性变更随引擎大版本。分发=裸目录约定（SKILL.md
+ * 目录放入五目录即被扫描）；信任=外部源确认（external 目录须信任，
+ * 见 trust-store.ts；user/project 默认信任）。
+ */
 import { readFile, readdir, stat } from "node:fs/promises";
+import { isTrustedSource } from "./trust-store.js";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import yaml from "js-yaml";
@@ -81,6 +93,19 @@ export async function loadConfiguredAgentSkills(
         source: candidate.source,
         defaultRank: candidate.defaultRank,
       });
+      // 768 号决策①A：external（INKOS_SKILL_DIRS 显式）来源须先在信任库
+      //（.inkos/trusted-sources.json）；未确认 → 技能不入列，仅 diagnostic
+      // 提示待确认（UI 确认后重载生效）。user/project 惯例目录默认信任。
+      if (
+        candidate.source === "external"
+        && !(await isTrustedSource(input.projectRoot, candidate.path))
+      ) {
+        diagnostics.push({
+          path: candidate.path,
+          message: "external skill source pending trust confirmation; confirm it in the skills trust settings.",
+        });
+        continue;
+      }
       skills.push(...result.skills);
       diagnostics.push(...result.diagnostics);
     } catch (error) {
@@ -187,8 +212,8 @@ async function loadSkillManifest(
 /**
  * 技能包契约版本（767 号公共件）：与 Rust `SKILL_CONTRACT_VERSION` 经
  * `golden/skill-contract-vectors.json` 双端锁（改值必须双端同批）。取 core
- * 正典版本前两段（技能契约源头在 TS 腿）。承诺状态仍随 766 号草案——
- * 正式冻结待决策③；本常量只是比较基准，非兼容性承诺。
+ * 正典版本前两段（技能契约源头在 TS 腿）。768 号起为契约 v1 正式比较
+ * 基准（破坏性变更随引擎大版本）。
  */
 export const SKILL_CONTRACT_VERSION = "2.0";
 

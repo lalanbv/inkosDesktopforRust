@@ -82,6 +82,18 @@ Selection order: env var `INKOS_ENGINE_BACKEND` (rust\|node) > the "Engine backe
 
 Sandboxed WASM plugins + declarative permissions + marketplace (see [docs/plugin-system.md](docs/plugin-system.md)).
 
+### Skill pack extension (third-party SKILL.md folders)
+
+A skill pack is a directory containing `SKILL.md` (AgentSkills / OpenClaw compatible). Any of the following locations is scanned on load:
+
+| Location | Source | Trust |
+|----------|--------|-------|
+| `$INKOS_SKILL_DIRS` (path-separator split) | External | **Requires trust confirmation in Settings → Skills** |
+| `~/.openclaw/skills`, `~/.agents/skills` | User | Trusted by default |
+| `<project>/.agents/skills`, `<project>/skills` | Project | Trusted by default |
+
+Public contract (v1, semver: breaking changes ship with engine major versions): frontmatter `name` (required, ≤64 chars), `description` (required, ≤1024 chars), `disable-model-invocation` (optional, never auto-activated by the model), `min-engine-version` (optional; unsatisfied skills load as a diagnostic instead); manifest ≤2MB. Trust state lives in `<project>/.inkos/trusted-sources.json` and can be revoked anytime in Settings.
+
 ## Run from source
 
 ### Requirements

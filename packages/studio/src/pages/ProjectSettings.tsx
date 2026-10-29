@@ -101,6 +101,9 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
   const { data: notifyData, refetch: refetchNotify } = useApi<{ channels: unknown[] }>("/project/notify");
   const { data: detectionData, refetch: refetchDetection } = useApi<{ detection: unknown | null }>("/project/detection");
   const { data: skillsData, refetch: refetchSkills } = useApi<SkillsResponse>("/skills");
+  // 768 号决策①A：外部来源信任管理（external=INKOS_SKILL_DIRS 显式目录需确认）。
+  const { data: skillTrustData, refetch: refetchSkillTrust } = useApi<{ entries: ReadonlyArray<{ path: string; confirmedAt: string }> }>("/skills/trust");
+  const [skillTrustPath, setSkillTrustPath] = useState("");
   // R44/566 号：skills:change 失效事件热刷新（author_skill 写链 / import / delete）。
   useSkillsInvalidation(sse, () => { void refetchSkills(); });
   const [defaultService, setDefaultService] = useState("");
@@ -174,6 +177,24 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
       await postApi("/skills/import", { files: serialized });
       await refetchSkills();
     }, isZh ? "Skill 文件夹已导入" : "Skill folder imported");
+  };
+
+  // 768 号决策①A：外部来源信任确认/撤销（载入闸读同一信任库）。
+  const addSkillTrust = async () => {
+    const path = skillTrustPath.trim();
+    if (!path) return;
+    await runSave("skill-trust-add", async () => {
+      await postApi("/skills/trust", { path });
+      setSkillTrustPath("");
+      await Promise.all([refetchSkillTrust(), refetchSkills()]);
+    }, isZh ? "外部 Skill 来源已信任" : "External skill source trusted");
+  };
+
+  const removeSkillTrust = async (path: string) => {
+    await runSave(`skill-trust-remove:${path}`, async () => {
+      await fetchJson(`/skills/trust?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+      await Promise.all([refetchSkillTrust(), refetchSkills()]);
+    }, isZh ? "外部 Skill 来源已撤销信任" : "External skill source untrusted");
   };
 
   const updateChannel = (index: number, patch: Partial<NotifyChannelDraft>) => {
@@ -270,6 +291,51 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
                 event.currentTarget.value = "";
               }}
             />
+          </div>
+          {/* 768 号决策①A：外部 Skill 来源信任管理。 */}
+          <div className="space-y-2 rounded-xl border border-border/60 bg-secondary/20 p-3">
+            <div className="text-sm font-semibold">{isZh ? "外部 Skill 来源信任" : "External skill source trust"}</div>
+            <p className="text-xs text-muted-foreground">
+              {isZh
+                ? "INKOS_SKILL_DIRS 环境变量目录中的技能需先确认信任才会载入；项目内 skills 目录默认信任。待确认的来源会出现在上方诊断列表。"
+                : "Skills from INKOS_SKILL_DIRS directories require trust confirmation before loading; project skills folders are trusted by default. Pending sources appear in the diagnostics above."}
+            </p>
+            {(skillTrustData?.entries ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">{isZh ? "尚未信任任何外部来源。" : "No trusted external sources yet."}</p>
+            ) : (
+              <div className="space-y-1">
+                {(skillTrustData?.entries ?? []).map((entry) => (
+                  <div key={entry.path} className="flex items-center justify-between gap-2 rounded-lg bg-background px-3 py-1.5">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{entry.path}</span>
+                    <button
+                      type="button"
+                      onClick={() => void removeSkillTrust(entry.path)}
+                      disabled={saving === `skill-trust-remove:${entry.path}`}
+                      className="shrink-0 rounded-lg p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      aria-label={isZh ? `撤销信任 ${entry.path}` : `Untrust ${entry.path}`}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <input
+                value={skillTrustPath}
+                onChange={(event) => setSkillTrustPath(event.currentTarget.value)}
+                placeholder={isZh ? "外部来源绝对路径（含 SKILL.md 的目录）" : "Absolute path to the folder containing SKILL.md"}
+                className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => void addSkillTrust()}
+                disabled={saving === "skill-trust-add" || !skillTrustPath.trim()}
+                className="shrink-0 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-40"
+              >
+                {isZh ? "信任此来源" : "Trust source"}
+              </button>
+            </div>
           </div>
           {skills.length === 0 ? (
             <p className="text-xs text-muted-foreground italic">{isZh ? "还没有 Skill。" : "No skills yet."}</p>

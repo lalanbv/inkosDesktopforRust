@@ -92,6 +92,18 @@
 
 WASM 沙箱插件 + 声明式权限 + marketplace（详见 [docs/plugin-system.md](docs/plugin-system.md)）。
 
+### 技能包扩展（第三方 SKILL.md 裸目录）
+
+技能包 = 含 `SKILL.md` 的目录（AgentSkills / OpenClaw 兼容），放入以下任一目录即被扫描装载：
+
+| 目录 | 来源 | 信任 |
+|------|------|------|
+| `$INKOS_SKILL_DIRS`（路径分隔符分割） | 外部 | **需在 设置 → 技能 中确认信任** |
+| `~/.openclaw/skills`、`~/.agents/skills` | 用户 | 默认信任 |
+| `<项目>/.agents/skills`、`<项目>/skills` | 项目 | 默认信任 |
+
+公开契约（v1，semver：破坏性变更随引擎大版本）：frontmatter `name`（必填 ≤64 字符）、`description`（必填 ≤1024 字符）、`disable-model-invocation`（可选，模型不可自主激活）、`min-engine-version`（可选，不满足时该技能载入为诊断提示）；manifest ≤2MB。信任状态存 `<项目>/.inkos/trusted-sources.json`，可在设置中随时撤销。
+
 ## 从源码运行
 
 ### 环境要求

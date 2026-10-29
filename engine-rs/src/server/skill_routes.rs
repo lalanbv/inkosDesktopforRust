@@ -200,6 +200,93 @@ fn internal_error_message(message: &str) -> ApiErrorResponse {
     api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message)
 }
 
+// ── GET/POST/DELETE /api/v1/skills/trust（768 号决策①A）────────────
+// external（INKOS_SKILL_DIRS 显式）来源信任管理；user/project 默认信任。
+// 注册在 :skillId 参数路由之前（matchit 静态段优先，双保险）。
+
+pub async fn list_skill_trust(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let entries = crate::skills::trust_store::read_trusted_sources(runtime.state.project_root())
+        .await;
+    (StatusCode::OK, Json(json!({ "entries": entries })))
+}
+
+pub async fn add_skill_trust(
+    State(runtime): State<BooksRuntime>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let raw_path = body
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    if raw_path.is_empty() || !Path::new(raw_path).is_absolute() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_SKILL_TRUST_PATH",
+            "Skill trust path must be absolute",
+        )
+        .into_response();
+    }
+    let dir = PathBuf::from(raw_path);
+    match tokio::fs::metadata(&dir).await {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            return api_error(
+                StatusCode::BAD_REQUEST,
+                "INVALID_SKILL_TRUST_PATH",
+                "Skill trust path must be a directory",
+            )
+            .into_response()
+        }
+        Err(_) => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                "SKILL_TRUST_PATH_NOT_FOUND",
+                format!("Skill source directory not found: {raw_path}"),
+            )
+            .into_response()
+        }
+    }
+    if tokio::fs::metadata(dir.join("SKILL.md")).await.is_err() {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_SKILL_TRUST_PATH",
+            "Skill source directory has no SKILL.md",
+        )
+        .into_response();
+    }
+    let result = crate::skills::trust_store::add_trusted_source(root, raw_path).await;
+    match result {
+        Ok(entries) => {
+            runtime.hub.broadcast("skills:change", &json!({ "reason": "trust-added" }));
+            (StatusCode::OK, Json(json!({ "ok": true, "entries": entries }))).into_response()
+        }
+        Err(error) => internal_error_message(&error.to_string()).into_response(),
+    }
+}
+
+pub async fn remove_skill_trust(
+    State(runtime): State<BooksRuntime>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let raw_path = params.get("path").map(|value| value.trim()).unwrap_or_default();
+    if raw_path.is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_TRUST", "path query is required")
+            .into_response();
+    }
+    let result =
+        crate::skills::trust_store::remove_trusted_source(runtime.state.project_root(), raw_path)
+            .await;
+    match result {
+        Ok(entries) => {
+            runtime.hub.broadcast("skills:change", &json!({ "reason": "trust-removed" }));
+            (StatusCode::OK, Json(json!({ "ok": true, "entries": entries }))).into_response()
+        }
+        Err(error) => internal_error_message(&error.to_string()).into_response(),
+    }
+}
+
 /// 139 号：sub_agent 工具面的技能装载复用出口。
 pub fn env_skill_dirs_public() -> Vec<String> {
     env_skill_dirs()

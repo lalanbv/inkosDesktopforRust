@@ -81,6 +81,18 @@
 
 サンドボックス化された WASM プラグイン + 宣言的権限 + marketplace（詳細は [docs/plugin-system.md](docs/plugin-system.md)）。
 
+### スキルパック拡張（サードパーティ SKILL.md フォルダ）
+
+スキルパック = `SKILL.md` を含むフォルダ（AgentSkills / OpenClaw 互換）。以下のいずれかのディレクトリに置くと走査・読み込みされます：
+
+| ディレクトリ | ソース | 信頼 |
+|--------------|--------|------|
+| `$INKOS_SKILL_DIRS`（パス区切りで分割） | 外部 | **設定 → スキルで信頼確認が必要** |
+| `~/.openclaw/skills`、`~/.agents/skills` | ユーザー | デフォルトで信頼 |
+| `<プロジェクト>/.agents/skills`、`<プロジェクト>/skills` | プロジェクト | デフォルトで信頼 |
+
+公開契約（v1、semver：破壊的変更はエンジンのメジャーバージョンで実施）：フロントマターの `name`（必須 ≤64 文字）、`description`（必須 ≤1024 文字）、`disable-model-invocation`（任意、モデルが自主アクティブ化しない）、`min-engine-version`（任意、未満の場合は診断として読み込み）；マニフェスト ≤2MB。信頼状態は `<プロジェクト>/.inkos/trusted-sources.json` に保存され、設定からいつでも取り消せます。
+
 ## ソースから実行
 
 ### 環境要件

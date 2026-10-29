@@ -4,6 +4,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  addTrustedSource,
   createSkillRegistry,
   loadAvailableAgentSkills,
   loadBuiltinAgentSkills,
@@ -11,6 +12,7 @@ import {
   loadExternalAgentSkills,
   parseAgentSkillDocument,
   parseSkillContractVersion,
+  removeTrustedSource,
   skillContractSatisfied,
   SKILL_CONTRACT_VERSION,
 } from "../skills/index.js";
@@ -372,6 +374,9 @@ describe("external skill loader", () => {
       "utf-8",
     );
 
+    // 768 号①A：external 来源须先信任——本测验证装载/坏路径行为，先确认信任。
+    await addTrustedSource(join(root, "project"), externalRoot);
+
     const loaded = await loadConfiguredAgentSkills({
       projectRoot: join(root, "project"),
       homeDir: join(root, "home"),
@@ -384,6 +389,52 @@ describe("external skill loader", () => {
     expect(loaded.skills.map((skill) => skill.id)).toContain("romance-play");
     expect(loaded.diagnostics.some((diagnostic) => diagnostic.path.includes("does-not-exist"))).toBe(true);
     expect(registry.resolveSkills({ requestedSkills: ["romance-play"] }).forcedSkillIds).toEqual(["romance-play"]);
+  });
+
+  // 768 号决策①A：external（env 显式）来源须先信任；未确认 → 技能不入列
+  // 仅 diagnostic 待确认提示；确认（写信任库）后重载即入列。user/project
+  // 惯例目录不受闸影响（默认信任）。
+  it("withholds untrusted external skill sources until confirmed", async () => {
+    const externalRoot = join(root, "gated-external");
+    const skillDir = join(externalRoot, "gated-romance");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: Gated Romance",
+        "description: Gated external skill.",
+        "---",
+        "Body.",
+      ].join("\n"),
+      "utf-8",
+    );
+    const projectRoot = join(root, "trust-project");
+    const load = () =>
+      loadConfiguredAgentSkills({
+        projectRoot,
+        homeDir: join(root, "trust-home"),
+        env: { INKOS_SKILL_DIRS: externalRoot },
+      });
+
+    const untrusted = await load();
+    expect(untrusted.skills.map((skill) => skill.id)).not.toContain("gated-romance");
+    expect(untrusted.diagnostics.some((diagnostic) =>
+      diagnostic.message.includes("pending trust confirmation")
+      && diagnostic.path === externalRoot,
+    )).toBe(true);
+
+    await addTrustedSource(projectRoot, externalRoot);
+    const trusted = await load();
+    expect(trusted.skills.map((skill) => skill.id)).toContain("gated-romance");
+    expect(trusted.diagnostics.some((diagnostic) =>
+      diagnostic.message.includes("pending trust confirmation"),
+    )).toBe(false);
+
+    // 撤销信任 → 回到待确认面。
+    await removeTrustedSource(projectRoot, externalRoot);
+    const revoked = await load();
+    expect(revoked.skills.map((skill) => skill.id)).not.toContain("gated-romance");
   });
 
   it("marks skills discovered from the user Agent Skills directory as user skills", async () => {

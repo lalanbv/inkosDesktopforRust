@@ -8,6 +8,7 @@
 
 pub mod external_loader;
 pub mod production_bindings;
+pub mod trust_store;
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]

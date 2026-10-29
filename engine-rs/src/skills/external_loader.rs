@@ -13,15 +13,19 @@
 //!
 //! 显式目录缺失 → 计入 diagnostics；非显式目录缺失（ENOENT）→ 静默跳过。
 //!
-//! ## 技能包契约 v1 草案（766 号文档化，双栈同构）
-//! frontmatter 事实契约字段：`name`（必填 ≤64 字符）、`description`
-//! （必填 ≤1024 字符）、`disable-model-invocation`（可选治理键，R37）、
-//! `min-engine-version`（767 号公共件：可选兼容键，不满足 → 该份技能
-//! diagnostic 降级；比较基准 [`SKILL_CONTRACT_VERSION`] 经 golden 双端锁）、
-//! manifest 上限 2MB。**承诺状态=草案**：正式冻结（含上列键的兼容性
-//! 承诺）与信任模型（外部源是否需显式确认）、分发形态（裸目录/打包/
-//! 注册表）两项设计决策，待用户定夺后另行收口（勿在本草案下擅自
-//! 承诺兼容性）。
+//! ## 技能包契约 v1（768 号正式冻结，决策③A；双栈同构）
+//! 公开契约字段：`name`（必填 ≤64 字符）、`description`（必填 ≤1024
+//! 字符）、`disable-model-invocation`（可选治理键，R37）、
+//! `min-engine-version`（可选兼容键，不满足 → 该份技能 diagnostic 降级；
+//! 比较基准 [`SKILL_CONTRACT_VERSION`] 经 golden 双端锁）、manifest 上限
+//! 2MB。semver 政策：破坏性变更（字段语义收紧/移除/上限下调）随引擎
+//! 大版本，小版本内保持兼容。
+//!
+//! ## 分发与信任（768 号决策②A/①A）
+//! 分发=裸目录约定：SKILL.md 目录即技能包，手动放入五目录即被扫描。
+//! 信任=外部源确认：external（INKOS_SKILL_DIRS 显式）目录须先经
+//! [`crate::skills::trust_store`] 确认（.inkos/trusted-sources.json），
+//! user/project 惯例目录默认信任。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -33,7 +37,7 @@ use crate::skills::{AgentSkill, SkillSource};
 /// 技能包契约版本（767 号公共件）：与 TS `SKILL_CONTRACT_VERSION` 经
 /// `packages/core/src/__tests__/golden/skill-contract-vectors.json` 双端锁
 ///（tests/golden_skill_contract_diff.rs；改值必须双端同批）。取 core 正典
-/// 版本前两段。承诺状态仍随 766 号草案——正式冻结待决策③。
+/// 版本前两段；768 号起为契约 v1 正式比较基准（破坏性变更随引擎大版本）。
 pub const SKILL_CONTRACT_VERSION: &str = "2.0";
 
 /// 解析 "major[.minor][.patch]" → (major, minor)（第三段忽略）；非法 → None。
@@ -370,6 +374,9 @@ fn configured_skill_dirs(project_root: &Path, env_dirs: &[String], home_dir: Opt
 
 /// 扫描配置目录集。对齐 TS `loadConfiguredAgentSkills`：
 /// 显式目录缺失 → 诊断；非显式缺失（ENOENT）→ 跳过。
+/// 768 号决策①A：external（env 显式）来源须在信任库
+///（[`trust_store`::read](crate::skills::trust_store)），未确认 → 技能不入列
+/// 仅诊断提示待确认；user/project 惯例目录默认信任。
 pub async fn load_configured_agent_skills(
     project_root: &Path,
     env_dirs: &[String],
@@ -378,6 +385,17 @@ pub async fn load_configured_agent_skills(
     let candidates = configured_skill_dirs(project_root, env_dirs, home_dir);
     let mut result = LoadExternalAgentSkillsResult::default();
     for candidate in candidates {
+        let is_external = matches!(candidate.source, SkillSource::External);
+        if is_external
+            && !crate::skills::trust_store::is_trusted_source(project_root, &candidate.path.to_string_lossy())
+                .await
+        {
+            result.diagnostics.push(ExternalSkillDiagnostic {
+                path: candidate.path.to_string_lossy().to_string(),
+                message: "external skill source pending trust confirmation; confirm it in the skills trust settings.".to_string(),
+            });
+            continue;
+        }
         match load_external_agent_skills(&candidate.path, candidate.source, Some(candidate.default_rank)).await {
             Ok(mut loaded) => {
                 result.skills.append(&mut loaded.skills);

@@ -161,6 +161,9 @@ import {
   type ConfirmedCapabilityBinding,
   type TokenMeterSnapshot,
   findChapterFileByNumber,
+  addTrustedSource,
+  readTrustedSources,
+  removeTrustedSource,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -4038,6 +4041,48 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.get("/api/v1/skills", async (c) => {
     const result = await loadStudioSkills(root);
     return c.json(result);
+  });
+
+  // 768 号决策①A：外部技能来源信任管理（external=INKOS_SKILL_DIRS 显式目录
+  // 需确认；user/project 惯例目录默认信任不在此列）。注册在 :skillId 参数路由
+  // 之前，防 `/skills/trust` 被 `/skills/:skillId` 吞并。
+  app.get("/api/v1/skills/trust", async (c) => {
+    return c.json({ entries: await readTrustedSources(root) });
+  });
+
+  app.post("/api/v1/skills/trust", async (c) => {
+    const body = await c.req.json<{ path?: unknown }>().catch(() => {
+      throw new ApiError(400, "INVALID_SKILL_TRUST", "Skill trust payload must be JSON");
+    });
+    const rawPath = typeof body.path === "string" ? body.path.trim() : "";
+    if (!rawPath || !isAbsolute(rawPath)) {
+      throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill trust path must be absolute");
+    }
+    let dirStat;
+    try {
+      dirStat = await stat(rawPath);
+    } catch {
+      throw new ApiError(404, "SKILL_TRUST_PATH_NOT_FOUND", `Skill source directory not found: ${rawPath}`);
+    }
+    if (!dirStat.isDirectory()) {
+      throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill trust path must be a directory");
+    }
+    try {
+      await access(join(rawPath, "SKILL.md"));
+    } catch {
+      throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill source directory has no SKILL.md");
+    }
+    const entries = await addTrustedSource(root, rawPath);
+    broadcast("skills:change", { reason: "trust-added" });
+    return c.json({ ok: true, entries });
+  });
+
+  app.delete("/api/v1/skills/trust", async (c) => {
+    const rawPath = (c.req.query("path") ?? "").trim();
+    if (!rawPath) throw new ApiError(400, "INVALID_SKILL_TRUST", "path query is required");
+    const entries = await removeTrustedSource(root, rawPath);
+    broadcast("skills:change", { reason: "trust-removed" });
+    return c.json({ ok: true, entries });
   });
 
   app.get("/api/v1/skills/:skillId/documents", async (c) => {

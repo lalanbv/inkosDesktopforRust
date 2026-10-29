@@ -12,6 +12,14 @@ export {
   type ParseAgentSkillDocumentOptions,
 } from "./external-loader.js";
 export {
+  addTrustedSource,
+  isTrustedSource,
+  normalizeTrustedSourcePath,
+  readTrustedSources,
+  removeTrustedSource,
+  type TrustedSourceEntry,
+} from "./trust-store.js";
+export {
   loadAvailableAgentSkills,
   loadBuiltinAgentSkills,
   type LoadAvailableAgentSkillsResult,

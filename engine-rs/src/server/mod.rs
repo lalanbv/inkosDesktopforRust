@@ -559,6 +559,14 @@ pub fn router_books(
         )
         // 60 号：skills / prompt-packs 轻域。
         .route("/api/v1/skills", get(skill_routes::list_skills).with_state(books.clone()))
+        // 768 号决策①A：信任管理（静态段注册在 :skillId 参数路由之前）。
+        .route(
+            "/api/v1/skills/trust",
+            get(skill_routes::list_skill_trust)
+                .post(skill_routes::add_skill_trust)
+                .delete(skill_routes::remove_skill_trust)
+                .with_state(books.clone()),
+        )
         .route(
             "/api/v1/skills/import",
             post(skill_routes::import_skill).with_state(books.clone()),
