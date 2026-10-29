@@ -233,15 +233,28 @@ pub fn save_secrets(project_root: &Path, secrets: &SecretsFile) -> std::io::Resu
     let path = dir.join(SECRETS_FILE);
     let temp = dir.join(format!("{SECRETS_FILE}.tmp-{}", uuid::Uuid::new_v4()));
     let write = || -> std::io::Result<()> {
-        std::fs::write(&temp, format!("{json}\n"))?;
+        use std::io::Write as _;
+        let mut options = std::fs::OpenOptions::new();
+        // create_new：uuid 临时名天然唯一，O_EXCL 额外堵符号链接/残留同名竞争。
+        options.write(true).create_new(true);
         // 227 号：0600 权限（对齐 src-tauri secrets M3b）——文件含明文 API
-        // key，默认 0644 同机其他用户可读；rename 前 chmod 消除可读窗口。
+        // key，默认 0644 同机其他用户可读。762 号：创建即 0600（OpenOptions
+        // mode）取代「先 0644 写入再 chmod」，连 create→chmod 之间的可读窗口
+        // 一并消除。
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        std::fs::rename(&temp, &path)
+        let mut file = options.open(&temp)?;
+        file.write_all(format!("{json}\n").as_bytes())?;
+        // 762 号：sync_all 落盘后才 rename（对齐 760 号 write_file_atomic）——
+        // 掉电后密钥文件要么旧要么完整新，不再可能零长。
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, &path)?;
+        crate::utils::atomic_file_set::sync_parent_dir_best_effort_sync(&path);
+        Ok(())
     };
     match write() {
         Ok(()) => Ok(()),

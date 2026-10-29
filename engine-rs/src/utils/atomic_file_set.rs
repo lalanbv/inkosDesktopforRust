@@ -315,9 +315,10 @@ async fn sync_parent_dir_best_effort(path: &Path) {
 #[cfg(not(unix))]
 async fn sync_parent_dir_best_effort(_path: &Path) {}
 
-/// [`sync_parent_dir_best_effort`] 的同步形态。
+/// [`sync_parent_dir_best_effort`] 的同步形态。pub(crate) 供 llm/secrets 的
+/// 0600 专用写路径复用（762 号）。
 #[cfg(unix)]
-fn sync_parent_dir_best_effort_sync(path: &Path) {
+pub(crate) fn sync_parent_dir_best_effort_sync(path: &Path) {
     if let Some(dir) = path.parent() {
         if let Ok(handle) = std::fs::File::open(dir) {
             let _ = handle.sync_all();
@@ -326,7 +327,7 @@ fn sync_parent_dir_best_effort_sync(path: &Path) {
 }
 
 #[cfg(not(unix))]
-fn sync_parent_dir_best_effort_sync(_path: &Path) {}
+pub(crate) fn sync_parent_dir_best_effort_sync(_path: &Path) {}
 
 /// 单文件原子替换（199 号稳定性审计）：先写同目录唯一临时文件，再
 /// `rename` 就位（同文件系统内 rename 对观察者原子）。进程在写入中途崩溃
