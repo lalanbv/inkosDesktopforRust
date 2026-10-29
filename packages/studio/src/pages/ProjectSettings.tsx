@@ -21,6 +21,7 @@ import {
   type OverrideRow,
 } from "./project-settings-model";
 import {
+  pendingTrustSourcePath,
   serializeSkillFolder,
   type StudioSkill,
 } from "./skill-ui-state";
@@ -263,11 +264,7 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
               {skillsData.diagnostics.slice(0, 8).map((item, index) => {
                 // 769 号：待信任来源一键确认（768 号信任门 UX 闭环——
                 // 此前须手工重敲路径；此处直接复用 POST /skills/trust 校验链）。
-                const pendingTrustPath = item.message?.includes("pending trust confirmation") === true
-                  && typeof item.path === "string"
-                  && item.path.length > 0
-                  ? item.path
-                  : null;
+                const pendingTrustPath = pendingTrustSourcePath(item);
                 const pendingTrust = pendingTrustPath !== null;
                 return (
                   <div key={`${item.path ?? "skill"}-${index}`} className="mt-1 flex items-center justify-between gap-2 break-all">

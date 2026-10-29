@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  pendingTrustSourcePath,
   serializeSkillFolder,
   selectedSkillIdsForSend,
   toggleSelectedSkillIds,
@@ -69,5 +70,28 @@ describe("skill-ui-state", () => {
       "writer-distillation/references/rubric.md",
     ]);
     expect(result[0]?.dataUrl).toMatch(/^data:text\/markdown;base64,/);
+  });
+});
+
+// ── 769 号：待信任来源判定（768 载入闸诊断的消费面）─────────────
+describe("pendingTrustSourcePath（769 号）", () => {
+  it("载入闸诊断 + 非空 path → 返回可确认的来源路径", () => {
+    expect(pendingTrustSourcePath({
+      message: "external skill source pending trust confirmation; confirm it in the skills trust settings.",
+      path: "/ext/skills",
+    })).toBe("/ext/skills");
+  });
+
+  it("普通格式诊断 → null（不走信任确认）", () => {
+    expect(pendingTrustSourcePath({ message: "SKILL.md frontmatter requires name.", path: "/x" })).toBeNull();
+  });
+
+  it("待信任串但 path 缺失/空 → null（无可确认目标）", () => {
+    expect(pendingTrustSourcePath({ message: "pending trust confirmation" })).toBeNull();
+    expect(pendingTrustSourcePath({ message: "pending trust confirmation", path: "" })).toBeNull();
+  });
+
+  it("message 缺失 → null", () => {
+    expect(pendingTrustSourcePath({ path: "/x" })).toBeNull();
   });
 });

@@ -70,3 +70,21 @@ function bytesToBase64(bytes: Uint8Array): string {
   }
   return btoa(binary);
 }
+
+// ── 外部来源信任门（768/769 号）───────────────────────────────
+
+/** 768 号载入闸诊断串（engine/TS 双端同文；此处仅消费）。 */
+const PENDING_TRUST_MESSAGE = "pending trust confirmation";
+
+/**
+ * 769 号：诊断条目是否为「待信任来源」——是则返回可一键确认的来源路径。
+ * 引擎载入闸对未确认 external 目录产出该诊断；path 为空（目录级诊断缺
+ * path 的形态）或非该串 → null（普通格式诊断不走信任确认）。
+ */
+export function pendingTrustSourcePath(
+  diagnostic: { readonly message?: string; readonly path?: string },
+): string | null {
+  if (diagnostic.message?.includes(PENDING_TRUST_MESSAGE) !== true) return null;
+  const path = diagnostic.path;
+  return typeof path === "string" && path.length > 0 ? path : null;
+}
