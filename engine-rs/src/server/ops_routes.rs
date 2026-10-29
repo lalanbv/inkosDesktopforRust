@@ -1247,18 +1247,31 @@ pub async fn post_hybrid_search(
     }
 
     let scope = "story-memory".to_string();
-    let index = match crate::utils::local_search::LocalSearchIndex::new(db_path.to_str().unwrap_or("")) {
-        Ok(index) => index,
+    // 765 号：FTS5 索引构建+查询移出 runtime 线程（独立 rusqlite 连接；
+    // search 无失败态，仅连接/migrate 可失败）。
+    let fts_hits = tokio::task::spawn_blocking({
+        let db_path = db_path.clone();
+        let query = query.clone();
+        move || -> Result<Vec<crate::utils::local_search::SearchHit>, String> {
+            let index = crate::utils::local_search::LocalSearchIndex::new(db_path.to_str().unwrap_or(""))
+                .map_err(|error| error.to_string())?;
+            Ok(index.search(
+                &query,
+                &crate::utils::local_search::SearchOptions {
+                    scope: &scope,
+                    kinds: &[],
+                    limit: k * 2,
+                },
+            ))
+        }
+    })
+    .await;
+    let fts_hits = match fts_hits {
+        Ok(Ok(hits)) => hits,
+        Ok(Err(error)) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
-    let fts_hits = index.search(
-        &query,
-        &crate::utils::local_search::SearchOptions {
-            scope: &scope,
-            kinds: &[],
-            limit: k * 2,
-        },
-    );
+
     let fts_ranked: Vec<Value> = fts_hits
         .iter()
         // 520 号：对齐 TS 响应形状 {id, score, source, title}（rank 为 TS 端

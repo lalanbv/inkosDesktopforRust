@@ -1823,27 +1823,38 @@ pub(crate) async fn prepare_write_input(
     // 重排（指纹增量缓存写 retrieval_chunks）；否则维持 LLM 精选。hybrid 内部
     // 任何 embedding 失败 → 空精选（347 号降级契约，回退 BM25 排序）。
     let llm_memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
-    let hybrid_selector =
-        match (&config.embedding, crate::state::memory_db::MemoryDb::open(book_dir)) {
-            (Some(embedding), Ok(cache)) => {
-                let api_key = embedding
-                    .api_key_env
-                    .as_ref()
-                    .and_then(|env| std::env::var(env).ok())
-                    .unwrap_or_default();
-                Some(crate::utils::hybrid_memory_selector::HybridMemorySelector::new(
-                    std::sync::Arc::new(
-                        crate::utils::hybrid_memory_selector::ProductionEmbedder {
-                            config: embedding.clone(),
-                            api_key,
-                        },
-                    ),
-                    cache,
-                    crate::utils::hybrid_memory_selector::HYBRID_SELECT_LIMIT,
-                ))
+    // 765 号：缓存库打开移出 runtime 线程；不可开 → 维持 LLM 精选
+    //（原 match (…, Ok(cache)) 的 None 臂语义逐字保留）。
+    let hybrid_selector = match &config.embedding {
+        Some(embedding) => {
+            let cache_open = tokio::task::spawn_blocking({
+                let book_dir = book_dir.to_path_buf();
+                move || crate::state::memory_db::MemoryDb::open(&book_dir)
+            })
+            .await;
+            match cache_open {
+                Ok(Ok(cache)) => {
+                    let api_key = embedding
+                        .api_key_env
+                        .as_ref()
+                        .and_then(|env| std::env::var(env).ok())
+                        .unwrap_or_default();
+                    Some(crate::utils::hybrid_memory_selector::HybridMemorySelector::new(
+                        std::sync::Arc::new(
+                            crate::utils::hybrid_memory_selector::ProductionEmbedder {
+                                config: embedding.clone(),
+                                api_key,
+                            },
+                        ),
+                        cache,
+                        crate::utils::hybrid_memory_selector::HYBRID_SELECT_LIMIT,
+                    ))
+                }
+                _ => None,
             }
-            _ => None,
-        };
+        }
+        None => None,
+    };
     let memory_selector: &dyn crate::utils::memory_retrieval::MemorySemanticSelector =
         if let Some(hybrid) = hybrid_selector.as_ref() {
             hybrid

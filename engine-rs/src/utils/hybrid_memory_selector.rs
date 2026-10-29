@@ -43,15 +43,17 @@ impl EmbedFn for ProductionEmbedder {
 
 pub struct HybridMemorySelector {
     embedder: Arc<dyn EmbedFn>,
-    /// rusqlite Connection !Sync——包 Mutex 满足 MemorySemanticSelector 的
-    /// Send + Sync；锁内均为同步调用（list/upsert），无跨 await 持锁。
-    cache: std::sync::Mutex<MemoryDb>,
+    /// rusqlite Connection !Sync——包 Arc<Mutex>：锁内均为同步调用
+    ///（list/upsert），无跨 await 持锁；Arc 使 765 号的同步段可整体
+    /// 移入 spawn_blocking（'static 捕获），Connection 不再出现在
+    /// runtime 线程上。
+    cache: std::sync::Arc<std::sync::Mutex<MemoryDb>>,
     limit: usize,
 }
 
 impl HybridMemorySelector {
     pub fn new(embedder: Arc<dyn EmbedFn>, cache: MemoryDb, limit: usize) -> Self {
-        Self { embedder, cache: std::sync::Mutex::new(cache), limit }
+        Self { embedder, cache: std::sync::Arc::new(std::sync::Mutex::new(cache)), limit }
     }
 
     async fn run_selection(
@@ -72,15 +74,25 @@ impl HybridMemorySelector {
             return Ok(Vec::new());
         }
 
-        let mut cached: HashMap<String, (String, Vec<f64>)> = self
-            .cache
-            .lock()
-            .unwrap()
-            .list_chunk_vectors()
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|chunk| (chunk.chunk_id, (chunk.fingerprint, chunk.vector)))
-            .collect();
+        // 765 号：缓存全量读移入 spawn_blocking（向量表随章节累积可到
+        // MB 级；owned HashMap 跨线程，Connection 生命周期限于阻塞线程）。
+        let cache_handle = std::sync::Arc::clone(&self.cache);
+        let mut cached: HashMap<String, (String, Vec<f64>)> =
+            tokio::task::spawn_blocking(move || {
+                cache_handle
+                    .lock()
+                    .unwrap()
+                    .list_chunk_vectors()
+                    .map(|chunks| {
+                        chunks
+                            .into_iter()
+                            .map(|chunk| (chunk.chunk_id, (chunk.fingerprint, chunk.vector)))
+                            .collect()
+                    })
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
 
         // 增量嵌入：仅指纹与缓存不一致（含无缓存）的候选；文本 = excerpt 空回退 title。
         let cached_fingerprints: HashMap<String, String> = cached
@@ -104,6 +116,9 @@ impl HybridMemorySelector {
             let texts: Vec<String> = stale.iter().map(|chunk| chunk.text.clone()).collect();
             let vectors = self.embedder.embed(&texts).await?;
             let now = crate::utils::utc_time::utc_now_iso();
+            // 765 号：新嵌向量先物化，单次阻塞段按原顺序批量落缓存——
+            // 任一写失败整体失败（与逐条 `?` 等价），347 号降级契约兜底。
+            let mut fresh: Vec<StoredChunkVector> = Vec::new();
             for (chunk, vector) in stale.iter().zip(vectors) {
                 if vector.is_empty() {
                     continue;
@@ -115,20 +130,32 @@ impl HybridMemorySelector {
                     .find(|candidate| candidate.id == chunk.id)
                     .map(|candidate| candidate.source.clone())
                     .unwrap_or_default();
-                self.cache
-                    .lock()
-                    .unwrap()
-                    .upsert_chunk_vector(&StoredChunkVector {
-                        chunk_id: chunk.id.clone(),
-                        source,
-                        fingerprint: fingerprint.clone(),
-                        dim: vector.len() as u32,
-                        vector: vector.clone(),
-                        created_at: now.clone(),
-                    })
-                    .map_err(|e| e.to_string())?;
-                cached.insert(chunk.id.clone(), (fingerprint, vector));
+                fresh.push(StoredChunkVector {
+                    chunk_id: chunk.id.clone(),
+                    source,
+                    fingerprint: fingerprint.clone(),
+                    dim: vector.len() as u32,
+                    vector: vector.clone(),
+                    created_at: now.clone(),
+                });
             }
+        let cache_handle = std::sync::Arc::clone(&self.cache);
+        let fresh_for_write = fresh.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = cache_handle.lock().unwrap();
+            for entry in &fresh_for_write {
+                db.upsert_chunk_vector(entry).map_err(|e| e.to_string())?;
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        for entry in &fresh {
+            cached.insert(
+                entry.chunk_id.clone(),
+                (entry.fingerprint.clone(), entry.vector.clone()),
+            );
+        }
         }
 
         // 向量重排：全部候选取缓存最新向量（新嵌 + 已缓存；缺失补空向量），
