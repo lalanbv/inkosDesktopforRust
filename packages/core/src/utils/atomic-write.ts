@@ -7,7 +7,8 @@
  * 文件锁：EPERM/EBUSY）时**线性退避重试**，而不是一次失败就丢内容。
  *
  * 双端：Rust 镜像 `engine-rs/src/utils/atomic_file_set.rs` 的
- * `write_file_atomic`（199 号既有原子替换 + 本次新增同款重试）。
+ * `write_file_atomic`（199 号既有原子替换 + 本次新增同款重试；760 号
+ * Rust 侧持久性升级由 761 号在本文件镜像）。
  * 重试决策由共享 golden 锁定：`golden/atomic-write-vectors.json`
  * （TS `golden-atomic-write.test.ts` / RS `tests/golden_atomic_write_diff.rs`）。
  */
@@ -42,6 +43,8 @@ export function atomicWriteErrorCode(error: unknown): string | null {
 /**
  * 单文件原子替换：tmp（同目录隐藏名，含 pid+uuid）→ rename。
  * rename 遇文件锁（EPERM/EBUSY）线性退避重试；放弃时清理 tmp 再抛错。
+ * 761 号：tmp 先 fsync 落盘再 rename，成功后尽力 fsync 父目录（镜像
+ * Rust 760 号）——掉电/内核崩溃同样收敛到「要么旧、要么完整新」。
  * options 供测试注入（retries/delayMs/sleep/rename）。
  */
 export async function writeTextAtomic(
@@ -57,6 +60,7 @@ export async function writeTextAtomic(
   const { dirname, basename, join: joinPath } = await import("node:path");
   const { randomUUID } = await import("node:crypto");
   const fs = await import("node:fs/promises");
+  const { writeFileDurable, syncDirBestEffort } = await import("./durable-fs.js");
 
   const retries = options?.retries ?? ATOMIC_WRITE_MAX_RETRIES;
   const delayMs = options?.delayMs ?? ATOMIC_WRITE_RETRY_DELAY_MS;
@@ -67,11 +71,12 @@ export async function writeTextAtomic(
   const name = basename(path);
   const tmp = joinPath(dir, `.${name}.tmp-${process.pid}-${randomUUID()}`);
 
-  await fs.writeFile(tmp, content, "utf-8");
+  await writeFileDurable(tmp, content);
   let attempt = 0;
   for (;;) {
     try {
       await rename(tmp, path);
+      await syncDirBestEffort(dir);
       return;
     } catch (error) {
       const code = atomicWriteErrorCode(error);

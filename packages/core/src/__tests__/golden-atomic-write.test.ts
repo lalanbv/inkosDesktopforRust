@@ -87,4 +87,17 @@ describe("atomic write (R29/404)", () => {
     expect(leftovers).toEqual([]); // 放弃时清理临时文件
     await rm(dir, { recursive: true, force: true });
   });
+
+  // 761 号：durable 路径（writeFileDurable fsync + syncDirBestEffort）的零长边界。
+  it("lands empty content through the durable write path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "atomic-write-"));
+    const target = join(dir, "empty.json");
+
+    await writeTextAtomic(target, "");
+
+    expect(await readFile(target, "utf-8")).toBe("");
+    const leftovers = (await readdir(dir)).filter((name) => name.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+    await rm(dir, { recursive: true, force: true });
+  });
 });
