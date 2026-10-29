@@ -566,6 +566,20 @@ async fn has_skill_manifest(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 775 号：信任校验用的目录可装载判定——与载入器发现语义一致（对齐
+/// `discover_skill_dirs`：根上有 SKILL.md，或两层内的子目录有）。此前信任
+/// 路由硬性要求根上有 SKILL.md，父目录形态（INKOS_SKILL_DIRS 指向容器、
+/// 技能在其子目录）被误拒——活体探针实锤，769 一键确认对容器形态必红。
+pub async fn has_skill_manifest_direct_or_below(dir: &Path) -> bool {
+    if has_skill_manifest(dir).await {
+        return true;
+    }
+    matches!(
+        discover_skill_dirs_below(dir, 2).await,
+        Ok(below) if !below.is_empty()
+    )
+}
+
 /// 读取并解析 SKILL.md（2MB 上限）。对齐 TS `loadSkillManifest`。
 async fn load_skill_manifest(
     skill_path: &Path,
@@ -645,6 +659,35 @@ mod tests {
         assert_eq!(skill.body, "正文段落。");
         assert_eq!(skill.source, SkillSource::Project);
         assert_eq!(skill.base_dir.as_deref(), Some("/root/.agents/skills/combat"));
+    }
+
+    // 775 号：信任校验可装载判定（容器形态回归锁，对齐发现语义）。
+    #[tokio::test]
+    async fn has_skill_manifest_direct_or_below_container_forms() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let root = dir.path();
+
+        // 直接形态：根上有 SKILL.md。
+        std::fs::write(root.join("SKILL.md"), "---\nname: direct\ndescription: d\n---\nb").unwrap();
+        assert!(has_skill_manifest_direct_or_below(root).await);
+
+        // 容器形态：两层内子目录有（768 误拒回归锁）。
+        let container = tempfile::tempdir().expect("容器临时目录");
+        let skill_dir = container.path().join("pack").join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: c\ndescription: d\n---\nb").unwrap();
+        assert!(has_skill_manifest_direct_or_below(container.path()).await);
+
+        // 两层外才有 → false（与载入器深度语义一致）。
+        let deep = tempfile::tempdir().expect("深层临时目录");
+        let deep_dir = deep.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep_dir).unwrap();
+        std::fs::write(deep_dir.join("SKILL.md"), "---\nname: deep\ndescription: d\n---\nb").unwrap();
+        assert!(!has_skill_manifest_direct_or_below(deep.path()).await);
+
+        // 空目录 → false。
+        let empty = tempfile::tempdir().expect("空临时目录");
+        assert!(!has_skill_manifest_direct_or_below(empty.path()).await);
     }
 
     #[test]

@@ -5,6 +5,7 @@ export {
   parseSkillContractVersion,
   skillContractSatisfied,
   SKILL_CONTRACT_VERSION,
+  hasSkillManifestDirectOrBelow,
   type ExternalSkillDiagnostic,
   type LoadConfiguredAgentSkillsInput,
   type LoadExternalAgentSkillsInput,

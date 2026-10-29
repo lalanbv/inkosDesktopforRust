@@ -196,6 +196,21 @@ async function hasSkillManifest(dir: string): Promise<boolean> {
   }
 }
 
+/**
+ * 775 号：信任校验用的目录可装载判定——与载入器发现语义一致（根上有
+ * SKILL.md，或两层内的子目录有，对齐 discoverSkillDirs）。此前信任路由
+ * 硬性要求根上有 SKILL.md，父目录形态（INKOS_SKILL_DIRS 指向容器、技能
+ * 在其子目录）被误拒——活体探针实锤，769 一键确认对容器形态必红。
+ */
+export async function hasSkillManifestDirectOrBelow(dir: string): Promise<boolean> {
+  if (await hasSkillManifest(dir)) return true;
+  try {
+    return (await discoverSkillDirsBelow(dir, 2)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function loadSkillManifest(
   skillPath: string,
   source: AgentSkill["source"] = "external",

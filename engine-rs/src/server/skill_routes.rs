@@ -248,11 +248,13 @@ pub async fn add_skill_trust(
             .into_response()
         }
     }
-    if tokio::fs::metadata(dir.join("SKILL.md")).await.is_err() {
+    // 775 号：可装载判定与载入器发现语义一致（根上或两层内子目录有
+    // SKILL.md）——此前硬性要求根上有，容器形态被误拒（活体探针实锤）。
+    if !crate::skills::external_loader::has_skill_manifest_direct_or_below(&dir).await {
         return api_error(
             StatusCode::BAD_REQUEST,
             "INVALID_SKILL_TRUST_PATH",
-            "Skill source directory has no SKILL.md",
+            "Skill source directory has no loadable SKILL.md (direct or within 2 levels below)",
         )
         .into_response();
     }

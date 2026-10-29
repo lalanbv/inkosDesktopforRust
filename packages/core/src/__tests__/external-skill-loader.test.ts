@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   addTrustedSource,
   createSkillRegistry,
+  hasSkillManifestDirectOrBelow,
   loadAvailableAgentSkills,
   loadBuiltinAgentSkills,
   loadConfiguredAgentSkills,
@@ -562,5 +563,36 @@ describe("external skill loader", () => {
         vector.satisfied,
       );
     }
+  });
+});
+
+// ── 775 号：信任校验可装载判定（容器形态回归锁）─────────────────
+describe("hasSkillManifestDirectOrBelow（775 号）", () => {
+  it("根上有 SKILL.md → true", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trust-direct-"));
+    await mkdir(join(root, "inner"), { recursive: true });
+    await writeFile(join(root, "SKILL.md"), "---\nname: direct\ndescription: d.\n---\nB.", "utf-8");
+    expect(await hasSkillManifestDirectOrBelow(root)).toBe(true);
+  });
+
+  it("容器形态：两层内子目录有 SKILL.md → true（768 误拒回归锁）", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trust-container-"));
+    const skillDir = join(root, "pack", "my-skill");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "---\nname: container-form\ndescription: d.\n---\nB.", "utf-8");
+    expect(await hasSkillManifestDirectOrBelow(root)).toBe(true);
+  });
+
+  it("两层外才有的 SKILL.md → false（与载入器深度语义一致）", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trust-deep-"));
+    const deep = join(root, "a", "b", "c");
+    await mkdir(deep, { recursive: true });
+    await writeFile(join(deep, "SKILL.md"), "---\nname: deep\ndescription: d.\n---\nB.", "utf-8");
+    expect(await hasSkillManifestDirectOrBelow(root)).toBe(false);
+  });
+
+  it("空目录 → false", async () => {
+    const root = await mkdtemp(join(tmpdir(), "trust-empty-"));
+    expect(await hasSkillManifestDirectOrBelow(root)).toBe(false);
   });
 });

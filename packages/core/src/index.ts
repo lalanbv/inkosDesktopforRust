@@ -140,6 +140,7 @@ export {
   skillContractSatisfied,
   SKILL_CONTRACT_VERSION,
   addTrustedSource,
+  hasSkillManifestDirectOrBelow,
   isTrustedSource,
   normalizeTrustedSourcePath,
   readTrustedSources,

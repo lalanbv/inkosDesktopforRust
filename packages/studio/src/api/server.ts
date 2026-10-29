@@ -85,6 +85,7 @@ import {
   createExportBookTool,
   resolveSessionHarnessBinding,
   parseAgentSkillDocument,
+  hasSkillManifestDirectOrBelow,
   toPosixPath,
   type ActionPayload,
   type ActionSource,
@@ -4067,10 +4068,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!dirStat.isDirectory()) {
       throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill trust path must be a directory");
     }
-    try {
-      await access(join(rawPath, "SKILL.md"));
-    } catch {
-      throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill source directory has no SKILL.md");
+    // 775 号：可装载判定与载入器发现语义一致（根上或两层内子目录有
+    // SKILL.md）——此前硬性要求根上有，容器形态被误拒（活体探针实锤）。
+    if (!(await hasSkillManifestDirectOrBelow(rawPath))) {
+      throw new ApiError(400, "INVALID_SKILL_TRUST_PATH", "Skill source directory has no loadable SKILL.md (direct or within 2 levels below)");
     }
     const entries = await addTrustedSource(root, rawPath);
     broadcast("skills:change", { reason: "trust-added" });
