@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "767号公共件:双栈技能包契约版本锁+min-engine-version 比较向量。contractVersion=双栈 SKILL_CONTRACT_VERSION 常量唯一事实源;改向量必须双端同批。",
+  "contractVersion": "2.0",
+  "cases": [
+    { "name": "equal-satisfied", "minEngineVersion": "2.0", "satisfied": true },
+    { "name": "patch-suffix-ignored", "minEngineVersion": "2.0.7", "satisfied": true },
+    { "name": "older-minor-satisfied", "minEngineVersion": "1.9", "satisfied": true },
+    { "name": "older-major-satisfied", "minEngineVersion": "1", "satisfied": true },
+    { "name": "newer-minor-unsatisfied", "minEngineVersion": "2.1", "satisfied": false },
+    { "name": "newer-major-unsatisfied", "minEngineVersion": "3.0", "satisfied": false },
+    { "name": "garbage-invalid", "minEngineVersion": "abc", "invalid": true },
+    { "name": "empty-invalid", "minEngineVersion": "", "invalid": true },
+    { "name": "four-segments-invalid", "minEngineVersion": "1.2.3.4", "invalid": true }
+  ]
+}

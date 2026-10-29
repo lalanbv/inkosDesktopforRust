@@ -16,10 +16,12 @@
 //! ## 技能包契约 v1 草案（766 号文档化，双栈同构）
 //! frontmatter 事实契约字段：`name`（必填 ≤64 字符）、`description`
 //! （必填 ≤1024 字符）、`disable-model-invocation`（可选治理键，R37）、
-//! manifest 上限 2MB。**承诺状态=草案**：正式冻结与 `minEngineVersion`
-//! 兼容键、以及信任模型（外部源是否需显式确认）与分发形态（裸目录/
-//! 打包/注册表）两项设计决策，待用户定夺后另行收口（勿在本草案下
-//! 擅自承诺兼容性）。
+//! `min-engine-version`（767 号公共件：可选兼容键，不满足 → 该份技能
+//! diagnostic 降级；比较基准 [`SKILL_CONTRACT_VERSION`] 经 golden 双端锁）、
+//! manifest 上限 2MB。**承诺状态=草案**：正式冻结（含上列键的兼容性
+//! 承诺）与信任模型（外部源是否需显式确认）、分发形态（裸目录/打包/
+//! 注册表）两项设计决策，待用户定夺后另行收口（勿在本草案下擅自
+//! 承诺兼容性）。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -27,6 +29,41 @@ use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::skills::{AgentSkill, SkillSource};
+
+/// 技能包契约版本（767 号公共件）：与 TS `SKILL_CONTRACT_VERSION` 经
+/// `packages/core/src/__tests__/golden/skill-contract-vectors.json` 双端锁
+///（tests/golden_skill_contract_diff.rs；改值必须双端同批）。取 core 正典
+/// 版本前两段。承诺状态仍随 766 号草案——正式冻结待决策③。
+pub const SKILL_CONTRACT_VERSION: &str = "2.0";
+
+/// 解析 "major[.minor][.patch]" → (major, minor)（第三段忽略）；非法 → None。
+pub fn parse_skill_contract_version(raw: &str) -> Option<(u64, u64)> {
+    let parts: Vec<&str> = raw.trim().split('.').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    let mut numbers = Vec::with_capacity(2);
+    for part in &parts {
+        if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        numbers.push(part.parse::<u64>().ok()?);
+    }
+    while numbers.len() < 2 {
+        numbers.push(0);
+    }
+    Some((numbers[0], numbers[1]))
+}
+
+/// min-engine-version 相对当前契约版本是否满足（前两段比较，`<` 即不满足）。
+pub fn skill_contract_satisfied(min_engine_version: (u64, u64)) -> bool {
+    let Some((current_major, current_minor)) = parse_skill_contract_version(SKILL_CONTRACT_VERSION)
+    else {
+        return false;
+    };
+    min_engine_version.0 < current_major
+        || (min_engine_version.0 == current_major && min_engine_version.1 <= current_minor)
+}
 
 pub const MAX_SKILL_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -116,6 +153,27 @@ pub fn parse_agent_skill_document(
         MAX_SKILL_DESCRIPTION_CHARS,
     )?;
     let id = normalize_external_skill_id(&name, &fallback_id)?;
+    // 767 号公共件：可选 min-engine-version（kebab 对齐 disable-model-invocation
+    // 惯例）——不满足/非法 → Err 成诊断（拒这一份技能，加载循环继续，人侧
+    // 可见原因；即 766 号草案的"降级非硬拒"）。YAML 数值形态按字符串归一
+    //（serde f64 {} 格式 2.0 → "2"，TS String(2.0) 同形），推荐带引号字符串。
+    if let Some(value) = data.get("min-engine-version") {
+        let raw_version = match value {
+            serde_yaml_ng::Value::String(text) => text.trim().to_string(),
+            serde_yaml_ng::Value::Number(number) => {
+                format!("{}", number.as_f64().unwrap_or_default())
+            }
+            other => format!("{other:?}"),
+        };
+        let parsed = parse_skill_contract_version(&raw_version).ok_or_else(|| {
+            format!("SKILL.md frontmatter min-engine-version is invalid: \"{raw_version}\".")
+        })?;
+        if !skill_contract_satisfied(parsed) {
+            return Err(format!(
+                "SKILL.md requires engine >= {raw_version}, current skill contract is {SKILL_CONTRACT_VERSION}."
+            ));
+        }
+    }
     // R37 治理面：frontmatter kebab-case 显式映射（与 TS parseAgentSkillDocument 同构）。
     let disable_model_invocation = data.get("disable-model-invocation").and_then(|v| v.as_bool());
     // R44/566 号：invocation 双布尔第二位（dsh `user-invocable`，缺省 true）——

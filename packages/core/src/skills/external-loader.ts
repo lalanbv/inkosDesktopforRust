@@ -184,6 +184,36 @@ async function loadSkillManifest(
   return parseAgentSkillDocument(raw, { skillPath, source, defaultRank });
 }
 
+/**
+ * 技能包契约版本（767 号公共件）：与 Rust `SKILL_CONTRACT_VERSION` 经
+ * `golden/skill-contract-vectors.json` 双端锁（改值必须双端同批）。取 core
+ * 正典版本前两段（技能契约源头在 TS 腿）。承诺状态仍随 766 号草案——
+ * 正式冻结待决策③；本常量只是比较基准，非兼容性承诺。
+ */
+export const SKILL_CONTRACT_VERSION = "2.0";
+
+/** 解析 "major[.minor][.patch]" → [major, minor]（第三段忽略）；非法 → null。 */
+export function parseSkillContractVersion(raw: string): readonly [number, number] | null {
+  const parts = raw.trim().split(".");
+  if (parts.length < 1 || parts.length > 3) return null;
+  const numbers: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    numbers.push(Number(part));
+  }
+  return [numbers[0], numbers[1] ?? 0];
+}
+
+/** min-engine-version 相对当前契约版本是否满足（前两段比较，`<` 即不满足）。 */
+export function skillContractSatisfied(minEngineVersion: readonly [number, number]): boolean {
+  const current = parseSkillContractVersion(SKILL_CONTRACT_VERSION);
+  if (!current) return false;
+  return (
+    minEngineVersion[0] < current[0]
+    || (minEngineVersion[0] === current[0] && minEngineVersion[1] <= current[1])
+  );
+}
+
 export function parseAgentSkillDocument(
   raw: string,
   options: ParseAgentSkillDocumentOptions,
@@ -201,6 +231,24 @@ export function parseAgentSkillDocument(
     MAX_SKILL_DESCRIPTION_CHARS,
   );
   const id = normalizeExternalSkillId(name, fallbackId);
+  // 767 号公共件：可选 min-engine-version（kebab 对齐 disable-model-invocation
+  // 惯例）——不满足/非法 → 抛错成 diagnostic（拒这一份技能，加载循环继续，
+  // 人侧可见原因；即 766 号草案的"降级非硬拒"）。YAML 数值形态按字符串归一
+  //（`2.0` 数值 → "2"），推荐带引号字符串。
+  if (data["min-engine-version"] !== undefined) {
+    const rawVersion = typeof data["min-engine-version"] === "number"
+      ? String(data["min-engine-version"])
+      : String(data["min-engine-version"]).trim();
+    const parsedVersion = parseSkillContractVersion(rawVersion);
+    if (parsedVersion === null) {
+      throw new Error(`SKILL.md frontmatter min-engine-version is invalid: "${rawVersion}".`);
+    }
+    if (!skillContractSatisfied(parsedVersion)) {
+      throw new Error(
+        `SKILL.md requires engine >= ${rawVersion}, current skill contract is ${SKILL_CONTRACT_VERSION}.`,
+      );
+    }
+  }
   return AgentSkillSchema.parse({
     id,
     name,

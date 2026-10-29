@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSkillRegistry,
@@ -9,6 +10,9 @@ import {
   loadConfiguredAgentSkills,
   loadExternalAgentSkills,
   parseAgentSkillDocument,
+  parseSkillContractVersion,
+  skillContractSatisfied,
+  SKILL_CONTRACT_VERSION,
 } from "../skills/index.js";
 
 const BUILTIN_SKILL_IDS = [
@@ -445,5 +449,67 @@ describe("external skill loader", () => {
     expect(bad.skills.find((skill) => skill.id === "bad-rank")).toBeUndefined();
     expect(bad.diagnostics.length).toBe(1);
     expect(bad.diagnostics[0].message).toContain("rank");
+  });
+
+  // 767 号公共件：可选 min-engine-version——不满足/非法 → 整份 diagnostic
+  //（拒这一份技能，加载循环继续），满足 → 正常装载。golden 锁比较语义。
+  it("gates skills by optional min-engine-version with diagnostic downgrade", async () => {
+    const root = await mkdtemp(join(tmpdir(), "skill-contract-"));
+    await mkdir(join(root, "skills"), { recursive: true });
+    const writeSkill = async (id: string, lines: string[]) => {
+      await mkdir(join(root, "skills", id), { recursive: true });
+      await writeFile(
+        join(root, "skills", id, "SKILL.md"),
+        ["---", `name: ${id}`, "description: contract gate.", ...lines, "---", "Body."].join("\n"),
+        "utf-8",
+      );
+    };
+    await writeSkill("ok-skill", ["min-engine-version: \"1.0\""]);
+    await writeSkill("future-skill", ["min-engine-version: \"99.0\""]);
+    await writeSkill("garbage-skill", ["min-engine-version: \"not-a-version\""]);
+    await writeSkill("numeric-skill", ["min-engine-version: 2"]);
+
+    const loaded = await loadConfiguredAgentSkills({ projectRoot: root, env: {} });
+    const ids = loaded.skills.map((skill) => skill.id);
+    expect(ids).toContain("ok-skill");
+    expect(ids).toContain("numeric-skill");
+    expect(ids).not.toContain("future-skill");
+    expect(ids).not.toContain("garbage-skill");
+    const gateMessages = loaded.diagnostics.map((diagnostic) => diagnostic.message);
+    expect(gateMessages.some((message) => message.includes("engine >= 99.0"))).toBe(true);
+    expect(gateMessages.some((message) => message.includes("min-engine-version is invalid"))).toBe(true);
+  });
+
+  // 767 号公共件 golden：契约版本常量唯一事实源 + min-engine-version 比较向量
+  //（Rust golden_skill_contract_diff.rs 读同一文件；改向量双端同批）。
+  it("locks the skill contract version and comparison vectors with Rust", async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const vectors = JSON.parse(
+      await readFile(resolve(here, "golden/skill-contract-vectors.json"), "utf-8"),
+    ) as {
+      contractVersion: string;
+      cases: Array<{ name: string; minEngineVersion: string; satisfied?: boolean; invalid?: boolean }>;
+    };
+
+    expect(SKILL_CONTRACT_VERSION).toBe(vectors.contractVersion);
+    // 契约版本取 core 正典版本前两段（防常量与包版本漂移）。
+    const corePackage = JSON.parse(
+      await readFile(resolve(here, "../../package.json"), "utf-8"),
+    ) as { version: string };
+    const [coreMajor, coreMinor] = parseSkillContractVersion(corePackage.version) ?? [0, 0];
+    const [contractMajor, contractMinor] = parseSkillContractVersion(SKILL_CONTRACT_VERSION) ?? [0, 0];
+    expect([contractMajor, contractMinor]).toEqual([coreMajor, coreMinor]);
+
+    for (const vector of vectors.cases) {
+      const parsed = parseSkillContractVersion(vector.minEngineVersion);
+      if (vector.invalid) {
+        expect(parsed, vector.name).toBeNull();
+        continue;
+      }
+      expect(parsed, vector.name).not.toBeNull();
+      expect(skillContractSatisfied(parsed as readonly [number, number]), vector.name).toBe(
+        vector.satisfied,
+      );
+    }
   });
 });
