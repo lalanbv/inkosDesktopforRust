@@ -251,22 +251,31 @@ async fn retrieve_skill_resources(
         }
     }
 
-    let Ok(index) = crate::utils::local_search::LocalSearchIndex::new(":memory:") else {
-        return Vec::new();
-    };
+    // 765 号（续）：内存 FTS 索引段移出 runtime 线程（:memory: open 廉价，
+    // 但 populate+search 仍是同步 sqlite 调用面，一并搬移保持不变式）。
     let scope = format!("skill:{skill_id}");
-    if index.replace_scope(&scope, &documents).is_err() {
-        return Vec::new();
-    }
-    let hits = index.search(
-        query,
-        &crate::utils::local_search::SearchOptions {
-            scope: &scope,
-            kinds: &[],
-            limit: 4,
-        },
-    );
-    index.close();
+    let documents_for_index = documents;
+    let query_for_index = query.to_string();
+    let hits = tokio::task::spawn_blocking(move || {
+        let Ok(index) = crate::utils::local_search::LocalSearchIndex::new(":memory:") else {
+            return Vec::new();
+        };
+        if index.replace_scope(&scope, &documents_for_index).is_err() {
+            return Vec::new();
+        }
+        let hits = index.search(
+            &query_for_index,
+            &crate::utils::local_search::SearchOptions {
+                scope: &scope,
+                kinds: &[],
+                limit: 4,
+            },
+        );
+        index.close();
+        hits
+    })
+    .await
+    .unwrap_or_default();
     hits.iter()
         .map(|hit| {
             // 534 号：段级元数据优先取 metadata（TS hit.metadata?.path ?? "" 对应面）。

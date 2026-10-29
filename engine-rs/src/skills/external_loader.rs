@@ -12,6 +12,14 @@
 //! 5. `{projectRoot}/skills`（project）
 //!
 //! 显式目录缺失 → 计入 diagnostics；非显式目录缺失（ENOENT）→ 静默跳过。
+//!
+//! ## 技能包契约 v1 草案（766 号文档化，双栈同构）
+//! frontmatter 事实契约字段：`name`（必填 ≤64 字符）、`description`
+//! （必填 ≤1024 字符）、`disable-model-invocation`（可选治理键，R37）、
+//! manifest 上限 2MB。**承诺状态=草案**：正式冻结与 `minEngineVersion`
+//! 兼容键、以及信任模型（外部源是否需显式确认）与分发形态（裸目录/
+//! 打包/注册表）两项设计决策，待用户定夺后另行收口（勿在本草案下
+//! 擅自承诺兼容性）。
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

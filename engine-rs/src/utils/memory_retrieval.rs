@@ -272,25 +272,33 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
     // hybrid-search / 检索面板等磁盘索引消费端在 Rust 侧恒空命中（差分器实证）。
     // replace_scope 按 content_hash 去重，重复章写入开销可控；磁盘打开失败时
     // 降级内存索引保检索不中断。
-    let index = crate::utils::local_search::LocalSearchIndex::new(
-        story_dir.join("memory.db").to_str().unwrap_or(":memory:"),
-    )
-    .ok()
-    .or_else(|| crate::utils::local_search::LocalSearchIndex::new(":memory:").ok());
-    if let Some(index) = &index {
-        let _ = index.replace_scope(STORY_MEMORY_SCOPE, &documents);
-    }
-    let hits = match &index {
-        Some(index) => index.search(
-            &retrieval_query,
-            &crate::utils::local_search::SearchOptions {
-                scope: STORY_MEMORY_SCOPE,
-                kinds: &[],
-                limit: 32,
-            },
-        ),
-        None => Vec::new(),
-    };
+    // 765 号（续）：索引重建+查询移出 runtime 线程（owned path/documents/查询
+    // 跨线程；retrieval_query 后续仍用，克隆）。
+    let disk_db_path = story_dir.join("memory.db").to_string_lossy().into_owned();
+    let query_for_index = retrieval_query.clone();
+    let (hits, disk_index_opened) = tokio::task::spawn_blocking(move || {
+        let index = crate::utils::local_search::LocalSearchIndex::new(&disk_db_path)
+            .ok()
+            .or_else(|| crate::utils::local_search::LocalSearchIndex::new(":memory:").ok());
+        let opened = index.is_some();
+        let hits = match &index {
+            Some(index) => {
+                let _ = index.replace_scope(STORY_MEMORY_SCOPE, &documents);
+                index.search(
+                    &query_for_index,
+                    &crate::utils::local_search::SearchOptions {
+                        scope: STORY_MEMORY_SCOPE,
+                        kinds: &[],
+                        limit: 32,
+                    },
+                )
+            }
+            None => Vec::new(),
+        };
+        (hits, opened)
+    })
+    .await
+    .unwrap_or_else(|_| (Vec::new(), false));
 
     // 语义精选：selector 缺失/候选 ≤1/失败 → None（回退 BM25 全量）。
     let semantic_selected = select_semantic_candidate_ids(
@@ -331,10 +339,9 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         recyclable_hooks: compute_recyclable_hooks(&active_hooks, params.chapter_number),
         facts: select_relevant_facts(&facts, &rank_scores),
         volume_summaries: select_relevant_volume_summaries(&volume_summaries, &rank_scores),
-        db_path: index
-            .as_ref()
-            .map(|_| format!("{}/story/memory.db", params.book_dir.display())),
-        retrieval_trace: index.as_ref().map(|_| MemoryRetrievalTrace {
+        db_path: disk_index_opened
+            .then(|| format!("{}/story/memory.db", params.book_dir.display())),
+        retrieval_trace: disk_index_opened.then(|| MemoryRetrievalTrace {
             engine: "sqlite-fts5-bm25",
             query: retrieval_query.clone(),
             candidates: trace_candidates,

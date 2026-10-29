@@ -545,80 +545,79 @@ pub async fn retrieve_materials(
     }
 
     let index_path = project_root.join(".inkos").join("retrieval.db");
-    let Ok(index) = crate::utils::local_search::LocalSearchIndex::new(
-        &index_path.to_string_lossy(),
-    ) else {
-        return Vec::new();
-    };
-    let retrieval = (|| -> rusqlite::Result<Vec<RetrievedMaterial>> {
-        index.replace_scope(MATERIAL_SCOPE, &documents)?;
-        let limit = normalize_limit(input.limit);
-        let kinds: Vec<String> = input
-            .purpose
-            .as_ref()
-            .map(|purpose| vec![format!("material:{purpose}")])
-            .unwrap_or_default();
-        let hits = index.search(
-            &input.query,
+    // 765 号（续）：sqlite 索引重建+查询移出 runtime 线程；打开失败 → 空
+    //（原 else return 语义）。documents/input 仅本段消费，owned 跨线程。
+    let documents_for_index = documents;
+    let query_for_index = input.query.clone();
+    let limit = normalize_limit(input.limit);
+    let kinds: Vec<String> = input
+        .purpose
+        .as_ref()
+        .map(|purpose| vec![format!("material:{purpose}")])
+        .unwrap_or_default();
+    let hits = tokio::task::spawn_blocking(move || {
+        let index = crate::utils::local_search::LocalSearchIndex::new(
+            &index_path.to_string_lossy(),
+        )
+        .ok()?;
+        let _ = index.replace_scope(MATERIAL_SCOPE, &documents_for_index);
+        Some(index.search(
+            &query_for_index,
             &crate::utils::local_search::SearchOptions {
                 scope: MATERIAL_SCOPE,
                 kinds: &kinds,
                 limit: (MAX_LIMIT * 4).min(limit * 4),
             },
-        );
-        let mut out: Vec<RetrievedMaterial> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for hit in &hits {
-            let meta = hit
-                .metadata
-                .as_ref()
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let field = |name: &str| {
-                meta.get(name)
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string()
-            };
-            let asset_id = field("assetId");
-            if asset_id.is_empty() || !seen.insert(asset_id.clone()) {
-                continue;
-            }
-            let char_start = meta
-                .get("charStart")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as usize;
-            let char_end = meta
-                .get("charEnd")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(hit.body.chars().count() as u64)
-                as usize;
-            out.push(RetrievedMaterial {
-                id: asset_id,
-                title: field("assetTitle"),
-                kind: field("assetKind"),
-                purpose: field("purpose"),
-                source: field("source"),
-                markdown_path: field("markdownPath"),
-                score: hit.score,
-                excerpt: hit.body.clone(),
-                char_start,
-                char_end,
-            });
-            if out.len() >= limit {
-                break;
-            }
-        }
-        Ok(out)
-    })();
-    let out = match retrieval {
-        Ok(out) => out,
-        Err(_) => {
-            index.close();
-            return Vec::new();
-        }
+        ))
+    })
+    .await
+    .unwrap_or(None);
+    let Some(hits) = hits else {
+        return Vec::new();
     };
-    index.close();
+    let mut out: Vec<RetrievedMaterial> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for hit in &hits {
+        let meta = hit
+            .metadata
+            .as_ref()
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let field = |name: &str| {
+            meta.get(name)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let asset_id = field("assetId");
+        if asset_id.is_empty() || !seen.insert(asset_id.clone()) {
+            continue;
+        }
+        let char_start = meta
+            .get("charStart")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize;
+        let char_end = meta
+            .get("charEnd")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(hit.body.chars().count() as u64)
+            as usize;
+        out.push(RetrievedMaterial {
+            id: asset_id,
+            title: field("assetTitle"),
+            kind: field("assetKind"),
+            purpose: field("purpose"),
+            source: field("source"),
+            markdown_path: field("markdownPath"),
+            score: hit.score,
+            excerpt: hit.body.clone(),
+            char_start,
+            char_end,
+        });
+        if out.len() >= limit {
+            break;
+        }
+    }
     out
 }
 
