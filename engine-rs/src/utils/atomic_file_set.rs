@@ -6,12 +6,20 @@
 //!
 //! writer 的 `saveChapter` 用它保证章节 + 真相文件要么全部落盘、要么全部不动。
 //!
+//! ## 持久性（760 号）
+//! 写入统一 `sync_all` 落盘后再 `rename`，成功后尽力 fsync 受影响父目录：
+//! 此前保证只覆盖进程崩溃（rename 对观察者原子），掉电/内核崩溃可重放出
+//! 零长/半截目标；数据先 sync 后 rename 后，两类崩溃都收敛到「目标要么
+//! 旧内容、要么完整新内容」。调用面实测（46 站点）全部为用户操作/章节
+//! 步进级频率，无 per-token 热循环，fsync 成本可忽略。
+//!
 //! ## 与 TS 的差异
 //! TS 的 `renameFile` 注入参数是测试缝隙（生产恒用 `rename`），Rust 版不保留；
 //! 回滚语义（逆序删除已就位 → 逆序恢复 backup → 汇总回滚错误）逐字对齐。
 
 use std::io;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt as _;
 
 /// 单条写入。对齐 TS `AtomicFileWrite`（content: string | Uint8Array）。
 #[derive(Debug, Clone)]
@@ -107,14 +115,20 @@ async fn rm_any(path: &Path) -> io::Result<()> {
 }
 
 async fn write_content(path: &Path, content: &FileContent) -> io::Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
     match content {
-        FileContent::Text(text) => tokio::fs::write(path, text).await,
-        FileContent::Bytes(bytes) => tokio::fs::write(path, bytes).await,
+        FileContent::Text(text) => file.write_all(text.as_bytes()).await?,
+        FileContent::Bytes(bytes) => file.write_all(bytes).await?,
     }
+    file.sync_all().await
 }
 
 /// 原子提交文件集。对齐 TS `commitAtomicFileSet` 的三段式事务（staged →
 /// backup → 就位）与失败回滚。
+///
+/// 760 号：staged 文件 `sync_all` 落盘后才进入 rename 段，全部就位后尽力
+/// fsync 各触碰目标的父目录（rename 项本身落盘，防掉电重放丢 rename）——
+/// 章节内容这类不可再生的用户数据，掉电后同样要么全旧、要么全新。
 pub async fn commit_atomic_file_set(input: &AtomicFileSet<'_>) -> Result<(), AtomicFileSetError> {
     let mut writes: Vec<(String, &FileContent)> = Vec::with_capacity(input.writes.len());
     for entry in &input.writes {
@@ -212,6 +226,19 @@ pub async fn commit_atomic_file_set(input: &AtomicFileSet<'_>) -> Result<(), Ato
         return Err(error.into());
     }
 
+    // 760 号：rename 项落盘（尽力）——写入与删除的父目录各 sync 一次
+    //（去重），防掉电重放把「target→backup 已持久、staged→target 丢失」
+    // 重放成目标缺失。
+    let mut synced_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    for relative_path in &touched_paths {
+        let target = input.root_dir.join(relative_path);
+        if let Some(parent) = target.parent() {
+            if synced_dirs.insert(parent.to_path_buf()) {
+                sync_parent_dir_best_effort(&target).await;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -256,6 +283,51 @@ pub fn atomic_write_error_kind(error: &std::io::Error) -> Option<&'static str> {
     }
 }
 
+/// 临时文件写入 + `sync_all` 落盘（760 号持久性升级）：数据在 `rename` 前
+/// 已到稳定存储，掉电/内核崩溃后 rename 重放不会产出零长/半截目标。
+async fn write_tmp_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
+    file.write_all(bytes).await?;
+    file.sync_all().await
+}
+
+/// [`write_tmp_durable`] 的同步形态。
+fn write_tmp_durable_sync(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// rename 成功后尽力 fsync 父目录（unix；Windows 无目录文件句柄语义，跳过）：
+/// 让 rename 项本身也落盘，否则掉电重放可能「target→backup 已持久而
+/// staged→target 丢失 = 目标缺失」。仅尽力——失败不回滚已成功的写入
+/// （数据已 sync，最坏回退到 199 号的进程崩溃保证）。
+#[cfg(unix)]
+async fn sync_parent_dir_best_effort(path: &Path) {
+    if let Some(dir) = path.parent() {
+        if let Ok(handle) = tokio::fs::File::open(dir).await {
+            let _ = handle.sync_all().await;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_dir_best_effort(_path: &Path) {}
+
+/// [`sync_parent_dir_best_effort`] 的同步形态。
+#[cfg(unix)]
+fn sync_parent_dir_best_effort_sync(path: &Path) {
+    if let Some(dir) = path.parent() {
+        if let Ok(handle) = std::fs::File::open(dir) {
+            let _ = handle.sync_all();
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir_best_effort_sync(_path: &Path) {}
+
 /// 单文件原子替换（199 号稳定性审计）：先写同目录唯一临时文件，再
 /// `rename` 就位（同文件系统内 rename 对观察者原子）。进程在写入中途崩溃
 /// 只会留下孤儿临时文件，目标文件要么是旧内容、要么是完整新内容——
@@ -264,15 +336,21 @@ pub fn atomic_write_error_kind(error: &std::io::Error) -> Option<&'static str> {
 /// R29/404 号：rename 目标被占用（Windows 文件锁 EPERM/EBUSY）时线性退避
 /// 重试（WNW v6.2.1 的 atomic_write_json 思路），放弃时清理临时文件。
 ///
+/// 760 号：临时文件 `sync_all` 落盘后才 rename，成功后尽力 fsync 父目录——
+/// 掉电/内核崩溃同样收敛到「要么旧、要么完整新」。
+///
 /// 适用于配置/索引类小文件（book.json / index.json / timeline.json）；
 /// 多文件事务仍走 [`commit_atomic_file_set`]。
 pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     let tmp = atomic_tmp_path(path);
-    tokio::fs::write(&tmp, content).await?;
+    write_tmp_durable(&tmp, content.as_bytes()).await?;
     let mut attempt: u32 = 0;
     loop {
         match tokio::fs::rename(&tmp, path).await {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                sync_parent_dir_best_effort(path).await;
+                return Ok(());
+            }
             Err(error) => {
                 let kind = atomic_write_error_kind(&error);
                 if !atomic_write_retry_decision(kind, attempt, ATOMIC_WRITE_MAX_RETRIES) {
@@ -292,14 +370,17 @@ pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()
 /// [`write_file_atomic`] 的同步形态：供无法 `.await` 的同步事务闭包使用
 /// （play_graph File 后端的 `with_transaction`/`flush` 在 rusqlite 同款同步
 /// 接口内持久化）。临时文件命名、重试决策与清理语义与 async 版共用同一实现，
-/// 仅退避改为 `std::thread::sleep`。
+/// 仅退避改为 `std::thread::sleep`。760 号持久性语义与 async 版一致。
 pub fn write_file_atomic_sync(path: &Path, content: &[u8]) -> std::io::Result<()> {
     let tmp = atomic_tmp_path(path);
-    std::fs::write(&tmp, content)?;
+    write_tmp_durable_sync(&tmp, content)?;
     let mut attempt: u32 = 0;
     loop {
         match std::fs::rename(&tmp, path) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                sync_parent_dir_best_effort_sync(path);
+                return Ok(());
+            }
             Err(error) => {
                 let kind = atomic_write_error_kind(&error);
                 if !atomic_write_retry_decision(kind, attempt, ATOMIC_WRITE_MAX_RETRIES) {
@@ -577,6 +658,23 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert!(leftovers.is_empty(), "失败路径不应留下临时文件");
+    }
+
+    // 760 号：durable 路径（File::create + write_all + sync_all）的零长边界。
+    #[tokio::test]
+    async fn write_file_atomic_accepts_empty_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("empty.json");
+        write_file_atomic(&target, "").await.unwrap();
+        assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "");
+    }
+
+    #[test]
+    fn write_file_atomic_sync_accepts_empty_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("empty.bin");
+        write_file_atomic_sync(&target, b"").unwrap();
+        assert!(std::fs::read(&target).unwrap().is_empty());
     }
 
     #[test]
