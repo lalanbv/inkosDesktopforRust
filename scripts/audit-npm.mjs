@@ -59,6 +59,14 @@ const ACCEPTED = new Map([
   // 来自本地 LLM provider 与用户内容，无远程攻击者可控入口；上游 MCP SDK 升
   // zod 4 契约时移除本条即恢复拦截。
   ["zod", { reason: "high；补丁线 4.6.6 跨 major（3.x 无补丁线），MCP/Anthropic SDK peer 契约待随上游升级；单机桌面无远程攻击面", since: "758" }],
+  // 759 号：@hono/node-server GHSA-rmxm-3fg6-px4f（moderate，serveStatic 路径
+  // 二次解码致静态前缀中间件绕过；非目录穿越）——漏洞区间 >=1.19.10 <2.1.3，
+  // 1.x 线 latest-1（1.19.17，即当前唯一解析线）仍在区间内，补丁仅存在于
+  // 2.1.3+（跨 major 须随上游 2.x 动作，688 号 vitest / 758 号 zod 同型）。
+  // 暴露面定性=fork 调用图零命中：studio server.ts 仅消费 serve（grep 实证
+  // serveStatic 全仓零引用），静态服务为自实现路由；公告仅影响挂中间件的
+  // serveStatic 使用方。上游升 2.x 时移除本条即恢复拦截。
+  ["@hono/node-server", { reason: "moderate；补丁线 2.1.3 跨 major（1.x 终态 1.19.17 仍在漏洞区间），须随上游升级；fork 零调用面（仅 serve，serveStatic 零引用）", since: "759" }],
 ]);
 
 const args = process.argv.slice(2);
