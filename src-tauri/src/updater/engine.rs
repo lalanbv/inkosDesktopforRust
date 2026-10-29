@@ -188,6 +188,9 @@ pub(super) fn is_valid_repo_slug(repo: &str) -> bool {
     ok_seg(owner) && ok_seg(name)
 }
 
+/// 770 号续：解压回调类型（spawn_blocking 跨线程形态，Arc 包裹使用）。
+pub type ExtractFn = dyn Fn(&Path, &Path) -> Result<()> + Send + Sync;
+
 impl EngineChannel {
     /// 构造 engine 更新通道。`repo` 非法（见 [`is_valid_repo_slug`]）时回退到内置
     /// 默认仓库并 warn——fail-safe：宁可查官方源，不可查攻击者指定的源。
@@ -235,12 +238,14 @@ impl EngineChannel {
 
     /// 应用最新 release：fetch → 下载 bundle + .sha256（size 封顶）→ 校验 → 解压 → 原子替换。
     /// staging 清理覆盖所有返回路径（M2）。`extract` = 解压函数（复用 node::extract_archive）。
+    /// 770 号续：三段重同步活（整 bundle sha256 / 整 bundle 读+验签 / 解压+展平）
+    /// 移入 spawn_blocking（bundle 可上百 MB，此前全部占 runtime 线程）。
     pub async fn apply(
         &self,
         engine_dir: &Path,
         bak_dir: &Path,
         staging_dir: &Path,
-        extract: &(dyn Fn(&Path, &Path) -> Result<()> + Sync),
+        extract: &std::sync::Arc<ExtractFn>,
     ) -> Result<()> {
         std::fs::create_dir_all(staging_dir)
             .with_context(|| format!("创建 staging 失败: {}", staging_dir.display()))?;
@@ -298,20 +303,28 @@ impl EngineChannel {
         new_dir: &Path,
         engine_dir: &Path,
         bak_dir: &Path,
-        extract: &(dyn Fn(&Path, &Path) -> Result<()> + Sync),
+        extract: &std::sync::Arc<ExtractFn>,
     ) -> Result<()> {
         // 下载 bundle（按 asset size 封顶）+ sha。
         download_to(&self.client, bundle_url, bundle_path, bundle_size).await?;
         download_to(&self.client, sha_url, sha_path, 0).await?;
 
-        // 校验：bundle SHA256 == 下载的 .sha256 内容。
-        let expected = std::fs::read_to_string(sha_path)
-            .context("读 .sha256 失败")?
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-        let actual = crate::engine::manifest::sha256_file(bundle_path)?;
+        // 校验：bundle SHA256 == 下载的 .sha256 内容（770 号续：整 bundle
+        // 哈希移入阻塞线程）。
+        let sha_path_owned = sha_path.to_path_buf();
+        let bundle_path_owned = bundle_path.to_path_buf();
+        let (expected, actual) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+            let expected = std::fs::read_to_string(&sha_path_owned)
+                .context("读 .sha256 失败")?
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            let actual = crate::engine::manifest::sha256_file(&bundle_path_owned)?;
+            Ok((expected, actual))
+        })
+        .await
+        .context("sha256 校验任务失败")??;
         if actual != expected {
             anyhow::bail!("engine bundle SHA256 不匹配：期望 {expected}，实际 {actual}");
         }
@@ -328,20 +341,28 @@ impl EngineChannel {
                 let url = sig_url.unwrap();
                 let pubkey = pubkey_hex.unwrap();
                 download_to(&self.client, url, sig_path, 0).await?;
-                let sig_hex = std::fs::read_to_string(sig_path)
-                    .context("读 .sig 失败")?
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                let sig_bytes = crate::updater::sig::decode_hex(&sig_hex)
-                    .context(".sig hex 解析失败")?;
-                let bundle_bytes = std::fs::read(bundle_path).context("读 bundle 失败")?;
-                let pubkey_bytes = crate::updater::sig::decode_hex(pubkey)
-                    .context("INKOS_ENGINE_PUBKEY hex 解析失败")?;
-                crate::updater::sig::verify(&bundle_bytes, &sig_bytes, &pubkey_bytes)
-                    .context("engine bundle 签名验证失败——拒绝该 bundle（可能被篡改）")?;
-                tracing::info!("engine bundle 签名验证通过");
+                // 770 号续：整 bundle 读 + 验签（ed25519 内含全量哈希）移入阻塞线程。
+                let sig_path_owned = sig_path.to_path_buf();
+                let bundle_path_owned = bundle_path.to_path_buf();
+                tokio::task::spawn_blocking(move || -> Result<()> {
+                    let sig_hex = std::fs::read_to_string(&sig_path_owned)
+                        .context("读 .sig 失败")?
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    let bundle_bytes = std::fs::read(&bundle_path_owned).context("读 bundle 失败")?;
+                    let sig_bytes = crate::updater::sig::decode_hex(&sig_hex)
+                        .context(".sig hex 解析失败")?;
+                    let pubkey_bytes = crate::updater::sig::decode_hex(pubkey)
+                        .context("INKOS_ENGINE_PUBKEY hex 解析失败")?;
+                    crate::updater::sig::verify(&bundle_bytes, &sig_bytes, &pubkey_bytes)
+                        .context("engine bundle 签名验证失败——拒绝该 bundle（可能被篡改）")?;
+                    tracing::info!("engine bundle 签名验证通过");
+                    Ok(())
+                })
+                .await
+                .context("签名验证任务失败")??;
             }
             SigAction::WarnPass => {
                 tracing::warn!(
@@ -359,15 +380,23 @@ impl EngineChannel {
             }
         }
 
-        // 解压到临时 new_dir（与 engine_dir 同 fs：放 staging 下）。
-        if new_dir.exists() {
-            std::fs::remove_dir_all(new_dir)
-                .with_context(|| format!("清理旧 new_dir 失败: {}", new_dir.display()))?;
-        }
-        extract(bundle_path, new_dir)?;
-        // Rust 全量包 tarball 顶层为单目录（inkos-engine-{ver}-{triple}/）——
-        // 展平到 new_dir 根（Node 包平铺布局原样保留）。
-        flatten_single_top_dir(new_dir)?;
+        // 解压到临时 new_dir（与 engine_dir 同 fs：放 staging 下）——
+        // 770 号续：解压+展平移入阻塞线程（extract 升格 Arc+Send 供跨线程）。
+        let extract = extract.clone();
+        let bundle_path_owned = bundle_path.to_path_buf();
+        let new_dir_owned = new_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if new_dir_owned.exists() {
+                std::fs::remove_dir_all(&new_dir_owned)
+                    .with_context(|| format!("清理旧 new_dir 失败: {}", new_dir_owned.display()))?;
+            }
+            extract(&bundle_path_owned, &new_dir_owned)?;
+            // Rust 全量包 tarball 顶层为单目录（inkos-engine-{ver}-{triple}/）——
+            // 展平到 new_dir 根（Node 包平铺布局原样保留）。
+            flatten_single_top_dir(&new_dir_owned)
+        })
+        .await
+        .context("解压任务失败")??;
 
         // 原子替换 + 回滚（健康预检按形态：manifest + 各自入口产物）。
         let flavor = self.flavor;

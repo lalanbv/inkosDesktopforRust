@@ -1085,6 +1085,11 @@ async fn check_shell_update(app_handle: &tauri::AppHandle) -> Result<Option<Stri
     }
 }
 
+/// engine bundle 解压适配器（770 号续：fn 指针形态喂给 updater 的 Arc<dyn Fn>）。
+fn engine_extract_adapter(bundle: &std::path::Path, dest: &std::path::Path) -> anyhow::Result<()> {
+    inkos_desktop::engine::node::extract_archive(bundle, dest)
+}
+
 /// 应用 engine 更新（下载 → SHA256 → 原子替换 + 回滚）。下次启动生效（app_data/engine）。
 #[tauri::command]
 async fn cmd_apply_engine_update(
@@ -1128,7 +1133,16 @@ async fn cmd_apply_engine_update(
             &engine_dir,
             &bak_dir,
             &state.staging_dir,
-            &|bundle, dest| inkos_desktop::engine::node::extract_archive(bundle, dest),
+            // 770 号续：extract 升格 Arc<dyn Fn + Send + Sync> 供 spawn_blocking 跨线程
+            //（fn 指针显式 HRTB，规避闭包生命周期泛型不满足）。
+            &(std::sync::Arc::new(
+                engine_extract_adapter as fn(
+                    &std::path::Path,
+                    &std::path::Path,
+                ) -> anyhow::Result<()>,
+            ) as std::sync::Arc<
+                dyn Fn(&std::path::Path, &std::path::Path) -> anyhow::Result<()> + Send + Sync,
+            >),
         )
         .await
         .map_err(|e| AppError::update("Engine 更新失败")
