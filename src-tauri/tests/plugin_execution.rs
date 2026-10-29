@@ -47,7 +47,6 @@ async fn execute_echo_round_trip() {
     // 安装示例插件
     manager
         .install_plugin(source.to_str().unwrap())
-        .await
         .expect("安装插件失败");
     assert_eq!(manager.list_plugins().len(), 1);
 
@@ -76,7 +75,7 @@ async fn execute_upper_transforms_text() {
     std::fs::create_dir_all(&plugins_dir).unwrap();
 
     let mut manager = PluginManager::new(&plugins_dir).unwrap();
-    manager.install_plugin(source.to_str().unwrap()).await.unwrap();
+    manager.install_plugin(source.to_str().unwrap()).unwrap();
 
     let result = manager
         .execute_plugin(
@@ -106,7 +105,7 @@ async fn execute_health_returns_metadata() {
     std::fs::create_dir_all(&plugins_dir).unwrap();
 
     let mut manager = PluginManager::new(&plugins_dir).unwrap();
-    manager.install_plugin(source.to_str().unwrap()).await.unwrap();
+    manager.install_plugin(source.to_str().unwrap()).unwrap();
 
     let result = manager
         .execute_plugin("hello-plugin", "plugin.health", serde_json::Value::Null)
@@ -134,7 +133,7 @@ async fn execute_unknown_method_returns_error() {
     std::fs::create_dir_all(&plugins_dir).unwrap();
 
     let mut manager = PluginManager::new(&plugins_dir).unwrap();
-    manager.install_plugin(source.to_str().unwrap()).await.unwrap();
+    manager.install_plugin(source.to_str().unwrap()).unwrap();
 
     // 未知方法：插件返回 JSON-RPC error，execute_plugin 应转成 Err
     let result = manager
@@ -160,7 +159,7 @@ async fn execute_disabled_plugin_is_rejected() {
     std::fs::create_dir_all(&plugins_dir).unwrap();
 
     let mut manager = PluginManager::new(&plugins_dir).unwrap();
-    manager.install_plugin(source.to_str().unwrap()).await.unwrap();
+    manager.install_plugin(source.to_str().unwrap()).unwrap();
 
     // 禁用后执行应被拒
     manager.disable_plugin("hello-plugin").unwrap();

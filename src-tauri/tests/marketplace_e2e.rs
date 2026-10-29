@@ -116,13 +116,12 @@ capabilities = []
     let source = install_temp.path().to_string_lossy().to_string();
     let meta = manager
         .install_plugin(&source)
-        .await
         .expect("install_plugin 应成功");
     assert_eq!(meta.id, "my-plugin");
     assert_eq!(meta.version, "1.0.0");
 
     // 8. 二次安装同 id → 拒绝（已安装）
-    assert!(manager.install_plugin(&source).await.is_err());
+    assert!(manager.install_plugin(&source).is_err());
 }
 
 #[test]
@@ -184,11 +183,9 @@ author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
     let mut manager = PluginManager::new(plugins_root.path()).unwrap();
     manager
         .install_plugin(&v1_temp.path().to_string_lossy())
-        .await
         .expect("初装 v1.0.0");
     let meta = manager
         .update_plugin(&v2_temp.path().to_string_lossy())
-        .await
         .expect("update_plugin 覆盖到 v1.1.0");
     assert_eq!(meta.version, "1.1.0");
 
@@ -269,7 +266,6 @@ dependencies = {{ lib = "^1.0.0" }}
         registry::safe_extract_tar_gz(&bundle, t.path()).unwrap();
         manager
             .install_plugin(&t.path().to_string_lossy())
-            .await
             .unwrap_or_else(|err| panic!("安装 {} 失败: {err}", e.id));
     }
 

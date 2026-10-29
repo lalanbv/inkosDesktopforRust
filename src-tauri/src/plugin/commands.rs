@@ -45,20 +45,30 @@ pub async fn install_plugin(
     path: String,
     state: State<'_, PluginState>,
 ) -> Result<PluginMetadata, String> {
-    let mut manager = state.manager.lock().await;
-    manager
-        .install_plugin(&path)
-        .await
-        .map_err(|e| format!("安装插件失败: {}", e))
+    // 770 号：安装体（整目录复制+清理）是同步重 FS——spawn_blocking 承载，
+    // 不再占 runtime 线程持锁执行（blocking_lock 在阻塞线程上取锁）。
+    let manager = state.manager.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut manager = manager.blocking_lock();
+        manager.install_plugin(&path)
+    })
+    .await
+    .map_err(|e| format!("安装插件失败: {e}"))?
+    .map_err(|e| format!("安装插件失败: {e}"))
 }
 
 /// 卸载插件
 #[tauri::command]
 pub async fn uninstall_plugin(id: String, state: State<'_, PluginState>) -> Result<(), String> {
-    let mut manager = state.manager.lock().await;
-    manager
-        .uninstall_plugin(&id)
-        .map_err(|e| format!("卸载插件失败: {}", e))
+    // 770 号：卸载体含 remove_dir_all——同 install_plugin 移入阻塞线程。
+    let manager = state.manager.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut manager = manager.blocking_lock();
+        manager.uninstall_plugin(&id)
+    })
+    .await
+    .map_err(|e| format!("卸载插件失败: {e}"))?
+    .map_err(|e| format!("卸载插件失败: {e}"))
 }
 
 /// 启用插件

@@ -183,8 +183,9 @@ impl PluginManager {
         self.installed.get(id).cloned()
     }
 
-    /// 安装插件
-    pub async fn install_plugin(&mut self, source: &str) -> Result<PluginMetadata, PluginError> {
+    /// 安装插件（770 号：去伪 async——函数体零 await，重 FS（整目录复制+
+    /// 旧目录清理）改由命令层 spawn_blocking 承载，不再占 runtime 线程持锁执行）。
+    pub fn install_plugin(&mut self, source: &str) -> Result<PluginMetadata, PluginError> {
         // 解析源路径（本地路径或 URL）
         let source_path = Path::new(source);
         if !source_path.exists() {
@@ -241,7 +242,8 @@ impl PluginManager {
 
     /// 更新插件（覆盖安装）：与 `install_plugin` 相同，但跳过「已安装」检查——
     /// 清理旧目录 + 复制新版 + 重新注册。原子性优于「卸载后安装」（无中间缺失态）。
-    pub async fn update_plugin(&mut self, source: &str) -> Result<PluginMetadata, PluginError> {
+    /// 770 号：去伪 async（同 install_plugin，同步体由命令层 spawn_blocking 承载）。
+    pub fn update_plugin(&mut self, source: &str) -> Result<PluginMetadata, PluginError> {
         let source_path = Path::new(source);
         if !source_path.exists() {
             return Err(PluginError::InstallFailed(format!(
@@ -749,7 +751,6 @@ entrypoint = "plugin.wasm"
         // 安装
         let metadata = manager
             .install_plugin(plugin_source.to_str().unwrap())
-            .await
             .unwrap();
         assert_eq!(metadata.id, "test-plugin");
 
@@ -774,7 +775,6 @@ entrypoint = "plugin.wasm"
         // 安装
         manager
             .install_plugin(plugin_source.to_str().unwrap())
-            .await
             .unwrap();
 
         // 卸载
@@ -876,7 +876,7 @@ entrypoint = "plugin.wasm"
         for i in 0..n {
             let id = format!("flaky-{}", i);
             create_test_plugin(&staging, &id);
-            manager.install_plugin(&staging.join(&id).to_string_lossy()).await.unwrap();
+            manager.install_plugin(&staging.join(&id).to_string_lossy()).unwrap();
             plugin_ids.push(id);
         }
 
@@ -938,7 +938,7 @@ entrypoint = "plugin.wasm"
         create_test_plugin(&staging, "flaky-plugin");
 
         let mut manager = PluginManager::new(&plugins_dir).unwrap();
-        manager.install_plugin(&staging.join("flaky-plugin").to_string_lossy()).await.unwrap();
+        manager.install_plugin(&staging.join("flaky-plugin").to_string_lossy()).unwrap();
 
         // 初始应为启用
         assert!(manager.get_plugin("flaky-plugin").unwrap().enabled);
@@ -1009,7 +1009,7 @@ entrypoint = "plugin.wasm"
         create_test_plugin(&staging, "wasm-plugin");
 
         let mut manager = PluginManager::new(&plugins_dir).unwrap();
-        manager.install_plugin(&staging.join("wasm-plugin").to_string_lossy()).await.unwrap();
+        manager.install_plugin(&staging.join("wasm-plugin").to_string_lossy()).unwrap();
         manager.disable_plugin("wasm-plugin").unwrap();
 
         // 禁用插件 → filter 排除 → ids 为空 → no-op，不 panic。

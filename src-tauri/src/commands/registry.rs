@@ -199,11 +199,15 @@ pub async fn cmd_install_from_registry(
     if entry.dependencies.is_empty() {
         let temp = download_verify_extract(&entry, &pubkey, &client).await?;
         let source = temp.path().to_string_lossy().to_string();
-        let mut manager = plugin_state.manager.lock().await;
-        return manager
-            .install_plugin(&source)
-            .await
-            .map_err(|e| format!("安装失败: {}", e));
+        // 770 号：安装体同步重 FS 移入阻塞线程。
+        let manager_arc = plugin_state.manager.clone();
+        return tokio::task::spawn_blocking(move || {
+            let mut manager = manager_arc.blocking_lock();
+            manager.install_plugin(&source)
+        })
+        .await
+        .map_err(|e| format!("安装失败: {e}"))?
+        .map_err(|e| format!("安装失败: {e}"));
     }
 
     // 有依赖：解析后序拓扑（依赖在前、entry 最后）→ 按序安装，跳过已装
@@ -225,13 +229,16 @@ pub async fn cmd_install_from_registry(
         }
         let temp = download_verify_extract(e, &pubkey, &client).await?;
         let source = temp.path().to_string_lossy().to_string();
-        let meta = {
-            let mut manager = plugin_state.manager.lock().await;
-            manager
-                .install_plugin(&source)
-                .await
-                .map_err(|err| format!("安装依赖 {} 失败: {}", e.id, err))?
-        };
+        // 770 号：安装体同步重 FS，spawn_blocking 承载（blocking_lock 阻塞线程取锁）。
+        let manager_arc = plugin_state.manager.clone();
+        let source_owned = source.clone();
+        let meta = tokio::task::spawn_blocking(move || {
+            let mut manager = manager_arc.blocking_lock();
+            manager.install_plugin(&source_owned)
+        })
+        .await
+        .map_err(|err| format!("安装依赖 {} 失败: {err}", e.id))?
+        .map_err(|err| format!("安装依赖 {} 失败: {}", e.id, err))?;
         if e.id == entry.id {
             last_meta = Some(meta);
         }
@@ -249,11 +256,16 @@ pub async fn cmd_update_plugin_from_registry(
     let (_url, pubkey, client, _cache_path) = registry_source_and_client(&config_state).await?;
     let temp = download_verify_extract(&entry, &pubkey, &client).await?;
     let source = temp.path().to_string_lossy().to_string();
-    let mut manager = plugin_state.manager.lock().await;
-    manager
-        .update_plugin(&source)
-        .await
-        .map_err(|e| format!("更新失败: {}", e))
+    // 770 号：同 install——更新体同步重 FS 移入阻塞线程。
+    let manager_arc = plugin_state.manager.clone();
+    let meta = tokio::task::spawn_blocking(move || {
+        let mut manager = manager_arc.blocking_lock();
+        manager.update_plugin(&source)
+    })
+    .await
+    .map_err(|e| format!("更新失败: {e}"))?
+    .map_err(|e| format!("更新失败: {e}"))?;
+    Ok(meta)
 }
 
 /// 检查已装插件的更新：拉取注册表 → 与已装版本 semver 比较 → 返回有更新的列表。
