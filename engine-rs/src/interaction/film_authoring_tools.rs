@@ -327,10 +327,16 @@ async fn tool_upsert_characters(deps: &FilmAuthoringDeps<'_>, args: &Value) -> T
     // open 前建好（MemoryDb::open 不建父目录）。
     let book_dir = deps.root.join("interactive-films").join(deps.project_id);
     if tokio::fs::create_dir_all(book_dir.join("story")).await.is_ok() {
-        if let Ok(db) = MemoryDb::open(&book_dir) {
-            write_character_facts(&db, &chars, rev);
-            let _ = db.close();
-        }
+        // 764 号：sqlite 事实写入移出 runtime 线程（chars 克隆跨线程，
+        // 失败不中断工具结果——与原 if-let-Ok 吞错语义一致）。
+        let chars_for_facts = chars.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(db) = MemoryDb::open(&book_dir) {
+                write_character_facts(&db, &chars_for_facts, rev);
+                let _ = db.close();
+            }
+        })
+        .await;
     }
     text_result(
         format!("Upserted {} character(s) (rev {rev}).", chars.len()),

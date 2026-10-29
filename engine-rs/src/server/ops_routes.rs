@@ -517,8 +517,17 @@ async fn handle_audit_failure(
                     .join(",")
             ),
         };
-        let recorded =
-            crate::state::memory_db::MemoryDb::open(&book_dir).and_then(|db| db.record_debt(&debt));
+        // 764 号：sqlite 写移出 runtime 线程（debt owned 跨线程；JoinError
+        // 并入同一 daemon:error 广播，语义=记录失败不中断）。
+        let recorded = tokio::task::spawn_blocking({
+            let book_dir = book_dir.clone();
+            move || {
+                crate::state::memory_db::MemoryDb::open(&book_dir)
+                    .and_then(|db| db.record_debt(&debt))
+            }
+        })
+        .await
+        .unwrap_or_else(|join_error| Err(crate::EngineError::Constraint(join_error.to_string())));
         if let Err(error) = recorded {
             runtime.hub.broadcast(
                 "daemon:error",
@@ -1273,8 +1282,17 @@ pub async fn post_hybrid_search(
                 crate::utils::semantic_retrieval::embed_batch(embedding, std::slice::from_ref(&query), Some(&api_key))
                     .await?;
             let query_vector = query_vectors.first().ok_or("empty embedding")?;
-            let db = crate::state::memory_db::MemoryDb::open(&book_dir).map_err(|e| e.to_string())?;
-            let chunks = db.list_chunk_vectors().map_err(|e| e.to_string())?;
+            // 764 号：chunk 向量全量读移出 runtime 线程。
+            let chunks = tokio::task::spawn_blocking({
+                let book_dir = book_dir.clone();
+                move || {
+                    crate::state::memory_db::MemoryDb::open(&book_dir)
+                        .and_then(|db| db.list_chunk_vectors())
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
             let chunk_inputs: Vec<crate::utils::semantic_retrieval::ChunkVector> = chunks
                 .iter()
                 .map(|chunk| crate::utils::semantic_retrieval::ChunkVector {
@@ -1383,14 +1401,14 @@ pub async fn get_roster_candidates(
         )
             .into_response();
     }
-    // 763 号：名册读取不依赖 db 结果，提到同步闭包前异步读（闭包内保留的
-    // MemoryDb/rusqlite 同步访问属 sqlite 同步访问面，另轮定性）。
+    // 763 号：名册读取不依赖 db 结果，提到同步闭包前异步读。
+    // 764 号：db 查询（summaries 全量）+纯投影移入 spawn_blocking。
     let roster_path = book_dir.join("story").join("entity_roster.md");
     let (roster, roster_exists) = match tokio::fs::read_to_string(&roster_path).await {
         Ok(raw) => (crate::utils::entity_roster::parse_entity_roster(&raw), true),
         Err(_) => (Vec::new(), false),
     };
-    let result = (|| {
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let summaries = db.get_summaries(1, 100_000)?;
         let current_chapter = summaries.iter().map(|s| s.chapter).max().map(|last| last + 1).unwrap_or(1);
@@ -1401,15 +1419,17 @@ pub async fn get_roster_candidates(
                 .collect::<Vec<_>>(),
         );
         let cards = crate::utils::entity_roster::resolve_roster_candidates(&candidates, &roster);
-        Ok::<_, crate::EngineError>(serde_json::json!({
+        Ok(serde_json::json!({
             "cards": cards,
             "candidates": candidates,
             "rosterExists": roster_exists,
             "currentChapter": current_chapter
         }))
-    })();
+    })
+    .await;
     match result {
-        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Ok(Ok(payload)) => (StatusCode::OK, Json(payload)).into_response(),
+        Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -1621,75 +1641,82 @@ pub async fn get_quality_trend(
         )
             .into_response();
     }
-    let result = async {
-        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-        let metrics = db.list_review_metrics()?;
-        let rows: Vec<crate::utils::quality_trend::ReviewMetricRow> = metrics
-            .iter()
-            .map(|metric| crate::utils::quality_trend::ReviewMetricRow {
-                chapter: metric.chapter,
-                overall_score: metric.overall_score,
-                passed: metric.passed,
-                critical_count: metric.critical_count,
-                warning_count: metric.warning_count,
-                info_count: metric.info_count,
-                recorded_at: String::new(),
-            })
-            .collect();
-        let trend = crate::utils::quality_trend::build_quality_trend(&rows);
-        let hooks = db.get_all_hooks()?;
-        let current_chapter = metrics
-            .iter()
-            .map(|metric| metric.chapter)
-            .max()
-            .map(|last| last + 1)
-            .unwrap_or(1);
-        let target_chapters = runtime
-            .state
-            .load_book_config(&book_id)
-            .await
-            .ok()
-            .map(|book| i64::from(book.target_chapters));
-        let mut urgency: Vec<crate::utils::promise_ledger::PromiseUrgency> = hooks
-            .iter()
-            .filter(|hook| {
-                !matches!(
-                    hook.status.trim().to_lowercase().as_str(),
-                    "resolved" | "closed" | "done" | "已回收" | "已解决"
-                )
-            })
-            .map(|hook| {
-                crate::utils::promise_ledger::PromiseHookInput {
-                    hook_id: hook.hook_id.clone(),
-                    start_chapter: hook.start_chapter,
-                    status: hook.status.clone(),
-                    last_advanced_chapter: hook.last_advanced_chapter,
-                    expected_payoff: hook.expected_payoff.clone(),
-                    notes: hook.notes.clone(),
-                    core_hook: false,
-                    // 紧迫度投影无 kind 字段（R23/396 号仅 timeline 透传）。
-                    kind: None,
-                }
-            })
-            .map(|input| {
-                crate::utils::promise_ledger::resolve_promise_urgency(
-                    &input,
-                    current_chapter,
-                    target_chapters,
-                )
-            })
-            .collect();
-        urgency.sort_by(|a, b| {
-            b.urgency.cmp(&a.urgency).then_with(|| a.hook_id.cmp(&b.hook_id))
-        });
-        Ok::<_, crate::EngineError>(serde_json::json!({
-            "trend": trend,
-            "urgency": urgency,
-            "currentChapter": current_chapter
-        }))
-    };
-    match result.await {
-        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+    // 764 号：load_book_config 与 db 结果无依赖，先 await；db 查询+纯投影
+    // 整体移入 spawn_blocking（metrics/hooks 全量读为 runtime 线程最大阻塞面）。
+    let target_chapters = runtime
+        .state
+        .load_book_config(&book_id)
+        .await
+        .ok()
+        .map(|book| i64::from(book.target_chapters));
+    let result = tokio::task::spawn_blocking({
+        let book_dir = book_dir.clone();
+        move || -> Result<serde_json::Value, crate::EngineError> {
+            let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+            let metrics = db.list_review_metrics()?;
+            let rows: Vec<crate::utils::quality_trend::ReviewMetricRow> = metrics
+                .iter()
+                .map(|metric| crate::utils::quality_trend::ReviewMetricRow {
+                    chapter: metric.chapter,
+                    overall_score: metric.overall_score,
+                    passed: metric.passed,
+                    critical_count: metric.critical_count,
+                    warning_count: metric.warning_count,
+                    info_count: metric.info_count,
+                    recorded_at: String::new(),
+                })
+                .collect();
+            let trend = crate::utils::quality_trend::build_quality_trend(&rows);
+            let hooks = db.get_all_hooks()?;
+            let current_chapter = metrics
+                .iter()
+                .map(|metric| metric.chapter)
+                .max()
+                .map(|last| last + 1)
+                .unwrap_or(1);
+            let mut urgency: Vec<crate::utils::promise_ledger::PromiseUrgency> = hooks
+                .iter()
+                .filter(|hook| {
+                    !matches!(
+                        hook.status.trim().to_lowercase().as_str(),
+                        "resolved" | "closed" | "done" | "已回收" | "已解决"
+                    )
+                })
+                .map(|hook| {
+                    crate::utils::promise_ledger::PromiseHookInput {
+                        hook_id: hook.hook_id.clone(),
+                        start_chapter: hook.start_chapter,
+                        status: hook.status.clone(),
+                        last_advanced_chapter: hook.last_advanced_chapter,
+                        expected_payoff: hook.expected_payoff.clone(),
+                        notes: hook.notes.clone(),
+                        core_hook: false,
+                        // 紧迫度投影无 kind 字段（R23/396 号仅 timeline 透传）。
+                        kind: None,
+                    }
+                })
+                .map(|input| {
+                    crate::utils::promise_ledger::resolve_promise_urgency(
+                        &input,
+                        current_chapter,
+                        target_chapters,
+                    )
+                })
+                .collect();
+            urgency.sort_by(|a, b| {
+                b.urgency.cmp(&a.urgency).then_with(|| a.hook_id.cmp(&b.hook_id))
+            });
+            Ok(serde_json::json!({
+                "trend": trend,
+                "urgency": urgency,
+                "currentChapter": current_chapter
+            }))
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(payload)) => (StatusCode::OK, Json(payload)).into_response(),
+        Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -1761,10 +1788,11 @@ pub async fn get_promises(
             .into_response();
     }
     // 763 号：台账读取不依赖 db 结果，提到同步闭包前异步读（缺文件降级语义不变）。
+    // 764 号：db 查询+投影移入 spawn_blocking。
     let hooks_markdown = tokio::fs::read_to_string(book_dir.join("story").join("pending_hooks.md"))
         .await
         .unwrap_or_default();
-    let result = (|| {
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
         let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
         let hooks = db.get_all_hooks()?;
         // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
@@ -1806,15 +1834,17 @@ pub async fn get_promises(
             })
             .collect();
         let weak_runs = crate::utils::promise_ledger::detect_weak_hook_runs(&weak_rows, None);
-        Ok::<_, crate::EngineError>(serde_json::json!({
+        Ok(serde_json::json!({
             "timeline": timeline,
             "pacingDebts": pacing_debts,
             "weakRuns": weak_runs,
             "currentChapter": current_chapter
         }))
-    })();
+    })
+    .await;
     match result {
-        Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
+        Ok(Ok(payload)) => (StatusCode::OK, Json(payload)).into_response(),
+        Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -1849,14 +1879,22 @@ pub async fn get_quality_debts(
     if !db_path.exists() {
         return (StatusCode::OK, Json(json!({ "debts": [] }))).into_response();
     }
-    match crate::state::memory_db::MemoryDb::open(&book_dir) {
-        Ok(db) => match db.list_debts(None, params.get("status").map(String::as_str)) {
-            Ok(debts) => {
-                let value = serde_json::to_value(&debts).unwrap_or(json!([]));
-                (StatusCode::OK, Json(json!({ "debts": value }))).into_response()
-            }
-            Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-        },
+    // 764 号：sqlite open+查询移出 runtime 线程。
+    let status_filter = params.get("status").map(String::as_str).map(str::to_string);
+    let result = tokio::task::spawn_blocking({
+        let book_dir = book_dir.clone();
+        move || {
+            crate::state::memory_db::MemoryDb::open(&book_dir)
+                .and_then(|db| db.list_debts(None, status_filter.as_deref()))
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(debts)) => {
+            let value = serde_json::to_value(&debts).unwrap_or(json!([]));
+            (StatusCode::OK, Json(json!({ "debts": value }))).into_response()
+        }
+        Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }

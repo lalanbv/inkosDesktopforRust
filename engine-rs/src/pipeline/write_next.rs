@@ -1266,19 +1266,27 @@ async fn write_next_chapter_locked(
                 recorded_at: String::new(),
             })
         };
-        let recorded = (|| -> Result<bool, crate::EngineError> {
-            let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-            memory.record_review_metric(&crate::state::memory_db::StoredReviewMetric {
-                chapter: i64::from(chapter_number),
-                overall_score: audit_result.overall_score.map(i64::from),
-                passed: audit_result.passed,
-                critical_count,
-                warning_count,
-                info_count,
-                content_hash,
-                recorded_at: crate::utils::utc_time::utc_now_iso(),
-            })
-        })();
+        // 764 号：sqlite 幂等写移出 runtime 线程（metric owned 跨线程；
+        // JoinError 并入同一 warn 日志，语义=记录失败不中断管线）。
+        let metric = crate::state::memory_db::StoredReviewMetric {
+            chapter: i64::from(chapter_number),
+            overall_score: audit_result.overall_score.map(i64::from),
+            passed: audit_result.passed,
+            critical_count,
+            warning_count,
+            info_count,
+            content_hash,
+            recorded_at: crate::utils::utc_time::utc_now_iso(),
+        };
+        let recorded = tokio::task::spawn_blocking({
+            let book_dir = book_dir.clone();
+            move || -> Result<bool, crate::EngineError> {
+                let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+                memory.record_review_metric(&metric)
+            }
+        })
+        .await
+        .unwrap_or_else(|error| Err(crate::EngineError::Constraint(error.to_string())));
         match recorded {
             Ok(false) => tracing::info!(target: "write-next", "[review-metrics] ch{chapter_number} 同内容重放，幂等跳过"),
             Ok(true) => {}
@@ -1396,12 +1404,19 @@ async fn write_next_chapter_locked(
         .await;
         match seed_result {
             Ok(seed) => {
-                let projected = (|| -> Result<(), crate::EngineError> {
-                    let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-                    memory.replace_summaries(&seed.summaries)?;
-                    memory.replace_hooks(&seed.hooks)?;
-                    Ok(())
-                })();
+                // 764 号：seed 全量回写（summaries+hooks 批量 replace）移出
+                // runtime 线程（seed owned 跨线程；失败 warn 语义不变）。
+                let projected = tokio::task::spawn_blocking({
+                    let book_dir = book_dir.clone();
+                    move || -> Result<(), crate::EngineError> {
+                        let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+                        memory.replace_summaries(&seed.summaries)?;
+                        memory.replace_hooks(&seed.hooks)?;
+                        Ok(())
+                    }
+                })
+                .await
+                .unwrap_or_else(|error| Err(crate::EngineError::Constraint(error.to_string())));
                 if let Err(error) = projected {
                     tracing::warn!(target: "write-next", "[narrative-memory] {error}");
                 }

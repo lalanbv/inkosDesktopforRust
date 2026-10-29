@@ -228,28 +228,37 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
     let summaries_markdown =
         read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
 
-    // MemoryDb 副作用（对齐 TS）：空库回填摘要/事实（DB 为可重建投影）。
-    if let Ok(memory_db) = MemoryDb::open(params.book_dir) {
-        if memory_db.get_chapter_count().unwrap_or(0) == 0 {
-            let backfill: Vec<StoredSummary> = if let Some(state) = &structured_summaries {
-                state.rows.iter().map(summary_from_row).collect()
-            } else {
-                parse_chapter_summaries_markdown(&summaries_markdown)
-            };
-            if !backfill.is_empty() {
-                let _ = memory_db.replace_summaries(&backfill);
-            }
-        }
-        if memory_db.get_current_facts().map(|f| f.is_empty()).unwrap_or(true) && !facts.is_empty()
-        {
-            let _ = memory_db.replace_current_facts(&facts);
-        }
-        memory_db.close().ok();
-    }
-
-    let summaries = structured_summaries
+    // 回填数据源与下方选取投影同源（structured rows 或 markdown 解析），
+    // 物化一次后克隆给阻塞闭包；选取路径继续用原值。
+    let summaries: Vec<StoredSummary> = structured_summaries
         .map(|state| state.rows.iter().map(summary_from_row).collect())
         .unwrap_or_else(|| parse_chapter_summaries_markdown(&summaries_markdown));
+
+    // MemoryDb 副作用（对齐 TS）：空库回填摘要/事实（DB 为可重建投影）。
+    // 764 号：sqlite 回填写移出 runtime 线程（JoinError 视为回填跳过——
+    // DB 可重建，下一次检索重试）。
+    let _ = tokio::task::spawn_blocking({
+        let book_dir = params.book_dir.to_path_buf();
+        let backfill_source = summaries.clone();
+        let facts = facts.clone();
+        move || {
+            if let Ok(memory_db) = MemoryDb::open(&book_dir) {
+                if memory_db.get_chapter_count().unwrap_or(0) == 0 && !backfill_source.is_empty() {
+                    let _ = memory_db.replace_summaries(&backfill_source);
+                }
+                if memory_db
+                    .get_current_facts()
+                    .map(|f| f.is_empty())
+                    .unwrap_or(true)
+                    && !facts.is_empty()
+                {
+                    let _ = memory_db.replace_current_facts(&facts);
+                }
+                memory_db.close().ok();
+            }
+        }
+    })
+    .await;
 
     let volume_summaries = parse_volume_summaries_markdown(&volume_summaries_markdown);
     let documents = build_memory_search_documents(
