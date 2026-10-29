@@ -197,6 +197,14 @@ rm "/path/to/project/.inkos/tasks/book%3Amy-book%3Awrite.json"
 2. 该技能若被标记为模型专用（`user-invocable: false`），不会出现在用户列表（仅供 Agent 自主调用）；
 3. 项目设置 → Agent Skills 顶部的诊断区会列出解析失败的定义文件。
 
+### 外部目录（INKOS_SKILL_DIRS）的技能没有载入？
+
+外部来源需**先确认信任**才会载入（项目内 `skills/` 与 `~/.agents` 等惯例目录默认信任）：
+
+1. 项目设置 → Agent Skills 顶部诊断区出现「pending trust confirmation」条目即待确认——点条目右侧**「信任此来源」**一键确认（需该目录含 SKILL.md）；
+2. 确认后列表自动热刷新；已信任清单在「外部 Skill 来源信任」区，可随时撤销（撤销后该目录技能回到待确认态）；
+3. 若条目带 `min-engine-version` 提示，说明技能要求的引擎版本高于当前契约版本，待引擎升级后可用。
+
 ### 任务完成后书籍列表/详情未刷新
 
 写作完成事件（`write:complete`）经 SSE 推送驱动刷新。若 SSE 断连（状态栏「实时」标识变灰）：
