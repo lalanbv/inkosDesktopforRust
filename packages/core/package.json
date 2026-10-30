@@ -73,7 +73,6 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:flows": "vitest run src/__tests__/*.flow.test.ts",
-    "eval": "vitest run src/__tests__/eval",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
