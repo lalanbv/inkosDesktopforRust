@@ -1,6 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TimelineSchema, type Timeline } from "../models/timeline.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 /**
  * 时间线节拍自动沉淀（191 号；与 189 号 Rust `agents/timeline_settler.rs` +
@@ -148,6 +149,6 @@ export async function settleTimelineBeatsForChapter(deps: {
     return 0;
   }
   await mkdir(join(deps.bookDir, "story"), { recursive: true });
-  await writeFile(path, `${JSON.stringify(timeline, null, 2)}\n`, "utf-8");
+  await writeTextAtomic(path, `${JSON.stringify(timeline, null, 2)}\n`);
   return applied;
 }

@@ -1,11 +1,12 @@
 import type {LengthSpec} from '../models/length-governance.js';
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { EPub } from "epub-gen-memory";
 import {renderChapterDocument} from '../utils/chapter-document.js';
 import {readChapterHeading} from '../utils/chapter-splitter.js';
 import {buildLengthSpec, chapterLengthDelivery, countChapterLength, defaultChapterLength} from '../utils/length-metrics.js';
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface ExportStateLike {
   readonly bookDir: (bookId: string) => string;
@@ -197,7 +198,7 @@ export async function writeExportArtifact(
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName">> {
   const artifact = await buildExportArtifact(state, bookId, options);
   await mkdir(dirname(artifact.outputPath), { recursive: true });
-  await writeFile(artifact.outputPath, artifact.payload);
+  await writeTextAtomic(artifact.outputPath, artifact.payload);
   return {
     kind: artifact.kind,
     workId: artifact.workId,

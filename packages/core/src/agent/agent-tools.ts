@@ -3,7 +3,7 @@ import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import { defaultChapterLength } from "../utils/length-metrics.js";
-import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import {createHash} from 'node:crypto';
 import { StateManager } from "../state/manager.js";
@@ -55,6 +55,7 @@ import { listWorkManifests, loadWorkManifest, mergeWorkMetadata,saveWorkManifest
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { StoryNodeToolSchema } from "../interactive-film/tool-schemas.js";
 import {CreationSourceReference,CreationSourceReferences,loadCreationSource,bindCreationSource} from './creation-source.js';
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -810,7 +811,7 @@ export function createResearchWebTool(projectRoot: string): AgentTool<typeof Res
       await mkdir(reportDir, { recursive: true });
       const fileName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${slugResearchTopic(params.topic)}.md`;
       const reportPath = join(reportDir, fileName);
-      await writeFile(reportPath, report.markdown, "utf-8");
+      await writeTextAtomic(reportPath, report.markdown);
       return textResult(
         [
           `Research report saved: ${reportPath}`,

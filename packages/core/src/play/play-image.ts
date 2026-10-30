@@ -9,7 +9,7 @@
  */
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from '../utils/atomic-file-set.js';
 import { loadAvailableAgentSkills } from '../skills/builtin-loader.js';
@@ -29,6 +29,7 @@ import {
   loadImageReference,
   resolveCoverGenerationRequest,
 } from "../pipeline/short-fiction-runner.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface PlayImageWorldContext {
   readonly visualFacts?:string;
@@ -139,7 +140,7 @@ export async function readPlayImageManifest(runDir: string): Promise<PlayImageMa
 export async function writePlayImageManifest(runDir: string, manifest: PlayImageManifest): Promise<void> {
   await mkdir(join(runDir, "images"), { recursive: true });
   const parsed = PlayImageManifestSchema.parse(manifest);
-  await writeFile(manifestPath(runDir), JSON.stringify(parsed, null, 2), "utf-8");
+  await writeTextAtomic(manifestPath(runDir), JSON.stringify(parsed, null, 2));
 }
 
 /** Immutably set one manifest entry and persist it. Returns the new manifest. */
@@ -191,7 +192,7 @@ export async function readPlayImageSettings(runDir: string): Promise<PlayImageSe
 
 export async function writePlayImageSettings(runDir: string, settings: PlayImageSettings): Promise<void> {
   await mkdir(join(runDir, "images"), { recursive: true });
-  await writeFile(settingsPath(runDir), JSON.stringify(PlayImageSettingsSchema.parse(settings), null, 2), "utf-8");
+  await writeTextAtomic(settingsPath(runDir), JSON.stringify(PlayImageSettingsSchema.parse(settings), null, 2));
 }
 
 /** Filesystem-safe leaf name derived from an entity id / scene key. */

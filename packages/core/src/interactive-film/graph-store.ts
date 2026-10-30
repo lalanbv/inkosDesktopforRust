@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { StoryGraphSchema, type StoryGraph } from "./graph-schema.js";
 import { workDirectory } from "../harness/work-store.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export function storyGraphPath(projectRoot: string, projectId: string): string {
   return join(workDirectory(projectRoot, projectId), "source", "story-graph.json");
@@ -28,5 +29,5 @@ export async function saveStoryGraph(
   const validated = StoryGraphSchema.parse(graph);
   const path = storyGraphPath(projectRoot, projectId);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(validated, null, 2), "utf-8");
+  await writeTextAtomic(path, JSON.stringify(validated, null, 2));
 }

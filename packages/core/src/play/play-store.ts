@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PlayPresentationSchema, legacyPresentation, type PlayPresentation } from "./play-presentation.js";
 import { legacyReceiptChoices } from "./play-presentation-legacy.js";
@@ -18,6 +18,7 @@ import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { createWorkManifest,loadWorkManifest } from "../harness/work-store.js";
 import {createBuiltInWorkProfileRegistry} from '../harness/builtin-profiles.js';
 import { listWorkManifests, workDirectory } from "../harness/work-store.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 const PlayTranscriptTurnSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool"]),
@@ -293,11 +294,9 @@ export class PlayStore {
   ): Promise<void> {
     await this.ensureRun(worldId, runId);
     const parsed = PlayCurrentStateSchema.parse(state);
-    await writeFile(
+    await writeTextAtomic(
       join(this.runDir(worldId, runId), "state", "current.json"),
-      `${JSON.stringify(parsed, null, 2)}\n`,
-      "utf-8",
-    );
+      `${JSON.stringify(parsed, null, 2)}\n`);
   }
 
   async loadCurrentState(worldId: string, runId: string): Promise<PlayCurrentState | null> {
@@ -319,7 +318,7 @@ export class PlayStore {
     await this.ensureRun(worldId, runId);
     const target = this.safeRunChildPath(worldId, runId, relativePath);
     await mkdir(join(target, ".."), { recursive: true });
-    await writeFile(target, content, "utf-8");
+    await writeTextAtomic(target, content);
   }
 
   async readProjection(worldId: string, runId: string, relativePath: string): Promise<string> {
@@ -360,11 +359,9 @@ export class PlayStore {
     snapshot: PlayRunSnapshot,
   ): Promise<void> {
     await this.ensureRun(worldId, runId);
-    await writeFile(
+    await writeTextAtomic(
       this.safeRunChildPath(worldId, runId, join("checkpoints", `${assertSafeSegment(snapshot.id)}.json`)),
-      `${JSON.stringify(snapshot, null, 2)}\n`,
-      "utf-8",
-    );
+      `${JSON.stringify(snapshot, null, 2)}\n`);
   }
 
   async loadCheckpoint(
@@ -385,11 +382,9 @@ export class PlayStore {
     await this.ensureRun(worldId, runId);
     const relativePath = join("variants", `turn-${turn}`, `${variantId}.json`);
     await mkdir(join(this.runDir(worldId, runId), "variants", `turn-${turn}`), { recursive: true });
-    await writeFile(
+    await writeTextAtomic(
       this.safeRunChildPath(worldId, runId, relativePath),
-      `${JSON.stringify({ ...snapshot, id: variantId }, null, 2)}\n`,
-      "utf-8",
-    );
+      `${JSON.stringify({ ...snapshot, id: variantId }, null, 2)}\n`);
     return variantId;
   }
 

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { z } from "zod";
 import type { PlanChapterOutput } from "../agents/planner.js";
@@ -7,6 +7,7 @@ import {
   ChapterMemoSchema,
   type ChapterIntent,
 } from "../models/input-governance.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 /**
  * The typed JSON cache is authoritative. The sibling intent Markdown is only
@@ -42,7 +43,7 @@ export async function savePersistedPlan(
     memo: plan.memo,
     plannerInputs: plan.plannerInputs,
   });
-  await writeFile(planPath(bookDir, plan.memo.chapter), `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  await writeTextAtomic(planPath(bookDir, plan.memo.chapter), `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export async function loadPersistedPlan(

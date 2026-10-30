@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export type ChapterVersionSource =
   | "manual"
@@ -43,7 +44,7 @@ export async function saveChapterUserBrief(
     return;
   }
   await mkdir(join(bookDir, "story", "runtime"), { recursive: true });
-  await writeFile(path, `${normalized}\n`, "utf-8");
+  await writeTextAtomic(path, `${normalized}\n`);
 }
 
 export async function readChapterPlanDocument(
@@ -69,7 +70,7 @@ export async function archiveChapterVersion(
   const id = `${now.getTime()}_${source}_${randomUUID()}`;
   const dir = versionsDir(bookDir, chapterNumber);
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, `${id}.md`), content, "utf-8");
+  await writeTextAtomic(join(dir, `${id}.md`), content);
   return {
     id,
     chapterNumber,

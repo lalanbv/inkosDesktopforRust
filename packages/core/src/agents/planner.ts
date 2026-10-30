@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { BaseAgent } from "./base.js";
 import type { BookConfig } from "../models/book.js";
@@ -18,6 +18,7 @@ import {
   getPlannerMemoSystemPrompt,
 } from "./planner-prompts.js";
 import { ComposerAgent } from "./composer.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface PlanChapterInput {
   readonly book: BookConfig;
@@ -105,7 +106,7 @@ export class PlannerAgent extends BaseAgent {
       intent,
       memo,
     );
-    await writeFile(runtimePath, intentMarkdown, "utf-8");
+    await writeTextAtomic(runtimePath, intentMarkdown);
 
     return {
       intent,

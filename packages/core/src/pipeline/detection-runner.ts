@@ -5,8 +5,9 @@
 import type { DetectionConfig } from "../models/project.js";
 import type { DetectionHistoryEntry } from "../models/detection.js";
 import { detectAIContent, type DetectionResult } from "../agents/detector.js";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface DetectChapterResult {
   readonly chapterNumber: number;
@@ -54,7 +55,7 @@ async function recordHistory(
   history.push(entry);
 
   await mkdir(join(bookDir, "story"), { recursive: true });
-  await writeFile(historyPath, JSON.stringify(history, null, 2), "utf-8");
+  await writeTextAtomic(historyPath, JSON.stringify(history, null, 2));
 }
 
 /** Load detection history from disk. */

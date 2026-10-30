@@ -65,6 +65,7 @@ import { loadAvailableAgentSkills, mergeActivatedSkillGuidance } from "../skills
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { compileStyleGuide } from "../agents/style-guide.js";
 import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 function mergeChapterRevisionInstructions(
   persistedBrief: string,
@@ -873,11 +874,9 @@ export class PipelineRunner {
     await mkdir(backupDir, { recursive: true });
     await this.copyDirShallow(join(storyDir, "outline"), join(backupDir, "outline"));
     await this.copyDirRecursive(join(storyDir, "roles"), join(backupDir, "roles"));
-    await writeFile(
+    await writeTextAtomic(
       join(backupDir, "book_rules.md"),
-      await readFile(join(storyDir, "book_rules.md"), "utf-8"),
-      "utf-8",
-    );
+      await readFile(join(storyDir, "book_rules.md"), "utf-8"));
 
     const book = await this.state.loadBookConfig(bookId);
     const [oldStoryFrame, oldVolumeMap, oldBookRules, oldRoles] = await Promise.all([
@@ -947,7 +946,7 @@ export class PipelineRunner {
     const entries = await readdir(src, { withFileTypes: true });
     await Promise.all(entries.filter((entry) => entry.isFile()).map(async (entry) => {
       const content = await readFile(join(src, entry.name), "utf-8");
-      await writeFile(join(dest, entry.name), content, "utf-8");
+      await writeTextAtomic(join(dest, entry.name), content);
     }));
   }
 
@@ -961,7 +960,7 @@ export class PipelineRunner {
         await this.copyDirRecursive(srcPath, destPath);
       } else if (entry.isFile()) {
         const content = await readFile(srcPath, "utf-8");
-        await writeFile(destPath, content, "utf-8");
+        await writeTextAtomic(destPath, content);
       }
     }
   }
@@ -982,7 +981,7 @@ export class PipelineRunner {
     const bookDir = this.state.bookDir(bookId);
     const storyDir = join(bookDir, "story");
     await mkdir(storyDir, { recursive: true });
-    await writeFile(join(storyDir, "fanfic_canon.md"), result.fullDocument, "utf-8");
+    await writeTextAtomic(join(storyDir, "fanfic_canon.md"), result.fullDocument);
 
     await syncWorkSourceArtifacts({
       projectRoot: this.config.projectRoot,
@@ -2018,7 +2017,7 @@ export class PipelineRunner {
       let continuationInstruction=input.continuationInstruction?.trim();
       if(continuationInstruction){
         await mkdir(join(bookDir,'story'),{recursive:true});
-        await writeFile(directionPath,continuationInstruction+'\n','utf8');
+        await writeTextAtomic(directionPath,continuationInstruction+'\n');
       }else{
         try{continuationInstruction=(await readFile(directionPath,'utf8')).trim();}
         catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
@@ -2047,11 +2046,11 @@ export class PipelineRunner {
         if (importContext.compiled) {
           const runtimeDir = join(bookDir, "story", "runtime");
           await mkdir(runtimeDir, { recursive: true });
-          await writeFile(join(runtimeDir, "import-context-trace.json"), JSON.stringify({
+          await writeTextAtomic(join(runtimeDir, "import-context-trace.json"), JSON.stringify({
             mode: "semantic-compilation",
             sourceChapters: input.chapters.length,
             chunkCount: importContext.chunkCount,
-          }, null, 2), "utf-8");
+          }, null, 2));
         }
 
         const architect = new ArchitectAgent(this.agentCtxFor("architect", input.bookId));
@@ -2290,16 +2289,12 @@ export class PipelineRunner {
     const storyDir = join(bookDir, "story");
 
     await Promise.all([
-      writeFile(
+      writeTextAtomic(
         join(storyDir, "current_state.md"),
-        this.buildImportReplayStateSeed(language),
-        "utf-8",
-      ),
-      writeFile(
+        this.buildImportReplayStateSeed(language)),
+      writeTextAtomic(
         join(storyDir, "pending_hooks.md"),
-        this.buildImportReplayHooksSeed(language),
-        "utf-8",
-      ),
+        this.buildImportReplayHooksSeed(language)),
       rm(join(storyDir, "chapter_summaries.md"), { force: true }),
       rm(join(storyDir, "volume_summaries.md"), { force: true }),
       rm(join(storyDir, "memory.db"), { force: true }),

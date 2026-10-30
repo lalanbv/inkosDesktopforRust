@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { workDirectory } from "../harness/work-store.js";
 import type { MaterialAsset } from "../materials/ingest.js";
 import { assertSafeBookId } from "../utils/book-id.js";
 import { safeChildPath } from "../utils/path-safety.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface BookReferenceBinding {
   readonly materialId: string;
@@ -233,14 +233,9 @@ async function assertBookExists(projectRoot: string, bookId: string): Promise<vo
 async function writeManifestAtomic(projectRoot: string, manifest: BookReferenceManifest): Promise<void> {
   const path = referenceManifestPath(projectRoot, manifest.bookId);
   await mkdir(join(workDirectory(projectRoot, manifest.bookId), "source", "story"), { recursive: true });
-  const tempPath = `${path}.tmp-${randomUUID()}`;
-  try {
-    await writeFile(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  // 780 号：手搓 tmp+rename 收敛到共享助手（获得 fsync 落盘 + EPERM/EBUSY 重试
+  // + 进程级唯一临时名，语义不变）。
+  await writeTextAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 function isMissingFile(error: unknown): boolean {

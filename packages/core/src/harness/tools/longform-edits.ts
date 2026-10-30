@@ -1,6 +1,6 @@
 import { Type, type Static } from "@mariozechner/pi-ai";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { executeEditTransaction, type EditRequest } from "../../interaction/edit-controller.js";
 import { StateManager } from "../../state/manager.js";
@@ -9,6 +9,7 @@ import { safeChildPath } from "../../utils/path-safety.js";
 import { BookRulesDataToolSchema } from "../../agents/architect-tool.js";
 import { BookRulesSchema } from "../../models/book-rules.js";
 import { commitAtomicFileSet } from "../../utils/atomic-file-set.js";
+import { writeTextAtomic } from "../../utils/atomic-write.js";
 
 const SAFE_TRUTH_FLAT_FILE_NAMES = new Set([
   "author_intent.md",
@@ -118,7 +119,7 @@ export function createWriteTruthFileTool(
             ],
           });
         } else {
-          await writeFile(targetPath, params.content, "utf-8");
+          await writeTextAtomic(targetPath, params.content);
         }
       });
       return textResult(`Updated "${fileName}" for "${bookId}".`, {

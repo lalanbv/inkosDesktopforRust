@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Value } from "@sinclair/typebox/value";
 import { ShortRevisionPlanSchema, ShortPackageToolSchema } from "../agents/short-fiction-tool.js";
 import {ShortAuthorScopeSchema, assertShortAuthorScope, type ShortAuthorScope} from '../agents/short-revision-scope.js';
-import { access, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, join, isAbsolute, relative } from "node:path";
 import type { AgentContext } from "../agents/base.js";
 import {
@@ -56,6 +56,7 @@ import { hydrateActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 
 import { readShortProductionState, writeShortProductionState, shortInputHash, type ShortProductionState } from "./short-production-state.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 const SHORT_FICTION_DRAFT_COMPLETION_ATTEMPTS = 3;
 const SHORT_DELIVERY_CONTRACT_CODES=new Set(["SHORT_CHAPTER_CONTRACT","SHORT_TITLE_MISMATCH","SHORT_OPENING_HOOK_CONTRACT"]);
@@ -1671,7 +1672,7 @@ function normalizeSellingPoints(value: ReadonlyArray<string> | undefined): Reado
 async function writeBinary(root: string, path: string, value: Buffer): Promise<void> {
   const resolved = safeChildPath(root, path);
   await mkdir(dirname(resolved), { recursive: true });
-  await writeFile(resolved, value);
+  await writeTextAtomic(resolved, value);
 }
 
 function textWrite(relativePath: string, value: string): AtomicFileWrite {
@@ -1684,7 +1685,7 @@ function textWrite(relativePath: string, value: string): AtomicFileWrite {
 async function writeText(root: string, path: string, value: string): Promise<void> {
   const resolved = safeChildPath(root, path);
   await mkdir(dirname(resolved), { recursive: true });
-  await writeFile(resolved, `${value.trimEnd()}\n`, "utf-8");
+  await writeTextAtomic(resolved, `${value.trimEnd()}\n`);
 }
 
 function shortWorkBaseDir(storyId: string): string {

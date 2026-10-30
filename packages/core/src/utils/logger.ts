@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 // === Types ===
 
@@ -121,8 +121,15 @@ function rotateIfOversized(path: string, maxBytes: number, keepBytes: number): v
     const cut = Math.max(0, content.length - keepBytes);
     const newline = content.indexOf(10, cut);
     const start = newline >= 0 ? newline + 1 : cut;
-    const tmp = `${path}.tmp`;
-    writeFileSync(tmp, content.subarray(start));
+    // 780 号：固定 tmp 名在并发轮转时互踩——pid 唯一名 + fsync 落盘后 rename。
+    const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    const handle = openSync(tmp, "w");
+    try {
+      writeSync(handle, content.subarray(start));
+      fsyncSync(handle);
+    } finally {
+      closeSync(handle);
+    }
     renameSync(tmp, path);
   } catch {
     // 轮转失败静默——最坏情况只是文件继续增长，不得阻断追加。

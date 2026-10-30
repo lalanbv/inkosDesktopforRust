@@ -45,11 +45,13 @@ export function atomicWriteErrorCode(error: unknown): string | null {
  * rename 遇文件锁（EPERM/EBUSY）线性退避重试；放弃时清理 tmp 再抛错。
  * 761 号：tmp 先 fsync 落盘再 rename，成功后尽力 fsync 父目录（镜像
  * Rust 760 号）——掉电/内核崩溃同样收敛到「要么旧、要么完整新」。
+ * 780 号：content 放宽收 Uint8Array（镜像 Rust 779 号 write_file_atomic_bytes
+ * ——双栈同语义；writeFileDurable 本就双型）。
  * options 供测试注入（retries/delayMs/sleep/rename）。
  */
 export async function writeTextAtomic(
   path: string,
-  content: string,
+  content: string | Uint8Array,
   options?: {
     readonly retries?: number;
     readonly delayMs?: number;

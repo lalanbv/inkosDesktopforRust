@@ -1,4 +1,4 @@
-import { access, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { access, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
 import { parseChapterFileName } from "../state/chapter-filename.js";
 import type { ChapterMeta } from "../models/chapter.js";
@@ -7,6 +7,7 @@ import {
   type ChapterVersionSource,
 } from "../state/chapter-workspace.js";
 import { classifyTruthAuthority, normalizeTruthFileName, type TruthAuthority } from "./truth-authority.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export type EditRequest =
   | {
@@ -234,7 +235,7 @@ async function executeEntityRename(
     if (nextContent === content) {
       continue;
     }
-    await writeFile(filePath, nextContent, "utf-8");
+    await writeTextAtomic(filePath, nextContent);
     touched.add(relative(root, filePath));
   }
 
@@ -354,7 +355,7 @@ async function executeChapterReplace(
     previousContent,
     request.versionSource ?? "agent",
   );
-  await writeFile(chapterPath, replacementContent, "utf-8");
+  await writeTextAtomic(chapterPath, replacementContent);
   const removedRuntimeFiles = await clearChapterRuntimeFiles(root, request.chapterNumber);
 
   const updatedIndex = recordManualEditObservation(
@@ -392,7 +393,7 @@ async function executeChapterLocalEdit(
   const nextContent = replaceChapterTargetText(content, request.targetText, request.replacementText);
   if (nextContent === content) throw new Error("The replacement would not change the chapter.");
   await archiveChapterVersion(root, request.chapterNumber, content, "agent");
-  await writeFile(chapterPath, nextContent, "utf-8");
+  await writeTextAtomic(chapterPath, nextContent);
 
   const removedRuntimeFiles = await clearChapterRuntimeFiles(root, request.chapterNumber);
   const updatedIndex = recordManualEditObservation(
@@ -442,7 +443,7 @@ export async function executeEditTransaction(
       const root = deps.bookDir(request.bookId);
       const normalizedFileName = normalizeTruthFileName(request.fileName);
       const filePath = join(root, "story", normalizedFileName);
-      await writeFile(filePath, request.instruction, "utf-8");
+      await writeTextAtomic(filePath, request.instruction);
       return {
         transactionType: request.kind,
         bookId: request.bookId,

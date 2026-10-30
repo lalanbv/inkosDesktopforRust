@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { toPosixPath } from "../utils/posix-path.js";
 import { EPub } from "epub-gen-memory";
 import { loadTranslationChapter, loadTranslationManifest, translationProjectDir } from "./run-store.js";
 import type { TranslationExportFormat, TranslationExportResult } from "./types.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export async function writeTranslationExport(
   projectRoot: string,
@@ -33,9 +34,9 @@ export async function writeTranslationExport(
       });
     }
     const epub = new EPub({ title: manifest.title, lang: manifest.targetLanguage }, chapters);
-    await writeFile(outputPath, await epub.genEpub());
+    await writeTextAtomic(outputPath, await epub.genEpub());
   } else {
-    await writeFile(outputPath, await renderTextExport(projectRoot, projectId, format), "utf-8");
+    await writeTextAtomic(outputPath, await renderTextExport(projectRoot, projectId, format));
   }
 
   await syncWorkSourceArtifacts({ projectRoot, workId: projectId, accept: true,

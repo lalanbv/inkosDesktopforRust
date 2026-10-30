@@ -1,6 +1,7 @@
-import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NarrativeForecastSchema, type NarrativeForecast } from "./schema.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 // All forecast artifacts live under this directory inside a book. Nothing in
 // this store may ever write outside of it — that is the v1 safety boundary
@@ -76,8 +77,8 @@ export class ForecastStore {
     await mkdir(dir, { recursive: true });
     const forecastJsonPath = this.forecastJsonPath(validated.forecastId);
     const comparisonPath = this.comparisonPath(validated.forecastId);
-    await writeFile(forecastJsonPath, `${JSON.stringify(validated, null, 2)}\n`, "utf-8");
-    await writeFile(comparisonPath, `${comparisonMarkdown.trimEnd()}\n`, "utf-8");
+    await writeTextAtomic(forecastJsonPath, `${JSON.stringify(validated, null, 2)}\n`);
+    await writeTextAtomic(comparisonPath, `${comparisonMarkdown.trimEnd()}\n`);
     return { forecastJsonPath, comparisonPath };
   }
 
@@ -127,17 +128,15 @@ export class ForecastStore {
 
   async markStale(forecast: NarrativeForecast): Promise<NarrativeForecast> {
     const stale: NarrativeForecast = { ...forecast, status: "stale" };
-    await writeFile(
+    await writeTextAtomic(
       this.forecastJsonPath(stale.forecastId),
-      `${JSON.stringify(NarrativeForecastSchema.parse(stale), null, 2)}\n`,
-      "utf-8",
-    );
+      `${JSON.stringify(NarrativeForecastSchema.parse(stale), null, 2)}\n`);
     return stale;
   }
 
   async writeSelectedPlan(forecastId: string, markdown: string): Promise<string> {
     const path = this.selectedPlanPath(forecastId);
-    await writeFile(path, `${markdown.trimEnd()}\n`, "utf-8");
+    await writeTextAtomic(path, `${markdown.trimEnd()}\n`);
     return path;
   }
 }

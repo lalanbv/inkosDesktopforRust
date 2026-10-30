@@ -1,8 +1,9 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join, dirname, relative, isAbsolute, sep } from "node:path";
 import { generateImageFromPrompt, resolveCoverGenerationRequest } from "../pipeline/short-fiction-runner.js";
 import type { StoryNode } from "./graph-schema.js";
 import type { StoryGraphDelta } from "./delta.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface NodeImageDeps {
   generateImage(prompt: string, size: string): Promise<{ buffer: Buffer; extension: "png" | "jpg" }>;
@@ -53,7 +54,7 @@ export async function generateNodeImage(params: {
     throw new Error(`unsafe node id for image path: ${params.node.id}`);
   }
   await mkdir(dirname(abs), { recursive: true });
-  await writeFile(abs, buffer);
+  await writeTextAtomic(abs, buffer);
   return { assetRef, delta: buildSetImageRefDelta(params.node, prompt, assetRef) };
 }
 

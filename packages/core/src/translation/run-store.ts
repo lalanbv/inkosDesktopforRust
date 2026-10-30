@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   TranslationChapterFile,
@@ -15,6 +15,7 @@ import {
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { workDirectory } from "../harness/work-store.js";
 import { safeChildPath } from "../utils/path-safety.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export function translationProjectDir(projectRoot: string, projectId: string): string {
   return join(workDirectory(projectRoot, projectId), "source");
@@ -37,7 +38,7 @@ export async function saveTranslationManifest(
   manifest: TranslationProjectManifest,
 ): Promise<void> {
   const parsed = validateTranslationManifestOwnership(TranslationProjectManifestSchema.parse(manifest),manifest.id);
-  await writeFile(translationManifestPath(projectRoot, parsed.id), JSON.stringify(parsed, null, 2), "utf-8");
+  await writeTextAtomic(translationManifestPath(projectRoot, parsed.id), JSON.stringify(parsed, null, 2));
 }
 
 export async function loadTranslationChapter(
@@ -53,7 +54,7 @@ export async function saveTranslationChapter(
   chapter: TranslationChapterFile,
 ): Promise<void> {
   const parsed = TranslationChapterFileSchema.parse(chapter);
-  await writeFile(safeChildPath(projectRoot, chapterPath), JSON.stringify(parsed, null, 2), "utf-8");
+  await writeTextAtomic(safeChildPath(projectRoot, chapterPath), JSON.stringify(parsed, null, 2));
 }
 
 export async function loadTranslationGlossary(
@@ -74,11 +75,9 @@ export async function saveTranslationGlossary(
   projectId: string,
   terms: ReadonlyArray<TranslationGlossaryTerm>,
 ): Promise<void> {
-  await writeFile(
+  await writeTextAtomic(
     join(translationProjectDir(projectRoot, projectId), "glossary.json"),
-    JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2),
-    "utf-8",
-  );
+    JSON.stringify({ terms: mergeGlossaryTerms(terms) }, null, 2));
 }
 
 export async function saveTranslationProgress(

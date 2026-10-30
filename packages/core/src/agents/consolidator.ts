@@ -4,7 +4,7 @@
  * 双端对偶 engine-rs/src/agents/consolidator.rs（ConsolidationResult 四字段同形）。
  */
 import { BaseAgent } from "./base.js";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readVolumeMap } from "../utils/outline-paths.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../utils/story-markdown.js";
 // 715 号：类型源适配——StoredHook 在当前树由 promise-ledger 承接（字段全集同形）。
 import type { StoredHook } from "../utils/promise-ledger.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface ConsolidationResult {
   readonly volumeSummaries: string;
@@ -134,21 +135,21 @@ export class ConsolidatorAgent extends BaseAgent {
     }
 
     // Write volume summaries
-    await writeFile(volumeSummariesPath, newSummaries.join("\n"), "utf-8");
+    await writeTextAtomic(volumeSummariesPath, newSummaries.join("\n"));
 
     // Archive detailed summaries
     const archiveDir = join(storyDir, "summaries_archive");
     await mkdir(archiveDir, { recursive: true });
     for (const vol of completedVolumes) {
       const archivePath = join(archiveDir, `vol_${vol.startCh}-${vol.endCh}.md`);
-      await writeFile(archivePath, `# ${vol.name}\n\n${header}\n${vol.rows.map((r) => r.raw).join("\n")}`, "utf-8");
+      await writeTextAtomic(archivePath, `# ${vol.name}\n\n${header}\n${vol.rows.map((r) => r.raw).join("\n")}`);
     }
 
     // Rewrite chapter_summaries.md with only current volume rows
     const retainedContent = currentVolumeRows.length > 0
       ? `${header}\n${currentVolumeRows.map((r) => r.raw).join("\n")}\n`
       : `${header}\n`;
-    await writeFile(summariesPath, retainedContent, "utf-8");
+    await writeTextAtomic(summariesPath, retainedContent);
 
     return {
       volumeSummaries: newSummaries.join("\n"),
@@ -181,7 +182,7 @@ export class ConsolidatorAgent extends BaseAgent {
     const result = rerunPromotionPass(hooks, summariesRaw);
     if (!result.updated) return 0;
 
-    await writeFile(ledgerPath, renderHookSnapshot([...result.hooks], language), "utf-8");
+    await writeTextAtomic(ledgerPath, renderHookSnapshot([...result.hooks], language));
     return result.flippedCount;
   }
 

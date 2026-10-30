@@ -5,7 +5,7 @@
 //! 断言：常量契约 + 重试决策纯函数。
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +98,32 @@ describe("atomic write (R29/404)", () => {
     expect(await readFile(target, "utf-8")).toBe("");
     const leftovers = (await readdir(dir)).filter((name) => name.includes(".tmp-"));
     expect(leftovers).toEqual([]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // 780 号：字节形态（镜像 Rust 779 号 write_file_atomic_bytes）——非 UTF-8
+  // 内容原样落盘、全量替换、无 tmp 残留。
+  it("writes Uint8Array payloads atomically and replaces existing files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "atomic-write-"));
+    const target = join(dir, "cover.png");
+
+    await writeFile(target, Uint8Array.of(0, 1, 2));
+    const payload = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0xff, 0x00);
+    await writeTextAtomic(target, payload);
+
+    expect([...await readFile(target)]).toEqual([...payload]);
+    const leftovers = (await readdir(dir)).filter((name) => name.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("lands empty byte payloads through the durable write path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "atomic-write-"));
+    const target = join(dir, "empty.bin");
+
+    await writeTextAtomic(target, new Uint8Array(0));
+
+    expect((await readFile(target)).byteLength).toBe(0);
     await rm(dir, { recursive: true, force: true });
   });
 });

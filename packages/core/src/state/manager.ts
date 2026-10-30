@@ -1,5 +1,5 @@
 import { ownsWorkMutation } from "../utils/work-mutation-scope.js";
-import { readFile, writeFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
+import { readFile, mkdir, readdir, rm, stat, unlink, open } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { BookConfigSchema, type BookConfig } from "../models/book.js";
@@ -14,6 +14,7 @@ import {
 } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -370,7 +371,7 @@ export class StateManager {
 
   async saveProjectConfig(config: Record<string, unknown>): Promise<void> {
     const configPath = join(this.projectRoot, "inkos.json");
-    await writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+    await writeTextAtomic(configPath, JSON.stringify(config, null, 2));
   }
 
   async loadBookConfig(bookId: string): Promise<BookConfig> {
@@ -410,11 +411,9 @@ export class StateManager {
   async saveBookConfigAt(bookDir: string, config: BookConfig): Promise<void> {
     const parsed = BookConfigSchema.parse(config);
     await mkdir(bookDir, { recursive: true });
-    await writeFile(
+    await writeTextAtomic(
       join(bookDir, "book.json"),
-      JSON.stringify(parsed, null, 2),
-      "utf-8",
-    );
+      JSON.stringify(parsed, null, 2));
   }
 
   async listBooks(): Promise<ReadonlyArray<string>> {
@@ -485,11 +484,9 @@ export class StateManager {
       }
     }
     const validated = index.map((chapter) => ChapterMetaSchema.parse(chapter));
-    await writeFile(
+    await writeTextAtomic(
       join(chaptersDir, "index.json"),
-      JSON.stringify(validated, null, 2),
-      "utf-8",
-    );
+      JSON.stringify(validated, null, 2));
   }
 
   async snapshotState(bookId: string, chapterNumber: number): Promise<void> {
@@ -679,7 +676,7 @@ export class StateManager {
       await stat(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await writeFile(path, content, "utf-8");
+      await writeTextAtomic(path, content);
     }
   }
 }

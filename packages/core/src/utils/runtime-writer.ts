@@ -1,5 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { commitAtomicFileSet } from "./atomic-file-set.js";
 import type {
   ChapterTrace,
   ContextPackage,
@@ -22,10 +23,15 @@ export async function writeGovernedRuntimeArtifacts(params: {
   const contextPath = join(params.runtimeDir, `${chapterSlug}.context.json`);
   const tracePath = join(params.runtimeDir, `${chapterSlug}.trace.json`);
 
-  await Promise.all([
-    writeFile(contextPath, JSON.stringify(params.contextPackage, null, 2), "utf-8"),
-    writeFile(tracePath, JSON.stringify(params.trace, null, 2), "utf-8"),
-  ]);
+  // 780 号：双件是 compose → write 的交接组，事务集提交——崩溃收敛到
+  // 「两件要么全旧/全缺、要么全新」（镜像 Rust 779 号三件套同款升级）。
+  await commitAtomicFileSet({
+    rootDir: params.runtimeDir,
+    writes: [
+      { relativePath: `${chapterSlug}.context.json`, content: JSON.stringify(params.contextPackage, null, 2) },
+      { relativePath: `${chapterSlug}.trace.json`, content: JSON.stringify(params.trace, null, 2) },
+    ],
+  });
 
   return {
     contextPath,
