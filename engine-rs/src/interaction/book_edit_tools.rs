@@ -72,7 +72,7 @@ async fn write_truth_file_inner(deps: &BookEditDeps<'_>, args: &Value) -> Result
             .await
             .map_err(|e| e.to_string())?;
     }
-    tokio::fs::write(&target, content).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&target, content).await.map_err(|e| e.to_string())?;
     Ok(format!("Updated \"{safe}\" for \"{book_id}\"."))
 }
 

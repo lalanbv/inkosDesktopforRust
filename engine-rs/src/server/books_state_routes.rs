@@ -696,7 +696,7 @@ pub async fn export_save(
         Ok(artifact) => {
             // build_export_artifact 只构建内存负载（GET /export 直接回流）；
             // export-save 的落盘语义在此完成（对齐 TS writeExportArtifact）。
-            if let Err(error) = tokio::fs::write(&artifact.output_path, &artifact.payload).await {
+            if let Err(error) = crate::utils::atomic_file_set::write_file_atomic_bytes(std::path::Path::new(&artifact.output_path), &artifact.payload).await {
                 return internal_error(error);
             }
             (

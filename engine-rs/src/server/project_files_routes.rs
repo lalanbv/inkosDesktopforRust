@@ -308,7 +308,7 @@ pub async fn put_project_artifact(
             return internal_error(&e).into_response();
         }
     }
-    if let Err(e) = tokio::fs::write(&resolved, content).await {
+    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic(&resolved, content).await {
         return internal_error(&e).into_response();
     }
     (

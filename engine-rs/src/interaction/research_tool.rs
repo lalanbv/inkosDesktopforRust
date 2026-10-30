@@ -174,7 +174,7 @@ pub async fn tool_research_web(
         slug_research_topic(topic)
     );
     let report_path = research_dir.join(&file_name);
-    if let Err(e) = tokio::fs::write(&report_path, &report.markdown).await {
+    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic(&report_path, &report.markdown).await {
         return error_result(e.to_string());
     }
     let report_path_text = report_path.to_string_lossy().to_string();

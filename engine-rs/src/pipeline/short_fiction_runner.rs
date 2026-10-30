@@ -200,7 +200,7 @@ async fn write_text(root: &Path, relative_path: &str, content: &str) -> Result<(
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
     let payload = format!("{}\n", content.trim_end());
-    tokio::fs::write(&full, payload).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&full, &payload).await.map_err(|e| e.to_string())
 }
 
 /// `writeJson`：`JSON.stringify(value, null, 2)`（+ 尾换行）。
@@ -213,7 +213,7 @@ async fn write_binary(root: &Path, relative_path: &str, bytes: &[u8]) -> Result<
     if let Some(parent) = full.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
-    tokio::fs::write(&full, bytes).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic_bytes(&full, bytes).await.map_err(|e| e.to_string())
 }
 
 async fn try_read_project_text(root: &Path, relative_path: &str) -> Option<String> {

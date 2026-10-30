@@ -1579,9 +1579,9 @@ async fn append_chapter_summary(
         })
         .collect();
 
-    tokio::fs::write(
+    crate::utils::atomic_file_set::write_file_atomic(
         &summary_path,
-        format!("{}\n{}\n", deduped.join("\n").trim_end(), data_rows.join("\n")),
+        &format!("{}\n{}\n", deduped.join("\n").trim_end(), data_rows.join("\n")),
     )
     .await
 }
@@ -2373,7 +2373,7 @@ pub async fn save_new_truth_files(
     let no_delta = output.runtime_state_delta.is_none();
     if no_delta {
         if let Some(updated) = &output.updated_chapter_summaries {
-            tokio::fs::write(story_dir.join("chapter_summaries.md"), updated).await?;
+            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("chapter_summaries.md"), updated).await?;
         } else if !output.chapter_summary.is_empty() {
             append_chapter_summary(
                 &story_dir,
@@ -2386,13 +2386,13 @@ pub async fn save_new_truth_files(
     }
 
     if !output.updated_subplots.is_empty() {
-        tokio::fs::write(story_dir.join("subplot_board.md"), &output.updated_subplots).await?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("subplot_board.md"), &output.updated_subplots).await?;
     }
     if !output.updated_emotional_arcs.is_empty() {
-        tokio::fs::write(story_dir.join("emotional_arcs.md"), &output.updated_emotional_arcs).await?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), &output.updated_emotional_arcs).await?;
     }
     if !output.updated_character_matrix.is_empty() {
-        tokio::fs::write(story_dir.join("character_matrix.md"), &output.updated_character_matrix).await?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("character_matrix.md"), &output.updated_character_matrix).await?;
     }
 
     Ok(())

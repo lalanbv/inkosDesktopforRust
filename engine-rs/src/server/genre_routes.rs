@@ -171,7 +171,7 @@ pub async fn create_genre(
     if tokio::fs::create_dir_all(&genres_dir).await.is_err() {
         return internal_error();
     }
-    match tokio::fs::write(genres_dir.join(format!("{id}.md")), frontmatter.as_bytes()).await {
+    match crate::utils::atomic_file_set::write_file_atomic(&genres_dir.join(format!("{id}.md")), &frontmatter).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": id }))),
         Err(_) => internal_error(),
     }
@@ -211,7 +211,7 @@ pub async fn update_genre(
     if tokio::fs::create_dir_all(&genres_dir).await.is_err() {
         return internal_error();
     }
-    match tokio::fs::write(genres_dir.join(format!("{genre_id}.md")), frontmatter.as_bytes()).await {
+    match crate::utils::atomic_file_set::write_file_atomic(&genres_dir.join(format!("{genre_id}.md")), &frontmatter).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": genre_id }))),
         Err(_) => internal_error(),
     }

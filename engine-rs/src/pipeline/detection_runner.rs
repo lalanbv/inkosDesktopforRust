@@ -205,9 +205,9 @@ async fn record_history(book_dir: &Path, entry: &HistoryEntry) {
         .unwrap_or_default();
     history.push(serde_json::to_value(entry).unwrap_or(serde_json::Value::Null));
     let _ = tokio::fs::create_dir_all(book_dir.join("story")).await;
-    let _ = tokio::fs::write(
+    let _ = crate::utils::atomic_file_set::write_file_atomic(
         &history_path,
-        serde_json::to_string_pretty(&history).unwrap_or_else(|_| "[]".to_string()),
+        &serde_json::to_string_pretty(&history).unwrap_or_else(|_| "[]".to_string()),
     )
     .await;
 }

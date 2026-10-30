@@ -43,14 +43,28 @@ pub async fn write_governed_runtime_artifacts(
     let trace_json = serde_json::to_string_pretty(trace)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    let (a, b, c) = tokio::join!(
-        tokio::fs::write(&context_path, context_json),
-        tokio::fs::write(&rule_stack_path, rule_stack_yaml),
-        tokio::fs::write(&trace_path, trace_json),
-    );
-    a?;
-    b?;
-    c?;
+    // 779 号：三件套是 compose → write 的权威交接组，升级为事务集提交——
+    // 崩溃收敛到「三件要么全旧/全缺、要么全新」，不再出现半新半旧的交接组。
+    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: runtime_dir,
+        writes: vec![
+            crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: format!("{chapter_slug}.context.json"),
+                content: crate::utils::atomic_file_set::FileContent::Text(context_json),
+            },
+            crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: format!("{chapter_slug}.rule-stack.yaml"),
+                content: crate::utils::atomic_file_set::FileContent::Text(rule_stack_yaml),
+            },
+            crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: format!("{chapter_slug}.trace.json"),
+                content: crate::utils::atomic_file_set::FileContent::Text(trace_json),
+            },
+        ],
+        deletes: vec![],
+    })
+    .await
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     Ok(RuntimeArtifactWriteResult {
         context_path,

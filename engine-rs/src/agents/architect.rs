@@ -1209,7 +1209,7 @@ pub async fn write_foundation_files(
             ),
         ];
         for (path, content) in writes {
-            tokio::fs::write(&path, content).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&path, &content).await.map_err(|e| e.to_string())?;
         }
         if mode == FoundationWriteMode::Init {
             let current_state_seed = if !output.current_state.trim().is_empty() {
@@ -1219,14 +1219,14 @@ pub async fn write_foundation_files(
             } else {
                 "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。\n".to_string()
             };
-            tokio::fs::write(story_dir.join("current_state.md"), current_state_seed).await.map_err(|e| e.to_string())?;
-            tokio::fs::write(story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &current_state_seed).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
             let emotional_seed = if language == WritingLanguage::En {
                 "# Emotional Arcs\n\n| Character | Chapter | Emotional State | Trigger Event | Intensity (1-10) | Arc Direction |\n| --- | --- | --- | --- | --- | --- |\n"
             } else {
                 "# 情感弧线\n\n| 角色 | 章节 | 情绪状态 | 触发事件 | 强度(1-10) | 弧线方向 |\n|------|------|----------|----------|------------|----------|\n"
             };
-            tokio::fs::write(story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
         }
         return Ok(());
     }
@@ -1234,11 +1234,11 @@ pub async fn write_foundation_files(
     let story_frame = story_frame_body.trim().to_string();
 
     // Phase 5 主产物。
-    tokio::fs::write(outline_dir.join("story_frame.md"), &story_frame).await.map_err(|e| e.to_string())?;
-    tokio::fs::write(outline_dir.join("volume_map.md"), &volume_map).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join("story_frame.md"), &story_frame).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join("volume_map.md"), &volume_map).await.map_err(|e| e.to_string())?;
     if !output.rhythm_principles.trim().is_empty() {
         let rhythm_file = if language == WritingLanguage::En { "rhythm_principles.md" } else { "节奏原则.md" };
-        tokio::fs::write(outline_dir.join(rhythm_file), &output.rhythm_principles).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join(rhythm_file), &output.rhythm_principles).await.map_err(|e| e.to_string())?;
     }
 
     // 一人一卡。
@@ -1249,17 +1249,17 @@ pub async fn write_foundation_files(
             continue;
         }
         let target = if role.tier == ArchitectRoleTier::Major { &roles_major_dir } else { &roles_minor_dir };
-        tokio::fs::write(target.join(format!("{safe_name}.md")), &role.content).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&target.join(format!("{safe_name}.md")), &role.content).await.map_err(|e| e.to_string())?;
     }
 
     // 兼容 shim。
-    tokio::fs::write(story_dir.join("story_bible.md"), build_story_bible_shim(&story_frame, language))
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("story_bible.md"), &build_story_bible_shim(&story_frame, language))
         .await
         .map_err(|e| e.to_string())?;
-    tokio::fs::write(story_dir.join("character_matrix.md"), build_character_matrix_shim(&output.roles, language))
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("character_matrix.md"), &build_character_matrix_shim(&output.roles, language))
         .await
         .map_err(|e| e.to_string())?;
-    tokio::fs::write(story_dir.join("book_rules.md"), format!("{}\n", output.book_rules.trim()))
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("book_rules.md"), &format!("{}\n", output.book_rules.trim()))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1271,14 +1271,14 @@ pub async fn write_foundation_files(
         } else {
             "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。每个角色的初始状态详见 roles/*.当前现状；承重的初始世界设定见 pending_hooks 里 startChapter=0 的行。\n".to_string()
         };
-        tokio::fs::write(story_dir.join("current_state.md"), current_state_seed).await.map_err(|e| e.to_string())?;
-        tokio::fs::write(story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &current_state_seed).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
         let emotional_seed = if language == WritingLanguage::En {
             "# Emotional Arcs\n\n| Character | Chapter | Emotional State | Trigger Event | Intensity (1-10) | Arc Direction |\n| --- | --- | --- | --- | --- | --- |\n"
         } else {
             "# 情感弧线\n\n| 角色 | 章节 | 情绪状态 | 触发事件 | 强度(1-10) | 弧线方向 |\n|------|------|----------|----------|------------|----------|\n"
         };
-        tokio::fs::write(story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }

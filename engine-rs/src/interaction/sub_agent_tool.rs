@@ -505,7 +505,7 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
             if let Some(parent) = std::path::Path::new(&artifact.output_path).parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            if let Err(e) = tokio::fs::write(&artifact.output_path, &artifact.payload).await {
+            if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(std::path::Path::new(&artifact.output_path), &artifact.payload).await {
                 return error_result(format!("Export failed: {e}"));
             }
             text_result(

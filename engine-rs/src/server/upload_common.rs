@@ -159,7 +159,7 @@ pub(crate) async fn store_project_upload(
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "failed to create upload directory"))?;
     let stored_name = format!("{}-{name}", utc_now_ms());
     let stored_path = upload_dir.join(&stored_name);
-    tokio::fs::write(&stored_path, &buffer)
+    crate::utils::atomic_file_set::write_file_atomic_bytes(&stored_path, &buffer)
         .await
         .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "failed to store upload"))?;
     let stored_rel = stored_path

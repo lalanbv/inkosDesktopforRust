@@ -64,10 +64,9 @@ fn rotate_if_oversized(path: &std::path::Path, max_bytes: u64, keep_bytes: usize
         .position(|&b| b == b'\n')
         .map(|i| cut + i + 1)
         .unwrap_or(cut);
-    let tmp = path.with_extension("log.tmp");
-    std::fs::write(&tmp, &content[start..])?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    // 779 号：手搓固定名 tmp+rename 收敛到共享助手——固定 tmp 名在并发轮转
+    // 时会互踩，助手给进程级唯一名 + sync_all 落盘。
+    crate::utils::atomic_file_set::write_file_atomic_sync(path, &content[start..])
 }
 
 #[cfg(test)]

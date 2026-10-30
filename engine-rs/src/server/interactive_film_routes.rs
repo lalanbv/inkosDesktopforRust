@@ -720,7 +720,7 @@ pub async fn post_node_image(
             return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
         }
     }
-    if let Err(message) = tokio::fs::write(&abs, &image.bytes).await {
+    if let Err(message) = crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await {
         return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
     }
     // buildSetImageRefDelta：upsert 节点 + imageSlot {prompt, assetRef}。

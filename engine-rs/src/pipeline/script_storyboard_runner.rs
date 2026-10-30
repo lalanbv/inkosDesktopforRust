@@ -295,7 +295,7 @@ async fn write_project_text(project_root: &Path, relative_path: &str, content: &
     } else {
         format!("{content}\n")
     };
-    tokio::fs::write(&full, payload).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&full, &payload).await.map_err(|e| e.to_string())
 }
 
 async fn ensure_project_dir(project_root: &Path, relative_path: &str) -> Result<(), String> {

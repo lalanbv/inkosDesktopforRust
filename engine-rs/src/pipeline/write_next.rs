@@ -1663,7 +1663,7 @@ pub(crate) async fn persist_audit_drift_guidance(
             .map(|issue| format!("> - [{}] {}: {}", severity_text(issue.severity), issue.category, issue.description)),
     );
     lines.push(String::new());
-    tokio::fs::write(&drift_path, lines.join("\n")).await
+    crate::utils::atomic_file_set::write_file_atomic(&drift_path, &lines.join("\n")).await
 }
 
 fn severity_text(severity: AuditSeverity) -> &'static str {
@@ -1765,7 +1765,7 @@ async fn run_promotion_pass(book_dir: &Path, chapter_number: u32) {
         let contains_cjk = ledger_raw.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
         let ledger_language = if contains_cjk { WritingLanguage::Zh } else { WritingLanguage::En };
         let rendered = render_hook_snapshot(&promotion.hooks, ledger_language);
-        if tokio::fs::write(&ledger_path, rendered).await.is_ok() {
+        if crate::utils::atomic_file_set::write_file_atomic(&ledger_path, &rendered).await.is_ok() {
             tracing::info!(
                 "[promotion] {} hook(s) promoted after chapter {chapter_number}",
                 promotion.flipped_count

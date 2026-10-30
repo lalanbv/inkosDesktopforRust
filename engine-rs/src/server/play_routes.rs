@@ -305,7 +305,7 @@ pub async fn post_play_generate_image(
                     if let Err(message) = tokio::fs::create_dir_all(&dir).await {
                         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
                     }
-                    if let Err(message) = tokio::fs::write(dir.join(&file), &image.bytes).await {
+                    if let Err(message) = crate::utils::atomic_file_set::write_file_atomic_bytes(&dir.join(&file), &image.bytes).await {
                         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
                     }
                     let entry = json!({ "status": "ready", "file": file });

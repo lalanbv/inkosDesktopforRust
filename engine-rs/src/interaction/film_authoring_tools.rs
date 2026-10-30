@@ -656,7 +656,7 @@ async fn tool_generate_node_image(deps: &FilmAuthoringDeps<'_>, args: &Value) ->
             return error_result(e.to_string());
         }
     }
-    if let Err(e) = tokio::fs::write(&abs, &image.bytes).await {
+    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await {
         return error_result(e.to_string());
     }
     // buildSetImageRefDelta：upsert 节点 + imageSlot {prompt, assetRef}。

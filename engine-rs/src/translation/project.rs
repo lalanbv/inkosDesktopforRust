@@ -48,11 +48,11 @@ pub async fn create_translation_project_from_file(
             segments: segments.clone(),
         };
         let payload = format!("{}\n", serde_json::to_string_pretty(&chapter_file).unwrap_or_default());
-        tokio::fs::write(&source_chapter_abs, &payload).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(&source_chapter_abs, &payload).await.map_err(|e| e.to_string())?;
         let translated_empty = TranslationChapterFile { segments: Vec::new(), ..chapter_file };
-        tokio::fs::write(
+        crate::utils::atomic_file_set::write_file_atomic(
             &translated_chapter_abs,
-            format!("{}\n", serde_json::to_string_pretty(&translated_empty).unwrap_or_default()),
+            &format!("{}\n", serde_json::to_string_pretty(&translated_empty).unwrap_or_default()),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -88,20 +88,20 @@ pub async fn create_translation_project_from_file(
         chapters,
     };
     let manifest_path_abs = project_dir_abs.join("manifest.json");
-    tokio::fs::write(
+    crate::utils::atomic_file_set::write_file_atomic(
         &manifest_path_abs,
-        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()),
+        &format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()),
     )
     .await
     .map_err(|e| e.to_string())?;
-    tokio::fs::write(
-        project_dir_abs.join("glossary.json"),
+    crate::utils::atomic_file_set::write_file_atomic(
+        &project_dir_abs.join("glossary.json"),
         "{\n  \"terms\": []\n}\n",
     )
     .await
     .map_err(|e| e.to_string())?;
-    tokio::fs::write(
-        project_dir_abs.join("review-report.md"),
+    crate::utils::atomic_file_set::write_file_atomic(
+        &project_dir_abs.join("review-report.md"),
         "# Translation Review\n\nPending.\n",
     )
     .await

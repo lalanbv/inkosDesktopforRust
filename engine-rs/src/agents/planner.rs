@@ -298,7 +298,7 @@ pub async fn plan_chapter(
         }
     }
 
-    tokio::fs::write(&runtime_path, &final_intent_markdown).await?;
+    crate::utils::atomic_file_set::write_file_atomic(&runtime_path, &final_intent_markdown).await?;
 
     Ok(PlanChapterOutput {
         intent,

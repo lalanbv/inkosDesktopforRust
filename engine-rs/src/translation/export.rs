@@ -32,11 +32,11 @@ pub async fn write_translation_export(
     match format {
         TranslationExportFormat::Epub => {
             let bytes = build_epub(&manifest, &chapters)?;
-            tokio::fs::write(&output_path, bytes).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic_bytes(&output_path, &bytes).await.map_err(|e| e.to_string())?;
         }
         format => {
             let rendered = render_text_export(&manifest, &chapters, format);
-            tokio::fs::write(&output_path, rendered).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&output_path, &rendered).await.map_err(|e| e.to_string())?;
         }
     }
 

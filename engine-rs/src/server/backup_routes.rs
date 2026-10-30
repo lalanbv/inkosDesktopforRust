@@ -175,7 +175,13 @@ pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) ->
         "fileCount": file_count,
         "totalBytes": total_bytes,
     });
-    if std::fs::write(staging.join(MANIFEST_NAME), serde_json::to_vec_pretty(&manifest).unwrap_or_default()).is_err() {
+    // 779 号：清单原子写（sync 形态）——撕裂清单=整包备份不可解读。
+    if crate::utils::atomic_file_set::write_file_atomic_sync(
+        &staging.join(MANIFEST_NAME),
+        &serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+    )
+    .is_err()
+    {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(std::io::Error::other("manifest write failed"));
     }
@@ -328,7 +334,9 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&target, &entry.bytes).map_err(|e| e.to_string())?;
+        // 779 号：恢复是覆盖写——撕裂=毁掉现有文件换成残缺恢复件，原子替换。
+        crate::utils::atomic_file_set::write_file_atomic_sync(&target, &entry.bytes)
+            .map_err(|e| e.to_string())?;
         restored += 1;
     }
     Ok(json!({ "ok": true, "restored": restored, "snapshot": has_snapshot }))

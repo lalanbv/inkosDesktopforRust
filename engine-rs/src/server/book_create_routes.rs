@@ -594,8 +594,17 @@ fn import_replay_hooks_seed(language: WritingLanguage) -> String {
 /// 回放前清空运行时真相（对齐 `resetImportReplayTruthFiles`）。
 async fn reset_import_replay_truth_files(book_dir: &Path, language: WritingLanguage) {
     let story = book_dir.join("story");
-    let _ = tokio::fs::write(story.join("current_state.md"), import_replay_state_seed(language)).await;
-    let _ = tokio::fs::write(story.join("pending_hooks.md"), import_replay_hooks_seed(language)).await;
+    // 779 号：种子重置落在 live 书目录上（覆盖类），原子写防撕裂半种子。
+    let _ = crate::utils::atomic_file_set::write_file_atomic(
+        &story.join("current_state.md"),
+        &import_replay_state_seed(language),
+    )
+    .await;
+    let _ = crate::utils::atomic_file_set::write_file_atomic(
+        &story.join("pending_hooks.md"),
+        &import_replay_hooks_seed(language),
+    )
+    .await;
     for file in [
         "chapter_summaries.md",
         "subplot_board.md",
@@ -989,7 +998,7 @@ pub(crate) async fn revise_foundation_chain(
     let _ = tokio::fs::create_dir_all(&backup_dir).await;
     for file_name in ["story_bible.md", "volume_outline.md", "book_rules.md", "character_matrix.md"] {
         if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file_name)).await {
-            let _ = tokio::fs::write(backup_dir.join(file_name), content).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&backup_dir.join(file_name), &content).await;
         }
     }
     if is_phase5 {
@@ -1117,7 +1126,7 @@ async fn copy_dir_shallow(src: &std::path::Path, dest: &std::path::Path) {
             continue;
         };
         if let Ok(content) = tokio::fs::read_to_string(src.join(&name)).await {
-            let _ = tokio::fs::write(dest.join(name), content).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&dest.join(name), &content).await;
         }
     }
 }
@@ -1136,7 +1145,7 @@ async fn copy_dir_deep(src: &std::path::Path, dest: &std::path::Path) {
         if tokio::fs::metadata(&src_path).await.map(|m| m.is_dir()).unwrap_or(false) {
             Box::pin(copy_dir_deep(&src_path, &dest_path)).await;
         } else if let Ok(content) = tokio::fs::read_to_string(&src_path).await {
-            let _ = tokio::fs::write(&dest_path, content).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&dest_path, &content).await;
         }
     }
 }

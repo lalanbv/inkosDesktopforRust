@@ -230,7 +230,7 @@ async fn generate_style_guide(
 
     let methodology = build_writing_methodology_section(language);
     let full_style_guide = format!("{qualitative_guide}\n\n{methodology}");
-    tokio::fs::write(story_dir.join("style_guide.md"), &full_style_guide)
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("style_guide.md"), &full_style_guide)
         .await
         .map_err(|e| e.to_string())?;
     Ok(full_style_guide)
@@ -411,7 +411,7 @@ pub async fn import_canon(
         content = strip_utf8_bom(&response.content)
     );
 
-    tokio::fs::write(story_dir.join("parent_canon.md"), &canon)
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("parent_canon.md"), &canon)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -602,7 +602,7 @@ pub async fn import_canon_file(
         tokio::fs::create_dir_all(&story_dir)
             .await
             .map_err(|e| e.to_string())?;
-        tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
             .await
             .map_err(|e| e.to_string())?;
         Ok::<_, String>(material)

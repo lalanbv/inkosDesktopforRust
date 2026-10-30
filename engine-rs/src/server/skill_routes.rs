@@ -374,7 +374,7 @@ pub async fn put_prompt_pack(
             return internal_error(&e);
         }
     }
-    if let Err(e) = tokio::fs::write(&file, content).await {
+    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic(&file, content).await {
         return internal_error(&e);
     }
     let prompt = builtin_prompts()

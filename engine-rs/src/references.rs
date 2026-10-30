@@ -267,19 +267,11 @@ fn write_manifest_atomic(project_root: &Path, manifest: &BookReferenceManifest) 
     let path = reference_manifest_path(project_root, &manifest.book_id);
     let story_dir = project_root.join("books").join(&manifest.book_id).join("story");
     std::fs::create_dir_all(&story_dir).map_err(|e| e.to_string())?;
-    let temp_path = story_dir.join(format!(
-        "{MANIFEST_FILE}.tmp-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let write = || -> Result<(), String> {
-        let body = format!("{}\n", serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?);
-        std::fs::write(&temp_path, body).map_err(|e| e.to_string())
-    };
-    if let Err(error) = write() {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
-    std::fs::rename(&temp_path, &path).map_err(|e| e.to_string())
+    // 779 号：手搓 tmp+rename 收敛到共享助手（获得 sync_all 落盘 + EPERM/EBUSY
+    // 重试 + 进程级唯一临时名，语义不变）。
+    let body = format!("{}\n", serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?);
+    crate::utils::atomic_file_set::write_file_atomic_sync(&path, body.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 // ---- bind / unbind / list ----

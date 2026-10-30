@@ -140,7 +140,7 @@ pub(crate) async fn init_fanfic_book(
     let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
     let story_dir = book_dir.join("story");
     tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
-    tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)
+    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -395,7 +395,7 @@ pub async fn fanfic_refresh(
         let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
         let story_dir = runtime.state.book_dir(&book_id).join("story");
         tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
-        tokio::fs::write(story_dir.join("fanfic_canon.md"), &canon.full_document)
+        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
             .await
             .map_err(|e| e.to_string())?;
         Ok::<(), String>(())

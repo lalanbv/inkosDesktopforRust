@@ -72,7 +72,7 @@ pub async fn execute_chapter_replace(
     .map_err(|e| e.to_string())?;
 
     let normalized = if trimmed.ends_with('\n') { trimmed.to_string() } else { format!("{trimmed}\n") };
-    tokio::fs::write(&chapter_path, normalized.as_bytes())
+    crate::utils::atomic_file_set::write_file_atomic(&chapter_path, &normalized)
         .await
         .map_err(|e| e.to_string())?;
     let removed_runtime_files = clear_chapter_runtime_files(&root, chapter_number).await;
@@ -152,7 +152,7 @@ pub async fn execute_entity_rename(
         if next_content == content {
             continue;
         }
-        tokio::fs::write(file_path, next_content.as_bytes())
+        crate::utils::atomic_file_set::write_file_atomic(file_path, &next_content)
             .await
             .map_err(|e| e.to_string())?;
         let relative = file_path
@@ -239,7 +239,7 @@ pub async fn execute_chapter_local_edit(
     )
     .await
     .map_err(|e| e.to_string())?;
-    tokio::fs::write(&chapter_path, next_content.as_bytes())
+    crate::utils::atomic_file_set::write_file_atomic(&chapter_path, &next_content)
         .await
         .map_err(|e| e.to_string())?;
     let removed_runtime_files = clear_chapter_runtime_files(&root, chapter_number).await;

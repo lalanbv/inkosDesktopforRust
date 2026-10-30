@@ -189,7 +189,7 @@ pub async fn consolidate(
     }
 
     let combined = new_summaries.join("\n");
-    tokio::fs::write(&volume_summaries_path, &combined).await?;
+    crate::utils::atomic_file_set::write_file_atomic(&volume_summaries_path, &combined).await?;
 
     // 明细归档。
     let archive_dir = story_dir.join("summaries_archive");
@@ -197,9 +197,9 @@ pub async fn consolidate(
     for (vol, vol_rows) in &completed {
         let archive_path = archive_dir.join(format!("vol_{}-{}.md", vol.start_ch, vol.end_ch));
         let detail = vol_rows.iter().map(|r| r.raw.clone()).collect::<Vec<_>>().join("\n");
-        tokio::fs::write(
-            archive_path,
-            format!("# {}\n\n{}\n{}", vol.name, header, detail),
+        crate::utils::atomic_file_set::write_file_atomic(
+            &archive_path,
+            &format!("# {}\n\n{}\n{}", vol.name, header, detail),
         )
         .await?;
     }
@@ -218,7 +218,7 @@ pub async fn consolidate(
     } else {
         format!("{header}\n")
     };
-    tokio::fs::write(&summaries_path, retained).await?;
+    crate::utils::atomic_file_set::write_file_atomic(&summaries_path, &retained).await?;
 
     Ok(ConsolidationResult {
         volume_summaries: combined,
@@ -249,7 +249,7 @@ async fn rerun_advanced_count_promotion(story_dir: &Path) -> usize {
     if !result.updated {
         return 0;
     }
-    if tokio::fs::write(&ledger_path, render_hook_snapshot(&result.hooks, language))
+    if crate::utils::atomic_file_set::write_file_atomic(&ledger_path, &render_hook_snapshot(&result.hooks, language))
         .await
         .is_err()
     {

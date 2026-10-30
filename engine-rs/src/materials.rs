@@ -104,6 +104,10 @@ pub async fn ingest_material(
         .await
         .map_err(|e| e.to_string())?;
 
+    let markdown_rel = format!("{id}.md");
+    let manifest_rel = format!("{id}.json");
+    let markdown_path_abs = materials_dir.join(&markdown_rel);
+    let manifest_path_abs = materials_dir.join(&manifest_rel);
     let markdown = render_material_markdown(
         &title,
         source.kind,
@@ -113,11 +117,6 @@ pub async fn ingest_material(
         &source.text,
         source.total_pages,
     );
-    let markdown_path_abs = materials_dir.join(format!("{id}.md"));
-    let manifest_path_abs = materials_dir.join(format!("{id}.json"));
-    tokio::fs::write(&markdown_path_abs, &markdown)
-        .await
-        .map_err(|e| e.to_string())?;
     let asset = MaterialAsset {
         id,
         title: title.clone(),
@@ -133,9 +132,24 @@ pub async fn ingest_material(
     };
     // TS `JSON.stringify(asset, null, 2)`：无尾换行。
     let manifest = serde_json::to_string_pretty(&asset).unwrap_or_default();
-    tokio::fs::write(&manifest_path_abs, manifest)
-        .await
-        .map_err(|e| e.to_string())?;
+    // 779 号：md 与 manifest 是一对（清单是检索入口、md 是内容），事务集
+    // 提交——崩溃收敛到「对要么全缺、要么全在」，不再出现有清单无正文。
+    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: &materials_dir,
+        writes: vec![
+            crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: markdown_rel,
+                content: crate::utils::atomic_file_set::FileContent::Text(markdown),
+            },
+            crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: manifest_rel,
+                content: crate::utils::atomic_file_set::FileContent::Text(manifest),
+            },
+        ],
+        deletes: vec![],
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(asset)
 }
 

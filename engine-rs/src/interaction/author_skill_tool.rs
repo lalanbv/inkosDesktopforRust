@@ -130,7 +130,7 @@ pub async fn execute_author_skill(root: &std::path::Path, raw_name: &str, descri
     tokio::fs::create_dir_all(&skill_dir)
         .await
         .map_err(|e| format!("create skill dir failed: {e}"))?;
-    tokio::fs::write(skill_dir.join("SKILL.md"), manifest)
+    crate::utils::atomic_file_set::write_file_atomic(&skill_dir.join("SKILL.md"), &manifest)
         .await
         .map_err(|e| format!("write SKILL.md failed: {e}"))?;
     Ok(format!(

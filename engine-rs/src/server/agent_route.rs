@@ -1852,7 +1852,7 @@ async fn normalize_agent_attachments(
             return Err(internal().into_response());
         }
         let stored_name = format!("{now_ms}-{}-{filename}", index + 1);
-        if tokio::fs::write(upload_dir.join(&stored_name), &bytes).await.is_err() {
+        if crate::utils::atomic_file_set::write_file_atomic_bytes(&upload_dir.join(&stored_name), &bytes).await.is_err() {
             return Err(internal().into_response());
         }
         // 文本附件：注入长度校验（UTF-16 码元 ≤120k）并保留注入内容。

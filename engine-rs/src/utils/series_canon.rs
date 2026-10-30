@@ -256,7 +256,7 @@ pub fn load_series_canon(project_root: &std::path::Path, series_id: &str) -> Opt
     parse_series_canon_file(&value)
 }
 
-/// 写系列正典文件（目录自动创建；temp+rename 原子替换，对齐 221 号纪律）。
+/// 写系列正典文件（目录自动创建；共享助手原子替换，对齐 221 号纪律）。
 pub fn save_series_canon(
     project_root: &std::path::Path,
     file: &SeriesCanonFile,
@@ -266,7 +266,6 @@ pub fn save_series_canon(
     let path = dir.join(format!("{}.json", file.series_id));
     let body = serde_json::to_string_pretty(file)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, &path)
+    // 779 号：手搓固定名 tmp+rename 收敛到共享助手（唯一临时名 + sync_all）。
+    crate::utils::atomic_file_set::write_file_atomic_sync(&path, body.as_bytes())
 }

@@ -791,7 +791,7 @@ pub async fn save_radar_scan(root: &Path, result: &Value) -> Result<String, Stri
     let file_name = format!("scan-{}.json", radar_timestamp_for_filename(timestamp));
     let file_path = radar_dir.join(&file_name);
     let payload = format!("{}\n", serde_json::to_string_pretty(result).unwrap_or_default());
-    tokio::fs::write(&file_path, payload)
+    crate::utils::atomic_file_set::write_file_atomic(&file_path, &payload)
         .await
         .map_err(|e| e.to_string())?;
     Ok(file_path.to_string_lossy().to_string())
@@ -980,7 +980,7 @@ pub async fn post_deconstruct(
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let out_path = story_dir.join(format!("{name}.md"));
-    if let Err(error) = tokio::fs::write(&out_path, &result.markdown).await {
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&out_path, &result.markdown).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
 
@@ -997,7 +997,7 @@ pub async fn post_deconstruct(
         let trimmed: String = material_id.chars().take(64).collect();
         let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
         let _ = tokio::fs::create_dir_all(&materials_dir).await;
-        let _ = tokio::fs::write(materials_dir.join(format!("{trimmed}.md")), &result.markdown).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(&materials_dir.join(format!("{trimmed}.md")), &result.markdown).await;
         let manifest = json!({
             "id": trimmed,
             "title": name,
@@ -1007,9 +1007,9 @@ pub async fn post_deconstruct(
             "mimeType": "text/markdown",
             "markdownPath": format!(".inkos/materials/{trimmed}.md"),
         });
-        let _ = tokio::fs::write(
-            materials_dir.join(format!("{trimmed}.json")),
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        let _ = crate::utils::atomic_file_set::write_file_atomic(
+            &materials_dir.join(format!("{trimmed}.json")),
+            &serde_json::to_string_pretty(&manifest).unwrap_or_default(),
         )
         .await;
         published_material_id = Some(trimmed);
@@ -1494,7 +1494,7 @@ pub async fn post_roster_confirm(
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let rendered = crate::utils::entity_roster::render_entity_roster(&roster);
-    if let Err(error) = tokio::fs::write(&roster_path, rendered).await {
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&roster_path, &rendered).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let applied_value = serde_json::to_value(&applied).unwrap_or(json!(null));
@@ -1548,7 +1548,7 @@ pub async fn save_style_profile(
     let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join(format!("{name}.json"));
     match serde_json::to_string_pretty(&body.profile) {
-        Ok(raw) => match tokio::fs::write(&path, raw).await {
+        Ok(raw) => match crate::utils::atomic_file_set::write_file_atomic(&path, &raw).await {
             Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name }))).into_response(),
             Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         },
@@ -1629,7 +1629,7 @@ pub async fn save_style_binding(
     }
     let path = story_dir.join("style_binding.json");
     let raw = serde_json::to_string_pretty(&binding).unwrap_or_default();
-    match tokio::fs::write(&path, raw).await {
+    match crate::utils::atomic_file_set::write_file_atomic(&path, &raw).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "binding": binding }))).into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }

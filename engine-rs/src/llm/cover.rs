@@ -685,7 +685,7 @@ pub async fn generate_short_fiction_cover(
     if !payload.ends_with('\n') {
         payload.push('\n');
     }
-    tokio::fs::write(&full_prompt_path, payload).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&full_prompt_path, &payload).await.map_err(|e| e.to_string())?;
 
     let request = resolve_cover_generation_request(root).await?;
     let size = std::env::var("INKOS_COVER_SIZE")
@@ -700,7 +700,7 @@ pub async fn generate_short_fiction_cover(
     if let Some(parent) = full_image_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
     }
-    tokio::fs::write(&full_image_path, &image.bytes).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic_bytes(&full_image_path, &image.bytes).await.map_err(|e| e.to_string())?;
     Ok(CoverGenerationOutcome {
         title: title.to_string(),
         output_dir,

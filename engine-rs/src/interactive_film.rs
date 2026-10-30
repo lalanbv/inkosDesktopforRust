@@ -379,7 +379,7 @@ pub async fn save_story_graph(
     }
     let mut serialized = serde_json::to_string_pretty(graph).map_err(|e| e.to_string())?;
     serialized.push('\n');
-    tokio::fs::write(&path, serialized).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await.map_err(|e| e.to_string())
 }
 
 // ── evaluator（evaluator.ts） ────────────────────────────────────

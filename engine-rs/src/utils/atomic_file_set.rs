@@ -343,8 +343,14 @@ pub(crate) fn sync_parent_dir_best_effort_sync(_path: &Path) {}
 /// 适用于配置/索引类小文件（book.json / index.json / timeline.json）；
 /// 多文件事务仍走 [`commit_atomic_file_set`]。
 pub async fn write_file_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    write_file_atomic_bytes(path, content.as_bytes()).await
+}
+
+/// [`write_file_atomic`] 的字节形态（779 号）：图片/上传缓冲/导出包等
+/// 非 UTF-8 内容的原子写。命名、持久性与重试语义与文本形态完全一致。
+pub async fn write_file_atomic_bytes(path: &Path, content: &[u8]) -> std::io::Result<()> {
     let tmp = atomic_tmp_path(path);
-    write_tmp_durable(&tmp, content.as_bytes()).await?;
+    write_tmp_durable(&tmp, content).await?;
     let mut attempt: u32 = 0;
     loop {
         match tokio::fs::rename(&tmp, path).await {
@@ -668,6 +674,44 @@ mod tests {
         let target = dir.path().join("empty.json");
         write_file_atomic(&target, "").await.unwrap();
         assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "");
+    }
+
+    // 779 号：字节形态与文本形态同语义（非 UTF-8 内容原样落盘）。
+    #[tokio::test]
+    async fn write_file_atomic_bytes_replaces_target_with_full_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("cover.png");
+        tokio::fs::write(&target, [0u8, 1, 2]).await.unwrap();
+        let payload: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0xFF, 0x00];
+        write_file_atomic_bytes(&target, &payload).await.unwrap();
+        let raw = tokio::fs::read(&target).await.unwrap();
+        assert_eq!(raw, payload);
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_bytes_cleans_up_when_parent_missing() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("nested").join("cover.png");
+        assert!(write_file_atomic_bytes(&target, b"x").await.is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(leftovers.is_empty(), "失败路径不应留下临时文件");
+    }
+
+    #[tokio::test]
+    async fn write_file_atomic_bytes_accepts_empty_content() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let target = dir.path().join("empty.bin");
+        write_file_atomic_bytes(&target, b"").await.unwrap();
+        assert!(tokio::fs::read(&target).await.unwrap().is_empty());
     }
 
     #[test]

@@ -1047,7 +1047,7 @@ pub(crate) async fn run_revise_chain(
         format!("# 第{chapter_number}章 {chapter_title}")
     };
     let revised_full = format!("{heading}\n\n{}", revise_output.revised_content);
-    tokio::fs::write(chapters_dir.join(&file_name), &revised_full)
+    crate::utils::atomic_file_set::write_file_atomic(&chapters_dir.join(&file_name), &revised_full)
         .await
         .map_err(|e| internal(e.to_string()))?;
 
@@ -1059,10 +1059,10 @@ pub(crate) async fn run_revise_chain(
             let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &settled.updated_state).await;
         }
         if !settled.updated_ledger.is_empty() {
-            let _ = tokio::fs::write(story_dir.join("particle_ledger.md"), &settled.updated_ledger).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("particle_ledger.md"), &settled.updated_ledger).await;
         }
         if !settled.updated_hooks.is_empty() {
-            let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &settled.updated_hooks).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &settled.updated_hooks).await;
         }
     }
 
@@ -1586,7 +1586,7 @@ async fn run_repair_state(
         let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &repaired.updated_state).await;
     }
     if repaired.updated_hooks != "(伏笔池未更新)" {
-        let _ = tokio::fs::write(story_dir.join("pending_hooks.md"), &repaired.updated_hooks).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &repaired.updated_hooks).await;
     }
     let _ = runtime.state.snapshot_state(book_id, target).await;
 

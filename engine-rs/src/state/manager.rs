@@ -490,7 +490,7 @@ impl StateManager {
         ];
         for file in FILES {
             if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file)).await {
-                tokio::fs::write(snapshot_dir.join(file), content).await?;
+                crate::utils::atomic_file_set::write_file_atomic(&snapshot_dir.join(file), &content).await?;
             }
         }
 
@@ -505,7 +505,7 @@ impl StateManager {
                 tokio::fs::create_dir_all(&snapshot_state_dir).await?;
                 for file in files {
                     if let Ok(content) = tokio::fs::read_to_string(state_dir.join(&file)).await {
-                        tokio::fs::write(snapshot_state_dir.join(file), content).await?;
+                        crate::utils::atomic_file_set::write_file_atomic(&snapshot_state_dir.join(file), &content).await?;
                     }
                 }
             }
@@ -545,7 +545,9 @@ async fn write_if_missing(path: &Path, content: &str) -> Result<(), StateManager
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
         return Ok(());
     }
-    tokio::fs::write(path, content).await?;
+    // 779 号：首写撕裂的代价是「文件已存在但残缺」，后续 ensure 永不修复——
+    // 原子写让崩溃收敛到「无文件（下次补种）或完整文件」。
+    crate::utils::atomic_file_set::write_file_atomic(path, content).await?;
     Ok(())
 }
 
