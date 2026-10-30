@@ -308,20 +308,36 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let snapshot_path = backups_dir.join(format!("pre-restore-{millis}.tar"));
-        let file = std::fs::File::create(&snapshot_path).map_err(|e| e.to_string())?;
-        let mut builder = tar::Builder::new(file);
-        for name in &overwriting {
-            if let Ok(data) = std::fs::read(root.join(name)) {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(data.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                builder
-                    .append_data(&mut header, name, data.as_slice())
-                    .map_err(|e| e.to_string())?;
+        // 782 号：快照是恢复的回滚保险件——「恢复中掉电」窗口内撕裂 tar 等于
+        // 保险失效（恢复目标本尊已由 779 号 write_file_atomic_sync 兜住，此处
+        // 补齐对称面）。tar::Builder 直拥句柄，走 tmp+sync_all+rename 形态
+        // （对齐 llm/secrets save_secrets 惯用形）；失败清理 tmp 防残留。
+        let tmp_path = backups_dir.join(format!(".pre-restore-{millis}.tmp"));
+        let build = || -> Result<(), String> {
+            let file = std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+            let mut builder = tar::Builder::new(file);
+            for name in &overwriting {
+                if let Ok(data) = std::fs::read(root.join(name)) {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(data.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, name, data.as_slice())
+                        .map_err(|e| e.to_string())?;
+                }
             }
+            let file = builder.into_inner().map_err(|e| e.to_string())?;
+            // 762 号同款：落盘后才 rename，掉电后快照要么缺失要么完整。
+            file.sync_all().map_err(|e| e.to_string())?;
+            drop(file);
+            std::fs::rename(&tmp_path, &snapshot_path).map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        if let Err(error) = build() {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(error);
         }
-        builder.finish().map_err(|e| e.to_string())?;
     }
 
     // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数。

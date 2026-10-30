@@ -101,8 +101,16 @@ pub async fn tool_grep(root: &Path, args: &Value) -> ToolResult {
     let Some(base) = safe_join(root, path) else {
         return error_result("path escapes project root");
     };
-    let mut files: Vec<PathBuf> = Vec::new();
-    grep_walk(&base, &mut files, 0);
+    // 782 号：grep_walk 同步遍历整棵项目树，是全仓唯一大 IO 同步面直接跑在
+    // async 工具分发里——挪到 spawn_blocking，不阻塞 tokio worker（其余
+    // 逐文件读取本就走 tokio::fs）。walk 只做 read_dir+收集，panic 面无。
+    let files = tokio::task::spawn_blocking(move || {
+        let mut files: Vec<PathBuf> = Vec::new();
+        grep_walk(&base, &mut files, 0);
+        files
+    })
+    .await
+    .unwrap_or_default();
     let mut hits: Vec<String> = Vec::new();
     for file in &files {
         let Ok(content) = tokio::fs::read_to_string(file).await else {
