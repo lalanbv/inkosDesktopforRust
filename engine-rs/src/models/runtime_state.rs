@@ -5,7 +5,6 @@
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::collections::HashMap;
 
 /// 状态清单（schemaVersion 固定 2）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -310,7 +309,11 @@ pub struct NewHookCandidate {
 }
 
 /// 章节状态增量（architect/consolidator 产出，应用到持久化状态）。
-/// 不 derive ts-rs（含 serde_json::Value 的 *Ops 字段，serde 契约优先）。
+/// 777 号：subplot/emotionalArc/characterMatrix 三面 ops 死字段清偿——
+/// 自 fork 引入以来无任何 apply 消费端（三面面板真实更新走 settler
+/// UPDATED_* TAG 全量替换路径），且模型每章被索要并镜像产出空数组纯属
+/// token 浪费；旧输出中的同名键由 serde 未知键忽略语义向前兼容
+///（settler_delta_parser 回归锁）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
@@ -325,12 +328,6 @@ pub struct RuntimeStateDelta {
     pub new_hook_candidates: Vec<NewHookCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chapter_summary: Option<ChapterSummaryRow>,
-    #[serde(default)]
-    pub subplot_ops: Vec<HashMap<String, serde_json::Value>>,
-    #[serde(default)]
-    pub emotional_arc_ops: Vec<HashMap<String, serde_json::Value>>,
-    #[serde(default)]
-    pub character_matrix_ops: Vec<HashMap<String, serde_json::Value>>,
     #[serde(default)]
     pub notes: Vec<String>,
 }

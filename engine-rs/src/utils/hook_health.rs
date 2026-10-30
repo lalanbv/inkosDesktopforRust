@@ -354,9 +354,6 @@ mod tests {
             hook_ops: HookOps { upsert: upsert_new, mention: vec![], resolve: vec![], defer: vec![] },
             new_hook_candidates: vec![],
             chapter_summary: None,
-            subplot_ops: vec![],
-            emotional_arc_ops: vec![],
-            character_matrix_ops: vec![],
             notes: vec![],
         };
         let existing_ids = vec!["h001".to_string()];

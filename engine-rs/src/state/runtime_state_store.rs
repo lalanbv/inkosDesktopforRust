@@ -411,9 +411,6 @@ mod tests {
             new_hook_candidates: Vec::new(),
             chapter_summary: None,
             current_state_patch: None,
-            subplot_ops: Vec::new(),
-            emotional_arc_ops: Vec::new(),
-            character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
         let artifacts =

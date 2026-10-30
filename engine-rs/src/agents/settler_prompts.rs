@@ -175,9 +175,6 @@ fn build_settler_output_format(gp: &GenreProfile) -> String {
     \"mood\": \"紧绷\",
     \"chapterType\": \"{chapter_type_example}\"
   }},
-  \"subplotOps\": [],
-  \"emotionalArcOps\": [],
-  \"characterMatrixOps\": [],
   \"notes\": []
 }}
 ```

@@ -144,6 +144,31 @@ mod tests {
         assert_eq!(out.runtime_state_delta.chapter, 3);
     }
 
+    /// 777 号：三面 ops（subplotOps/emotionalArcOps/characterMatrixOps）死字段
+    /// 清偿后，历史模型输出仍携带这三键（serde 未知键忽略语义）——本夹具与
+    /// 断言锁「旧形态 delta 继续解析成功」，防未来误加 deny_unknown_fields。
+    #[test]
+    fn legacy_panel_ops_keys_are_tolerated() {
+        assert!(delta_json().contains("subplotOps"));
+        let content = format!("=== RUNTIME_STATE_DELTA ===\n{}\n", delta_json());
+        let out = parse_settler_delta_output(&content).unwrap();
+        assert_eq!(out.runtime_state_delta.chapter, 3);
+        assert!(out.runtime_state_delta.hook_ops.upsert.is_empty());
+        assert!(out.runtime_state_delta.notes.is_empty());
+    }
+
+    /// 777 号对偶面：prompt 不再索要三面 ops 后的最小新形态输出照样可解析
+    ///（default 字段缺省），锁「清偿未收窄解析接受面」。
+    #[test]
+    fn minimal_new_form_delta_parses_without_panel_ops() {
+        let content =
+            "=== RUNTIME_STATE_DELTA ===\n{\"chapter\":9,\"notes\":[\"n\"]}\n";
+        let out = parse_settler_delta_output(content).unwrap();
+        assert_eq!(out.runtime_state_delta.chapter, 9);
+        assert_eq!(out.runtime_state_delta.notes, vec!["n".to_string()]);
+        assert!(out.runtime_state_delta.hook_ops.upsert.is_empty());
+    }
+
     #[test]
     fn missing_delta_block_is_constraint_error() {
         let err = parse_settler_delta_output("=== POST_SETTLEMENT ===\nx").unwrap_err();

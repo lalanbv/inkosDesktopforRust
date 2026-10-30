@@ -250,9 +250,6 @@ pub fn arbitrate_runtime_state_delta_hooks(
         },
         new_hook_candidates: Vec::new(),
         chapter_summary: delta.chapter_summary.clone(),
-        subplot_ops: delta.subplot_ops.clone(),
-        emotional_arc_ops: delta.emotional_arc_ops.clone(),
-        character_matrix_ops: delta.character_matrix_ops.clone(),
         notes: delta.notes.clone(),
     };
 
@@ -630,9 +627,6 @@ mod tests {
             hook_ops: HookOps::default(),
             new_hook_candidates: candidates,
             chapter_summary: None,
-            subplot_ops: Vec::new(),
-            emotional_arc_ops: Vec::new(),
-            character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         }
     }
@@ -775,9 +769,6 @@ mod tests {
             },
             new_hook_candidates: Vec::new(),
             chapter_summary: None,
-            subplot_ops: Vec::new(),
-            emotional_arc_ops: Vec::new(),
-            character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
         let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
@@ -823,9 +814,6 @@ mod tests {
                 "A fresh unresolved rule around the seal appears in this chapter.",
             )],
             chapter_summary: None,
-            subplot_ops: Vec::new(),
-            emotional_arc_ops: Vec::new(),
-            character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
         let (resolved, decisions) =
@@ -871,9 +859,6 @@ mod tests {
             },
             new_hook_candidates: Vec::new(),
             chapter_summary: None,
-            subplot_ops: Vec::new(),
-            emotional_arc_ops: Vec::new(),
-            character_matrix_ops: Vec::new(),
             notes: Vec::new(),
         };
         let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
