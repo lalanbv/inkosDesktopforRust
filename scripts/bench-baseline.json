@@ -22,6 +22,14 @@
     "title_dedup/resolve_no_duplicate_200": 29807.05698470362,
     "tool_registry/lookup_last_hit": 26.732282078016123,
     "tool_registry/lookup_miss": 30.514342352584205,
-    "tool_registry/schemas_book_session_layer": 2790.500656986225
-  }
+    "tool_registry/schemas_book_session_layer": 2790.500656986225,
+    "read_chain/analytics": 472568.5377997009,
+    "read_chain/book_detail": 9964318.208333334,
+    "read_chain/chapter_workspace": 494590.95183566737,
+    "read_chain/list_books": 8929683.113333337,
+    "read_chain/list_genres": 135566.33828693026,
+    "read_chain/read_chapter": 50012.014414227866,
+    "read_chain/truth_list": 147901.3329161132
+  },
+  "readChainNote": "784 号：read_chain 7 场景为 API 读链基线（生产路由 oneshot 端到端）；台账见 docs/bench-read-chain-ledger.md"
 }

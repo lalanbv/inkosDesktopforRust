@@ -488,6 +488,174 @@ fn bench_backup_export(c: &mut Criterion) {
     group.finish();
 }
 
+/// 784 号：API 读链基线（757 号演进路线 #5「读链性能基线台账防 0GC 收益回吐」）。
+///
+/// 7 类热读端点走**生产形态全量路由**（`router_books`：axum 路由+提取器+
+/// handler+响应序列化的端到端读链，非裸内核），tower `oneshot` 进程内打请求。
+/// 场景=studio UI 实际加载频率：Dashboard 首屏（list）、写作页（detail）、
+/// 单章（read_chapter）、编辑器聚合（workspace）、真相面板（truth）、
+/// 流派面板（genres）、分析面板（analytics）。
+/// 播种口径=既有 bench 同款（12 章 × ~1600 字 + index.json；双栈布局
+/// books/ 正典形态）；流派画像用真仓 cozy.md（避免自造 frontmatter 解析
+/// 失败伪象）。**首轮自检 200**（712 号教训：不许把 404/5xx 链静默测进基线）。
+/// 写链 runner 为 no-op（读链不触 write-next；误触即 Err 现形）。
+fn bench_read_chain(c: &mut Criterion) {
+    use tower::util::ServiceExt;
+
+    type WriteNextFuture = futures_util::future::BoxFuture<
+        'static,
+        Result<inkos_engine::pipeline::write_next::ChapterPipelineResult, String>,
+    >;
+
+    let rt = tokio::runtime::Runtime::new().expect("tokio rt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+
+    // ── 播种（复用 export/backup bench 口径）──
+    let book_dir = root.join("books").join("b1");
+    std::fs::create_dir_all(book_dir.join("chapters")).expect("mkdir chapters");
+    std::fs::create_dir_all(book_dir.join("story").join("outline")).expect("mkdir story");
+    std::fs::create_dir_all(root.join("genres")).expect("mkdir genres");
+    std::fs::write(
+        root.join("inkos.json"),
+        r#"{ "writing": { "reviewMode": "manual" } }"#,
+    )
+    .expect("inkos.json");
+    std::fs::write(
+        book_dir.join("book.json"),
+        r#"{"id":"b1","title":"镜花缘","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":12,"chapterWordCount":1600,"language":"zh","createdAt":"2026-10-31T00:00:00.000Z","updatedAt":"2026-10-31T00:00:00.000Z"}"#,
+    )
+    .expect("book.json");
+    let paragraph = "林动握紧手中的祖符玉佩，坊市的喧嚣在身后渐渐远去，山道上的风带着初秋的凉意。他回望这座生活了十六年的小城，目光里没有留恋，只有对前路的笃定。";
+    let body: String = (0..24).map(|_| paragraph).collect::<Vec<_>>().join("\n\n");
+    let mut index_rows = Vec::new();
+    for i in 1..=12 {
+        let title = format!("第{i}章 风起于青萍之末");
+        std::fs::write(
+            book_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            format!("# {title}\n\n{body}\n"),
+        )
+        .expect("chapter file");
+        index_rows.push(json!({
+            "number": i, "title": title, "wordCount": body.replace('\n', "").chars().count(),
+            "createdAt": "2026-10-31T00:00:00.000Z", "updatedAt": "2026-10-31T00:00:00.000Z",
+            "observations": [], "provenance": "generated",
+        }));
+    }
+    std::fs::write(
+        book_dir.join("chapters").join("index.json"),
+        serde_json::to_string(&index_rows).expect("index"),
+    )
+    .expect("index.json");
+    std::fs::write(book_dir.join("story").join("brief.md"), "# 简介\n\n试炼之路。\n").expect("truth");
+    std::fs::write(
+        book_dir.join("story").join("outline").join("story_frame.md"),
+        "# 故事框架\n\n三幕。\n",
+    )
+    .expect("outline");
+    std::fs::write(
+        root.join("genres").join("cozy.md"),
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../packages/core/genres/cozy.md"
+        ))
+        .expect("仓库内 cozy.md 应存在"),
+    )
+    .expect("genre");
+
+    // ── 生产形态 runtime 装配 ──
+    let hub = Arc::new(BroadcastHub::new());
+    let state = Arc::new(inkos_engine::state::manager::StateManager::new(
+        root.display().to_string().as_str(),
+    ));
+    let agent_router = Arc::new(inkos_engine::llm::agent_router::AgentRouter::new(
+        inkos_engine::llm::agent_router::LlmEndpointConfig {
+            context_window_tokens: 128_000,
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            max_tokens: 1024,
+            extra_headers: Default::default(),
+        },
+        Default::default(),
+    ));
+    let runner: inkos_engine::server::write_next_route::WriteNextRunner = Arc::new(
+        |_state, _book, _target, _quality, _abort, _mode| {
+            Box::pin(async { Err("read-chain bench 不触写链".to_string()) }) as WriteNextFuture
+        },
+    );
+    let books = inkos_engine::server::books_routes::BooksRuntime {
+        hub: hub.clone(),
+        state: state.clone(),
+        router: agent_router.clone(),
+        builtin_genres_dir: root.clone(),
+        revision_gate: inkos_engine::pipeline::merged_audit::RevisionGate::default(),
+    };
+    let audit = inkos_engine::server::audit_route::AuditRuntime {
+        hub: hub.clone(),
+        state: state.clone(),
+        router: agent_router.clone(),
+        builtin_genres_dir: root.clone(),
+    };
+    let write_next = inkos_engine::server::write_next_route::WriteNextRuntime {
+        hub: hub.clone(),
+        state: state.clone(),
+        runner,
+        project_root: root.clone(),
+    };
+    let app = inkos_engine::server::router_books(
+        inkos_engine::server::AppState { version: "bench".into() },
+        hub,
+        write_next,
+        audit,
+        books,
+    );
+
+    let scenarios: &[(&str, &str)] = &[
+        ("list_books", "/api/v1/books"),
+        ("book_detail", "/api/v1/books/b1"),
+        ("read_chapter", "/api/v1/books/b1/chapters/1"),
+        ("chapter_workspace", "/api/v1/books/b1/chapters/1/workspace"),
+        ("truth_list", "/api/v1/books/b1/truth"),
+        ("list_genres", "/api/v1/genres"),
+        ("analytics", "/api/v1/books/b1/analytics"),
+    ];
+
+    // 首轮自检：每场景必须 200——fixture 与路由失配时拒绝静默入基线。
+    for (name, path) in scenarios {
+        let request = axum::http::Request::builder()
+            .uri(*path)
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = rt
+            .block_on(app.clone().oneshot(request))
+            .expect("oneshot");
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "read-chain 自检失败：{name} {path}（fixture 与路由失配）"
+        );
+    }
+
+    let mut group = c.benchmark_group("read_chain");
+    for (name, path) in scenarios {
+        let path = path.to_string();
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let request = axum::http::Request::builder()
+                        .uri(path.as_str())
+                        .body(axum::body::Body::empty())
+                        .expect("request");
+                    let response = app.clone().oneshot(request).await.expect("oneshot");
+                    std::hint::black_box(response.status());
+                })
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
@@ -497,6 +665,7 @@ criterion_group!(
     bench_sse_parse,
     bench_story_markdown_render,
     bench_export_artifact,
-    bench_backup_export
+    bench_backup_export,
+    bench_read_chain
 );
 criterion_main!(benches);

@@ -67,6 +67,15 @@ const ACCEPTED = new Map([
   // serveStatic 全仓零引用），静态服务为自实现路由；公告仅影响挂中间件的
   // serveStatic 使用方。上游升 2.x 时移除本条即恢复拦截。
   ["@hono/node-server", { reason: "moderate；补丁线 2.1.3 跨 major（1.x 终态 1.19.17 仍在漏洞区间），须随上游升级；fork 零调用面（仅 serve，serveStatic 零引用）", since: "759" }],
+  // 784 号：minimatch GHSA-g3hv-75wg-m249（moderate，globparts 放大 DoS）——
+  // 漏洞区间 <11.0.1，补丁线 11.0.1 跨 major；仓内两条依赖链均锁旧 major
+  //（epub-gen-memory→ejs→jake→filelist 锁 ^5；shadcn→ts-morph→@ts-morph/common
+  // 锁 ^10），override 强提 11 破坏传递契约。暴露面定性=运行时零执行：
+  // jake/filelist 是 ejs 的构建工具链依赖（引擎只调 ejs render，jake CLI
+  // 任务从不执行）；ts-morph 链=shadcn 纯 dev CLI。且 DoS 需攻击者可控
+  // glob 模式入参，单机引擎无该输入面。ejs/ts-morph 升级到改用 minimatch 11
+  // 的版本时移除本条即恢复拦截。
+  ["minimatch", { reason: "moderate；补丁线 11.0.1 跨 major（filelist 锁 ^5、@ts-morph/common 锁 ^10，override 强提破坏传递契约）；运行时零执行（jake/filelist 为 ejs 构建工具链，引擎仅 ejs render；ts-morph 纯 dev）且无攻击者可控 glob 入参面", since: "784" }],
 ]);
 
 const args = process.argv.slice(2);
