@@ -356,21 +356,27 @@ http.createServer((req, res) => {
         // 794 号：与 rust 文本协议同源（buildSettlerDeltaObject——章号锚/
         // hookOps/summary 一致）；factOps 对齐 rust 文本 delta 的缺省（不发
         // 事实 upsert——事实面由正文投影复查层负责，双腿一致为空）。
+        // 800 号：upsert 记录与 rust ledger 终态对齐——H01-H03=SETTLER_TEMPLATE
+        // 记录经 resync/写链 merge 后的终态（lastAdvancedChapter 3=台账导入与
+        // 模板 merge 的 max），H04=台账原始记录（模板未触及）。字段级对齐使
+        // promises timeline 双腿逐项一致（id/notes/lastAdvanced/openedAt）。
         const delta = buildSettlerDeltaObject(msgs);
-        // 799 号：与 rust 文本协议完全同源——hookOps.upsert 携带显式 H01-H03
-        // id（writer upsert 守卫已放宽为 rust 语义：新 id 走 reducer 创建，
-        // 引用类操作仍限台账既有 id）。与 795 时代的 candidates 形态相比，
-        // timeline hook id 双腿一致（H01-H03 vs 派生 hook-N）。
+        const ledgerUpserts = [
+          { hookId: "H01", startChapter: 1, type: "身世", status: "progressing", lastAdvancedChapter: 3, expectedPayoff: "第10章", notes: "镜中世界来历初现端倪。" },
+          { hookId: "H02", startChapter: 2, type: "情感线", status: "open", lastAdvancedChapter: 3, expectedPayoff: "第8章", notes: "与镜灵的婚约誓言待启。" },
+          { hookId: "H03", startChapter: 2, type: "信物", status: "open", lastAdvancedChapter: 3, expectedPayoff: "第6章", notes: "碎镜夜半发光之谜。" },
+          { hookId: "H04", startChapter: 3, type: "背景", status: "open", lastAdvancedChapter: 0, expectedPayoff: "", notes: "镜宗与皇室的隐秘盟约。" },
+        ];
         const args = JSON.stringify({
           postSettlement: "结算完成。",
           factOps: { upsert: [], expire: [] },
           // TS SettlementToolSchema 四键全发（mention/resolve/defer required
           // ——rust serde default 容忍缺省，TS 侧须显式空数组）。
           hookOps: {
-            upsert: delta.hookOps.upsert ?? [],
-            mention: delta.hookOps.mention ?? [],
-            resolve: delta.hookOps.resolve ?? [],
-            defer: delta.hookOps.defer ?? [],
+            upsert: ledgerUpserts,
+            mention: [],
+            resolve: [],
+            defer: [],
           },
           newHookCandidates: [],
           chapterSummary: delta.chapterSummary,
