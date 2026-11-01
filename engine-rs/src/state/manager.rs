@@ -228,27 +228,30 @@ impl StateManager {
     }
 
     /// 从章节文件重建索引（`NNN标题.md` / `NNN-标题.md` / `NNN.md`）。
+    ///
+    /// 813 号：同章双形态按章号去重（[`select_chapter_files`]：正典 `NNNN_` 优先，其次
+    /// 文件名序）——此前每个匹配文件各产一行，legacy 连字符旧章与重写后的正典章并存时
+    /// 索引出现两条同号条目。
     pub async fn rebuild_chapter_index_from_files_at(&self, book_dir: &Path) -> Vec<ChapterMeta> {
         let chapters_dir = book_dir.join("chapters");
         let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
             return Vec::new();
         };
+        let mut names: Vec<String> = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
 
         let mut rows: Vec<ChapterMeta> = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().into_owned();
+        for name in select_chapter_files(names) {
             let Some(captures) = rebuild_file_re().captures(&name) else {
                 continue;
             };
             let Ok(number) = captures[1].parse::<u32>() else {
                 continue;
             };
-            if number == 0 {
-                continue;
-            }
             let file_path = chapters_dir.join(&name);
-            let timestamp = entry
-                .metadata()
+            let timestamp = tokio::fs::metadata(&file_path)
                 .await
                 .ok()
                 .and_then(|meta| meta.modified().ok())
@@ -557,11 +560,40 @@ async fn write_if_missing(path: &Path, content: &str) -> Result<(), StateManager
 /// 旧章（夹具 683 号故意播种的形态）在 rollback 删章时逃过，随后被空索引触发的宽容
 /// 重建捞回=「reject 后章节复活」（差分器尾批 reject(1) node 404 vs rust 200 根因）。
 /// 读侧认什么为章，删侧与计数侧必须认同一集合。
-fn leading_number(name: &str) -> Option<u32> {
+pub(crate) fn leading_number(name: &str) -> Option<u32> {
     rebuild_file_re()
         .captures(name)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse().ok())
+}
+
+/// 正典章节文件名（`NNNN_标题.md`，writer 落盘形态）。
+fn is_canonical_chapter_file(name: &str) -> bool {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"^\d+_.*\.md$").unwrap()).is_match(name)
+}
+
+/// 813 号：同章双形态去重——同一前导章号多个文件时正典 `NNNN_` 优先，其次文件名序；
+/// 章号 0 跳过。返回按章号升序的唯一章文件名（TS `selectChapterFiles` 同策略）。
+/// 双形态来源：legacy 连字符旧章 + 重写后的正典章并存（writer 清理同章旧文件此前只认
+/// 下划线前缀，813 号已改按前导章号；此处为索引重建侧的恢复兜底）。
+pub(crate) fn select_chapter_files(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    let mut by_number: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
+    for name in names {
+        let Some(number) = leading_number(&name) else { continue };
+        if number == 0 {
+            continue;
+        }
+        let replace = match by_number.get(&number) {
+            None => true,
+            Some(current) => !is_canonical_chapter_file(current) && is_canonical_chapter_file(&name),
+        };
+        if replace {
+            by_number.insert(number, name);
+        }
+    }
+    by_number.into_values().collect()
 }
 
 fn rebuild_file_re() -> &'static Regex {
@@ -680,6 +712,40 @@ mod tests {
         tokio::fs::write(chapters.join("0002_二.md"), "c").await.unwrap();
         tokio::fs::write(chapters.join("index.json"), "[]").await.unwrap();
         assert_eq!(manager.get_persisted_chapter_count("b").await.unwrap(), 2);
+    }
+
+    /// 813 号：同章双形态去重——正典 `NNNN_` 优先，其次文件名序；章号 0 跳过；按章号升序。
+    #[test]
+    fn select_chapter_files_prefers_canonical_and_dedupes_by_number() {
+        let names = vec![
+            "0002-b.md".to_string(),
+            "0001_新.md".to_string(),
+            "0001-旧.md".to_string(),
+            "0003.md".to_string(),
+            "0000_zero.md".to_string(),
+            "index.json".to_string(),
+            "0002-a.md".to_string(),
+        ];
+        assert_eq!(
+            select_chapter_files(names),
+            vec!["0001_新.md".to_string(), "0002-a.md".to_string(), "0003.md".to_string()]
+        );
+    }
+
+    /// 813 号：索引重建对同章双形态只产一行（正典形态的标题胜出）。
+    #[tokio::test]
+    async fn rebuild_chapter_index_dedupes_same_chapter_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let chapters = manager.book_dir("dup").join("chapters");
+        tokio::fs::create_dir_all(&chapters).await.unwrap();
+        tokio::fs::write(chapters.join("0001-旧题.md"), "legacy").await.unwrap();
+        tokio::fs::write(chapters.join("0001_新题.md"), "canonical").await.unwrap();
+        tokio::fs::write(chapters.join("0002.md"), "bare").await.unwrap();
+        let rows = manager.rebuild_chapter_index_from_files_at(&manager.book_dir("dup")).await;
+        let numbers: Vec<u32> = rows.iter().map(|m| m.number).collect();
+        assert_eq!(numbers, vec![1, 2]);
+        assert_eq!(rows[0].title, "新题");
     }
 
     /// 785 号：get_next_chapter_number 读端点语义探针——legacy 书（章节产物，

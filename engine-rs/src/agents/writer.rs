@@ -2249,9 +2249,14 @@ pub async fn save_chapter(
         }
         Err(_) => Vec::new(),
     };
+    // 813 号：同章旧文件按前导章号识别（`NNNN_`/legacy `NNNN-`/裸 `NNNN.md` 同集，与
+    // 索引重建/回滚同口径）——此前只认 `NNNN_` 前缀，重写 legacy 章时连字符旧文件幸存
+    // 成双形态（索引重建产两条同号条目）。TS writer supersededChapterFiles 同修。
     let superseded_chapter_files: Vec<String> = existing_chapter_files
         .iter()
-        .filter(|file| file.starts_with(&format!("{padded_num}_")) && file.ends_with(".md") && **file != filename)
+        .filter(|file| {
+            crate::state::manager::leading_number(file) == Some(output.chapter_number) && **file != filename
+        })
         .cloned()
         .collect();
 

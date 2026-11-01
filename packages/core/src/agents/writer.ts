@@ -25,6 +25,7 @@ import { renderMemoAsNarrativeBlock, renderNarrativeSelectedContext } from "../u
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet, type AtomicFileWrite } from "../utils/atomic-file-set.js";
+import { chapterFileNumber } from "../utils/chapter-files.js";
 import {
   renderChapterSummariesProjection,
   renderCurrentStateProjection,
@@ -431,8 +432,11 @@ export class WriterAgent extends BaseAgent {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    // 813 号：同章旧文件按前导章号识别（正典 `NNNN_`/legacy `NNNN-`/裸 `NNNN.md` 同集，与
+    // 索引重建/回滚删章同口径）——此前只认 `NNNN_` 前缀，重写 legacy 章时连字符旧文件
+    // 幸存成双形态（索引重建产两条同号条目）。Rust writer superseded_chapter_files 同修。
     const supersededChapterFiles = existingChapterFiles
-      .filter((file) => file.startsWith(`${paddedNum}_`) && file.endsWith(".md") && file !== filename);
+      .filter((file) => chapterFileNumber(file) === output.chapterNumber && file !== filename);
 
     const chapterContent = renderChapterDocument(output.chapterNumber,output.title,output.content,language);
     const runtimeStateArtifacts = await this.resolveRuntimeStateArtifactsForOutput(

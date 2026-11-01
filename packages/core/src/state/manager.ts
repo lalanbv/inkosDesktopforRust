@@ -15,6 +15,7 @@ import {
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
+import { chapterFileNumber, selectChapterFiles } from "../utils/chapter-files.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -433,10 +434,12 @@ export class StateManager {
 
     try {
       const files = await readdir(chaptersDir);
+      // 813 号：按前导章号去重计数，legacy `NNNN-`/裸 `NNNN.md` 同列（Rust 807 号
+      // get_persisted_chapter_count 同口径；此前仅认 `NNNN_`，legacy 书计 0）。
       for (const file of files) {
-        const match = file.match(/^(\d+)_.*\.md$/);
-        if (!match) continue;
-        chapterNumbers.add(parseInt(match[1]!, 10));
+        const number = chapterFileNumber(file);
+        if (number === undefined) continue;
+        chapterNumbers.add(number);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
@@ -491,7 +494,10 @@ export class StateManager {
       throw error;
     }
     const rows: ChapterMeta[] = [];
-    for (const name of entries) {
+    // 813 号：同章双形态按章号去重（正典 `NNNN_` 优先，其次文件名序）——此前每个匹配
+    // 文件各产一行，legacy 连字符旧章与重写后的正典章并存时出现两条同号条目
+    //（Rust rebuild_chapter_index_from_files_at / select_chapter_files 同策略）。
+    for (const name of selectChapterFiles(entries)) {
       const match = /^(\d+)[_-]?(.*?)\.md$/u.exec(name);
       if (!match) continue;
       const number = Number.parseInt(match[1]!, 10);
@@ -545,7 +551,9 @@ export class StateManager {
     await mkdir(chaptersDir, { recursive: true });
     if (index.length === 0 && !options.allowEmptyWithChapterFiles) {
       const files = await readdir(chaptersDir);
-      if (files.some((file) => /^(\d+)_.*\.md$/u.test(file))) {
+      // 813 号：守卫按同一章文件集合判定（legacy 形态同列；章号 0 非章）——与重建/回滚同口径，
+      // 否则 legacy 旧章在场也会放行空索引（随后被宽容重建捞回）。
+      if (files.some((file) => (chapterFileNumber(file) ?? 0) > 0)) {
         throw new Error("Refusing to save an empty chapter index while chapter files still exist.");
       }
     }
