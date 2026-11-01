@@ -214,19 +214,21 @@ export function parseMarkdownTableRows(markdown: string): string[][] {
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"))
     .filter((line) => !line.includes("---"))
-    .map((line) => line.split("|").slice(1, -1).map((cell) => restoreTableCell(cell.trim())))
+    // 812 号：感知转义的拆分——渲染器把单元格内竖线转成 `\|`，拆分器此前按每个 `|` 朴素
+    // 拆分（拆分先于还原），含竖线的 notes 会多拆出一列。反向预查 `(?<!\\)\|` 跳过转义竖线，
+    // 再在 restoreTableCell 还原为 `|`（Rust parse_markdown_table_rows 同口径）。
+    .map((line) => line.split(/(?<!\\)\|/).slice(1, -1).map((cell) => restoreTableCell(cell.trim())))
     .filter((cells) => cells.some(Boolean));
 }
 
 /**
- * 811 号：单元格回读还原——渲染器（state-projections `escapeTableCell`）把换行转成
- * `<br>` 以保住表格行，解析器此前原样回传，使多行 notes（805 撤回语义「既有 + 换行 +
- * 依据」）经 md 往返后以 `<br>` 字面落回 state。渲染产什么、解析就还原什么；
- * 与 Rust `story_markdown::restore_table_cell` 同集（`<br>` / `<br/>` / `<br />`，忽略大小写）。
- * 竖线转义 `\|` 的还原需感知转义的拆分器（拆分先于还原），双侧同为朴素拆分——另案。
+ * 811/812 号：单元格回读还原——渲染器（`escapeTableCell`）把换行转 `<br>`、竖线转 `\|`
+ * 以保住表格行与列，解析器此前原样回传：多行 notes（805 撤回语义「既有 + 换行 + 依据」）
+ * 经 md 往返后以 `<br>` 字面落回 state；含竖线 notes 则列数错位。渲染产什么、解析就还原什么；
+ * 与 Rust `story_markdown::restore_table_cell` 同集（`<br>` / `<br/>` / `<br />` 忽略大小写；`\|`）。
  */
 function restoreTableCell(cell: string): string {
-  return cell.replace(/<br\s*\/?>/gi, "\n");
+  return cell.replace(/<br\s*\/?>/gi, "\n").replace(/\\\|/g, "|");
 }
 
 export function isStateTableHeaderRow(row: ReadonlyArray<string>): boolean {
@@ -383,5 +385,7 @@ function parseOptionalInt(cell: string | undefined): number | undefined {
 }
 
 function escapeTableCell(value: string | number): string {
-  return String(value).replace(/\|/g, "\\|").trim();
+  // 812 号：与 state-projections `escapeTableCell` 同集（竖线 → `\|`、换行 → `<br>`）——
+  // 此前仅转义竖线，多行单元格会把 fork 格式台账行截断（Rust story_markdown 同修）。
+  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>").trim();
 }

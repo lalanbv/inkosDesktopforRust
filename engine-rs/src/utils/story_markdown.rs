@@ -175,9 +175,10 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
         .filter(|line| line.starts_with('|'))
         .filter(|line| !line.contains("---"))
         .filter_map(|line| {
-            // JS split('|').slice(1, -1)：去首段（`|` 前空串）与尾段（末 `|` 后空串）。
-            // Rust split('|') 对 "|a|b|" → ["", "a", "b", ""]；对 "|a|b" → ["", "a", "b"]。
-            let segs: Vec<&str> = line.split('|').collect();
+            // JS split(/(?<!\\)\|/).slice(1, -1)：去首段（`|` 前空串）与尾段（末 `|` 后空串）。
+            // 812 号：感知转义——渲染器把单元格内竖线转成 `\|`，此前按每个 `|` 朴素拆分
+            //（拆分先于还原）会把含竖线的 notes 多拆出一列；转义竖线不作分隔，还原见下。
+            let segs: Vec<&str> = split_table_row_escaped(line);
             if segs.len() < 2 {
                 return None;
             }
@@ -200,16 +201,32 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// 单元格回读还原：`<br>` / `<br/>` / `<br />`（忽略大小写）→ 换行。
+/// 按未转义的 `|` 拆分表格行（`\|` 不作分隔符，留给 [`restore_table_cell`] 还原）。
+/// 等价 JS `line.split(/(?<!\\)\|/)`（regex crate 无反向预查，手写扫描）。
+fn split_table_row_escaped(line: &str) -> Vec<&str> {
+    let mut segs = Vec::new();
+    let mut start = 0;
+    let mut prev_backslash = false;
+    for (idx, ch) in line.char_indices() {
+        if ch == '|' && !prev_backslash {
+            segs.push(&line[start..idx]);
+            start = idx + 1;
+        }
+        prev_backslash = ch == '\\';
+    }
+    segs.push(&line[start..]);
+    segs
+}
+
+/// 单元格回读还原：`<br>` / `<br/>` / `<br />`（忽略大小写）→ 换行；`\|` → `|`。
 ///
-/// 811 号：与渲染侧 `projections::escape_table_cell`（810 号补换行→`<br>`）成对；
-/// TS `story-markdown.ts restoreTableCell` 同集。竖线转义 `\|` 的还原需感知转义的
-/// 拆分器（拆分先于还原），双侧同为朴素拆分——另案登记。
+/// 811/812 号：与渲染侧 `escape_table_cell`（竖线 → `\|`、换行 → `<br>`）成对；
+/// TS `story-markdown.ts restoreTableCell` 同集。
 fn restore_table_cell(cell: &str) -> String {
     static BR: OnceLock<Regex> = OnceLock::new();
     BR.get_or_init(|| Regex::new(r"(?i)<br\s*/?>").unwrap())
         .replace_all(cell, "\n")
-        .into_owned()
+        .replace("\\|", "|")
 }
 
 /// 解析章节摘要 markdown 表格 → [`StoredSummary`] 列表。
@@ -489,8 +506,16 @@ fn render_promoted_cell(
     }
 }
 
+/// 表格单元格转义（fork 格式台账/摘要渲染）：竖线 → `\|`、换行 → `<br>`。
+/// 812 号：与 `projections::escape_table_cell` / TS story-markdown `escapeTableCell` 同集——
+/// 此前仅转义竖线，多行单元格会把 fork 格式台账行截断。
 fn escape_table_cell(value: &str) -> String {
-    value.replace('|', "\\|").trim().to_string()
+    value
+        .replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace('\n', "<br>")
+        .trim()
+        .to_string()
 }
 
 /// 解析 current_state markdown → [`NewFact`] 列表。
@@ -1081,5 +1106,20 @@ mod tests {
         assert_eq!(rows, vec![vec!["a".to_string(), "b".to_string()], vec!["既有。\n依据。".to_string(), "x\ny\nz".to_string()]]);
         // 普通单元格不受影响
         assert_eq!(parse_markdown_table_rows("| plain |\n")[0], vec!["plain".to_string()]);
+    }
+
+    /// 812 号：`\|` 不作分隔且还原为竖线（与渲染侧转义成对）——含竖线 notes 不再错位拆列。
+    #[test]
+    fn parse_markdown_table_rows_keeps_escaped_pipes() {
+        let rows = parse_markdown_table_rows("| a\\|b | c |\n| --- | --- |\n| 备注含\\|竖线 | 1 |\n");
+        assert_eq!(
+            rows,
+            vec![
+                vec!["a|b".to_string(), "c".to_string()],
+                vec!["备注含|竖线".to_string(), "1".to_string()],
+            ]
+        );
+        // 未转义竖线仍正常分隔（非转义形态不受影响）。
+        assert_eq!(parse_markdown_table_rows("| a | b |\n"), vec![vec!["a".to_string(), "b".to_string()]]);
     }
 }

@@ -465,7 +465,7 @@ mod tests {
         let mut withdrawn = hook("H03");
         withdrawn.kind = Some(HookKind::Artifact);
         withdrawn.status = HookStatus::Superseded;
-        withdrawn.notes = "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。".into();
+        withdrawn.notes = "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。".into();
         let md = render_hooks_projection(&HooksState { hooks: vec![withdrawn] }, WritingLanguage::Zh, None);
         let rows: Vec<&str> = md.lines().filter(|l| l.contains("H03")).collect();
         assert_eq!(rows.len(), 1, "多行 notes 必须渲染为单行：{md}");
@@ -475,8 +475,8 @@ mod tests {
         let h03 = parsed.iter().find(|h| h.hook_id == "H03").expect("H03 回读");
         assert_eq!(h03.kind, Some(HookKind::Artifact));
         assert_eq!(h03.status, HookStatus::Superseded);
-        // 811 号：换行经 <br> 往返无损（渲染转义 ↔ 解析还原成对）。
-        assert_eq!(h03.notes, "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。");
+        // 811/812 号：换行经 <br>、竖线经 \| 往返无损（渲染转义 ↔ 解析还原成对）。
+        assert_eq!(h03.notes, "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。");
     }
 
     #[test]

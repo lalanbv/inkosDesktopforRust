@@ -37,16 +37,18 @@ describe("superseded hook status in the string parsing layer", () => {
     expect(parsed.find((h) => h.hookId === "open")?.status).toBe("open");
   });
 
-  // 811 号：撤回 notes（既有 + 换行 + 依据）经 md 往返无损——渲染 <br> 转义 ↔ 解析还原成对，
-  // 且多行单元格不得把表格行截断（rust projections/story_markdown 同集）。
+  // 811/812 号：撤回 notes（既有 + 换行 + 依据，含竖线）经 md 往返无损——渲染 <br>/\| 转义 ↔
+  // 解析还原成对，且多行单元格不得把表格行截断、含竖线单元格不得错位拆列（rust 同集）。
   it("keeps multi-line withdrawal notes intact across the markdown round trip", () => {
-    const withdrawn = { ...hook("gone", "superseded"), notes: "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。" };
+    const withdrawn = { ...hook("gone", "superseded"), notes: "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。" };
     const markdown = renderHooksProjection({ hooks: [withdrawn] }, "zh");
     expect(markdown.split("\n").filter((line) => line.includes("gone"))).toHaveLength(1);
     expect(markdown).toContain("<br>");
+    expect(markdown).toContain("H01\\|H04");
     const parsed = parsePendingHooksMarkdown(markdown);
     expect(parsed.find((h) => h.hookId === "gone")?.notes).toBe(withdrawn.notes);
-    // 三种 <br> 形态均还原，普通单元格不受影响。
+    // 三种 <br> 形态均还原，\| 不作分隔且还原，普通单元格不受影响。
     expect(parseMarkdownTableRows("| a |\n| --- |\n| x<br>y<BR/>z<br />w |\n")).toEqual([["a"], ["x\ny\nz\nw"]]);
+    expect(parseMarkdownTableRows("| a\\|b | c |\n| --- | --- |\n| 备注含\\|竖线 | 1 |\n")).toEqual([["a|b", "c"], ["备注含|竖线", "1"]]);
   });
 });

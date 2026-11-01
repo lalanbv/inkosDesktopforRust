@@ -609,7 +609,8 @@ pub fn render_summary_snapshot(
 }
 
 fn escape_table_cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', "<br>")
+    // 812 号：`\r\n` 先于 `\n` 归一（TS `/\r?\n/g` 同集），否则 CRLF 文本残留裸 `\r`。
+    value.replace('|', "\\|").replace("\r\n", "<br>").replace('\n', "<br>")
 }
 
 fn heading_prefix_re() -> &'static Regex {
