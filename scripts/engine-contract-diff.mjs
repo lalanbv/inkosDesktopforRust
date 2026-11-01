@@ -728,14 +728,17 @@ try {
       // 714 新增 TS submit_chapter_memo 工具支——双腿分派各自保真）；写面
       // 状态码口径。:num/:chapter 不在 instShared 替换表——字面写死 fixture
       // 第 1 章。
-      { path: "/api/v1/books/:id/plan", method: "POST" },
-      { path: "/api/v1/books/:id/compose", method: "POST" },
+      // 797 号：plan/compose 移表尾——node 腿二探针走 CreativeEpisode 机制，
+      // 未注册 episode 时 preserveFailedWork 会 syncWorkSourceArtifacts(accept:
+      // false) 把工作副本回滚到上一接受修订（写链第 2 章被整个回滚——797 号
+      // 活体实锤：共享面 eval 空/index=[]）。与 approve/reject 同类变异探针。
       // repair-state 护栏探针：fixture 第 1 章非 state-degraded → 双端同护栏
       // 500（Rust run_repair_state 与 fork 逐字同门槛）。
       { path: "/api/v1/books/:id/repair-state/1", method: "POST" },
-      // approve 先于 reject：approve 置 approved（200 落盘）；reject 命中第
-      // 1 章 → rollbackTo 0（快照 0 缺失双端同护栏 500——快乐路径留走查造第
-      // 2 章后活体）；未命中第 2 章双端 404（typed 错误体）。
+      // 797 号：approve/reject 为状态变异面（reject 回滚到快照 0——对称深播
+      // 后快照在位双端 200，但双腿回滚语义差会清空/改写章节与账本，污染其后
+      // 全部 GET 对比）→ 移共享面表尾（draft 同款防污染先例）；写链状态收敛
+      // 的 GET 基线（promises/quality-trend/roster/eval/detect）先于变异探针。
       { path: "/api/v1/books/:id/chapters/1/approve", method: "POST" },
       { path: "/api/v1/books/:id/chapters/1/reject", method: "POST" },
       { path: "/api/v1/books/:id/chapters/2/reject", method: "POST" },
@@ -772,6 +775,14 @@ try {
       { path: "/api/v1/books/:id/style-binding", method: "PUT", body: { profileName: "probe-missing" } },
       { path: "/api/v1/books/:id/hybrid-search", method: "POST", body: {} },
       { path: "/api/v1/books/:id/fanfic/refresh", method: "POST", body: {} },
+      // 797 号：变异探针尾批（plan→compose→approve→reject×2，见上文注）——
+      // 其后无 GET 基线可污染；plan/compose 的 episode 回滚与 reject 的章节
+      // 清空语义差单列为 695 工项。
+      { path: "/api/v1/books/:id/plan", method: "POST" },
+      { path: "/api/v1/books/:id/compose", method: "POST" },
+      { path: "/api/v1/books/:id/chapters/1/approve", method: "POST" },
+      { path: "/api/v1/books/:id/chapters/1/reject", method: "POST" },
+      { path: "/api/v1/books/:id/chapters/2/reject", method: "POST" },
     ];
     console.log("[diff] ═══ 695 三域活体分歧报告（迁移进度度量）═══");
     let sharedDiffs = 0;

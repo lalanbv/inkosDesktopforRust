@@ -290,17 +290,35 @@ const runWriteChain = async (label) => {
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
-  for (let i = 0; i < 48; i += 1) {
+  // 797 号：两段轮询——chapters≥2 后继续等 detail 稳定（章数+逐章字数连续
+  // 两轮不变）才退出。write-next 是 fire-and-forget：章落盘后真相同步阶段
+  // 仍在跑，探针与同步竞态会读到中途态（797 号 diff 环境索引被清空实锤）。
+  let reachedTwo = false;
+  let stable = 0;
+  let lastFingerprint = "";
+  for (let i = 0; i < 60; i += 1) {
     await sleep(5000);
     const detail = (await api(`/api/v1/books/${enc}`).catch(() => null))?.body;
     const chapters = detail?.chapters?.length ?? 0;
+    const fingerprint = chapters >= 2
+      ? `${chapters}:${(detail?.chapters ?? []).map((row) => row.wordCount ?? 0).join(",")}`
+      : String(chapters);
     process.stdout.write(`[walkthrough-fixture] ${label} chapters = ${chapters}\r`);
-    if (chapters >= 2) {
-      console.log(`\n[walkthrough-fixture] ${label} write-next 完成（chapters=2）`);
-      return;
+    if (chapters < 2) continue;
+    reachedTwo = true;
+    if (fingerprint === lastFingerprint) {
+      stable += 1;
+      if (stable >= 2) {
+        console.log(`\n[walkthrough-fixture] ${label} write-next 完成（chapters=2 且真相同步趋稳）`);
+        return;
+      }
+    } else {
+      stable = 0;
     }
+    lastFingerprint = fingerprint;
   }
-  die(`${label} write-next 240s 未落第 2 章（写链回归？核查对称深播前提）`);
+  if (!reachedTwo) die(`${label} write-next 300s 未落第 2 章（写链回归？核查对称深播前提）`);
+  console.log(`\n[walkthrough-fixture] ${label} 警告：章已落盘但 300s 内真相同步未趋稳（继续，可能读到中途态）`);
 };
 if (!forkContract) {
   console.log("[walkthrough-fixture] 2.0 TS 腿：对称深播（§2.5）+ write-next（795 号）。");
