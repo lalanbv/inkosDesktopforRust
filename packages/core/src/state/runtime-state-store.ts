@@ -10,6 +10,7 @@ import {
 } from "../models/runtime-state.js";
 import { renderChapterSummariesProjection, renderCurrentStateProjection, renderHooksProjection } from "./state-projections.js";
 import { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state-reducer.js";
+import { bootstrapStructuredStateFromMarkdown, readStateJsonTolerant } from "./state-bootstrap.js";
 import { validateRuntimeState } from "./state-validator.js";
 import { arbitrateRuntimeStateDeltaHooks } from "../utils/hook-arbiter.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
@@ -46,20 +47,27 @@ export async function loadRuntimeStateSnapshot(bookDir: string): Promise<Runtime
   const stateDir = join(bookDir, "story", "state");
 
   const [manifest, currentState, hooks, chapterSummaries] = await Promise.all([
-    readJson(join(stateDir, "manifest.json"), StateManifestSchema),
-    readJson(join(stateDir, "current_state.json"), CurrentStateStateSchema),
-    readJson(join(stateDir, "hooks.json"), HooksStateSchema),
-    readJson(join(stateDir, "chapter_summaries.json"), ChapterSummariesStateSchema),
+    readStateJsonTolerant(join(stateDir, "manifest.json"), StateManifestSchema),
+    readStateJsonTolerant(join(stateDir, "current_state.json"), CurrentStateStateSchema),
+    readStateJsonTolerant(join(stateDir, "hooks.json"), HooksStateSchema),
+    readStateJsonTolerant(join(stateDir, "chapter_summaries.json"), ChapterSummariesStateSchema),
   ]);
 
-  const snapshot = {
-    manifest,
-    currentState,
-    hooks,
-    chapterSummaries,
-  };
+  if (manifest && currentState && hooks && chapterSummaries) {
+    const snapshot = {
+      manifest,
+      currentState,
+      hooks,
+      chapterSummaries,
+    };
 
-  return validateLoadedSnapshot(snapshot, "persisted runtime state");
+    return validateLoadedSnapshot(snapshot, "persisted runtime state");
+  }
+
+  // 788 号：legacy 书（状态四件缺失或损坏）→ ensure 补齐——Rust
+  // load_runtime_state_snapshot 先 bootstrap 再读的同语义镜像（此前 ENOENT
+  // 直抛，Node 回退腿上 legacy 书写链失败而 Rust 腿自愈=双栈发散）。
+  return bootstrapStructuredStateFromMarkdown({ bookDir });
 }
 
 export async function loadRuntimeStateSnapshotAtChapter(params: {
