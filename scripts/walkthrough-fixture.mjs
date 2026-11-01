@@ -19,7 +19,7 @@
 //   4. 断言：/promises 的 timeline kind 全补齐、/run-log total 增长
 //   5. 打印浏览器走查地址与四个 UI 面的点验要点
 
-import { mkdirSync, writeFileSync, existsSync, copyFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, copyFileSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -241,6 +241,14 @@ if (!forkContract) {
       writeFileSync(join(worksSourceDir, "story", "book_rules.md"), "# 本书规则\n\n（fixture 缺省：无附加禁则。）\n");
     }
     console.log("[walkthrough-fixture] book_rules seeded");
+    // 794/795 号：outline 双件 + chapter-0 基线快照（创建流产物形态镜像——
+    // settle 链 baseline 与 readStoryFrame 前提；双腿对称播种见 section 3）。
+    mkdirSync(join(worksSourceDir, "story", "outline"), { recursive: true });
+    writeFileSync(join(worksSourceDir, "story", "outline", "story_frame.md"), "# 故事框架\n\n（fixture 缺省：三幕结构。）\n");
+    writeFileSync(join(worksSourceDir, "story", "outline", "volume_map.md"), "# 卷册映射\n\n（fixture 缺省：第一卷。）\n");
+    const manager = new core.StateManager(root);
+    await manager.snapshotState(BOOK, 0);
+    console.log("[walkthrough-fixture] outline + chapter-0 baseline snapshot seeded");
   }
 }
 
@@ -251,23 +259,58 @@ if (!forkContract) {
 const enc = encodeURIComponent(BOOK);
 // 698 号：报告模式双腿跳过生产链——write-next 的执行深度决定 chaptersWritten
 //（Rust 全链产出第 2 章 vs TS 停在播种态），度量只需 GET 面，双腿对称停在播种态。
+// 795 号：对称深播 + 真实 write-next（794/795 修复后写链双腿全通）——
+// chaptersWritten 2=2 由真写达成。§2.5 已播 node 侧（快照/outline/state）；
+// rust 侧此处镜像播种（books 布局：outline 双件 + snapshots/0 文件镜像
+// snapshot_state_at 的 7 md 尽力拷 + state/*.json）。
+const seedRustOutlineAndSnapshot = () => {
+  mkdirSync(join(bookDir, "story", "outline"), { recursive: true });
+  writeFileSync(join(bookDir, "story", "outline", "story_frame.md"), "# 故事框架\n\n（fixture 缺省：三幕结构。）\n");
+  writeFileSync(join(bookDir, "story", "outline", "volume_map.md"), "# 卷册映射\n\n（fixture 缺省：第一卷。）\n");
+  const snapshotDir = join(bookDir, "story", "snapshots", "0");
+  const FILES = ["current_state.md", "particle_ledger.md", "pending_hooks.md", "chapter_summaries.md", "subplot_board.md", "emotional_arcs.md", "character_matrix.md"];
+  mkdirSync(join(snapshotDir, "state"), { recursive: true });
+  for (const file of FILES) {
+    const source = join(bookDir, "story", file);
+    if (existsSync(source)) writeFileSync(join(snapshotDir, file), readFileSync(source, "utf-8"));
+  }
+  const stateDir = join(bookDir, "story", "state");
+  if (existsSync(stateDir)) {
+    for (const file of readdirSync(stateDir)) {
+      writeFileSync(join(snapshotDir, "state", file), readFileSync(join(stateDir, file), "utf-8"));
+    }
+  }
+  console.log("[walkthrough-fixture] rust 腿 outline + chapter-0 snapshot 已播种（books 布局）");
+};
+const runWriteChain = async (label) => {
+  const resync = await api(`/api/v1/books/${enc}/resync/1`, { method: "POST" });
+  console.log(`[walkthrough-fixture] ${label} resync = ${resync.status}${resync.status !== 200 ? ` ${JSON.stringify(resync.body).slice(0, 200)}` : ""}`);
+  await api(`/api/v1/books/${enc}/write-next`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  for (let i = 0; i < 48; i += 1) {
+    await sleep(5000);
+    const detail = (await api(`/api/v1/books/${enc}`).catch(() => null))?.body;
+    const chapters = detail?.chapters?.length ?? 0;
+    process.stdout.write(`[walkthrough-fixture] ${label} chapters = ${chapters}\r`);
+    if (chapters >= 2) {
+      console.log(`\n[walkthrough-fixture] ${label} write-next 完成（chapters=2）`);
+      return;
+    }
+  }
+  die(`${label} write-next 240s 未落第 2 章（写链回归？核查对称深播前提）`);
+};
 if (!forkContract) {
-  // 700 号：2.0 TS 腿自适应（与调用方解耦——smoke/contract-diff/walkthrough
-  // 统一走此路径）：resync 注册进度（迁移后的 works 面），跳过 write-next
-  //（执行深度差=chaptersWritten 分歧源）与链断言（断言验链，链跳过则必假红）。
-  // fork 契约腿走 687 原流（连字符探针+全链+断言）。
-  console.log("[walkthrough-fixture] 2.0 TS 腿：POST resync/1（进度注册）后收尾，跳过 write-next 与链断言。");
-  const resync = await api(`/api/v1/books/${encodeURIComponent(BOOK)}/resync/1`, { method: "POST" });
-  console.log(`[walkthrough-fixture] resync = ${resync.status}${resync.status !== 200 ? ` ${JSON.stringify(resync.body).slice(0, 200)}` : ""}`);
-  process.exit(0); // 顶层直线脚本（ESM 禁 return）——同 die() 的早退惯例，exit 0=播种成功。
+  console.log("[walkthrough-fixture] 2.0 TS 腿：对称深播（§2.5）+ write-next（795 号）。");
+  await runWriteChain("node");
+  process.exit(0);
 }
-// 698 号深度对称分支（fork 契约腿）：contract-diff 报告模式传
-// WALKTHROUGH_REPORT_MODE=1——fork 腿也只做 resync 进度注册（跳过 write-next），
-// 与 2.0 腿对称停在播种态（chaptersWritten 1=1）。严格对跑不设此 env，走 687 原流。
 if (process.env.WALKTHROUGH_REPORT_MODE === "1") {
-  console.log("[walkthrough-fixture] 报告模式（fork 腿）：POST resync/1（进度注册）后收尾，跳过 write-next（深度对称）。");
-  const resync = await api(`/api/v1/books/${encodeURIComponent(BOOK)}/resync/1`, { method: "POST" });
-  console.log(`[walkthrough-fixture] resync = ${resync.status}`);
+  console.log("[walkthrough-fixture] 报告模式（fork 腿）：对称深播 + write-next（795 号）。");
+  seedRustOutlineAndSnapshot();
+  await runWriteChain("rust");
   process.exit(0);
 }
 const bookState = (await api(`/api/v1/books/${enc}`)).body;

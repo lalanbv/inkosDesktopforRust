@@ -305,6 +305,23 @@ http.createServer((req, res) => {
         emitSse(chunk, finish);
         return;
       }
+      // 795 号：修稿协议分派（submitStructured submit_revised_chapter）——
+      // 2.0 TS 链的 revision candidate/revise 腿（ChapterRewriteToolSchema：
+      // {revisedContent} min1，validate 长度门=篇幅预算带）。缺路由时落兜底
+      // 文本→结构化结果恒无效→修正循环打转（794 号活体实锤：182 次 revise）。
+      // 复用 WRITER_BODY（645 号口径篇幅达标），与 draft 同文=确定性收敛。
+      if (toolNames.includes("submit_revised_chapter")) {
+        const args = JSON.stringify({ revisedContent: `=== CHAPTER_TITLE ===\n风起\n\n${WRITER_BODY}` });
+        const toolCall = { id: `call_revise_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_revised_chapter", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
       // 794 号：状态对账协议分派（submitStructured submit_state_validation）——
       // 2.0 TS 写链 settle 后的状态校验**双层同名词协议**，按 system 锚点分派：
       // ①投影复查层（StateProjectionReviewToolSchema）：sys 含 "exact proposed
@@ -340,11 +357,27 @@ http.createServer((req, res) => {
         // hookOps/summary 一致）；factOps 对齐 rust 文本 delta 的缺省（不发
         // 事实 upsert——事实面由正文投影复查层负责，双腿一致为空）。
         const delta = buildSettlerDeltaObject(msgs);
+        // 795 号：空基线台账（chapter-0 快照 hooks 空）下 upsert 已知 id 被
+        // reducer 拒（"Unknown hook id(s)"——只收台账内 id）→ 模板的 H01-H03
+        // 走 newHookCandidates（type/expectedPayoff/notes 三字段形态，
+        // NewHookCandidateSchema；hookId 由 reducer 派生）。
+        const candidates = (delta.hookOps.upsert ?? []).map((hook) => ({
+          type: hook.type,
+          expectedPayoff: hook.expectedPayoff,
+          notes: hook.notes,
+        }));
         const args = JSON.stringify({
           postSettlement: "结算完成。",
           factOps: { upsert: [], expire: [] },
-          hookOps: delta.hookOps,
-          newHookCandidates: [],
+          // 795 号：TS SettlementToolSchema 四键全发（mention/resolve/defer
+          // required——rust serde default 容忍缺省，TS 侧须显式空数组）。
+          hookOps: {
+            upsert: [],
+            mention: delta.hookOps.mention ?? [],
+            resolve: delta.hookOps.resolve ?? [],
+            defer: delta.hookOps.defer ?? [],
+          },
+          newHookCandidates: candidates,
           chapterSummary: delta.chapterSummary,
         });
         const toolCall = { id: `call_settle_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_runtime_state_delta", arguments: args } };
