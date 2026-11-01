@@ -175,11 +175,22 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
     Ok(HooksState { hooks })
 }
 
+/// 804 号：合并语义对齐 TS harness v2 `mergeHookRecord`（state-reducer.ts）。
+/// 共享契约字段——文本三件（type/expectedPayoff/notes）= incoming 优先、空白回落既有
+/// （TS `incoming.X.trim() || existing.X`）；status = resolved 粘滞否则 incoming 直赢
+/// （TS `existing.status === "resolved" ? "resolved" : incoming.status`）。
+/// 此前的 `prefer_richer_text`（更长者胜、等长取既有）与 `merge_hook_status`（进展升
+/// 级 progressing）是 08-11 移植当时 TS 形态的忠实移植；TS 于 harness v2（7aed0d82）
+/// 改为 incoming 优先而 rust 未跟进——等长 notes「既有胜」即 promises timeline H02
+/// notes 双腿分歧的直接根因。语义依据：upsert 是 LLM 对该钩子的权威最新陈述（notes
+/// 须可被纠正/缩短；richer 使 notes 单调不缩）。同族吸收路径（新 id 命中既有族）同为
+/// upsert 言语行为故共用本函数；候选提案（newHookCandidates）为弱言语行为，仍走
+/// hook_arbiter::merge_candidate_into_existing_hook 的 richer 调和语义。
+/// rust 独有产品字段（kind/payoff_timing/core_hook/…）保持既有 rust 语义。
 fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord {
-    let expected_payoff = prefer_richer_text(&existing.expected_payoff, &incoming.expected_payoff);
-    let notes = prefer_richer_text(&existing.notes, &incoming.notes);
+    let expected_payoff = prefer_incoming_text(&existing.expected_payoff, &incoming.expected_payoff);
+    let notes = prefer_incoming_text(&existing.notes, &incoming.notes);
     let advanced = existing.last_advanced_chapter.max(incoming.last_advanced_chapter);
-    let progressed = advanced > existing.last_advanced_chapter;
 
     let merged_timing = incoming.payoff_timing.or(existing.payoff_timing);
     let resolved_timing = resolve_hook_payoff_timing(
@@ -193,8 +204,12 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
         kind: incoming.kind.or(existing.kind),
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter.min(incoming.start_chapter),
-        hook_type: prefer_richer_text(&existing.hook_type, &incoming.hook_type),
-        status: merge_hook_status(existing.status, incoming.status, progressed),
+        hook_type: prefer_incoming_text(&existing.hook_type, &incoming.hook_type),
+        status: if existing.status == HookStatus::Resolved {
+            HookStatus::Resolved
+        } else {
+            incoming.status
+        },
         status_raw: String::new(),
         last_advanced_chapter: advanced,
         expected_payoff,
@@ -210,32 +225,13 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
     }
 }
 
-fn merge_hook_status(existing: HookStatus, incoming: HookStatus, progressed: bool) -> HookStatus {
-    if existing == HookStatus::Resolved || incoming == HookStatus::Resolved {
-        return HookStatus::Resolved;
-    }
-    if progressed || existing == HookStatus::Progressing || incoming == HookStatus::Progressing {
-        return HookStatus::Progressing;
-    }
-    existing
-}
-
-fn prefer_richer_text(primary: &str, fallback: &str) -> String {
-    let left = primary.trim();
-    let right = fallback.trim();
-    if left.is_empty() {
-        return right.to_string();
-    }
-    if right.is_empty() {
-        return left.to_string();
-    }
-    if left == right {
-        return left.to_string();
-    }
-    if right.encode_utf16().count() > left.encode_utf16().count() {
-        right.to_string()
+/// TS `incoming.trim() || existing`：incoming 非空白则取其 trim 形态，否则原样保留既有。
+fn prefer_incoming_text(existing: &str, incoming: &str) -> String {
+    let trimmed = incoming.trim();
+    if trimmed.is_empty() {
+        existing.to_string()
     } else {
-        left.to_string()
+        trimmed.to_string()
     }
 }
 
@@ -464,7 +460,8 @@ mod tests {
         let mut snap = empty_snapshot(5);
         snap.hooks.hooks.push(hook("h1", 1, 3));
         let mut advancing = hook("h1", 1, 6);
-        advancing.expected_payoff = "主角终局摊牌场景".into(); // 比现有 "soon" 更长 → richer
+        advancing.expected_payoff = "主角终局摊牌场景".into();
+        advancing.status = HookStatus::Progressing;
         let delta = RuntimeStateDelta {
             chapter: 6,
             hook_ops: HookOps { upsert: vec![advancing], ..Default::default() },
@@ -472,9 +469,66 @@ mod tests {
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
         assert_eq!(next.hooks.hooks.len(), 1);
-        assert_eq!(next.hooks.hooks[0].last_advanced_chapter, 6); // advanced
-        assert_eq!(next.hooks.hooks[0].status, HookStatus::Progressing); // progressed → progressing
-        assert_eq!(next.hooks.hooks[0].expected_payoff, "主角终局摊牌场景");
+        assert_eq!(next.hooks.hooks[0].last_advanced_chapter, 6); // max(3, 6)
+        assert_eq!(next.hooks.hooks[0].status, HookStatus::Progressing); // 804：incoming 直赢
+        assert_eq!(next.hooks.hooks[0].expected_payoff, "主角终局摊牌场景"); // 804：incoming 优先
+    }
+
+    /// 804 号：文本三件 incoming 优先——即便更短/等长也覆盖既有（TS `incoming.X.trim() || existing.X`）。
+    /// 等长场景即 promises timeline H02 notes 分歧复现（旧 richer 等长取既有）。
+    #[test]
+    fn merge_text_fields_prefer_incoming_even_when_shorter_or_equal_length() {
+        let mut existing = hook("h1", 1, 3);
+        existing.hook_type = "情感线（主线）".into();
+        existing.expected_payoff = "第8章婚约揭晓".into();
+        existing.notes = "苏檀与镜灵的婚约誓言。".into();
+        let mut incoming = hook("h1", 1, 3);
+        incoming.hook_type = "情感线".into(); // 更短
+        incoming.expected_payoff = "  第8章  ".into(); // 更短且带空白 → trim 后取用
+        incoming.notes = "与镜灵的婚约誓言待启。".into(); // 等长（11 字）
+        let merged = merge_hook_record(&existing, &incoming);
+        assert_eq!(merged.hook_type, "情感线");
+        assert_eq!(merged.expected_payoff, "第8章");
+        assert_eq!(merged.notes, "与镜灵的婚约誓言待启。");
+    }
+
+    /// 804 号：incoming 文本为空白时回落既有，且既有原样保留（不 trim）。
+    #[test]
+    fn merge_text_fields_fall_back_to_existing_when_incoming_blank() {
+        let mut existing = hook("h1", 1, 3);
+        existing.hook_type = "身世".into();
+        existing.expected_payoff = "第10章 ".into();
+        existing.notes = "镜中世界来历初现端倪。".into();
+        let mut incoming = hook("h1", 1, 3);
+        incoming.hook_type = "   ".into();
+        incoming.expected_payoff = String::new();
+        incoming.notes = "\t\n".into();
+        let merged = merge_hook_record(&existing, &incoming);
+        assert_eq!(merged.hook_type, "身世");
+        assert_eq!(merged.expected_payoff, "第10章 ");
+        assert_eq!(merged.notes, "镜中世界来历初现端倪。");
+    }
+
+    /// 804 号：status = resolved 粘滞否则 incoming 直赢；进展（lastAdvanced 增大）不再自动升级 progressing。
+    #[test]
+    fn merge_status_follows_incoming_unless_existing_resolved() {
+        use HookStatus::*;
+        let with = |status: HookStatus, last_adv: u32| {
+            let mut h = hook("h1", 1, last_adv);
+            h.status = status;
+            h
+        };
+        // incoming 直赢（旧 merge_hook_status 会因 existing progressing 而保持 progressing）
+        assert_eq!(merge_hook_record(&with(Progressing, 3), &with(Open, 3)).status, Open);
+        // incoming deferred 直赢（旧语义返回 existing open）
+        assert_eq!(merge_hook_record(&with(Open, 3), &with(Deferred, 3)).status, Deferred);
+        // 进展不自动升级（旧语义 progressed → progressing）
+        let advanced = merge_hook_record(&with(Open, 3), &with(Open, 6));
+        assert_eq!(advanced.status, Open);
+        assert_eq!(advanced.last_advanced_chapter, 6);
+        // resolved 粘滞（双向）
+        assert_eq!(merge_hook_record(&with(Resolved, 3), &with(Open, 6)).status, Resolved);
+        assert_eq!(merge_hook_record(&with(Open, 3), &with(Resolved, 6)).status, Resolved);
     }
 
     #[test]
@@ -528,25 +582,6 @@ mod tests {
         assert_eq!(locs.len(), 1);
         assert_eq!(locs[0].object, "新位置");
         assert_eq!(locs[0].valid_from_chapter, 6);
-    }
-
-    #[test]
-    fn prefer_richer_text_picks_longer() {
-        assert_eq!(prefer_richer_text("ab", "abcd"), "abcd");
-        assert_eq!(prefer_richer_text("abcd", "ab"), "abcd");
-        assert_eq!(prefer_richer_text("", "x"), "x");
-        assert_eq!(prefer_richer_text("x", ""), "x");
-        assert_eq!(prefer_richer_text("same", "same"), "same");
-    }
-
-    #[test]
-    fn merge_hook_status_logic() {
-        use HookStatus::*;
-        assert_eq!(merge_hook_status(Open, Resolved, false), Resolved);
-        assert_eq!(merge_hook_status(Resolved, Open, false), Resolved);
-        assert_eq!(merge_hook_status(Open, Open, true), Progressing);
-        assert_eq!(merge_hook_status(Open, Progressing, false), Progressing);
-        assert_eq!(merge_hook_status(Open, Open, false), Open);
     }
 
     #[test]
