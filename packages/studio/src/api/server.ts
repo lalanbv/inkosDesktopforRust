@@ -4623,30 +4623,54 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books/:id/roster-candidates", async (c) => {
     const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ cards: [], candidates: [], rosterExists: false, currentChapter: 0 });
-    }
-    try {
-      const memory = new MemoryDBReadonly(join(root, "books", id));
-      const summaries = memory.getSummaries(1, 100_000);
+    // 候选派生：章摘要 characters 列 → extractCharacterCandidates → 对照名册出卡
+    // （Rust ops_routes get_roster_candidates 同序同函数族）。
+    const resolve = async (
+      summaries: ReadonlyArray<{ readonly chapter: number; readonly characters: string }>,
+      rosterPath: string,
+    ) => {
       const currentChapter = summaries.length > 0
-        ? summaries[summaries.length - 1]!.chapter + 1
+        ? Math.max(...summaries.map((s) => s.chapter)) + 1
         : 1;
-      const candidates = extractCharacterCandidates(
-        summaries.map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" })),
-      );
+      const candidates = extractCharacterCandidates(summaries);
       let roster: import("@actalk/inkos-core").RosterEntity[] = [];
       let rosterExists = false;
       try {
-        const rosterRaw = await readFile(join(root, "books", id, "story", "entity_roster.md"), "utf-8");
-        roster = parseEntityRoster(rosterRaw);
+        roster = parseEntityRoster(await readFile(rosterPath, "utf-8"));
         rosterExists = true;
       } catch {
         rosterExists = false;
       }
-      const cards = resolveRosterCandidates(candidates, roster);
-      return c.json({ cards, candidates, rosterExists, currentChapter });
+      return { cards: resolveRosterCandidates(candidates, roster), candidates, rosterExists, currentChapter };
+    };
+
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (await access(dbPath).then(() => true).catch(() => false)) {
+      // legacy 账本在位（1.x 迁移书）：summaries 与名册走 books/ 树。
+      try {
+        const memory = new MemoryDBReadonly(join(root, "books", id));
+        const summaries = memory.getSummaries(1, 100_000)
+          .map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" }));
+        return c.json(await resolve(summaries, join(root, "books", id, "story", "entity_roster.md")));
+      } catch (e) {
+        return c.json({ error: String(e) }, 500);
+      }
+    }
+    // 809 号：账本缺席（2.0 原生书——无 MemoryDB 写链）改走正典派生，不再返回死空壳
+    // （currentChapter 0）：summaries=state/chapter_summaries.json 行（798/808 同源），
+    // 名册=works 树 story/entity_roster.md（716 正典读面）。
+    try {
+      const storyDir = join(state.bookDir(id), "story");
+      const rows: Array<{ chapter: number; characters: string }> = await readFile(
+        join(storyDir, "state", "chapter_summaries.json"),
+        "utf-8",
+      ).then((raw) => {
+        const parsed = JSON.parse(raw) as { rows?: Array<{ chapter?: unknown; characters?: unknown }> };
+        return (Array.isArray(parsed.rows) ? parsed.rows : [])
+          .filter((row) => typeof row.chapter === "number")
+          .map((row) => ({ chapter: row.chapter as number, characters: typeof row.characters === "string" ? row.characters : "" }));
+      }).catch(() => []);
+      return c.json(await resolve(rows, join(storyDir, "entity_roster.md")));
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
