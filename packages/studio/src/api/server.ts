@@ -3399,6 +3399,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const tool = createWriteChaptersTool(pipeline, id, {
       workerSkills: (worker) => worker === "auditor" || worker === "reviser" ? reviewSkills : writingSkills,
     });
+    // 794 号：startChapterNumber 必填（WriteChaptersParams 契约——"must match
+    // the next unwritten chapter"），capability decode 此前恒拒：write-next 在
+    // 2.0 TS 腿静默失败（698 号间隙的真根因）。取 durable 链权威下一章。
+    const startChapterNumber = await state.getNextChapterNumber(id);
     executeExplicitCapabilityTool({
       projectRoot: root,
       binding: confirmedCapabilityBinding("write_next")!,
@@ -3406,6 +3410,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       parameters: {
         instruction: "Write the next chapter for the active Work.",
         bookId: id,
+        startChapterNumber,
         chapterCount: 1,
         ...(body.wordCount ? { chapterWordCount: body.wordCount } : {}),
       },
@@ -3420,6 +3425,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         });
       },
       (e) => {
+        // 794 号：写链失败的服务端栈日志（此前仅广播 message——栈只在客户端
+        // SSE 面，服务端排障无据；含 TypeBox decode 类框架错误的定位栈）。
+        console.error(`[studio] write-next 失败（${id}）:`, e instanceof Error ? e.stack : e);
         broadcast("write:error", { bookId: id, error: e instanceof Error ? e.message : String(e) });
       },
     );

@@ -104,7 +104,20 @@ export class CapabilityRegistry {
   ): Promise<ActionResult> {
     const { action } = this.resolve(capabilityId, actionId);
     if (context.signal?.aborted) throw context.signal.reason;
-    const input = Value.Decode(action.parameters, rawInput);
+    let input: Static<typeof action.parameters>;
+    try {
+      input = Value.Decode(action.parameters, rawInput);
+    } catch (error) {
+      // 794 号：decode 失败带原始载荷与 TypeBox 错误明细——裸
+      // "Unable to decode value" 无法定位调用方与 schema 的偏差面。
+      const errors = [...Value.Errors(action.parameters, rawInput)].map(
+        (issue) => `${issue.path}: ${issue.message}`,
+      );
+      throw new Error(
+        `Capability ${capabilityId}.${actionId} params decode failed: ${errors.join("; ") || String(error)} | check=${Value.Check(action.parameters, rawInput)} | schema=${JSON.stringify(action.parameters)?.slice(0, 600)} | raw=${JSON.stringify(rawInput)?.slice(0, 400)}`,
+        { cause: error },
+      );
+    }
     return ActionResultSchema.parse(await action.execute(context, input));
   }
 }

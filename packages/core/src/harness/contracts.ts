@@ -4,12 +4,19 @@ import type { Observation } from "../models/observation.js";
 
 export const HARNESS_VERSION = 2 as const;
 
+const UNSAFE_RESOURCE_ID_RE = /[\u0000-\u001f\u007f/\\:*?"'`{}<>|]/u;
+
+// 794 号：HarnessId 与 WorkResourceId 统一安全字符法——旧 ASCII 正则
+//（^[a-z0-9._-]$）拒绝中文书 id（镜花水月），而同文件 WorkResourceIdSchema 与
+// rust 腿（books/<id> 目录名任意安全名）都接受——写链 episode/work id 派生自
+// bookId 时中文书在 2.0 TS 腿恒被拒（698 间隙第二层根因，contract-diff 活体
+// 实证）。统一为「禁路径危险字符」语义（CJK 合法），双子 schema 不再分裂。
 export const HarnessIdSchema = z.string()
   .min(1)
   .max(128)
-  .regex(/^[a-z0-9][a-z0-9._-]*$/i, "ID must be filesystem-safe");
-
-const UNSAFE_RESOURCE_ID_RE = /[\u0000-\u001f\u007f/\\:*?"'`{}<>|]/u;
+  .refine((value) => value.trim() === value, "ID must not have surrounding whitespace")
+  .refine((value) => value !== "." && value !== ".." && !value.includes(".."), "ID cannot traverse directories")
+  .refine((value) => !UNSAFE_RESOURCE_ID_RE.test(value), "ID contains unsafe path characters");
 
 export const WorkResourceIdSchema = z.string()
   .min(1)

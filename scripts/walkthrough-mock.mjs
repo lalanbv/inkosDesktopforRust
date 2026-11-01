@@ -125,7 +125,10 @@ const SETTLER_TEMPLATE = {
 // 653 号：取**最后一个**「第 N 章」命中——planner 文本「# 第 1 章 memo」先于目标章引用出现，
 // 取首个会让 LAST_SETTLER_CHAPTER/delta.chapter 恒偏 1（652c 实录：写第 2 章时 analyzer 摘要行章号=1）。
 let LAST_SETTLER_CHAPTER = 1;
-function settlerDelta(msgs) {
+// 794 号：delta 构造抽取为对象形态——文本协议（状态追踪分析师）与 2.0 工具
+// 协议（submit_runtime_state_delta）同源同内容（章号锚/hookOps/summary 完全
+// 一致），双腿结算内容收敛。
+function buildSettlerDeltaObject(msgs) {
   const text = msgs.map((m) => m?.content ?? "").join("\n");
   // 653 号：章号锚=「## 已有章节摘要」表格的最大已有章号+1（写第 N 章=已有
   // N-1 章+1，连续写作单调自洽）。不可用「第 N 章」文本命中：消息里的命中全
@@ -138,6 +141,10 @@ function settlerDelta(msgs) {
   const delta = JSON.parse(JSON.stringify(SETTLER_TEMPLATE));
   delta.chapter = n;
   delta.chapterSummary.chapter = n;
+  return delta;
+}
+function settlerDelta(msgs) {
+  const delta = buildSettlerDeltaObject(msgs);
   return "=== RUNTIME_STATE_DELTA ===\n```json\n" + JSON.stringify(delta) + "\n```\n";
 }
 const ARGS = "{\"action\": \"create_book\", \"instruction\": \"创建玄幻小说《镜花水月》，主角苏檀。世界观：镜中世界反向修行。核心冲突：镜像侵蚀现实。\", \"createBook\": {\"title\": \"镜花水月\", \"genre\": \"xuanhuan\", \"platform\": \"qidian\", \"targetChapters\": 12, \"chapterWordCount\": 3000, \"language\": \"zh\"}}";
@@ -281,26 +288,64 @@ http.createServer((req, res) => {
         emitSse(chunk, finish);
         return;
       }
+      // 794 号：审稿工具协议分派（submitSourcedReview 多轮：record_review_
+      // observation 逐条记录 → submit_chapter_review 终审）——最小合法终态=
+      // 跳过记录直接终审（无发现）：{summary, observationCodes:[]} → 审稿
+      // 通过、修稿循环不触发。缺路由时落兜底文本→审稿结构化结果恒无效→
+      // 修稿循环打转（794 号活体实锤：182 次 submit_revised_chapter）。
+      if (toolNames.includes("submit_chapter_review")) {
+        const args = JSON.stringify({ summary: "Reviewed the chapter; no findings.", observationCodes: [] });
+        const toolCall = { id: `call_review_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_chapter_review", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
+      // 794 号：状态对账协议分派（submitStructured submit_state_validation）——
+      // 2.0 TS 写链 settle 后的状态校验**双层同名词协议**，按 system 锚点分派：
+      // ①投影复查层（StateProjectionReviewToolSchema）：sys 含 "exact proposed
+      //   record" → {corrections:[],observations:""}（全部拟议事实准确）；
+      // ②和解判定层（StateValidationToolSchema）：sys 含 "reconciliationRequired="
+      //   → {reconciliationRequired:false,reportMarkdown:""}（无需和解）。
+      // 缺路由时落兜底文本→结构化结果恒无效→"remained invalid after bounded
+      // correction attempts"→状态应用放弃（794 号活体实锤：纠正 6 次全落兜底）。
+      if (toolNames.includes("submit_state_validation")) {
+        const isProjectionReview = sys.includes("exact proposed record");
+        const args = JSON.stringify(
+          isProjectionReview
+            ? { corrections: [], observations: "" }
+            : { reconciliationRequired: false, reportMarkdown: "" },
+        );
+        const toolCall = { id: `call_stateval_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_state_validation", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
       // 717 号：settle 结算协议分派（submitStructured submit_runtime_state_delta）
       // ——writeChapter 落盘前的真相结算工具（factOps/hookOps/章摘要）。合法
       // 最小 delta：单事实推进 + 空钩子操作 + 单行章摘要（对齐
       // SettlementToolSchema 契约形态；write-next 内链的「状态追踪分析师」
       // 文本支是 setterDelta 文本协议，与本工具支并存互不截胡）。
       if (toolNames.includes("submit_runtime_state_delta")) {
+        // 794 号：与 rust 文本协议同源（buildSettlerDeltaObject——章号锚/
+        // hookOps/summary 一致）；factOps 对齐 rust 文本 delta 的缺省（不发
+        // 事实 upsert——事实面由正文投影复查层负责，双腿一致为空）。
+        const delta = buildSettlerDeltaObject(msgs);
         const args = JSON.stringify({
-          postSettlement: "本章林动夺回祖符并初窥镜界异象，正式踏上修炼路。",
-          factOps: { upsert: [{ subject: "林动", predicate: "持有", object: "祖符玉佩" }], expire: [] },
-          hookOps: { upsert: [], mention: [], resolve: [], defer: [] },
+          postSettlement: "结算完成。",
+          factOps: { upsert: [], expire: [] },
+          hookOps: delta.hookOps,
           newHookCandidates: [],
-          chapterSummary: {
-            title: "玉符异动",
-            characters: "林动",
-            events: "坊市对峙夺回祖符，玉符异象初显",
-            stateChanges: "正式踏上修炼路",
-            hookActivity: "H01 推进",
-            mood: "紧张",
-            chapterType: "冲突",
-          },
+          chapterSummary: delta.chapterSummary,
         });
         const toolCall = { id: `call_settle_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_runtime_state_delta", arguments: args } };
         if (!wantStream) {
@@ -460,6 +505,11 @@ http.createServer((req, res) => {
         emitSse(chunk, finish);
         return;
       } else {
+        // 794 号：兜底命中诊断（WALKTHROUGH_MOCK_DEBUG=1 时打未匹配 sys 首段
+        // 与消息角色序列——2.0 链语义面工程的探针面；静默默认不影响走查）。
+        if (process.env.WALKTHROUGH_MOCK_DEBUG === "1") {
+          console.log(`[mock][fallback] sys=${String(sys).slice(0, 120).replace(/\n/g, "⏎")} roles=${msgs.map((m) => m.role).join(">")} last=${String(msgs[msgs.length - 1]?.content ?? "").slice(0, 120).replace(/\n/g, "⏎")}`);
+        }
         content = "已生成确认卡，请在下方点击确认。";
       }
       if (!wantStream) {
