@@ -4301,7 +4301,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books/:id/tension-curve", async (c) => {
     const id = c.req.param("id");
-    const summariesPath = join(root, "books", id, "story", "chapter_summaries.md");
+    // 796 号：活书数据面（state.bookDir=works/<id>/source）——旧 books/<id>
+    // 硬编码读迁移前静态副本（写链产出在 works 面→tension 曲线丢点，
+    // contract-diff 活体捕获）。
+    const summariesPath = join(state.bookDir(id), "story", "chapter_summaries.md");
     if (!(await access(summariesPath).then(() => true).catch(() => false))) {
       return c.json({ curve: { points: [], scoredChapters: 0, unscoredChapters: 0 }, warnings: [] });
     }

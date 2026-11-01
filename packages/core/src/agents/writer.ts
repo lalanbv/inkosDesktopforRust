@@ -390,6 +390,10 @@ export class WriterAgent extends BaseAgent {
         hookActivity: result.chapterSummary.hookActivity,
         mood: result.chapterSummary.mood,
         chapterType: result.chapterSummary.chapterType,
+        // 796 号：张力评分透传（rust ChapterSummaryRow.conflict_level/
+        // reveal_level 镜像——undefined 时 zod optional 丢键=不渲染 8 列形态）。
+        conflictLevel: result.chapterSummary.conflictLevel,
+        revealLevel: result.chapterSummary.revealLevel,
       },
     });
 

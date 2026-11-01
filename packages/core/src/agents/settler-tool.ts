@@ -26,6 +26,10 @@ const ChapterSummaryToolSchema = Type.Object({
   hookActivity: Type.String(),
   mood: Type.String(),
   chapterType: Type.String(),
+  // 796 号：张力评分镜像（rust ChapterSummaryRow.conflict_level/reveal_level
+  // Option 语义——settle 工具 args 可携带，缺省 undefined 丢键）。
+  conflictLevel: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
+  revealLevel: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
 });
 
 const StateFactToolSchema = Type.Object({

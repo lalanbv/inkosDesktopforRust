@@ -56,6 +56,11 @@ export const ChapterSummaryRowSchema = z.object({
   hookActivity: z.string(),
   mood: z.string(),
   chapterType: z.string(),
+  // 796 号：张力评分镜像（R2/359 号；rust ChapterSummaryRow.conflict_level/
+  // reveal_level Option+skip 序列化同语义）——缺失不渲染（8 列形态），在场时
+  // 渲染 10 列张力行（tension-curve 派生面；旧摘要无此键完全兼容）。
+  conflictLevel: z.number().int().min(1).max(10).optional(),
+  revealLevel: z.number().int().min(1).max(10).optional(),
 }).strict();
 
 export type ChapterSummaryRow = z.infer<typeof ChapterSummaryRowSchema>;

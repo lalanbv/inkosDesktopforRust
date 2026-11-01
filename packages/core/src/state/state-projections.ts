@@ -47,14 +47,17 @@ export function renderChapterSummariesProjection(
   language: "zh" | "en" = "zh",
 ): string {
   const title = language === "en" ? "# Chapter Summaries" : "# 章节摘要";
+  // 796 号：末尾增冲突强度/揭示强度两列（R2/359 号 rust 镜像；缺分渲染空
+  // 单元格保持旧表消费者无感）——此前 8 列硬编码=tension-curve 派生面的
+  // 双腿分歧源（rust 10 列 vs TS 8 列，contract-diff 活体捕获）。
   const headers = language === "en"
     ? [
-      "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| Chapter | Title | Characters | Key Events | State Changes | Hook Activity | Mood | Chapter Type | Conflict | Reveal |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     : [
-      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |",
-      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 | 冲突强度 | 揭示强度 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ];
 
   const rows = [...state.rows]
@@ -69,6 +72,8 @@ export function renderChapterSummariesProjection(
         summary.hookActivity,
         summary.mood,
         summary.chapterType,
+        summary.conflictLevel !== undefined ? String(summary.conflictLevel) : "",
+        summary.revealLevel !== undefined ? String(summary.revealLevel) : "",
       ].map(escapeTableCell).join(" | ")
     } |`);
 
