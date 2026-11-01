@@ -4474,37 +4474,47 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books/:id/promises", async (c) => {
     const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ timeline: [], pacingDebts: [], weakRuns: { runs: [], longestRun: 0 }, currentChapter: 0 });
-    }
+    // 798 号：正典 hooks state 派生（works/<id>/source/story/state/hooks.json
+    // + chapter_summaries.json——794 号确立 state 为正典真源；rust ledger 亦
+    // 同源投影）。旧 books/<id>/memory.db 硬编码=legacy 副本路径且 2.0 写链
+    // 不产账本表（仅检索表）→ promises 恒空（contract-diff 活体捕获）。
     try {
-      const memory = new MemoryDBReadonly(join(root, "books", id));
-      const hooks = memory.getAllHooks();
-      // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
-      // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
-      const hooksMarkdown = await readFile(
-        join(root, "books", id, "story", "pending_hooks.md"),
-        "utf-8",
-      ).catch(() => "");
+      const storyDir = join(state.bookDir(id), "story");
+      const hooksParsed = JSON.parse(
+        await readFile(join(storyDir, "state", "hooks.json"), "utf-8"),
+      ) as { hooks?: ReadonlyArray<Record<string, unknown>> };
+      const hooksMarkdown = await readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => "");
       const kindById = new Map(
         parsePendingHooks(hooksMarkdown)
           .filter((hook) => hook.kind)
           .map((hook) => [hook.id, hook.kind]),
       );
-      const enrichedHooks = hooks.map((hook) => {
-        const kind = kindById.get(hook.hookId);
-        return kind ? { ...hook, kind } : hook;
+      const enrichedHooks = (hooksParsed.hooks ?? []).map((hook) => {
+        const hookId = String(hook.hookId ?? "");
+        const kind = kindById.get(hookId);
+        return {
+          hookId,
+          startChapter: Number(hook.startChapter ?? 0),
+          type: String(hook.type ?? ""),
+          status: String(hook.status ?? "open"),
+          lastAdvancedChapter: Number(hook.lastAdvancedChapter ?? 0),
+          expectedPayoff: String(hook.expectedPayoff ?? ""),
+          notes: String(hook.notes ?? ""),
+          ...(kind ? { kind } : {}),
+        };
       });
-      const summaries = memory.getSummaries(1, 100_000);
-      const currentChapter = summaries.length > 0
-        ? summaries[summaries.length - 1]!.chapter + 1
+      const summariesParsed = JSON.parse(
+        await readFile(join(storyDir, "state", "chapter_summaries.json"), "utf-8"),
+      ) as { rows?: ReadonlyArray<{ chapter: number; hookActivity?: string }> };
+      const summaryRows = (summariesParsed.rows ?? [])
+        .filter((row) => Number.isInteger(row.chapter))
+        .map((row) => ({ chapter: row.chapter, hookActivity: row.hookActivity ?? "" }));
+      const currentChapter = summaryRows.length > 0
+        ? summaryRows[summaryRows.length - 1]!.chapter + 1
         : 1;
       const timeline = buildPromiseTimeline(enrichedHooks, currentChapter);
       const pacingDebts = detectPacingDebts({ hooks: enrichedHooks, currentChapter });
-      const weakRuns = detectWeakHookRuns({
-        summaries: summaries.map((s) => ({ chapter: s.chapter, hookActivity: s.hookActivity ?? "" })),
-      });
+      const weakRuns = detectWeakHookRuns({ summaries: summaryRows });
       return c.json({ timeline, pacingDebts, weakRuns, currentChapter });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
