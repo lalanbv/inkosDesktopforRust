@@ -448,18 +448,81 @@ export class StateManager {
 
   async loadChapterIndex(bookId: string): Promise<ReadonlyArray<ChapterMeta>> {
     const indexPath = join(this.bookDir(bookId), "chapters", "index.json");
+    let parsed: ReadonlyArray<ChapterMeta> | null = null;
     try {
       const raw = await readFile(indexPath, "utf-8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) throw new Error(`Chapter index is not an array: ${indexPath}`);
-      return parsed.map((entry) => ChapterMetaSchema.parse(entry));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      if (await this.getPersistedChapterCount(bookId) > 0) {
-        throw new Error(`Chapter index is missing while chapter files exist: ${indexPath}`);
+      const value = JSON.parse(raw) as unknown;
+      if (Array.isArray(value)) {
+        parsed = value.map((entry) => ChapterMetaSchema.parse(entry));
       }
-      return [];
+    } catch (error) {
+      // 791 号：index 缺失/损坏（ENOENT/SyntaxError/schema 不符）不再 throw——
+      // 容忍降级到从章节文件重建（Rust load_chapter_index + rebuild 镜像）。
+      // 此前 index-less legacy 书在 Node 回退腿 bookDetail 500 而 Rust 腿重建 200
+      // =双栈发散（legacy 簇收尾，与 788/789 同簇）。
+      if (
+        (error as NodeJS.ErrnoException).code !== "ENOENT"
+        && !(error instanceof SyntaxError)
+        && (error as Error)?.name !== "ZodError"
+        && !((error as Error)?.message ?? "").includes("Chapter index is not an array")
+      ) {
+        throw error;
+      }
+      parsed = null;
     }
+    if (parsed && parsed.length > 0) return parsed;
+    // 空/缺失/损坏 → 从文件重建（Rust rebuild_chapter_index_from_files_at 镜像）；
+    // 重建非空则用之，否则 []（真 fresh 书）。
+    const rebuilt = await this.rebuildChapterIndexFromFilesAt(this.bookDir(bookId));
+    return rebuilt.length > 0 ? rebuilt : (parsed ?? []);
+  }
+
+  /** 791 号：从章节文件重建索引（Rust rebuild_chapter_index_from_files_at 镜像）——
+   * 文件名 `N[_-]标题.md` 提取章号与标题（前导 `_` 剥离、`_`→空格、空 → 第N章），
+   * 词数=去全部空白后的码元数，mtime 为时间戳，按章号排序。仅内存返回不写回
+   * （Rust 同款——写回走显式 saveChapterIndex）。 */
+  private async rebuildChapterIndexFromFilesAt(bookDir: string): Promise<ChapterMeta[]> {
+    const chaptersDir = join(bookDir, "chapters");
+    let entries: string[];
+    try {
+      entries = await readdir(chaptersDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const rows: ChapterMeta[] = [];
+    for (const name of entries) {
+      const match = /^(\d+)[_-]?(.*?)\.md$/u.exec(name);
+      if (!match) continue;
+      const number = Number.parseInt(match[1]!, 10);
+      if (!Number.isInteger(number) || number <= 0) continue; // 0 号跳过（Rust 同款）
+      const filePath = join(chaptersDir, name);
+      let timestamp: string;
+      try {
+        timestamp = new Date((await stat(filePath)).mtimeMs).toISOString();
+      } catch {
+        timestamp = new Date().toISOString();
+      }
+      const content = await readFile(filePath, "utf-8").catch(() => "");
+      // 词数口径：去全部空白后的码元数（Rust 注释引 TS 原版 content.replace(/\s+/g,"").length）。
+      const wordCount = content.replace(/\s+/g, "").length;
+      const rawTitle = match[2] ?? "";
+      const stripped = rawTitle.startsWith("_") ? rawTitle.slice(1) : rawTitle;
+      const spaced = stripped.replace(/_/g, " ").trim();
+      const title = spaced.length > 0 ? spaced : `第${number}章`;
+      rows.push({
+        number,
+        title,
+        status: "ready-for-review",
+        wordCount,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        observations: [],
+        provenance: "generated",
+      });
+    }
+    rows.sort((a, b) => a.number - b.number);
+    return rows;
   }
 
   async saveChapterIndex(
