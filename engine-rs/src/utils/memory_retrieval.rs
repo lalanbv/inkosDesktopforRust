@@ -216,10 +216,11 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
         .map(|state| state.hooks)
         .unwrap_or_else(|| parse_pending_hooks_markdown(&hooks_markdown));
     let active_hooks = filter_active_hooks(&hooks);
-    // 休眠 architect 种子非活跃债务，但仍是可检索正典（TS searchableHooks）。
+    // 可检索正典=一切未兑现未撤回的钩子（含 deferred 与休眠 architect 种子）——
+    // 对齐 TS v2 searchableHooks；活跃债务另由 active_hooks 把关（806 号口径定案）。
     let searchable_hooks: Vec<HookRecord> = hooks
         .iter()
-        .filter(|hook| !is_recycle_terminal_status(hook_status_text(hook)))
+        .filter(|hook| !is_searchable_terminal_status(hook_status_text(hook)))
         .cloned()
         .collect();
 
@@ -376,6 +377,29 @@ pub fn compute_recyclable_hooks(hooks: &[HookRecord], chapter_number: u32) -> Ve
     scored.into_iter().map(|(hook, _)| hook).collect()
 }
 
+/// 可检索终态（TS v2 `searchableHooks` 对偶）：仅 resolved（已兑现）与 superseded（已撤回）
+/// 退出可检索正典。
+///
+/// 806 号：此前 searchable 集复用 `is_recycle_terminal_status`（含 deferred 组）——那是
+/// e27428b4 移植当时 TS `isRecycleTerminalStatus` 的忠实镜像；TS harness v2（7aed0d82）
+/// 改为 `status !== "resolved" && status !== "superseded"`：「每个未兑现钩子都是可检索正典，
+/// 由语义选择器决定相关性，状态不等于紧迫度」。延后的承诺仍然存在，把它从记忆检索里藏
+/// 起来会让写作与一条活着的承诺相矛盾。
+fn is_searchable_terminal_status(status: &str) -> bool {
+    searchable_terminal_re().is_match(status.trim())
+}
+
+fn searchable_terminal_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(resolved|closed|done|已回收|已解决|superseded|withdrawn|已撤回|撤回)$")
+            .unwrap()
+    })
+}
+
+/// 回收压力终态（rust 独有 planner 回收面；golden leaf.json `terminal-excluded` 锁定）：
+/// 在可检索终态之外还含 deferred/paused/hold 组——显式延后的承诺没有回收压力，
+/// 但仍可被检索（两个口径两个谓词，806 号定案）。
 fn is_recycle_terminal_status(status: &str) -> bool {
     recycle_terminal_re().is_match(status.trim())
 }
@@ -383,8 +407,6 @@ fn is_recycle_terminal_status(status: &str) -> bool {
 fn recycle_terminal_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // 805 号：superseded（已撤回前提）与 resolved 同为检索终态（TS searchableHooks
-        // 排除 resolved+superseded）。deferred 组为 rust 既有口径，TS 不排——登记待对齐。
         Regex::new(r"(?i)^(resolved|closed|done|已回收|已解决|deferred|paused|hold|延后|延期|搁置|暂缓|superseded|withdrawn|已撤回|撤回)$")
             .unwrap()
     })
@@ -1034,14 +1056,62 @@ mod tests {
     use crate::models::runtime_state::HookStatus;
 
     /// 805 号：已撤回前提是检索终态（TS searchableHooks 排除 resolved+superseded）。
+    /// 806 号：两个口径两个谓词——可检索终态不含 deferred（延后的承诺仍是正典），
+    /// 回收压力终态含 deferred（显式延后无回收压力；golden terminal-excluded 锁定）。
     #[test]
-    fn recycle_terminal_includes_superseded_and_its_aliases() {
-        assert!(is_recycle_terminal_status("superseded"));
-        assert!(is_recycle_terminal_status(" Withdrawn "));
-        assert!(is_recycle_terminal_status("已撤回"));
-        assert!(is_recycle_terminal_status("resolved"));
-        assert!(!is_recycle_terminal_status("open"));
-        assert!(!is_recycle_terminal_status("progressing"));
+    fn terminal_predicates_split_searchable_from_recycle_pressure() {
+        for terminal in ["superseded", " Withdrawn ", "已撤回", "resolved", "closed", "已解决"] {
+            assert!(is_searchable_terminal_status(terminal), "{terminal}");
+            assert!(is_recycle_terminal_status(terminal), "{terminal}");
+        }
+        for live in ["open", "progressing", "pressured", "near_payoff"] {
+            assert!(!is_searchable_terminal_status(live), "{live}");
+            assert!(!is_recycle_terminal_status(live), "{live}");
+        }
+        for postponed in ["deferred", "paused", "hold", "延后", "搁置"] {
+            assert!(!is_searchable_terminal_status(postponed), "{postponed} 仍可检索");
+            assert!(is_recycle_terminal_status(postponed), "{postponed} 无回收压力");
+        }
+    }
+
+    /// 806 号：deferred 钩子被查询命中时可入选 hooks（选择器决定相关性），
+    /// 同样命中的 resolved 钩子不入选；deferred 仍不进活跃集/回收集。
+    #[tokio::test]
+    async fn retrieve_memory_selection_keeps_deferred_hooks_searchable() {
+        let dir = tempfile::tempdir().unwrap();
+        let story = dir.path().join("story");
+        tokio::fs::create_dir_all(&story).await.unwrap();
+        tokio::fs::write(
+            story.join("pending_hooks.md"),
+            "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 |\n\
+             | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n\
+             | H01 | 1 | main | open | 7 | 10 | near-term | 无 | 一卷 | 是 | 5 | 是 | 祖符觉醒 |\n\
+             | H02 | 2 | support | deferred | 3 | 20 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 镜灵婚约誓言 |\n\
+             | H03 | 2 | support | resolved | 3 | 20 | slow-burn | 无 | 二卷 | 否 | 8 | 否 | 镜灵婚约誓言 |\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(story.join("chapter_summaries.md"), "").await.unwrap();
+
+        let selection = retrieve_memory_selection(&RetrieveMemoryParams {
+            book_dir: dir.path(),
+            chapter_number: 8,
+            goal: "镜灵婚约誓言",
+            outline_node: None,
+            must_keep: &[],
+            semantic_selector: None,
+        })
+        .await;
+
+        let selected: Vec<&str> = selection.hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        assert!(selected.contains(&"H02"), "deferred 命中应入选: {selected:?}");
+        assert!(!selected.contains(&"H03"), "resolved 命中不得入选: {selected:?}");
+        let active: Vec<&str> = selection.active_hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        assert_eq!(active, vec!["H01"], "deferred 不是活跃债务");
+        assert!(
+            selection.recyclable_hooks.iter().all(|h| h.hook_id != "H02"),
+            "deferred 不进回收压力集"
+        );
     }
 
     fn hook(id: &str, start: u32, last: u32, status: HookStatus, status_raw: &str) -> HookRecord {
