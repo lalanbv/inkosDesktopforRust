@@ -174,6 +174,22 @@ async function exists(path: string): Promise<boolean> {
 }
 
 export async function commitAtomicFileSet(input: AtomicFileSet): Promise<void> {
+  // 802 号：插桩（WALKTHROUGH_MOCK_DEBUG=1）——hooks.json 落盘调用点追踪
+  //（802 号 diff 环境实锤 hooks startChapter 全被覆写为 sync settle 的
+  // delta.chapter，写入者经 works-source sync 而非 saveRuntimeStateSnapshot
+  // ——本插桩带调用栈片段定位确切 caller）。
+  if (process.env.WALKTHROUGH_MOCK_DEBUG === "1") {
+    const hookWrite = input.writes.find((write) => write.relativePath.endsWith("hooks.json"));
+    if (hookWrite) {
+      let sc = "?";
+      try {
+        const content = typeof hookWrite.content === "string" ? hookWrite.content : Buffer.from(hookWrite.content).toString("utf-8");
+        sc = (JSON.parse(content) as { hooks: { hookId: string; startChapter: number }[] })
+          .hooks.map((hook) => `${hook.hookId}:${hook.startChapter}`).join(",");
+      } catch { /* 非 JSON 内容不阻塞 */ }
+      console.error(`[atomic-commit] ${input.rootDir} ${hookWrite.relativePath} sc=${sc} caller=${new Error().stack?.split("\n").slice(2, 4).join(" <- ")}`);
+    }
+  }
   return serialize(input.rootDir, async () => {
     await recoverRoot(input.rootDir);
     await commitFileSet(input);

@@ -165,6 +165,12 @@ export async function saveRuntimeStateSnapshot(
   snapshot: RuntimeStateSnapshot,
 ): Promise<void> {
   const parsed = validateLoadedSnapshot(snapshot, "runtime state save");
+  // 802 号：插桩（WALKTHROUGH_MOCK_DEBUG=1）——hooks startChapter 落盘值追踪
+  //（802 号 diff 环境实锤 state hooks startChapter 全被覆写为 1，upsert 携带
+  // 值 3/2 消失——定位覆写发生的 save 调用点）。
+  if (process.env.WALKTHROUGH_MOCK_DEBUG === "1") {
+    console.error(`[state-save] ${bookDir} hooks sc: ${parsed.hooks.hooks.map((hook) => `${hook.hookId}:${hook.startChapter}`).join(",")} chapter: ${parsed.currentState.chapter}`);
+  }
   const language = parsed.manifest.language;
   await commitAtomicFileSet({
     rootDir: bookDir,
