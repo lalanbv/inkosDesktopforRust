@@ -1690,9 +1690,12 @@ pub async fn get_quality_trend(
             let mut urgency: Vec<crate::utils::promise_ledger::PromiseUrgency> = hooks
                 .iter()
                 .filter(|hook| {
+                    // 805/808 号：终态排除含 superseded 组（已撤回前提不再是未来承诺；
+                    // 与 TS quality-trend TERMINAL_HOOK_STATUS 同集）。
                     !matches!(
                         hook.status.trim().to_lowercase().as_str(),
                         "resolved" | "closed" | "done" | "已回收" | "已解决"
+                            | "superseded" | "withdrawn" | "已撤回" | "撤回"
                     )
                 })
                 .map(|hook| {

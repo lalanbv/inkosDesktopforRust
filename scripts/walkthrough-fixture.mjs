@@ -157,7 +157,9 @@ if (SEED_TS_CANONICAL) {
       wordCount: chapterBody.replace(/\s+/g, "").length,
       createdAt: "2026-09-14T00:00:00.000Z",
       updatedAt: "2026-09-14T00:00:00.000Z",
-      observations: [],
+      // 808 号：导入种子不带 observations 键（792 号已转 optional）——该键是
+      // reviewChapter 的审改痕迹，种子带空数组会把未审的导入章算作「已审零发现」
+      // （quality-trend 正典派生多出一个趋势点；Rust 腿种子无指标行，双腿不对称）。
       provenance: "imported",
     },
   ], null, 2));

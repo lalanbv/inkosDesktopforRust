@@ -4530,34 +4530,74 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.get("/api/v1/books/:id/quality-trend", async (c) => {
     const id = c.req.param("id");
-    const dbPath = join(root, "books", id, "story", "memory.db");
-    if (!(await access(dbPath).then(() => true).catch(() => false))) {
-      return c.json({ trend: { points: [], scoredChapters: 0, failingChapters: [] }, urgency: [], currentChapter: 0 });
-    }
+    // 805/808 号：承诺紧迫度排除终态——resolved 组 + superseded 组（已撤回前提
+    // 不再是未来承诺；与 Rust ops_routes get_quality_trend 同集）。
+    const TERMINAL_HOOK_STATUS = /^(resolved|closed|done|已回收|已解决|superseded|withdrawn|已撤回|撤回)$/i;
+    let targetChapters: number | undefined;
     try {
-      const memory = new MemoryDBReadonly(join(root, "books", id));
-      const metrics = memory.listReviewMetrics();
-      const trend = buildQualityTrend(metrics);
-      const hooks = memory.getAllHooks();
-      const currentChapter = metrics.length > 0
-        ? metrics[metrics.length - 1]!.chapter + 1
-        : 1;
-      let targetChapters: number | undefined;
-      try {
-        const book = await state.loadBookConfig(id);
-        targetChapters = book?.targetChapters;
-      } catch {
-        targetChapters = undefined;
-      }
-      const urgency = hooks
-        .filter((hook) => !/^(resolved|closed|done|已回收|已解决)$/i.test((hook.status ?? "").trim()))
+      const book = await state.loadBookConfig(id);
+      targetChapters = book?.targetChapters;
+    } catch {
+      targetChapters = undefined;
+    }
+    const rankUrgency = (hooks: ReadonlyArray<Parameters<typeof resolvePromiseUrgency>[0]["hook"]>, currentChapter: number) =>
+      hooks
+        .filter((hook) => !TERMINAL_HOOK_STATUS.test((hook.status ?? "").trim()))
         .map((hook) => resolvePromiseUrgency({
           hook,
           currentChapter,
           ...(typeof targetChapters === "number" ? { targetChapters } : {}),
         }))
         .sort((a, b) => b.urgency - a.urgency || (a.hookId < b.hookId ? -1 : a.hookId > b.hookId ? 1 : 0));
-      return c.json({ trend, urgency, currentChapter });
+
+    const dbPath = join(root, "books", id, "story", "memory.db");
+    if (await access(dbPath).then(() => true).catch(() => false)) {
+      // legacy 账本在位（1.x 迁移书）：review_metrics 含审稿人数值分，照常消费。
+      try {
+        const memory = new MemoryDBReadonly(join(root, "books", id));
+        const metrics = memory.listReviewMetrics();
+        const trend = buildQualityTrend(metrics);
+        const currentChapter = metrics.length > 0
+          ? metrics[metrics.length - 1]!.chapter + 1
+          : 1;
+        return c.json({ trend, urgency: rankUrgency(memory.getAllHooks(), currentChapter), currentChapter });
+      } catch (e) {
+        return c.json({ error: String(e) }, 500);
+      }
+    }
+    // 808 号：账本缺席（2.0 原生书——无 review_metrics 写链）改走正典派生，不再返回
+    // 死空壳（currentChapter 0）。已审章=索引行带 observations 键（reviewChapter 写入；
+    // 导入种子无该键=未审）；issueCount=assessment "issue" 观察数；passed=无 issue
+    // 观察（2.0 审改语义：有 issue 即触发修订）。审稿人数值分 overallScore 与
+    // verdict 在 2.0 审改协议中不存在——scoredChapters/averageScore 诚实为空，
+    // 登记为协议扩展后再记录（795 号 submit_chapter_review 契约面）。
+    try {
+      const index = await state.loadChapterIndex(id);
+      const rows = index
+        .filter((chapter) => chapter.observations !== undefined)
+        .map((chapter) => {
+          const issues = (chapter.observations ?? []).filter((observation) => observation.assessment === "issue");
+          return {
+            chapter: chapter.number,
+            passed: issues.length === 0,
+            criticalCount: 0,
+            warningCount: issues.length,
+            infoCount: 0,
+            recordedAt: chapter.updatedAt,
+          };
+        })
+        .sort((a, b) => a.chapter - b.chapter);
+      const trend = buildQualityTrend(rows);
+      const currentChapter = rows.length > 0 ? rows[rows.length - 1]!.chapter + 1 : 1;
+      // hooks：正典 state（798 号 promises 同源；账本是投影，state 是真相）。
+      const hooks: Array<Parameters<typeof resolvePromiseUrgency>[0]["hook"]> = await readFile(
+        join(state.bookDir(id), "story", "state", "hooks.json"),
+        "utf-8",
+      ).then((raw) => {
+        const parsed = JSON.parse(raw) as { hooks?: unknown };
+        return Array.isArray(parsed.hooks) ? parsed.hooks as Array<Parameters<typeof resolvePromiseUrgency>[0]["hook"]> : [];
+      }).catch(() => []);
+      return c.json({ trend, urgency: rankUrgency(hooks, currentChapter), currentChapter });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }
