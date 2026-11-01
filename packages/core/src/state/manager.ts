@@ -707,10 +707,14 @@ export class StateManager {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     };
-    await collectNumberedDeletes("chapters", (name) => {
-      const match = /^(\d+)_.*\.md$/u.exec(name);
+    // 807 号：删章口径与索引重建（`^(\d+)[_-]?(.*?)\.md$`，本文件 rebuild 分支）同集——
+    // 此前仅认下划线，legacy 连字符旧章在回滚时逃过、再被空索引触发的宽容重建捞回
+    // （rust 对偶同病同修：engine-rs manager.rs leading_number）。
+    const numberedMarkdown = (name: string): number | undefined => {
+      const match = /^(\d+)[_-]?(.*?)\.md$/u.exec(name);
       return match ? Number.parseInt(match[1]!, 10) : undefined;
-    });
+    };
+    await collectNumberedDeletes("chapters", numberedMarkdown);
     await collectNumberedDeletes(join("story", "snapshots"), (name) => {
       const value = Number.parseInt(name, 10);
       return Number.isFinite(value) ? value : undefined;
@@ -719,10 +723,7 @@ export class StateManager {
       const match = /^chapter-(\d+)\./u.exec(name);
       return match ? Number.parseInt(match[1]!, 10) : undefined;
     });
-    await collectNumberedDeletes(join("story", "drafts"), (name) => {
-      const match = /^(\d+)_.*\.md$/u.exec(name);
-      return match ? Number.parseInt(match[1]!, 10) : undefined;
-    });
+    await collectNumberedDeletes(join("story", "drafts"), numberedMarkdown);
     for (const file of ["memory.db", "memory.db-shm", "memory.db-wal"]) {
       deletes.add(join("story", file));
     }

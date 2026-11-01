@@ -180,7 +180,7 @@ impl StateManager {
         Ok(durable_chapter as u32 + 1)
     }
 
-    /// 已落盘章节数（`NNN_*.md` 去重计数）。
+    /// 已落盘章节数（按前导章号去重；`NNNN_`/`NNNN-`/`NNNN.md` 同列——807 号与重建同口径）。
     pub async fn get_persisted_chapter_count(&self, book_id: &str) -> Result<usize, StateManagerError> {
         let chapters_dir = self.book_dir(book_id).join("chapters");
         let mut chapter_numbers: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -189,10 +189,8 @@ impl StateManager {
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(captures) = chapter_file_re().captures(&name) {
-                if let Ok(number) = captures[1].parse::<u32>() {
-                    chapter_numbers.insert(number);
-                }
+            if let Some(number) = leading_number(&name) {
+                chapter_numbers.insert(number);
             }
         }
         Ok(chapter_numbers.len())
@@ -426,7 +424,8 @@ impl StateManager {
         let kept: Vec<ChapterMeta> = index.iter().filter(|m| m.number <= target_chapter).cloned().collect();
         let discarded: Vec<u32> = index.iter().filter(|m| m.number > target_chapter).map(|m| m.number).collect();
 
-        // 章节正文与草稿（`NN_title.md` 前缀数字 > target）。
+        // 章节正文与草稿（`NNNN_title.md` / legacy `NNNN-title.md` 前缀数字 > target；
+        // 807 号：与索引重建同口径，旧章不得逃过删除）。
         for dir in [chapters_dir, book_dir.join("story").join("drafts")] {
             if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
                 while let Ok(Some(entry)) = entries.next_entry().await {
@@ -551,15 +550,15 @@ async fn write_if_missing(path: &Path, content: &str) -> Result<(), StateManager
     Ok(())
 }
 
-fn chapter_file_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(\d+)_.*\.md$").unwrap())
-}
-
-/// `^(\d+)_.*\.md$` 前缀数字（rollback 的章节/草稿文件匹配，复用
-/// chapter_file_re 同一模式）。
+/// 章节文件前导章号（`NNNN_标题.md` / `NNNN-标题.md` / `NNNN.md`）——rollback 的章节/
+/// 草稿文件匹配与已落盘计数共用。
+///
+/// 807 号：与 [`rebuild_file_re`] 同口径。此前用仅认下划线的严格正则：legacy 连字符
+/// 旧章（夹具 683 号故意播种的形态）在 rollback 删章时逃过，随后被空索引触发的宽容
+/// 重建捞回=「reject 后章节复活」（差分器尾批 reject(1) node 404 vs rust 200 根因）。
+/// 读侧认什么为章，删侧与计数侧必须认同一集合。
 fn leading_number(name: &str) -> Option<u32> {
-    chapter_file_re()
+    rebuild_file_re()
         .captures(name)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse().ok())
@@ -635,6 +634,52 @@ mod tests {
 
         tokio::fs::write(book_dir.join("book.json"), r#"{"language":"en"}"#).await.unwrap();
         assert_eq!(manager.resolve_control_document_language("zh-book").await, WritingLanguage::En);
+    }
+
+    /// 807 号：rollback 删章与索引重建同口径——legacy 连字符旧章（`NNNN-标题.md`）
+    /// 必须随目标章之后的章节一起删除，否则被空索引触发的宽容重建捞回=章节复活。
+    #[tokio::test]
+    async fn rollback_to_chapter_deletes_legacy_hyphen_chapter_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book_dir = manager.book_dir("legacy");
+        let chapters = book_dir.join("chapters");
+        let snapshot0 = book_dir.join("story").join("snapshots").join("0");
+        tokio::fs::create_dir_all(&chapters).await.unwrap();
+        tokio::fs::create_dir_all(&snapshot0).await.unwrap();
+        tokio::fs::write(chapters.join("0001-镜中醒来.md"), "legacy").await.unwrap();
+        tokio::fs::write(chapters.join("0002_续章.md"), "canonical").await.unwrap();
+        tokio::fs::write(chapters.join("0003.md"), "bare").await.unwrap();
+        tokio::fs::write(snapshot0.join("current_state.md"), "# state").await.unwrap();
+        tokio::fs::write(snapshot0.join("pending_hooks.md"), "# hooks").await.unwrap();
+        // 索引缺失 → load 走宽容重建，三种命名全部入索引（读侧口径）。
+        let before = manager.load_chapter_index("legacy").await.unwrap();
+        let mut numbers: Vec<u32> = before.iter().map(|m| m.number).collect();
+        numbers.sort_unstable();
+        assert_eq!(numbers, vec![1, 2, 3]);
+
+        let mut discarded = manager.rollback_to_chapter("legacy", 0).await.unwrap();
+        discarded.sort_unstable();
+        assert_eq!(discarded, vec![1, 2, 3]);
+        for name in ["0001-镜中醒来.md", "0002_续章.md", "0003.md"] {
+            assert!(!chapters.join(name).exists(), "{name} 应被删除");
+        }
+        // 文件已清空 → 索引为空且不再被重建捞回。
+        assert!(manager.load_chapter_index("legacy").await.unwrap().is_empty());
+    }
+
+    /// 807 号：已落盘计数与重建同口径（按章号去重，legacy 连字符形态同列）。
+    #[tokio::test]
+    async fn persisted_chapter_count_includes_legacy_hyphen_files_deduped_by_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let chapters = manager.book_dir("b").join("chapters");
+        tokio::fs::create_dir_all(&chapters).await.unwrap();
+        tokio::fs::write(chapters.join("0001-旧.md"), "a").await.unwrap();
+        tokio::fs::write(chapters.join("0001_新.md"), "b").await.unwrap(); // 同章双形态=1
+        tokio::fs::write(chapters.join("0002_二.md"), "c").await.unwrap();
+        tokio::fs::write(chapters.join("index.json"), "[]").await.unwrap();
+        assert_eq!(manager.get_persisted_chapter_count("b").await.unwrap(), 2);
     }
 
     /// 785 号：get_next_chapter_number 读端点语义探针——legacy 书（章节产物，
