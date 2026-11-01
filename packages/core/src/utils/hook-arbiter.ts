@@ -39,7 +39,14 @@ export function arbitrateRuntimeStateDeltaHooks(params: {
       continue;
     }
 
-    throw new Error(`Hook upsert references unknown hook id: ${hook.hookId}. Submit a newHookCandidate instead.`);
+    // 799 号：rust 语义镜像（reducer apply_hook_ops 对新 id upsert 走准入
+    // 评估后创建——engine-rs reducer.rs 同构）。此前硬拒未知 id upsert=
+    // TS 侧独有语义，写链新建钩子被迫走 candidates 通道（id 派生 hook-N
+    // 与 rust LLM 显式 id 分歧——promises timeline 双腿不一致实锤）。
+    // hallucination 面新建钩子可见可审，existing-id upsert 合并语义不变。
+    const created = { ...hook };
+    upsertsById.set(created.hookId, created);
+    replaceWorkingHook(workingHooks, created);
   }
 
   if (params.allowNewHooks === false && delta.newHookCandidates.length > 0) {

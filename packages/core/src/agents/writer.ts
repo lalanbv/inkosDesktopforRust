@@ -754,8 +754,11 @@ function validateSettlementHookIds<T extends {
     readonly defer: ReadonlyArray<string>;
   };
 }>(value: T, knownHookIds: ReadonlySet<string>): T {
+  // 799 号：upsert 不再拒未知 id——rust reducer 语义镜像（apply_hook_ops 对
+  // 新 id 走准入评估后创建，reducer.ts:85 同效创建）；hallucination 防护面
+  // 收窄到引用类操作（mention/resolve/defer 必须指向台账既有 id——指向不
+  // 存在的状态引用无意义且不可创建）。
   const submittedIds = [
-    ...value.hookOps.upsert.map((hook) => hook.hookId),
     ...value.hookOps.mention,
     ...value.hookOps.resolve,
     ...value.hookOps.defer,
@@ -763,7 +766,7 @@ function validateSettlementHookIds<T extends {
   const unknown = [...new Set(submittedIds.filter((hookId) => !knownHookIds.has(hookId)))];
   if (unknown.length > 0) {
     throw new Error(
-      `Unknown hook id(s): ${unknown.join(", ")}. Existing hook operations accept only ids from the supplied ledger; submit a newHookCandidate for a new promise.`,
+      `Unknown hook id(s): ${unknown.join(", ")}. Reference operations (mention/resolve/defer) accept only ids from the supplied ledger; submit a newHookCandidate or an upsert for a new promise.`,
     );
   }
   return value;

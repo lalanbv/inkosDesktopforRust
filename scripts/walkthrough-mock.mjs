@@ -357,27 +357,22 @@ http.createServer((req, res) => {
         // hookOps/summary 一致）；factOps 对齐 rust 文本 delta 的缺省（不发
         // 事实 upsert——事实面由正文投影复查层负责，双腿一致为空）。
         const delta = buildSettlerDeltaObject(msgs);
-        // 795 号：空基线台账（chapter-0 快照 hooks 空）下 upsert 已知 id 被
-        // reducer 拒（"Unknown hook id(s)"——只收台账内 id）→ 模板的 H01-H03
-        // 走 newHookCandidates（type/expectedPayoff/notes 三字段形态，
-        // NewHookCandidateSchema；hookId 由 reducer 派生）。
-        const candidates = (delta.hookOps.upsert ?? []).map((hook) => ({
-          type: hook.type,
-          expectedPayoff: hook.expectedPayoff,
-          notes: hook.notes,
-        }));
+        // 799 号：与 rust 文本协议完全同源——hookOps.upsert 携带显式 H01-H03
+        // id（writer upsert 守卫已放宽为 rust 语义：新 id 走 reducer 创建，
+        // 引用类操作仍限台账既有 id）。与 795 时代的 candidates 形态相比，
+        // timeline hook id 双腿一致（H01-H03 vs 派生 hook-N）。
         const args = JSON.stringify({
           postSettlement: "结算完成。",
           factOps: { upsert: [], expire: [] },
-          // 795 号：TS SettlementToolSchema 四键全发（mention/resolve/defer
-          // required——rust serde default 容忍缺省，TS 侧须显式空数组）。
+          // TS SettlementToolSchema 四键全发（mention/resolve/defer required
+          // ——rust serde default 容忍缺省，TS 侧须显式空数组）。
           hookOps: {
-            upsert: [],
+            upsert: delta.hookOps.upsert ?? [],
             mention: delta.hookOps.mention ?? [],
             resolve: delta.hookOps.resolve ?? [],
             defer: delta.hookOps.defer ?? [],
           },
-          newHookCandidates: candidates,
+          newHookCandidates: [],
           chapterSummary: delta.chapterSummary,
         });
         const toolCall = { id: `call_settle_${++PROPOSE_SEQ}`, type: "function", function: { name: "submit_runtime_state_delta", arguments: args } };
