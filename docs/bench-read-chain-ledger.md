@@ -24,15 +24,15 @@
 生产形态全量路由 `router_books` + tower `oneshot` 端到端（axum 路由+提取器+handler+响应
 序列化，非裸内核）。播种：12 章 × ~1600 字 + index.json + 真相文件 + 真仓 cozy.md 流派画像。
 
-| 场景 | 端点 | UI 频率依据 | 首测（2026-10-31，load 0.23，双轮复现 ±1.5%） |
-|---|---|---|---|
-| `read_chain/list_books` | `GET /api/v1/books` | Dashboard 首屏 | **8.93 ms** |
-| `read_chain/book_detail` | `GET /api/v1/books/:id` | 写作页载入 | **9.96 ms** |
-| `read_chain/read_chapter` | `GET /api/v1/books/:id/chapters/:num` | 开章阅读（最重单章读） | 50.0 µs |
-| `read_chain/chapter_workspace` | `GET .../chapters/:num/workspace` | 编辑器聚合视图 | 494.6 µs |
-| `read_chain/truth_list` | `GET /api/v1/books/:id/truth` | 真相文件面板 | 147.9 µs |
-| `read_chain/list_genres` | `GET /api/v1/genres` | 流派面板/建书流程 | 135.6 µs |
-| `read_chain/analytics` | `GET /api/v1/books/:id/analytics` | 分析面板（Dashboard 四面板之一） | 472.6 µs |
+| 场景 | 端点 | UI 频率依据 | 首测（2026-10-31，load 0.23） | 785 复测（快路径后，2026-11-01 基线刷新） |
+|---|---|---|---|---|
+| `read_chain/list_books` | `GET /api/v1/books` | Dashboard 首屏 | 8.93 ms | **222.1 µs（-97.5%，40×）** |
+| `read_chain/book_detail` | `GET /api/v1/books/:id` | 写作页载入 | 9.96 ms | **665.1 µs（-93.3%，15×）** |
+| `read_chain/read_chapter` | `GET /api/v1/books/:id/chapters/:num` | 开章阅读（最重单章读） | 50.0 µs | 49.1 µs（不受影响路径恒等） |
+| `read_chain/chapter_workspace` | `GET .../chapters/:num/workspace` | 编辑器聚合视图 | 494.6 µs | 518.9 µs（噪声带内） |
+| `read_chain/truth_list` | `GET /api/v1/books/:id/truth` | 真相文件面板 | 147.9 µs | 150.0 µs |
+| `read_chain/list_genres` | `GET /api/v1/genres` | 流派面板/建书流程 | 135.6 µs | 143.9 µs |
+| `read_chain/analytics` | `GET /api/v1/books/:id/analytics` | 分析面板（Dashboard 四面板之一） | 472.6 µs | 463.1 µs（前轮 +23.9% 系噪声带，p=0.18） |
 
 ## 三、首测发现（台账的第一笔归因）
 
@@ -54,9 +54,19 @@
 
 ### 候选登记（按需开工，无日期承诺）
 
-| 候选 | 归因 | 预期收益 | 风险 |
-|---|---|---|---|
-| get_next_chapter_number 快路径（状态四件齐且 manifest 进度≥durable 时跳过重建） | bootstrap 每读必跑 | list_books/book_detail 9ms→µs 级（200×） | ensure 语义时序变化——须 legacy 书兼容探针 |
+| 候选 | 归因 | 预期收益 | 风险 | 状态 |
+|---|---|---|---|---|
+| get_next_chapter_number 快路径（状态四件齐且 manifest 进度≥durable 时跳过重建） | bootstrap 每读必跑 | list_books/book_detail 9ms→µs 级（200×） | ensure 语义时序变化——须 legacy 书兼容探针 | **已清偿（785 号，2026-11-01）**：快路径内嵌 bootstrap 本体（`structured_state_fresh_manifest`，判定不确定一律回落慢路径，ensure 语义不变）；legacy 兼容探针=manager 端到端（legacy 书首读补齐四件+durable 权威）+spy store 零写锁+mtime 零写端到端锁；实测 list_books 8.93ms→222µs（40×）/book_detail 9.96ms→665µs（15×），基线经显式 --update 刷新（本文件第二节复测列） |
+
+### 785 号基线刷新注记（协议豁免的合法 --update）
+
+本文件第三节候选在 785 号清偿，读链两条目大幅改善——按协议「优化落地后显式 --update」
+刷新基线（collectedAt 2026-11-01，28 场景全量重测）。同轮全量复跑首次暴露
+`backup_export/run_export_12ch` 3.48ms→12.9ms：**A/B 定罪非本轮**（stash 本轮改动在
+784 HEAD 481ce5fd 复跑同场景仍 12.2ms）——系 779 号（10-30 落地，manifest 清单写转
+`write_file_atomic_sync` fsync 硬化，backup_routes.rs「撕裂清单=整包备份不可解读」）/
+782 号在基线采集（10-29）之后落地、784 轮仅 JSON 合并未复跑写侧 21 条而漏检的**持久性
+换成本**（用户操作频率低，掉电韧性优先），刷新即如实记录已发布现实，非洗回退。
 
 ## 四、0GC 资产关联（既有 21 条基线，非本轮产物，台账收录备查）
 

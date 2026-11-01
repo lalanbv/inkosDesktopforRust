@@ -637,6 +637,36 @@ mod tests {
         assert_eq!(manager.resolve_control_document_language("zh-book").await, WritingLanguage::En);
     }
 
+    /// 785 号：get_next_chapter_number 读端点语义探针——legacy 书（章节产物，
+    /// 无结构化状态）首读补齐四件且章号权威=durable 链（784 号台账行为面保持）；
+    /// 状态齐备后二读零写（manifest mtime 不变 = fsync 原子写不再每次触发，
+    /// 784 号台账 9ms 归因的端到端回归锁）。
+    #[tokio::test]
+    async fn get_next_chapter_number_ensures_legacy_state_then_stops_rewriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book_dir = manager.book_dir("b1");
+        tokio::fs::create_dir_all(book_dir.join("chapters")).await.unwrap();
+        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#).await.unwrap();
+        tokio::fs::write(book_dir.join("chapters").join("1_开篇.md"), "正文").await.unwrap();
+        tokio::fs::write(book_dir.join("chapters").join("2_推进.md"), "正文").await.unwrap();
+
+        // legacy 书首读：durable 链权威 → 3；ensure 补齐结构化状态。
+        assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
+        let state_dir = book_dir.join("story").join("state");
+        for file in ["manifest.json", "current_state.json", "hooks.json", "chapter_summaries.json"] {
+            assert!(state_dir.join(file).exists(), "ensure 补齐 {file}");
+        }
+        let manifest = tokio::fs::read_to_string(state_dir.join("manifest.json")).await.unwrap();
+        assert!(manifest.contains("\"lastAppliedChapter\": 2"), "manifest 记 durable 进度");
+
+        // 二读：快路径零写——manifest mtime 不变。
+        let before = tokio::fs::metadata(state_dir.join("manifest.json")).await.unwrap().modified().unwrap();
+        assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
+        let after = tokio::fs::metadata(state_dir.join("manifest.json")).await.unwrap().modified().unwrap();
+        assert_eq!(before, after, "快路径二读零写（mtime 不变）");
+    }
+
     #[tokio::test]
     async fn ensure_control_documents_creates_defaults_and_methodology() {
         let dir = tempfile::tempdir().unwrap();

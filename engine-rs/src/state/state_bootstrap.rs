@@ -709,10 +709,94 @@ pub async fn load_or_bootstrap_current_state(
     Ok(current)
 }
 
+/// 785 号：ensure 幂等快路径判定——结构化状态是否已达目标态。
+///
+/// 目标态 = 慢路径「全有效分支」的落盘终态：四件 JSON 齐且合法免修
+///（hooks 无需修复、summaries 无重复行）+ manifest 结构定型
+///（schema 2 / language zh|en / migration_warnings 已归一）+ 进度与 durable
+/// 链一致（慢路径 manifest 恒按 max(产物前缀, fallback) 重算写回，不一致即重写）。
+/// 该分支唯一副作用是把逐字段相同的 manifest 重写回盘（fsync 原子写）——
+/// 784 号台账实证读端点每次调用都为此付 markdown 全量装载 + 一次落盘
+///（list_books/book_detail ≈9ms，归因 get_next_chapter_number 内嵌 ensure）。
+/// 全部通过 → `Some(既有 manifest)`，调用方零写返回；任一判定不确定
+///（读失败/解析失败/需修复/需去重/未归一/进度不一致）→ `None` 回落慢路径，
+/// ensure 语义（legacy 书四件从 markdown 补齐）完全不变。
+///
+/// 行为面注记：慢路径全有效分支还会把 markdown 装载产生的 warnings 并入
+/// manifest.migration_warnings——快路径跳过该诊断刷新（四件状态与进度字段
+/// 不受影响），warnings 在下一次非 fresh 的 ensure（如写链）时照常补记。
+async fn structured_state_fresh_manifest(
+    store: &dyn StateStore,
+    book_dir: &str,
+    manifest_path: &str,
+    current_state_path: &str,
+    hooks_path: &str,
+    summaries_path: &str,
+    fallback_chapter: Option<u32>,
+) -> Option<StateManifest> {
+    // manifest：缺失/损坏/结构未定型 → 慢路径（warning 收集只服务判定，丢弃安全：
+    // 慢路径会重读重warn）。
+    let mut probe = Vec::new();
+    let manifest = load_json_if_valid::<StateManifest>(store, manifest_path, &mut probe, "manifest.json")
+        .await
+        .ok()??;
+    if manifest.schema_version != 2 || (manifest.language != "zh" && manifest.language != "en") {
+        return None;
+    }
+    if unique_strings(&manifest.migration_warnings) != manifest.migration_warnings {
+        return None; // 慢路径会归一重写
+    }
+
+    // current_state.json：有效即可（load_or_bootstrap_current_state 对 existing 零写）。
+    let mut probe = Vec::new();
+    load_json_if_valid::<CurrentStateState>(
+        store,
+        current_state_path,
+        &mut probe,
+        "current_state.json",
+    )
+    .await
+    .ok()??;
+
+    // hooks.json：须「有效且免修」——repair 命中即慢路径写回（对齐
+    // load_hooks_state_if_valid 的 repaired 分支）。
+    let mut probe = Vec::new();
+    let hooks_raw = store.read_to_string(hooks_path).await.ok()??;
+    let mut hooks_value: serde_json::Value = serde_json::from_str(&hooks_raw).ok()?;
+    if repair_hooks_state_value(&mut hooks_value, &mut probe) {
+        return None;
+    }
+    serde_json::from_value::<HooksState>(hooks_value).ok()?;
+
+    // chapter_summaries.json：有效且无重复行（dedup 命中即慢路径去重写回）。
+    let mut probe = Vec::new();
+    let summaries = load_json_if_valid::<ChapterSummariesState>(
+        store,
+        summaries_path,
+        &mut probe,
+        "chapter_summaries.json",
+    )
+    .await
+    .ok()??;
+    if deduplicate_summary_rows(&summaries.rows, |r| r.chapter as i64).len() != summaries.rows.len() {
+        return None;
+    }
+
+    // 进度一致性：与主入口同参同 store 重算 expected（i64→u32 截断口径与
+    // load_markdown_bootstrap_state 一致），manifest 落后/超前均回落慢路径。
+    let artifact = resolve_contiguous_artifact_chapter_progress(store, book_dir).await.ok()?;
+    let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
+    if manifest.last_applied_chapter != markdown_fallback.max(artifact as u32) {
+        return None;
+    }
+    Some(manifest)
+}
+
 /// 主入口：从 markdown 引导结构化状态（manifest/current_state/hooks/chapter_summaries 四文件编排）。
 ///
 /// 对齐 TS `bootstrapStructuredStateFromMarkdown`。幂等：已存在的 JSON 保留并校验/修复；
-/// 缺失则从 markdown 引导并写入。manifest 始终按 durable progress 重算并写回。
+/// 缺失则从 markdown 引导并写入。manifest 按 durable progress 重算并写回——785 号起
+/// 目标态已达成时走快路径零写返回（[`structured_state_fresh_manifest`]），ensure 语义不变。
 ///
 /// `book_dir` 下的 `story/state/` 为状态目录；`story/*.md` 为 markdown 源。
 pub async fn bootstrap_structured_state_from_markdown(
@@ -726,6 +810,26 @@ pub async fn bootstrap_structured_state_from_markdown(
     let current_state_path = join_path(&state_dir, "current_state.json");
     let hooks_path = join_path(&state_dir, "hooks.json");
     let summaries_path = join_path(&state_dir, "chapter_summaries.json");
+
+    // 785 号快路径：四件齐且合法免修 + 进度与 durable 链一致 → 零写返回
+    // （读端点不再每次 markdown 装载 + manifest fsync 落盘）。
+    if let Some(manifest) = structured_state_fresh_manifest(
+        store,
+        book_dir,
+        &manifest_path,
+        &current_state_path,
+        &hooks_path,
+        &summaries_path,
+        fallback_chapter,
+    )
+    .await
+    {
+        return Ok(BootstrapStructuredStateResult {
+            created_files: Vec::new(),
+            warnings: Vec::new(),
+            manifest,
+        });
+    }
 
     store.mkdir_p(&state_dir).await?;
 
@@ -1562,5 +1666,185 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.manifest.last_applied_chapter, 5);
+    }
+
+    // --- 785 号快路径（ensure 幂等零写）------------------------------------------
+
+    /// 785 号：写计数 spy——委托 InMemoryStateStore 并统计 write_string/mkdir_p
+    /// 次数（内容相同的重写也算写，计数是比内容比对更强的零写判别）。
+    struct WriteCountingStore {
+        inner: InMemoryStateStore,
+        writes: std::sync::Mutex<usize>,
+        mkdirs: std::sync::Mutex<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl StateStore for WriteCountingStore {
+        async fn read_to_string(&self, path: &str) -> crate::Result<Option<String>> {
+            self.inner.read_to_string(path).await
+        }
+        async fn write_string(&self, path: &str, content: &str) -> crate::Result<()> {
+            *self.writes.lock().unwrap() += 1;
+            self.inner.write_string(path, content).await
+        }
+        async fn mkdir_p(&self, path: &str) -> crate::Result<()> {
+            *self.mkdirs.lock().unwrap() += 1;
+            self.inner.mkdir_p(path).await
+        }
+        async fn list_dir(&self, path: &str) -> crate::Result<Vec<String>> {
+            self.inner.list_dir(path).await
+        }
+        async fn remove_file(&self, path: &str) -> crate::Result<()> {
+            self.inner.remove_file(path).await
+        }
+        async fn exists(&self, path: &str) -> crate::Result<bool> {
+            self.inner.exists(path).await
+        }
+    }
+
+    /// 核心回归锁：legacy 书首次 ensure 慢路径建四件；目标态达成后二次 ensure
+    /// 必须零写零 mkdir（读端点不再每次 markdown 装载 + manifest fsync 落盘）。
+    #[tokio::test]
+    async fn bootstrap_fast_path_second_call_writes_nothing() {
+        let store = WriteCountingStore {
+            inner: InMemoryStateStore::new(),
+            writes: std::sync::Mutex::new(0),
+            mkdirs: std::sync::Mutex::new(0),
+        };
+        store.inner.set("book/book.json", r#"{"language":"zh"}"#);
+        store.inner.set("book/chapters/1_a.md", "x");
+        store.inner.set("book/chapters/2_b.md", "x");
+        store.inner.set("book/story/chapter_summaries.md", "| 1 | t1 |");
+        store.inner.set(
+            "book/story/pending_hooks.md",
+            "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |",
+        );
+        store.inner.set(
+            "book/story/current_state.md",
+            "| 字段 | 值 |\n|---|---|\n| 当前章节 | 2 |\n| 当前位置 | 森林 |",
+        );
+
+        // 首次：legacy 书（无 state/）→ 慢路径建四件。
+        let first = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        assert_eq!(first.created_files.len(), 4);
+        assert_eq!(first.manifest.last_applied_chapter, 2);
+        let writes_after_first = *store.writes.lock().unwrap();
+        let mkdirs_after_first = *store.mkdirs.lock().unwrap();
+        assert!(writes_after_first > 0, "首次 ensure 必须有写（四件 + manifest）");
+        let manifest_before = store
+            .inner
+            .read_to_string("book/story/state/manifest.json")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 二次：目标态已达成 → 快路径，零写零 mkdir，manifest 字节不变。
+        let second = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        assert!(second.created_files.is_empty());
+        assert!(second.warnings.is_empty());
+        assert_eq!(
+            *store.writes.lock().unwrap(),
+            writes_after_first,
+            "快路径不得有任何写（含内容相同的 manifest 重写）"
+        );
+        assert_eq!(*store.mkdirs.lock().unwrap(), mkdirs_after_first, "快路径不得 mkdir_p");
+        let manifest_after = store
+            .inner
+            .read_to_string("book/story/state/manifest.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(manifest_before, manifest_after);
+        assert_eq!(second.manifest.last_applied_chapter, 2);
+        assert_eq!(second.manifest.projection_version, first.manifest.projection_version);
+    }
+
+    /// 进度不一致（manifest 落后 durable 链）→ 回落慢路径重算写回（快路径的
+    /// 进度门槛生效；同时证明 784 号「99 规范化到 1」类行为不被快路径吞掉）。
+    #[tokio::test]
+    async fn bootstrap_fast_path_falls_back_when_manifest_progress_stale() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        store.set("book/chapters/1_a.md", "x");
+        store.set("book/chapters/2_b.md", "x");
+        store.set(
+            "book/story/state/manifest.json",
+            r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":1,"projectionVersion":1,"migrationWarnings":[]}"#,
+        );
+        store.set("book/story/state/current_state.json", r#"{"chapter":2,"facts":[]}"#);
+        store.set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
+        store.set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        assert_eq!(result.manifest.last_applied_chapter, 2, "落后于产物前缀 → 慢路径重算");
+        let written = store
+            .read_to_string("book/story/state/manifest.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(written.contains("\"lastAppliedChapter\": 2"), "manifest 已重写");
+    }
+
+    /// 四件缺一（legacy 半态书）→ ensure 补齐语义不变（784 号台账行为面风险探针：
+    /// 读端点内嵌 ensure 系 legacy 书可用性所依，快路径不得跳过补齐）。
+    #[tokio::test]
+    async fn bootstrap_fast_path_falls_back_when_state_file_missing() {
+        let store = InMemoryStateStore::new();
+        store.set("book/book.json", r#"{"language":"en"}"#);
+        store.set("book/chapters/1_a.md", "x");
+        store.set(
+            "book/story/state/manifest.json",
+            r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":1,"projectionVersion":1,"migrationWarnings":[]}"#,
+        );
+        store.set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
+        store.set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
+        // current_state.json 缺失。
+
+        let result = bootstrap_structured_state_from_markdown(&store, "book", None)
+            .await
+            .unwrap();
+        assert!(
+            result.created_files.contains(&"current_state.json".to_string()),
+            "缺失件必须从 markdown 补齐"
+        );
+        let written = store
+            .read_to_string("book/story/state/current_state.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(serde_json::from_str::<CurrentStateState>(&written).is_ok());
+    }
+
+    /// fallback 显式进度（写链预指派语义）下同样生效：manifest 已达 fallback
+    /// 目标态（无产物、lastApplied==fallback）→ 快路径零写。
+    #[tokio::test]
+    async fn bootstrap_fast_path_honors_explicit_fallback_progress() {
+        let store = WriteCountingStore {
+            inner: InMemoryStateStore::new(),
+            writes: std::sync::Mutex::new(0),
+            mkdirs: std::sync::Mutex::new(0),
+        };
+        store.inner.set("book/book.json", r#"{"language":"en"}"#);
+        store.inner.set(
+            "book/story/state/manifest.json",
+            r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":5,"projectionVersion":1,"migrationWarnings":[]}"#,
+        );
+        store.inner.set("book/story/state/current_state.json", r#"{"chapter":5,"facts":[]}"#);
+        store.inner.set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
+        store.inner.set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
+
+        // 首次带 Some(5)：manifest 已在目标态（5 == max(fallback=5, 产物 0)）→ 快路径。
+        let result = bootstrap_structured_state_from_markdown(&store, "book", Some(5))
+            .await
+            .unwrap();
+        assert_eq!(result.manifest.last_applied_chapter, 5);
+        assert_eq!(*store.writes.lock().unwrap(), 0, "目标态即达 → 零写");
+        assert_eq!(*store.mkdirs.lock().unwrap(), 0);
     }
 }
