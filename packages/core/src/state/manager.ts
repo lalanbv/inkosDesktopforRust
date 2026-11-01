@@ -517,8 +517,11 @@ export class StateManager {
         wordCount,
         createdAt: timestamp,
         updatedAt: timestamp,
-        observations: [],
-        provenance: "generated",
+        // 792 号：响应行键与 Rust rebuild 行逐键对齐——auditIssues/
+        // lengthWarnings 空 vec 恒序列化（serde default）；observations/
+        // provenance 不发（Rust ChapterMeta 无此二字段）。
+        auditIssues: [],
+        lengthWarnings: [],
       });
     }
     rows.sort((a, b) => a.number - b.number);

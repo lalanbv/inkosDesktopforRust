@@ -1213,7 +1213,7 @@ export class PipelineRunner {
         || mode === "rework";
       const currentReviewHash=chapterReviewContentHash(content,targetChapter);
       const preRevision:AuditResult = explicitRevisionRequested
-        ? { observations: chapterMeta.observations.filter(observation => observation.assessment === 'issue'
+        ? { observations: (chapterMeta.observations ?? []).filter(observation => observation.assessment === 'issue'
             && observation.category !== 'execution' && observation.targetHash === currentReviewHash),
             summary: language === "en" ? "User-directed revision" : "用户定向修订" }
         : await this.collectReviewObservations({
@@ -1427,7 +1427,7 @@ export class PipelineRunner {
             ...ch,
             updatedAt: new Date().toISOString(),
             observations: [
-              ...ch.observations.filter((observation) => observation.code !== "upstream-revision"),
+              ...(ch.observations ?? []).filter((observation) => observation.code !== "upstream-revision"),
               {
                 code: "upstream-revision",
                 summary: downstreamRevisionNotice,
@@ -1924,7 +1924,7 @@ export class PipelineRunner {
     index[targetIndex] = {
       ...targetMeta,
       updatedAt: new Date().toISOString(),
-      observations: targetMeta.observations.filter((observation) => observation.code !== "state-sync-required"),
+      observations: (targetMeta.observations ?? []).filter((observation) => observation.code !== "state-sync-required"),
     };
     await writer.saveChapter(bookDir, syncedOutput, pipelineLang, index);
     return {

@@ -530,6 +530,78 @@ try {
   let divergences = 0;
   let compared = 0;
 
+  // ── 792 号：legacy 夹具通道——788-791 双栈 legacy 收敛的全端点动态认证 ──
+  // 向双腿根各播种一本 legacy 书（章节产物 + markdown 真相面，无 state 四件、
+  // 无 index.json——1.x 迁移书形态），对只读端点集做归一化差分。此前 788-791
+  // 的认证是单测级（TS 腿 vitest）+ 静态对照；本通道把它升级为双引擎活体
+  // 全端点差分，可抓出未审计面上的残余发散。纯读零 LLM 依赖（秒级）。
+  // 双模式接线：严格模式（主表后）与 695 报告模式（豁免记账收尾前）各调一次。
+  const runLegacyChannel = async () => {
+    for (const engine of engines) {
+      console.log(`[diff] legacy 夹具播种：${engine.name} root=${engine.root}`);
+      execFileSync("node", [join(scriptDir, "legacy-fixture.mjs"), engine.root, engine.port], {
+        cwd: repoRoot,
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+    }
+    const LEGACY_BOOK = "legacy-book";
+    const LEGACY_ENDPOINTS = [
+      "/api/v1/books",
+      `/api/v1/books/${LEGACY_BOOK}`,
+      `/api/v1/books/${LEGACY_BOOK}/chapters/1`,
+      `/api/v1/books/${LEGACY_BOOK}/chapters/1/workspace`,
+      `/api/v1/books/${LEGACY_BOOK}/truth`,
+      `/api/v1/books/${LEGACY_BOOK}/timeline`,
+      `/api/v1/books/${LEGACY_BOOK}/chapter-review-mode`,
+      `/api/v1/books/${LEGACY_BOOK}/series-backfill/existing`,
+      `/api/v1/books/${LEGACY_BOOK}/analytics`,
+      `/api/v1/books/${LEGACY_BOOK}/eval`,
+      "/api/v1/genres",
+    ];
+    console.log(`\n[diff] legacy 通道：${LEGACY_ENDPOINTS.length} 端点（792 号，双栈 legacy 收敛动态认证）`);
+    for (const endpoint of LEGACY_ENDPOINTS) {
+      let nodeRes = await nodeApi(endpoint);
+      let rustRes = await rustApi(endpoint);
+      // /books 全表含 walkthrough 书——报告模式双腿播种不对称（fork 章节数
+      // 刻意不同，695 号），会污染 legacy 通道。只比 legacy-book 条目：
+      // 双端都必须含它（可见性认证）+ 条目归一化一致。
+      if (endpoint === "/api/v1/books") {
+        const pick = (res) => {
+          const body = res.body;
+          if (!body || !Array.isArray(body.books)) return res;
+          return {
+            ...res,
+            body: {
+              books: body.books.filter((book) => book.id === LEGACY_BOOK),
+              incompleteWorkIds: (body.incompleteWorkIds ?? []).filter((id) => id === LEGACY_BOOK),
+            },
+          };
+        };
+        nodeRes = pick(nodeRes);
+        rustRes = pick(rustRes);
+      }
+      compared += 1;
+      if (nodeRes.status !== rustRes.status) {
+        divergences += 1;
+        console.log(`✗ legacy ${endpoint}：状态码分歧 node=${nodeRes.status} rust=${rustRes.status}`);
+        continue;
+      }
+      const aNode = prune(nodeRes.body);
+      const aRust = prune(rustRes.body);
+      const a = JSON.stringify(aNode);
+      const b = JSON.stringify(aRust);
+      if (a === b) {
+        console.log(`✓ legacy ${endpoint}（${nodeRes.status}）`);
+      } else {
+        divergences += 1;
+        console.log(`✗ legacy ${endpoint}：归一化后不一致`);
+        console.log(`    首个分叉：${firstDiffPath(aNode, aRust) ?? "?"}`);
+        console.log(`    node=${a.slice(0, 260)}`);
+        console.log(`    rust=${b.slice(0, 260)}`);
+      }
+    }
+  };
+
   // ── 3.0 三域活体分歧报告（695 号）：TS 腿=上游 2.0 时的迁移进度度量 ──
   // 域定义（由 687 fork server 与 2.0 server 路由面机械比对生成，691 后现状）：
   // ①共享面=双端在位的路由（缩减集，活体逐端点对比）；②fork-only=仅 Rust 在位
@@ -854,6 +926,8 @@ try {
     for (const d of upstreamNewDrift) console.log(`[diff] [上游新增 漂移] ${d}`);
     console.log("[diff] [695 豁免记账] fork 契约全量字节级对跑待 Rust 2.0 迁移落地后自动恢复（688 号 §五）；");
     console.log("[diff] [695 豁免记账] 共享面分歧=真实迁移工项；两域漂移行=进度信号（复活/跟进）或回归（双缺）。");
+    // 792 号：legacy 通道在报告模式下照常跑（腿对称、纯读——与模式无关）。
+    await runLegacyChannel();
     throw new ProbeEarlyExit("695 三域活体分歧报告收尾（豁免记账 exit 0）");
   }
 
@@ -1861,6 +1935,9 @@ try {
       console.log(`✗ 技能写面周期分歧：node=${JSON.stringify(results.node)} rust=${JSON.stringify(results.rust)}`);
     }
   }
+
+  // ── 792 号 legacy 通道（双模式接线，函数定义见计数器声明处）──
+  await runLegacyChannel();
 
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;

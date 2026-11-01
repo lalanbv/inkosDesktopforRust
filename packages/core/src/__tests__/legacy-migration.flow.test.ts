@@ -91,7 +91,7 @@ it("previews and migrates legacy works with readable chapters and translations w
   expect((await loadRuntimeStateSnapshotAtChapter({bookDir:join(root,'works/novel/source'),chapterNumber:0,language:'en'})).manifest.lastAppliedChapter).toBe(0);
   expect(await listWorkManifests(root)).toHaveLength(7);
   const [chapter] = await new StateManager(root).loadChapterIndex("novel");
-  expect({number:chapter?.number,provenance:chapter?.provenance,observation:chapter?.observations[0]?.code})
+  expect({number:chapter?.number,provenance:chapter?.provenance,observation:chapter?.observations?.[0]?.code})
     .toEqual({number:1,provenance:"imported",observation:"legacy-review"});
   expect(chapter?.tokenUsage).toEqual({promptTokens:0,completionTokens:0,totalTokens:12});
   expect(chapter?.lengthTelemetry).toEqual({target:1000,countingMode:'en_words',writerCount:2,postReviseCount:2,finalCount:2,repairApplied:false});

@@ -17,18 +17,19 @@ export const reviewCommand = new Command("review")
           state.loadChapterIndex(id),
         ]);
         const countingMode = resolveLengthCountingMode(book.language);
-        for (const chapter of chapters.filter((item) => item.observations.length > 0)) {
+        for (const chapter of chapters.filter((item) => (item.observations?.length ?? 0) > 0)) {
+          const chapterObservations = chapter.observations ?? [];
           const row = {
             bookId: id,
             chapter: chapter.number,
             title: chapter.title,
             wordCount: chapter.wordCount,
-            observations: chapter.observations,
+            observations: chapterObservations,
           };
           rows.push(row);
           if (!opts.json) {
             log(`\n${book.title} · Ch.${chapter.number} "${chapter.title}" · ${formatLengthCount(chapter.wordCount, countingMode)}`);
-            for (const observation of chapter.observations) {
+            for (const observation of chapterObservations) {
               log(`  ${observation.code}: ${observation.summary}`);
             }
           }

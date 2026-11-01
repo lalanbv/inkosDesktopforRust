@@ -1123,6 +1123,9 @@ async fn list_md_json_yaml(dir: &std::path::Path) -> Vec<String> {
             names.push(name);
         }
     }
+    // 792 号：裸 readdir 序跨机/跨根不稳定（APFS hash 序）——truth 清单排序
+    // 保证契约确定性（TS 腿同款排序，contract-diff legacy 通道活体捕获）。
+    names.sort();
     names
 }
 

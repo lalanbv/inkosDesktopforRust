@@ -315,7 +315,7 @@ function recordManualEditObservation(
         ...(typeof wordCount === "number" ? { wordCount } : {}),
         provenance: "edited" as const,
         observations: [
-          ...chapter.observations.filter((existing) => existing.code !== "manual-edit-review"),
+          ...(chapter.observations ?? []).filter((existing) => existing.code !== "manual-edit-review"),
           {
             code: "manual-edit-review",
             summary: issue,

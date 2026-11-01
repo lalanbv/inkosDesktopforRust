@@ -131,7 +131,10 @@ describe("791 chapter index tolerant rebuild", () => {
     ]);
     expect(rows[0]).toMatchObject({
       status: "ready-for-review",
-      provenance: "generated",
+      // 792 号：行键与 Rust rebuild 行对齐——auditIssues/lengthWarnings 恒在，
+      // observations/provenance 不发（Rust ChapterMeta 无此二字段）。
+      auditIssues: [],
+      lengthWarnings: [],
       // 词数口径=去全部空白后的码元数（含标题行：#第1章正文）。
       wordCount: "#第1章正文".length,
     });

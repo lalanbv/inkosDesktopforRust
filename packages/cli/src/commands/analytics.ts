@@ -25,8 +25,9 @@ export const analyticsCommand = new Command("analytics")
         log(`  Total chapters: ${analytics.totalChapters}`);
         log(`  Total words: ${analytics.totalWords.toLocaleString()}`);
         log(`  Avg words/chapter: ${analytics.avgWordsPerChapter.toLocaleString()}`);
-        log(`  Review observations: ${analytics.observationCount}`);
-        log(`  Chapters with observations: ${analytics.chaptersWithObservations}`);
+        log(`  Audit pass rate: ${analytics.auditPassRate}%`);
+        log(`  Top issue categories: ${analytics.topIssueCategories.map((entry) => `${entry.category}:${entry.count}`).join(", ") || "none"}`);
+        log(`  Status distribution: ${Object.entries(analytics.statusDistribution).map(([status, count]) => `${status}:${count}`).join(", ") || "none"}`);
         log("");
 
         if (analytics.tokenStats) {

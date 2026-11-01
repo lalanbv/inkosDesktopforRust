@@ -159,12 +159,18 @@ const strings = {
   "analytics.totalChapters": { zh: "总章数", en: "Total Chapters" },
   "analytics.totalWords": { zh: "总字数", en: "Total Words" },
   "analytics.avgWords": { zh: "平均字数/章", en: "Avg Words/Chapter" },
-  "analytics.observations": { zh: "观察记录", en: "Observations" },
   "analytics.runtimeEvidence": { zh: "运行证据", en: "Runtime Evidence" },
-  "analytics.chaptersWithObservations": { zh: "有观察的章节", en: "Chapters with Observations" },
   "analytics.promptTokens": { zh: "输入 Token", en: "Prompt Tokens" },
   "analytics.completionTokens": { zh: "输出 Token", en: "Completion Tokens" },
   "analytics.totalTokens": { zh: "总 Token", en: "Total Tokens" },
+  // 792 号：analytics 形态对齐 Rust 权威（statusDistribution/topIssueCategories/
+  // chaptersWithMostIssues/auditPassRate），替换 observation 两键。
+  "analytics.auditPassRate": { zh: "审查通过率", en: "Audit Pass Rate" },
+  "analytics.statusDistribution": { zh: "状态分布", en: "Status Distribution" },
+  "analytics.topIssues": { zh: "高频问题分类", en: "Top Issue Categories" },
+  "analytics.chaptersWithMostIssues": { zh: "问题最多的章节", en: "Chapters with Most Issues" },
+  "analytics.chapterN": { zh: "第{n}章", en: "Chapter {n}" },
+  "analytics.avgTokens": { zh: "平均 Token/章", en: "Avg Tokens/Chapter" },
 
   // Breadcrumb
   "bread.books": { zh: "书籍", en: "Books" },

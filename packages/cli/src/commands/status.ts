@@ -35,8 +35,8 @@ export const statusCommand = new Command("status")
         const persistedChapterCount = await state.getPersistedChapterCount(id);
         const countingMode = resolveLengthCountingMode(book.language);
 
-        const observationCount = index.reduce((sum, chapter) => sum + chapter.observations.length, 0);
-        const chaptersWithObservations = index.filter((chapter) => chapter.observations.length > 0).length;
+        const observationCount = index.reduce((sum, chapter) => sum + (chapter.observations?.length ?? 0), 0);
+        const chaptersWithObservations = index.filter((chapter) => (chapter.observations?.length ?? 0) > 0).length;
         const totalWords = index.reduce((sum, ch) => sum + ch.wordCount, 0);
         const avgWords = index.length > 0 ? Math.round(totalWords / index.length) : 0;
 
@@ -76,9 +76,10 @@ export const statusCommand = new Command("status")
           if (opts.chapters && index.length > 0) {
             log("");
             for (const ch of index) {
-              const icon = ch.observations.length > 0 ? "!" : "+";
-              log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.provenance}`);
-              for (const observation of ch.observations) {
+              const chapterObservations = ch.observations ?? [];
+              const icon = chapterObservations.length > 0 ? "!" : "+";
+              log(`    [${icon}] Ch.${ch.number} "${ch.title}" | ${formatLengthCount(ch.wordCount, countingMode)} | ${ch.provenance ?? "-"}`);
+              for (const observation of chapterObservations) {
                 log(`        ${observation.code}: ${observation.summary}`);
               }
             }

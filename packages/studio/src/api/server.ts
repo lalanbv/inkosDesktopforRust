@@ -6085,19 +6085,23 @@ function yamlScalar(value: unknown): string {
     }
 
     try {
-      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file));
+      // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性，
+      // Rust truth_list list_md_json_yaml 同款排序）。
+      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file)).sort();
       const outlineFiles = (await listDir("outline"))
         .map((file) => `outline/${file}`)
-        .filter((file) => TRUTH_OUTLINE_FILES.includes(file));
+        .filter((file) => TRUTH_OUTLINE_FILES.includes(file))
+        .sort();
       // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
       // English-locale equivalents so en-language books are visible.
-      const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`);
-      const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`);
-      const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`);
-      const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`);
+      const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`).sort();
+      const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`).sort();
+      const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`).sort();
+      const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`).sort();
       const runtimeFiles = (await listDir("runtime"))
         .map((f) => `runtime/${f}`)
-        .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f));
+        .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f))
+        .sort();
 
       const all = [
         ...flatFiles,

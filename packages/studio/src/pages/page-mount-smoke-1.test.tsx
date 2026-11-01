@@ -68,9 +68,11 @@ describe("page mount smoke — small pages batch 1 (737)", () => {
         totalChapters: 3,
         totalWords: 7200,
         avgWordsPerChapter: 2400,
-        observationCount: 4,
-        chaptersWithObservations: 2,
         auditPassRate: 100,
+        // 792 号：形态对齐 Rust compute_analytics 权威（observation 两键已删）。
+        topIssueCategories: [{ category: "pacing", count: 2 }],
+        chaptersWithMostIssues: [{ chapter: 1, issueCount: 2 }],
+        statusDistribution: { "ready-for-review": 2, drafted: 1 },
       },
       refetch: () => undefined,
     });

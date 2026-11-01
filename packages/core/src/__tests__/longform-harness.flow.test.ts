@@ -184,11 +184,11 @@ describe("long-form harness mini-flow", () => {
       expect(context.map(entry=>entry.source)).toEqual(['author_request','story/book_rules.md']);
       expect(context[0]).toMatchObject({excerpt:authorRequest,protection:'protected'});
       const reviewHash='sha256:'+createHash('sha256').update(chapterOutput(1).content.trim()).digest('hex');
-      expect((await state.loadChapterIndex('replay'))[0]!.observations[0]).toMatchObject({code:'DEPARTURE',targetHash:reviewHash});
+      expect((await state.loadChapterIndex('replay'))[0]!.observations?.[0]).toMatchObject({code:'DEPARTURE',targetHash:reviewHash});
       const reviser=vi.spyOn(ReviserAgent.prototype,'reviseChapter').mockRejectedValue(Object.assign(new Error('Fixture writer unavailable'),{code:'FIXTURE_WRITER_UNAVAILABLE'}));
       await expect(pipeline.reviseDraft('replay',1,'spot-fix','Clarify the departure.')).rejects.toMatchObject({code:'FIXTURE_WRITER_UNAVAILABLE'});
       const reviewedIndex=await state.loadChapterIndex('replay');
-      await state.saveChapterIndex('replay',reviewedIndex.map(chapter=>({...chapter,observations:chapter.observations.map(observation=>({...observation,targetHash:'sha256:stale'}))})));
+      await state.saveChapterIndex('replay',reviewedIndex.map(chapter=>({...chapter,observations:chapter.observations?.map(observation=>({...observation,targetHash:'sha256:stale'})) ?? []})));
       await expect(pipeline.reviseDraft('replay',1,'spot-fix','Clarify the departure.')).rejects.toMatchObject({code:'FIXTURE_WRITER_UNAVAILABLE'});
       expect(reviser.mock.calls.map(call=>call[3].map(observation=>observation.code))).toEqual([['DEPARTURE'],[]]);
       expect(await readFile(planPath)).toEqual(plan);
@@ -236,7 +236,7 @@ describe("long-form harness mini-flow", () => {
     const [chapter] = await state.loadChapterIndex("novel");
     const persisted = JSON.parse(await readFile(join(bookDir, "chapters", "index.json"), "utf-8")) as Array<Record<string, unknown>>;
     expect({
-      observation: chapter?.observations[0]?.code,
+      observation: chapter?.observations?.[0]?.code,
       provenance: chapter?.provenance,
       hasLegacyStatus: "status" in (persisted[0] ?? {}),
       chapterFiles: (await readdir(join(bookDir, "chapters"))).filter((file) => file.endsWith(".md")).length,

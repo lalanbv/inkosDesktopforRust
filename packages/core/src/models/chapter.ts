@@ -30,11 +30,17 @@ export const ChapterMetaSchema = z.object({
   wordCount: z.number().int(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  observations: z.array(ObservationSchema),
+  // 792 号：observations/provenance 转 optional——Rust ChapterMeta 无此二字段
+  //（serde 忽略未知键），索引响应行键对齐（重建行不发）；存量索引两键照常
+  // round-trip（读宽容、写保留）。
+  observations: z.array(ObservationSchema).optional(),
   // 717 号：审查问题清单（Rust ChapterMeta.audit_issues serde default 空 vec
   // 镜像；book-eval 质量评估消费，存量索引文件无此键完全兼容）。
   auditIssues: z.array(z.string()).optional(),
-  provenance: z.enum(["generated", "imported", "edited"]),
+  // 792 号：length_warnings 镜像（Rust serde default 空 vec 恒序列化——
+  // bookDetail 响应行键对齐；存量索引无此键完全兼容）。
+  lengthWarnings: z.array(z.string()).optional(),
+  provenance: z.enum(["generated", "imported", "edited"]).optional(),
   lengthTelemetry: LengthTelemetrySchema.optional(),
   lengthSpec: LengthSpecSchema.optional(),
   tokenUsage: z.object({
