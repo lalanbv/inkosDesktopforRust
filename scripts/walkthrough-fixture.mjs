@@ -223,8 +223,29 @@ if (!forkContract) {
   // 官方初始化函数，schema 演进随真源走，不手写 JSON。
   const worksSourceDir = join(root, "works", BOOK, "source");
   if (existsSync(worksSourceDir)) {
-    await core.createInitialRuntimeState({ bookDir: worksSourceDir, language: "zh" });
-    console.log(`[walkthrough-fixture] runtime state init: works/${BOOK}/source`);
+    // 803 号：hooks 基线从台账导入（镜像 rust resync 台账导入路径）——
+    // parsePendingHooksMarkdown 解析 14 列台账 → HookRecord 四件（H01-H04，
+    // sc/la=台账值）。空基线会使 settle merge 后 startChapter/lastAdvanced
+    // 与 rust ledger 字段级发散（802/803 号插桩定位：钳制+merge 语义双侧行为
+    // 一致，分歧=基线缺台账导入）。status 词表外（台账 pressured）归一 open
+    // ——createInitialRuntimeState 的 HookRecordSchema 校验通过。
+    const ledgerRows = core.parsePendingHooksMarkdown(
+      readFileSync(join(worksSourceDir, "story", "pending_hooks.md"), "utf-8"),
+    );
+    const CANON_STATUS = new Set(["open", "progressing", "deferred", "resolved", "superseded"]);
+    const baselineHooks = ledgerRows.map((hook) => ({
+      hookId: hook.hookId,
+      startChapter: hook.startChapter,
+      type: hook.type,
+      status: CANON_STATUS.has(hook.status) ? hook.status : "open",
+      lastAdvancedChapter: hook.lastAdvancedChapter,
+      expectedPayoff: hook.expectedPayoff,
+      notes: hook.notes,
+      ...(hook.dependsOn ? { dependsOn: [...hook.dependsOn] } : {}),
+      ...(hook.paysOffInArc !== undefined ? { paysOffInArc: hook.paysOffInArc } : {}),
+    }));
+    await core.createInitialRuntimeState({ bookDir: worksSourceDir, language: "zh", hooks: baselineHooks });
+    console.log(`[walkthrough-fixture] runtime state init: works/${BOOK}/source（hooks 基线 ${baselineHooks.length} 条自台账导入）`);
     // 717 号：book_rules 双文件补播（writeChapter 管线前置——readBookRules 硬读
     // story/book_rules.{md,json}；完备书目录必备件，建书链产物形态）。缺省时
     // draft/write 链 ENOENT 恒败（走查 draft:error 实锤后补）。

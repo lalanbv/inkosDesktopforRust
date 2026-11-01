@@ -69,6 +69,11 @@ export function applyRuntimeStateDelta(params: {
     throw new Error(issues.map((issue) => `${issue.code}: ${issue.message}`).join("; "));
   }
 
+  // 803 号：插桩——reducer 输出 hooks startChapter（arbitrate 后/reducer 后对照）。
+  if (process.env.WALKTHROUGH_MOCK_DEBUG === "1") {
+    console.error(`[reducer-out] hooks sc: ${next.hooks.hooks.map((hook) => `${hook.hookId}:${hook.startChapter}`).join(",")}`);
+  }
+
   return next;
 }
 

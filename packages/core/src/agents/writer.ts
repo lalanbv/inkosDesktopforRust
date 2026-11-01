@@ -368,6 +368,13 @@ export class WriterAgent extends BaseAgent {
       },
       {maxTokens: Math.min(16384, this.ctx.client.defaults.maxTokens),professionalGuidance:false},
     );
+    // 803 号：decode 结果插桩（WALKTHROUGH_MOCK_DEBUG=1）——settle 工具
+    // TypeBox decode 后的 upsert startChapter 值追踪（sc1 注入窗口定界：
+    // decode 即 sc1=pi-ai 工具参数规范化；decode 后 3 而 arbitrate 后 1=
+    // arbitrate 输入侧改写）。
+    if (process.env.WALKTHROUGH_MOCK_DEBUG === "1") {
+      console.error(`[settle-decode] ch${params.chapterNumber} upsert sc: ${result.hookOps.upsert.map((hook) => `${hook.hookId}:${hook.startChapter}`).join(",")}`);
+    }
     const runtimeStateDelta = RuntimeStateDeltaSchema.parse({
       chapter: params.chapterNumber,
       factOps: {
