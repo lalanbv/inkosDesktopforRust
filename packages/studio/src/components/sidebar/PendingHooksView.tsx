@@ -99,6 +99,19 @@ export function PendingHooksView({ content }: PendingHooksViewProps) {
                 {tr("活跃", "Active")}
               </span>
             )}
+            {/* 814 号：终态徽标补全——resolved（已兑现）/ superseded（805 号撤回：前提被作者
+                修订明确撤回，保留原文+依据供历史查证，不再是活跃正典或未来承诺）。此前两态
+                无标，与 open 外观无差。 */}
+            {hook.status === "resolved" && (
+              <span className="text-[12px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                {tr("已回收", "Resolved")}
+              </span>
+            )}
+            {hook.status === "superseded" && (
+              <span className="text-[12px] px-1.5 py-0.5 rounded-full bg-zinc-500/15 text-muted-foreground line-through decoration-muted-foreground/60">
+                {tr("已撤回", "Withdrawn")}
+              </span>
+            )}
             {hook.kind && (
               <span className={cn("text-[12px] px-1.5 py-0.5 rounded-full", HOOK_KIND_COLOR[hook.kind])}>
                 {tr(hookKindLabel(hook.kind, "zh"), hookKindLabel(hook.kind, "en"))}
@@ -113,7 +126,14 @@ export function PendingHooksView({ content }: PendingHooksViewProps) {
               <span className="text-[12px] text-muted-foreground/50 ml-auto">{tr("回收", "Payoff")} · {hook.payoff}</span>
             )}
           </div>
-          <p className="text-[15px] text-foreground leading-7 font-['SimSun','Songti_SC','STSong',serif]">
+          {/* 814 号：whitespace-pre-line——撤回 notes 形态为「既有 + 换行 + 依据」（811/812 号
+              解析侧已把 <br> 还原为换行），按行展示；已撤回条目正文弱化。 */}
+          <p
+            className={cn(
+              "text-[15px] leading-7 font-['SimSun','Songti_SC','STSong',serif] whitespace-pre-line",
+              hook.status === "superseded" ? "text-muted-foreground/70" : "text-foreground",
+            )}
+          >
             {hook.content}
           </p>
         </div>

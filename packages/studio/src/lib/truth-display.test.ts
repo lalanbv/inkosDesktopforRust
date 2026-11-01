@@ -205,6 +205,24 @@ describe("parsePendingHooks", () => {
     expect(hooks[1]).toMatchObject({ id: "H004", promoted: false });
   });
 
+  // 814 号：渲染器把单元格内竖线转 `\|`、换行转 `<br>`（core 810/812 号）；朴素拆分会把这类行
+  // 错位拆列并因列数不符整行丢弃（伏笔从 UI 消失）。拆分须感知转义并还原；终态 superseded 透出。
+  it("keeps rows whose notes contain escaped pipes and <br>, restoring them for display", () => {
+    const withdrawn = [
+      "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      "| H03 | 2 | 信物 | superseded | 3 | 第6章 | near-term | H01 | 第一卷 | 否 | 6 | 否 | 母亲留下的碎镜。<br>作者修订撤回：并入 H01\\|H04。 | 物品 |",
+      "| H04 | 3 | 背景 | open | 0 |  | slow-burn | 无 | 第二卷 | 否 |  | 是 | 镜宗与皇室的隐秘盟约。 | 世界观 |",
+    ].join("\n");
+    const hooks = parsePendingHooks(withdrawn);
+    expect(hooks.map((hook) => hook.id)).toEqual(["H03", "H04"]);
+    expect(hooks[0]).toMatchObject({
+      status: "superseded",
+      kind: "artifact",
+      content: "母亲留下的碎镜。\n作者修订撤回：并入 H01|H04。",
+    });
+  });
+
   it("parses the R23 kind column with alias normalization and drops out-of-vocabulary values (R23/396)", () => {
     const phase8 = [
       "| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |",

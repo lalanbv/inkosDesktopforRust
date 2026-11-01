@@ -214,7 +214,15 @@ export interface PendingHook {
 }
 
 function splitTableRow(line: string): string[] {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  // 814 号：感知转义的拆分 + 回读还原（与 core story-markdown 812/811 号同集）——
+  // 渲染器把单元格内竖线转 `\|`、换行转 `<br>`；朴素按 `|` 拆会把含竖线/多行 notes 的行
+  // 错位拆列（列数不符被 parsePendingHooks 的行过滤整行丢弃=伏笔从 UI 消失）。
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((c) => c.trim().replace(/<br\s*\/?>/gi, "\n").replace(/\\\|/g, "|"));
 }
 
 // pending_hooks.md is a 14-column tracking table (R23/394 号 added 分类/kind;
