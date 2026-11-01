@@ -475,6 +475,8 @@ mod tests {
         let h03 = parsed.iter().find(|h| h.hook_id == "H03").expect("H03 回读");
         assert_eq!(h03.kind, Some(HookKind::Artifact));
         assert_eq!(h03.status, HookStatus::Superseded);
+        // 811 号：换行经 <br> 往返无损（渲染转义 ↔ 解析还原成对）。
+        assert_eq!(h03.notes, "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。");
     }
 
     #[test]

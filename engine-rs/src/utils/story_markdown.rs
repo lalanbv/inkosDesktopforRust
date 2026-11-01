@@ -187,7 +187,10 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
             } else {
                 &segs[1..]
             };
-            let cells: Vec<String> = mid.iter().map(|s| s.trim().to_string()).collect();
+            // 811 号：单元格回读还原（TS restoreTableCell 同款）——渲染器把换行转 <br>
+            // 保住表格行，解析器此前原样回传，多行 notes（805 撤回语义「既有+换行+依据」）
+            // 经 md 往返（resync 台账导入）以 <br> 字面落回 state。渲染产什么解析就还原什么。
+            let cells: Vec<String> = mid.iter().map(|s| restore_table_cell(s.trim())).collect();
             if cells.iter().any(|c| !c.is_empty()) {
                 Some(cells)
             } else {
@@ -195,6 +198,18 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
             }
         })
         .collect()
+}
+
+/// 单元格回读还原：`<br>` / `<br/>` / `<br />`（忽略大小写）→ 换行。
+///
+/// 811 号：与渲染侧 `projections::escape_table_cell`（810 号补换行→`<br>`）成对；
+/// TS `story-markdown.ts restoreTableCell` 同集。竖线转义 `\|` 的还原需感知转义的
+/// 拆分器（拆分先于还原），双侧同为朴素拆分——另案登记。
+fn restore_table_cell(cell: &str) -> String {
+    static BR: OnceLock<Regex> = OnceLock::new();
+    BR.get_or_init(|| Regex::new(r"(?i)<br\s*/?>").unwrap())
+        .replace_all(cell, "\n")
+        .into_owned()
 }
 
 /// 解析章节摘要 markdown 表格 → [`StoredSummary`] 列表。
@@ -1056,5 +1071,15 @@ mod tests {
         assert_eq!(parse_hook_status("superseded".to_string()), HookStatus::Superseded);
         assert_eq!(parse_hook_status("Withdrawn".to_string()), HookStatus::Superseded);
         assert_eq!(parse_hook_status("已撤回".to_string()), HookStatus::Superseded);
+    }
+
+    /// 811 号：单元格回读还原 `<br>` 三形态（忽略大小写）→ 换行；与渲染侧转义成对。
+    #[test]
+    fn parse_markdown_table_rows_restores_br_to_newline() {
+        let md = "| a | b |\n| --- | --- |\n| 既有。<br>依据。 | x<BR/>y<br />z |\n";
+        let rows = parse_markdown_table_rows(md);
+        assert_eq!(rows, vec![vec!["a".to_string(), "b".to_string()], vec!["既有。\n依据。".to_string(), "x\ny\nz".to_string()]]);
+        // 普通单元格不受影响
+        assert_eq!(parse_markdown_table_rows("| plain |\n")[0], vec!["plain".to_string()]);
     }
 }

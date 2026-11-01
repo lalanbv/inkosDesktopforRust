@@ -214,8 +214,19 @@ export function parseMarkdownTableRows(markdown: string): string[][] {
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"))
     .filter((line) => !line.includes("---"))
-    .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()))
+    .map((line) => line.split("|").slice(1, -1).map((cell) => restoreTableCell(cell.trim())))
     .filter((cells) => cells.some(Boolean));
+}
+
+/**
+ * 811 号：单元格回读还原——渲染器（state-projections `escapeTableCell`）把换行转成
+ * `<br>` 以保住表格行，解析器此前原样回传，使多行 notes（805 撤回语义「既有 + 换行 +
+ * 依据」）经 md 往返后以 `<br>` 字面落回 state。渲染产什么、解析就还原什么；
+ * 与 Rust `story_markdown::restore_table_cell` 同集（`<br>` / `<br/>` / `<br />`，忽略大小写）。
+ * 竖线转义 `\|` 的还原需感知转义的拆分器（拆分先于还原），双侧同为朴素拆分——另案。
+ */
+function restoreTableCell(cell: string): string {
+  return cell.replace(/<br\s*\/?>/gi, "\n");
 }
 
 export function isStateTableHeaderRow(row: ReadonlyArray<string>): boolean {

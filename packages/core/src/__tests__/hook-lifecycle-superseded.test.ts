@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HookRecord } from "../models/runtime-state.js";
 import { filterActiveHooks, normalizeStoredHookStatus, resolveHookStatusAlias } from "../utils/hook-lifecycle.js";
-import { parsePendingHooksMarkdown } from "../utils/story-markdown.js";
+import { parseMarkdownTableRows, parsePendingHooksMarkdown } from "../utils/story-markdown.js";
 import { renderHooksProjection } from "../state/state-projections.js";
 
 // 805 号：撤回终态在「markdown 字符串 → 状态」解析层的对等——HookStatusSchema 早已
@@ -35,5 +35,18 @@ describe("superseded hook status in the string parsing layer", () => {
     const parsed = parsePendingHooksMarkdown(markdown);
     expect(parsed.find((h) => h.hookId === "gone")?.status).toBe("superseded");
     expect(parsed.find((h) => h.hookId === "open")?.status).toBe("open");
+  });
+
+  // 811 号：撤回 notes（既有 + 换行 + 依据）经 md 往返无损——渲染 <br> 转义 ↔ 解析还原成对，
+  // 且多行单元格不得把表格行截断（rust projections/story_markdown 同集）。
+  it("keeps multi-line withdrawal notes intact across the markdown round trip", () => {
+    const withdrawn = { ...hook("gone", "superseded"), notes: "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。" };
+    const markdown = renderHooksProjection({ hooks: [withdrawn] }, "zh");
+    expect(markdown.split("\n").filter((line) => line.includes("gone"))).toHaveLength(1);
+    expect(markdown).toContain("<br>");
+    const parsed = parsePendingHooksMarkdown(markdown);
+    expect(parsed.find((h) => h.hookId === "gone")?.notes).toBe(withdrawn.notes);
+    // 三种 <br> 形态均还原，普通单元格不受影响。
+    expect(parseMarkdownTableRows("| a |\n| --- |\n| x<br>y<BR/>z<br />w |\n")).toEqual([["a"], ["x\ny\nz\nw"]]);
   });
 });
