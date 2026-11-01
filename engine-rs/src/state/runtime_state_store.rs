@@ -314,8 +314,9 @@ pub async fn load_narrative_memory_seed(
             hook_id: h.hook_id,
             start_chapter: h.start_chapter as i64,
             r#type: h.hook_type,
-            // status 变体均为单词（Progressing→"progressing"…），Debug+lowercase 安全。
-            status: format!("{:?}", h.status).to_lowercase(),
+            // 805 号：走 canonical 映射（与 serde 名同形），弃 Debug+lowercase 形态——
+            // 该形态对多词变体曾出错（R26/409 payoff_timing 教训），枚举扩展时不再依赖"恰好单词"。
+            status: crate::utils::hook_lifecycle::hook_status_canonical(h.status).to_string(),
             last_advanced_chapter: h.last_advanced_chapter as i64,
             expected_payoff: h.expected_payoff,
             // R26/409 号：payoff_timing 存在多词变体（NearTerm→"nearterm" 错值），

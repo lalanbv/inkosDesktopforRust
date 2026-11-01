@@ -37,6 +37,15 @@ pub enum StateReducerError {
     DuplicateSummaryRow(u32),
     #[error("duplicate active hook family: {0} overlaps {1}")]
     DuplicateHookFamily(String, String),
+    /// 805 号：superseded 为终态——resolve/defer 均拒绝（TS code HOOK_SUPERSEDED）。
+    #[error("cannot {op} superseded hook {hook_id}")]
+    HookSuperseded { op: &'static str, hook_id: String },
+    /// 805 号：resolved 历史不可撤回（TS code HOOK_RESOLVED_HISTORY）。
+    #[error("cannot withdraw resolved history {0}")]
+    HookResolvedHistory(String),
+    /// 805 号：撤回必须携带依据 notes（TS code HOOK_WITHDRAWAL_REASON_REQUIRED）。
+    #[error("withdrawal authority is required for {0}")]
+    HookWithdrawalReasonRequired(String),
     #[error("validation failed: {0}")]
     ValidationFailed(String),
 }
@@ -109,15 +118,16 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
 
     for incoming in &delta.hook_ops.upsert {
         if let Some(idx) = hooks.iter().position(|h| h.hook_id == incoming.hook_id) {
-            let merged = merge_hook_record(&hooks[idx], incoming);
+            let merged = merge_hook_record(&hooks[idx], incoming)?;
             hooks[idx] = merged;
             continue;
         }
 
-        // 新 hook：准入评估
+        // 新 hook：准入评估（805 号：superseded 与 resolved 同为终态，不参与同族匹配——
+        // 否则新提案会被吸收进已撤回的死记录而静默消失）
         let active: Vec<HookRecord> = hooks
             .iter()
-            .filter(|h| h.status != HookStatus::Resolved)
+            .filter(|h| h.status != HookStatus::Resolved && h.status != HookStatus::Superseded)
             .cloned()
             .collect();
         let admission = evaluate_hook_admission(
@@ -134,7 +144,7 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
             let matched_id = admission.matched_hook_id.clone();
             if let Some(mid) = &matched_id {
                 if let Some(idx) = hooks.iter().position(|h| &h.hook_id == mid) {
-                    let merged = merge_hook_record(&hooks[idx], incoming);
+                    let merged = merge_hook_record(&hooks[idx], incoming)?;
                     hooks[idx] = merged;
                     continue;
                 }
@@ -150,6 +160,9 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
 
     for hook_id in &delta.hook_ops.resolve {
         if let Some(idx) = hooks.iter().position(|h| &h.hook_id == hook_id) {
+            if hooks[idx].status == HookStatus::Superseded {
+                return Err(StateReducerError::HookSuperseded { op: "resolve", hook_id: hook_id.clone() });
+            }
             let advanced = hooks[idx].last_advanced_chapter.max(delta.chapter);
             hooks[idx].status = HookStatus::Resolved;
             hooks[idx].last_advanced_chapter = advanced;
@@ -159,9 +172,12 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
 
     for hook_id in &delta.hook_ops.defer {
         if let Some(idx) = hooks.iter().position(|h| &h.hook_id == hook_id) {
-            let advanced = hooks[idx].last_advanced_chapter.max(delta.chapter);
+            if hooks[idx].status == HookStatus::Superseded {
+                return Err(StateReducerError::HookSuperseded { op: "defer", hook_id: hook_id.clone() });
+            }
+            // 805 号：延后不是叙事推进的证据——保持既有 last_advanced_chapter
+            //（对齐 TS 2.0 7e60e13f；移植当时 TS 曾推进，后改为不推进）。
             hooks[idx].status = HookStatus::Deferred;
-            hooks[idx].last_advanced_chapter = advanced;
         }
     }
 
@@ -187,7 +203,26 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
 /// upsert 言语行为故共用本函数；候选提案（newHookCandidates）为弱言语行为，仍走
 /// hook_arbiter::merge_candidate_into_existing_hook 的 richer 调和语义。
 /// rust 独有产品字段（kind/payoff_timing/core_hook/…）保持既有 rust 语义。
-fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord {
+///
+/// 805 号：撤回生命周期（TS 同函数前两分支逐字移植）——existing superseded 为终态
+/// 原样返回（后续 upsert 不可复活）；incoming superseded 为撤回：resolved 历史不可撤、
+/// 撤回须携带依据 notes、通过后 notes = 既有 + 换行 + 依据（保留原内容供历史查证）。
+fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> Result<HookRecord, StateReducerError> {
+    if existing.status == HookStatus::Superseded {
+        return Ok(existing.clone());
+    }
+    if incoming.status == HookStatus::Superseded {
+        if existing.status == HookStatus::Resolved {
+            return Err(StateReducerError::HookResolvedHistory(existing.hook_id.clone()));
+        }
+        let authority = incoming.notes.trim();
+        if authority.is_empty() {
+            return Err(StateReducerError::HookWithdrawalReasonRequired(existing.hook_id.clone()));
+        }
+        let notes = format!("{}\n{}", existing.notes, authority).trim().to_string();
+        return Ok(HookRecord { status: HookStatus::Superseded, status_raw: String::new(), notes, ..existing.clone() });
+    }
+
     let expected_payoff = prefer_incoming_text(&existing.expected_payoff, &incoming.expected_payoff);
     let notes = prefer_incoming_text(&existing.notes, &incoming.notes);
     let advanced = existing.last_advanced_chapter.max(incoming.last_advanced_chapter);
@@ -199,7 +234,7 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
         Some(&notes),
     );
 
-    HookRecord {
+    Ok(HookRecord {
         // R23/394 号：规范类型——新值赢，缺席保持既有（对齐 TS incoming.kind ?? existing.kind）。
         kind: incoming.kind.or(existing.kind),
         hook_id: existing.hook_id.clone(),
@@ -222,7 +257,7 @@ fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> HookRecord
         half_life_chapters: existing.half_life_chapters,
         advanced_count: existing.advanced_count,
         promoted: existing.promoted,
-    }
+    })
 }
 
 /// TS `incoming.trim() || existing`：incoming 非空白则取其 trim 形态，否则原样保留既有。
@@ -486,7 +521,7 @@ mod tests {
         incoming.hook_type = "情感线".into(); // 更短
         incoming.expected_payoff = "  第8章  ".into(); // 更短且带空白 → trim 后取用
         incoming.notes = "与镜灵的婚约誓言待启。".into(); // 等长（11 字）
-        let merged = merge_hook_record(&existing, &incoming);
+        let merged = merge_hook_record(&existing, &incoming).unwrap();
         assert_eq!(merged.hook_type, "情感线");
         assert_eq!(merged.expected_payoff, "第8章");
         assert_eq!(merged.notes, "与镜灵的婚约誓言待启。");
@@ -503,7 +538,7 @@ mod tests {
         incoming.hook_type = "   ".into();
         incoming.expected_payoff = String::new();
         incoming.notes = "\t\n".into();
-        let merged = merge_hook_record(&existing, &incoming);
+        let merged = merge_hook_record(&existing, &incoming).unwrap();
         assert_eq!(merged.hook_type, "身世");
         assert_eq!(merged.expected_payoff, "第10章 ");
         assert_eq!(merged.notes, "镜中世界来历初现端倪。");
@@ -519,16 +554,138 @@ mod tests {
             h
         };
         // incoming 直赢（旧 merge_hook_status 会因 existing progressing 而保持 progressing）
-        assert_eq!(merge_hook_record(&with(Progressing, 3), &with(Open, 3)).status, Open);
+        assert_eq!(merge_hook_record(&with(Progressing, 3), &with(Open, 3)).unwrap().status, Open);
         // incoming deferred 直赢（旧语义返回 existing open）
-        assert_eq!(merge_hook_record(&with(Open, 3), &with(Deferred, 3)).status, Deferred);
+        assert_eq!(merge_hook_record(&with(Open, 3), &with(Deferred, 3)).unwrap().status, Deferred);
         // 进展不自动升级（旧语义 progressed → progressing）
-        let advanced = merge_hook_record(&with(Open, 3), &with(Open, 6));
+        let advanced = merge_hook_record(&with(Open, 3), &with(Open, 6)).unwrap();
         assert_eq!(advanced.status, Open);
         assert_eq!(advanced.last_advanced_chapter, 6);
         // resolved 粘滞（双向）
-        assert_eq!(merge_hook_record(&with(Resolved, 3), &with(Open, 6)).status, Resolved);
-        assert_eq!(merge_hook_record(&with(Open, 3), &with(Resolved, 6)).status, Resolved);
+        assert_eq!(merge_hook_record(&with(Resolved, 3), &with(Open, 6)).unwrap().status, Resolved);
+        assert_eq!(merge_hook_record(&with(Open, 3), &with(Resolved, 6)).unwrap().status, Resolved);
+    }
+
+    /// 805 号：撤回生命周期——TS superseded-hooks.flow.test 五场景 + reducer 守卫逐条移植。
+    #[test]
+    fn supersede_archives_withdrawn_premise_with_authority_notes() {
+        let mut snap = empty_snapshot(0);
+        let mut planned = hook("plan", 0, 0);
+        planned.status = HookStatus::Deferred;
+        planned.expected_payoff = "Discover the workshop prohibition".into();
+        planned.notes = "Original plan".into();
+        snap.hooks.hooks.push(planned.clone());
+        let mut withdrawal = planned.clone();
+        withdrawal.status = HookStatus::Superseded;
+        withdrawal.notes = "Current book rules explicitly withdraw the workshop prohibition".into();
+        let delta = RuntimeStateDelta {
+            chapter: 1,
+            hook_ops: HookOps { upsert: vec![withdrawal], ..Default::default() },
+            ..Default::default()
+        };
+        let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
+        let plan = next.hooks.hooks.iter().find(|h| h.hook_id == "plan").unwrap();
+        assert_eq!(plan.status, HookStatus::Superseded);
+        assert_eq!(plan.notes, "Original plan\nCurrent book rules explicitly withdraw the workshop prohibition");
+        // 原内容保留供历史查证
+        assert_eq!(plan.expected_payoff, "Discover the workshop prohibition");
+        assert_eq!(plan.start_chapter, 0);
+    }
+
+    #[test]
+    fn supersede_is_terminal_and_cannot_be_reactivated_by_later_upsert() {
+        let mut existing = hook("plan", 0, 0);
+        existing.status = HookStatus::Superseded;
+        existing.notes = "Original plan\nwithdrawn".into();
+        let mut reactivate = hook("plan", 0, 3);
+        reactivate.status = HookStatus::Progressing;
+        reactivate.notes = "trying to revive".into();
+        let merged = merge_hook_record(&existing, &reactivate).unwrap();
+        assert_eq!(merged, existing); // 原样返回：状态/notes/la 均不变
+    }
+
+    #[test]
+    fn supersede_rejects_resolved_history_and_requires_authority() {
+        let mut resolved = hook("past", 0, 2);
+        resolved.status = HookStatus::Resolved;
+        let mut withdraw_resolved = resolved.clone();
+        withdraw_resolved.status = HookStatus::Superseded;
+        withdraw_resolved.notes = "Replace the plan".into();
+        assert_eq!(
+            merge_hook_record(&resolved, &withdraw_resolved),
+            Err(StateReducerError::HookResolvedHistory("past".into()))
+        );
+
+        let open = hook("plan", 0, 0);
+        let mut withdraw_blank = open.clone();
+        withdraw_blank.status = HookStatus::Superseded;
+        withdraw_blank.notes = "  \n".into();
+        assert_eq!(
+            merge_hook_record(&open, &withdraw_blank),
+            Err(StateReducerError::HookWithdrawalReasonRequired("plan".into()))
+        );
+    }
+
+    #[test]
+    fn resolve_and_defer_reject_superseded_hook() {
+        let mut snap = empty_snapshot(5);
+        let mut gone = hook("plan", 1, 3);
+        gone.status = HookStatus::Superseded;
+        snap.hooks.hooks.push(gone);
+        let resolve = RuntimeStateDelta {
+            chapter: 6,
+            hook_ops: HookOps { resolve: vec!["plan".into()], ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_runtime_state_delta(&snap, &resolve, None),
+            Err(StateReducerError::HookSuperseded { op: "resolve", hook_id: "plan".into() })
+        );
+        let defer = RuntimeStateDelta {
+            chapter: 6,
+            hook_ops: HookOps { defer: vec!["plan".into()], ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_runtime_state_delta(&snap, &defer, None),
+            Err(StateReducerError::HookSuperseded { op: "defer", hook_id: "plan".into() })
+        );
+    }
+
+    /// 805 号：延后不是叙事推进的证据——defer 保持既有 last_advanced_chapter（TS 2.0 同款）。
+    #[test]
+    fn defer_keeps_last_advanced_chapter() {
+        let mut snap = empty_snapshot(5);
+        snap.hooks.hooks.push(hook("h1", 1, 3));
+        let delta = RuntimeStateDelta {
+            chapter: 6,
+            hook_ops: HookOps { defer: vec!["h1".into()], ..Default::default() },
+            ..Default::default()
+        };
+        let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
+        assert_eq!(next.hooks.hooks[0].status, HookStatus::Deferred);
+        assert_eq!(next.hooks.hooks[0].last_advanced_chapter, 3);
+    }
+
+    /// 805 号：已撤回记录不参与同族准入匹配——同族新提案应新建而非被吸收进死记录。
+    #[test]
+    fn superseded_hook_does_not_absorb_same_family_new_upsert() {
+        let mut snap = empty_snapshot(5);
+        let mut gone = hook("h1", 1, 3);
+        gone.status = HookStatus::Superseded;
+        gone.expected_payoff = "终局摊牌".into();
+        snap.hooks.hooks.push(gone);
+        let mut fresh = hook("h2", 6, 6);
+        fresh.expected_payoff = "终局摊牌".into(); // 与已撤回记录同 type+payoff
+        let delta = RuntimeStateDelta {
+            chapter: 6,
+            hook_ops: HookOps { upsert: vec![fresh], ..Default::default() },
+            ..Default::default()
+        };
+        let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
+        let ids: Vec<_> = next.hooks.hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        assert!(ids.contains(&"h1") && ids.contains(&"h2"), "ids={ids:?}");
+        assert_eq!(next.hooks.hooks.iter().find(|h| h.hook_id == "h1").unwrap().status, HookStatus::Superseded);
     }
 
     #[test]

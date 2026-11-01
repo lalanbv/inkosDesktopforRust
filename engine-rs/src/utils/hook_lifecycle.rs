@@ -25,6 +25,11 @@ fn status_progressing_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"(?i)^(progressing|advanced|重大推进|持续推进)$").unwrap())
 }
+/// 805 号：撤回终态别名——与 TS HOOK_STATUS_ALIASES 的 superseded 组逐字同集。
+fn status_superseded_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)^(superseded|withdrawn|已撤回|撤回)$").unwrap())
+}
 
 /// hook 的判定用状态文本：优先 `status_raw` 原文，空串回退枚举规范名。
 ///
@@ -45,6 +50,7 @@ pub fn hook_status_canonical(status: HookStatus) -> &'static str {
         HookStatus::Progressing => "progressing",
         HookStatus::Deferred => "deferred",
         HookStatus::Resolved => "resolved",
+        HookStatus::Superseded => "superseded",
     }
 }
 
@@ -62,6 +68,9 @@ pub fn hook_payoff_timing_canonical(timing: HookPayoffTiming) -> &'static str {
 /// 规范化 hook 状态字符串 → HookStatus。默认 open。
 pub fn normalize_stored_hook_status(status: &str) -> HookStatus {
     let s = status.trim();
+    if status_superseded_re().is_match(s) {
+        return HookStatus::Superseded;
+    }
     if status_resolved_re().is_match(s) {
         return HookStatus::Resolved;
     }
@@ -74,13 +83,14 @@ pub fn normalize_stored_hook_status(status: &str) -> HookStatus {
     HookStatus::Open
 }
 
-/// 过滤活跃 hook（非 resolved/deferred，且 promoted !== false）。
+/// 过滤活跃 hook（非 resolved/deferred/superseded，且 promoted !== false）。
 pub fn filter_active_hooks(hooks: &[HookRecord]) -> Vec<HookRecord> {
     hooks
         .iter()
         .filter(|h| {
             // HookRecord.status 已是强类型 HookStatus，直接按变体判断
-            let active = !matches!(h.status, HookStatus::Resolved | HookStatus::Deferred);
+            //（805 号：superseded=已撤回前提，非活跃债务）
+            let active = !matches!(h.status, HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded);
             active && h.promoted != Some(false)
         })
         .cloned()
@@ -299,6 +309,54 @@ mod tests {
         assert_eq!(normalize_stored_hook_status("deferred"), HookStatus::Deferred);
         assert_eq!(normalize_stored_hook_status("progressing"), HookStatus::Progressing);
         assert_eq!(normalize_stored_hook_status("unknown"), HookStatus::Open);
+        // 805 号：撤回终态别名（TS HOOK_STATUS_ALIASES superseded 组同集）
+        assert_eq!(normalize_stored_hook_status("superseded"), HookStatus::Superseded);
+        assert_eq!(normalize_stored_hook_status(" Withdrawn "), HookStatus::Superseded);
+        assert_eq!(normalize_stored_hook_status("已撤回"), HookStatus::Superseded);
+    }
+
+    /// 805 号：serde 名 ↔ 规范名 ↔ 词表三向同形（渲染→md→解析往返无损）。
+    #[test]
+    fn superseded_round_trips_through_serde_canonical_and_alias_table() {
+        assert_eq!(hook_status_canonical(HookStatus::Superseded), "superseded");
+        assert_eq!(serde_json::to_string(&HookStatus::Superseded).unwrap(), "\"superseded\"");
+        assert_eq!(serde_json::from_str::<HookStatus>("\"superseded\"").unwrap(), HookStatus::Superseded);
+        assert_eq!(
+            normalize_stored_hook_status(hook_status_canonical(HookStatus::Superseded)),
+            HookStatus::Superseded
+        );
+    }
+
+    /// 805 号：已撤回前提不是活跃债务（与 resolved/deferred 同列排除）。
+    #[test]
+    fn filter_active_hooks_excludes_superseded() {
+        let mk = |id: &str, status: HookStatus| HookRecord {
+            kind: None,
+            hook_id: id.into(),
+            start_chapter: 1,
+            hook_type: "plot".into(),
+            status,
+            status_raw: String::new(),
+            last_advanced_chapter: 1,
+            expected_payoff: "soon".into(),
+            payoff_timing: None,
+            notes: String::new(),
+            depends_on: None,
+            pays_off_in_arc: None,
+            core_hook: None,
+            half_life_chapters: None,
+            advanced_count: None,
+            promoted: None,
+        };
+        let hooks = vec![
+            mk("open", HookStatus::Open),
+            mk("gone", HookStatus::Superseded),
+            mk("done", HookStatus::Resolved),
+            mk("later", HookStatus::Deferred),
+            mk("live", HookStatus::Progressing),
+        ];
+        let ids: Vec<_> = filter_active_hooks(&hooks).into_iter().map(|h| h.hook_id).collect();
+        assert_eq!(ids, vec!["open", "live"]);
     }
 
     #[test]

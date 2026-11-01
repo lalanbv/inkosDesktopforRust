@@ -383,7 +383,9 @@ fn is_recycle_terminal_status(status: &str) -> bool {
 fn recycle_terminal_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?i)^(resolved|closed|done|已回收|已解决|deferred|paused|hold|延后|延期|搁置|暂缓)$")
+        // 805 号：superseded（已撤回前提）与 resolved 同为检索终态（TS searchableHooks
+        // 排除 resolved+superseded）。deferred 组为 rust 既有口径，TS 不排——登记待对齐。
+        Regex::new(r"(?i)^(resolved|closed|done|已回收|已解决|deferred|paused|hold|延后|延期|搁置|暂缓|superseded|withdrawn|已撤回|撤回)$")
             .unwrap()
     })
 }
@@ -1030,6 +1032,17 @@ fn anchor_edge_dash_re() -> &'static Regex {
 mod tests {
     use super::*;
     use crate::models::runtime_state::HookStatus;
+
+    /// 805 号：已撤回前提是检索终态（TS searchableHooks 排除 resolved+superseded）。
+    #[test]
+    fn recycle_terminal_includes_superseded_and_its_aliases() {
+        assert!(is_recycle_terminal_status("superseded"));
+        assert!(is_recycle_terminal_status(" Withdrawn "));
+        assert!(is_recycle_terminal_status("已撤回"));
+        assert!(is_recycle_terminal_status("resolved"));
+        assert!(!is_recycle_terminal_status("open"));
+        assert!(!is_recycle_terminal_status("progressing"));
+    }
 
     fn hook(id: &str, start: u32, last: u32, status: HookStatus, status_raw: &str) -> HookRecord {
         HookRecord {

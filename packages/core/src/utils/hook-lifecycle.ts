@@ -32,6 +32,12 @@ const HOOK_STATUS_ALIASES: ReadonlyMap<string, HookStatus> = new Map([
   ...[
     "open", "pending", "seeded", "planted", "待定", "未回收", "已埋", "已种下", "已铺垫",
   ].map((value) => [value, "open"] as const),
+  // 805 号：撤回终态别名——缺席时 md 投影往返会把已撤回前提复活为 open
+  //（HookStatusSchema 已含 superseded，但别名表未跟）；与 rust
+  // hook_lifecycle::status_superseded_re / story_markdown::parse_hook_status 同集。
+  ...[
+    "superseded", "withdrawn", "已撤回", "撤回",
+  ].map((value) => [value, "superseded"] as const),
 ]);
 
 export function resolveHookStatusAlias(status: string | undefined | null): HookStatus | undefined {
@@ -46,7 +52,8 @@ export function normalizeStoredHookStatus(status: string): HookStatus {
 export function filterActiveHooks(hooks: ReadonlyArray<StoredHook>): StoredHook[] {
   return hooks.filter((hook) => {
     const status = normalizeStoredHookStatus(hook.status);
-    if (status === "resolved" || status === "deferred") return false;
+    // 805 号：superseded=已撤回前提，非活跃债务（与 rust filter_active_hooks 同列）。
+    if (status === "resolved" || status === "deferred" || status === "superseded") return false;
     // promoted=false means this is still an architect seed, not live hook debt.
     // Legacy rows without the promoted column keep the old behavior.
     return hook.promoted !== false;

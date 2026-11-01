@@ -41,14 +41,14 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
 
     let mut issues: Vec<AuditIssue> = Vec::new();
 
-    // 活跃伏笔：非 resolved/deferred。
+    // 活跃伏笔：非 resolved/deferred/superseded（805 号：已撤回前提非活跃债务）。
     let active_hooks: Vec<&HookRecord> = params
         .hooks
         .iter()
         .filter(|h| {
             let st = hook_status_str(h.status);
             let normalized = crate::utils::hook_lifecycle::normalize_stored_hook_status(&st);
-            normalized != HookStatus::Resolved && normalized != HookStatus::Deferred
+            !matches!(normalized, HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded)
         })
         .collect();
 
@@ -250,6 +250,7 @@ fn hook_status_str(status: HookStatus) -> String {
         HookStatus::Progressing => "progressing".to_string(),
         HookStatus::Deferred => "deferred".to_string(),
         HookStatus::Resolved => "resolved".to_string(),
+        HookStatus::Superseded => "superseded".to_string(),
     }
 }
 

@@ -20,12 +20,12 @@ pub struct StateManifest {
     pub migration_warnings: Vec<String>,
 }
 
-/// 伏笔状态。对齐 TS `"open" | "progressing" | "deferred" | "resolved"`。
+/// 伏笔状态。对齐 TS `"open" | "progressing" | "deferred" | "resolved" | "superseded"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"open\" | \"progressing\" | \"deferred\" | \"resolved\"")
+    ts(export, type = "\"open\" | \"progressing\" | \"deferred\" | \"resolved\" | \"superseded\"")
 )]
 pub enum HookStatus {
     #[serde(rename = "progressing")]
@@ -34,6 +34,11 @@ pub enum HookStatus {
     Deferred,
     #[serde(rename = "resolved")]
     Resolved,
+    /// 805 号：显式撤回终态（对齐 TS harness v2 撤回生命周期）——前提被作者批准的
+    /// 设定/修订明确撤回，记录保留原内容+撤回依据供历史查证，不再是活跃正典或未来承诺；
+    /// 终态不可变（后续 upsert 忽略、resolve/defer 拒绝），且不得撤回 resolved 历史。
+    #[serde(rename = "superseded")]
+    Superseded,
     /// 默认变体；反序列化未知值（如 "pressured"、"near_payoff"）落入此处，
     /// 原文由 [`HookRecord::status_raw`] 保留。
     #[serde(rename = "open", other)]

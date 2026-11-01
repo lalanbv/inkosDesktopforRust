@@ -694,6 +694,9 @@ fn parse_hook_status(cell: String) -> HookStatus {
         | "completed" | "已回收" | "回收" | "完成" | "已解决" | "已兑现" | "兑现" | "已关闭" => {
             HookStatus::Resolved
         }
+        // superseded 组（805 号：撤回终态，与 TS HOOK_STATUS_ALIASES superseded 组同集；
+        // 不识别则 md 往返把已撤回前提复活为 open）
+        "superseded" | "withdrawn" | "已撤回" | "撤回" => HookStatus::Superseded,
         // open 组（TS 全表）
         "open" | "pending" | "seeded" | "planted" | "待定" | "未回收" | "已埋" | "已种下" | "已铺垫" => {
             HookStatus::Open
@@ -1049,5 +1052,9 @@ mod tests {
         assert_eq!(parse_hook_status("closed".to_string()), HookStatus::Resolved);
         assert_eq!(parse_hook_status("".to_string()), HookStatus::Open);
         assert_eq!(parse_hook_status("unknown".to_string()), HookStatus::Open);
+        // 805 号：撤回终态（md 往返不得把已撤回前提复活为 open）
+        assert_eq!(parse_hook_status("superseded".to_string()), HookStatus::Superseded);
+        assert_eq!(parse_hook_status("Withdrawn".to_string()), HookStatus::Superseded);
+        assert_eq!(parse_hook_status("已撤回".to_string()), HookStatus::Superseded);
     }
 }

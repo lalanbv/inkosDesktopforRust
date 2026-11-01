@@ -52,6 +52,13 @@ fn open_status_re() -> &'static Regex {
     })
 }
 
+/// 805 号：撤回终态（TS bootstrap 以 HookStatusSchema.options 含 superseded 保留原值；
+/// rust 词表须识别，否则 md 派生基线把已撤回前提复活为 open）。
+fn superseded_status_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)(superseded|withdrawn|已撤回|撤回)").expect("superseded status regex"))
+}
+
 fn digits_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"\d+").expect("digits regex"))
@@ -98,6 +105,9 @@ pub fn normalize_hook_status(value: Option<&str>, warnings: &mut Vec<String>, ho
     let normalized = value.unwrap_or("").trim().to_lowercase();
     if normalized.is_empty() {
         return HookStatus::Open;
+    }
+    if superseded_status_re().is_match(&normalized) {
+        return HookStatus::Superseded;
     }
     if resolved_status_re().is_match(&normalized) {
         return HookStatus::Resolved;
@@ -1062,6 +1072,16 @@ mod tests {
         assert_eq!(normalize_hook_status(Some("paid off"), &mut w, "h1"), HookStatus::Resolved);
         assert_eq!(normalize_hook_status(Some("PAID_OFF"), &mut w, "h1"), HookStatus::Resolved);
         assert_eq!(normalize_hook_status(Some("兑现"), &mut w, "h1"), HookStatus::Resolved);
+        assert!(w.is_empty(), "命中的归一不应产 warning");
+    }
+
+    /// 805 号：md 派生基线保留撤回终态（TS bootstrap 以 HookStatusSchema.options 保留 superseded）。
+    #[test]
+    fn normalize_hook_status_keeps_superseded_without_warning() {
+        let mut w = Vec::new();
+        assert_eq!(normalize_hook_status(Some("superseded"), &mut w, "h1"), HookStatus::Superseded);
+        assert_eq!(normalize_hook_status(Some("Withdrawn"), &mut w, "h1"), HookStatus::Superseded);
+        assert_eq!(normalize_hook_status(Some("已撤回"), &mut w, "h1"), HookStatus::Superseded);
         assert!(w.is_empty(), "命中的归一不应产 warning");
     }
 

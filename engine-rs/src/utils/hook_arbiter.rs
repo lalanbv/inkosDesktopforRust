@@ -132,9 +132,11 @@ pub fn arbitrate_runtime_state_delta_hooks(
             });
             continue;
         }
+        // 805 号：superseded 与 resolved 同为终态，不参与同族匹配——否则候选会被吸收进
+        // 已撤回记录并经 merge_candidate_into_existing_hook 复活为 progressing。
         let active_hooks: Vec<HookRecord> = working_hooks
             .iter()
-            .filter(|h| h.status != HookStatus::Resolved)
+            .filter(|h| !matches!(h.status, HookStatus::Resolved | HookStatus::Superseded))
             .cloned()
             .collect();
         let admission_candidate = crate::utils::hook_governance::HookAdmissionCandidate {
@@ -286,10 +288,10 @@ fn merge_candidate_into_existing_hook(
         hook_id: existing.hook_id.clone(),
         start_chapter: existing.start_chapter,
         hook_type: prefer_richer_text(&existing.hook_type, &candidate.hook_type),
-        status: if existing.status == HookStatus::Resolved {
-            HookStatus::Resolved
-        } else {
-            HookStatus::Progressing
+        // 805 号：终态（resolved/superseded）保持，否则候选吸收即推进。
+        status: match existing.status {
+            HookStatus::Resolved | HookStatus::Superseded => existing.status,
+            _ => HookStatus::Progressing,
         },
         status_raw: String::new(),
         last_advanced_chapter: existing.last_advanced_chapter.max(chapter),

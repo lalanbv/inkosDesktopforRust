@@ -53,7 +53,7 @@ pub fn collect_stale_hook_debt(
 ) -> Vec<HookRecord> {
     let mut filtered: Vec<HookRecord> = hooks
         .iter()
-        .filter(|h| !matches!(h.status, HookStatus_::Resolved | HookStatus_::Deferred))
+        .filter(|h| !matches!(h.status, HookStatus_::Resolved | HookStatus_::Deferred | HookStatus_::Superseded))
         .filter(|h| h.start_chapter <= chapter_number)
         .filter(|h| {
             if let Some(stale) = stale_after_chapters {
@@ -233,6 +233,7 @@ fn hook_status_str(s: HookStatus_) -> String {
         HookStatus_::Progressing => "progressing",
         HookStatus_::Deferred => "deferred",
         HookStatus_::Resolved => "resolved",
+        HookStatus_::Superseded => "superseded",
     }
     .into()
 }

@@ -120,6 +120,7 @@ fn hook_status_str(s: crate::models::runtime_state::HookStatus) -> &'static str 
         HookStatus::Progressing => "progressing",
         HookStatus::Deferred => "deferred",
         HookStatus::Resolved => "resolved",
+        HookStatus::Superseded => "superseded",
     }
 }
 

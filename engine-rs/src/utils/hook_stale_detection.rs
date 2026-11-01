@@ -21,8 +21,10 @@ pub struct HookDiagnostics {
     pub blocked_distance: u32,
 }
 
+/// 已关闭记录（resolved 已兑现 / superseded 已撤回）——不再计 stale、不再算 blocked。
+/// 805 号：撤回的债务不该再挂账，与 resolved 同列。
 fn is_resolved(hook: &HookRecord) -> bool {
-    matches!(hook.status, HookStatus::Resolved)
+    matches!(hook.status, HookStatus::Resolved | HookStatus::Superseded)
 }
 
 /// 计算所有 hook 的诊断标志。
