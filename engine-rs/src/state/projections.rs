@@ -18,8 +18,19 @@ fn note_index_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)^note_(\d+)$").unwrap())
 }
 
+/// 表格单元格转义：竖线 → `\|`，换行 → `<br>`（TS `escapeTableCell` 逐字同款）。
+///
+/// 810 号：此前只转义竖线——撤回语义的 notes 形态为「既有 + 换行 + 依据」（805 号），
+/// 多行单元格把 markdown 行截成两行，回读该投影的 kind enrich（get_promises）丢 H03
+/// 的 kind（差分器 /timeline/3/kind 分叉实锤）。TS 2.0 于 7e60e13f 补换行转义，
+/// rust 移植（e5adc8e1）早于该提交未跟进=移植漂移。
 fn escape_table_cell(value: &str) -> String {
-    value.replace('|', "\\|").trim().to_string()
+    value
+        .replace('|', "\\|")
+        .replace("\r\n", "<br>")
+        .replace('\n', "<br>")
+        .trim()
+        .to_string()
 }
 
 // ---- hooks 投影 ----
@@ -441,6 +452,29 @@ mod tests {
     #[test]
     fn escape_table_cell_pipes() {
         assert_eq!(escape_table_cell("a|b"), "a\\|b");
+        // 810 号：换行 → <br>（TS escapeTableCell 同款），单元格不得把表格行截断。
+        assert_eq!(escape_table_cell("既有。\n撤回依据。"), "既有。<br>撤回依据。");
+        assert_eq!(escape_table_cell("a\r\nb"), "a<br>b");
+    }
+
+    /// 810 号：撤回 notes（既有 + 换行 + 依据）渲染后仍是单行，回读台账时 kind 不丢
+    /// （get_promises kind enrich 的回读路径；差分器 /timeline/3/kind 分叉回归锁）。
+    #[test]
+    fn hooks_projection_keeps_multiline_notes_on_one_row_and_round_trips_kind() {
+        use crate::models::runtime_state::{HookKind, HookStatus};
+        let mut withdrawn = hook("H03");
+        withdrawn.kind = Some(HookKind::Artifact);
+        withdrawn.status = HookStatus::Superseded;
+        withdrawn.notes = "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01。".into();
+        let md = render_hooks_projection(&HooksState { hooks: vec![withdrawn] }, WritingLanguage::Zh, None);
+        let rows: Vec<&str> = md.lines().filter(|l| l.contains("H03")).collect();
+        assert_eq!(rows.len(), 1, "多行 notes 必须渲染为单行：{md}");
+        assert!(rows[0].contains("<br>"), "{}", rows[0]);
+        assert!(rows[0].contains("| superseded |"), "{}", rows[0]);
+        let parsed = crate::utils::story_markdown::parse_pending_hooks_markdown(&md);
+        let h03 = parsed.iter().find(|h| h.hook_id == "H03").expect("H03 回读");
+        assert_eq!(h03.kind, Some(HookKind::Artifact));
+        assert_eq!(h03.status, HookStatus::Superseded);
     }
 
     #[test]

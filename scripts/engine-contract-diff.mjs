@@ -36,6 +36,10 @@ const rustPort = argOf("--rust-port", "8901");
 const nodePort = argOf("--node-port", "8902");
 const mockPort = argOf("--mock-port", "1234");
 const keep = args.includes("--keep");
+// 810 号：分歧响应体预览长度可调（默认 300 保持日志形态）——字段级分叉常落在 300 字之外
+// （803/804/810 三轮都靠 --keep 现场或二次脚本才看到分叉字段），取证时设
+// INKOS_DIFF_BODY_PREVIEW=4000 一次看全。
+const BODY_PREVIEW = Math.max(60, Number(process.env.INKOS_DIFF_BODY_PREVIEW ?? "300") || 300);
 // 684 号：探测模式一等公民化——488/634 的「新增端点先活体探测双端 200 再入列」
 // 原为临时手搓，现固化为 --probe "<path1,path2,...>"。起齐 mock+双引擎+fixture
 // 后对候选 GET 逐个报状态码对与响应形状，不比对不计数；$BOOK=书名编码、
@@ -596,8 +600,8 @@ try {
         divergences += 1;
         console.log(`✗ legacy ${endpoint}：归一化后不一致`);
         console.log(`    首个分叉：${firstDiffPath(aNode, aRust) ?? "?"}`);
-        console.log(`    node=${a.slice(0, 260)}`);
-        console.log(`    rust=${b.slice(0, 260)}`);
+        console.log(`    node=${a.slice(0, BODY_PREVIEW)}`);
+        console.log(`    rust=${b.slice(0, BODY_PREVIEW)}`);
       }
     }
   };
@@ -844,8 +848,8 @@ try {
       } else {
         sharedDiffs += 1;
         console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(cn, cr) ?? "?"}` : ""}${declaredKeys}`);
-        console.log(`    node : ${JSON.stringify(cn).slice(0, 300)}`);
-        console.log(`    rust : ${JSON.stringify(cr).slice(0, 300)}`);
+        console.log(`    node : ${JSON.stringify(cn).slice(0, BODY_PREVIEW)}`);
+        console.log(`    rust : ${JSON.stringify(cr).slice(0, BODY_PREVIEW)}`);
       }
     }
 

@@ -116,7 +116,11 @@ const SETTLER_TEMPLATE = {
   hookOps: { upsert: [
     { hookId: "H01", startChapter: 1, type: "身世", status: "progressing", lastAdvancedChapter: 1, expectedPayoff: "第10章", notes: "镜中世界来历初现端倪。", kind: "suspense" },
     { hookId: "H02", startChapter: 2, type: "情感线", status: "open", lastAdvancedChapter: 0, expectedPayoff: "第8章", notes: "与镜灵的婚约誓言待启。", kind: "emotion" },
-    { hookId: "H03", startChapter: 2, type: "信物", status: "open", lastAdvancedChapter: 0, expectedPayoff: "第6章", notes: "碎镜夜半发光之谜。", kind: "artifact" },
+    // 810 号：H03 以 superseded 撤回（notes=撤回依据，reducer 两侧均要求非空并追加到
+    // 既有 notes）——双协议同源（TS submit_runtime_state_delta 工具支 / Rust 文本
+    // RUNTIME_STATE_DELTA）活体覆盖 805 号撤回生命周期；ANALYZER_HOOKS_TABLE 的 H03
+    // 仍为 pressured，故意压测「台账导入 merge 不得复活终态」（存量快照回放同款）。
+    { hookId: "H03", startChapter: 2, type: "信物", status: "superseded", lastAdvancedChapter: 0, expectedPayoff: "第6章", notes: "作者修订撤回：碎镜线并入 H01 身世线，不再独立回收。", kind: "artifact" },
   ] },
 };
 
