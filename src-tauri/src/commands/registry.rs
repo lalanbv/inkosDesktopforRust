@@ -146,8 +146,10 @@ async fn fetch_registry_index(
             }
             // best-effort 缓存（序列化已验签索引；写失败仅 warn，不阻断本次）
             if let Ok(toml_str) = toml::to_string(&index) {
-                if let Err(e) = std::fs::write(cache_path, toml_str) {
-                    tracing::warn!("写注册表缓存失败（不影响本次）: {e}");
+                // 786 号：原子写——缓存是 R6 单调新鲜性锚，torn 写（断电半截）=锚
+                // 丢失 → 降级防护失效直到下次成功拉取。0600 语义对同用户缓存无害。
+                if let Err(e) = inkos_desktop::util::atomic_write_0600(cache_path, toml_str.as_bytes()) {
+                    tracing::warn!("写注册表缓存失败（不影响本次）: {e:#}");
                 }
             }
             Ok(index)
@@ -359,9 +361,26 @@ mod tests {
 
     #[test]
     fn downgrade_non_rfc3339_fail_open() {
-        let cached = idx(Some("2026-08-07T00:00:00Z"));
+        let cached = idx(Some("not-a-date"));
         let bad = idx(Some("not-a-date"));
         assert!(!is_registry_downgrade(&bad, &cached), "非 RFC3339 → fail-open（兼容性）");
+    }
+
+    #[test]
+    fn cache_atomic_write_roundtrip_no_residue() {
+        // 786 号：缓存写走 atomic_write_0600（R6 单调新鲜性锚掉电存活）——
+        // 原子形态产出可解析缓存且零 tmp 残留。
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("registry-cache.toml");
+        let index = idx(Some("2026-11-01T00:00:00Z"));
+        let toml_str = toml::to_string(&index).unwrap();
+        inkos_desktop::util::atomic_write_0600(&cache_path, toml_str.as_bytes()).unwrap();
+
+        let parsed = read_cached_index(&cache_path).expect("原子写缓存应可解析");
+        assert_eq!(parsed.generated_at.as_deref(), Some("2026-11-01T00:00:00Z"));
+
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(entries.len(), 1, "原子写后应零 tmp 残留");
     }
 
     #[test]

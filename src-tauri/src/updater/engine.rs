@@ -481,6 +481,12 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes
             .with_context(|| format!("写下载文件失败: {}", dest.display()))?;
     }
     tmp.flush().with_context(|| format!("flush 下载失败: {}", dest.display()))?;
+    // 786 号：fsync 后再 persist（762 号「落盘后才 rename」形态补齐）——flush 只到
+    // page cache，断电可致 persist 后的终名半写。每更新一次的 ms 级开销（网络下载
+    // 量级面前可忽略），对齐 util.rs atomic_write_0600 的 M4 审计修复形态。
+    tmp.as_file()
+        .sync_all()
+        .with_context(|| format!("fsync 下载失败: {}", dest.display()))?;
     tmp.persist(dest)
         .map_err(|e| anyhow::anyhow!("persist 下载 {} 失败: {}", dest.display(), e.error))?;
     Ok(())

@@ -397,7 +397,11 @@ impl HostContext {
         // canonicalize 解析链接后再 starts_with。
         // 覆盖：test_write_file_rejects_symlinked_parent_dir、
         // test_read_file_rejects_symlink_to_outside、test_safe_extract_rejects_symlink。
-        std::fs::write(&normalized, content).map_err(|e| {
+        // 786 号：原子写（同目录 tmp + fsync + rename，util::atomic_write_0600）——
+        // 插件数据文件撕裂保护（宿主崩溃/断电不再留半截内容）；tmp 与终名同目录
+        // = 沙盒 contained，终名原子出现。配额语义不变：成功才计 content_len，
+        // 失败 NamedTempFile drop 自动清理 tmp 且下方 fetch_sub 回滚。
+        crate::util::atomic_write_0600(&normalized, content.as_bytes()).map_err(|e| {
             // 配额回滚：写失败未占用磁盘，不应消耗配额（否则反复失败的写入
             // 会把配额耗尽，插件即使从未成功写入也被永久拒绝）。
             self.written_bytes.fetch_sub(content_len, Ordering::SeqCst);
@@ -1512,6 +1516,15 @@ mod tests {
 
         // 验证文件确实存在
         assert!(temp_path.join("test.txt").exists());
+
+        // 786 号：原子写零残留——tmp 与终名同目录创建并 persist 消费，
+        // 写成功后数据目录应恰含这 1 个文件（无 .tmp 垃圾）。
+        let residue: Vec<_> = std::fs::read_dir(&temp_path)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(residue.len(), 1, "原子写后数据目录应恰含写入文件自身");
+        assert_eq!(residue[0].file_name().to_string_lossy(), "test.txt");
     }
 
     #[test]
