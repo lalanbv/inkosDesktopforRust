@@ -4483,7 +4483,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const hooksParsed = JSON.parse(
         await readFile(join(storyDir, "state", "hooks.json"), "utf-8"),
       ) as { hooks?: ReadonlyArray<Record<string, unknown>> };
-      const hooksMarkdown = await readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => "");
+      // 801 号：kind enrich 源=books/<id>/原始台账（14 列含分类；works 树的
+      // pending_hooks.md 是渲染投影——7 列无分类列，enrich 必落空）。rust
+      // get_promises 同源（book_dir/books 布局原始台账）；books 副本缺失
+      // （node 原生书）降级 works 树（无分类列→无 kind，优雅缺省）。
+      const hooksMarkdown = await readFile(
+        join(root, "books", id, "story", "pending_hooks.md"),
+        "utf-8",
+      ).catch(() => readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""));
       const kindById = new Map(
         parsePendingHooks(hooksMarkdown)
           .filter((hook) => hook.kind)
