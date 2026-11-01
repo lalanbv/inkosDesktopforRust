@@ -23,27 +23,47 @@ export async function resolveDurableStoryProgress(params: {
   readonly bookDir: string;
 }): Promise<number> {
   const chaptersDir = join(params.bookDir, "chapters");
-  let indexNumbers: number[];
-  let fileNumbers: number[];
+  // 789 号：index 缺失/损坏不再整体降级为 0（旧行为会让 index-less legacy 书的
+  // getNextChapterNumber 返回 1，write-next 覆盖既有第 1 章——788 号登记项），
+  // 改为容忍降级到文件名 `N_` 前缀的连续前缀（durable 产物链权威 = 章节文件本身）。
+  // index 有效时保留 2.0 一致性守卫（index/files 不一致即抛——fail-closed 完整性面，
+  // 比 Rust 的无守卫合并更严，属刻意保留的不对称）。
+  let indexNumbers: number[] | null = null;
   try {
-    const [indexRaw, entries] = await Promise.all([
-      readFile(join(chaptersDir, "index.json"), "utf-8"),
-      readdir(chaptersDir),
-    ]);
+    const indexRaw = await readFile(join(chaptersDir, "index.json"), "utf-8");
     const parsed = JSON.parse(indexRaw) as unknown;
-    if (!Array.isArray(parsed)) throw new Error("Chapter index must be an array.");
-    indexNumbers = parsed.map((entry) => {
-      const number = (entry as { number?: unknown })?.number;
-      if (!Number.isInteger(number) || (number as number) <= 0) throw new Error("Chapter index contains an invalid number.");
-      return number as number;
-    });
-    fileNumbers = entries.flatMap((entry) => {
-      const match = /^(\d+)_/u.exec(entry);
-      return match ? [Number.parseInt(match[1]!, 10)] : [];
-    });
+    if (!Array.isArray(parsed)) {
+      indexNumbers = null;
+    } else {
+      const numbers: number[] = [];
+      let allValid = true;
+      for (const entry of parsed) {
+        const number = (entry as { number?: unknown } | null)?.number;
+        if (!Number.isInteger(number) || (number as number) <= 0) {
+          allValid = false;
+          break;
+        }
+        numbers.push(number as number);
+      }
+      indexNumbers = allValid ? numbers : null;
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof SyntaxError)) {
+      throw error;
+    }
+    indexNumbers = null;
+  }
+  const entries = await readdir(chaptersDir).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
     throw error;
+  });
+  const fileNumbers = entries.flatMap((entry) => {
+    const match = /^(\d+)_/u.exec(entry);
+    return match ? [Number.parseInt(match[1]!, 10)] : [];
+  });
+  if (indexNumbers === null) {
+    // index 缺失/损坏：纯文件前缀（真 fresh 书两表皆空 → 0，语义不变）。
+    return resolveContiguousChapterPrefix(fileNumbers);
   }
   const indexed = new Set(indexNumbers);
   const files = new Set(fileNumbers);
