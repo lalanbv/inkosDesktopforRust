@@ -214,4 +214,47 @@ describe("788 legacy bootstrap", () => {
     expect(snapshot.hooks.hooks).toEqual([]);
     expect(snapshot.chapterSummaries.rows).toEqual([]);
   });
+
+  it("deduplicates summary rows on load and rewrites (790 audit: Rust dedup mirror)", async () => {
+    // existing summaries 含重复 chapter（1 两次，后覆盖）——Rust fast-path 查重
+    // → 慢路径去重重写；TS 同款：load 即去重 + 原子重写。
+    const bookDir = await tempBook();
+    await seedLegacyBook(bookDir);
+    const stateDir = join(bookDir, "story", "state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, "chapter_summaries.json"),
+      JSON.stringify({
+        rows: [
+          { chapter: 1, title: "old", characters: "", events: "", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+          { chapter: 1, title: "new", characters: "", events: "", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+          { chapter: 2, title: "推进", characters: "", events: "", stateChanges: "", hookActivity: "", mood: "", chapterType: "" },
+        ],
+      }),
+    );
+
+    const snapshot = await loadRuntimeStateSnapshot(bookDir);
+    expect(snapshot.chapterSummaries.rows.map((row) => [row.chapter, row.title])).toEqual([
+      [1, "new"],
+      [2, "推进"],
+    ]);
+    // 去重命中 → 重写落盘（幂等：再读稳定）。
+    const persisted = JSON.parse(await readFile(join(stateDir, "chapter_summaries.json"), "utf-8")) as {
+      rows: { chapter: number; title: string }[];
+    };
+    expect(persisted.rows).toHaveLength(2);
+    expect(persisted.rows[0]?.title).toBe("new");
+  });
+
+  it("rejects bootstrap output violating business validation (790 audit: post-bootstrap validate mirror)", async () => {
+    // markdown 含重复 hookId → bootstrap 派生重复 hooks → 业务校验拒绝
+    //（Rust load_runtime_state_snapshot bootstrap 后 validate_runtime_state 同款）。
+    const bookDir = await tempBook();
+    await seedLegacyBook(bookDir);
+    await writeFile(
+      join(bookDir, "story", "pending_hooks.md"),
+      "| H01 | 1 | mystery | open | 1 | a | x |\n| H01 | 2 | mystery | open | 2 | b | y |\n",
+    );
+    await expect(loadRuntimeStateSnapshot(bookDir)).rejects.toThrow(/duplicate_hook_id/);
+  });
 });

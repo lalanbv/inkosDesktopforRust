@@ -187,6 +187,14 @@ async function resolveRuntimeLanguage(
   return language === "zh" ? "zh" : "en";
 }
 
+/** summaries 行去重（Rust deduplicate_summary_rows 镜像）：同 chapter 保留
+ * 最后一次出现（后覆盖），顺序保持。 */
+function deduplicateSummaryRows<T extends { readonly chapter: number }>(rows: ReadonlyArray<T>): T[] {
+  const byChapter = new Map<number, T>();
+  for (const row of rows) byChapter.set(row.chapter, row);
+  return [...byChapter.values()];
+}
+
 export async function bootstrapStructuredStateFromMarkdown(params: {
   readonly bookDir: string;
 }): Promise<RuntimeStateSnapshot> {
@@ -204,15 +212,21 @@ export async function bootstrapStructuredStateFromMarkdown(params: {
   const language = await resolveRuntimeLanguage(bookDir, existingManifest?.language);
   const durableChapter = await resolveDurableArtifactProgressTolerant(bookDir);
 
-  // summaries：existing 保留；缺失/损坏 → markdown 派生（chapter≥1 且标题非空
-  // ——ChapterSummaryRowSchema strict 约束；tension 列为 2.0 schema 外字段，剥离）。
-  const summaries =
+  // summaries：existing 去重（Rust deduplicate_summary_rows 镜像——同 chapter 后
+  // 覆盖；去重命中即重写，对应 Rust fast-path 查重→慢路径去重的语义，790 号审计
+  // 补齐）；缺失/损坏 → markdown 派生（chapter≥1 且标题非空——
+  // ChapterSummaryRowSchema strict 约束；tension 列为 2.0 schema 外字段，剥离）。
+  const rawSummaries =
     existingSummaries ??
     {
       rows: parseChapterSummariesMarkdown(await readBookMarkdown(bookDir, "chapter_summaries.md"))
         .filter((row) => row.chapter >= 1 && row.title.length > 0)
         .map(({ conflictLevel: _conflictLevel, revealLevel: _revealLevel, ...row }) => row),
     };
+  const dedupedRows = deduplicateSummaryRows(rawSummaries.rows);
+  const summaries = { rows: dedupedRows };
+  const summariesRewritten =
+    !existingSummaries || dedupedRows.length !== rawSummaries.rows.length;
 
   // hooks：existing 保留；缺失/损坏 → markdown 派生（type 空白 → "unspecified"、
   // status 词表外 → "open"——HookRecordSchema 约束镜像 Rust normalize_hook_type）。
@@ -259,9 +273,10 @@ export async function bootstrapStructuredStateFromMarkdown(params: {
           projectionVersion: existingManifest?.projectionVersion ?? 1,
         };
 
-  // 只物化缺失/损坏的件 + 重算过的 manifest；全 fresh → 零写（不触 markdown）。
+  // 只物化缺失/损坏的件 + 去重命中重写 + 重算过的 manifest；全 fresh → 零写
+  // （不触 markdown）。
   const writes: Array<{ readonly relativePath: string; readonly content: string }> = [];
-  if (!existingSummaries) {
+  if (summariesRewritten) {
     writes.push({
       relativePath: join("story", "state", "chapter_summaries.json"),
       content: `${JSON.stringify(summaries, null, 2)}\n`,

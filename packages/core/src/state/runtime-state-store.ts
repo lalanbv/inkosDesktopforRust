@@ -67,7 +67,10 @@ export async function loadRuntimeStateSnapshot(bookDir: string): Promise<Runtime
   // 788 号：legacy 书（状态四件缺失或损坏）→ ensure 补齐——Rust
   // load_runtime_state_snapshot 先 bootstrap 再读的同语义镜像（此前 ENOENT
   // 直抛，Node 回退腿上 legacy 书写链失败而 Rust 腿自愈=双栈发散）。
-  return bootstrapStructuredStateFromMarkdown({ bookDir });
+  // 790 号审计修正：Rust 在 bootstrap 后仍走 validate_runtime_state（issues 非空
+  // 即 Constraint）——镜像同款，bootstrap 派生产物不过业务校验即返回=发散残留。
+  const bootstrapped = await bootstrapStructuredStateFromMarkdown({ bookDir });
+  return validateLoadedSnapshot(bootstrapped, "persisted runtime state");
 }
 
 export async function loadRuntimeStateSnapshotAtChapter(params: {
