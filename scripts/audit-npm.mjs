@@ -40,7 +40,9 @@ const ACCEPTED = new Map([
   // katex GHSA-238p-pmpm-9mq7（low）：补丁线 >=0.18.2 为跨 major（streamdown 依赖
   // katex 0.16 线）；fork 阅读器渲染自有内容，原型污染需恶意 LaTeX 输入。
   // streamdown 升级 katex 线时移除本条即恢复拦截。
-  ["katex", { reason: "low；补丁线 0.18.2 跨 major（streamdown 依赖 0.16 线）；渲染面需恶意输入方可触发", since: "688" }],
+  // 824 号：streamdown 2.7.1 已移除自身 katex 依赖——0.16 线现由 @streamdown/math
+  // 的 katex ^0.16.27 契约拉入（math 插件渲染面），条目维持、理由更新。
+  ["katex", { reason: "low；补丁线 0.18.2 跨 major（@streamdown/math 钉 katex ^0.16.27，streamdown 2.7 已移除自身 katex）；渲染面需恶意输入方可触发", since: "688" }],
   // 700 号：esbuild GHSA-g7r4-m6w7-qqqr（low，Windows dev server 任意读）——
   // 补丁线 >=0.28.1 但 vite 6.4.1 与 esbuild 0.25 配对；esbuild@<0.28 override
   // 强提 0.28 会破坏 vite:esbuild-transpile（studio client build 活体实证）。
