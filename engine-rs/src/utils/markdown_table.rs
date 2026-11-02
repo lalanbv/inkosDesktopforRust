@@ -19,7 +19,19 @@ fn restore_br_re() -> &'static Regex {
 }
 
 /// 渲染：单元格转义（竖线 → `\|`、换行 → `<br>`、首尾空白 trim）。
+///
+/// 817 号：单次字节扫描快速路径——无 `|`/`\n`/`\r` 的常见单元格直接 trim 返回，避免
+/// 逐替换扫描。810 号补换行转义后 projections 渲染（每章落盘热路径，100 钩子×14 格）
+/// 逐格多两次子串扫描，bench 实测 hooks +54%/summaries +70%（基线 11-01，先于 810）
+/// ——本快速路径恢复基线并略优（常见格：1 次扫描+trim，旧形态为 1 次扫描+2 次分配）。
 pub fn escape_table_cell(value: &str) -> String {
+    let needs_escape = value
+        .as_bytes()
+        .iter()
+        .any(|&b| b == b'|' || b == b'\n' || b == b'\r');
+    if !needs_escape {
+        return value.trim().to_string();
+    }
     value
         .replace('|', "\\|")
         .replace("\r\n", "<br>")
