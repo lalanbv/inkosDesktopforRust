@@ -46,19 +46,16 @@ const REGISTRY = "https://registry.npmjs.org/";
 // 消化至 5 条；30 键 override 见根 package.json pnpm.overrides），剩余为
 // 跨 major 决策/无补丁线/低危渲染面，逐条定性如下：
 const ACCEPTED = new Map([
-  // vitest/@vitest/mocker：补丁线在 vitest 4.1.11+，上游 2.0 pin ^3.0.0（版本对齐 2.0.0
-  // 是上游发布契约）——跨 major 升级须随上游动作，不在 fork 侧单独跳线。
-  // dev-only 暴露面：UI server（GHSA-5xrq）与 mocker redirect（GHSA-82fw）仅在
-  // 跑测试时监听/生效，不进生产产物。上游 vitest 升 4 时移除本条即恢复拦截。
-  // 854 号：mocker 补 GHSA-qxg6-89mg-rqv8（2026-10 新发，dev-server WebSocket 未认证
-  // mock 注册注入代码）——此前整模块放行从未单独定性；patched >=4.1.12 同样依赖
-  // vitest 4 跨 major，暴露面同类（仅测试期 dev server 可达，须先连上本机 WS），
-  // 一并定性接受、随上游 vitest 4 一并消除。
-  ["vitest", { ids: ["GHSA-5xrq-8626-4rwp", "GHSA-82fw-gwwq-j7x9"], reason: "上游 2.0 pin ^3.0.0 跨 major 待随上游升级；dev-only（UI server 仅测试期监听）", since: "688" }],
-  ["@vitest/mocker", { ids: ["GHSA-82fw-gwwq-j7x9", "GHSA-qxg6-89mg-rqv8"], reason: "同 vitest：补丁线 4.1.11+/4.1.12 依赖 vitest 4；dev-only（mocker 仅测试期生效，须先连上本机 dev server WS）", since: "688/854" }],
-  // braces GHSA-vfj7-8cjw-p6xm：patched <0.0.0（无补丁线，501 号同型先例——
-  // 无补丁线即当前最新为终态，跟进上游发版）。
-  ["braces", { ids: ["GHSA-vfj7-8cjw-p6xm"], reason: "无补丁线（patched <0.0.0），当前最新即终态，跟进上游", since: "688" }],
+  // 858 号：vitest/@vitest/mocker 两钉定摘除（688 号立「随上游跳线」、854 号收窄至
+  // id 钉定）——本轮改判：dev-only 依赖的 package.json 一行差异对上游合并成本可忽略
+  // （与 core/studio/cli 发布版本号解耦），而三条 advisory 的持续再定性负担是真实负债。
+  // 活体=vitest ^3.0.0→^5.1.0 跨两 major（vite 6.4.5 满足 v5 peer ^6.4.0，msw 2.12.13
+  // 满足 mocker peer；三包套件 998+725+81 全绿零测试代码改动），GHSA-5xrq-8626-4rwp /
+  // GHSA-82fw-gwwq-j7x9 / GHSA-qxg6-89mg-rqv8 随补丁线（4.1.11+/4.1.12，5.x 全含）出清。
+  // 白名单条目移除即恢复拦截：同模块再现任何新 id 一律红。
+  // 858 号：braces 钉定摘除（688 号立）——GHSA-vfj7-8cjw-p6xm 已不在 pnpm audit
+  // 报告面（857 号实报 10 条即无 braces；树内 3.0.3=latest，公告面上游侧更新后
+  // 不再命中）。移除条目即恢复拦截：若公告面再现须重新定性再加回。
   // katex GHSA-238p-pmpm-9mq7（low）：补丁线 >=0.18.2 为跨 major（streamdown 依赖
   // katex 0.16 线）；fork 阅读器渲染自有内容，原型污染需恶意 LaTeX 输入。
   // streamdown 升级 katex 线时移除本条即恢复拦截。
