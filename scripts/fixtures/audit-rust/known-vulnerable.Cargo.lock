@@ -1,0 +1,25 @@
+# 847 号：audit:rust 门禁的「必红用例」夹具——故意钉在带 RustSec advisory 的旧版本，
+# 供 scripts/audit-rust.mjs --self-check 喂入 `cargo audit -n -f` 证明检测器活着。
+#
+# 背景（846 号恒绿事故）：cargo-audit 0.22 把汇总行打在 stderr，旧脚本丢弃 stderr 后
+# 对任何输入都报「0 漏洞」——恒绿与真绿在日志上同形，只能靠喂一个已知红的输入区分。
+#
+# 本文件**永远不该被"修复"**：两组互不相关的 crate 各自命中多条 advisory（任一组被
+# RustSec 撤回也不会让夹具整体转绿）。cargo-audit 按 name+version 匹配，但**只匹配
+# 带 `source = registry+…` 的条目**（无 source 视为本地 path 包直接跳过——847 号实测
+# 夹具自身就曾因此恒绿），checksum/依赖图不需要。若自检开始失败，先怀疑解析器/工具
+# 版本/夹具 source 行，不是改版本号。
+#
+#   zip 2.6.1      → RUSTSEC-2026-0367 / 0368 / 0369（9.1 critical）/ 0429（extract() 四连）
+#   smallvec 0.6.9 → RUSTSEC-2019-0009 / 2019-0012 / 2021-0003（grow/insert_many 内存破坏）
+version = 4
+
+[[package]]
+name = "zip"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "smallvec"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
