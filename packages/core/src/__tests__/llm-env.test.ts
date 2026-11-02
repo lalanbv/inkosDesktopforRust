@@ -21,11 +21,11 @@ describe("loadLLMEnvLayers", () => {
   it("exposes project .env variables through process.env for apiKeyEnv consumers", async () => {
     root = await mkdtemp(join(tmpdir(), "inkos-llm-env-"));
     delete process.env.GOOGLE_API_KEY;
-    await writeFile(join(root, ".env"), "GOOGLE_API_KEY=sk-from-project-env\n", "utf-8");
+    await writeFile(join(root, ".env"), "GOOGLE_API_KEY=test-key-from-project-env\n", "utf-8");
 
     const layers = await loadLLMEnvLayers(root);
 
-    expect(layers.project.GOOGLE_API_KEY).toBe("sk-from-project-env");
-    expect(process.env.GOOGLE_API_KEY).toBe("sk-from-project-env");
+    expect(layers.project.GOOGLE_API_KEY).toBe("test-key-from-project-env");
+    expect(process.env.GOOGLE_API_KEY).toBe("test-key-from-project-env");
   });
 });

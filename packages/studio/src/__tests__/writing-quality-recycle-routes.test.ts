@@ -13,6 +13,9 @@ import { createStudioServer } from "../api/server.js";
  * 双端 body 同构已证——fixture 同文阈值无漂移）。
  */
 describe("writing quality recycle routes (717)", () => {
+  // 855 号：测试键占位符——可经环境注入（真实凭据只走 env/密钥服务，源码不落字面量），
+  // 回退值仅为让 fixture 密钥文件形态合法的非凭据占位符。
+  const testKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "writing-quality-recycle-"));
@@ -34,7 +37,7 @@ describe("writing quality recycle routes (717)", () => {
     );
     await writeFile(
       join(dir, "secrets.json"),
-      JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }),
+      JSON.stringify({ services: { "custom:Mock": { apiKey: testKey } } }),
       "utf-8",
     );
   });

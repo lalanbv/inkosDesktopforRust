@@ -103,7 +103,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { moonshot: { apiKey: "sk-moon" } } }, null, 2),
+      JSON.stringify({ services: { moonshot: { apiKey: "test-key-moon" } } }, null, 2),
       "utf-8",
     );
 
@@ -113,7 +113,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(config.llm.model).toBe("kimi-k2.5");
-    expect(config.llm.apiKey).toBe("sk-moon");
+    expect(config.llm.apiKey).toBe("test-key-moon");
     expect(config.llm.temperature).toBe(1);
   });
 
@@ -139,7 +139,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { minimax: { apiKey: "sk-minimax" } } }, null, 2),
+      JSON.stringify({ services: { minimax: { apiKey: "test-key-minimax" } } }, null, 2),
       "utf-8",
     );
 
@@ -149,7 +149,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://api.minimaxi.com/v1");
     expect(config.llm.model).toBe("MiniMax-M2.7");
-    expect(config.llm.apiKey).toBe("sk-minimax");
+    expect(config.llm.apiKey).toBe("test-key-minimax");
   });
 
   it("loads custom service config using custom secret key and entry baseUrl", async () => {
@@ -174,7 +174,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "sk-corp" } } }, null, 2),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }, null, 2),
       "utf-8",
     );
 
@@ -184,7 +184,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("custom");
     expect(config.llm.baseUrl).toBe("https://llm.internal.corp/v1");
     expect(config.llm.model).toBe("corp-chat");
-    expect(config.llm.apiKey).toBe("sk-corp");
+    expect(config.llm.apiKey).toBe("test-key-corp");
     expect(config.llm.temperature).toBe(0.9);
     expect(config.llm.apiFormat).toBe("responses");
     expect(config.llm.stream).toBe(false);
@@ -214,12 +214,12 @@ describe("loadProjectConfig local provider auth", () => {
       "INKOS_LLM_PROVIDER=openai",
       "INKOS_LLM_BASE_URL=https://api-vip.codex-for.me/v1",
       "INKOS_LLM_MODEL=gpt-5.4",
-      "INKOS_LLM_API_KEY=sk-env",
+      "INKOS_LLM_API_KEY=test-key-env",
     ].join("\n"), "utf-8");
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "sk-corp" } } }, null, 2),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }, null, 2),
       "utf-8",
     );
 
@@ -229,7 +229,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("custom");
     expect(config.llm.baseUrl).toBe("https://llm.internal.corp/v1");
     expect(config.llm.model).toBe("corp-chat");
-    expect(config.llm.apiKey).toBe("sk-corp");
+    expect(config.llm.apiKey).toBe("test-key-corp");
   });
 
   it("does not mix stale top-level env-era model/baseUrl with selected Studio service", async () => {
@@ -248,7 +248,7 @@ describe("loadProjectConfig local provider auth", () => {
         service: "google",
         model: "kimi-k2.5",
         baseUrl: "https://api.moonshot.cn/v1",
-        apiKey: "sk-moon-inline",
+        apiKey: "test-key-moon-inline",
         services: [
           { service: "google", temperature: 0.7, apiFormat: "chat", stream: true },
           { service: "moonshot", temperature: 1, apiFormat: "chat", stream: true },
@@ -261,15 +261,15 @@ describe("loadProjectConfig local provider auth", () => {
       "INKOS_LLM_PROVIDER=custom",
       "INKOS_LLM_BASE_URL=https://api.moonshot.cn/v1",
       "INKOS_LLM_MODEL=kimi-k2.5",
-      "INKOS_LLM_API_KEY=sk-env-moon",
+      "INKOS_LLM_API_KEY=test-key-env-moon",
     ].join("\n"), "utf-8");
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
       JSON.stringify({
         services: {
-          google: { apiKey: "sk-google" },
-          moonshot: { apiKey: "sk-moon" },
+          google: { apiKey: "test-key-google" },
+          moonshot: { apiKey: "test-key-moon" },
         },
       }, null, 2),
       "utf-8",
@@ -282,7 +282,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(config.llm.model).toBe("gemini-2.5-flash");
-    expect(config.llm.apiKey).toBe("sk-google");
+    expect(config.llm.apiKey).toBe("test-key-google");
   });
 
   it("falls back to env when Studio config is still the empty bootstrap state", async () => {
@@ -295,7 +295,7 @@ describe("loadProjectConfig local provider auth", () => {
     process.env.INKOS_LLM_PROVIDER = "openai";
     process.env.INKOS_LLM_BASE_URL = "https://api-vip.codex-for.me/v1";
     process.env.INKOS_LLM_MODEL = "gpt-5.4";
-    process.env.INKOS_LLM_API_KEY = "sk-env";
+    process.env.INKOS_LLM_API_KEY = "test-key-env";
 
     await writeFile(join(root, "inkos.json"), JSON.stringify({
       name: "studio-bootstrap-project",
@@ -320,6 +320,6 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://api-vip.codex-for.me/v1");
     expect(config.llm.model).toBe("gpt-5.4");
-    expect(config.llm.apiKey).toBe("sk-env");
+    expect(config.llm.apiKey).toBe("test-key-env");
   });
 });

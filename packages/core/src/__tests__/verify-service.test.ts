@@ -19,7 +19,7 @@ describe("verifyService (B9)", () => {
       // 后续 chat 请求失败（测试环境没真实 openai SDK 支持），但这 OK —— 只要 chat 被尝试了就行
       .mockRejectedValue(new Error("test: no real chat backend"));
 
-    const result = await verifyService("openai", "sk-test");
+    const result = await verifyService("openai", "test-key-test");
     expect(result.probe.ok).toBe(true);
     expect(result.probe.models).toBe(2);
     // chat 字段不为 null 说明 checkModel 存在 + chat 步骤被执行（ok=true/false 都可以）
@@ -42,7 +42,7 @@ describe("verifyService (B9)", () => {
 
   it("probe 网络挂 → probe.ok=false, error 是 fetch 错误", async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as typeof fetch;
-    const result = await verifyService("openai", "sk-test");
+    const result = await verifyService("openai", "test-key-test");
     expect(result.probe.ok).toBe(false);
     expect(result.probe.error).toContain("ECONNREFUSED");
   });
@@ -56,7 +56,7 @@ describe("verifyService (B9)", () => {
       .mockRejectedValue(new Error("test: no real chat backend"));
     global.fetch = fetchMock as typeof fetch;
 
-    const result = await verifyService("openai", "sk-test", { proxyUrl: "http://127.0.0.1:9910" });
+    const result = await verifyService("openai", "test-key-test", { proxyUrl: "http://127.0.0.1:9910" });
     expect(result.probe.ok).toBe(true);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       dispatcher: expect.any(Object),
@@ -65,12 +65,12 @@ describe("verifyService (B9)", () => {
 
   it("provider 没 checkModel（custom baseUrl 空）→ chat 字段返回 null，不发 chat 请求", async () => {
     // custom 没 checkModel，verifyService 跳过 chat step
-    const result = await verifyService("custom", "sk-x");
+    const result = await verifyService("custom", "test-key-x");
     expect(result.chat).toBeNull();
   });
 
   it("未知 service → probe 报 '无 baseUrl'", async () => {
-    const result = await verifyService("nonexistent-xyz", "sk-test");
+    const result = await verifyService("nonexistent-xyz", "test-key-test");
     expect(result.probe.ok).toBe(false);
     expect(result.probe.error).toContain("baseUrl");
   });

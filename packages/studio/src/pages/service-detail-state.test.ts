@@ -8,6 +8,12 @@ import {
   saveServiceConfig,
 } from "./service-detail-state";
 
+// 855 号：测试键占位符——可经环境注入（真实凭据只走 env/密钥服务，源码不落字面量），
+// 回退值仅为让断言成立的非凭据形态占位符。
+const liveKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-live";
+const orKey = process.env.INKOS_TEST_LLM_KEY_OPENROUTER ?? "test-key-openrouter";
+const badKey = process.env.INKOS_TEST_LLM_KEY_BAD ?? "test-key-invalid";
+
 describe("mergeServiceDetailModels", () => {
   it("keeps discovered and user-added models in one stable catalog", () => {
     expect(mergeServiceDetailModels(
@@ -62,7 +68,7 @@ describe("rehydrateServiceConnectionStatus", () => {
   it("loads saved key without probing models on page load", async () => {
     const fetchJsonImpl = vi.fn(async (path: string) => {
       if (path === "/services/openai/secret") {
-        return { apiKey: "sk-live" };
+        return { apiKey: liveKey };
       }
       throw new Error(`unexpected path: ${path}`);
     });
@@ -80,7 +86,7 @@ describe("rehydrateServiceConnectionStatus", () => {
     expect(fetchJsonImpl).toHaveBeenCalledTimes(1);
     expect(fetchJsonImpl).toHaveBeenCalledWith("/services/openai/secret");
     expect(result).toMatchObject({
-      apiKey: "sk-live",
+      apiKey: liveKey,
       detectedModel: "",
       detectedConfig: null,
       status: { state: "idle" },
@@ -193,7 +199,7 @@ describe("saveServiceConfig", () => {
       serviceId: "openai",
       isCustom: false,
       resolvedCustomName: "",
-      apiKey: "sk-live",
+      apiKey: liveKey,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,
@@ -208,8 +214,8 @@ describe("saveServiceConfig", () => {
       "/services/config",
     ]);
     expect(bodies).toEqual([
-      { apiKey: "sk-live", apiFormat: "chat", stream: true },
-      { apiKey: "sk-live" },
+      { apiKey: liveKey, apiFormat: "chat", stream: true },
+      { apiKey: liveKey },
       {
         service: "openai",
         defaultModel: "gpt-5.5",
@@ -291,14 +297,14 @@ describe("saveServiceConfig", () => {
       serviceId: "openai",
       isCustom: false,
       resolvedCustomName: "",
-      apiKey: "sk-live",
+      apiKey: liveKey,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,
       temperature: "0.7",
       detectedModel: "",
       verifiedProbe: {
-        apiKey: "sk-live",
+        apiKey: liveKey,
         baseUrl: "",
         apiFormat: "chat",
         stream: true,
@@ -314,7 +320,7 @@ describe("saveServiceConfig", () => {
       "/services/config",
     ]);
     expect(bodies).toEqual([
-      { apiKey: "sk-live" },
+      { apiKey: liveKey },
       {
         service: "openai",
         defaultModel: "gpt-5.5",
@@ -352,7 +358,7 @@ describe("saveServiceConfig", () => {
       serviceId: "openrouter",
       isCustom: false,
       resolvedCustomName: "",
-      apiKey: "sk-or",
+      apiKey: orKey,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,
@@ -379,7 +385,7 @@ describe("saveServiceConfig", () => {
       calls.push(path);
       if (path === "/services/openai/test") {
         expect(init?.body ? JSON.parse(init.body) : null).toEqual({
-          apiKey: "sk-bad",
+          apiKey: badKey,
           apiFormat: "chat",
           stream: true,
         });
@@ -393,7 +399,7 @@ describe("saveServiceConfig", () => {
       serviceId: "openai",
       isCustom: false,
       resolvedCustomName: "",
-      apiKey: "sk-bad",
+      apiKey: badKey,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,

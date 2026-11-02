@@ -25,21 +25,21 @@ describe("secrets", () => {
       await mkdir(join(root, ".inkos"), { recursive: true });
       await writeFile(
         join(root, ".inkos", "secrets.json"),
-        JSON.stringify({ services: { moonshot: { apiKey: "sk-test" } } }),
+        JSON.stringify({ services: { moonshot: { apiKey: "test-key-test" } } }),
       );
       const secrets = await loadSecrets(root);
-      expect(secrets.services.moonshot.apiKey).toBe("sk-test");
+      expect(secrets.services.moonshot.apiKey).toBe("test-key-test");
     });
   });
 
   describe("saveSecrets", () => {
     it("creates .inkos dir and writes secrets file", async () => {
       await saveSecrets(root, {
-        services: { deepseek: { apiKey: "sk-deep" } },
+        services: { deepseek: { apiKey: "test-key-deep" } },
       });
       const raw = await readFile(join(root, ".inkos", "secrets.json"), "utf-8");
       const parsed = JSON.parse(raw);
-      expect(parsed.services.deepseek.apiKey).toBe("sk-deep");
+      expect(parsed.services.deepseek.apiKey).toBe("test-key-deep");
     });
 
     it("overwrites existing secrets file", async () => {
@@ -62,16 +62,16 @@ describe("secrets", () => {
       await mkdir(join(root, ".inkos"), { recursive: true });
       await writeFile(
         join(root, ".inkos", "secrets.json"),
-        JSON.stringify({ services: { moonshot: { apiKey: "sk-from-file" } } }),
+        JSON.stringify({ services: { moonshot: { apiKey: "test-key-from-file" } } }),
       );
       const key = await getServiceApiKey(root, "moonshot");
-      expect(key).toBe("sk-from-file");
+      expect(key).toBe("test-key-from-file");
     });
 
     it("falls back to environment variable", async () => {
-      vi.stubEnv("MOONSHOT_API_KEY", "sk-from-env");
+      vi.stubEnv("MOONSHOT_API_KEY", "test-key-from-env");
       const key = await getServiceApiKey(root, "moonshot");
-      expect(key).toBe("sk-from-env");
+      expect(key).toBe("test-key-from-env");
       vi.unstubAllEnvs();
     });
 
@@ -85,11 +85,11 @@ describe("secrets", () => {
       await writeFile(
         join(root, ".inkos", "secrets.json"),
         JSON.stringify({
-          services: { "custom:内网GPT": { apiKey: "sk-custom" } },
+          services: { "custom:内网GPT": { apiKey: "test-key-custom" } },
         }),
       );
       const key = await getServiceApiKey(root, "custom:内网GPT");
-      expect(key).toBe("sk-custom");
+      expect(key).toBe("test-key-custom");
     });
   });
 });

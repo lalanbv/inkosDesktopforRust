@@ -14,6 +14,9 @@ import { CHAPTER_STATUSES } from "@actalk/inkos-core";
  * 状态写面 roundtrip（ChapterMeta.status 可选键 709 号自毁键教训）。
  */
 describe("chapter pipeline recycle routes (714)", () => {
+  // 855 号：测试键占位符——可经环境注入（真实凭据只走 env/密钥服务，源码不落字面量），
+  // 回退值仅为让 fixture 密钥文件形态合法的非凭据占位符。
+  const testKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "chapter-pipeline-recycle-"));
@@ -41,7 +44,7 @@ describe("chapter pipeline recycle routes (714)", () => {
     );
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }),
+      JSON.stringify({ services: { "custom:Mock": { apiKey: testKey } } }),
       "utf-8",
     );
   };

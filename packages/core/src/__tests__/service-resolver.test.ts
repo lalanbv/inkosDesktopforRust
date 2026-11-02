@@ -61,13 +61,13 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { moonshot: { apiKey: "sk-moon" } } }),
+      JSON.stringify({ services: { moonshot: { apiKey: "test-key-moon" } } }),
     );
 
     const result = await resolveServiceModel("moonshot", "kimi-k2.5", root);
 
     expect(result.model.id).toBe("kimi-k2.5");
-    expect(result.apiKey).toBe("sk-moon");
+    expect(result.apiKey).toBe("test-key-moon");
     expect(result.writingTemperature).toBe(1.0);
     expect(result.temperatureRange).toEqual([0, 1]);
   });
@@ -76,12 +76,12 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { deepseek: { apiKey: "sk-deep" } } }),
+      JSON.stringify({ services: { deepseek: { apiKey: "test-key-deep" } } }),
     );
 
     const result = await resolveServiceModel("deepseek", "deepseek-chat", root);
 
-    expect(result.apiKey).toBe("sk-deep");
+    expect(result.apiKey).toBe("test-key-deep");
     expect(result.writingTemperature).toBe(1.5);
     expect(result.temperatureRange).toEqual([0, 2]);
   });
@@ -90,7 +90,7 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { google: { apiKey: "sk-google" } } }),
+      JSON.stringify({ services: { google: { apiKey: "test-key-google" } } }),
     );
 
     const result = await resolveServiceModel("google", "gemini-pro-latest", root);
@@ -105,7 +105,7 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { deepseek: { apiKey: "sk-deep" } } }),
+      JSON.stringify({ services: { deepseek: { apiKey: "test-key-deep" } } }),
     );
 
     const result = await resolveServiceModel("deepseek", "deepseek-v4-pro", root);
@@ -120,7 +120,7 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { deepseek: { apiKey: "sk-deep" } } }),
+      JSON.stringify({ services: { deepseek: { apiKey: "test-key-deep" } } }),
     );
 
     // "deepseek-chat" is NOT in KNOWN_MODELS, so getModel returns undefined
@@ -131,15 +131,15 @@ describe("resolveServiceModel", () => {
     expect(result.model.api).toBe("openai-completions");
     expect(result.model.baseUrl).toBe("https://api.deepseek.com");
     expect(result.model.provider).toBe("openai");
-    expect(result.apiKey).toBe("sk-deep");
+    expect(result.apiKey).toBe("test-key-deep");
   });
 
   it("falls back to env var when no secrets file", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "sk-env");
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key-env");
 
     const result = await resolveServiceModel("deepseek", "deepseek-chat", root);
 
-    expect(result.apiKey).toBe("sk-env");
+    expect(result.apiKey).toBe("test-key-env");
   });
 
   it("throws when no key found", async () => {
@@ -193,7 +193,7 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "sk-corp" } } }),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }),
     );
 
     const result = await resolveServiceModel(
@@ -203,7 +203,7 @@ describe("resolveServiceModel", () => {
       "https://llm.internal.corp/v1",
     );
 
-    expect(result.apiKey).toBe("sk-corp");
+    expect(result.apiKey).toBe("test-key-corp");
     expect(result.model.id).toBe("gpt-4o");
   });
 
@@ -211,7 +211,7 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "sk-corp" } } }),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }),
     );
 
     const result = await resolveServiceModel(
@@ -222,7 +222,7 @@ describe("resolveServiceModel", () => {
       "responses",
     );
 
-    expect(result.apiKey).toBe("sk-corp");
+    expect(result.apiKey).toBe("test-key-corp");
     expect(result.model.id).toBe("gpt-5.4");
     expect(result.model.api).toBe("openai-responses");
   });
@@ -231,12 +231,12 @@ describe("resolveServiceModel", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { minimax: { apiKey: "sk-minimax" } } }),
+      JSON.stringify({ services: { minimax: { apiKey: "test-key-minimax" } } }),
     );
 
     const result = await resolveServiceModel("minimax", "MiniMax-M2.7", root);
 
-    expect(result.apiKey).toBe("sk-minimax");
+    expect(result.apiKey).toBe("test-key-minimax");
     expect(result.model.baseUrl).toBe("https://api.minimaxi.com/v1");
     expect(result.model.api).toBe("openai-completions");
     expect(result.model.provider).toBe("openai");

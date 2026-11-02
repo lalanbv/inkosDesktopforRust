@@ -115,7 +115,9 @@ async function runLeg(engine) {
     join(root, "inkos.json"),
     JSON.stringify({ name: `inkos-epub-smoke-${engine}`, version: "0.1.0", services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }] }),
   );
-  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }));
+  // 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）。
+  const mockKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: mockKey } } }));
 
   if (engine === "node") {
     startChild(

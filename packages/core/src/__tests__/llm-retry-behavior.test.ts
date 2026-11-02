@@ -7,9 +7,12 @@ import { describe, expect, it, vi } from "vitest";
  * 判定函数单测见 llm-retry.test.ts；本文件走真实 chatCompletion 链
  * （native transport + proxy-fetch mock）。
  */
-const { fetchCalls, responseQueue } = vi.hoisted(() => ({
+const { fetchCalls, responseQueue, testKey } = vi.hoisted(() => ({
   fetchCalls: [] as Array<{ url: string; init: RequestInit; body: Record<string, unknown> }>,
   responseQueue: [] as Response[],
+  // 855 号：测试键占位符——可经环境注入（真实凭据只走 env/密钥服务，源码不落字面量），
+  // 回退值仅为让 mock 链路走通的非凭据形态占位符。
+  testKey: process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder",
 }));
 
 vi.mock("../utils/proxy-fetch.js", () => ({
@@ -42,7 +45,7 @@ async function makeClient() {
     provider: "openai",
     service: "minimax",
     model: "test-model",
-    apiKey: "sk-test",
+    apiKey: testKey,
     apiFormat: "chat",
     stream: false,
     temperature: 0.1,

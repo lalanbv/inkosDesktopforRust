@@ -32,7 +32,7 @@ describe("embedding client (G1/348)", () => {
 
   it("openai-compatible: posts batch input with bearer auth to /embeddings", async () => {
     mockFetch({ data: [{ embedding: [1, 2] }, { embedding: [3, 4] }] });
-    vi.stubEnv("TEST_KEY_ENV", "sk-test");
+    vi.stubEnv("TEST_KEY_ENV", "test-key-embedded");
     const client = createEmbeddingClient({
       provider: "openai-compatible",
       baseUrl: "http://127.0.0.1:9/v1",
@@ -45,7 +45,9 @@ describe("embedding client (G1/348)", () => {
     expect(captured[0]!.url).toBe("http://127.0.0.1:9/v1/embeddings");
     const body = JSON.parse(String(captured[0]!.init.body));
     expect(body).toEqual({ model: "text-embedding-x", input: ["甲", "乙"] });
-    expect((captured[0]!.init.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+    expect((captured[0]!.init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer test-key-embedded",
+    );
   });
 
   it("ollama: posts batch input to /api/embed without auth", async () => {

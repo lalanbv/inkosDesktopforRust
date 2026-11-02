@@ -109,7 +109,9 @@ async function runEngineLeg(engine) {
     join(root, "inkos.json"),
     JSON.stringify({ name: `inkos-smoke-${engine}`, version: "0.1.0", services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }] }),
   );
-  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }));
+  // 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）。
+  const mockKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: mockKey } } }));
   // 632 号：genre 读面穿越探针的诱饵（项目根、genres 目录之外——旧码可经
   // `..%2Fdecoy` 直读此文件，守卫后应 400）。
   writeFileSync(join(root, "decoy.md"), "# decoy\n\n陷阱文件：不应被任何路由读出。\n");

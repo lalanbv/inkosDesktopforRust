@@ -156,8 +156,10 @@ if (args.engine === "node") {
       services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${args.mockPort}/v1` }],
     },
   }, null, 2));
+  // 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）。
+  const mockKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
   writeFileSync(join(args.root, ".inkos", "secrets.json"), JSON.stringify({
-    services: { "custom:Mock": { apiKey: "sk-mock" } },
+    services: { "custom:Mock": { apiKey: mockKey } },
   }));
   // .bin/tsx 是 shell 包装，直接喂 node 会语法崩——用真实 CLI 入口（515 号）。
   backend = spawn(process.execPath, [
@@ -178,7 +180,7 @@ if (args.engine === "node") {
       INKOS_PROJECT_ROOT: args.root,
       // /v1 必须带：模型列表与 chat/completions 都走 mock 的 /v1 面（436 号实测）。
       INKOS_LLM_BASE_URL: `http://127.0.0.1:${args.mockPort}/v1`,
-      INKOS_LLM_API_KEY: "sk-mock",
+      INKOS_LLM_API_KEY: process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder",
       INKOS_LLM_MODEL: "lm-mock-model",
       INKOS_STATIC_DIR: studioDist,
       INKOS_PORT: args.port,

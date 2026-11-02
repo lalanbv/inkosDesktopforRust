@@ -87,8 +87,11 @@ const inkosConfig = {
 };
 if (!forkContract) console.log("[walkthrough-fixture] TS 腿=上游 2.0（prompt-packs 404）——inkos.json 省略 writing 段（2.0 无评审重试旋钮）。");
 writeFileSync(join(root, "inkos.json"), JSON.stringify(inkosConfig, null, 2));
+// 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）；
+// 下方走查文案的 Key(...) 提示与本值恒等（人工按提示输入）。
+const mockKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({
-  services: { "custom:Mock": { apiKey: "sk-mock" } },
+  services: { "custom:Mock": { apiKey: mockKey } },
 }));
 
 // ── 2. fixture 书 ──
@@ -565,7 +568,7 @@ if (!kindsOk) {
 }
 
 console.log(`[fixture] ✓ 数据就绪。浏览器打开 ${base} 走查：`);
-console.log(`  0. ${base}/#/chat 新建会话 → 「配置模型 →」→ 服务商列表「自定义服务」区块置顶（575 号）→ 填名称/Base URL(http://127.0.0.1:${mockPort}/v1)/Key(sk-mock) → 测试连接（自动发现模型）→ 保存——聊天与计量徽章的前置`);
+console.log(`  0. ${base}/#/chat 新建会话 → 「配置模型 →」→ 服务商列表「自定义服务」区块置顶（575 号）→ 填名称/Base URL(http://127.0.0.1:${mockPort}/v1)/Key(${mockKey}) → 测试连接（自动发现模型）→ 保存——聊天与计量徽章的前置`);
 console.log(`  1. 书详情 ${base}/#/book/${enc} → 右栏「伏笔池」：分类 chips（全部/悬念/物品/情感/世界观）+ 点击筛选收窄`);
 console.log(`  2. ${base}/#/book/${enc}/settings → 「承诺账本」：kind 徽标 + 分类过滤（open 置顶排序）`);
 console.log(`  3. 首页 ${base}/#/ → 「运行遥测」：累计 ${runLog.total} · 明细 agent/model/耗时（R26/403 号挂 Dashboard，不在设置页）`);

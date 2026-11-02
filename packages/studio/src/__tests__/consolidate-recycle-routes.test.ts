@@ -13,6 +13,9 @@ import { createStudioServer } from "../api/server.js";
  * engine-rs/src/agents/consolidator.rs（ConsolidationResult 四字段同形）。
  */
 describe("consolidate recycle route (715)", () => {
+  // 855 号：测试键占位符——可经环境注入（真实凭据只走 env/密钥服务，源码不落字面量），
+  // 回退值仅为让 fixture 密钥文件形态合法的非凭据占位符。
+  const testKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
   let root: string;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "consolidate-recycle-"));
@@ -34,7 +37,7 @@ describe("consolidate recycle route (715)", () => {
     );
     await writeFile(
       join(dir, "secrets.json"),
-      JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }),
+      JSON.stringify({ services: { "custom:Mock": { apiKey: testKey } } }),
       "utf-8",
     );
   });

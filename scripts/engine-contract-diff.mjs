@@ -358,13 +358,16 @@ const STATUS_ONLY_ENDPOINTS = new Set([
   `/api/v1/projects/diff-film/export`,
 ]);
 
+// 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）。
+const mockKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+
 const preseed = (root) => {
   mkdirSync(join(root, ".inkos"), { recursive: true });
   writeFileSync(
     join(root, "inkos.json"),
     JSON.stringify({ name: "inkos-contract-diff", version: "0.1.0", services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }] }),
   );
-  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: "sk-mock" } } }));
+  writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Mock": { apiKey: mockKey } } }));
 };
 
 // ── 1. mock + 双引擎 + 双根 ──
@@ -1773,7 +1776,7 @@ try {
       const secretsPath = join(engine.root, ".inkos", "secrets.json");
       const secrets = JSON.parse(readFileSync(secretsPath, "utf-8"));
       secrets.services = secrets.services ?? {};
-      secrets.services["custom:MockNF"] = { apiKey: "sk-mock" };
+      secrets.services["custom:MockNF"] = { apiKey: mockKey };
       writeFileSync(secretsPath, JSON.stringify(secrets));
     }
 

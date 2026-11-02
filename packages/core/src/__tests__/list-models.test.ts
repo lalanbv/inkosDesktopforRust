@@ -35,7 +35,7 @@ describe("listModelsForService (B8)", () => {
       ok: true,
       json: async () => ({ data: [{ id: "gpt-4o" }, { id: "my-proxy-model" }] }),
     } as any) as typeof fetch;
-    const models = await listModelsForService("custom", "sk-test", "https://myproxy.example/v1");
+    const models = await listModelsForService("custom", "test-key-test", "https://myproxy.example/v1");
     // gpt-4o 命中 openai provider，拿到元数据
     const gpt = models.find((m) => m.id === "gpt-4o");
     expect(gpt).toBeDefined();
@@ -85,7 +85,7 @@ describe("listModelsForService (B8)", () => {
 
   it("live 挂了降级到 provider 内置 models（没有 fetch 错误 crash）", async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as typeof fetch;
-    const models = await listModelsForService("anthropic", "sk-test");
+    const models = await listModelsForService("anthropic", "test-key-test");
     expect(models.length).toBeGreaterThan(0);
     expect(models.some((m) => m.id === "claude-sonnet-4-6")).toBe(true);
   });
@@ -106,7 +106,7 @@ describe("listModelsForService (B8)", () => {
     });
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const models = await listModelsForService("bailian", "sk-test");
+    const models = await listModelsForService("bailian", "test-key-test");
 
     expect(resolveServiceModelsBaseUrl("bailian")).toBe("https://dashscope.aliyuncs.com/apps/anthropic");
     expect(fetchMock).not.toHaveBeenCalledWith(
