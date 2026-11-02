@@ -26,12 +26,20 @@
 // 输出 advisory-db 最新提交日期作为新鲜度证据。yank 联网核验超时属已知噪声，折叠计数。
 //
 // 847 号必红自检：恒绿与真绿在日志上同形，唯一可靠的区分是喂一个已知红的输入。
-// 每次运行末尾用 `cargo audit -n --no-yanked -f fixtures/audit-rust/known-vulnerable.Cargo.lock`
-//（离线、秒级）走**同一条 runAudit/parseAudit 路径**，断言检出 ≥1 漏洞；否则判定
+// 每次运行末尾用 `cargo audit -n --no-yanked -f fixtures/audit-rust/…Cargo.lock`
+//（离线、秒级）走**同一条 runAudit/parseAudit 路径**，断言检出漏洞；否则判定
 // 检测器已退化，本次全部「0 漏洞」结论作废（码 1）。夹具两组独立 crate 防单条
 // advisory 被撤回；条目须带 `source = registry+…` 否则 cargo-audit 视为本地包跳过
 //（847 号实测夹具自身曾因此恒绿——自检也需要自己的必红证明，见
 // INKOS_AUDIT_SELFCHECK_FIXTURE 测试钩子）。
+//
+// 854 号三处补丁：①汇总行正则 `vulnerabilities?` 匹配不到**单数形** `error: 1
+// vulnerability found!`（vulnerabilit`y` ≠ vulnerabilitie`s`，0.22.2 活体实证）——恰 1
+// 条漏洞时 vulns 解析为 0，门禁仍红（非零退出不放行）但细节不打印、诊断错向；改
+// `vulnerabilit(?:y|ies)`。②`YANK_NOISE_RE` 带 `g` 标志又被逐行 `.test()`——`g` 正则
+// lastIndex 跨调用有状态，噪声行隔行漏进错误尾部；行级判断改字面量 includes，计数保留 g。
+// ③新增恰 1 条 advisory 的夹具锁**单数汇总行**解析（多漏洞夹具的 ≥1 断言永远走不到
+// 单数分支），且自检加 stderr 汇总数 = stdout 条目数的一致性断言（部分解析=检测器退化）。
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -49,12 +57,24 @@ const selfCheckOnly = args.includes("--self-check-only");
 const targets = args.filter((a) => !a.startsWith("--"));
 const crates = targets.length ? targets : ["engine-rs", "src-tauri"];
 
-// 必红夹具；环境变量覆盖**仅供测试自检本身**（喂干净锁证明自检会失败），生产不设。
-const SELF_CHECK_FIXTURE =
-  process.env.INKOS_AUDIT_SELFCHECK_FIXTURE
-  ?? join(scriptDir, "fixtures", "audit-rust", "known-vulnerable.Cargo.lock");
+// 必红夹具组；环境变量覆盖**仅供测试自检本身**（喂干净锁证明自检会失败），生产不设。
+// expected: null = 断言 ≥1（多漏洞锁）；1 = 断言恰 1（锁单数汇总行解析，854 号）。
+const fixtureDir = join(scriptDir, "fixtures", "audit-rust");
+const SELF_CHECK_FIXTURES = process.env.INKOS_AUDIT_SELFCHECK_FIXTURE
+  ? [{ path: process.env.INKOS_AUDIT_SELFCHECK_FIXTURE, expected: null }]
+  : [
+      // 多漏洞锁：zip 2.6.1 四连 + smallvec 0.6.9 三连，两组独立防单条 advisory 被撤回转绿。
+      { path: join(fixtureDir, "known-vulnerable.Cargo.lock"), expected: null },
+      // 单漏洞锁：恰 1 条 → cargo-audit 打**单数**汇总行 `1 vulnerability found!`。
+      // 若 smallvec 1.6.0 日后新增 advisory 使本夹具变红，换一个恰 1 条的 crate，
+      // 不要放宽断言——放宽数 = 单数锁静默失效（846 号恒绿事故同型）。
+      { path: join(fixtureDir, "known-vulnerable-single.Cargo.lock"), expected: 1 },
+    ];
 
 // stderr 里与 DB 拉取无关的已折叠噪声（yank 联网核验超时；镜像/离线环境常见）。
+// 854 号：计数用 `g` 正则；逐行过滤用字面量 includes——`g` 正则的 `.test()` 有跨调用
+// lastIndex 状态（匹配后停在下一位），逐行判断会隔行漏判（实测 [true,false,false]）。
+const YANK_NOISE_TEXT = "couldn't check if the package is yanked";
 const YANK_NOISE_RE = /couldn't check if the package is yanked/g;
 const DB_FETCH_FAILURE_RE = /couldn't (?:fetch|update) advisory database/;
 
@@ -94,7 +114,9 @@ function runAudit(cwd, extraArgs) {
 function parseAudit(run) {
   const stdout = run.stdout ?? "";
   const stderr = run.stderr ?? "";
-  const vulnMatch = stderr.match(/error: (\d+) vulnerabilities? found/);
+  // 854 号：`vulnerabilities?` 匹配不到单数形（恰 1 条漏洞时解析为 0）——
+  // `(?:y|ies)` 双形通吃，单/复数汇总行均 0.22.2 活体实证。
+  const vulnMatch = stderr.match(/error: (\d+) vulnerabilit(?:y|ies) found/);
   const warnMatch = stderr.match(/warning: (\d+) allowed warnings? found/);
   // 只摘漏洞条目（条目在 stdout，以空行分块；含 `Warning:` 的块是 unmaintained/yanked 警告，剔除）。
   const pickedVulnLines = stdout
@@ -164,7 +186,7 @@ if (!selfCheckOnly) {
       // 非零退出但无漏洞汇总=非预期失败（工具错误/锁文件损坏/…）——绝不静默放行。
       const tail = result.stderr
         .split("\n")
-        .filter((l) => l.trim() && !YANK_NOISE_RE.test(l))
+        .filter((l) => l.trim() && !l.includes(YANK_NOISE_TEXT))
         .slice(-6)
         .join("\n    ");
       console.error(`✗ ${crate}: cargo audit 非零退出（code=${result.status}）且无漏洞汇总——\n    ${tail}`);
@@ -183,20 +205,25 @@ if (!selfCheckOnly) {
 }
 
 // ── 必红自检（847 号）：跑在真审计之后（DB 已由上面拉取），-n 离线、--no-yanked 免联网。
-console.log(`\n== 必红自检（${SELF_CHECK_FIXTURE.replace(repoRoot + "/", "")}） ==`);
-if (!existsSync(SELF_CHECK_FIXTURE)) {
-  console.error(`✗ 自检夹具缺失：${SELF_CHECK_FIXTURE}——检测器无法自证，门禁结论不可信`);
-  failed = true;
-} else {
-  const check = parseAudit(runAudit(repoRoot, ["-n", "--no-yanked", "-f", SELF_CHECK_FIXTURE]));
+for (const fixture of SELF_CHECK_FIXTURES) {
+  console.log(`\n== 必红自检（${fixture.path.replace(repoRoot + "/", "")}） ==`);
+  if (!existsSync(fixture.path)) {
+    console.error(`✗ 自检夹具缺失：${fixture.path}——检测器无法自证，门禁结论不可信`);
+    failed = true;
+    continue;
+  }
+  const check = parseAudit(runAudit(repoRoot, ["-n", "--no-yanked", "-f", fixture.path]));
   const sawIds = check.pickedVulnLines.filter((l) => /^ID:\s+RUSTSEC-/.test(l.trim())).length;
-  if (check.vulns >= 1 && sawIds >= 1) {
+  // stderr 汇总数与 stdout 条目数须一致（部分解析=检测器退化）；expected=1 锁单数汇总行。
+  const parity = check.vulns === sawIds;
+  const enough = check.vulns >= 1 && (fixture.expected === null || check.vulns === fixture.expected);
+  if (parity && enough) {
     console.log(`✓ 自检：已知漏洞锁检出 ${check.vulns} 个漏洞（${sawIds} 条 RUSTSEC 条目）——检测器活着`);
   } else {
     const tail = check.stderr.split("\n").filter((l) => l.trim()).slice(-4).join("\n    ");
     console.error(
-      `✗ 自检失败：已知漏洞锁未报红（vulns=${check.vulns} ids=${sawIds} code=${check.status}）——`
-      + `检测器可能已退化为恒绿（846 号事故同型：工具改了输出流/夹具失配/本地 DB 过旧），`
+      `✗ 自检失败：已知漏洞锁未达预期（期望 ${fixture.expected ?? "≥1"}，vulns=${check.vulns} ids=${sawIds} code=${check.status}）——`
+      + `检测器可能已退化为恒绿（846 号事故同型：工具改了输出流/解析器不认单数形/夹具失配/本地 DB 过旧），`
       + `本次所有「0 漏洞」结论作废\n    ${tail}`,
     );
     failed = true;

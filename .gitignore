@@ -5,6 +5,7 @@ dist/
 .npmrc
 *.tgz
 .DS_Store
+.mimosa/
 coverage/
 .turbo/
 _notes/

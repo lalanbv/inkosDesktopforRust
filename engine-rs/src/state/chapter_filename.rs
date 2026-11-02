@@ -81,6 +81,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_number_bounds_match_ts_u32_and_ascii_digits() {
+        // 854 号：章号上界与 TS `MAX_CHAPTER_NUMBER`（u32::MAX）恒等——TS `parseInt` 对
+        // 超 u32 前导号给出浮点整数并列为章，Rust parse 失败判非章即旧漂移点。
+        assert_eq!(parse_chapter_file_number("4294967295_界内.md"), Some(u32::MAX));
+        assert_eq!(parse_chapter_file_number("4294967296_超界.md"), None);
+        assert_eq!(parse_chapter_file_number(&format!("{}_天文.md", "9".repeat(20))), None);
+        // 854 号：数字类显式 ASCII——regex `\d` 默认 Unicode 数字类（全角/阿拉伯-印度
+        // 数字），JS `\d` 恒 ASCII；对齐后非 ASCII 数字前缀不构成章号。混合形态按
+        // ASCII 前导段取值，与 TS `\d+` 捕获语义恒等。
+        assert_eq!(parse_chapter_file_number("１２３_全角数字.md"), None);
+        assert_eq!(parse_chapter_file_number("١٢٣_阿拉伯数字.md"), None);
+        assert_eq!(parse_chapter_file_number("1２_x.md"), Some(1));
+    }
+
+    #[test]
+    fn tie_break_matches_ts_code_point_order() {
+        // 854 号：类内文件名序 = `&str` 字节序（码点序），与 TS compareByCodePoint 恒等。
+        // JS 默认 `<` 的 UTF-16 码元序对「增补平面字符 vs U+E000-U+FFFF（全角标点）」
+        // 次序相反——旧 TS 实现同章双正典会取 emoji 文件而 Rust 取全角叹号文件。
+        let fullwidth = "0001_开局！.md"; // U+FF01，UTF-8 首字节 EF（码点较小）
+        let emoji = "0001_开局🔥.md"; // U+1F525，UTF-8 首字节 F0（码点较大）
+        assert_eq!(
+            find_chapter_file_by_number(&list(&[fullwidth, emoji]), 1).as_deref(),
+            Some(fullwidth)
+        );
+        assert_eq!(
+            find_chapter_file_by_number(&list(&[emoji, fullwidth]), 1).as_deref(),
+            Some(fullwidth)
+        );
+        // 前缀等值时短者在前（两序在此一致，锁住回归）。
+        assert_eq!(
+            find_chapter_file_by_number(&list(&["0002_ab.md", "0002_a.md"]), 2).as_deref(),
+            Some("0002_a.md")
+        );
+    }
+
+    #[test]
     fn find_prefers_canonical_then_lexicographic() {
         // 845 号：同号双形态正典 `_` 胜出（与索引重建 select_chapter_files 同胜者），
         // 不再按 padded 类内字典序取 '-'（0x2D）<'_'（0x5F）的连字符旧章。输入顺序无关。

@@ -568,9 +568,13 @@ pub(crate) fn leading_number(name: &str) -> Option<u32> {
 }
 
 /// 正典章节文件名（`NNNN_标题.md`，writer 落盘形态）。
+///
+/// 854 号：数字类用显式 `[0-9]` 而非 `\d`——regex crate 的 `\d` 默认 Unicode 数字类
+///（`\p{Nd}`，含全角 `０１２` / 阿拉伯-印度 `٠١٢`），JS `\d` 恒 ASCII；两侧对同一
+/// 文件名的判定须恒等（TS `chapter-files.ts` 同步注释）。
 fn is_canonical_chapter_file(name: &str) -> bool {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^\d+_.*\.md$").unwrap()).is_match(name)
+    R.get_or_init(|| Regex::new(r"^[0-9]+_.*\.md$").unwrap()).is_match(name)
 }
 
 /// 845 号：同章双形态择优的唯一裁决——`candidate` 是否应取代 `current`：正典 `NNNN_` 优先，
@@ -617,7 +621,9 @@ pub(crate) fn select_chapter_files(names: Vec<String>) -> Vec<String> {
 
 fn rebuild_file_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(\d+)[_-]?(.*?)\.md$").unwrap())
+    // 854 号：`[0-9]` 显式 ASCII 数字类（regex 的 `\d` 默认 Unicode，与 JS `\d` 不恒等，
+    // 见 [`is_canonical_chapter_file`] 注释）。
+    R.get_or_init(|| Regex::new(r"^([0-9]+)[_-]?(.*?)\.md$").unwrap())
 }
 
 #[cfg(test)]

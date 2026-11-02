@@ -128,4 +128,36 @@ describe("unified dual-form preference (845)", () => {
     }
     expect(selectChapterFiles(reversed)).toEqual(selectChapterFiles(files));
   });
+
+  // 854 号：类内文件名序与 Rust `&str` 字节序（= 码点序）恒等——JS 默认 `<` 的 UTF-16
+  // 码元序对「增补平面字符（emoji 代理对）vs U+E000-U+FFFF（全角标点）」次序相反，
+  // 旧实现同章双正典时 TS 取 emoji 文件、Rust 取全角叹号文件（双引擎开不同章）。
+  it("ties inside the same class by code-point order, matching Rust byte order (854)", () => {
+    const fullwidth = "0001_开局！.md"; // U+FF01（UTF-8 首字节 EF）
+    const emoji = "0001_开局🔥.md"; // U+1F525（UTF-8 首字节 F0，码点更大）
+    expect(preferredChapterFile(fullwidth, emoji)).toBe(fullwidth);
+    expect(preferredChapterFile(emoji, fullwidth)).toBe(fullwidth);
+    expect(findChapterFileByNumber([fullwidth, emoji], 1)).toBe(fullwidth);
+    expect(findChapterFileByNumber([emoji, fullwidth], 1)).toBe(fullwidth);
+    // 前缀等值时短者在前（与 Rust 字节序一致）。
+    expect(preferredChapterFile("0002_ab.md", "0002_a.md")).toBe("0002_a.md");
+  });
+});
+
+// 854 号：章号上界与 Rust `parse::<u32>` 恒等——超 u32 的前导号 TS 旧实现 `parseInt` 给出
+// 浮点整数（`Number.isInteger(1e20) === true`）列为章，Rust 解析失败判非章，双引擎索引分叉。
+describe("chapter number bounds (854)", () => {
+  it("rejects leading numbers beyond u32::MAX like Rust parse::<u32>", () => {
+    expect(chapterFileNumber("4294967295_界内.md")).toBe(4294967295);
+    expect(chapterFileNumber("4294967296_超界.md")).toBeUndefined();
+    expect(chapterFileNumber("9".repeat(20) + "_天文.md")).toBeUndefined();
+    expect(selectChapterFiles(["4294967296_超界.md", "0001_正常.md"])).toEqual(["0001_正常.md"]);
+    expect(parseChapterFileName("4294967296_超界.md")).toBeNull();
+    expect(findChapterFileByNumber(["4294967296_超界.md"], 4294967296)).toBeUndefined();
+  });
+
+  it("treats non-ASCII digits as not-a-chapter like JS \\d (Rust regex aligned to [0-9])", () => {
+    expect(chapterFileNumber("１２３_全角数字.md")).toBeUndefined();
+    expect(chapterFileNumber("١٢٣_阿拉伯数字.md")).toBeUndefined();
+  });
 });

@@ -18,17 +18,25 @@
 // `Object.values(parsed.advisories ?? {})` 把它静默当 0 advisory → 假绿。
 // 现：JSON 里无 `advisories` 键=端点故障/改形/限流，未知≠绿灯，exit 3 并
 // 原样回显响应头；metadata.vulnerabilities 汇总与 advisory 计数矛盾（0 vs
-// 非空）同样 exit 3。另加必红自检：三枚内联夹具走与真审计同一条
+// 非空）同样 exit 3。另加必红自检：内联夹具走与真审计同一条
 // classifyAdvisories 路径（未白名单告警→红；错误形状→红；全白名单→绿），
 // 任一不符判定检测器退化、本次全部绿灯结论作废。
+//
+// 854 号定性面收窄：白名单从「整模块放行」改为「按 GHSA id 钉定」——模块级匹配会把
+// 同模块**未来新增的任意 advisory**（哪怕 critical）静默当作已接受风险放行，放行面
+// 大于定性面（846/848 恒绿族同型）。活体实证：@vitest/mocker 的 GHSA-qxg6-89mg-rqv8
+//（2026-10 新发，dev-server mock 注册代码注入）从未被定性，仅因模块名顺带放行。现
+// 每条白名单钉定其定性过的 GHSA id 集合，未钉定 id 一律拦截（自检加第 4 夹具锁该路径）。
 
 import { execFileSync } from "node:child_process";
 
 const REGISTRY = "https://registry.npmjs.org/";
 
 /**
- * 已接受风险白名单：module → { reason, since }。
- * 维护规则：新增条目必须给出定性理由与来源；移除条目即恢复拦截。
+ * 已接受风险白名单：module → { ids, reason, since }。
+ * 维护规则：新增条目必须给出**定性过的 GHSA id 集合**与理由、来源循环号；移除条目
+ * 即恢复拦截。854 号起按 id 钉定——同模块出现未钉定 id 的新 advisory 一律拦截，
+ * 须人工定性后把新 id 加入 ids（reason 里同步补理由）。
  */
 // 501 号：白名单清零——esbuild（vite 7.3.6）、brace-expansion/postcss-selector-
 // parser（override 直达补丁线）、fast-xml-parser/provider-utils（override 出清，
@@ -42,35 +50,39 @@ const ACCEPTED = new Map([
   // 是上游发布契约）——跨 major 升级须随上游动作，不在 fork 侧单独跳线。
   // dev-only 暴露面：UI server（GHSA-5xrq）与 mocker redirect（GHSA-82fw）仅在
   // 跑测试时监听/生效，不进生产产物。上游 vitest 升 4 时移除本条即恢复拦截。
-  ["vitest", { reason: "上游 2.0 pin ^3.0.0 跨 major 待随上游升级；dev-only（UI server 仅测试期监听）", since: "688" }],
-  ["@vitest/mocker", { reason: "同 vitest：补丁线 4.1.11+ 依赖 vitest 4；dev-only（mocker 仅测试期生效）", since: "688" }],
+  // 854 号：mocker 补 GHSA-qxg6-89mg-rqv8（2026-10 新发，dev-server WebSocket 未认证
+  // mock 注册注入代码）——此前整模块放行从未单独定性；patched >=4.1.12 同样依赖
+  // vitest 4 跨 major，暴露面同类（仅测试期 dev server 可达，须先连上本机 WS），
+  // 一并定性接受、随上游 vitest 4 一并消除。
+  ["vitest", { ids: ["GHSA-5xrq-8626-4rwp", "GHSA-82fw-gwwq-j7x9"], reason: "上游 2.0 pin ^3.0.0 跨 major 待随上游升级；dev-only（UI server 仅测试期监听）", since: "688" }],
+  ["@vitest/mocker", { ids: ["GHSA-82fw-gwwq-j7x9", "GHSA-qxg6-89mg-rqv8"], reason: "同 vitest：补丁线 4.1.11+/4.1.12 依赖 vitest 4；dev-only（mocker 仅测试期生效，须先连上本机 dev server WS）", since: "688/854" }],
   // braces GHSA-vfj7-8cjw-p6xm：patched <0.0.0（无补丁线，501 号同型先例——
   // 无补丁线即当前最新为终态，跟进上游发版）。
-  ["braces", { reason: "无补丁线（patched <0.0.0），当前最新即终态，跟进上游", since: "688" }],
+  ["braces", { ids: ["GHSA-vfj7-8cjw-p6xm"], reason: "无补丁线（patched <0.0.0），当前最新即终态，跟进上游", since: "688" }],
   // katex GHSA-238p-pmpm-9mq7（low）：补丁线 >=0.18.2 为跨 major（streamdown 依赖
   // katex 0.16 线）；fork 阅读器渲染自有内容，原型污染需恶意 LaTeX 输入。
   // streamdown 升级 katex 线时移除本条即恢复拦截。
   // 824 号：streamdown 2.7.1 已移除自身 katex 依赖——0.16 线现由 @streamdown/math
   // 的 katex ^0.16.27 契约拉入（math 插件渲染面），条目维持、理由更新。
-  ["katex", { reason: "low；补丁线 0.18.2 跨 major（@streamdown/math 钉 katex ^0.16.27，streamdown 2.7 已移除自身 katex）；渲染面需恶意输入方可触发", since: "688" }],
+  ["katex", { ids: ["GHSA-238p-pmpm-9mq7"], reason: "low；补丁线 0.18.2 跨 major（@streamdown/math 钉 katex ^0.16.27，streamdown 2.7 已移除自身 katex）；渲染面需恶意输入方可触发", since: "688" }],
   // 700 号：esbuild GHSA-g7r4-m6w7-qqqr（low，Windows dev server 任意读）——
   // 补丁线 >=0.28.1 但 vite 6.4.1 与 esbuild 0.25 配对；esbuild@<0.28 override
   // 强提 0.28 会破坏 vite:esbuild-transpile（studio client build 活体实证）。
   // 升级随 vite bump（vite 7 线自带新 esbuild），到时移除本条即恢复拦截。
-  ["esbuild", { reason: "low；补丁线 >=0.28.1 与 vite 6.4.1 的 0.25 配对冲突（override 强提破坏 vite 构建，700 号活体实证）；dev server 面", since: "700" }],
+  ["esbuild", { ids: ["GHSA-g7r4-m6w7-qqqr"], reason: "low；补丁线 >=0.28.1 与 vite 6.4.1 的 0.25 配对冲突（override 强提破坏 vite 构建，700 号活体实证）；dev server 面", since: "700" }],
   // 758 号：deepmerge GHSA-gcqx-w48m-w2h4（low，mergeObject 原型污染）——
   // patched <0.0.0（advisory 明示无修复版，4.3.1 即最新终态，501 号 braces
   // 同型先例）。消费面=streamdown→rehype-sanitize→hast-util-sanitize 渲染链
   // （Markdown 安全过滤配置合并，均为静态配置非用户可控源），跟进上游发版
   // 后移除本条即恢复拦截。
-  ["deepmerge", { reason: "low；无补丁线（patched <0.0.0，4.3.1 即最新终态）；streamdown→rehype-sanitize 渲染链静态配置合并面", since: "758" }],
+  ["deepmerge", { ids: ["GHSA-gcqx-w48m-w2h4"], reason: "low；无补丁线（patched <0.0.0，4.3.1 即最新终态）；streamdown→rehype-sanitize 渲染链静态配置合并面", since: "758" }],
   // 758 号：zod GHSA-mrhx-c7xc-m3w5（high，超大受限集合校验内存耗尽 DoS）——
   // 补丁线 4.6.6（3.x 无补丁线），树内 3.25.76 是 @modelcontextprotocol/sdk /
   // @anthropic-ai/sdk / zod-to-json-schema 的 peer 契约（688 号 vitest 同型：
   // 跨 major 升级须随上游 SDK 动作）。暴露面定性=单机桌面应用，zod 校验输入
   // 来自本地 LLM provider 与用户内容，无远程攻击者可控入口；上游 MCP SDK 升
   // zod 4 契约时移除本条即恢复拦截。
-  ["zod", { reason: "high；补丁线 4.6.6 跨 major（3.x 无补丁线），MCP/Anthropic SDK peer 契约待随上游升级；单机桌面无远程攻击面", since: "758" }],
+  ["zod", { ids: ["GHSA-mrhx-c7xc-m3w5"], reason: "high；补丁线 4.6.6 跨 major（3.x 无补丁线），MCP/Anthropic SDK peer 契约待随上游升级；单机桌面无远程攻击面", since: "758" }],
   // 759 号：@hono/node-server GHSA-rmxm-3fg6-px4f（moderate，serveStatic 路径
   // 二次解码致静态前缀中间件绕过；非目录穿越）——漏洞区间 >=1.19.10 <2.1.3，
   // 1.x 线 latest-1（1.19.17，即当前唯一解析线）仍在区间内，补丁仅存在于
@@ -78,7 +90,7 @@ const ACCEPTED = new Map([
   // 暴露面定性=fork 调用图零命中：studio server.ts 仅消费 serve（grep 实证
   // serveStatic 全仓零引用），静态服务为自实现路由；公告仅影响挂中间件的
   // serveStatic 使用方。上游升 2.x 时移除本条即恢复拦截。
-  ["@hono/node-server", { reason: "moderate；补丁线 2.1.3 跨 major（1.x 终态 1.19.17 仍在漏洞区间），须随上游升级；fork 零调用面（仅 serve，serveStatic 零引用）", since: "759" }],
+  ["@hono/node-server", { ids: ["GHSA-rmxm-3fg6-px4f"], reason: "moderate；补丁线 2.1.3 跨 major（1.x 终态 1.19.17 仍在漏洞区间），须随上游升级；fork 零调用面（仅 serve，serveStatic 零引用）", since: "759" }],
   // 784 号：minimatch GHSA-g3hv-75wg-m249（moderate，globparts 放大 DoS）——
   // 漏洞区间 <11.0.1，补丁线 11.0.1 跨 major；仓内两条依赖链均锁旧 major
   //（epub-gen-memory→ejs→jake→filelist 锁 ^5；shadcn→ts-morph→@ts-morph/common
@@ -87,7 +99,7 @@ const ACCEPTED = new Map([
   // 任务从不执行）；ts-morph 链=shadcn 纯 dev CLI。且 DoS 需攻击者可控
   // glob 模式入参，单机引擎无该输入面。ejs/ts-morph 升级到改用 minimatch 11
   // 的版本时移除本条即恢复拦截。
-  ["minimatch", { reason: "moderate；补丁线 11.0.1 跨 major（filelist 锁 ^5、@ts-morph/common 锁 ^10，override 强提破坏传递契约）；运行时零执行（jake/filelist 为 ejs 构建工具链，引擎仅 ejs render；ts-morph 纯 dev）且无攻击者可控 glob 入参面", since: "784" }],
+  ["minimatch", { ids: ["GHSA-g3hv-75wg-m249"], reason: "moderate；补丁线 11.0.1 跨 major（filelist 锁 ^5、@ts-morph/common 锁 ^10，override 强提破坏传递契约）；运行时零执行（jake/filelist 为 ejs 构建工具链，引擎仅 ejs render；ts-morph 纯 dev）且无攻击者可控 glob 入参面", since: "784" }],
 ]);
 
 const args = process.argv.slice(2);
@@ -115,15 +127,29 @@ function auditShapeFailure(parsed) {
   return null;
 }
 
-/** 分类（真审计与自检共用的唯一路径）：白名单放行 vs 未白名单拦截。 */
+/** advisory 的 GHSA id（pnpm v1 顶层 `github_advisory_id`；缺失时从 url 兜底提取）。 */
+function advisoryGhsaId(advisory) {
+  if (typeof advisory.github_advisory_id === "string" && advisory.github_advisory_id) {
+    return advisory.github_advisory_id;
+  }
+  const fromUrl = typeof advisory.url === "string" ? advisory.url.match(/GHSA-[a-z0-9-]+/i) : null;
+  return fromUrl?.[0] ?? "?";
+}
+
+/** 分类（真审计与自检共用的唯一路径）：白名单放行 vs 拦截。854 号起按 id 钉定——
+ * 已白名单模块出现未钉定 id 的新 advisory 同样拦截（定性面 ≠ 模块名面）。 */
 function classifyAdvisories(parsed) {
   const accepted = [];
   const unaccepted = [];
   for (const a of Object.values(parsed.advisories)) {
     const name = a.module_name ?? "?";
     const severity = a.severity ?? "?";
-    if (ACCEPTED.has(name)) {
-      accepted.push(`  = ${name} [${severity}] ${ACCEPTED.get(name).reason}（${ACCEPTED.get(name).since} 接受）`);
+    const id = advisoryGhsaId(a);
+    const entry = ACCEPTED.get(name);
+    if (entry && entry.ids.includes(id)) {
+      accepted.push(`  = ${name} [${severity}] ${entry.reason}（${entry.since} 接受）`);
+    } else if (entry) {
+      unaccepted.push(`  ✗ ${name} [${severity}] 已白名单模块的新 advisory（${id}），需重新定性后加入 ids ${a.title ?? ""} ${a.url ?? ""}`.trim());
     } else {
       unaccepted.push(`  ✗ ${name} [${severity}] ${a.title ?? ""} ${a.url ?? ""}`.trim());
     }
@@ -207,15 +233,23 @@ function runSelfCheck() {
       ok: (r) => r.shapeFailure !== null,
     },
     {
-      name: "全白名单→绿",
+      name: "全白名单（id 钉定）→绿",
       parsed: {
-        advisories: { 1: { module_name: "katex", severity: "low", title: "t", url: "u" } },
+        advisories: { 1: { module_name: "katex", github_advisory_id: "GHSA-238p-pmpm-9mq7", severity: "low", title: "t", url: "u" } },
         metadata: { vulnerabilities: { info: 0, low: 1, moderate: 0, high: 0, critical: 0 } },
       },
       ok: (r) => r.unaccepted.length === 0 && r.accepted.length === 1,
     },
+    {
+      name: "已白名单模块未钉定新 id→红（854）",
+      parsed: {
+        advisories: { 1: { module_name: "zod", github_advisory_id: "GHSA-0000-0000-854new", severity: "critical", title: "t", url: "u" } },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 1 } },
+      },
+      ok: (r) => r.unaccepted.length === 1 && r.accepted.length === 0,
+    },
   ];
-  console.log("[audit-npm] == 必红自检（3 夹具） ==");
+  console.log("[audit-npm] == 必红自检（4 夹具） ==");
   let failed = false;
   for (const c of cases) {
     const shapeFailure = auditShapeFailure(c.parsed);

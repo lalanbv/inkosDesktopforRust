@@ -1,0 +1,18 @@
+# 854 号：audit:rust 自检的「单漏洞夹具」——恰 1 条 advisory，专门锁**单数汇总行**
+# `error: 1 vulnerability found!` 的解析（多漏洞夹具 known-vulnerable.Cargo.lock 的
+# ≥1 断言永远走不到单数分支；854 号前单数形被 `vulnerabilities?` 正则漏配成 0）。
+#
+# 选型：smallvec 1.6.0 → 仅 RUSTSEC-2021-0003（insert_many 内存破坏，patched >=1.6.1；
+# 2019-0009/0012 两姐妹条目只覆盖 <0.6.10 的 0.6 线）——恰 1 条经 0.22.2 活体实证。
+#
+# 本文件**永远不该被"修复"**（847 号多漏洞夹具同规）；条目须带
+# `source = registry+…` 否则 cargo-audit 视为本地包跳过而恒绿。
+# 若 smallvec 1.6.0 日后新增 advisory 使单条断言变红：换一个恰 1 条的 crate，
+# **不要放宽断言**——放宽数 = 单数锁静默失效。
+
+version = 4
+
+[[package]]
+name = "smallvec"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
