@@ -71,6 +71,15 @@ fn is_fulfilled(status: &str) -> bool {
     )
 }
 
+/// 818 号：撤回终态（与 TS WITHDRAWN_PATTERN 同集）——已撤回前提非已兑付，
+/// 亦无回收义务（时间线投影 withdrawn / 不计节奏债）。
+fn is_withdrawn(status: &str) -> bool {
+    matches!(
+        status.trim().to_lowercase().as_str(),
+        "superseded" | "withdrawn" | "已撤回" | "撤回"
+    )
+}
+
 /// 从 expectedPayoff 文本提取期望兑现章号（"第10章" / 裸数字）。
 pub fn parse_expected_chapter(expected_payoff: &str) -> Option<i64> {
     let trimmed = expected_payoff.trim();
@@ -163,7 +172,8 @@ pub fn detect_pacing_debts(
     let threshold = threshold.unwrap_or(DEFAULT_CORE_HOOK_STALLED_THRESHOLD);
     let mut alerts: Vec<PacingDebtAlert> = hooks
         .iter()
-        .filter(|hook| hook.core_hook && !is_fulfilled(&hook.status))
+        // 818 号：已撤回前提无回收义务——不计节奏债（TS detectPacingDebts 同口径）。
+        .filter(|hook| hook.core_hook && !is_fulfilled(&hook.status) && !is_withdrawn(&hook.status))
         .map(|hook| {
             let anchor = std::cmp::max(hook.last_advanced_chapter.max(0), hook.start_chapter.max(0));
             (hook, std::cmp::max(0, current_chapter - anchor))
@@ -282,6 +292,8 @@ pub fn build_promise_timeline(
         "overdue" => 0,
         "open" => 1,
         "advancing" => 2,
+        // 818 号：撤回为历史信息，排最末（不参与紧迫度）。
+        "withdrawn" => 4,
         _ => 3,
     };
     let mut entries: Vec<PromiseTimelineEntry> = hooks
@@ -292,7 +304,10 @@ pub fn build_promise_timeline(
             } else {
                 None
             };
-            let state = if is_fulfilled(&hook.status) {
+            // 818 号：撤回终态投影——已撤回前提既非已兑付也非逾期/推进（805 生命周期延伸）。
+            let state = if is_withdrawn(&hook.status) {
+                "withdrawn"
+            } else if is_fulfilled(&hook.status) {
                 "fulfilled"
             } else {
                 let expected = parse_expected_chapter(&hook.expected_payoff);
@@ -361,7 +376,8 @@ pub fn promise_ledger_contract() -> PromiseLedgerContract {
             weak_hook_min_run: DEFAULT_WEAK_HOOK_MIN_RUN,
         },
         strengths: vec!["strong", "weak", "none"],
-        timeline_states: vec!["open", "advancing", "fulfilled", "overdue"],
+        // 818 号：撤回终态入契约（TS vectors contract 同步）。
+        timeline_states: vec!["open", "advancing", "fulfilled", "overdue", "withdrawn"],
     }
 }
 

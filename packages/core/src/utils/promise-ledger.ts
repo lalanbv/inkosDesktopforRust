@@ -57,9 +57,16 @@ export function hookActivityStrength(text: string): HookActivityStrength {
 }
 
 const RESOLVED_PATTERN = /^(resolved|closed|done|已回收|已解决)$/i;
+// 818 号：撤回终态（与 hook-lifecycle HOOK_STATUS_ALIASES superseded 组同集）——
+// 已撤回前提不是已兑付，也绝非节奏债务（805 生命周期的时间线/债务延伸）。
+const WITHDRAWN_PATTERN = /^(superseded|withdrawn|已撤回|撤回)$/i;
 
 function isFulfilled(hook: StoredHook): boolean {
   return RESOLVED_PATTERN.test((hook.status ?? "").trim());
+}
+
+function isWithdrawn(hook: StoredHook): boolean {
+  return WITHDRAWN_PATTERN.test((hook.status ?? "").trim());
 }
 
 /** 从 expectedPayoff 文本提取期望兑现章号（"第10章" / 裸数字），提取不到返回 undefined。 */
@@ -92,6 +99,8 @@ export function detectPacingDebts(params: {
   for (const hook of params.hooks) {
     if (hook.coreHook !== true) continue;
     if (isFulfilled(hook)) continue;
+    // 818 号：已撤回前提无回收义务——不计节奏债。
+    if (isWithdrawn(hook)) continue;
     const anchor = Math.max(hook.lastAdvancedChapter || 0, hook.startChapter || 0);
     const stalledChapters = Math.max(0, params.currentChapter - anchor);
     if (stalledChapters >= threshold) {
@@ -163,7 +172,7 @@ export interface PromiseTimelineEntry {
   readonly openedAt: number;
   readonly lastAdvancedAt?: number;
   readonly expectedPayoff: string;
-  readonly state: "open" | "advancing" | "fulfilled" | "overdue";
+  readonly state: "open" | "advancing" | "fulfilled" | "overdue" | "withdrawn";
   /** R23/396 号：规范类型分类透传（存量无 kind 不出键）。 */
   readonly kind?: HookKind;
 }
@@ -178,7 +187,10 @@ export function buildPromiseTimeline(
   const entries: PromiseTimelineEntry[] = hooks.map((hook) => {
     const lastAdvancedAt = hook.lastAdvancedChapter > 0 ? hook.lastAdvancedChapter : undefined;
     let state: PromiseTimelineEntry["state"];
-    if (isFulfilled(hook)) {
+    // 818 号：撤回终态投影——已撤回前提既非已兑付也非逾期/推进（805 生命周期的时间线延伸）。
+    if (isWithdrawn(hook)) {
+      state = "withdrawn";
+    } else if (isFulfilled(hook)) {
       state = "fulfilled";
     } else {
       const expected = parseExpectedChapter(hook.expectedPayoff ?? "");
@@ -206,6 +218,8 @@ export function buildPromiseTimeline(
     open: 1,
     advancing: 2,
     fulfilled: 3,
+    // 818 号：撤回为历史信息，排最末（不参与紧迫度）。
+    withdrawn: 4,
   };
   return entries.sort(
     (a, b) =>

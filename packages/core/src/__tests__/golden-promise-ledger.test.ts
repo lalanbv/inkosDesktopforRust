@@ -104,7 +104,7 @@ describe("promise ledger (G10)", () => {
         weakHookMinRun: DEFAULT_WEAK_HOOK_MIN_RUN,
       },
       strengths: ["strong", "weak", "none"],
-      timelineStates: ["open", "advancing", "fulfilled", "overdue"],
+      timelineStates: ["open", "advancing", "fulfilled", "overdue", "withdrawn"],
     });
   });
 });
