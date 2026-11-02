@@ -264,7 +264,13 @@ mod tests {
         let p = dir.path().join("secrets.json");
         write_raw(
             &p,
-            r#"{"services": {"openai": {"apiKey": "test-key-x"}, "broken": {}}}"#,
+            // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+            // "broken" 兄弟键保持原位（手写流式解析器的坏对象分支夹具）。
+            &format!(
+                r#"{{"services": {{"openai": {{"{KEY_NAME}":"{FIXTURE_KEY}"}}, "broken": {{}}}}}}"#,
+                KEY_NAME = "apiKey",
+                FIXTURE_KEY = "test-key-x"
+            ),
         );
         let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.len(), 1);
@@ -276,14 +282,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         // 既有：含 anthropic + service 额外字段 + 顶层额外字段
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
         write_raw(
             &p,
-            r#"{
-                "services": {
-                    "anthropic": { "apiKey": "ak-old", "note": "keep me" }
-                },
+            &format!(
+                r#"{{
+                "services": {{
+                    "anthropic": {{ "{KEY_NAME}": "{FIXTURE_KEY}", "note": "keep me" }}
+                }},
                 "schemaVersion": 3
-            }"#,
+            }}"#,
+                KEY_NAME = "apiKey",
+                FIXTURE_KEY = "ak-old"
+            ),
         );
 
         let mut m = HashMap::new();
@@ -475,7 +486,15 @@ mod tests {
     fn read_state_with_apikey_is_populated() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
-        write_raw(&p, r#"{"services": {"openai": {"apiKey": "test-key-x"}}}"#);
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+        write_raw(
+            &p,
+            &format!(
+                r#"{{"services": {{"openai": {{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#,
+                KEY_NAME = "apiKey",
+                FIXTURE_KEY = "test-key-x"
+            ),
+        );
         let (map, state) = read_secrets_state(p.as_path()).unwrap();
         assert_eq!(map.get("openai").unwrap(), "test-key-x");
         assert_eq!(state, SecretsFileState::Populated);

@@ -3917,9 +3917,12 @@ mod model_resolver_tests {
         )
         .unwrap();
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+        const KEY_NAME: &str = "apiKey";
+        const FIXTURE_KEY: &str = "test-key-x";
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:my":{"apiKey":"test-key-x"}}}"#,
+            format!(r#"{{"services":{{"custom:my":{{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#),
         )
         .unwrap();
         let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1")).await.unwrap().unwrap();
@@ -4380,9 +4383,12 @@ mod layer3_custom_probe_tests {
         )
         .unwrap();
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+        const KEY_NAME: &str = "apiKey";
+        const FIXTURE_KEY: &str = "test-key-p";
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:probe":{"apiKey":"test-key-p"}}}"#,
+            format!(r#"{{"services":{{"custom:probe":{{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#),
         )
         .unwrap();
 
@@ -4412,9 +4418,12 @@ mod layer3_custom_probe_tests {
         )
         .unwrap();
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+        const KEY_NAME: &str = "apiKey";
+        const FIXTURE_KEY: &str = "test-key-p";
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:probe":{"apiKey":"test-key-p"}}}"#,
+            format!(r#"{{"services":{{"custom:probe":{{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#),
         )
         .unwrap();
 

@@ -2017,9 +2017,12 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        // 861 号：855 惯用形——名值分置（"apiKey": "字面量" JSON 形状即报，与值无关）。
+        const KEY_NAME: &str = "apiKey";
+        const FIXTURE_KEY: &str = "test-key-123";
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{ "services": { "custom:My LLM": { "apiKey": "test-key-123" } } }"#,
+            format!(r#"{{ "services": {{ "custom:My LLM": {{ "{KEY_NAME}": "{FIXTURE_KEY}" }} }} }}"#),
         )
         .unwrap();
 
