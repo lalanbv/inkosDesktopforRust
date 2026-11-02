@@ -610,7 +610,8 @@ pub fn render_summary_snapshot(
 
 fn escape_table_cell(value: &str) -> String {
     // 812 号：`\r\n` 先于 `\n` 归一（TS `/\r?\n/g` 同集），否则 CRLF 文本残留裸 `\r`。
-    value.replace('|', "\\|").replace("\r\n", "<br>").replace('\n', "<br>")
+    // 816 号：走 utils::markdown_table 单一真源（同集+trim，与 TS analyzer 对齐）。
+    crate::utils::markdown_table::escape_table_cell(value)
 }
 
 fn heading_prefix_re() -> &'static Regex {

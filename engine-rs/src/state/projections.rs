@@ -18,20 +18,9 @@ fn note_index_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?i)^note_(\d+)$").unwrap())
 }
 
-/// 表格单元格转义：竖线 → `\|`，换行 → `<br>`（TS `escapeTableCell` 逐字同款）。
-///
-/// 810 号：此前只转义竖线——撤回语义的 notes 形态为「既有 + 换行 + 依据」（805 号），
-/// 多行单元格把 markdown 行截成两行，回读该投影的 kind enrich（get_promises）丢 H03
-/// 的 kind（差分器 /timeline/3/kind 分叉实锤）。TS 2.0 于 7e60e13f 补换行转义，
-/// rust 移植（e5adc8e1）早于该提交未跟进=移植漂移。
-fn escape_table_cell(value: &str) -> String {
-    value
-        .replace('|', "\\|")
-        .replace("\r\n", "<br>")
-        .replace('\n', "<br>")
-        .trim()
-        .to_string()
-}
+// 表格单元格转义：810 号补换行→<br>（撤回 notes 多行截行实锤，TS 7e60e13f 对偶）；
+// 816 号收敛到 utils::markdown_table 单一真源（此前 5 处物理拷贝各自漂移）。
+use crate::utils::markdown_table::escape_table_cell;
 
 // ---- hooks 投影 ----
 

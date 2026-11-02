@@ -201,33 +201,9 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// 按未转义的 `|` 拆分表格行（`\|` 不作分隔符，留给 [`restore_table_cell`] 还原）。
-/// 等价 JS `line.split(/(?<!\\)\|/)`（regex crate 无反向预查，手写扫描）。
-fn split_table_row_escaped(line: &str) -> Vec<&str> {
-    let mut segs = Vec::new();
-    let mut start = 0;
-    let mut prev_backslash = false;
-    for (idx, ch) in line.char_indices() {
-        if ch == '|' && !prev_backslash {
-            segs.push(&line[start..idx]);
-            start = idx + 1;
-        }
-        prev_backslash = ch == '\\';
-    }
-    segs.push(&line[start..]);
-    segs
-}
-
-/// 单元格回读还原：`<br>` / `<br/>` / `<br />`（忽略大小写）→ 换行；`\|` → `|`。
-///
-/// 811/812 号：与渲染侧 `escape_table_cell`（竖线 → `\|`、换行 → `<br>`）成对；
-/// TS `story-markdown.ts restoreTableCell` 同集。
-fn restore_table_cell(cell: &str) -> String {
-    static BR: OnceLock<Regex> = OnceLock::new();
-    BR.get_or_init(|| Regex::new(r"(?i)<br\s*/?>").unwrap())
-        .replace_all(cell, "\n")
-        .replace("\\|", "|")
-}
+// 811/812 号：拆分感知转义 + 单元格回读还原；816 号收敛到 utils::markdown_table 单一真源
+//（与渲染侧 escape_table_cell 成对，TS utils/markdown-table.ts 同集）。
+use crate::utils::markdown_table::{escape_table_cell, restore_table_cell, split_table_row_escaped};
 
 /// 解析章节摘要 markdown 表格 → [`StoredSummary`] 列表。
 /// 对齐 TS `parseChapterSummariesMarkdown`：首列须为纯数字（章节号）。
@@ -506,17 +482,8 @@ fn render_promoted_cell(
     }
 }
 
-/// 表格单元格转义（fork 格式台账/摘要渲染）：竖线 → `\|`、换行 → `<br>`。
-/// 812 号：与 `projections::escape_table_cell` / TS story-markdown `escapeTableCell` 同集——
-/// 此前仅转义竖线，多行单元格会把 fork 格式台账行截断。
-fn escape_table_cell(value: &str) -> String {
-    value
-        .replace('|', "\\|")
-        .replace("\r\n", "<br>")
-        .replace('\n', "<br>")
-        .trim()
-        .to_string()
-}
+// 表格单元格转义（fork 格式台账/摘要渲染）：812 号补换行→<br>；816 号起走
+// utils::markdown_table::escape_table_cell 单一真源（见上方 use）。
 
 /// 解析 current_state markdown → [`NewFact`] 列表。
 ///

@@ -54,6 +54,7 @@ pub mod log_file;
 pub mod llm_endpoint_auth;
 pub mod llm_env;
 pub mod long_span_fatigue;
+pub mod markdown_table;
 pub mod memory_retrieval;
 pub mod narrative_control;
 pub mod outline_paths;

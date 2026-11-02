@@ -1,6 +1,8 @@
 // 715 号：类型源适配——StoredHook→promise-ledger / StoredSummary→memory-db-readonly
 // / Fact→CurrentStateFact（runtime-state 同构，parseCurrentStateFacts 不消费 id 字段）。
 import type { StoredHook } from "./promise-ledger.js";
+// 816 号：单元格转义/还原/拆分单一真源（曾与 state-projections 物理拷贝两处）。
+import { escapeTableCell, restoreTableCell, splitTableRowEscaped } from "./markdown-table.js";
 import type { StoredSummary } from "../state/memory-db-readonly.js";
 import type { CurrentStateFact as Fact } from "../models/runtime-state.js";
 import {
@@ -215,20 +217,11 @@ export function parseMarkdownTableRows(markdown: string): string[][] {
     .filter((line) => line.startsWith("|"))
     .filter((line) => !line.includes("---"))
     // 812 号：感知转义的拆分——渲染器把单元格内竖线转成 `\|`，拆分器此前按每个 `|` 朴素
-    // 拆分（拆分先于还原），含竖线的 notes 会多拆出一列。反向预查 `(?<!\\)\|` 跳过转义竖线，
+    // 拆分（拆分先于还原），含竖线的 notes 会多拆出一列。转义竖线跳过分隔，
     // 再在 restoreTableCell 还原为 `|`（Rust parse_markdown_table_rows 同口径）。
-    .map((line) => line.split(/(?<!\\)\|/).slice(1, -1).map((cell) => restoreTableCell(cell.trim())))
+    // 816 号：拆分/还原收敛到 utils/markdown-table 单一真源（此前物理拷贝两处）。
+    .map((line) => splitTableRowEscaped(line).slice(1, -1).map((cell) => restoreTableCell(cell.trim())))
     .filter((cells) => cells.some(Boolean));
-}
-
-/**
- * 811/812 号：单元格回读还原——渲染器（`escapeTableCell`）把换行转 `<br>`、竖线转 `\|`
- * 以保住表格行与列，解析器此前原样回传：多行 notes（805 撤回语义「既有 + 换行 + 依据」）
- * 经 md 往返后以 `<br>` 字面落回 state；含竖线 notes 则列数错位。渲染产什么、解析就还原什么；
- * 与 Rust `story_markdown::restore_table_cell` 同集（`<br>` / `<br/>` / `<br />` 忽略大小写；`\|`）。
- */
-function restoreTableCell(cell: string): string {
-  return cell.replace(/<br\s*\/?>/gi, "\n").replace(/\\\|/g, "|");
 }
 
 export function isStateTableHeaderRow(row: ReadonlyArray<string>): boolean {
@@ -384,8 +377,3 @@ function parseOptionalInt(cell: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function escapeTableCell(value: string | number): string {
-  // 812 号：与 state-projections `escapeTableCell` 同集（竖线 → `\|`、换行 → `<br>`）——
-  // 此前仅转义竖线，多行单元格会把 fork 格式台账行截断（Rust story_markdown 同修）。
-  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>").trim();
-}

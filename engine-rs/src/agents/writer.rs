@@ -786,7 +786,9 @@ pub fn render_delta_summary_row(delta: &RuntimeStateDelta) -> String {
         summary.chapter_type.clone(),
     ]
     .iter()
-    .map(|value| value.replace('|', "\\|").trim().to_string())
+    // 816 号：走 utils::markdown_table 单一真源（补换行→<br>，此前仅转义竖线——多行
+    // 摘要字段会把摘要行截断；golden render_delta_summary_row 用例无换行输入不受影响）。
+    .map(|value| crate::utils::markdown_table::escape_table_cell(value))
     .collect::<Vec<String>>()
     .join(" | ");
 

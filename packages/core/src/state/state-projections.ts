@@ -3,6 +3,8 @@ import type {
   CurrentStateState,
   HooksState,
 } from "../models/runtime-state.js";
+// 816 号：单元格转义单一真源（曾与 story-markdown 物理拷贝两处，810/811/812 各修一处后收敛）。
+import { escapeTableCell } from "../utils/markdown-table.js";
 
 export function renderHooksProjection(
   state: HooksState,
@@ -119,8 +121,4 @@ export function renderCurrentStateProjection(
     ...facts,
     "",
   ].join("\n");
-}
-
-function escapeTableCell(value: string | number): string {
-  return String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>").trim();
 }
