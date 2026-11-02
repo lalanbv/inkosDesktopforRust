@@ -127,15 +127,30 @@ export function PendingHooksView({ content }: PendingHooksViewProps) {
             )}
           </div>
           {/* 814 号：whitespace-pre-line——撤回 notes 形态为「既有 + 换行 + 依据」（811/812 号
-              解析侧已把 <br> 还原为换行），按行展示；已撤回条目正文弱化。 */}
-          <p
-            className={cn(
-              "text-[15px] leading-7 font-['SimSun','Songti_SC','STSong',serif] whitespace-pre-line",
-              hook.status === "superseded" ? "text-muted-foreground/70" : "text-foreground",
-            )}
-          >
-            {hook.content}
-          </p>
+              解析侧已把 <br> 还原为换行），按行展示；已撤回条目正文弱化。
+              832 号：superseded 时拆分首行（原文前提 划线）与撤回依据（弱化前缀），使作者
+              一眼区分「被撤回的前提」与「撤回理由」。 */}
+          {hook.status === "superseded" && hook.content.includes("\n") ? (
+            <div className="text-[15px] leading-7 font-['SimSun','Songti_SC','STSong',serif]">
+              <p className="line-through decoration-muted-foreground/60 text-muted-foreground/70">
+                {hook.content.split("\n")[0]}
+              </p>
+              {hook.content.split("\n").slice(1).map((line, idx) => (
+                <p key={idx} className="text-[13px] text-muted-foreground/60 leading-5">
+                  ↳ {line}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p
+              className={cn(
+                "text-[15px] leading-7 font-['SimSun','Songti_SC','STSong',serif] whitespace-pre-line",
+                hook.status === "superseded" ? "text-muted-foreground/70" : "text-foreground",
+              )}
+            >
+              {hook.content}
+            </p>
+          )}
         </div>
       ))}
     </div>
