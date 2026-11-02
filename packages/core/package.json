@@ -52,6 +52,10 @@
     "./utils/hook-kind": {
       "types": "./dist/utils/hook-kind.d.ts",
       "import": "./dist/utils/hook-kind.js"
+    },
+    "./utils/promise-ledger": {
+      "types": "./dist/utils/promise-ledger.d.ts",
+      "import": "./dist/utils/promise-ledger.js"
     }
   },
   "files": [

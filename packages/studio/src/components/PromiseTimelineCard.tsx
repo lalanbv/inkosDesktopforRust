@@ -1,19 +1,11 @@
 import { useEffect, useState } from "react";
 import { HOOK_KIND_IDS, hookKindLabel, type HookKind } from "@actalk/inkos-core/utils/hook-kind";
+// 822 号：条目类型单一真源（此前本地接口与 core PromiseTimelineEntry 物理拷贝——
+// 821 加 withdrawn 时需手工双写同步，即 816 教训的类型版）。
+import type { PromiseTimelineEntry } from "@actalk/inkos-core/utils/promise-ledger";
 import { cn } from "../lib/utils";
 import { fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
-
-interface PromiseTimelineEntry {
-  readonly hookId: string;
-  readonly summary: string;
-  readonly openedAt: number;
-  readonly lastAdvancedAt?: number;
-  readonly expectedPayoff: string;
-  // 818 号：撤回终态（与 core PromiseTimelineEntry state 同集——superseded 钩子投影）。
-  readonly state: "open" | "advancing" | "fulfilled" | "overdue" | "withdrawn";
-  readonly kind?: HookKind; // R23/396 号：规范分类透传（存量无 kind 缺省）
-}
 
 interface PacingDebt {
   readonly hookId: string;
