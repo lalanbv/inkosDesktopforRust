@@ -7,10 +7,20 @@
 //   （每条须注来源循环号与理由；无补丁线的 modulo 3.x 最新即为终态）；
 // - **新告警拦截**：白名单之外的任何 advisory 非零退出——新漏洞不应静默绿灯。
 //
-//   node scripts/audit-npm.mjs            # 全量扫描
+//   node scripts/audit-npm.mjs            # 全量扫描 + 必红自检
 //   node scripts/audit-npm.mjs --json     # 附带输出原始 advisory 摘要
+//   node scripts/audit-npm.mjs --self-check-only  # 只跑必红自检（毫秒级）
 //
 // 前置：pnpm（同仓库包管理器）。
+//
+// 848 号形状卫兵（846 号 audit:rust 恒绿事故同型，活体实证）：端点瞬态错误
+// 响应是顶层 `{"error": ...}` 的对象（无 advisories 键），旧代码
+// `Object.values(parsed.advisories ?? {})` 把它静默当 0 advisory → 假绿。
+// 现：JSON 里无 `advisories` 键=端点故障/改形/限流，未知≠绿灯，exit 3 并
+// 原样回显响应头；metadata.vulnerabilities 汇总与 advisory 计数矛盾（0 vs
+// 非空）同样 exit 3。另加必红自检：三枚内联夹具走与真审计同一条
+// classifyAdvisories 路径（未白名单告警→红；错误形状→红；全白名单→绿），
+// 任一不符判定检测器退化、本次全部绿灯结论作废。
 
 import { execFileSync } from "node:child_process";
 
@@ -82,6 +92,44 @@ const ACCEPTED = new Map([
 
 const args = process.argv.slice(2);
 const verbose = args.includes("--json");
+if (args.includes("--self-check-only")) {
+  runSelfCheck();
+  process.exit(0);
+}
+
+/** 形状卫兵：无 `advisories` 键 / null = 端点故障、改形或限流——未知≠绿灯（848 号）。 */
+function auditShapeFailure(parsed) {
+  if (!parsed || typeof parsed !== "object") return "响应不是对象";
+  if (!("advisories" in parsed) || parsed.advisories == null) {
+    return `响应无 advisories 键（端点故障/改形/限流）${parsed.error ? `，error=${JSON.stringify(parsed.error).slice(0, 120)}` : ""}`;
+  }
+  // metadata 汇总与 advisory 计数矛盾（npm v1 形状都有 metadata）。
+  const vulns = parsed.metadata?.vulnerabilities;
+  if (vulns && typeof vulns === "object") {
+    const total = ["info", "low", "moderate", "high", "critical"]
+      .reduce((sum, k) => sum + (Number(vulns[k]) || 0), 0);
+    const count = Object.keys(parsed.advisories).length;
+    if (total > 0 && count === 0) return `metadata 汇总 ${total} 条 findings 但 advisories 为空——形状矛盾`;
+    if (total === 0 && count > 0) return `advisories 有 ${count} 条但 metadata 汇总为 0——形状矛盾`;
+  }
+  return null;
+}
+
+/** 分类（真审计与自检共用的唯一路径）：白名单放行 vs 未白名单拦截。 */
+function classifyAdvisories(parsed) {
+  const accepted = [];
+  const unaccepted = [];
+  for (const a of Object.values(parsed.advisories)) {
+    const name = a.module_name ?? "?";
+    const severity = a.severity ?? "?";
+    if (ACCEPTED.has(name)) {
+      accepted.push(`  = ${name} [${severity}] ${ACCEPTED.get(name).reason}（${ACCEPTED.get(name).since} 接受）`);
+    } else {
+      unaccepted.push(`  ✗ ${name} [${severity}] ${a.title ?? ""} ${a.url ?? ""}`.trim());
+    }
+  }
+  return { accepted, unaccepted };
+}
 
 let raw;
 try {
@@ -109,23 +157,24 @@ try {
   process.exit(3);
 }
 
-const advisories = Object.values(parsed.advisories ?? {});
+const shapeFailure = auditShapeFailure(parsed);
+if (shapeFailure) {
+  // 848 号：端点瞬态错误对象（顶层 {"error": ...}）此前被 `?? {}` 吞成
+  // 「✓ 0 advisory」假绿——未知≠绿灯，exit 3 响亮并回显响应头供定性。
+  console.error(`[audit-npm] ✗ 形状卫兵：${shapeFailure}`);
+  console.error(`[audit-npm] 响应头 240 字节：${raw.slice(0, 240)}`);
+  console.error("[audit-npm] （多为端点瞬态故障——稍后重跑一次；持续失败则查 pnpm/registry 版本变化）");
+  process.exit(3);
+}
+
+const advisories = Object.values(parsed.advisories);
 if (advisories.length === 0) {
   console.log("[audit-npm] ✓ 0 advisory");
+  runSelfCheck();
   process.exit(0);
 }
 
-const accepted = [];
-const unaccepted = [];
-for (const a of advisories) {
-  const name = a.module_name ?? "?";
-  const severity = a.severity ?? "?";
-  if (ACCEPTED.has(name)) {
-    accepted.push(`  = ${name} [${severity}] ${ACCEPTED.get(name).reason}（${ACCEPTED.get(name).since} 接受）`);
-  } else {
-    unaccepted.push(`  ✗ ${name} [${severity}] ${a.title ?? ""} ${a.url ?? ""}`.trim());
-  }
-}
+const { accepted, unaccepted } = classifyAdvisories(parsed);
 
 if (verbose) {
   for (const line of [...accepted, ...unaccepted]) console.log(line);
@@ -134,6 +183,52 @@ if (verbose) {
 console.log(`[audit-npm] advisory 合计 ${advisories.length}：白名单放行 ${accepted.length}，拦截 ${unaccepted.length}`);
 if (unaccepted.length > 0) {
   console.error("[audit-npm] ✗ 新增未白名单告警：\n" + unaccepted.join("\n"));
+  runSelfCheck();
   process.exit(1);
 }
 console.log("[audit-npm] ✓ 全部为已接受风险（dev 工具链），通过");
+runSelfCheck();
+
+// ── 必红自检（848 号）：三枚内联夹具走与真审计同一条 auditShapeFailure/classifyAdvisories
+// 路径，毫秒级离线。任一不符=检测器退化，本次所有绿灯结论作废（码 1）。
+function runSelfCheck() {
+  const cases = [
+    {
+      name: "未白名单告警→红",
+      parsed: {
+        advisories: { 1: { module_name: "left-pad", severity: "high", title: "t", url: "u" } },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 1, critical: 0 } },
+      },
+      ok: (r) => r.unaccepted.length === 1 && r.accepted.length === 0,
+    },
+    {
+      name: "错误形状（无 advisories 键）→红",
+      parsed: { error: { code: "ENOTFOUND" } },
+      ok: (r) => r.shapeFailure !== null,
+    },
+    {
+      name: "全白名单→绿",
+      parsed: {
+        advisories: { 1: { module_name: "katex", severity: "low", title: "t", url: "u" } },
+        metadata: { vulnerabilities: { info: 0, low: 1, moderate: 0, high: 0, critical: 0 } },
+      },
+      ok: (r) => r.unaccepted.length === 0 && r.accepted.length === 1,
+    },
+  ];
+  console.log("[audit-npm] == 必红自检（3 夹具） ==");
+  let failed = false;
+  for (const c of cases) {
+    const shapeFailure = auditShapeFailure(c.parsed);
+    const result = {
+      shapeFailure,
+      ...(shapeFailure ? {} : classifyAdvisories(c.parsed)),
+    };
+    if (c.ok(result)) {
+      console.log(`[audit-npm]   ✓ ${c.name}`);
+    } else {
+      console.error(`[audit-npm]   ✗ ${c.name}——检测器退化，本次绿灯结论作废`);
+      failed = true;
+    }
+  }
+  if (failed) process.exit(1);
+}

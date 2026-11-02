@@ -214,6 +214,14 @@ for (const dir of SCAN_DIRS) {
   files.push(...await walk(join(ROOT, dir)));
 }
 
+// 848 号零扫描面卫兵：本仓三个包合计 700+ 源文件——若目录结构漂移（包改名/
+// ROOT 取错）扫到 0 文件，findings=0 会被误读为「全绿」而非「没扫到」
+//（846 号 audit:rust 恒绿事故同型：解析面失效默认绿）。
+if (files.length === 0) {
+  console.error(`Semantic audit: scan surface is EMPTY under ${ROOT} (${SCAN_DIRS.join(", ")}) — directory drift? Not a pass.`);
+  process.exit(2);
+}
+
 const findings = [];
 for (const path of FORBIDDEN_SOURCE_PATHS) {
   try {
