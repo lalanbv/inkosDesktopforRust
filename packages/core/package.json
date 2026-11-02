@@ -81,11 +81,11 @@
     "@earendil-works/pi-telemetry": "0.87.1",
     "@mariozechner/pi-agent-core": "0.67.1",
     "@mariozechner/pi-ai": "0.67.1",
-    "@sinclair/typebox": "^0.34.49",
+    "@sinclair/typebox": "^0.34.52",
     "dotenv": "^16.4.0",
     "epub-gen-memory": "^1.0.10",
     "js-yaml": "^4.1.1",
-    "jszip": "3.10.1",
+    "jszip": "3.10.2",
     "undici": "6.21.3",
     "unpdf": "^1.6.2",
     "zod": "^3.25.76"

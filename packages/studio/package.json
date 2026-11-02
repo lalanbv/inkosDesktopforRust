@@ -34,7 +34,7 @@
   "dependencies": {
     "@actalk/inkos-core": "workspace:*",
     "@hono/node-server": "^1.13.0",
-    "hono": "^4.7.0",
+    "hono": "^4.13.16",
     "katex": "0.18.2"
   },
   "devDependencies": {
