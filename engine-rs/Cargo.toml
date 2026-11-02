@@ -51,7 +51,11 @@ async-trait = "0.1"
 # UUID：chapter-workspace 版本归档的版本 id 生成（v4，与 TS crypto.randomUUID 对齐）。
 uuid = { version = "1", features = ["v4"] }
 flate2 = "1"
-zip = "2"
+# 846 号：RUSTSEC-2026-0367/0368/0369/0429（zip ≤8 `extract()` 符号链接/SUID 四连，含 9.1 critical）
+# → ≥9。本仓只用 ZipWriter 写 EPUB + by_name/by_index 手动读，extract() 不可达；仍升级以清零审计。
+# 特性裁剪到 deflate：EPUB 规范仅允许 Stored/Deflate，去掉 aes/bzip2/lzma/xz/zstd 传递依赖；
+# 不启 time → FileOptions::default() 时间戳恒为 1980-01-01，导出字节确定性。
+zip = { version = "9", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 # YAML：genre-profile / book-rules 的 frontmatter 解析（TS js-yaml 的对应物）。
 # serde_yaml_ng = serde_yaml 0.9 的维护续作（同 API drop-in；0.9 已停维护

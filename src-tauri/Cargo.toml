@@ -96,7 +96,10 @@ ureq = "2"
 url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
-zip = "2"
+# 846 号：RUSTSEC-2026-0367/0368/0369/0429（zip ≤8 `extract()` 四连）→ ≥9；本仓 extract_zip 为
+# 手工加固解压（enclosed_name 防 zip-slip + 字节上限防炸弹），不走 extract()。特性裁剪到 deflate
+#（Node 官方 .zip 发行包仅 Deflate）。
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 # tempfile 已提升为常规 dep（M2b 加固：atomic_write 使用 NamedTempFile）。

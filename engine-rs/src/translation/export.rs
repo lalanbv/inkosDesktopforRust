@@ -221,11 +221,12 @@ fn build_epub(
     let mut buffer = std::io::Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut buffer);
-        let stored: zip::write::FileOptions<'_, ()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated: zip::write::FileOptions<'_, ()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let mut push = |name: &str, options: zip::write::FileOptions<'_, ()>, body: &[u8]| -> Result<(), String> {
+        // 846 号：zip 9 的 FileOptions 多一个生命周期参数——改用跨版本稳定的 SimpleFileOptions 别名。
+        let stored: zip::write::SimpleFileOptions =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let deflated: zip::write::SimpleFileOptions =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let mut push = |name: &str, options: zip::write::SimpleFileOptions, body: &[u8]| -> Result<(), String> {
             writer
                 .start_file(name, options)
                 .map_err(|e| e.to_string())?;
