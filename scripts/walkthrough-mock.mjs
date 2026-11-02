@@ -168,6 +168,8 @@ const STREAM_DELAY_MS = Number(process.env.WALKTHROUGH_MOCK_STREAM_DELAY_MS ?? "
 // 686 号解析修复：空段先滤再转数——旧形态 `"".split(",")→[""]→Number("")→0`
 // 把「未设」静默变成 `[0]`（首轮 0 分注入恒触发审改循环，契约差分/走查的
 // 默认形态被反转；686 号实录 node=1 vs rust=3 次审稿文本分叉即此暴露）。
+// 815 号：resync 路由（815 号补审计段）在 fixture 流中先于 write-next 消耗
+// AUDIT_CALL_SEQ——注入序列按调用序取值，走查预期须将 resync 审计计入偏移。
 const AUDIT_SCORES = (process.env.WALKTHROUGH_MOCK_AUDIT_SCORES ?? "")
   .split(",").map((s) => s.trim()).filter((s) => s !== "")
   .map((s) => Number(s)).filter((n) => Number.isFinite(n));
