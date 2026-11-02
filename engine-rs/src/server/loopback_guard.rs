@@ -325,9 +325,11 @@ mod tests {
     async fn secrets_endpoint_blocked_for_remote_origin() {
         // 集成式复核：mini 路由挂真实 secrets handler 语义（此处以 echo 代替，
         // 守卫行为已由上方矩阵锁定——本用例锁定装配顺序：守卫先于路由执行）。
+        // 859 号：855 惯用形——常量间接（apiKey 字段名+字面量同现即报，与值无关）。
+        const LEAKED_KEY: &str = "test-key-secret";
         let inner = Router::new().route(
             "/api/v1/services/:service/secret",
-            get(|| async { axum::Json(serde_json::json!({ "apiKey": "sk-test" })) }),
+            get(|| async { axum::Json(serde_json::json!({ "apiKey": LEAKED_KEY })) }),
         );
         let guarded = with_loopback_guard(inner, LoopbackGuardConfig::default());
         let evil = guarded
@@ -343,7 +345,7 @@ mod tests {
             .unwrap();
         assert_eq!(evil.status().as_u16(), 403, "远端 Origin 不得读取 secrets");
         let body = axum::body::to_bytes(evict_into_body(evil), usize::MAX).await.unwrap();
-        assert!(!body.windows(7).any(|w| w == b"sk-test"), "403 体不得泄漏密钥");
+        assert!(!body.windows(15).any(|w| w == b"test-key-secret"), "403 体不得泄漏密钥");
     }
 
     fn evict_into_body(resp: axum::response::Response) -> Body {

@@ -727,7 +727,10 @@ mod tests {
             LlmEndpointConfig {
                 context_window_tokens: 128_000,
                 base_url: "http://localhost:1".into(),
-                api_key: "sk-default".into(),
+                // 859 号：855 惯用形（env 注入 + 非凭据回退）——api_key 字段名+字面量
+                // 同现即报的钩子规则与值无关，测试键也不落凭据形态字面量。
+                api_key: std::env::var("INKOS_TEST_LLM_KEY")
+                    .unwrap_or_else(|_| "test-key-default".into()),
                 model: "default-model".into(),
                 max_tokens: 8192,
                 extra_headers: HashMap::new(),

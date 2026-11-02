@@ -1907,7 +1907,7 @@ mod tests {
 
     #[test]
     fn header_safe_api_key_rules() {
-        assert!(is_header_safe_api_key("sk-abc123XYZ"));
+        assert!(is_header_safe_api_key("test-key-abc123XYZ"));
         assert!(!is_header_safe_api_key(""));
         assert!(!is_header_safe_api_key("has space"));
         assert!(!is_header_safe_api_key("中文key"));
@@ -2019,7 +2019,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{ "services": { "custom:My LLM": { "apiKey": "sk-123" } } }"#,
+            r#"{ "services": { "custom:My LLM": { "apiKey": "test-key-123" } } }"#,
         )
         .unwrap();
 
@@ -2029,7 +2029,7 @@ mod tests {
         let effective = resolve_effective_llm_studio(root, &raw_llm).await;
         assert_eq!(effective.get("baseUrl").unwrap(), "https://my.llm/v1");
         assert_eq!(effective.get("model").unwrap(), "my-model");
-        assert_eq!(effective.get("apiKey").unwrap(), "sk-123");
+        assert_eq!(effective.get("apiKey").unwrap(), "test-key-123");
         assert_eq!(effective.get("configSource").unwrap(), "studio");
     }
 

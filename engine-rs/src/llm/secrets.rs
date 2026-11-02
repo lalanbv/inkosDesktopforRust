@@ -366,18 +366,18 @@ mod tests {
     #[test]
     fn resolve_key_prefers_secrets_then_env() {
         let mut services = HashMap::new();
-        services.insert("deepseek".into(), secret("sk-from-file"));
+        services.insert("deepseek".into(), secret("test-key-from-file"));
         let s = SecretsFile { services };
         // secrets 命中
         assert_eq!(
             resolve_service_api_key(&s, "deepseek", |_| None),
-            Some("sk-from-file".into())
+            Some("test-key-from-file".into())
         );
         // secrets 空 → env
         let empty = SecretsFile::default();
         assert_eq!(
-            resolve_service_api_key(&empty, "deepseek", |k| if k == "DEEPSEEK_API_KEY" { Some("sk-env".into()) } else { None }),
-            Some("sk-env".into())
+            resolve_service_api_key(&empty, "deepseek", |k| if k == "DEEPSEEK_API_KEY" { Some("test-key-env".into()) } else { None }),
+            Some("test-key-env".into())
         );
         // 都无 → None
         assert_eq!(resolve_service_api_key(&empty, "missing", |_| None), None);
@@ -388,11 +388,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("inkos-secrets-test-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         let mut services = HashMap::new();
-        services.insert("openai".into(), secret("sk-123"));
+        services.insert("openai".into(), secret("test-key-123"));
         let s = SecretsFile { services };
         save_secrets(&dir, &s).unwrap();
         let loaded = load_secrets(&dir).unwrap();
-        assert_eq!(loaded.services.get("openai").unwrap().api_key, "sk-123");
+        assert_eq!(loaded.services.get("openai").unwrap().api_key, "test-key-123");
         std::fs::remove_dir_all(&dir).ok();
     }
 

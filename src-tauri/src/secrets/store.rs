@@ -261,11 +261,11 @@ mod tests {
     #[test]
     fn mock_roundtrip() {
         let store = MockStore::new();
-        store.upsert("openai", "sk-x").unwrap();
+        store.upsert("openai", "test-key-x").unwrap();
         store.upsert("deepseek", "dk").unwrap();
 
         let all = store.read_all().unwrap();
-        assert_eq!(all.get("openai").unwrap(), "sk-x");
+        assert_eq!(all.get("openai").unwrap(), "test-key-x");
         assert_eq!(all.get("deepseek").unwrap(), "dk");
         assert_eq!(all.len(), 2);
 
@@ -342,19 +342,19 @@ mod tests {
         assert!(store.read_all().unwrap().is_empty(), "新 service 应为空");
 
         // upsert 两个 key
-        store.upsert("openai", "sk-test-1").unwrap();
+        store.upsert("openai", "test-key-1").unwrap();
         store.upsert("deepseek", "dk-test-2").unwrap();
 
         // read_all 看到 2 条
         let all = store.read_all().unwrap();
         assert_eq!(all.len(), 2);
-        assert_eq!(all.get("openai").unwrap(), "sk-test-1");
+        assert_eq!(all.get("openai").unwrap(), "test-key-1");
         assert_eq!(all.get("deepseek").unwrap(), "dk-test-2");
 
         // upsert 覆盖
-        store.upsert("openai", "sk-test-1-v2").unwrap();
+        store.upsert("openai", "test-key-1-v2").unwrap();
         let all = store.read_all().unwrap();
-        assert_eq!(all.get("openai").unwrap(), "sk-test-1-v2");
+        assert_eq!(all.get("openai").unwrap(), "test-key-1-v2");
         assert_eq!(all.len(), 2, "覆盖不应增加 key 数");
 
         // delete 一个

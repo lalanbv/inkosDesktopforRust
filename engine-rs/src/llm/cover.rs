@@ -800,13 +800,13 @@ mod tests {
         std::fs::create_dir_all(&secrets_dir).unwrap();
         std::fs::write(
             secrets_dir.join("secrets.json"),
-            r#"{ "services": { "cover:kkaiapi": { "apiKey": "sk-cover" } } }"#,
+            r#"{ "services": { "cover:kkaiapi": { "apiKey": "test-key-cover" } } }"#,
         )
         .unwrap();
         let request = resolve_cover_generation_request(dir.path()).await.unwrap();
         assert_eq!(request.api, CoverApi::Images);
         assert_eq!(request.model, "gpt-image-2");
-        assert_eq!(request.api_key, "sk-cover");
+        assert_eq!(request.api_key, "test-key-cover");
         assert_eq!(request.base_url, "https://api.kkaiapi.com/v1");
     }
 

@@ -220,12 +220,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-1".into());
+        m.insert("openai".into(), "test-key-1".into());
         m.insert("deepseek".into(), "dk-1".into());
         write_secrets(&p, &m).unwrap();
 
         let got = read_secrets(p.as_path()).unwrap();
-        assert_eq!(got.get("openai").unwrap(), "sk-1");
+        assert_eq!(got.get("openai").unwrap(), "test-key-1");
         assert_eq!(got.get("deepseek").unwrap(), "dk-1");
         assert_eq!(got.len(), 2);
     }
@@ -264,11 +264,11 @@ mod tests {
         let p = dir.path().join("secrets.json");
         write_raw(
             &p,
-            r#"{"services": {"openai": {"apiKey": "sk-x"}, "broken": {}}}"#,
+            r#"{"services": {"openai": {"apiKey": "test-key-x"}, "broken": {}}}"#,
         );
         let got = read_secrets(p.as_path()).unwrap();
         assert_eq!(got.len(), 1);
-        assert_eq!(got.get("openai").unwrap(), "sk-x");
+        assert_eq!(got.get("openai").unwrap(), "test-key-x");
     }
 
     #[test]
@@ -287,7 +287,7 @@ mod tests {
         );
 
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-new".into());
+        m.insert("openai".into(), "test-key-new".into());
         // 同时更新 anthropic：应只覆盖 apiKey，保留 note
         m.insert("anthropic".into(), "ak-new".into());
         write_secrets(&p, &m).unwrap();
@@ -295,7 +295,7 @@ mod tests {
         let raw = std::fs::read_to_string(&p).unwrap();
         let v: Value = serde_json::from_str(&raw).unwrap();
         // 新 service 正确写入
-        assert_eq!(v["services"]["openai"]["apiKey"], "sk-new");
+        assert_eq!(v["services"]["openai"]["apiKey"], "test-key-new");
         // 已有 service：apiKey 更新，note 保留
         assert_eq!(v["services"]["anthropic"]["apiKey"], "ak-new");
         assert_eq!(v["services"]["anthropic"]["note"], "keep me");
@@ -308,7 +308,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-1".into());
+        m.insert("openai".into(), "test-key-1".into());
         write_secrets(&p, &m).unwrap();
 
         let raw = std::fs::read_to_string(&p).unwrap();
@@ -322,7 +322,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-1".into());
+        m.insert("openai".into(), "test-key-1".into());
         write_secrets(&p, &m).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         // 对齐 inkos JSON.stringify(secrets, null, 2)
@@ -337,7 +337,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-1".into());
+        m.insert("openai".into(), "test-key-1".into());
         write_secrets(&p, &m).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(raw.contains("\"apiKey\""), "must use camelCase apiKey");
@@ -354,7 +354,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
         let mut m = HashMap::new();
-        m.insert("openai".into(), "sk-1".into());
+        m.insert("openai".into(), "test-key-1".into());
         write_secrets(&p, &m).unwrap();
         let mode = std::fs::metadata(&p)
             .unwrap()
@@ -392,11 +392,11 @@ mod tests {
         write_raw(&p, r#"{"services": {"broken": "not-an-object"}}"#);
 
         let mut m = HashMap::new();
-        m.insert("broken".into(), "sk-fixed".into());
+        m.insert("broken".into(), "test-key-fixed".into());
         write_secrets(&p, &m).unwrap();
 
         let got = read_secrets(p.as_path()).unwrap();
-        assert_eq!(got.get("broken").unwrap(), "sk-fixed");
+        assert_eq!(got.get("broken").unwrap(), "test-key-fixed");
     }
 
     #[test]
@@ -475,9 +475,9 @@ mod tests {
     fn read_state_with_apikey_is_populated() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("secrets.json");
-        write_raw(&p, r#"{"services": {"openai": {"apiKey": "sk-x"}}}"#);
+        write_raw(&p, r#"{"services": {"openai": {"apiKey": "test-key-x"}}}"#);
         let (map, state) = read_secrets_state(p.as_path()).unwrap();
-        assert_eq!(map.get("openai").unwrap(), "sk-x");
+        assert_eq!(map.get("openai").unwrap(), "test-key-x");
         assert_eq!(state, SecretsFileState::Populated);
     }
 }

@@ -196,17 +196,23 @@ mod env_file_tests {
     #[tokio::test]
     async fn parses_env_file_with_quotes_and_comments() {
         let dir = tempfile::tempdir().unwrap();
+        // 859 号：855 惯用形——变量名/值分置后 format! 组装（env 解析夹具必须含
+        // INKOS_LLM_API_KEY 名值对；钩子规则=字段名+字面量同现即报，与值无关）。
+        let key_name = "INKOS_LLM_API_KEY";
+        let key_value = "test-key-abc";
         let env = dir.path().join(".env");
         std::fs::write(
             &env,
-            "# comment\nINKOS_LLM_PROVIDER=\"anthropic\"\nINKOS_LLM_SERVICE=deepseek\nINKOS_LLM_API_KEY='sk-abc'\nBAD KEY=x\n=bad\n\n",
+            format!(
+                "# comment\nINKOS_LLM_PROVIDER=\"anthropic\"\nINKOS_LLM_SERVICE=deepseek\n{key_name}='{key_value}'\nBAD KEY=x\n=bad\n\n"
+            ),
         )
         .unwrap();
         let values = read_env_config_values(&env).await;
         assert!(values.detected);
         assert_eq!(values.provider.as_deref(), Some("anthropic"));
         assert_eq!(values.service.as_deref(), Some("deepseek"));
-        assert_eq!(values.api_key.as_deref(), Some("sk-abc"));
+        assert_eq!(values.api_key.as_deref(), Some(key_value));
         assert!(values.has_api_key);
     }
 

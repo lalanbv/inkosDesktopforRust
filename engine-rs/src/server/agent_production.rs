@@ -3919,13 +3919,13 @@ mod model_resolver_tests {
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:my":{"apiKey":"sk-x"}}}"#,
+            r#"{"services":{"custom:my":{"apiKey":"test-key-x"}}}"#,
         )
         .unwrap();
         let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1")).await.unwrap().unwrap();
         assert_eq!(resolved.service, "custom:my");
         assert_eq!(resolved.model, "m1");
-        assert_eq!(resolved.api_key, "sk-x");
+        assert_eq!(resolved.api_key, "test-key-x");
         assert_eq!(resolved.base_url, "http://127.0.0.1:9");
 
         // 层 4：无显式 service/model 且无 defaultModel/有 key 服务（custom:my
@@ -4382,7 +4382,7 @@ mod layer3_custom_probe_tests {
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:probe":{"apiKey":"sk-p"}}}"#,
+            r#"{"services":{"custom:probe":{"apiKey":"test-key-p"}}}"#,
         )
         .unwrap();
 
@@ -4390,7 +4390,7 @@ mod layer3_custom_probe_tests {
         let resolved = resolve_agent_model_override(&root, None, None).await.unwrap().unwrap();
         assert_eq!(resolved.service, "custom:probe");
         assert_eq!(resolved.base_url, base);
-        assert_eq!(resolved.api_key, "sk-p");
+        assert_eq!(resolved.api_key, "test-key-p");
         // 首个文本模型（bank/legacy 对 custom 为空 → live 发现序）。
         assert_eq!(resolved.model, "mock-large");
     }
@@ -4414,7 +4414,7 @@ mod layer3_custom_probe_tests {
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            r#"{"services":{"custom:probe":{"apiKey":"sk-p"}}}"#,
+            r#"{"services":{"custom:probe":{"apiKey":"test-key-p"}}}"#,
         )
         .unwrap();
 
