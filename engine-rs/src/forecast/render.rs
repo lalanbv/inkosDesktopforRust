@@ -261,3 +261,42 @@ fn render_branch_section(branch: &ForecastBranch, zh: bool, heading_level: usize
 fn escape_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::schema::{ForecastBeat, ForecastBranch, ForecastIntentAlignment, ForecastStatus};
+    use super::*;
+
+    /// 816/818 号：comparison 表格单元格转义——竖线 `\|`、换行→空格，行保持单行
+    ///（comparison.md 为只写交付物无回读解析，此测试锁渲染形态防两侧漂移）。
+    #[test]
+    fn comparison_table_escapes_pipes_and_newlines_in_cell() {
+        let forecast = NarrativeForecast {
+            version: 1,
+            forecast_id: "fc-test-1".to_string(),
+            book_id: "b1".to_string(),
+            created_at: "2026-08-18T00:00:00.000Z".to_string(),
+            language: "zh".to_string(),
+            divergence: "合作还是对抗".to_string(),
+            horizon: 5,
+            base_chapter: 3,
+            context_fingerprint: "abc".to_string(),
+            status: ForecastStatus::Active,
+            branches: vec![ForecastBranch {
+                branch_id: "branch-1".to_string(),
+                title: "合作|对抗\n背水一战".to_string(),
+                premise: "p".to_string(),
+                beats: vec![ForecastBeat { chapter: 4, summary: "s".to_string() }],
+                character_decisions: Vec::new(),
+                projected_changes: Default::default(),
+                risks: Vec::new(),
+                uncertainties: Vec::new(),
+                intent_alignment: ForecastIntentAlignment { score: 80, rationale: "r".to_string() },
+            }],
+        };
+        let md = render_forecast_comparison_markdown(&forecast);
+        let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| branch-1 |")).collect();
+        assert_eq!(rows, vec!["| branch-1 | 合作\\|对抗 背水一战 | 80 | 0 | p |"]); // 单行且转义到位
+        assert_eq!(rows.len(), 1); // 表格行不因换行截断（小节标题含裸竖线合法，不属表格）
+    }
+}
