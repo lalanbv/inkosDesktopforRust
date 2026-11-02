@@ -5,6 +5,7 @@ import type { BookConfig } from "../models/book.js";
 import type { DetectionConfig } from "../models/project.js";
 import { detectChapter } from "./detection-runner.js";
 import type { Logger } from "../utils/logger.js";
+import { findChapterFileByNumber } from "../utils/chapter-files.js";
 
 export interface SchedulerConfig extends PipelineConfig {
   readonly radarCron: string;
@@ -238,8 +239,9 @@ export class Scheduler {
     const { join } = await import("node:path");
     const chaptersDir = join(bookDir, "chapters");
     const files = await readdir(chaptersDir);
-    const paddedNum = String(chapterNumber).padStart(4, "0");
-    const chapterFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+    // 845 号：读侧定位归一到共享真源（数值等值 + 正典优先）——此前 startsWith(补零串)
+    // 既有前缀碰撞（num=7 误配 00071_）又在双形态下按 readdir 顺序取首个（非确定）。
+    const chapterFile = findChapterFileByNumber(files, chapterNumber);
     if (!chapterFile) {
       throw new Error(`Chapter ${chapterNumber} file not found in ${chaptersDir}`);
     }

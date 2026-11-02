@@ -1,53 +1,44 @@
-//! 章节文件名前导号解析与同号定位——`packages/core/src/state/chapter-filename.ts`
-//! 逐字镜像。
+//! 章节文件名前导号解析与同号定位——`packages/core/src/utils/chapter-files.ts`
+//!（`parseChapterFileName` / `findChapterFileByNumber`）镜像。
 //!
 //! 682 号在 TS 侧确立「能列出（索引宽松侧）即可打开（详情侧）」单一事实源：
 //! 引擎写入侧恒 4 位补零（`NNNN_title.md`），但导入/手工放置的章节文件位数
-//! 不限；读侧按「前导号数值等值」定位，同号多形态（0007/007/7 并存）取
-//! 4 位补零（引擎主形态）优先、字典序兜底。旧读侧 `startsWith(补零串)` 的
-//! 前缀碰撞（num=7 误配 `00071_`）与「列表可见、详情 404」（`7_手记.md`）
-//! 按数值等值在此根除——687 号把引擎读侧消费点（章节读取/审计/修稿/检测/
-//! workspace 等 8 处）统一到本模块；写侧自产工件定位不受此影响（683 号裁决：
-//! `starts_with("{padded}_")` 逐字镜像维持）。
+//! 不限；读侧按「前导号数值等值」定位。旧读侧 `startsWith(补零串)` 的前缀碰撞
+//!（num=7 误配 `00071_`）与「列表可见、详情 404」（`7_手记.md`）按数值等值在此
+//! 根除——687 号把引擎读侧消费点（章节读取/审计/修稿/检测/workspace 等 8 处）
+//! 统一到本模块；845 号补齐漏网的 book_eval / continuity / planning_materials /
+//! edit_controller 四处 `starts_with(padded)` 读侧残留。
+//!
+//! 845 号：同号多形态择优与索引重建侧（`state::manager::select_chapter_files`）合并为
+//! 唯一裁决 [`manager::chapter_file_candidate_wins`]（正典 `NNNN_` 优先，同类内字节序
+//! 小者）——此前本模块按 padded-4 类内字典序取 `'-'<'_'` 的连字符旧章，与索引侧正典
+//! 优先互斥，同一本书出现「索引列 `0001_新`、详情开 `0001-旧`」缺口。正则亦归源到
+//! `manager::leading_number`，本模块不再持有私有拷贝。
 
-use regex::Regex;
+use crate::state::manager::{chapter_file_candidate_wins, leading_number};
 use std::path::Path;
-use std::sync::OnceLock;
 
-fn chapter_file_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(\d+)[_-]?(.*)\.md$").unwrap())
-}
-
-/// TS `parseChapterFileName`：前导号数值（须 > 0）；不匹配返回 `None`。
+/// TS `parseChapterFileName(...)?.number`：前导号数值（须 > 0）；不匹配 / 0 号返回 `None`。
 pub fn parse_chapter_file_number(file_name: &str) -> Option<u32> {
-    let captures = chapter_file_re().captures(file_name)?;
-    let number = captures[1].parse::<u32>().ok()?;
-    (number > 0).then_some(number)
+    leading_number(file_name).filter(|number| *number > 0)
 }
 
-/// TS `/^0{3}\d/`：4 位补零（引擎主形态）判定。
-fn is_padded_4(file_name: &str) -> bool {
-    let bytes = file_name.as_bytes();
-    bytes.len() >= 4
-        && bytes[0] == b'0'
-        && bytes[1] == b'0'
-        && bytes[2] == b'0'
-        && bytes[3].is_ascii_digit()
-}
-
-/// TS `findChapterFileByNumber`：数值等值候选按字典序，4 位补零优先、字典序兜底。
+/// TS `findChapterFileByNumber`：数值等值候选按 [`chapter_file_candidate_wins`] 择一
+///（与 `select_chapter_files` 对该章的胜者恒等）；单趟零中间分配，仅在命中时克隆一次。
 pub fn find_chapter_file_by_number(files: &[String], chapter_number: u32) -> Option<String> {
-    let mut candidates: Vec<&String> = files
-        .iter()
-        .filter(|file| parse_chapter_file_number(file) == Some(chapter_number))
-        .collect();
-    candidates.sort();
-    candidates
-        .iter()
-        .find(|file| is_padded_4(file))
-        .or_else(|| candidates.first())
-        .map(|file| (*file).clone())
+    if chapter_number == 0 {
+        return None;
+    }
+    let mut best: Option<&str> = None;
+    for file in files {
+        if parse_chapter_file_number(file) != Some(chapter_number) {
+            continue;
+        }
+        if best.is_none_or(|current| chapter_file_candidate_wins(current, file)) {
+            best = Some(file.as_str());
+        }
+    }
+    best.map(str::to_owned)
 }
 
 /// 读 `chapters_dir` 并按数值等值定位章节文件（路由读侧消费形态；目录缺失/
@@ -69,6 +60,7 @@ pub async fn resolve_chapter_file(chapters_dir: &Path, chapter_number: u32) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::manager::select_chapter_files;
 
     fn list(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
@@ -89,19 +81,29 @@ mod tests {
     }
 
     #[test]
-    fn find_prefers_padded4_then_lexicographic() {
-        // 同号多形态同属 padded-4 类：类内字典序（'-' 0x2D < '_' 0x5F），
-        // 与 TS findChapterFileByNumber 逐字一致（确定性是目的，非「下划线规范名」）。
+    fn find_prefers_canonical_then_lexicographic() {
+        // 845 号：同号双形态正典 `_` 胜出（与索引重建 select_chapter_files 同胜者），
+        // 不再按 padded 类内字典序取 '-'（0x2D）<'_'（0x5F）的连字符旧章。输入顺序无关。
+        let files = list(&["0001-镜中醒来.md", "0001_镜中醒来.md"]);
+        assert_eq!(
+            find_chapter_file_by_number(&files, 1),
+            Some("0001_镜中醒来.md".to_string())
+        );
         let files = list(&["0001_镜中醒来.md", "0001-镜中醒来.md"]);
         assert_eq!(
             find_chapter_file_by_number(&files, 1),
-            Some("0001-镜中醒来.md".to_string())
+            Some("0001_镜中醒来.md".to_string())
         );
-        // 非 4 位形态并存：字典序兜底（"007_" < "7_"）。
+        // 同类内字节序兜底：均正典 → "007_" < "7_"；均非正典 → "0002-a" < "0002-b"。
         let files = list(&["7_手记.md", "007_手记.md"]);
         assert_eq!(
             find_chapter_file_by_number(&files, 7),
             Some("007_手记.md".to_string())
+        );
+        let files = list(&["0002-b.md", "0002-a.md"]);
+        assert_eq!(
+            find_chapter_file_by_number(&files, 2),
+            Some("0002-a.md".to_string())
         );
         // 数值等值：00071 是 71 章，与 7 无关（前缀碰撞根除）。
         let files = list(&["00071_长名.md"]);
@@ -110,7 +112,26 @@ mod tests {
             find_chapter_file_by_number(&files, 71),
             Some("00071_长名.md".to_string())
         );
-        // 无候选。
+        // 无候选 / 0 号。
         assert_eq!(find_chapter_file_by_number(&list(&["0002_风起.md"]), 1), None);
+        assert_eq!(find_chapter_file_by_number(&list(&["0000_零.md"]), 0), None);
+    }
+
+    #[test]
+    fn find_agrees_with_select_chapter_files_for_every_chapter() {
+        // 845 号：读侧定位与索引去重对任一章的胜者恒等，且与输入顺序无关。
+        let files = list(&[
+            "0002-b.md", "0001_新.md", "0001-旧.md", "0003.md", "0000_zero.md", "index.json",
+            "0002-a.md", "7_a.md", "0007_b.md", "007_c.md", "00071_七十一.md",
+        ]);
+        let mut reversed = files.clone();
+        reversed.reverse();
+        let selected = select_chapter_files(files.clone());
+        assert_eq!(selected, select_chapter_files(reversed.clone()));
+        for name in &selected {
+            let number = parse_chapter_file_number(name).expect("selected files carry a chapter number");
+            assert_eq!(find_chapter_file_by_number(&files, number).as_deref(), Some(name.as_str()));
+            assert_eq!(find_chapter_file_by_number(&reversed, number).as_deref(), Some(name.as_str()));
+        }
     }
 }

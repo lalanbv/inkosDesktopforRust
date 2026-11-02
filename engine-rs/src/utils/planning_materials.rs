@@ -54,7 +54,7 @@ pub struct PlanningMaterials {
     pub planner_inputs: Vec<String>,
 }
 
-/// 读取前章末屏节选：chapters/ 下 `NNNN*.md`，去首行取正文，截尾 320 UTF-16 单元。
+/// 读取前章末屏节选：chapters/ 下前导号数值等值的章文件，去首行取正文，截尾 320 UTF-16 单元。
 pub async fn read_previous_ending_excerpt(
     book_dir: &Path,
     chapter_number: u32,
@@ -65,18 +65,10 @@ pub async fn read_previous_ending_excerpt(
     }
 
     let chapters_dir = book_dir.join("chapters");
-    let padded = format!("{:04}", previous_chapter);
-    let mut entries = tokio::fs::read_dir(&chapters_dir).await.ok()?;
-    let mut matched: Option<String> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(&padded) && name.ends_with(".md") {
-            // TS files.find：取第一个匹配（readdir 顺序）。
-            matched = Some(name);
-            break;
-        }
-    }
-    let file_name = matched?;
+    // 845 号：定位归一到 resolve_chapter_file（数值等值 + 正典优先）——此前 starts_with(padded)
+    // 按 read_dir 顺序取首个；TS planning-materials.ts 同步归一到 findChapterFileByNumber。
+    let file_name =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, previous_chapter).await?;
     let markdown = tokio::fs::read_to_string(chapters_dir.join(file_name))
         .await
         .ok()?;

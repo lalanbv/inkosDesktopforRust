@@ -1365,31 +1365,23 @@ async fn read_file_safe(path: &Path) -> String {
         .unwrap_or_else(|_| MISSING_FILE.to_string())
 }
 
-/// 加载上一章全文（chapters/ 目录中 `{prev:04}` 前缀 + .md 的首个文件）。
-/// 对齐 TS `loadPreviousChapter`。
+/// 加载上一章全文。对齐 TS `loadPreviousChapter`。
+/// 845 号：定位归一到 `chapter_filename::resolve_chapter_file`（数值等值 + 正典优先）——
+/// 此前 `starts_with("{prev:04}")` 既有前缀碰撞（prev=7 误配 `00071_`）又在双形态下按
+/// read_dir 顺序取首个（非确定）；TS runner.readChapterContent 同步归一。
 async fn load_previous_chapter(book_dir: &Path, current_chapter: u32) -> String {
     if current_chapter <= 1 {
         return String::new();
     }
     let chapters_dir = book_dir.join("chapters");
-    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
+    let Some(name) =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, current_chapter - 1).await
+    else {
         return String::new();
     };
-    let padded_prev = format!("{:04}", current_chapter - 1);
-    loop {
-        match entries.next_entry().await {
-            Ok(Some(entry)) => {
-                let name = entry.file_name();
-                let Some(name) = name.to_str() else { continue };
-                if name.starts_with(&padded_prev) && name.ends_with(".md") {
-                    return tokio::fs::read_to_string(entry.path())
-                        .await
-                        .unwrap_or_default();
-                }
-            }
-            _ => return String::new(),
-        }
-    }
+    tokio::fs::read_to_string(chapters_dir.join(name))
+        .await
+        .unwrap_or_default()
 }
 
 /// 过滤结果非缺失时渲染块，缺失时空串。对齐 TS 的 `!== "(文件不存在)"` 三元。

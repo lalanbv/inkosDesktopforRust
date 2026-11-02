@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { findChapterFileByNumber } from "../state/chapter-filename.js";
+import { findChapterFileByNumber } from "./chapter-files.js";
 import type { StateManager } from "../state/manager.js";
 import { analyzeAITells } from "../agents/ai-tells.js";
 import { computeAnalytics } from "./analytics.js";

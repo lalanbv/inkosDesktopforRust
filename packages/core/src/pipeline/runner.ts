@@ -66,6 +66,7 @@ import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { compileStyleGuide } from "../agents/style-guide.js";
 import { compileImportSource, renderCompleteImportSource } from "../agents/import-context.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
+import { findChapterFileByNumber } from "../utils/chapter-files.js";
 
 function mergeChapterRevisionInstructions(
   persistedBrief: string,
@@ -1399,10 +1400,12 @@ export class PipelineRunner {
       });
       const chaptersDir = join(bookDir, "chapters");
       const files = await readdir(chaptersDir);
-      const paddedNum = String(targetChapter).padStart(4, "0");
-      const existingFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      // 845 号：修订落盘目标按共享真源定位（数值等值 + 正典优先）——双形态下此前按 readdir
+      // 首个匹配可能改写 legacy 连字符旧章而索引指向正典章（修订对读侧"消失"）；Rust 687 号
+      // 修稿侧已走 resolve_chapter_file，此处为 TS 镜像补齐。
+      const existingFile = findChapterFileByNumber(files, targetChapter);
       if (!existingFile) {
-        throw new Error(`Chapter ${targetChapter} file not found in ${chaptersDir} (expected filename starting with ${paddedNum})`);
+        throw new Error(`Chapter ${targetChapter} file not found in ${chaptersDir} (expected a chapter file with leading number ${targetChapter})`);
       }
       if (changed) await archiveChapterVersion(bookDir, targetChapter, content, "revision");
       const reviseLang = book.language;
@@ -2547,8 +2550,8 @@ export class PipelineRunner {
   private async readChapterContent(bookDir: string, chapterNumber: number): Promise<string> {
     const chaptersDir = join(bookDir, "chapters");
     const files = await readdir(chaptersDir);
-    const paddedNum = String(chapterNumber).padStart(4, "0");
-    const chapterFile = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+    // 845 号：读侧定位归一到共享真源（数值等值 + 正典优先），见 scheduler.readChapterContent 同注。
+    const chapterFile = findChapterFileByNumber(files, chapterNumber);
     if (!chapterFile) {
       throw new Error(`Chapter ${chapterNumber} file not found in ${chaptersDir}`);
     }

@@ -1465,7 +1465,7 @@ mod books48_e2e {
 
     // 687 号：读侧数值等值定位（TS findChapterFileByNumber 逐字镜像）——
     // 「能列出即可打开」+ 前缀碰撞（num=7 误配 00071_）根除 + 同号多形态
-    // padded 类内字典序确定性（与 chapter_filename 单测互补，锁路由行为）。
+    // 确定性择优（与 chapter_filename 单测互补，锁路由行为）。
     #[tokio::test]
     async fn chapter_read_numeric_equivalence() {
         let dir = tempfile::tempdir().unwrap();
@@ -1490,10 +1490,11 @@ mod books48_e2e {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["filename"], "00071_长名.md");
 
-        // 同号双形态：同属 padded-4 类，类内字典序（'-' < '_'），与 TS 一致。
+        // 同号双形态：正典 `_` 胜出（845 号：与索引重建 select_chapter_files 同胜者——
+        // 旧口径按 padded 类内字典序取 '-'<'_' 的连字符旧章，索引列正典、详情开旧章）。
         let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/1", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(parsed["filename"], "0001-风起.md");
+        assert_eq!(parsed["filename"], "0001_风起.md");
     }
 
     #[tokio::test]

@@ -573,24 +573,43 @@ fn is_canonical_chapter_file(name: &str) -> bool {
     R.get_or_init(|| Regex::new(r"^\d+_.*\.md$").unwrap()).is_match(name)
 }
 
-/// 813 号：同章双形态去重——同一前导章号多个文件时正典 `NNNN_` 优先，其次文件名序；
+/// 845 号：同章双形态择优的唯一裁决——`candidate` 是否应取代 `current`：正典 `NNNN_` 优先，
+/// 同类内文件名序（字节序，与 `Vec<String>::sort` 同序）小者。索引重建（[`select_chapter_files`]）
+/// 与读侧定位（`chapter_filename::find_chapter_file_by_number`）共用此函数——此前两者各持一套
+///（682 读侧按 padded 类内字典序取 `'-'<'_'` 的连字符旧章，813 索引侧正典优先），同一本书出现
+/// 「索引列 `0001_新`、详情开 `0001-旧`」缺口。TS `preferredChapterFile` 同策略。
+pub(crate) fn chapter_file_candidate_wins(current: &str, candidate: &str) -> bool {
+    let current_canonical = is_canonical_chapter_file(current);
+    let candidate_canonical = is_canonical_chapter_file(candidate);
+    if candidate_canonical != current_canonical {
+        candidate_canonical
+    } else {
+        candidate < current
+    }
+}
+
+/// 813 号：同章双形态去重——同一前导章号多个文件时按 [`chapter_file_candidate_wins`] 择一；
 /// 章号 0 跳过。返回按章号升序的唯一章文件名（TS `selectChapterFiles` 同策略）。
 /// 双形态来源：legacy 连字符旧章 + 重写后的正典章并存（writer 清理同章旧文件此前只认
 /// 下划线前缀，813 号已改按前导章号；此处为索引重建侧的恢复兜底）。
-pub(crate) fn select_chapter_files(mut names: Vec<String>) -> Vec<String> {
-    names.sort();
+/// 845 号：择优内联比较取代预排序（单趟，无整表排序）。
+pub(crate) fn select_chapter_files(names: Vec<String>) -> Vec<String> {
+    use std::collections::btree_map::Entry;
     let mut by_number: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
     for name in names {
         let Some(number) = leading_number(&name) else { continue };
         if number == 0 {
             continue;
         }
-        let replace = match by_number.get(&number) {
-            None => true,
-            Some(current) => !is_canonical_chapter_file(current) && is_canonical_chapter_file(&name),
-        };
-        if replace {
-            by_number.insert(number, name);
+        match by_number.entry(number) {
+            Entry::Vacant(slot) => {
+                slot.insert(name);
+            }
+            Entry::Occupied(mut slot) => {
+                if chapter_file_candidate_wins(slot.get(), &name) {
+                    slot.insert(name);
+                }
+            }
         }
     }
     by_number.into_values().collect()

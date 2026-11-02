@@ -528,20 +528,13 @@ fn dice_coefficient(left: &[String], right: &[String]) -> f64 {
 
 /// 定位章节文件：`chapters/{NNNN}_*.md`（前缀必须带下划线，对齐 TS
 /// `findChapterPath` 的 `startsWith(\`${padded}_\`)`；未命中 → 错误文案逐字）。
+/// 定位待编辑章文件。对齐 TS `findChapterPath`（683 号起走 682 数值等值单一事实源）。
+/// 845 号：此前 `starts_with("{:04}_")` 严格正典前缀为漏网端口偏移——legacy 连字符 /
+/// 非 4 位章在 TS 端可改、Rust 端 "not found"；归一到 `resolve_chapter_file`（数值等值 +
+/// 正典优先），双形态下与索引重建 / 详情读侧改同一文件。
 async fn find_chapter_path(root: &Path, chapter_number: u32) -> Result<PathBuf, String> {
     let chapters_dir = root.join("chapters");
-    let prefix = format!("{:04}_", chapter_number);
-    let mut matched: Option<String> = None;
-    if let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&prefix) && name.ends_with(".md") {
-                matched = Some(name);
-                break;
-            }
-        }
-    }
-    match matched {
+    match crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await {
         Some(file) => Ok(chapters_dir.join(file)),
         None => Err(format!("Chapter {chapter_number} not found.")),
     }
@@ -632,6 +625,27 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_chapter_path_accepts_legacy_forms_and_prefers_canonical() {
+        // 845 号：此前严格 `{:04}_` 前缀——legacy 连字符 / 非 4 位章 TS 可改、Rust "not found"。
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("books").join("b1");
+        let chapters = book.join("chapters");
+        tokio::fs::create_dir_all(&chapters).await.unwrap();
+        tokio::fs::write(chapters.join("0002-Legacy.md"), "legacy").await.unwrap();
+        tokio::fs::write(chapters.join("7_Import.md"), "import").await.unwrap();
+        tokio::fs::write(chapters.join("0001-Old.md"), "old").await.unwrap();
+        tokio::fs::write(chapters.join("0001_New.md"), "new").await.unwrap();
+
+        assert_eq!(find_chapter_path(&book, 2).await.unwrap(), chapters.join("0002-Legacy.md"));
+        assert_eq!(find_chapter_path(&book, 7).await.unwrap(), chapters.join("7_Import.md"));
+        // 双形态：正典 `_` 胜出（与索引重建 / 详情读侧同一文件），不按 read_dir 顺序。
+        assert_eq!(find_chapter_path(&book, 1).await.unwrap(), chapters.join("0001_New.md"));
+        // 前缀碰撞根除：7 不误配 0007x；缺章 → Err。
+        assert!(find_chapter_path(&book, 70).await.is_err());
+        assert!(find_chapter_path(&book, 9).await.is_err());
     }
 
     #[tokio::test]

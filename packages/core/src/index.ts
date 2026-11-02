@@ -791,7 +791,7 @@ export {
   NON_LONG_PRODUCTION_CAPABILITIES,
   type ProductionSkillCapability,
 } from "./skills/production-bindings.js";
-export { findChapterFileByNumber } from "./state/chapter-filename.js";
+export { findChapterFileByNumber } from "./utils/chapter-files.js";
 
 // ── 718 号：混合检索面（RecallTestCard 召回测试消费）——FTS 索引当前演进版
 //    在树 + RRF 融合/向量相似度/嵌入客户端；MemoryDB 语义缓存 2.0 未接线

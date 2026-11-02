@@ -1,6 +1,7 @@
 import { access, mkdir, readdir, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChapterMeta } from "../models/chapter.js";
+import { chapterFileNumber } from "../utils/chapter-files.js";
 import { toPosixPath } from "../utils/posix-path.js";
 
 export interface ChapterDeleteDeps {
@@ -73,10 +74,8 @@ export async function deleteLatestChapter(
   // Preserve the chapter markdown in chapters/.trash/ instead of hard-deleting.
   const chaptersDir = join(bookDir, "chapters");
   const trashDir = join(chaptersDir, ".trash");
-  const chapterFiles = (await readdir(chaptersDir)).filter((file) => {
-    const match = file.match(/^(\d+)[_-]?.*\.md$/);
-    return match !== null && parseInt(match[1]!, 10) === latest;
-  });
+  // 845 号：同章全部形态（正典/连字符/裸号）一并入 .trash——识别归源到共享 chapterFileNumber。
+  const chapterFiles = (await readdir(chaptersDir)).filter((file) => chapterFileNumber(file) === latest);
 
   const trashedFiles: string[] = [];
   if (chapterFiles.length > 0) {

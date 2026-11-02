@@ -270,7 +270,10 @@ const ENDPOINTS = [
   `/api/v1/books/${BOOK}/chapters/2`,
   // 687 号：双形态同号面（fixture 故意播种 0001-连字符种子 + resync 产
   // 0001_规范名并存）——读侧数值等值定位（findChapterFileByNumber 双端镜像）
-  // 的字节级回归锁：filename+content 双腿恒等（padded 类内字典序 '-'<'_'）。
+  // 的字节级回归锁：filename+content 双腿恒等。
+  // 845 号：择优改为正典 `_` 胜出（与索引重建 selectChapterFiles 同胜者；此前 padded
+  // 类内字典序 '-'<'_' 取连字符旧章，与索引侧互斥）。node 详情路由此前为 startsWith +
+  // readdir 顺序，本锁在 APFS 哈希序下巧合恒等——现双端均走共享真源，恒等为确定性。
   `/api/v1/books/${BOOK}/chapters/1`,
   `/api/v1/books/${BOOK}/context-lens/2`,
   `/api/v1/books/${BOOK}/roster-candidates`,

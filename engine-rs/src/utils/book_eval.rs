@@ -169,10 +169,9 @@ pub async fn evaluate_book_quality(
 
     let mut chapter_evals: Vec<ChapterEval> = Vec::with_capacity(filtered.len());
     for ch in &filtered {
-        let padded = format!("{:04}", ch.number);
-        let file = chapter_files
-            .iter()
-            .find(|f| f.starts_with(&padded) && f.ends_with(".md"));
+        // 845 号：TS book-eval.ts 自 682 号起走 findChapterFileByNumber（数值等值 + 择优），
+        // 本处 `starts_with(padded)` 为漏网端口偏移——前缀碰撞 + 双形态下取 list 首个；归一。
+        let file = crate::state::chapter_filename::find_chapter_file_by_number(&chapter_files, ch.number);
         let content = match file {
             Some(name) => tokio::fs::read_to_string(chapters_dir.join(name)).await.unwrap_or_default(),
             None => String::new(),

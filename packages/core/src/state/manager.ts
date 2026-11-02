@@ -15,7 +15,7 @@ import {
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
-import { chapterFileNumber, selectChapterFiles } from "../utils/chapter-files.js";
+import { chapterFileNumber, parseChapterFileName, selectChapterFiles } from "../utils/chapter-files.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -498,10 +498,10 @@ export class StateManager {
     // 文件各产一行，legacy 连字符旧章与重写后的正典章并存时出现两条同号条目
     //（Rust rebuild_chapter_index_from_files_at / select_chapter_files 同策略）。
     for (const name of selectChapterFiles(entries)) {
-      const match = /^(\d+)[_-]?(.*?)\.md$/u.exec(name);
-      if (!match) continue;
-      const number = Number.parseInt(match[1]!, 10);
-      if (!Number.isInteger(number) || number <= 0) continue; // 0 号跳过（Rust 同款）
+      // 845 号：内联正则归源到共享 parseChapterFileName（0 号已在其内拒绝，Rust 同款）。
+      const parsed = parseChapterFileName(name);
+      if (!parsed) continue;
+      const { number } = parsed;
       const filePath = join(chaptersDir, name);
       let timestamp: string;
       try {
@@ -512,7 +512,7 @@ export class StateManager {
       const content = await readFile(filePath, "utf-8").catch(() => "");
       // 词数口径：去全部空白后的码元数（Rust 注释引 TS 原版 content.replace(/\s+/g,"").length）。
       const wordCount = content.replace(/\s+/g, "").length;
-      const rawTitle = match[2] ?? "";
+      const rawTitle = parsed.base;
       const stripped = rawTitle.startsWith("_") ? rawTitle.slice(1) : rawTitle;
       const spaced = stripped.replace(/_/g, " ").trim();
       const title = spaced.length > 0 ? spaced : `第${number}章`;
@@ -715,13 +715,10 @@ export class StateManager {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     };
-    // 807 号：删章口径与索引重建（`^(\d+)[_-]?(.*?)\.md$`，本文件 rebuild 分支）同集——
-    // 此前仅认下划线，legacy 连字符旧章在回滚时逃过、再被空索引触发的宽容重建捞回
-    // （rust 对偶同病同修：engine-rs manager.rs leading_number）。
-    const numberedMarkdown = (name: string): number | undefined => {
-      const match = /^(\d+)[_-]?(.*?)\.md$/u.exec(name);
-      return match ? Number.parseInt(match[1]!, 10) : undefined;
-    };
+    // 807 号：删章口径与索引重建同集——此前仅认下划线，legacy 连字符旧章在回滚时逃过、再被
+    // 空索引触发的宽容重建捞回（rust 对偶同病同修：engine-rs manager.rs leading_number）。
+    // 845 号：内联正则归源到共享 chapterFileNumber（同签名同语义，含 0 号原样返回）。
+    const numberedMarkdown = chapterFileNumber;
     await collectNumberedDeletes("chapters", numberedMarkdown);
     await collectNumberedDeletes(join("story", "snapshots"), (name) => {
       const value = Number.parseInt(name, 10);

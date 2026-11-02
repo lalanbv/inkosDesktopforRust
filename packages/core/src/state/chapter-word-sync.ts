@@ -4,6 +4,7 @@ import type { BookConfig } from "../models/book.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import type { LengthCountingMode } from "../models/length-governance.js";
 import { countChapterLength, resolveLengthCountingMode } from "../utils/length-metrics.js";
+import { chapterFileNumber, selectChapterFiles } from "../utils/chapter-files.js";
 
 export interface ChapterWordSyncDeps {
   bookDir(bookId: string): string;
@@ -45,12 +46,11 @@ export async function syncChapterWordCounts(
   }
 
   const chaptersDir = join(deps.bookDir(bookId), "chapters");
+  // 845 号：同章双形态按共享择优取一（正典优先）——此前按 readdir 顺序取首个，字数同步可能
+  // 落在索引不指向的 legacy 旧章上；selectChapterFiles 已保证章号唯一且 > 0。
   const fileByNumber = new Map<number, string>();
-  for (const entry of await readdir(chaptersDir)) {
-    const match = entry.match(/^(\d+)[_-]?.*\.md$/);
-    if (!match) continue;
-    const number = parseInt(match[1]!, 10);
-    if (!fileByNumber.has(number)) fileByNumber.set(number, entry);
+  for (const entry of selectChapterFiles(await readdir(chaptersDir))) {
+    fileByNumber.set(chapterFileNumber(entry)!, entry);
   }
 
   const now = new Date().toISOString();

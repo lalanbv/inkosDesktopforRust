@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { findChapterFileByNumber } from "./chapter-files.js";
 
 export interface PlanningSeedMaterials {
   readonly authorIntent: string;
@@ -27,10 +28,10 @@ async function readPreviousEndingExcerpt(
   }
 
   const chaptersDir = join(bookDir, "chapters");
-  const padded = String(previousChapter).padStart(4, "0");
   try {
     const files = await readdir(chaptersDir);
-    const match = files.find((file) => file.startsWith(padded) && file.endsWith(".md"));
+    // 845 号：前章定位归一到共享真源（数值等值 + 正典优先；Rust planning_materials 同步）。
+    const match = findChapterFileByNumber(files, previousChapter);
     if (!match) {
       return undefined;
     }

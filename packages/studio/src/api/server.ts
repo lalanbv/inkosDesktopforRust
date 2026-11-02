@@ -3073,8 +3073,11 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
     try {
       const files = await readdir(chaptersDir);
-      const paddedNum = String(num).padStart(4, "0");
-      const match = files.find((f) => f.startsWith(paddedNum) && f.endsWith(".md"));
+      // 845 号：682 号点名的「studio 详情路由」终于归一到共享真源 findChapterFileByNumber
+      //（数值等值 + 正典优先）——此前 startsWith(补零串) 既前缀碰撞又在双形态下按 readdir
+      // 顺序取首个；与 Rust books_routes resolve_chapter_file 同胜者，契约 /chapters/1 双形态
+      // 面从「靠目录顺序巧合恒等」变为确定性恒等。
+      const match = findChapterFileByNumber(files, num);
       if (!match) return c.json({ error: "Chapter not found" }, 404);
       const content = await readFile(join(chaptersDir, match), "utf-8");
       return c.json({ chapterNumber: num, filename: match, content });

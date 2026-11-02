@@ -1,6 +1,6 @@
 import { access, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
-import { parseChapterFileName } from "../state/chapter-filename.js";
+import { findChapterFileByNumber } from "../utils/chapter-files.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import {
   archiveChapterVersion,
@@ -263,14 +263,15 @@ async function executeEntityRename(
 
 async function findChapterPath(root: string, chapterNumber: number): Promise<{ readonly chaptersDir: string; readonly chapterPath: string; readonly chapterFile: string }> {
   const chaptersDir = join(root, "chapters");
-  const chapterFile = (await readdir(chaptersDir).catch((error) => {
+  const entries = await readdir(chaptersDir).catch((error) => {
     if (isMissingDirectoryError(error)) {
       return [];
     }
     throw error;
-  }))
-    // 683 号：与 682 单一事实源统一（数值等值定位，前缀碰撞根除）
-    .find((file) => parseChapterFileName(file)?.number === chapterNumber);
+  });
+  // 683 号：与 682 单一事实源统一（数值等值定位，前缀碰撞根除）；845 号：同号双形态改按
+  // 共享择优（正典优先）而非 readdir 首个匹配——与索引重建 / 详情读侧改同一文件。
+  const chapterFile = findChapterFileByNumber(entries, chapterNumber);
 
   if (!chapterFile) {
     throw new Error(`Chapter ${chapterNumber} not found.`);
