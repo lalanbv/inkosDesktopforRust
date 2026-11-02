@@ -13,7 +13,9 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx"]);
 
 const FORBIDDEN_SOURCE_PATHS = [
   "packages/core/src/models/state.ts",
-  "packages/core/src/models/genre-profile.ts",
+  // 850 号摘除 models/genre-profile.ts 条目：路径与上游 2.0 合并后的合法 zod 流派
+  // 档案 schema（GenreProfileSchema，parseGenreProfile）撞名——语义已彻底换代，
+  // 保留条目让本工具每次运行必报一条「forbidden remains」狼来了（849 号实测）。
   "packages/core/src/state/memory-db.ts",
   "packages/core/src/interactive-film/memory-link.ts",
   "packages/core/src/agent/llm-stub.ts",
