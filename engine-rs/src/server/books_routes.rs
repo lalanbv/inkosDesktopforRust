@@ -1679,12 +1679,73 @@ pub async fn resync(
         }
     };
     match run_resync_chain(&runtime, &book_id, chapter_number, None).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+        Ok(result) => {
+            // 815 号：审计段——TS /resync/:chapter 走 `resyncChapterStateAndAudit`
+            //（resync + reviewChapter 更新索引观察），rust 此前只同步不审计：导入章
+            //（如夹具 ch1）无 review_metrics 行，quality-trend /trend/points 少一个
+            // 趋势点（双腿长度 2 vs 1 实锤）。审计失败按 TS 语义传播（500）。
+            // 交互编辑工具（book_edit_tools）复用的 run_resync_chain 链内不加——
+            // TS 对偶 _resyncChapterArtifactsLocked 本就不审计。
+            match record_resync_audit(&runtime, &book_id, chapter_number).await {
+                Ok(()) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+                Err(message) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": message })),
+                ),
+            }
+        }
         Err(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": message })),
         ),
     }
+}
+
+/// 815 号：resync 后对目标章跑审稿并沉淀 review_metrics（TS `reviewChapter` 对偶）。
+/// 无正文的章优雅跳过；审计失败向上传播（与 TS resyncChapterStateAndAudit 一致）。
+async fn record_resync_audit(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    chapter_number: u32,
+) -> Result<(), String> {
+    let book_dir = runtime.state.book_dir(book_id);
+    let chapters_dir = book_dir.join("chapters");
+    let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
+        return Ok(());
+    };
+    let mut content: Option<String> = None;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate::state::manager::leading_number(&name) == Some(chapter_number) {
+            content = tokio::fs::read_to_string(chapters_dir.join(&name)).await.ok();
+            break;
+        }
+    }
+    let Some(content) = content else {
+        return Ok(());
+    };
+    // 与 write-next 审核环/审计路由同一端口（FullCycleAuditor → 真实 audit_chapter 编排，
+    // 645 号 JSON 契约）；勿用 RoutedAgent 文本审稿（PASS/FAIL 行协议——mock 返回 JSON 契约
+    // 时无 PASS 行→passed=false、分值回落 50，815 号活体实锤 ch1 50/false 假阴性）。
+    let genre = runtime
+        .state
+        .load_book_config(book_id)
+        .await
+        .map(|book| book.genre)
+        .unwrap_or_default();
+    let auditor = FullCycleAuditor {
+        router: runtime.effective_router().await,
+        project_root: runtime.state.project_root().to_path_buf(),
+        builtin_genres_dir: runtime.builtin_genres_dir.clone(),
+        book_dir: book_dir.clone(),
+        chapter_number,
+        genre,
+    };
+    let audit = crate::pipeline::chapter_review_cycle::CycleAuditor::audit_chapter(&auditor, &content, None, None)
+        .await
+        .map_err(|error| format!("resync audit failed for chapter {chapter_number}: {error}"))?;
+    crate::pipeline::write_next::record_chapter_review_metric(&book_dir, chapter_number, &audit).await;
+    Ok(())
 }
 
 /// 章节工件重建（TS `_resyncChapterArtifactsLocked`）：从已编辑正文重跑

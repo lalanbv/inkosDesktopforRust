@@ -1243,56 +1243,8 @@ async fn write_next_chapter_locked(
 
     // ── R3/361 号：审查指标沉淀（overallScore + severity 计数；contentHash 幂等——
     // 同章同内容重放跳过，修订后内容更新覆盖）。失败仅告警，不阻断管线。
-    {
-        let mut critical_count: i64 = 0;
-        let mut warning_count: i64 = 0;
-        let mut info_count: i64 = 0;
-        for issue in &audit_result.issues {
-            match issue.severity {
-                AuditSeverity::Critical => critical_count += 1,
-                AuditSeverity::Info => info_count += 1,
-                AuditSeverity::Warning => warning_count += 1,
-            }
-        }
-        let content_hash = {
-            use crate::utils::quality_trend::review_metric_content_hash;
-            review_metric_content_hash(&crate::utils::quality_trend::ReviewMetricRow {
-                chapter: i64::from(chapter_number),
-                overall_score: audit_result.overall_score.map(i64::from),
-                passed: audit_result.passed,
-                critical_count,
-                warning_count,
-                info_count,
-                recorded_at: String::new(),
-            })
-        };
-        // 764 号：sqlite 幂等写移出 runtime 线程（metric owned 跨线程；
-        // JoinError 并入同一 warn 日志，语义=记录失败不中断管线）。
-        let metric = crate::state::memory_db::StoredReviewMetric {
-            chapter: i64::from(chapter_number),
-            overall_score: audit_result.overall_score.map(i64::from),
-            passed: audit_result.passed,
-            critical_count,
-            warning_count,
-            info_count,
-            content_hash,
-            recorded_at: crate::utils::utc_time::utc_now_iso(),
-        };
-        let recorded = tokio::task::spawn_blocking({
-            let book_dir = book_dir.clone();
-            move || -> Result<bool, crate::EngineError> {
-                let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-                memory.record_review_metric(&metric)
-            }
-        })
-        .await
-        .unwrap_or_else(|error| Err(crate::EngineError::Constraint(error.to_string())));
-        match recorded {
-            Ok(false) => tracing::info!(target: "write-next", "[review-metrics] ch{chapter_number} 同内容重放，幂等跳过"),
-            Ok(true) => {}
-            Err(error) => tracing::warn!(target: "write-next", "[review-metrics] {error}"),
-        }
-    }
+    // 815 号：抽为 record_chapter_review_metric（resync 路由审计段复用）。
+    record_chapter_review_metric(&book_dir, chapter_number, &audit_result).await;
 
     // ── R5/366 号：反AI规则扫描（detect 消费）——命中并入审计问题（reviser 按
     // issue.suggestion=replacement 修复）。
@@ -1911,6 +1863,67 @@ fn padded_re() -> &'static regex::Regex {
     R.get_or_init(|| regex::Regex::new(r"^\d{4}").unwrap())
 }
 
+/// R3/361 号：审查指标沉淀——overallScore + severity 计数写入 memory.db `review_metrics`
+/// （contentHash 幂等：同章同内容重放跳过，修订后内容更新覆盖）。失败仅告警，不阻断管线。
+///
+/// 815 号：从 write-next 内联块抽出，供 `/resync/:chapter` 路由的审计段复用——TS 对偶
+/// `resync_chapter_state` 工具=resync+audit（`reviewChapter` 更新索引观察），rust 此前只
+/// 同步不审计，导入章（夹具 ch1）无指标行=quality-trend `/trend/points` 长度双腿分歧。
+pub(crate) async fn record_chapter_review_metric(
+    book_dir: &std::path::Path,
+    chapter_number: u32,
+    audit_result: &AuditResult,
+) {
+    let mut critical_count: i64 = 0;
+    let mut warning_count: i64 = 0;
+    let mut info_count: i64 = 0;
+    for issue in &audit_result.issues {
+        match issue.severity {
+            AuditSeverity::Critical => critical_count += 1,
+            AuditSeverity::Info => info_count += 1,
+            AuditSeverity::Warning => warning_count += 1,
+        }
+    }
+    let content_hash = {
+        use crate::utils::quality_trend::review_metric_content_hash;
+        review_metric_content_hash(&crate::utils::quality_trend::ReviewMetricRow {
+            chapter: i64::from(chapter_number),
+            overall_score: audit_result.overall_score.map(i64::from),
+            passed: audit_result.passed,
+            critical_count,
+            warning_count,
+            info_count,
+            recorded_at: String::new(),
+        })
+    };
+    // 764 号：sqlite 幂等写移出 runtime 线程（metric owned 跨线程；
+    // JoinError 并入同一 warn 日志，语义=记录失败不中断管线）。
+    let metric = crate::state::memory_db::StoredReviewMetric {
+        chapter: i64::from(chapter_number),
+        overall_score: audit_result.overall_score.map(i64::from),
+        passed: audit_result.passed,
+        critical_count,
+        warning_count,
+        info_count,
+        content_hash,
+        recorded_at: crate::utils::utc_time::utc_now_iso(),
+    };
+    let recorded = tokio::task::spawn_blocking({
+        let book_dir = book_dir.to_path_buf();
+        move || -> Result<bool, crate::EngineError> {
+            let memory = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+            memory.record_review_metric(&metric)
+        }
+    })
+    .await
+    .unwrap_or_else(|error| Err(crate::EngineError::Constraint(error.to_string())));
+    match recorded {
+        Ok(false) => tracing::info!(target: "review-metrics", "[write-next/resync] ch{chapter_number} 同内容重放，幂等跳过"),
+        Ok(true) => {}
+        Err(error) => tracing::warn!(target: "review-metrics", "[write-next/resync] {error}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1921,6 +1934,47 @@ mod tests {
     use crate::llm::provider::LLMMessage;
     use crate::state::store::InMemoryStateStore;
     use std::sync::Mutex as StdMutex;
+
+    /// 815 号：record_chapter_review_metric 抽取后的行为锁——severity 计数/分值/verdict 落
+    /// review_metrics，同内容重放幂等（仍一行）；修订后分值变化覆盖。
+    #[tokio::test]
+    async fn record_chapter_review_metric_writes_counts_and_is_idempotent() {
+        use crate::agents::continuity::{AuditIssue, AuditSeverity};
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path().join("book");
+        tokio::fs::create_dir_all(book_dir.join("story")).await.unwrap();
+        let issue = |severity: AuditSeverity| AuditIssue {
+            severity,
+            category: "c".into(),
+            description: "d".into(),
+            suggestion: "s".into(),
+            repair_scope: None,
+        };
+        let audit = AuditResult {
+            passed: true,
+            issues: vec![issue(AuditSeverity::Critical), issue(AuditSeverity::Warning), issue(AuditSeverity::Warning)],
+            overall_score: Some(88),
+            ..Default::default()
+        };
+        record_chapter_review_metric(&book_dir, 1, &audit).await;
+        record_chapter_review_metric(&book_dir, 1, &audit).await; // 同内容重放
+        let rows = {
+            let memory = crate::state::memory_db::MemoryDb::open(&book_dir).unwrap();
+            memory.list_review_metrics().unwrap()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].chapter, rows[0].overall_score, rows[0].passed), (1, Some(88), true));
+        assert_eq!((rows[0].critical_count, rows[0].warning_count, rows[0].info_count), (1, 2, 0));
+
+        let revised = AuditResult { overall_score: Some(92), ..audit.clone() };
+        record_chapter_review_metric(&book_dir, 1, &revised).await;
+        let rows = {
+            let memory = crate::state::memory_db::MemoryDb::open(&book_dir).unwrap();
+            memory.list_review_metrics().unwrap()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].overall_score, Some(92));
+    }
 
     /// 531 号：run 快照 skillIds 取实际激活——scope 外 None、scope 内为激活 id 表。
     #[tokio::test]
