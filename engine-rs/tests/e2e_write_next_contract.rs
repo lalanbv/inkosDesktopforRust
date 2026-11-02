@@ -261,7 +261,12 @@ async fn e2e_write_next_contract_matches_node_shape() {
         match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
             Ok(Ok(payload)) => events.push((payload.event, payload.data)),
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Err(_) | Ok(Err(_)) => break,
+            // 866 号：内层静默超时=回到外层 deadline 的轮询节拍，非致命——
+            // 全量并行负载下管线多段 LLM 往返可超单个 5s 静默窗（863 后
+            // testgate 假红实测：write:start 后 5s 静默即 break，30s 外层
+            // deadline 形同虚设）。只有广播关闭（Ok(Err)）才是真终止。
+            Err(_) => continue,
+            Ok(Err(_)) => break,
         }
     }
     assert_eq!(events[0].0, "write:start", "事件序列: {events:?}");
@@ -486,7 +491,12 @@ async fn e2e_llm_unreachable_pushes_write_error() {
         match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
             Ok(Ok(payload)) => events.push((payload.event, payload.data)),
             Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Err(_) | Ok(Err(_)) => break,
+            // 866 号：内层静默超时=回到外层 deadline 的轮询节拍，非致命——
+            // 全量并行负载下管线多段 LLM 往返可超单个 5s 静默窗（863 后
+            // testgate 假红实测：write:start 后 5s 静默即 break，30s 外层
+            // deadline 形同虚设）。只有广播关闭（Ok(Err)）才是真终止。
+            Err(_) => continue,
+            Ok(Err(_)) => break,
         }
     }
     assert_eq!(events[0].0, "write:start");
