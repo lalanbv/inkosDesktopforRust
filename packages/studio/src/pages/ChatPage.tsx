@@ -872,6 +872,9 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
   return (
     <div className="flex flex-col h-full flex-1 min-w-0 relative">
+      {/* sr-only h1（872 号 axe 审计）：书页/聊天页此前无一级标题
+          （page-has-heading-one, moderate）——读屏用户按 H 键可直达主区语义。 */}
+      <h1 className="sr-only">{isZh ? "对话创作" : "Chat authoring"}</h1>
       {workSessionBinding ? (
         <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/30 px-4 py-2">
           {workSessionError ? <span role="alert" className="text-xs text-destructive">{workSessionError}</span> : null}

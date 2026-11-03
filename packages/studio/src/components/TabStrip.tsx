@@ -34,6 +34,10 @@ export function TabStrip({ tabs, activeId, onActivate, onClose, onCloseOthers, o
     <div
       data-slot="tab-strip"
       data-testid="tab-strip"
+      // role="navigation"（872 号 axe 审计）：标签条内容不在任何 landmark 内
+      // （region, moderate）；标签切换=导航语义。
+      role="navigation"
+      aria-label={tr("标签页", "Tabs")}
       className="h-9 shrink-0 flex items-stretch overflow-x-auto no-scrollbar border-b border-border/40 bg-background/50"
     >
       {tabs.map((tab, index) => {
@@ -60,7 +64,9 @@ export function TabStrip({ tabs, activeId, onActivate, onClose, onCloseOthers, o
             <span className="truncate flex-1 select-none">
               {tab.title}
               {tab.preview && (
-                <span className="ml-1 italic text-muted-foreground/60">{tr("预览", "preview")}</span>
+                // text-foreground/70（872 号 axe 审计）：原 muted-foreground/60
+                // 对比度 3.15 < 4.5（color-contrast, serious）
+                <span className="ml-1 italic text-foreground/70">{tr("预览", "preview")}</span>
               )}
             </span>
             {tab.pinned && <Pin size={11} className="shrink-0 text-primary/70" />}

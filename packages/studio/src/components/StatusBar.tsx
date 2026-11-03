@@ -26,7 +26,9 @@ function countWords(content: string): number {
 }
 
 function StatusDot({ color, label }: { color: string; label: string }) {
-  return <span className={`inline-block size-1.5 rounded-full ${color}`} aria-label={label} title={label} />;
+  // role="img"（872 号 axe 审计）：无 role 的 span 上 aria-label 非法
+  // （aria-prohibited-attr, serious）；状态点=图形化指示，img 语义成立。
+  return <span role="img" className={`inline-block size-1.5 rounded-full ${color}`} aria-label={label} title={label} />;
 }
 
 export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemonRunning, onOpenBottomPanel, workspaceActiveId, onSwitchWorkspace }: {

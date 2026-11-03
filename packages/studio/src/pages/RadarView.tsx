@@ -183,10 +183,10 @@ export function RadarView({ nav, theme, t, onCreateBook }: RadarViewProps) {
       {rankings.length > 0 && (
         <div className={`border ${c.cardStatic} rounded-lg p-5 space-y-4`}>
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
               <ListChecks size={14} />
               {t("radar.rankings")}
-            </h3>
+            </h2>
             <span className="text-xs text-muted-foreground">
               {t("radar.selectedHint").replace("{n}", String(selectedCount))}
             </span>
@@ -244,7 +244,7 @@ export function RadarView({ nav, theme, t, onCreateBook }: RadarViewProps) {
       {result && (
         <div className="space-y-6">
           <div className={`border ${c.cardStatic} rounded-lg p-5`}>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">{t("radar.summary")}</h3>
+            <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">{t("radar.summary")}</h2>
             <p className="text-sm leading-relaxed whitespace-pre-wrap">{result.marketSummary}</p>
           </div>
 
@@ -307,10 +307,10 @@ export function RadarView({ nav, theme, t, onCreateBook }: RadarViewProps) {
 
       {history.length > 0 && (
         <div className={`border ${c.cardStatic} rounded-lg p-5 space-y-3`}>
-          <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
             <Clock size={14} />
             {t("radar.history")}
-          </h3>
+          </h2>
           <div className="space-y-2">
             {history.slice(0, 10).map((item) => (
               <button

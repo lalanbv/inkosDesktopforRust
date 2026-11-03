@@ -88,7 +88,7 @@ export function QuickActions({ onAction, disabled, isZh, writeNextRunning = fals
             className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-40 group ${
               running
                 ? "bg-destructive text-destructive-foreground hover:scale-105 active:scale-95 shadow-destructive/20"
-                : "bg-secondary/50 border border-border/30 text-muted-foreground hover:text-primary hover:border-primary/30 hover:bg-primary/5 disabled:pointer-events-none"
+                : "bg-secondary/50 border border-border/30 text-foreground/80 hover:text-primary hover:border-primary/30 hover:bg-primary/5 disabled:pointer-events-none"
             }`}
           >
             <span className="group-hover:scale-110 transition-transform">{running ? chip.stopIcon : chip.icon}</span>

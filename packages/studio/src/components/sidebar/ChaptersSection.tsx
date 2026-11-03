@@ -49,7 +49,9 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
                 <span className="truncate flex-1">
                   {String(ch.number).padStart(2, "0")} {ch.title || (isZh ? `第${ch.number}章` : `Chapter ${ch.number}`)}
                 </span>
-                <span className="tabular-nums text-[13px] text-muted-foreground/50 shrink-0">
+                {/* text-foreground/70（872 号 axe 审计）：原 muted-foreground/50
+                    对比度 2.58 < 4.5（color-contrast, serious） */}
+                <span className="tabular-nums text-[13px] text-foreground/70 shrink-0">
                   {(ch.wordCount ?? 0).toLocaleString()}
                 </span>
               </li>
