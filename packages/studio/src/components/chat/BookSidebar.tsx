@@ -264,6 +264,7 @@ export function BookSidebar({ bookId, theme, t, sse }: BookSidebarProps) {
 
   return (
     <aside
+      aria-label={t("nav.openContextPanel")}
       className="hidden lg:flex shrink-0 flex-col bg-background/30 backdrop-blur-sm overflow-y-auto relative"
       style={{ width }}
     >
@@ -299,6 +300,7 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
         <div className="fixed inset-0 z-40 lg:hidden" onClick={() => setOpen(false)}>
           <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
           <aside
+            aria-label={t("nav.openContextPanel")}
             className="absolute right-0 top-0 h-full w-[420px] max-w-[85vw] bg-background border-l border-border/20 overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >

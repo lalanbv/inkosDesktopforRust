@@ -99,6 +99,7 @@ export function ContextDock({ bookId, theme, t, sse, visible, onClose }: {
     <aside
       data-slot="context-dock"
       data-testid="context-dock"
+      aria-label={tr("上下文面板", "Context panel")}
       className="hidden lg:flex shrink-0 flex-col bg-background/30 backdrop-blur-sm overflow-y-auto relative border-l border-border/20"
       style={{ width: panel.width }}
     >

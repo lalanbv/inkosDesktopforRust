@@ -64,7 +64,7 @@ export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemo
       <span className="truncate" data-testid="status-context">
         {leftLabel}
         {chapter && chapterData?.content ? (
-          <span className="ml-2 text-muted-foreground/60">
+          <span className="ml-2 text-foreground/70">
             {tr(`约 ${countWords(chapterData.content)} 字`, `~${countWords(chapterData.content)} chars`)}
           </span>
         ) : null}

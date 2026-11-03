@@ -27,7 +27,15 @@ export function SidePanel({ nav, activePage, sse, t, zone, visible }: {
   if (!visible) return null;
 
   return (
-    <div data-slot="side-panel" data-testid="side-panel" className="relative flex shrink-0 h-full" style={{ width: panel.width }}>
+    // 877 号：外层即导航地标（aside+名称），过滤框与宽度分隔条都在地标内
+    // （此前 aside 在内层 Sidebar，二者飘在外 → axe region）。
+    <aside
+      data-slot="side-panel"
+      data-testid="side-panel"
+      aria-label={tr("导航侧栏", "Navigation sidebar")}
+      className="relative flex shrink-0 h-full"
+      style={{ width: panel.width }}
+    >
       <div className="flex min-w-0 flex-1 flex-col">
         {zone === "create" && (
           <div className="px-4 pt-3 pb-1">
@@ -64,6 +72,6 @@ export function SidePanel({ nav, activePage, sse, t, zone, visible }: {
         onDoubleClick={panel.resetWidth}
         className="w-1 shrink-0 cursor-col-resize bg-transparent hover:bg-primary/30 active:bg-primary/50 transition-colors"
       />
-    </div>
+    </aside>
   );
 }

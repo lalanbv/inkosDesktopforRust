@@ -324,9 +324,14 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
     setDeleteTarget(null);
   };
 
+  // 877 号：V1 整栏时自身即导航地标（aside+名称）；V2 嵌入 SidePanel（fillWidth）
+  // 时降级为 div——由 SidePanel 外层 aside 统一承担地标，避免 aside 嵌套出两个
+  // 同名 complementary（axe landmark-unique）且让过滤框/分隔条落入地标内（region）。
+  const RootTag = fillWidth ? "div" : "aside";
   return (
-    <aside
+    <RootTag
       data-sidebar-root
+      aria-label={fillWidth ? undefined : tr("导航侧栏", "Navigation sidebar")}
       className={`${fillWidth ? "w-full" : "w-[260px]"} shrink-0 border-r border-border bg-background/80 backdrop-blur-md flex flex-col h-full overflow-hidden select-none`}
       data-testid={fillWidth ? "side-panel-sidebar" : undefined}
     >
@@ -826,7 +831,7 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
         onConfirm={() => void handleDeleteConfirm()}
         onCancel={() => setDeleteTarget(null)}
       />
-    </aside>
+    </RootTag>
   );
 }
 

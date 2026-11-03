@@ -94,7 +94,7 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
               <div className="flex items-center gap-3 py-1">
                 <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />
                 <span className="text-sm font-medium flex-1">{t("doctor.bookHealth")}</span>
-                <span className="text-xs text-emerald-600 dark:text-emerald-400">{t("doctor.bookHealthOk")}</span>
+                <span className="text-xs text-emerald-700 dark:text-emerald-400">{t("doctor.bookHealthOk")}</span>
               </div>
             ) : (
               bookIssues.map((issue) => (
@@ -119,8 +119,8 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       {data && (
         <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
           data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
-            ? "bg-emerald-500/10 text-emerald-600"
-            : "bg-amber-500/10 text-amber-600"
+            ? "bg-emerald-500/10 text-emerald-700"
+            : "bg-amber-500/10 text-amber-800"
         }`}>
           {data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
             ? t("doctor.allPassed")

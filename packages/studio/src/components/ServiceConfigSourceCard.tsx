@@ -109,7 +109,7 @@ export function ServiceConfigSourceCard({ onChange }: { onChange?: () => void })
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium">{tr("LLM 配置来源", "LLM config source")}</div>
-          <div className="text-xs text-muted-foreground/70 mt-1">
+          <div className="text-xs text-foreground/70 mt-1">
             {tr("Studio 运行时：", "Studio runtime:")}
             <span className="text-foreground"> {tr("使用服务页配置和 Studio 密钥", "uses service page config and Studio keys")}</span>
           </div>

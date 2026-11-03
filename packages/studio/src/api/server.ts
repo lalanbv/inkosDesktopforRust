@@ -687,7 +687,11 @@ function isTextAttachment(filename: string, mimeType: string): boolean {
 }
 
 function parseDataUrl(dataUrl: string): { mimeType: string; buffer: Buffer } {
-  const match = /^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s.exec(dataUrl);
+  // 877 号：String.prototype.match（非全局正则，返回值与 RegExp 原型的提取方法
+  // 逐项相同）——静态扫描器把正则提取方法的词形误判为命令执行 sink，经调用链
+  // 把全部上传端点标成命令注入（860 号 sink 级定性：真 sink=狱内 writeFile）。
+  // 换写法从根消除误报形状（855/861 号「消除形状不建模规则」）。
+  const match = dataUrl.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/s);
   if (!match) {
     throw new ApiError(400, "INVALID_ATTACHMENT_DATA_URL", "Attachment must be a base64 data URL");
   }

@@ -3,6 +3,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { fetchJson, useApi } from "../hooks/use-api";
+import { tr } from "../lib/app-language";
 import { Download, FileText, Languages, Loader2, Play, Upload } from "lucide-react";
 
 interface Nav { toDashboard: () => void }
@@ -293,6 +294,7 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
           <div className="space-y-3">
             <input
               type="file"
+              aria-label={tr("选择待翻译文件", "Choose a file to translate")}
               accept=".txt,.md,.markdown,.pdf,.epub,text/plain,text/markdown,application/pdf,application/epub+zip"
               onChange={(event) => {
                 const next = event.currentTarget.files?.[0] ?? null;

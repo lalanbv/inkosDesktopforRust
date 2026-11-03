@@ -159,7 +159,7 @@ function CoverConfigCard() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-medium text-foreground">{tr("封面生成", "Cover generation")}</h2>
-          <p className="mt-1 text-xs text-muted-foreground/70">
+          <p className="mt-1 text-xs text-foreground/70">
             {tr(
               "只配置封面通道和模型；封面尺寸由短篇封面提示词和内部默认处理。",
               "Only configures the cover provider and model; cover size is handled by the short-story cover prompt and internal defaults.",
@@ -175,7 +175,7 @@ function CoverConfigCard() {
 
       <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("服务", "Service")}</span>
+          <span className="block text-xs font-medium text-foreground/70">{tr("服务", "Service")}</span>
           <select
             value={service}
             onChange={(event) => handleServiceChange(event.target.value)}
@@ -187,7 +187,7 @@ function CoverConfigCard() {
           </select>
         </label>
         <label className="space-y-1.5">
-          <span className="block text-xs font-medium text-muted-foreground/70">{tr("封面模型", "Cover model")}</span>
+          <span className="block text-xs font-medium text-foreground/70">{tr("封面模型", "Cover model")}</span>
           <select
             value={model}
             onChange={(event) => setModel(event.target.value)}
@@ -201,7 +201,7 @@ function CoverConfigCard() {
       </div>
 
       <label className="space-y-1.5">
-        <span className="block text-xs font-medium text-muted-foreground/70">Base URL</span>
+        <span className="block text-xs font-medium text-foreground/70">Base URL</span>
         <input
           type="url"
           value={baseUrl}
@@ -218,7 +218,7 @@ function CoverConfigCard() {
       </label>
 
       <label className="space-y-1.5">
-        <span className="block text-xs font-medium text-muted-foreground/70">API Key</span>
+        <span className="block text-xs font-medium text-foreground/70">API Key</span>
         <div className="relative">
           <input
             type={showKey ? "text" : "password"}
@@ -432,7 +432,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
           引导链收敛为两层）；既有 preset 用户路径不变（分组列表原序跟随）。 */}
       {showCustomSection && (
         <section className="space-y-3">
-          <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-foreground/70">
             {tr("自定义服务", "Custom services")}
           </h2>
           <div className="grid grid-cols-2 gap-3">
@@ -462,7 +462,7 @@ export function ServiceListPage({ nav }: { nav: Nav }) {
         return (
           <section key={group} className="space-y-3">
             <div className="space-y-1">
-              <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+              <h2 className="text-xs font-medium uppercase tracking-wider text-foreground/70">
                 {getGroupLabel(group)}
               </h2>
               {getGroupDescription(group) && (

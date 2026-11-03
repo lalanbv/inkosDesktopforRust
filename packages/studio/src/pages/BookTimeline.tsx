@@ -85,13 +85,13 @@ const STATUS_DOT_CLASS: Record<Tone, string> = {
 };
 
 const TONE_CLASS: Record<Tone, string> = {
-  done: "bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
-  review: "bg-amber-500/10 border-amber-500/40 text-amber-600 dark:text-amber-400",
-  failed: "bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400",
-  wip: "bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400",
+  done: "bg-emerald-500/10 border-emerald-500/40 text-emerald-700 dark:text-emerald-400",
+  review: "bg-amber-500/10 border-amber-500/40 text-amber-800 dark:text-amber-400",
+  failed: "bg-red-500/10 border-red-500/40 text-red-700 dark:text-red-400",
+  wip: "bg-sky-500/10 border-sky-500/40 text-sky-700 dark:text-sky-400",
   imported: "bg-muted border-border text-muted-foreground",
-  planned: "bg-violet-500/10 border-violet-500/40 text-violet-600 dark:text-violet-400",
-  empty: "bg-transparent border-dashed border-border/60 text-muted-foreground/60",
+  planned: "bg-violet-500/10 border-violet-500/40 text-violet-700 dark:text-violet-400",
+  empty: "bg-transparent border-dashed border-border/60 text-foreground/70",
 };
 
 interface EditTarget {
@@ -464,7 +464,9 @@ export function BookTimeline({ bookId, nav, theme, t }: {
                       />
                     )}
                     <div className="text-xs font-semibold truncate pr-2">{cell.title}</div>
-                    <div className="text-[11px] opacity-70 mt-0.5 truncate">{cell.subtitle}</div>
+                    {/* 877 号：副标题不再叠 opacity——色调 700 档叠透明度在浅色底上
+                        跌破 4.5（axe color-contrast），层级靠 11px 字号区分 */}
+                    <div className="text-[11px] mt-0.5 truncate">{cell.subtitle}</div>
                   </button>
                 ))}
               </div>

@@ -47,10 +47,6 @@ function CommandDialog({
 }) {
   return (
     <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
       <DialogContent
         className={cn(
           "top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
@@ -58,6 +54,13 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
+        {/* 877 号：sr-only 标题移入 DialogContent——原先作为 Dialog Root 直接子节点
+            原地渲染，面板关着也常驻 DOM、飘在地标外（axe region，872 号曾误备案为
+            「框架内部结构」）；移入后关闭随 portal 卸载、打开时在 dialog 内命名。 */}
+        <DialogHeader className="sr-only">
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
         {children}
       </DialogContent>
     </Dialog>

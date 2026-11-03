@@ -171,7 +171,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
           ) : selected && fileData?.content === null ? (
             <div className="text-muted-foreground text-sm">{t("truth.notFound")}</div>
           ) : (
-            <div className="text-muted-foreground/50 text-sm italic">{t("truth.selectFile")}</div>
+            <div className="text-foreground/70 text-sm italic">{t("truth.selectFile")}</div>
           )}
         </div>
       </div>

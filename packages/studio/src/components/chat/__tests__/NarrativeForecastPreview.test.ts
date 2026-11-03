@@ -55,7 +55,7 @@ const forecast: NarrativeForecast = {
   ],
 };
 
-function exec(details: unknown, tool = "create_narrative_forecast"): ToolExecution {
+function forecastExec(details: unknown, tool = "create_narrative_forecast"): ToolExecution {
   return {
     id: "forecast-tool-1",
     tool,
@@ -69,23 +69,23 @@ function exec(details: unknown, tool = "create_narrative_forecast"): ToolExecuti
 
 describe("NarrativeForecastPreview", () => {
   it("extracts create and get tool details without accepting malformed payloads", () => {
-    expect(getNarrativeForecastPreviewDetails(exec({
+    expect(getNarrativeForecastPreviewDetails(forecastExec({
       kind: "narrative_forecast_created",
       forecastId: forecast.forecastId,
       forecast,
     }))).toMatchObject({ kind: "forecast", stale: false, forecast });
 
-    expect(getNarrativeForecastPreviewDetails(exec({
+    expect(getNarrativeForecastPreviewDetails(forecastExec({
       kind: "narrative_forecast",
       stale: true,
       forecast: { ...forecast, status: "stale" },
     }, "get_narrative_forecast"))).toMatchObject({ kind: "forecast", stale: true });
 
-    expect(getNarrativeForecastPreviewDetails(exec({ kind: "narrative_forecast_created" }))).toBeNull();
+    expect(getNarrativeForecastPreviewDetails(forecastExec({ kind: "narrative_forecast_created" }))).toBeNull();
   });
 
   it("extracts a selected branch result", () => {
-    expect(getNarrativeForecastPreviewDetails(exec({
+    expect(getNarrativeForecastPreviewDetails(forecastExec({
       kind: "narrative_branch_selected",
       stale: false,
       branchId: "branch-2",
@@ -100,7 +100,7 @@ describe("NarrativeForecastPreview", () => {
 
   it("renders the divergence, branches, beats, risks and non-canonical boundary", () => {
     const html = renderToStaticMarkup(React.createElement(NarrativeForecastPreview, {
-      exec: exec({ kind: "narrative_forecast_created", forecastId: forecast.forecastId, forecast }),
+      exec: forecastExec({ kind: "narrative_forecast_created", forecastId: forecast.forecastId, forecast }),
       onSelectBranch: vi.fn(),
       onRecheck: vi.fn(),
     }));
@@ -120,7 +120,7 @@ describe("NarrativeForecastPreview", () => {
 
   it("disables selection when the forecast is stale", () => {
     const html = renderToStaticMarkup(React.createElement(NarrativeForecastPreview, {
-      exec: exec({ kind: "narrative_forecast", stale: true, forecast: { ...forecast, status: "stale" } }, "get_narrative_forecast"),
+      exec: forecastExec({ kind: "narrative_forecast", stale: true, forecast: { ...forecast, status: "stale" } }, "get_narrative_forecast"),
       onSelectBranch: vi.fn(),
       onRecheck: vi.fn(),
     }));

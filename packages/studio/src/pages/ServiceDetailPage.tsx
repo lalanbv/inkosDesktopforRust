@@ -322,7 +322,10 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               onChange={(e) => setApiKey(e.target.value)} placeholder={apiKeyOptional ? tr("本地服务可留空", "Optional for local service") : "sk-..."}
               className="w-full rounded-lg border border-border/60 bg-background px-3 py-2 pr-10 text-sm font-mono"
             />
-            <button type="button" onClick={() => setShowKey((v) => !v)}
+            {/* 877 号：显式名称必须——Field 的 <label> 包裹会把「API Key」也赋给本按钮
+                （label 可标记后代），读屏无法区分输入框与显隐切换（变异实测：去掉
+                aria-label 后 axe 不报但名称语义错误） */}
+            <button type="button" aria-label={showKey ? tr("隐藏 API Key", "Hide API key") : tr("显示 API Key", "Show API key")} onClick={() => setShowKey((v) => !v)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors">
               {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
@@ -386,20 +389,21 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           </Field>
 
           <Field label={tr("流式响应", "Streaming")}>
-            <label className="flex h-10 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm">
+            {/* 877 号：外层 Field 已是 <label>，内层改 span 防 label 嵌套（HTML 非法） */}
+            <span className="flex h-10 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm">
               <input
                 type="checkbox"
                 checked={stream}
                 onChange={(e) => setStream(e.target.checked)}
               />
               <span>{stream ? tr("开启", "On") : tr("关闭", "Off")}</span>
-            </label>
+            </span>
           </Field>
         </div>
 
         {/* Models */}
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground/70 font-medium uppercase tracking-wider">
+          <p className="text-xs text-foreground/70 font-medium uppercase tracking-wider">
             {tr(`模型目录（${models.length}）`, `Model catalog (${models.length})`)}
           </p>
           <div className="flex gap-2">
@@ -426,7 +430,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               {tr("添加", "Add")}
             </button>
           </div>
-          <p className="text-xs text-muted-foreground/60">
+          <p className="text-xs text-foreground/70">
             {tr("先点“测试连接”拉取最新列表，再点“保存”写入创作选择器。内置目录只在还没有保存过快照时作为兜底。", "Click “Test connection” to fetch the latest list, then “Save” to write it into the writing picker. The built-in catalog is only a fallback before a snapshot is saved.")}
           </p>
           {hasModelCatalog && (
@@ -448,7 +452,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground/60">{tr("点击“测试连接”查看可用模型", "Click “Test connection” to list available models")}</p>
+              <p className="text-xs text-foreground/70">{tr("点击“测试连接”查看可用模型", "Click “Test connection” to list available models")}</p>
             )}
           </div>
           )}
@@ -456,7 +460,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 
         {/* Advanced params */}
         <details className="group pt-2 border-t border-border/20">
-          <summary className="text-xs text-muted-foreground/60 cursor-pointer select-none hover:text-muted-foreground transition-colors py-2">
+          <summary className="text-xs text-foreground/70 cursor-pointer select-none hover:text-muted-foreground transition-colors py-2">
             {tr("高级参数", "Advanced")}
           </summary>
           <div className="space-y-4 pt-2">
@@ -464,7 +468,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               <div className="flex items-center gap-3">
                 {temperature !== "" && <input type="range" min="0" max="2" step="0.05" value={temperature}
                   onChange={(e) => setTemperature(e.target.value)} className="flex-1 accent-primary h-1" />}
-                <input type="number" value={temperature} onChange={(e) => setTemperature(e.target.value)}
+                <input type="number" aria-label={tr("随机性数值", "Temperature value")} value={temperature} onChange={(e) => setTemperature(e.target.value)}
                   placeholder={tr("模型默认", "Default")} min="0" max="2" step="0.05" className="w-24 rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-right font-mono" />
                 {temperature !== "" && <button type="button" onClick={() => setTemperature("")} className="text-xs text-muted-foreground">{tr("使用默认", "Use default")}</button>}
               </div>
@@ -477,10 +481,14 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  // 877 号：<label> 包裹（隐式关联）——此前 label 与控件无关联，表单控件全部
+  // 无可访问名称（axe label/select-name, critical），对比度 4.15 的 muted/70
+  // 标签同时升为 foreground/70（services/detail 页首批审计命中）。
   return (
     <div className="space-y-1.5">
-      <label className="block text-xs text-muted-foreground/70 font-medium">{label}</label>
-      {children}
+      <label className="block text-xs font-medium text-foreground/70">{label}
+        {children}
+      </label>
     </div>
   );
 }
