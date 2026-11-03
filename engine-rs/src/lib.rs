@@ -25,6 +25,7 @@
 pub mod agent;
 pub mod agents;
 pub mod forecast;
+pub mod harness;
 pub mod interaction;
 pub mod interactive_film;
 pub mod llm;
