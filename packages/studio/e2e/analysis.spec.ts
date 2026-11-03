@@ -5,7 +5,7 @@ test.beforeAll(async () => {
   await seedAnalysis();
 });
 
-test("analysis panel shows issues, emotion arc, and path distribution", async ({ page }) => {
+test("analysis panel shows issues and path distribution", async ({ page }) => {
   // 1. Open the film wizard page and wait for the stepper to render.
   await page.goto(`/#/studio/film/${E2E_ANALYSIS_ID}`);
   await expect(page.getByTestId("film-wizard")).toBeVisible({ timeout: 20_000 });
@@ -21,9 +21,8 @@ test("analysis panel shows issues, emotion arc, and path distribution", async ({
     page.getByTestId("validation-issue-GATED_UNREACHABLE").first(),
   ).toBeVisible({ timeout: 15_000 });
 
-  // 4. The emotion arc chart must be rendered.
-  await expect(page.getByTestId("emotion-arc")).toBeVisible({ timeout: 15_000 });
-
-  // 5. The path distribution panel must be rendered.
+  // 4. The path distribution panel must be rendered.
+  //    878 号：情绪弧线图断言移除——上游 2.0 harness v2 迁移（7aed0d82）把
+  //    AnalysisPanel 的 EmotionArcChart 整体删除（-127 行），该 testid 已不存在。
   await expect(page.getByTestId("path-distribution")).toBeVisible({ timeout: 15_000 });
 });

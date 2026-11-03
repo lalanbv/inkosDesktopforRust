@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { saveStoryGraph, StoryGraphSchema } from "@actalk/inkos-core";
+import { createWorkManifest, saveStoryGraph, saveWorkManifest, StoryGraphSchema } from "@actalk/inkos-core";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,13 @@ function makeGraph(projectId: string, title: string) {
 test.beforeAll(async () => {
   await saveStoryGraph(E2E_ROOT, FILM_A_ID, makeGraph(FILM_A_ID, "Alpha 测试剧"));
   await saveStoryGraph(E2E_ROOT, FILM_B_ID, makeGraph(FILM_B_ID, "Beta 测试剧"));
+  // 878 号：2.0 的 /interactive-films 列表走 works 清单（profile=interactive-film）
+  // ——只写 story-graph.json 不注册 work，侧栏清单恒空（本 spec 的失败根因）。
+  for (const [id, title] of [[FILM_A_ID, "Alpha 测试剧"], [FILM_B_ID, "Beta 测试剧"]] as const) {
+    await saveWorkManifest(E2E_ROOT, createWorkManifest({
+      id, title, profileId: "interactive-film", language: "zh",
+    }));
+  }
 });
 
 test("sidebar lists film projects and clicking a project opens the wizard", async ({ page }) => {

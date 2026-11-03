@@ -433,8 +433,36 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
       const persistedMessages = detail.messages ? deserializeMessages(detail.messages) : [];
       const task = data.task;
       const taskRunning = task?.execution.status === "running" || task?.execution.status === "processing";
+      // 878 号：恢复 2.0 合并时丢失的 fork 恢复特性（2e839afb）——chatRequest
+      // 水合。running=脱管聊天轮（isChatStreaming）；toolExecutions 合并回消息
+      // 流；failed=错误消息 + lastFailedSend（「重试上一条消息」按钮的数据源，
+      // 服务端 loadChatRequest 已把重启残留的 running 降级为 failed）；
+      // completed/cancelled=清除失败痕迹。
+      const chatRequest = data.chatRequest;
+      const chatRunning = chatRequest?.status === "running";
+      const isRunning = taskRunning || chatRunning;
       let restoredMessages: ReadonlyArray<ReturnType<typeof deserializeMessages>[number]> = persistedMessages;
       if (task) restoredMessages = mergeTaskExecution(restoredMessages, task.execution);
+      for (const execution of chatRequest?.toolExecutions ?? []) {
+        restoredMessages = mergeToolExecution(restoredMessages, execution);
+      }
+      if (!isRunning && chatRequest !== undefined) {
+        restoredMessages = markRunningToolsFailed(
+          restoredMessages,
+          tr("运行已中断，请从已保存结果继续。", "Execution stopped. Continue from the saved results."),
+          Date.now(),
+        );
+      }
+      const failedRequest = chatRequest?.status === "failed" ? chatRequest : undefined;
+      const failureMessage = failedRequest
+        ? failedRequest.error?.message ?? tr("上次请求未完成，请重试或从已保存结果继续。", "The previous request failed. Retry or continue from the saved results.")
+        : undefined;
+      const failureTimestamp = failedRequest?.completedAt ?? failedRequest?.startedAt;
+      if (failureMessage && failureTimestamp !== undefined) {
+        restoredMessages = [...restoredMessages, {
+          role: "assistant", content: `✗ ${failureMessage}`, timestamp: failureTimestamp,
+        } as ReturnType<typeof deserializeMessages>[number]];
+      }
       const messages = restoredMessages;
       const restoredResolutions = deriveResolvedProposals(messages);
 
@@ -444,7 +472,9 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
         // forceReplace（639 号 D1）：分支切换后的重拉必须用磁盘 active 链投影
         // 整体替换本地消息——缺省守卫（runtime 已有消息则保留）是任务恢复
         // 场景防覆盖流式卡的，会让分支后视图停在弃用路径上与真实上下文脱节。
-        const baseMessages = !opts?.forceReplace && runtime?.messages.length ? runtime.messages : messages;
+        // failedRequest 同样强制走磁盘（878 号恢复旧语义）：本地乐观消息已被
+        // 失败取代，保留会遮住服务端投影。
+        const baseMessages = !opts?.forceReplace && runtime?.messages.length && !failedRequest ? runtime.messages : messages;
         const nextMessages = task ? mergeTaskExecution(baseMessages, task.execution) : baseMessages;
         return {
           sessions: {
@@ -460,9 +490,21 @@ export const createMessageSlice: StateCreator<ChatStore, [], [], MessageActions>
               bookId: nextBookId,
               sessionKind: detail.sessionKind ?? runtime?.sessionKind,
               playMode: detail.playMode ?? runtime?.playMode,
+              profileId: detail.profileId ?? runtime?.profileId,
+              workId: detail.workId ?? runtime?.workId,
+              modelOverride: detail.modelOverride ?? runtime?.modelOverride,
+              serviceOverride: detail.serviceOverride ?? runtime?.serviceOverride,
               title: detail.title ?? runtime?.title ?? null,
               messages: nextMessages,
               isStreaming: taskRunning,
+              isChatStreaming: chatRunning,
+              detachedChatRequestId: chatRunning ? chatRequest.requestId : runtime?.detachedChatRequestId ?? null,
+              ...(failedRequest ? {
+                lastFailedSend: failedRequest.retry ?? runtime?.lastFailedSend,
+                lastError: failureMessage,
+              } : {}),
+              ...(chatRequest?.status === "completed" || chatRequest?.status === "cancelled"
+                ? { lastFailedSend: undefined, lastError: null } : {}),
             },
           },
           sessionIdsByBook: {

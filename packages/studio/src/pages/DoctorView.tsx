@@ -119,8 +119,8 @@ export function DoctorView({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFunc
       {data && (
         <div className={`px-4 py-3 rounded-lg text-sm font-medium ${
           data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
-            ? "bg-emerald-500/10 text-emerald-700"
-            : "bg-amber-500/10 text-amber-800"
+            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+            : "bg-amber-500/10 text-amber-800 dark:text-amber-400"
         }`}>
           {data.inkosJson && (data.projectEnv || data.globalEnv) && data.llmConnected
             ? t("doctor.allPassed")

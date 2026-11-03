@@ -133,9 +133,14 @@ for (const shell of ["v1", "v2"] as const) {
   test.describe(`a11y 全路由审计（${shell === "v1" ? "V1 默认壳" : "V2 活动栏壳"}）`, () => {
     for (const [pageKey, route] of Object.entries(AUDIT_ROUTES) as Array<[HashRoute["page"], HashRoute]>) {
       test(pageKey, async ({ page }) => {
-        if (shell === "v2") {
-          await page.addInitScript(() => localStorage.setItem("inkos:studio:nav-layout-v2", "true"));
-        }
+        await page.addInitScript((target) => {
+          // 878 号：默认主题按时段（6-18 点浅、其余深）——夜间跑套件会整站切
+          // dark，色卡基线漂移。审计固定浅色主题（877 基线语义）；dark 模式
+          // 色卡另行专项审计，不混入本 spec。
+          localStorage.setItem("inkos:studio:theme", "light");
+          if (target === "v2") localStorage.setItem("inkos:studio:nav-layout-v2", "true");
+        }, shell);
+
         const spec = PAGE_SPEC[pageKey] as { toHash: (route: HashRoute) => string } | null;
         expect(spec, `${pageKey} 缺 PAGE_SPEC 条目`).not.toBeNull();
         await page.goto(`/${spec!.toHash(route)}`);

@@ -143,9 +143,27 @@ export interface SessionResponse {
     readonly title?: string | null;
     readonly activeBookId?: string;
     readonly messages?: ReadonlyArray<SessionMessage>;
+    // 878 号：恢复 2.0 合并时丢失的 fork 恢复特性（2e839afb）——这些字段
+    // 是会话身份/恢复链（work 绑定重定向、失败重试）的读取前提。
+    readonly profileId?: string;
+    readonly workId?: string | null;
+    readonly proposalAction?: ChatRequestedIntent;
+    readonly modelOverride?: string | null;
+    readonly serviceOverride?: string | null;
   };
   readonly activeBookId?: string;
   readonly task?: StudioTaskSnapshot;
+  /** 878 号：服务端聊天请求快照（/sessions/:id 附带）——恢复失败重试、
+   *  脱管检测与工具执行合并的数据源（合并时丢失，878 恢复）。 */
+  readonly chatRequest?: {
+    readonly status: "running" | "completed" | "failed" | "cancelled";
+    readonly requestId: string;
+    readonly startedAt?: number;
+    readonly completedAt?: number | null;
+    readonly error?: { readonly code?: string; readonly message?: string };
+    readonly retry?: FailedSendRecord;
+    readonly toolExecutions?: ReadonlyArray<ToolExecution>;
+  };
 }
 
 export interface StudioTaskSnapshot {

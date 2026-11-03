@@ -242,14 +242,20 @@ export default function FlowView({
   };
 
   const onAddNode = async () => {
+    // 878 号：节点必须带全展示字段（sceneDesc/dialogue）——2.0 delta 端点对
+    // upsert 节点跑 assertDisplayText（sceneDesc.trim / dialogue.forEach），
+    // 残缺节点 500（`as never` 曾把这里的类型逃逸掩盖掉，一并移除）。
     await post(
       addNodeDelta({
         id: genNodeId(),
         type: "normal",
         title: tr("新节点", "New node"),
+        act: "",
+        sceneDesc: "",
+        dialogue: [],
         choices: [],
         position: { x: 80, y: 80 },
-      } as never),
+      }),
     );
   };
 

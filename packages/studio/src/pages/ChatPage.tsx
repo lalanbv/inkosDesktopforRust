@@ -608,7 +608,11 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
 
         const state = useChatStore.getState();
         const session = state.sessions[existingId];
-        if (session && session.bookId === null && (mode !== "project-chat" || (session.messages?.length ?? 0) > 0)) {
+        // 878 号：恢复 2e839afb 语义——「Entry bookmarks identify the conversation,
+        // even after creation binds it to a Work」。bookId===null 条件是 2.0 合并
+        // 带回的旧形态：绑定 work 的入口会话（bookId=id）会被跳过激活、落到新建
+        // 草稿，重试按钮/恢复重定向全部失效（entry-session-recovery spec 的场景）。
+        if (session && (mode !== "project-chat" || (session.messages?.length ?? 0) > 0)) {
           activateSession(existingId);
           return;
         }
