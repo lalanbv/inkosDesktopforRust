@@ -157,7 +157,7 @@ export function ChapterWorkspacePanel({
             type="button"
             onClick={deleteChapter}
             disabled={busy !== null}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs font-bold text-destructive transition-colors hover:bg-destructive hover:text-white disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs font-bold text-destructive dark:text-red-400 transition-colors hover:bg-destructive hover:text-white disabled:opacity-50"
           >
             <Trash2 size={14} />
             {t("reader.deleteChapter")}

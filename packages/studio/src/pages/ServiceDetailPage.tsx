@@ -346,7 +346,7 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
           </button>
           {(isConnected || isCustom) && (
             <button onClick={handleDelete} disabled={isBusy}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50">
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs rounded-lg border border-destructive/30 text-destructive dark:text-red-400 hover:bg-destructive/10 transition-colors disabled:opacity-50">
               <Trash2 size={12} />
               {tr("删除配置", "Delete config")}
             </button>

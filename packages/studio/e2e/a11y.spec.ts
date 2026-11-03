@@ -160,3 +160,50 @@ for (const shell of ["v1", "v2"] as const) {
     }
   });
 }
+
+// 879 号：dark 主题抽查（chapter/service-detail/doctor——878 号夜间全量暴露
+// 的三处 destructive/amber 深底色卡所在页）。主题实现 = dark 类挂 html +
+// localStorage 三态 "dark"，不依赖 prefers-color-scheme，headless 下可确定复现。
+for (const [pageKey, route] of [
+  ["chapter", { page: "chapter", bookId: A11Y_BOOK, chapterNumber: 1 }],
+  ["service-detail", { page: "service-detail", serviceId: "custom" }],
+  ["doctor", { page: "doctor" }],
+] as Array<[HashRoute["page"], HashRoute]>) {
+  test(`dark 主题抽查：${pageKey}`, async ({ page }) => {
+    await page.addInitScript((target) => {
+      localStorage.setItem("inkos:studio:theme", "dark");
+      localStorage.setItem("inkos:studio:nav-layout-v2", "true");
+      void target;
+    }, pageKey);
+    const spec = PAGE_SPEC[pageKey] as { toHash: (route: HashRoute) => string } | null;
+    await page.goto(`/${spec!.toHash(route)}`);
+    await expect(page.getByTestId("status-bar")).toBeVisible({ timeout: 20_000 });
+    await waitForQuietDom(page);
+    await page.addScriptTag({ content: AXE_SOURCE });
+    await page.evaluate(() => {
+      // 必红探针注入 main 内（region 由地标覆盖）；违规样本自带白底浅灰字
+      //（contrast 违规）+ 无名按钮（button-name）——dark 页面上白底容器在
+      // 根节点会自带 region 违规污染断言（879 首跑教训）。
+      const probe = document.createElement("div");
+      probe.setAttribute("data-a11y-probe", "");
+      // fixed 定位回视口内：axe color-contrast 跳过视口外元素（main 尾部 append
+      // 在页面底外会被跳过，只剩 button-name——879 首跑教训）。白底子元素供
+      // contrast 违规样本（深色页面上白底浅灰字 1.67）。
+      probe.style.cssText = "position:fixed;top:0;left:0;z-index:9999";
+      probe.innerHTML = '<button type="button" style="background:#ffffff;padding:4px"></button>'
+        + '<p style="background:#ffffff;color:#c8c8c8;margin:0;padding:4px">低对比探针文本</p>';
+      document.querySelector("main")?.appendChild(probe);
+    });
+    // 探针验证与干净审计分离：先断言检出（dark 检测器活性），移除探针后再
+    // 全量断言零违规——探针违规样本混进零断言会让 dark 抽查永远红（879 首跑）。
+    const probeIds = await page.evaluate(async () => {
+      const axe = (window as unknown as { axe: { run: (ctx: Document, opts: object) => Promise<{ violations: Array<{ id: string }> }> } }).axe;
+      return (await axe.run(document, { resultTypes: ["violations"] })).violations.map((v) => v.id);
+    });
+    expect(probeIds).toEqual(expect.arrayContaining(["button-name", "color-contrast"]));
+    await page.evaluate(() => document.querySelector('[data-a11y-probe]')?.remove());
+    await waitForQuietDom(page);
+    const violations = (await auditViolations(page)).filter((v) => !isAllowlisted(v));
+    expect(violations, describeViolations(violations)).toEqual([]);
+  });
+}
