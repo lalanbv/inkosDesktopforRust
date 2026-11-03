@@ -184,7 +184,10 @@ export function WorkInspector({ workId, onBack, onChat }: {
       </div>}
       {(selected || previewLoading) && (
         <div className="fixed inset-0 z-[90] flex justify-end bg-background/40 backdrop-blur-sm" onClick={() => setSelected(null)}>
-          <aside className="h-full w-[min(820px,94vw)] overflow-y-auto border-l border-border bg-background p-7 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+          {/* aria-label（875 号 axe 审计）：抽屉是页面第二个 <aside>，无名称时与
+              侧栏 aside 撞成两个不可区分的 complementary 地标（landmark-unique）；
+              关闭钮/编辑 textarea 同轮补名称（button-name / label, critical）。 */}
+          <aside aria-label={tr("版本预览", "Revision preview")} className="h-full w-[min(820px,94vw)] overflow-y-auto border-l border-border bg-background p-7 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             {selected && <div className="mb-5 flex flex-wrap items-center gap-2">
               <select aria-label={tr("选择作品版本", "Select revision")} className="max-w-full rounded border border-border bg-background p-2 text-sm" value={previewRevisionId || selected.revision.id} onChange={event => {
                 const revision = selectedArtifact?.revisions.find(revision => revision.id === event.target.value);
@@ -214,11 +217,11 @@ export function WorkInspector({ workId, onBack, onChat }: {
                     ) : (
                       <button type="button" disabled={selected?.revision.id !== selectedArtifact?.currentRevisionId} onClick={() => setEditing(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"><Pencil size={15} />{tr("编辑", "Edit")}</button>
                     )}
-                    <button type="button" onClick={() => setSelected(null)} className="rounded-lg border border-border p-2"><X size={16} /></button>
+                    <button type="button" aria-label={tr("关闭预览", "Close preview")} onClick={() => setSelected(null)} className="rounded-lg border border-border p-2"><X size={16} /></button>
                   </div>
                 </div>
                 {editing ? (
-                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-[calc(100vh-130px)] w-full resize-none rounded-xl border border-border bg-secondary/20 p-4 font-mono text-sm leading-7 outline-none focus:border-primary" />
+                  <textarea aria-label={tr("编辑版本内容", "Edit revision content")} value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-[calc(100vh-130px)] w-full resize-none rounded-xl border border-border bg-secondary/20 p-4 font-mono text-sm leading-7 outline-none focus:border-primary" />
                 ) : (
                   <pre className="whitespace-pre-wrap break-words font-sans text-base leading-8">{selected?.content}</pre>
                 )}

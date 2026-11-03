@@ -908,7 +908,10 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
             <div className="w-14 h-14 rounded-2xl border border-dashed border-border flex items-center justify-center bg-secondary/30 opacity-40">
               <Gamepad2 size={24} className="text-muted-foreground" />
             </div>
-            <p className="text-sm text-muted-foreground/70 max-w-md leading-7">
+            {/* text-foreground/70（875 号 axe 审计）：原 muted-foreground/70 在会话
+                空态底色上 4.15 < 4.5（color-contrast, serious）——新会话/工作区对话
+                才渲染空态，872/873 审的书页有消息故漏网 */}
+            <p className="text-sm text-foreground/70 max-w-md leading-7">
               {isZh ? "选个玩法，进去再聊你想玩的世界。" : "Pick a playstyle, then describe the world you want in chat."}
             </p>
             <div className="flex gap-3">
@@ -939,7 +942,7 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
             <div className="w-14 h-14 rounded-2xl border border-dashed border-border flex items-center justify-center mb-4 bg-secondary/30 opacity-40">
               <BotMessageSquare size={24} className="text-muted-foreground" />
             </div>
-            <p className="text-sm text-muted-foreground/70 max-w-md leading-7">
+            <p className="text-sm text-foreground/70 max-w-md leading-7">
               {emptyGuidance}
             </p>
           </div>

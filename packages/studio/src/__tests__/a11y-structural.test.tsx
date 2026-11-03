@@ -8,14 +8,20 @@
 //! SOP（注入 axe-core 逐页足时复测）；页面级地标/标题规则对孤立组件无意义，
 //! 同样由真浏览器审计覆盖。必红自检夹具证明所依赖的规则在本配置下确实活着
 //! （847/848 号门禁纪律：检测器须喂必红用例，防静默恒绿）。
+//!
+//! 875 号追加：WorkInspector 版本抽屉（关闭钮名称 button-name critical / 编辑
+//! textarea 名称 label critical / 抽屉 aside 地标名称——landmark-unique 需侧栏
+//! 并存才触发，此处直接断言 aria-label 在位）。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import axe from "axe-core";
 import { StoryGraphSchema } from "@actalk/inkos-core/interactive-film/graph-schema";
 import { StatusBar } from "../components/StatusBar";
 import { TabStrip } from "../components/TabStrip";
 import { StoryGraphTree } from "../pages/StoryGraphTree";
 import { ImportManager } from "../pages/ImportManager";
+import { WorkInspector } from "../pages/WorkInspector";
 import type { TFunction } from "../hooks/use-i18n";
 
 const GRAPH = StoryGraphSchema.parse({
@@ -30,9 +36,30 @@ const GRAPH = StoryGraphSchema.parse({
   endings: [],
 });
 
+const REVISION = {
+  id: "r2",
+  path: "artifacts/outline/revisions/r2.md",
+  contentType: "text/markdown",
+  status: "current",
+  byteLength: 12,
+  createdAt: "2026-11-03T00:00:00.000Z",
+};
+
 const API_DATA: Record<string, unknown> = {
   "/projects/p1/story-graph": GRAPH,
   "/books": { books: [{ id: "b1", title: "书 A" }] },
+  "/works/w1": {
+    work: {
+      id: "w1",
+      title: "雨夜碎镜",
+      profileId: "short-fiction",
+      language: "zh",
+      status: "active",
+      artifacts: [{ id: "outline", kind: "outline", currentRevisionId: "r2", revisions: [REVISION] }],
+    },
+    episodes: [],
+  },
+  "/profiles": { profiles: [] },
 };
 
 vi.mock("../hooks/use-api", async (importOriginal) => ({
@@ -44,6 +71,12 @@ vi.mock("../hooks/use-api", async (importOriginal) => ({
     refetch: vi.fn(),
     mutate: vi.fn(),
   }),
+  fetchJson: async (path: string) => {
+    if (path === "/works/w1/artifacts/outline/revisions/r2") {
+      return { revision: REVISION, artifactId: "outline", content: "# 短篇大纲 v2\n" };
+    }
+    throw new Error(`unexpected fetchJson ${path}`);
+  },
 }));
 
 const t = ((key: string) => key) as TFunction;
@@ -126,6 +159,25 @@ describe("a11y 结构性防回归（874）", () => {
   it("ImportManager：目标书籍 select 有可访问名称（873 critical）", async () => {
     const { container } = render(<ImportManager nav={nav} theme="light" t={t} />);
     expect(container.querySelector("select")).not.toBeNull();
+    expect(await violationsOf(container)).toEqual([]);
+  });
+
+  it("WorkInspector：版本抽屉关闭钮/编辑 textarea/抽屉地标均有名称（875 critical）", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<WorkInspector workId="w1" onBack={() => {}} onChat={() => {}} />);
+    const artifactButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("artifacts/outline/revisions/r2.md"),
+    );
+    expect(artifactButton).toBeDefined();
+    await user.click(artifactButton!);
+    await vi.waitFor(() => expect(container.querySelector("aside")).not.toBeNull());
+    const drawer = container.querySelector("aside")!;
+    expect(drawer.getAttribute("aria-label")).toBeTruthy();
+    expect(await violationsOf(container)).toEqual([]);
+
+    const editButton = Array.from(drawer.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes("编辑"));
+    await user.click(editButton!);
+    await vi.waitFor(() => expect(drawer.querySelector("textarea")).not.toBeNull());
     expect(await violationsOf(container)).toEqual([]);
   });
 });

@@ -20,8 +20,9 @@
 //   5. 打印浏览器走查地址与四个 UI 面的点验要点
 
 import { mkdirSync, writeFileSync, existsSync, copyFileSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
@@ -346,6 +347,100 @@ const runWriteChain = async (label) => {
   if (!reachedTwo) die(`${label} write-next 300s 未落第 2 章（写链回归？核查对称深播前提）`);
   console.log(`\n[walkthrough-fixture] ${label} 警告：章已落盘但 300s 内真相同步未趋稳（继续，可能读到中途态）`);
 };
+// ── 2.9 work 实体播种（875 号：work/work-chat 子流程页面活体）──
+// 必须在下方腿分支之前：2.0 TS 腿（!forkContract）与报告模式均在 §3.6 之前
+// process.exit——而 /works 域恰恰只活在 TS 腿（Rust 直启端 404=695 上游新增
+// 未迁声明）。WorkInspector 全量渲染需要 work.json（双版本 artifact——版本
+// 抽屉/比较/采用面）+ harness.sqlite 的 episode（执行记录 + 事件层）：前者纯
+// 文件、后者走 core dist 的 CreativeEpisodeStore（与 Node 回退端同一实现同一
+// schema，不复刻表结构）。幂等：文件覆写同内容 + getEpisode 存在即跳过。
+// Rust 腿同样播种（文件无害、引擎不读）——差分器上游新增域探测因此有真实
+// work id 可用（engine-contract-diff 923 行「随迁移面验收」）。
+const WORK_ID = "walk-diff";
+const seedWorkEntity = async () => {
+  const workDir = join(root, "works", WORK_ID);
+  const sha256 = (text) => createHash("sha256").update(text, "utf-8").digest("hex");
+  const rev1Text = "# 短篇大纲 v1\n\n雨夜来客叩门，碎镜斋主以镜换名。\n";
+  const rev2Text = "# 短篇大纲 v2\n\n雨夜来客叩门；斋主窥见镜中人影与自己同貌，交易自此刻开始。\n";
+  const revisionOf = (revisionId, text, status, parent, createdAt) => ({
+    id: revisionId,
+    parentRevisionId: parent,
+    path: `artifacts/outline/revisions/${revisionId}.md`,
+    contentType: "text/markdown",
+    status,
+    checksum: `sha256:${sha256(text)}`,
+    byteLength: Buffer.byteLength(text, "utf-8"),
+    createdAt,
+  });
+  const manifest = {
+    version: 2,
+    id: WORK_ID,
+    title: "雨夜碎镜（走查）",
+    profileId: "short-fiction",
+    language: "zh",
+    status: "active",
+    lineage: [],
+    artifacts: [{
+      id: "outline",
+      kind: "outline",
+      currentRevisionId: "r2",
+      revisions: [
+        revisionOf("r1", rev1Text, "superseded", null, "2026-11-02T00:00:00.000Z"),
+        revisionOf("r2", rev2Text, "current", "r1", "2026-11-03T00:00:00.000Z"),
+      ],
+      metadata: {},
+    }],
+    metadata: {},
+    createdAt: "2026-11-02T00:00:00.000Z",
+    updatedAt: "2026-11-03T00:00:00.000Z",
+  };
+  mkdirSync(join(workDir, "artifacts", "outline", "revisions"), { recursive: true });
+  writeFileSync(join(workDir, "artifacts", "outline", "revisions", "r1.md"), rev1Text);
+  writeFileSync(join(workDir, "artifacts", "outline", "revisions", "r2.md"), rev2Text);
+  writeFileSync(join(workDir, "work.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const storeModule = join(repoRoot, "packages", "core", "dist", "harness", "episode-store.js");
+  if (!existsSync(storeModule)) {
+    console.warn("[walkthrough-fixture] ⚠ core dist 缺失（pnpm --filter @actalk/inkos-core build）——work 播种跳过 episode，执行记录面将为空态");
+  } else {
+    const { CreativeEpisodeStore } = await import(pathToFileURL(storeModule).href);
+    const store = new CreativeEpisodeStore(join(root, ".inkos", "harness.sqlite"));
+    const episodeId = "ep-walkdiff-1";
+    try {
+      if (!store.getEpisode(episodeId)) {
+        store.create({
+          version: 2, id: episodeId, workId: WORK_ID, profileId: "short-fiction",
+          status: "running", startedAt: "2026-11-03T00:00:00.000Z", completedAt: null,
+        });
+        store.append({
+          episodeId, type: "stage.completed", workId: WORK_ID,
+          capabilityId: "short-fiction", actionId: "outline-draft",
+          payload: { stage: "outline", note: "走查播种事件一" },
+        }, "2026-11-03T00:00:30.000Z");
+        store.append({
+          episodeId, type: "review.completed", workId: WORK_ID,
+          capabilityId: "short-fiction", payload: { score: 91 },
+        }, "2026-11-03T00:00:50.000Z");
+        store.finish(episodeId, "completed", "2026-11-03T00:01:00.000Z");
+      }
+    } finally {
+      store.close();
+    }
+  }
+
+  // 断言：TS 腿 /works 必可读（Rust 直启端 404=695 声明内，只提示不失败）
+  const listed = await api("/api/v1/works");
+  const found = Array.isArray(listed.body?.works) && listed.body.works.find((w) => w.id === WORK_ID);
+  if (found) {
+    console.log(`[walkthrough-fixture] work 播种就绪：${WORK_ID}（artifacts=${found.artifactCount}）`);
+  } else if (!forkContract) {
+    die(`TS 腿 /works 未见播种的 ${WORK_ID}（status=${listed.status}）——work 夹具或 /works 域回归`);
+  } else {
+    console.log(`[walkthrough-fixture] work 文件已播种（Rust 腿 /works=${listed.status}，695 上游新增未迁域声明内）`);
+  }
+};
+await seedWorkEntity();
+
 if (!forkContract) {
   console.log("[walkthrough-fixture] 2.0 TS 腿：对称深播（§2.5）+ write-next（795 号）。");
   await runWriteChain("node");
