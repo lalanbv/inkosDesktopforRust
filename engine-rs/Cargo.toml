@@ -60,6 +60,12 @@ base64 = "0.22"
 # YAML：genre-profile / book-rules 的 frontmatter 解析（TS js-yaml 的对应物）。
 # serde_yaml_ng = serde_yaml 0.9 的维护续作（同 API drop-in；0.9 已停维护
 # RUSTSEC-2024-0320，173 号 W-C6 迁移），输出等价性由 golden 向量 + duel 锁定。
+# 871 号定性备案：底层 unsafe-libyaml 被 RUSTSEC-2024-0449 标 unmaintained
+# （serde_yaml_ng 0.9.35~0.10.0 全线钉死、无 patched 路径）。RUSTSEC 建议的
+# saphyr/serde-saphyr 系非 drop-in（API+序列化行为不同）——换库即破坏
+# runtime_writer 对齐 js-yaml dump(lineWidth:120) 的双栈字节恒等锁 + 三处
+# frontmatter 解析语义，代价 >> unmaintained 警告（非漏洞；本地单机信任
+# 边界，解析输入=用户自己项目文件）。禁在无恒等证明前更换 YAML 库。
 serde_yaml_ng = "0.10"
 # 临时目录：atomic-file-set 的事务目录 + 测试 fixture。
 tempfile = "3"
