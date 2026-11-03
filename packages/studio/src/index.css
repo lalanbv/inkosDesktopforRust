@@ -397,3 +397,10 @@ h3 { font-size: 1.25rem; }
     scroll-behavior: auto !important;
   }
 }
+
+/* React Flow attribution 对比度覆盖（873 号 axe 审计）：库内置水印链接
+   #999999 对比度 2.8 < 4.5（color-contrast, serious）。保留水印（React Flow
+   许可条款要求 attribution），仅加深文字色至达标对比度。 */
+.react-flow .react-flow__attribution a {
+  color: #736a61 !important;
+}

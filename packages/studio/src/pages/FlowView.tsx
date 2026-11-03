@@ -264,6 +264,8 @@ export default function FlowView({
 
   return (
     <div className="flex flex-col h-full p-5 gap-3" data-testid="flow-view">
+      {/* sr-only h1（873 号 axe 审计）：流程图页此前无一级标题 */}
+      <h1 className="sr-only">{tr("故事流程图", "Story flow")}</h1>
       <div className="flex items-center gap-3 text-sm shrink-0">
         {!embedded && (
           <button

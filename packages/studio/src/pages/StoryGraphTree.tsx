@@ -74,6 +74,8 @@ export function StoryGraphTree({
 
   return (
     <div className="space-y-6" data-testid="film-tree">
+      {/* sr-only h1（873 号 axe 审计）：互动影视页此前无一级标题 */}
+      <h1 className="sr-only">{tr("互动影视图谱", "Interactive film graph")}</h1>
       {!embedded && (
         <div className="flex items-center gap-3 text-sm">
           <button onClick={nav.toDashboard} className={c.link} data-testid="film-back">
@@ -186,6 +188,7 @@ function NodeEditor({
       )}
       <textarea
         data-testid={`film-scene-${node.id}`}
+        aria-label={tr("场景描述", "Scene description")}
         className="mt-2 w-full text-sm border rounded p-2"
         value={scene}
         onChange={(e) => setScene(e.target.value)}

@@ -183,7 +183,7 @@ export function SessionBranchSwitcher({
                           {isZh ? "已弃用分支" : "abandoned"}
                         </span>
                       ) : null}
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground/50">
+                      <span className="ml-auto shrink-0 text-[11px] text-foreground/70">
                         {formatRelative(point.timestamp)}
                       </span>
                     </div>

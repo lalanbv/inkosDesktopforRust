@@ -576,7 +576,7 @@ function Zone(props: {
         <span className="text-[16px]">{props.icon}</span>{props.title}
       </h3>
       {props.empty ? (
-        <p className="text-[15px] leading-6 text-muted-foreground/50">{props.emptyText}</p>
+        <p className="text-[15px] leading-6 text-foreground/70">{props.emptyText}</p>
       ) : (
         <div className="space-y-1.5">{props.children}</div>
       )}
@@ -618,7 +618,7 @@ function HudRowInspect(props: {
             <div className="space-y-2 border-t border-border/30 pt-2">
               {row.details.map((detail, i) => (
                 <p key={i} className="break-words text-[14px] leading-6 text-muted-foreground">
-                  {detail.label ? <span className="text-muted-foreground/50">{detail.label} </span> : null}
+                  {detail.label ? <span className="text-foreground/70">{detail.label} </span> : null}
                   {detail.text}
                 </p>
               ))}
@@ -682,7 +682,7 @@ function Row({
         <div className={`min-w-0 space-y-1 px-2.5 pb-2 ${hasImage ? "pl-[68px]" : "pl-8"}`}>
           {row.details.map((detail, i) => (
             <p key={i} className="break-words text-[14px] leading-6 text-muted-foreground">
-              {detail.label ? <span className="text-muted-foreground/50">{detail.label} </span> : null}
+              {detail.label ? <span className="text-foreground/70">{detail.label} </span> : null}
               {detail.text}
             </p>
           ))}

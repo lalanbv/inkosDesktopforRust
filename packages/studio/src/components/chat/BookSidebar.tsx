@@ -165,7 +165,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
             <Loader2 size={16} className="text-muted-foreground animate-spin" />
           </div>
         ) : content === null ? (
-          <p className="text-[14px] leading-6 text-muted-foreground/50 italic px-4 py-3">文件不存在</p>
+          <p className="text-[14px] leading-6 text-foreground/70 italic px-4 py-3">文件不存在</p>
         ) : editing ? (
           <textarea
             value={editContent}

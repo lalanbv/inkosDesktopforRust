@@ -220,6 +220,7 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
         {tab === "chapters" && (
           <>
             <select value={chBookId} onChange={(e) => setChBookId(e.target.value)}
+              aria-label={t("import.selectTarget")}
               className="w-full px-3 py-2 rounded-lg bg-secondary/30 border border-border text-sm">
               <option value="">{t("import.selectTarget")}</option>
               {booksData?.books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
