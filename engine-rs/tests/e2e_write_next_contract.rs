@@ -7289,7 +7289,8 @@ mod agent68_e2e {
             pi_turn_index: None,
             tool_call_id: None,
             source_tool_assistant_uuid: None,
-            legacy_display: None,
+            display: None,
+            visibility: None,
             message,
         }
     }

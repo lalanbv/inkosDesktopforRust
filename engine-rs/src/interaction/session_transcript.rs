@@ -166,8 +166,16 @@ pub enum TranscriptEvent {
         tool_call_id: Option<String>,
         #[serde(rename = "sourceToolAssistantUuid", skip_serializing_if = "Option::is_none")]
         source_tool_assistant_uuid: Option<String>,
-        #[serde(rename = "legacyDisplay", skip_serializing_if = "Option::is_none")]
-        legacy_display: Option<LegacyDisplay>,
+        /// 876 号：上游 2.0（b399a8d3，8/30）把 `legacyDisplay` 改名 `display`
+        /// 且 TS 严格 schema 只认新名——此前 Rust 写旧名，Node 回退端读到即整份
+        /// 会话拒读。写新名、读兼容旧名（alias：旧 Rust 文件 + 2.0 前 TS 文件）。
+        /// 装箱：展示补充稀有出现，避免把每个事件撑到最大变体尺寸（large_enum_variant）。
+        #[serde(rename = "display", alias = "legacyDisplay", skip_serializing_if = "Option::is_none")]
+        display: Option<Box<MessageDisplay>>,
+        /// 876 号：上游 2.0 消息可见性——`"model"`=仅模型可见，UI 恢复剔除
+        /// （TS visibleMessageEvents 同语义）；Rust 自身不写。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        visibility: Option<String>,
         /// 原始 AgentMessage（宽松：不做结构校验，重放/展示层自行解析）。
         message: Value,
     },
@@ -217,11 +225,38 @@ pub enum TranscriptEvent {
         #[serde(rename = "toSeq")]
         to_seq: Option<u64>,
     },
+    /// 876 号：上游 2.0 请求交付账本事件（TS agent-session 每轮末追加，
+    /// `state` 为 RequestDeliveryState）。Rust 不消费交付语义（695 未迁域），
+    /// 但必须能解析：此前无此变体，读取器把该行当坏行跳过，`next_seq` 与
+    /// `transcript_head` 都漏算它——Node 写过的会话经 Rust 追加时复用其 seq
+    /// 并从其前驱分叉父链（R36 树化会话损坏）。`state` 原样保真。
+    RequestDelivery {
+        version: u32,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        seq: u64,
+        timestamp: u64,
+        #[serde(
+            rename = "parentSeq",
+            default,
+            deserialize_with = "deserialize_double_option"
+        )]
+        parent_seq: Option<Option<u64>>,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        state: Value,
+    },
 }
 
-/// message 事件的 legacy 展示补充。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct LegacyDisplay {
+/// message 事件的展示补充（876 号：对齐上游 2.0 MessageEventSchema.display）。
+/// thinking/toolExecutions 为 Rust 回放所用；completion/userInput 是 2.0 TS
+/// 写入的展示字段，Rust 恢复暂不消费（2.0 恢复语义属 695 未迁域），原样保真。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion: Option<Value>,
+    #[serde(rename = "userInput", skip_serializing_if = "Option::is_none")]
+    pub user_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     #[serde(rename = "toolExecutions", default, skip_serializing_if = "Vec::is_empty")]
@@ -238,7 +273,8 @@ impl TranscriptEvent {
             | TranscriptEvent::RequestFailed { seq, .. }
             | TranscriptEvent::Message { seq, .. }
             | TranscriptEvent::Compaction { seq, .. }
-            | TranscriptEvent::BranchMoved { seq, .. } => *seq,
+            | TranscriptEvent::BranchMoved { seq, .. }
+            | TranscriptEvent::RequestDelivery { seq, .. } => *seq,
         }
     }
 
@@ -261,7 +297,8 @@ impl TranscriptEvent {
             | TranscriptEvent::RequestFailed { parent_seq, .. }
             | TranscriptEvent::Message { parent_seq, .. }
             | TranscriptEvent::Compaction { parent_seq, .. }
-            | TranscriptEvent::BranchMoved { parent_seq, .. } => *parent_seq,
+            | TranscriptEvent::BranchMoved { parent_seq, .. }
+            | TranscriptEvent::RequestDelivery { parent_seq, .. } => *parent_seq,
         }
     }
 
@@ -274,7 +311,8 @@ impl TranscriptEvent {
             | TranscriptEvent::RequestFailed { parent_seq, .. }
             | TranscriptEvent::Message { parent_seq, .. }
             | TranscriptEvent::Compaction { parent_seq, .. }
-            | TranscriptEvent::BranchMoved { parent_seq, .. } => *parent_seq = value,
+            | TranscriptEvent::BranchMoved { parent_seq, .. }
+            | TranscriptEvent::RequestDelivery { parent_seq, .. } => *parent_seq = value,
         }
     }
 
@@ -364,25 +402,35 @@ pub async fn read_transcript_events(project_root: &Path, session_id: &str) -> Ve
     else {
         return Vec::new();
     };
+    parse_transcript(&raw).0
+}
+
+/// 解析 transcript 原文：返回（可识别事件 seq 升序，全部行的原始 seq 最大值）。
+/// 876 号：后者覆盖本端不识别的行——上游后续新增事件类型时，追加 seq 仍取
+/// 全文件最大值 +1，不会复用被跳过行的 seq（request_delivery 缺变体时的教训）。
+fn parse_transcript(raw: &str) -> (Vec<TranscriptEvent>, Option<u64>) {
     let mut events = Vec::new();
+    let mut raw_max_seq: Option<u64> = None;
     for line in raw.lines() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Ok(parsed) = serde_json::from_str::<TranscriptEvent>(line) {
-            // zod 拒绝 version≠1 的行；serde 宽松接受（偏差备案：边缘差异）
-            if let Ok(Value::Number(version)) =
-                serde_json::from_str::<Value>(line).map(|v| v["version"].clone())
-            {
-                if version.as_u64() != Some(1) {
-                    continue;
-                }
-            }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(seq) = value.get("seq").and_then(Value::as_u64) {
+            raw_max_seq = Some(raw_max_seq.map_or(seq, |max| max.max(seq)));
+        }
+        // zod 拒绝 version≠1 的行；serde 宽松接受（偏差备案：边缘差异）
+        if value.get("version").and_then(Value::as_u64).is_some_and(|version| version != 1) {
+            continue;
+        }
+        if let Ok(parsed) = serde_json::from_value::<TranscriptEvent>(value) {
             events.push(parsed);
         }
     }
     events.sort_by_key(TranscriptEvent::seq);
-    events
+    (events, raw_max_seq)
 }
 
 fn session_lock(project_root: &Path, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -414,8 +462,12 @@ where
 {
     let lock = session_lock(project_root, session_id);
     let _guard = lock.lock().await;
-    let events = read_transcript_events(project_root, session_id).await;
-    let next_seq = events.iter().map(TranscriptEvent::seq).max().unwrap_or(0) + 1;
+    let raw = tokio::fs::read_to_string(transcript_path(project_root, session_id))
+        .await
+        .unwrap_or_default();
+    let (events, raw_max_seq) = parse_transcript(&raw);
+    // 876 号：取全文件原始 seq 最大值（含本端不识别而被跳过的行），防 seq 复用。
+    let next_seq = raw_max_seq.unwrap_or(0) + 1;
     let mut built = build_events(&events, next_seq);
     if built.is_empty() {
         return Vec::new();
@@ -467,4 +519,103 @@ fn _roles_used() -> [&'static str; 4] {
 #[allow(dead_code)]
 fn _zero_helper(n: u64) -> bool {
     is_zero(&n)
+}
+
+#[cfg(test)]
+mod tests {
+    //! 876 号：跨引擎 transcript 兼容金标准。三条行与 TS 侧
+    //! `packages/core/src/__tests__/session-transcript-cross-engine.test.ts`
+    //! **逐字共用**——双端恒等锁：任一端改 schema 而另一端不跟，必有一端红。
+    use super::*;
+    use crate::interaction::session_restore::message_events_to_interaction_messages;
+
+    /// 876 前 Rust（及 2.0 前 TS）写出的旧名形态。
+    const GOLDEN_LEGACY_DISPLAY_LINE: &str = r#"{"type":"message","version":1,"sessionId":"s876","seq":3,"timestamp":1730000000000,"parentSeq":2,"requestId":"req-1","uuid":"u-3","parentUuid":null,"role":"assistant","legacyDisplay":{"toolExecutions":[{"id":"exec-1","tool":"draft_structure","label":"draft_structure","status":"completed"}]},"message":{"role":"assistant","content":[{"type":"text","text":"已生成结构"}]}}"#;
+    /// 上游 2.0 TS 写出的新名形态（含 visibility 与 display 全字段）。
+    const GOLDEN_TS20_MESSAGE_LINE: &str = r#"{"type":"message","version":1,"sessionId":"s876","seq":4,"timestamp":1730000000001,"parentSeq":3,"requestId":"req-1","uuid":"u-4","parentUuid":"u-3","role":"assistant","visibility":"model","display":{"completion":{"status":"answered","message":"完成"},"userInput":{"text":"写大纲","language":"zh","attachments":[]},"thinking":"先列人物","toolExecutions":[{"id":"exec-2","tool":"write_outline","status":"completed"}]},"message":{"role":"assistant","content":[]}}"#;
+    /// 上游 2.0 TS 每轮末追加的交付账本事件。
+    const GOLDEN_REQUEST_DELIVERY_LINE: &str = r#"{"type":"request_delivery","version":1,"sessionId":"s876","seq":5,"timestamp":1730000000002,"parentSeq":4,"requestId":"req-1","state":{"version":1,"authorRequest":"写大纲","declared":true,"steps":[],"receipts":[]}}"#;
+
+    fn as_value(line: &str) -> Value {
+        serde_json::from_str(line).expect("golden line is valid JSON")
+    }
+
+    #[test]
+    fn legacy_display_alias_reads_and_writes_canonical_display() {
+        let event: TranscriptEvent = serde_json::from_str(GOLDEN_LEGACY_DISPLAY_LINE).expect("旧名行可读");
+        let TranscriptEvent::Message { display, .. } = &event else { panic!("应为 message") };
+        assert_eq!(display.as_ref().map(|d| d.tool_executions.len()), Some(1));
+        let written = serde_json::to_value(&event).unwrap();
+        assert!(written.get("display").is_some(), "写出须为 TS 2.0 认的新名 display");
+        assert!(written.get("legacyDisplay").is_none(), "不得再写旧名（TS 严格 schema 拒读）");
+    }
+
+    #[test]
+    fn ts20_message_round_trips_losslessly_including_visibility() {
+        let event: TranscriptEvent = serde_json::from_str(GOLDEN_TS20_MESSAGE_LINE).expect("2.0 行可读");
+        let TranscriptEvent::Message { display, visibility, .. } = &event else { panic!("应为 message") };
+        assert_eq!(visibility.as_deref(), Some("model"));
+        let display = display.as_ref().expect("display 不得丢");
+        assert!(display.completion.is_some() && display.user_input.is_some());
+        assert_eq!(display.thinking.as_deref(), Some("先列人物"));
+        assert_eq!(display.tool_executions.len(), 1);
+        assert_eq!(serde_json::to_value(&event).unwrap(), as_value(GOLDEN_TS20_MESSAGE_LINE), "读写须无损");
+    }
+
+    #[test]
+    fn request_delivery_line_parses_and_round_trips() {
+        let event: TranscriptEvent = serde_json::from_str(GOLDEN_REQUEST_DELIVERY_LINE).expect("request_delivery 可读");
+        assert!(matches!(event, TranscriptEvent::RequestDelivery { seq: 5, .. }));
+        assert_eq!(serde_json::to_value(&event).unwrap(), as_value(GOLDEN_REQUEST_DELIVERY_LINE));
+    }
+
+    #[test]
+    fn raw_max_seq_covers_lines_this_engine_cannot_parse() {
+        let text = format!(
+            "{}\n{}\n",
+            r#"{"type":"session_created","version":1,"sessionId":"s876","seq":1,"timestamp":1,"parentSeq":null,"bookId":null,"title":null,"createdAt":1,"updatedAt":1}"#,
+            r#"{"type":"some_future_event","version":1,"sessionId":"s876","seq":7,"timestamp":2}"#,
+        );
+        let (events, raw_max_seq) = parse_transcript(&text);
+        assert_eq!(events.len(), 1, "未知类型行跳过");
+        assert_eq!(raw_max_seq, Some(7), "但其 seq 必须计入，防追加复用");
+    }
+
+    #[tokio::test]
+    async fn append_after_ts_request_delivery_tail_neither_reuses_seq_nor_forks_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tokio::fs::create_dir_all(sessions_dir(root)).await.unwrap();
+        let ts_written = [
+            r#"{"type":"session_created","version":1,"sessionId":"s876","seq":1,"timestamp":1,"parentSeq":null,"bookId":null,"title":null,"createdAt":1,"updatedAt":1}"#,
+            r#"{"type":"request_started","version":1,"sessionId":"s876","seq":2,"timestamp":2,"parentSeq":1,"requestId":"req-1","input":"写大纲"}"#,
+            &GOLDEN_TS20_MESSAGE_LINE.replace(r#""seq":4"#, r#""seq":3"#).replace(r#""parentSeq":3"#, r#""parentSeq":2"#),
+            &GOLDEN_REQUEST_DELIVERY_LINE.replace(r#""seq":5"#, r#""seq":4"#).replace(r#""parentSeq":4"#, r#""parentSeq":3"#),
+        ]
+        .join("\n");
+        tokio::fs::write(transcript_path(root, "s876"), format!("{ts_written}\n")).await.unwrap();
+
+        let written = append_transcript_events(root, "s876", |_, next_seq| {
+            vec![TranscriptEvent::RequestCommitted {
+                version: 1,
+                session_id: "s876".into(),
+                seq: next_seq,
+                timestamp: 3,
+                parent_seq: None,
+                request_id: "req-1".into(),
+            }]
+        })
+        .await;
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].seq(), 5, "seq 须越过 TS 末行 request_delivery(4)，不得复用");
+        assert_eq!(written[0].parent_seq(), Some(Some(4)), "父须为 request_delivery(4)，不得从其前驱分叉");
+    }
+
+    #[test]
+    fn model_visibility_messages_are_hidden_from_ui_projection() {
+        let model_only: TranscriptEvent = serde_json::from_str(GOLDEN_TS20_MESSAGE_LINE).unwrap();
+        let visible: TranscriptEvent = serde_json::from_str(&GOLDEN_TS20_MESSAGE_LINE.replace(r#""visibility":"model","#, "")).unwrap();
+        assert!(message_events_to_interaction_messages(&[&model_only]).is_empty(), "visibility=model 不入 UI");
+        assert!(!message_events_to_interaction_messages(&[&visible]).is_empty(), "无 visibility 正常投影");
+    }
 }

@@ -253,7 +253,8 @@ async fn begin_chat_turn(
                 pi_turn_index: None,
                 tool_call_id: None,
                 source_tool_assistant_uuid: None,
-                legacy_display: None,
+                display: None,
+                visibility: None,
                 message: json!({ "role": "user", "content": instruction, "timestamp": now }),
             },
         ]
@@ -336,7 +337,8 @@ async fn commit_chat_turn(
                 pi_turn_index: None,
                 tool_call_id: None,
                 source_tool_assistant_uuid: None,
-                legacy_display: None,
+                display: None,
+                visibility: None,
                 message: call_message,
             });
             seq += 1;
@@ -372,7 +374,8 @@ async fn commit_chat_turn(
                 pi_turn_index: None,
                 tool_call_id: Some(execution.id.clone()),
                 source_tool_assistant_uuid: Some(call_uuid),
-                legacy_display: None,
+                display: None,
+                visibility: None,
                 message: result_payload,
             });
             seq += 1;
@@ -391,7 +394,8 @@ async fn commit_chat_turn(
             pi_turn_index: None,
             tool_call_id: None,
             source_tool_assistant_uuid: None,
-            legacy_display: None,
+            display: None,
+            visibility: None,
             message: json!({
                 "role": "assistant",
                 "content": [{ "type": "text", "text": response_text }],

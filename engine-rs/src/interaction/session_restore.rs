@@ -87,12 +87,16 @@ struct MessageRef<'a> {
 
 fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
     match event {
+        // 876 号：上游 2.0 `visibility: "model"` 为仅模型可见消息——UI 恢复剔除
+        // （TS visibleMessageEvents 同语义）。本函数只服务 UI 消息投影
+        // （message_events_to_interaction_messages），模型恢复路径不经此处。
+        TranscriptEvent::Message { visibility, .. } if visibility.as_deref() == Some("model") => None,
         TranscriptEvent::Message {
             request_id,
             role,
             timestamp,
             tool_call_id,
-            legacy_display,
+            display,
             message,
             ..
         } => Some(MessageRef {
@@ -100,8 +104,8 @@ fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
             role,
             timestamp: *timestamp,
             tool_call_id: tool_call_id.as_deref(),
-            legacy_thinking: legacy_display.as_ref().and_then(|d| d.thinking.as_deref()),
-            legacy_tool_executions: legacy_display
+            legacy_thinking: display.as_ref().and_then(|d| d.thinking.as_deref()),
+            legacy_tool_executions: display
                 .as_ref()
                 .map(|d| &d.tool_executions),
             message,
@@ -671,7 +675,8 @@ fn other_timestamp(event: &TranscriptEvent) -> u64 {
         | TranscriptEvent::RequestFailed { timestamp, .. }
         | TranscriptEvent::Message { timestamp, .. }
         | TranscriptEvent::Compaction { timestamp, .. }
-        | TranscriptEvent::BranchMoved { timestamp, .. } => *timestamp,
+        | TranscriptEvent::BranchMoved { timestamp, .. }
+        | TranscriptEvent::RequestDelivery { timestamp, .. } => *timestamp,
     }
 }
 
@@ -738,7 +743,8 @@ pub async fn migrate_legacy_book_session_to_transcript(
                 pi_turn_index: None,
                 tool_call_id: None,
                 source_tool_assistant_uuid: None,
-                legacy_display: None,
+                display: None,
+                visibility: None,
                 message,
             });
             parent_uuid = Some(uuid);
@@ -1185,7 +1191,8 @@ mod restore_agent_tests {
             pi_turn_index: None,
             tool_call_id: None,
             source_tool_assistant_uuid: None,
-            legacy_display: None,
+            display: None,
+            visibility: None,
             message,
         }
     }

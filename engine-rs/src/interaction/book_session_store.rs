@@ -573,7 +573,8 @@ mod tests {
                     pi_turn_index: None,
                     tool_call_id: None,
                     source_tool_assistant_uuid: None,
-                    legacy_display: None,
+                    display: None,
+                    visibility: None,
                     message: serde_json::json!({
                         "role": "user", "content": user_text, "timestamp": now
                     }),
@@ -591,7 +592,8 @@ mod tests {
                     pi_turn_index: None,
                     tool_call_id: None,
                     source_tool_assistant_uuid: None,
-                    legacy_display: None,
+                    display: None,
+                    visibility: None,
                     message: serde_json::json!({
                         "role": "assistant",
                         "content": [{ "type": "text", "text": assistant_text }],

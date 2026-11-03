@@ -34,6 +34,21 @@ export function transcriptPath(projectRoot: string, sessionId: string): string {
   return join(sessionsDir(projectRoot), `${sessionId}.jsonl`);
 }
 
+/**
+ * 876 号：上游 2.0（b399a8d3）把消息事件 `legacyDisplay` 改名为 `display` 且未做
+ * 迁移——2.0 前本端与 Rust 引擎（876 前）写出的会话行携带旧名，严格 schema 直接
+ * 拒读（整份会话不可读；listBookSessions 的 Promise.all 还会连坐整个会话列表）。
+ * 读边界归一：旧名搬到新名（新名已在则以新名为准），其余形状不动。旧名形状
+ * `{thinking?, toolExecutions?}` 恰为 `display` 严格形状的子集，归一后照常过校验。
+ */
+export function normalizeLegacyTranscriptLine(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const record = raw as Record<string, unknown>;
+  if (record.type !== "message" || !("legacyDisplay" in record)) return raw;
+  const { legacyDisplay, ...rest } = record;
+  return rest.display === undefined && legacyDisplay != null ? { ...rest, display: legacyDisplay } : rest;
+}
+
 export async function readTranscriptEvents(
   projectRoot: string,
   sessionId: string,
@@ -50,7 +65,7 @@ export async function readTranscriptEvents(
   for (const [index, line] of raw.split(/\r?\n/).entries()) {
     if (!line.trim()) continue;
     try {
-      events.push(TranscriptEventSchema.parse(JSON.parse(line)));
+      events.push(TranscriptEventSchema.parse(normalizeLegacyTranscriptLine(JSON.parse(line))));
     } catch (error) {
       throw new Error(`Invalid transcript event at ${transcriptPath(projectRoot, sessionId)}:${index + 1}: ${String(error)}`);
     }

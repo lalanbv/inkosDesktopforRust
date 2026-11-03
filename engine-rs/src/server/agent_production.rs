@@ -991,7 +991,8 @@ async fn append_production_user_turn(
                 pi_turn_index: None,
                 tool_call_id: None,
                 source_tool_assistant_uuid: None,
-                legacy_display: None,
+                display: None,
+                visibility: None,
                 message: json!({ "role": "user", "content": instruction, "timestamp": now }),
             },
             TranscriptEvent::RequestCommitted {
@@ -1057,10 +1058,11 @@ async fn append_production_assistant_message(
                 pi_turn_index: None,
                 tool_call_id: None,
                 source_tool_assistant_uuid: None,
-                legacy_display: Some(crate::interaction::session_transcript::LegacyDisplay {
-                    thinking: None,
+                display: Some(Box::new(crate::interaction::session_transcript::MessageDisplay {
                     tool_executions: vec![exec.to_json()],
-                }),
+                    ..Default::default()
+                })),
+                visibility: None,
                 message: json!({
                     "role": "assistant",
                     "content": [{ "type": "text", "text": visible_text }],

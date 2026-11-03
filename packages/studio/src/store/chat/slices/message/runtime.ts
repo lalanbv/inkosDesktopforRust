@@ -370,8 +370,9 @@ export function markRunningToolsFailed(
 function extractSessionToolExecutions(message: SessionMessage): ToolExecution[] | undefined {
   const direct = (message as any).toolExecutions;
   if (Array.isArray(direct)) return direct as ToolExecution[];
-  const legacy = (message as any).legacyDisplay?.toolExecutions;
-  return Array.isArray(legacy) ? legacy as ToolExecution[] : undefined;
+  // 876 号：上游 2.0 起展示补充更名 display（Rust 引擎同步改写新名）；旧名兼容保留。
+  const nested = (message as any).display?.toolExecutions ?? (message as any).legacyDisplay?.toolExecutions;
+  return Array.isArray(nested) ? nested as ToolExecution[] : undefined;
 }
 
 type ProposalResolution = "confirmed" | "rejected";
