@@ -27,6 +27,7 @@ import type {
 import { useRecentsStore } from "@/store/recents";
 import {
   BookCopy,
+  BookOpen,
   BookPlus,
   Boxes,
   Clapperboard,
@@ -61,6 +62,7 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
   house: House,
   "message-square": MessageSquare,
   "book-plus": BookPlus,
+  "book-open": BookOpen,
   settings: Settings,
   zap: Zap,
   terminal: Terminal,

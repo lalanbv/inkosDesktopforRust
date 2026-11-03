@@ -36,6 +36,7 @@ const ctx: CommandContext = {
   openBookCreate: () => calls.push("bookCreate"),
   createProjectChatDraft: () => calls.push("draft"),
   launchProjectMode: (kind, playMode) => calls.push(`launch:${kind}:${playMode ?? ""}`),
+  switchWorkspace: (id) => calls.push(`workspace:${id}`),
 };
 
 const seedRecents: RecentEntry[] = [

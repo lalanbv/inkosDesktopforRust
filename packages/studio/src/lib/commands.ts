@@ -2,6 +2,7 @@ import type { HashRoute } from "@/hooks/use-hash-route";
 import type { ThemeMode } from "@/hooks/use-theme";
 import { recentIdentity } from "@/store/recents";
 import type { RecentEntry } from "@/store/recents";
+import type { WorkspaceId } from "@/lib/workspaces";
 
 export type CommandGroup = "recent" | "navigation" | "action";
 // 219 号：ja 面板文案缺失时由调用侧回退（PaletteLang 与 UI Lang 解耦，
@@ -38,6 +39,8 @@ export interface CommandContext {
   /** 新建一个项目级草稿会话（同人 / 续写 / 番外 / 仿写 / 翻译）。 */
   createProjectChatDraft: () => void;
   launchProjectMode: (kind: LaunchKind, playMode?: "guided" | "open") => void;
+  /** 切换工作区预设（869 号）：捕获/应用布局 + 跳规范目的地。 */
+  switchWorkspace: (id: WorkspaceId) => void;
 }
 
 export interface CommandEntry {
@@ -151,6 +154,14 @@ export function buildActionCommands(): CommandEntry[] {
       (ctx) => ctx.refetchProject(), ["refresh", "刷新", "reload"]),
     action("action.sessionNew", "新建项目会话", "New Project Session", "plus",
       (ctx) => ctx.createProjectChatDraft(), ["session", "会话", "new"]),
+    action("action.workspaceWriting", "工作区：写作", "Workspace: Writing", "feather",
+      (ctx) => ctx.switchWorkspace("writing"), ["workspace", "工作区", "写作", "writing"]),
+    action("action.workspaceReview", "工作区：审阅", "Workspace: Review", "book-open",
+      (ctx) => ctx.switchWorkspace("review"), ["workspace", "工作区", "审阅", "review", "timeline"]),
+    action("action.workspaceAnalysis", "工作区：分析", "Workspace: Analysis", "trending-up",
+      (ctx) => ctx.switchWorkspace("analysis"), ["workspace", "工作区", "分析", "analysis", "radar"]),
+    action("action.workspaceFilm", "工作区：互动影视", "Workspace: Interactive Film", "film",
+      (ctx) => ctx.switchWorkspace("film"), ["workspace", "工作区", "影视", "film"]),
   ];
 }
 

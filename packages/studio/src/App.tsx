@@ -61,6 +61,9 @@ import type { HotkeyDef } from "./hooks/use-global-hotkeys";
 import { deriveBreadcrumb } from "./lib/breadcrumb";
 import { deriveHeaderInsetClass, isMacPlatformAgent, isTauriRuntime } from "./lib/titlebar";
 import { useRecentsStore } from "./store/recents";
+import { useWorkspacesStore } from "./store/workspaces";
+import { WORKSPACE_IDS, isWorkspaceId, resolveWorkspaceDestination, workspaceDef } from "./lib/workspaces";
+import type { WorkspaceId } from "./lib/workspaces";
 import { useChatStore } from "./store/chat";
 import { setProjectChatSessionId } from "./pages/chat-page-state";
 
@@ -81,6 +84,11 @@ const HOTKEY_DEFS: ReadonlyArray<HotkeyDef> = [
   { combo: "mod+j", commandId: "app.bottom.toggle" },
   { combo: "mod+shift+f", commandId: "app.focus.toggle" },
   { combo: "mod+/", commandId: "app.cheatsheet.toggle" },
+  // 工作区预设（869 号）：⌘⌥1..4 切换写作/审阅/分析/互动影视
+  ...WORKSPACE_IDS.map((id, index) => ({
+    combo: `mod+alt+${index + 1}`,
+    commandId: `app.workspace.${id}`,
+  })),
   ...Array.from({ length: 9 }, (_, i) => ({
     combo: `mod+${i + 1}`,
     commandId: `app.tab.${i + 1}`,
@@ -204,7 +212,10 @@ export function App() {
       return;
     }
     if (target === "app.sidepanel.toggle") {
-      if (navLayoutV2) setSidePanelVisible((visible) => !visible);
+      if (navLayoutV2) {
+        const workspaces = useWorkspacesStore.getState();
+        workspaces.setSidePanelVisible(!workspaces.sidePanelVisible);
+      }
       return;
     }
     // Cmd+Shift+D 右侧 dock / Cmd+J 底部面板（P3-4，按页记忆）
@@ -214,6 +225,12 @@ export function App() {
     }
     if (target === "app.bottom.toggle") {
       bottomVisibility.toggle();
+      return;
+    }
+    // 工作区预设（869 号）：⌘⌥1..4 / 命令面板 / 状态栏切换器同一入口
+    const workspaceMatch = /^app\.workspace\.([a-z]+)$/.exec(target);
+    if (workspaceMatch && isWorkspaceId(workspaceMatch[1])) {
+      switchWorkspace(workspaceMatch[1] as WorkspaceId);
       return;
     }
     // P4-1 专注模式：⌘⇧F 切换；Esc 退出——仅当无弹层打开时（弹层的 Esc
@@ -356,8 +373,11 @@ export function App() {
   const density = usePreferencesStore((state) => state.density);
   const setDensity = usePreferencesStore((state) => state.setDensity);
   const activeSection = storedActiveNavSection ?? sectionForRoute(view);
-  // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）
-  const [sidePanelVisible, setSidePanelVisible] = useState(true);
+  // Cmd+B 面板折叠（P3-2，仅 V2 有意义：活动栏本身即图标条，折叠=隐藏面板）。
+  // 869 号起全局开合迁入 workspaces store 持久化（此前 reload 丢失），并在
+  // 切换工作区时按「各自记住」语义捕获/应用。
+  const sidePanelVisible = useWorkspacesStore((state) => state.sidePanelVisible);
+  const workspaceActiveId = useWorkspacesStore((state) => state.activeId);
   // P3-4：dock / 底部面板开合按页记忆（dock 沿袭书籍页默认可见，底部默认收起）
   const dockVisibility = usePerPageVisibility("inkos:studio:dock-visibility", view.page, true);
   const bottomVisibility = usePerPageVisibility("inkos:studio:bottom-panel-visibility", view.page, false);
@@ -387,6 +407,17 @@ export function App() {
   // P3-1：统一 Nav 工厂（消除 App/Sidebar 双份接口声明）；全部导航写最近访问
   const nav = createNav(setRouteTracked);
 
+  // 工作区切换（869 号）：store 捕获/应用侧面板快照 → 活动栏同步选区 →
+  // 专注模式退出（切模式即回到常规 chrome，避免侧面板状态被专注遮罩隐藏）→
+  // 跳规范目的地（recents 事件时读取，无记录回落首页，不臆造数据）。
+  const switchWorkspace = (id: WorkspaceId) => {
+    useWorkspacesStore.getState().switchTo(id);
+    setActiveNavSection(workspaceDef(id).section);
+    if (usePreferencesStore.getState().focusMode) setFocusMode(false);
+    const destination = resolveWorkspaceDestination(id, useRecentsStore.getState().recents);
+    setRouteTracked(destination ?? { page: "dashboard" });
+  };
+
   // 命令面板执行上下文：每次渲染重建，命令闭包不持有过期状态。
   // 创建类动作与 Sidebar 的 launchProjectMode/handleOpenBookCreate 等价
   // （P1 不动 Sidebar 本体，P3 活动栏重组时收敛为单一实现）。
@@ -414,6 +445,7 @@ export function App() {
       setInput("");
       nav.toChat();
     },
+    switchWorkspace,
   };
 
   const activeBookId = deriveActiveBookId(view);
@@ -805,6 +837,8 @@ export function App() {
           onReconnect={sse.reconnect}
           daemonRunning={daemonData?.running}
           onOpenBottomPanel={() => bottomVisibility.setVisible(true)}
+          workspaceActiveId={workspaceActiveId}
+          onSwitchWorkspace={switchWorkspace}
         />
       </div>
 

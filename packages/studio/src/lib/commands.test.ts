@@ -24,6 +24,7 @@ function mockCtx(): { ctx: CommandContext; routes: unknown[]; calls: string[] } 
     openBookCreate: () => calls.push("bookCreate"),
     createProjectChatDraft: () => calls.push("draft"),
     launchProjectMode: (kind, playMode) => calls.push(`launch:${kind}:${playMode ?? ""}`),
+    switchWorkspace: (id) => calls.push(`workspace:${id}`),
   };
   return { ctx, routes, calls };
 }
@@ -63,7 +64,7 @@ describe("buildNavigationCommands", () => {
 
 describe("buildActionCommands", () => {
   it("registers at least 18 actions, bringing the total over 30", () => {
-    expect(actions).toHaveLength(21); // P4-2 密度×2
+    expect(actions).toHaveLength(25); // P4-2 密度×2 + 869 工作区×4
     expect(nav.length + actions.length).toBeGreaterThanOrEqual(30);
     const ids = new Set(actions.map((entry) => entry.id));
     expect(ids.size).toBe(actions.length);
@@ -87,6 +88,19 @@ describe("buildActionCommands", () => {
       "theme:auto",
       "lang:en",
       "refresh",
+    ]);
+  });
+
+  it("workspace entries dispatch switchWorkspace with the preset id (869)", () => {
+    const { ctx, calls } = mockCtx();
+    for (const id of ["action.workspaceWriting", "action.workspaceReview", "action.workspaceAnalysis", "action.workspaceFilm"]) {
+      actions.find((entry) => entry.id === id)!.run(ctx);
+    }
+    expect(calls).toEqual([
+      "workspace:writing",
+      "workspace:review",
+      "workspace:analysis",
+      "workspace:film",
     ]);
   });
 });

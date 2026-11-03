@@ -1,13 +1,24 @@
-import { Loader2, Eye } from "lucide-react";
+import { BookOpen, Eye, Feather, Film, Loader2, TrendingUp } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { tr } from "@/lib/app-language";
 import { useApi } from "@/hooks/use-api";
 import { chatSelectors, useChatStore } from "@/store/chat";
+import { WORKSPACE_DEFS } from "@/lib/workspaces";
+import type { WorkspaceId } from "@/lib/workspaces";
 
 /**
  * 状态栏（P3-5）：h-6 常驻底条，全部真实数据源。
- * 左=当前书·章节+字数（章节内容前端统计）；中=SSE 连接点（绿/黄，断连点击
- * 重连）+ daemon 运行点；右=生成中 spinner +「查看」直达底部面板任务流。
+ * 左=当前书·章节+字数（章节内容前端统计）+ 工作区切换器（869 号，四预设
+ * 一键切换，规范目的地与侧面板布局随预设记忆）；中=SSE 连接点（绿/黄，断连
+ * 点击重连）+ daemon 运行点；右=生成中 spinner +「查看」直达底部面板任务流。
  */
+
+const WORKSPACE_ICONS: Record<string, LucideIcon> = {
+  feather: Feather,
+  "book-open": BookOpen,
+  "trending-up": TrendingUp,
+  film: Film,
+};
 
 function countWords(content: string): number {
   // 中文字数近似：去空白后的字符数（与项目字数口径一致的前端近似）
@@ -18,7 +29,7 @@ function StatusDot({ color, label }: { color: string; label: string }) {
   return <span className={`inline-block size-1.5 rounded-full ${color}`} aria-label={label} title={label} />;
 }
 
-export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemonRunning, onOpenBottomPanel }: {
+export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemonRunning, onOpenBottomPanel, workspaceActiveId, onSwitchWorkspace }: {
   /** 当前书名（书/章等书籍系页面），无则显示项目级文案。 */
   bookTitle?: string;
   /** 章节页携带 {bookId, number}；组件自取章节内容统计字数。 */
@@ -27,6 +38,10 @@ export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemo
   onReconnect: () => void;
   daemonRunning: boolean | undefined;
   onOpenBottomPanel: () => void;
+  /** 当前激活工作区（869 号；null=从未切换，切换器仍渲染、无高亮）。 */
+  workspaceActiveId?: WorkspaceId | null;
+  /** 提供即渲染工作区切换器（测试/独立使用可不挂）。 */
+  onSwitchWorkspace?: (id: WorkspaceId) => void;
 }) {
   const generating = useChatStore(chatSelectors.isActiveSessionStreaming);
   const { data: chapterData } = useApi<{ content: string }>(
@@ -52,6 +67,42 @@ export function StatusBar({ bookTitle, chapter, sseConnected, onReconnect, daemo
           </span>
         ) : null}
       </span>
+
+      {/* 左 II：工作区切换器（869 号，⌘⌥1..4 同源） */}
+      {onSwitchWorkspace ? (
+        <div
+          className="flex items-center gap-0.5"
+          data-testid="workspace-switcher"
+          role="group"
+          aria-label={tr("工作区切换", "Workspace switcher")}
+        >
+          {WORKSPACE_DEFS.map((def) => {
+            const Icon = WORKSPACE_ICONS[def.icon] ?? Feather;
+            const active = def.id === workspaceActiveId;
+            return (
+              <button
+                key={def.id}
+                type="button"
+                data-testid={`workspace-${def.id}`}
+                aria-pressed={active}
+                title={tr(
+                  `${def.titleZh}工作区`,
+                  `${def.titleEn} workspace`,
+                )}
+                onClick={() => onSwitchWorkspace(def.id)}
+                className={`flex items-center gap-1 rounded px-1 py-0.5 transition-colors ${
+                  active
+                    ? "bg-secondary/70 text-foreground"
+                    : "hover:bg-secondary/40 hover:text-foreground"
+                }`}
+              >
+                <Icon size={11} className="shrink-0" />
+                <span className="hidden md:inline">{tr(def.titleZh, def.titleEn)}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="flex-1" />
 

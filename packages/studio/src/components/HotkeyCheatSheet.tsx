@@ -23,6 +23,10 @@ const APP_ACTION_LABELS: Record<string, { zh: string; en: string }> = {
   "app.focus.toggle": { zh: "专注模式开/关", en: "Toggle focus mode" },
   "app.focus.exit": { zh: "退出专注模式", en: "Exit focus mode" },
   "app.cheatsheet.toggle": { zh: "快捷键速查表", en: "Shortcut cheat sheet" },
+  "app.workspace.writing": { zh: "切换到写作工作区", en: "Switch to Writing workspace" },
+  "app.workspace.review": { zh: "切换到审阅工作区", en: "Switch to Review workspace" },
+  "app.workspace.analysis": { zh: "切换到分析工作区", en: "Switch to Analysis workspace" },
+  "app.workspace.film": { zh: "切换到互动影视工作区", en: "Switch to Interactive Film workspace" },
 };
 
 /**
