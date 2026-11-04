@@ -4,6 +4,7 @@
 //! 语义锚：selection 的 `singleLine` 行内片段回喂禁换行（ARTIFACT_EDIT_SHAPE_INVALID）；
 //! overlap/越界 → ARTIFACT_EDIT_RANGE_INVALID。
 
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::utils::source_text::split_source_lines;
@@ -22,7 +23,7 @@ pub struct TextEditSelection {
     pub single_line: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BoundSelection {
     pub start_line: u32,
     pub end_line: u32,
@@ -47,7 +48,7 @@ pub struct RangeEditContract {
     pub sorted: Vec<TextEditRange>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct BoundRange {
     pub index: usize,
     pub start_line: u32,

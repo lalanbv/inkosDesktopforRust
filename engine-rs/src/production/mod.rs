@@ -31,6 +31,12 @@ pub mod author_edit_scope;
 pub mod source_locator;
 pub mod author_text_permission;
 
+// 891 号 M3c 终：长度合同 2.0 形态 + 叙事控制渲染 + ReviserAgent + 短篇修订链。
+pub mod length_contract;
+pub mod narrative_context;
+pub mod short_fiction_reviser;
+pub mod short_fiction_revision;
+
 // 888 号 M3b：结构化 worker 基座（runWorkerAgentTool 等价环——通用件，
 // M3c 四代理与 M4 复用）。
 pub mod structured_agent;
