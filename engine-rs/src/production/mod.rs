@@ -13,6 +13,13 @@ use crate::utils::atomic_file_set::{commit_atomic_file_set, AtomicFileSet, Atomi
 // tagged 链活体不动——处置关系见 production/short_fiction.rs 模块头）。
 pub mod short_fiction;
 
+// 889 号 M3c：短篇提示词构造（prompts/short-fiction.ts 逐字面）。
+pub mod short_fiction_prompts;
+
+// 889 号 M3c：短篇代理面（outline/packaging/reviewer + writer 主干；
+// continueDraft/reviseDraft/applyRevisionPlan 随 890 轮 Reviser 链）。
+pub mod short_fiction_agents;
+
 // 888 号 M3b：结构化 worker 基座（runWorkerAgentTool 等价环——通用件，
 // M3c 四代理与 M4 复用）。
 pub mod structured_agent;

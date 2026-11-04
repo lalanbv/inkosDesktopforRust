@@ -72,6 +72,7 @@ pub mod rule_experience_engine;
 pub mod scene_beats;
 pub mod runtime_writer;
 pub mod semantic_retrieval;
+pub mod source_text;
 pub mod story_markdown;
 pub mod tension_curve;
 pub mod vector_engine;

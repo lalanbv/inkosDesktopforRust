@@ -512,6 +512,85 @@ pub async fn run_structured_tool(
     })
 }
 
+// ── 生产适配器（AgentRouter/streaming_client → ChatTurnFn）───────────
+
+/// `ChatTurnError` 的生产映射（StreamError 分类：OutputLimit→output_limit，
+/// 其余→WORKER_MODEL_ERROR 面）。
+pub fn chat_turn_error_from_stream(error: crate::llm::streaming_client::StreamError) -> ChatTurnError {
+    let output_limit = matches!(
+        error,
+        crate::llm::streaming_client::StreamError::OutputLimit(_)
+    );
+    ChatTurnError { message: error.to_string(), output_limit }
+}
+
+/// 生产 ChatTurnFn：AgentRouter 按 `agent` 角色路由（resolve→client 缓存），
+/// streaming_client 非流式收集（环轮次短；tool_choice 走 extra 顶层透传，
+/// stream=false 对齐 TS guardedPiNonStreaming 分支的确定性收集）。
+pub fn router_chat_turn_fn(
+    router: Arc<crate::llm::agent_router::AgentRouter>,
+    agent: &'static str,
+) -> ChatTurnFn {
+    Arc::new(move |request: ChatTurnRequest| {
+        let router = Arc::clone(&router);
+        // 借用面克隆出所有权（Box<dyn Future> 无生命周期泛型——888 号同款）。
+        let model = request.model.to_string();
+        let messages = request.messages.to_vec();
+        let tools = request.tools.clone();
+        let tool_choice = request.tool_choice.map(str::to_string);
+        let temperature = request.temperature;
+        let max_tokens = request.max_tokens;
+        Box::pin(async move {
+            // client 取该角色路由端点（base_url/api_key 面）；model 以
+            // request.model 为准（调用方经 defaults 装配已解析的模型——TS
+            // workerModel(client, modelId) 的 modelId 单参换模型同构）。
+            let endpoint = router.resolve(agent);
+            let client = router.client_for_public(&endpoint).await;
+            let mut extra = std::collections::HashMap::new();
+            if let Some(choice) = &tool_choice {
+                extra.insert("tool_choice".to_string(), Value::String(choice.clone()));
+            }
+            let llm_messages: Vec<crate::llm::provider::LLMMessage> = messages;
+            let params = crate::llm::streaming_client::ChatCompletionParams {
+                model: &model,
+                messages: &llm_messages,
+                temperature,
+                max_tokens,
+                stream: false,
+                api_format: router.api_format(),
+                extra: Some(&extra),
+                tools: Some(&tools),
+                images: None,
+                progress: None,
+                deadline: crate::llm::streaming_client::StreamDeadlineSpec::PIPELINE,
+                trajectory: None,
+            };
+            let completion = client
+                .stream_chat(&params)
+                .await
+                .map_err(chat_turn_error_from_stream)?;
+            Ok(ChatTurnResponse {
+                content: completion.content,
+                tool_calls: completion
+                    .tool_calls
+                    .into_iter()
+                    .map(|call| ChatTurnToolCall {
+                        id: call.id,
+                        name: call.name,
+                        arguments: call.arguments,
+                    })
+                    .collect(),
+                finish_reason: completion.finish_reason,
+                usage: ChatTurnUsage {
+                    prompt_tokens: completion.prompt_tokens.unwrap_or(0),
+                    completion_tokens: completion.completion_tokens.unwrap_or(0),
+                    total_tokens: completion.total_tokens.unwrap_or(0),
+                },
+            })
+        })
+    })
+}
+
 // ── 测试（mock 注入：形态金标准 + 变异必红）─────────────────────────
 
 #[cfg(test)]

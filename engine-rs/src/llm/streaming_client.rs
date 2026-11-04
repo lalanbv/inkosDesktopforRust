@@ -317,6 +317,10 @@ pub struct StreamedCompletion {
     /// 聚合推理文本（129 号：reasoning_content/reasoning/reasoning_text 增量
     /// 累积——pi-ai thinking 块对应物；与 content 分离不回填）。
     pub reasoning: String,
+    /// OpenAI finish_reason（889 号：结构化 worker 基座的 length 分流面
+    /// ——TS pi-ai stopReason "length" 对应物；None=传输未提供）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
 }
 
 /// 聚合后的单条工具调用。
@@ -368,6 +372,10 @@ pub enum StreamError {
     /// 协议层失败（响应体可解析 HTTP 但内容不合协议——responses 空响应/
     /// 缺终态事件等；TS wrapLLMError 族的 Rust 等价锚）。
     Protocol(String),
+    /// 输出上限（889 号：finish_reason=length/max_tokens 的结构化变体——
+    /// 结构化 worker 基座 MODEL_OUTPUT_LIMIT 分流面；TS stopReason "length"
+    /// 对应物。Display 文本与原 Protocol 形态逐字一致）。
+    OutputLimit(String),
     /// 流不活动超时（130 号：TS `LLMStreamInactivityError` 对应物——
     /// 首事件窗内无任何流事件 / 空闲窗内无新事件）。
     Inactivity {
@@ -391,6 +399,9 @@ impl std::fmt::Display for StreamError {
             StreamError::Http(e) => write!(f, "HTTP 错误: {e}"),
             StreamError::BadStatus(code, body) => write!(f, "HTTP {code}: {body}"),
             StreamError::Protocol(message) => write!(f, "{message}"),
+            StreamError::OutputLimit(reason) => {
+                write!(f, "model reached the output limit ({reason})")
+            }
             StreamError::Inactivity { stage, timeout_ms } => match stage {
                 InactivityStage::FirstEvent => {
                     write!(f, "LLM stream produced no event within {timeout_ms}ms")
@@ -485,12 +496,12 @@ impl StreamingChatClient {
                 json.pointer("/choices/0/finish_reason").and_then(Value::as_str),
                 Some("length") | Some("max_tokens")
             ) {
-                return Err(StreamError::Protocol(format!(
-                    "model reached the output limit ({})",
+                return Err(StreamError::OutputLimit(
                     json.pointer("/choices/0/finish_reason")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
-                )));
+                        .to_string(),
+                ));
             }
             let tool_calls: Vec<StreamedToolCall> = message
                 .get("tool_calls")
@@ -520,6 +531,10 @@ impl StreamingChatClient {
                 done: true,
                 tool_calls,
                 reasoning: String::new(),
+                finish_reason: json
+                    .pointer("/choices/0/finish_reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             });
         }
         // 流式：按字节块喂给 sse_parser，累积 content。看门狗：每块到达即
@@ -624,10 +639,9 @@ impl StreamingChatClient {
         // 工具调用轮 content 为空是常态——有 tool_calls 时豁免空响应守卫
         // （TS 自定义传输不做工具聚合，本侧为其工具能力的适应性扩展）。
         if matches!(terminal_finish_reason.as_deref(), Some("length") | Some("max_tokens")) {
-            return Err(StreamError::Protocol(format!(
-                "model reached the output limit ({})",
-                terminal_finish_reason.unwrap_or_default()
-            )));
+            return Err(StreamError::OutputLimit(
+                terminal_finish_reason.unwrap_or_default(),
+            ));
         }
         if content.is_empty() && tool_call_deltas.is_empty() {
             if !reasoning.is_empty() {
@@ -646,7 +660,16 @@ impl StreamingChatClient {
             ));
         }
         let tool_calls = aggregate_tool_calls(&tool_call_deltas);
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done, tool_calls, reasoning })
+        Ok(StreamedCompletion {
+            content,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            done,
+            tool_calls,
+            reasoning,
+            finish_reason: terminal_finish_reason,
+        })
     }
 
     /// responses 传输（106 号）：POST /responses——非流式整体解析 + 流式
@@ -700,6 +723,10 @@ impl StreamingChatClient {
                 done: true,
                 tool_calls: Vec::new(),
                 reasoning: String::new(),
+                finish_reason: json
+                    .pointer("/choices/0/finish_reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             });
         }
         // 流式：收集原始字节后统一抽 data: 事件（stream_chat 本就聚合语义）。
@@ -775,7 +802,7 @@ impl StreamingChatClient {
         if let Some(monitor) = monitor {
             monitor.finish();
         }
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new(), reasoning: String::new() })
+        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new(), reasoning: String::new(), finish_reason: None })
     }
 }
 
@@ -926,6 +953,7 @@ mod tests {
                 done: true,
                 tool_calls: Vec::new(),
                 reasoning: String::new(),
+                finish_reason: None,
             })
         }
     }
