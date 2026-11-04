@@ -11,22 +11,23 @@
 //!   L1103-1200：标题别名 + 章节文件淘汰 + 原子集提交）
 //! - 失败恢复（候选记录 + recovery payload L322-332）
 //!
-//! 备案（886 处置表 + 892 现状）：
-//! - 封面生成本体（2.0 `buildCoverImagePrompt` + reference 编辑路由 + skills
-//!   注入）未接线——cover 请求在包警示/空 coverPrompt 门（SHORT_COVER_PACKAGE_
-//!   REQUIRED）之外的生成路径 fail-closed 短路（SHORT_COVER_UNAVAILABLE），与
-//!   TS catch→coverError→stage failed 形状一致；旧 78 号 cover.rs（generic
-//!   prompt 形态）服务旧链不动。
-//! - `reviseShortFictionProduction`（L742-926 checkpoint 编排）与 scoped 执行
-//!   分支随 893 号 M3e 服务面接线。
+//! 备案（886 处置表 + 893 现状）：
+//! - 封面 2.0 生成本体已接线（893：2.0 `buildCoverImagePrompt` + reference
+//!   编辑路由 + inkos-story-cover skill 注入，llm/cover.rs 扩展面）；失败 =
+//!   TS catch→coverError→stage failed 形状。备案：coverModel 入参未接
+//!   resolve 覆盖（模型走 project config/env）；hydrate 检索面=全 body 注入。
+//! - `reviseShortFictionProduction`（L742-926 checkpoint 编排）已接线（893）；
+//!   applyRevisionPlan 的 scoped 执行分支（authorScope→逐章 reviseChapter +
+//!   章题提交）仍为备案（非 scoped 主干执行 instruction，validateRevisionPlan
+//!   权限面已核）——随 M4 agent 工具面装配。
 //! - TS `recordExecutionEvidence` 观测点（source-material-used 等）未接线——
-//!   执行上下文以 [`ShortRunExecutionScope`] 显式注入（M3e 从 episode 上下文装配）。
+//!   执行上下文以 [`ShortRunExecutionScope`] 显式注入（893 服务面装配）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -123,6 +124,12 @@ pub struct ShortFictionRunOptions<'a> {
     pub retry_stages: Vec<ShortRetryStage>,
     pub revision_request: Option<&'a str>,
     pub review_scope: Option<&'a str>,
+    /// TS `resumeOperationId`（revise 面续跑——只收 ID，新指令即冲突）。
+    pub resume_operation_id: Option<&'a str>,
+    /// TS `restartPendingRevision`（显式替换 pending 并归档旧 checkpoint）。
+    pub restart_pending_revision: bool,
+    /// TS `revisionChapterNumbers`（修订章号范围——author scope 收窄面）。
+    pub revision_chapter_numbers: Option<Vec<u32>>,
     pub language: Option<WritingLanguage>,
     pub execution: ShortRunExecutionScope,
     pub on_progress: Option<OnProgress>,
@@ -149,6 +156,9 @@ impl<'a> ShortFictionRunOptions<'a> {
             retry_stages: Vec::new(),
             revision_request: None,
             review_scope: None,
+            resume_operation_id: None,
+            restart_pending_revision: false,
+            revision_chapter_numbers: None,
             language: None,
             execution: ShortRunExecutionScope::default(),
             on_progress: None,
@@ -241,25 +251,39 @@ pub fn short_draft_minimum(options: &ShortFictionRunOptions<'_>) -> Result<Short
 }
 
 /// TS `ShortFictionRunResult`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShortFictionRunResult {
+    #[serde(rename = "reviewedArtifact", skip_serializing_if = "Option::is_none")]
     pub reviewed_artifact: Option<ShortReviewedArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<ShortDelivery>,
+    #[serde(rename = "storyId")]
     pub story_id: String,
+    #[serde(rename = "stageResults", skip_serializing_if = "Option::is_none")]
     pub stage_results: Option<ShortProductionStages>,
     pub observations: Vec<Observation>,
+    #[serde(rename = "outlinePath")]
     pub outline_path: String,
+    #[serde(rename = "draftReviewPath")]
     pub draft_review_path: String,
+    #[serde(rename = "finalMarkdownPath")]
     pub final_markdown_path: String,
+    #[serde(rename = "finalJsonPath")]
     pub final_json_path: String,
+    #[serde(rename = "salesPackagePath")]
     pub sales_package_path: String,
+    #[serde(rename = "coverPromptPath")]
     pub cover_prompt_path: String,
+    #[serde(rename = "coverImagePath", skip_serializing_if = "Option::is_none")]
     pub cover_image_path: Option<String>,
+    #[serde(rename = "coverError", skip_serializing_if = "Option::is_none")]
     pub cover_error: Option<String>,
+    #[serde(rename = "packageError", skip_serializing_if = "Option::is_none")]
     pub package_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortReviewedArtifact {
     pub artifact_id: String,
@@ -1131,10 +1155,16 @@ pub async fn produce_short(
     } else {
         base_dir.join("drafts/v001/draft.json")
     };
-    let current_draft = if provided_story_id.is_some() {
-        try_read_short_fiction_draft(root, &candidate_path.to_string_lossy()).await?
-    } else {
-        None
+    // TS：currentDraft = revisedDraft ??（provided → 磁盘读取）——修订传入草稿优先。
+    let current_draft = match revised_draft {
+        Some(draft) => Some(draft.clone()),
+        None => {
+            if provided_story_id.is_some() {
+                try_read_short_fiction_draft(root, &candidate_path.to_string_lossy()).await?
+            } else {
+                None
+            }
+        }
     };
     let resumed_draft = match current_draft {
         Some(draft) => Some(draft),
@@ -1921,8 +1951,9 @@ pub async fn produce_short(
         ));
     }
 
-    // ── 封面门面（生成 fail-closed——模块头备案）──
+    // ── 封面门面（893 号：2.0 生成本体接线——失败 catch→coverError 语义）──
     let cover_requested = options.cover.unwrap_or(true);
+    let mut cover_image_path: Option<String> = None;
     let (cover_error, cover_error_code): (Option<String>, Option<String>) = if !cover_requested {
         (Some("disabled".into()), None)
     } else if package_warning.is_some()
@@ -1933,10 +1964,33 @@ pub async fn produce_short(
             Some("SHORT_COVER_PACKAGE_REQUIRED".into()),
         )
     } else {
-        (
-            Some("Cover generation is not wired in this engine build yet. The manuscript and package remain available.".into()),
-            Some("SHORT_COVER_UNAVAILABLE".into()),
+        // TS generateCoverArtifact(...).catch(error => ({coverError: String(error)}))
+        // ——生成失败不推翻正文与包装，只记封面阶段错误（code 缺省 cover-generation）。
+        let package = sales_package.as_ref().unwrap();
+        let sales_view = crate::llm::cover::CoverSalesPackage {
+            title: &package.title,
+            intro: &package.intro,
+            selling_points: &package.selling_points,
+            cover_prompt: &package.cover_prompt,
+        };
+        match crate::llm::cover::generate_cover_image_artifact(
+            root,
+            &base_dir.join("final"),
+            true,
+            &sales_view,
+            options.execution.author_request.as_deref().or(Some(options.direction)),
+            &[],
+            Some(language_code(language)),
+            None,
         )
+        .await
+        {
+            Ok(path) => {
+                cover_image_path = Some(path);
+                (None, None)
+            }
+            Err(message) => (Some(message), None),
+        }
     };
     if cover_requested {
         production_state.stages.cover = Some(ShortStage {
@@ -2034,7 +2088,7 @@ pub async fn produce_short(
         &story_id,
         &base_dir,
         observations,
-        None,
+        cover_image_path,
         package_warning,
         cover_error,
         Some(production_state.stages.clone()),
@@ -2831,6 +2885,873 @@ impl ShortFictionBatchDraft {
 
 // 导出面重导出于 short_fiction.rs（ShortStageComparison 直接 use 消费）。
 
+// ── reviseShortFictionProduction（TS L742-926 checkpoint 编排，893 号 M3e）──
+
+/// TS `ShortRevisionCheckpoint`（.inkos/short-revisions/<workId>.json；
+/// deny_unknown_fields ↔ TypeBox 推断面等价——checkpoint 为引擎本地面）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionCheckpoint {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(rename = "inputHash")]
+    pub input_hash: String,
+    #[serde(rename = "sourceHash", skip_serializing_if = "Option::is_none")]
+    pub source_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<String>,
+    #[serde(rename = "authorScope", skip_serializing_if = "Option::is_none")]
+    pub author_scope: Option<crate::production::short_fiction_tools::ShortAuthorScope>,
+    #[serde(rename = "authorRequest", skip_serializing_if = "Option::is_none")]
+    pub author_request: Option<String>,
+    #[serde(rename = "authorSource", skip_serializing_if = "Option::is_none")]
+    pub author_source: Option<ShortReviewedArtifact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<ShortRevisionRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<ShortRevisionProgress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalization: Option<ShortRevisionFinalization>,
+}
+
+/// TS `request` 面（仅创作入参——runtime 上下文绝不序列化，TS 注释逐字）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionRequest {
+    pub direction: String,
+    #[serde(rename = "chapterCount", skip_serializing_if = "Option::is_none")]
+    pub chapter_count: Option<u32>,
+    #[serde(rename = "charsPerChapter", skip_serializing_if = "Option::is_none")]
+    pub chars_per_chapter: Option<u32>,
+    #[serde(rename = "minChapterLength", skip_serializing_if = "Option::is_none")]
+    pub min_chapter_length: Option<u32>,
+    #[serde(rename = "maxChapterLength", skip_serializing_if = "Option::is_none")]
+    pub max_chapter_length: Option<u32>,
+    #[serde(rename = "openingHookChars", skip_serializing_if = "Option::is_none")]
+    pub opening_hook_chars: Option<u32>,
+    #[serde(rename = "revisionChapterNumbers", skip_serializing_if = "Option::is_none")]
+    pub revision_chapter_numbers: Option<Vec<u32>>,
+}
+
+/// TS `ShortRevisionProgress`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionProgress {
+    pub plan: crate::production::short_fiction::ShortRevisionPlan,
+    pub draft: ShortFictionBatchDraft,
+    pub completed: Vec<u32>,
+}
+
+/// TS `finalization` 面：基线（不重写章节/不重置基线）与结果草稿。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionFinalization {
+    pub baseline: ShortRevisionSnapshot,
+    pub result: ShortRevisionSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionSnapshot {
+    pub draft: ShortFictionBatchDraft,
+    #[serde(rename = "outlineMarkdown")]
+    pub outline_markdown: String,
+}
+
+/// TS `ShortFictionRevisionResult`（ShortFictionRunResult 去 sales/cover 面）。
+#[derive(Debug, Clone)]
+pub struct ShortFictionRevisionResult {
+    pub story_id: String,
+    pub delivery: Option<ShortDelivery>,
+    pub reviewed_artifact: Option<ShortReviewedArtifact>,
+    pub observations: Vec<Observation>,
+    pub revision_changes: ShortRevisionChanges,
+    pub outline_path: String,
+    pub draft_review_path: String,
+    pub final_markdown_path: String,
+    pub final_json_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShortRevisionChanges {
+    #[serde(rename = "chapterNumbers")]
+    pub chapter_numbers: Vec<u32>,
+    #[serde(rename = "openingChanged")]
+    pub opening_changed: bool,
+    #[serde(rename = "titleChanged")]
+    pub title_changed: bool,
+    #[serde(rename = "outlineChanged")]
+    pub outline_changed: bool,
+}
+
+/// TS `selectAuthorScope`（short-revision-scope.ts L202-205）：双 system 逐字 +
+/// 章号存在性 validate；professionalGuidance=false（authorRequest 前置不注入）。
+pub async fn select_author_scope(
+    agents: &crate::production::short_fiction_agents::ShortAgents,
+    draft: &ShortFictionBatchDraft,
+    author_request: &str,
+) -> Result<crate::production::short_fiction_tools::ShortAuthorScope, ShortRunError> {
+    let (messages, tool, validate) =
+        crate::production::short_fiction_tools::short_author_scope_request(draft, author_request);
+    let validate = Arc::new(validate);
+    let validate_for_run: crate::production::structured_agent::ValidateFn = Arc::new(move |value: Value| {
+        let validate = Arc::clone(&validate);
+        Box::pin(async move {
+            let scope: crate::production::short_fiction_tools::ShortAuthorScope =
+                serde_json::from_value(value.clone()).map_err(|error| {
+                    crate::production::structured_agent::StructuredToolError::coded(
+                        "WORKER_SCHEMA_INVALID",
+                        error.to_string(),
+                    )
+                })?;
+            validate.validate(&scope)?;
+            Ok(value)
+        })
+    });
+    let outcome = crate::production::structured_agent::run_structured_tool(
+        Arc::clone(&agents.chat),
+        &agents.model,
+        // professionalGuidance=false：authorRequest 前置不注入（TS 同参语义）。
+        &agents.messages_with_prelude(messages, false),
+        agents.defaults.clone(),
+        tool,
+        Some(validate_for_run),
+        Vec::new(),
+        crate::production::structured_agent::StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(std::cmp::min(4096, agents.defaults.max_tokens)),
+        },
+    )
+    .await
+    .map_err(|error| ShortRunError { code: error.code, message: error.message, recovery: None })?;
+    serde_json::from_value(outcome.result)
+        .map_err(|error| ShortRunError::new("WORKER_SCHEMA_INVALID", error.to_string()))
+}
+
+/// TS 原始 sha256 输入串（revisionPlanVersion 7——TS 字面量键序，BTreeMap 排序
+/// 不可用；手动按序拼接）。值序列化 = serde_json to_string。
+fn ordered_hash_object(pairs: Vec<(&str, Value)>) -> String {
+    let body = pairs
+        .iter()
+        .map(|(key, value)| format!("\"{}\":{}", key, value))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{body}}}")
+}
+
+/// TS `revisionPlanVersion 7` 输入 hash（原始 sha256——非 canonical 面备案）。
+#[allow(clippy::too_many_arguments)]
+fn revision_input_hash(
+    draft: &ShortFictionBatchDraft,
+    outline_markdown: &str,
+    review: &str,
+    direction: &str,
+    chars_target: Option<u32>,
+    chapter_count: u32,
+    chapter_numbers: Option<&[u32]>,
+    minimum: &ShortDraftMinimum,
+) -> String {
+    let text = ordered_hash_object(vec![
+        ("revisionPlanVersion", Value::from(7)),
+        ("draft", serde_json::to_value(draft).unwrap_or(Value::Null)),
+        ("outlineMarkdown", Value::String(outline_markdown.to_string())),
+        ("review", Value::String(review.to_string())),
+        ("direction", Value::String(direction.to_string())),
+        (
+            "target",
+            chars_target.map(Value::from).unwrap_or(Value::Null),
+        ),
+        ("chapterCount", Value::from(chapter_count)),
+        (
+            "chapterNumbers",
+            chapter_numbers
+                .map(|numbers| serde_json::to_value(numbers).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null),
+        ),
+        ("minimum", serde_json::to_value(minimum).unwrap_or(Value::Null)),
+    ]);
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+}
+
+/// TS `recovery(checkpoint)`：续跑动作 payload（workId/checkpointPath 由调用点注入）。
+fn revision_recovery_with(
+    work_id: &str,
+    checkpoint_path: &str,
+    checkpoint: &ShortRevisionCheckpoint,
+) -> Value {
+    let pending: Vec<u32> = checkpoint
+        .progress
+        .as_ref()
+        .map(|progress| {
+            progress
+                .plan
+                .chapters
+                .iter()
+                .filter(|chapter| !progress.completed.contains(&chapter.number))
+                .map(|chapter| chapter.number)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut payload = serde_json::json!({
+        "action": "short-fiction__revise_short_fiction",
+        "completedChapterNumbers": checkpoint.progress.as_ref().map(|progress| progress.completed.clone()).unwrap_or_default(),
+        "pendingChapterNumbers": pending,
+        "reason": "Continue the saved revision by its operation ID. To replace its instructions or scope, start an explicit new revision with restartPendingRevision=true; the previous checkpoint will be archived.",
+    });
+    if let Some(map) = payload.as_object_mut() {
+        if let Some(operation_id) = &checkpoint.operation_id {
+            map.insert("parameters".into(), serde_json::json!({ "resumeOperationId": operation_id }));
+        }
+        map.insert("workId".into(), Value::String(work_id.to_string()));
+        map.insert("checkpointPath".into(), Value::String(checkpoint_path.to_string()));
+    }
+    payload
+}
+
+/// TS `reviseShortFictionProduction`（L742-926）：书锁 → capability 守卫 →
+/// 成稿前提 → checkpoint 派生/恢复 → writer.reviseDraft → 权限终验 →
+/// finalization 提交 → produceShort(review) → 变更面 → checkpoint 删除。
+#[allow(clippy::too_many_lines)]
+pub async fn revise_short_fiction_production(
+    options: &ShortFictionRunOptions<'_>,
+    story_id: &str,
+) -> Result<ShortFictionRevisionResult, ShortRunError> {
+    let root = options.project_root;
+    let lock = acquire_work_mutation_lock(root, story_id);
+    let _guard = lock.lock().await;
+    revise_short_fiction_with_lock(options, root, story_id).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn revise_short_fiction_with_lock(
+    options: &ShortFictionRunOptions<'_>,
+    root: &Path,
+    story_id: &str,
+) -> Result<ShortFictionRevisionResult, ShortRunError> {
+    let work = load_work_manifest(root, story_id).await?;
+    let profile_registry = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
+        .map_err(|error| ShortRunError::new("WORK_PROFILE_MISMATCH", error.to_string()))?;
+    let profile = profile_registry
+        .require(&work.profile_id)
+        .map_err(|error| ShortRunError::new("WORK_PROFILE_MISMATCH", error.to_string()))?;
+    if !profile.capability_ids.iter().any(|capability| capability == "short-fiction") {
+        return Err(ShortRunError::new(
+            "SHORT_REVISION_PROFILE_MISMATCH",
+            "Short revision requires a short-fiction Work",
+        ));
+    }
+    let base = short_work_base_dir(story_id);
+    let mut draft = match try_read_short_fiction_draft(root, &base.join("final/short-story.json").to_string_lossy()).await? {
+        Some(draft) => draft,
+        None => {
+            return Err(ShortRunError::new(
+                "SHORT_MANUSCRIPT_NOT_READY",
+                "Complete the saved draft before revising the accepted manuscript.",
+            )
+            .with_recovery(serde_json::json!({
+                "action": "short-fiction__draft_short_fiction",
+                "parameters": {
+                    "workId": story_id,
+                    "minChapterLength": Value::Null,
+                    "maxChapterLength": Value::Null,
+                    "openingHookChars": Value::Null,
+                    "coverRequired": Value::Null,
+                },
+                "reason": "The saved draft checkpoint is not an accepted manuscript. Complete and repair it through the draft stage while preserving the existing Work contract.",
+            })));
+        }
+    };
+    let language = if work.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+    let state = read_short_production_state(root, &base).map_err(ShortRunError::new_state_read)?;
+    let checkpoint_path = format!(".inkos/short-revisions/{story_id}.json");
+    let saved_text = try_read_project_text(root, &checkpoint_path).await?;
+    let saved: Option<ShortRevisionCheckpoint> = match &saved_text {
+        Some(text) => Some(serde_json::from_str(text).map_err(|error| {
+            ShortRunError::new("SHORT_REVISION_CHECKPOINT_INVALID", error.to_string())
+        })?),
+        None => None,
+    };
+    let mut outline_markdown = read_text(root, &base.join("outline/v001.md")).await?;
+    let mut source_hash = short_input_hash(&serde_json::json!({
+        "draft": serde_json::to_value(&draft).unwrap_or(Value::Null),
+        "outlineMarkdown": outline_markdown,
+    }));
+    let mut review =
+        try_read_project_text(root, &base.join("reviews/draft-v001.md").to_string_lossy()).await?.unwrap_or_default();
+    // 权限自 episode 原始源 + 作者请求派生（绝不自协调者章表或后续审稿建议派生
+    // ——TS 注释逐字）。执行上下文经 ShortRunExecutionScope 显式注入。
+    let baseline = options.execution.baseline_work.as_ref().filter(|baseline| baseline.id == story_id);
+    let author_request = options.execution.author_request.as_deref().filter(|request| !request.trim().is_empty());
+    let original_artifact = baseline.and_then(|baseline| {
+        baseline.artifacts.iter().find(|artifact| {
+            artifact.revisions.iter().any(|revision| {
+                Some(&revision.id) == artifact.current_revision_id.as_ref()
+                    && revision.path == "source/final/short-story.json"
+            })
+        })
+    });
+    let resume_matches = matches!(
+        (&options.resume_operation_id, &saved),
+        (Some(resume_id), Some(saved)) if saved.operation_id.as_deref() == Some(*resume_id)
+    );
+    let mut author_scope: Option<crate::production::short_fiction_tools::ShortAuthorScope> = if resume_matches {
+        saved.as_ref().and_then(|saved| saved.author_scope.clone())
+    } else {
+        None
+    };
+    let scope_author_request: Option<String> = if author_scope.is_some() {
+        saved.as_ref().and_then(|saved| saved.author_request.clone())
+    } else {
+        author_request.map(str::to_string)
+    };
+    let author_source_ref: Option<ShortReviewedArtifact> = if resume_matches {
+        saved.as_ref().and_then(|saved| saved.author_source.clone())
+    } else {
+        original_artifact
+            .and_then(|artifact| artifact.current_revision_id.clone())
+            .map(|revision_id| ShortReviewedArtifact {
+                artifact_id: original_artifact.unwrap().id.clone(),
+                revision_id,
+            })
+    };
+    let author_original = match &author_source_ref {
+        Some(reference) if scope_author_request.is_some() => Some(
+            read_artifact_revision(root, story_id, &reference.artifact_id, Some(&reference.revision_id))
+                .await
+                .map_err(|error| ShortRunError::new("ARTIFACT_NOT_FOUND", error.to_string()))?,
+        ),
+        _ => None,
+    };
+    let author_source: Option<(ShortReviewedArtifact, String, ShortFictionBatchDraft)> =
+        match (&author_original, &author_source_ref, &scope_author_request) {
+            (Some(original), Some(reference), Some(request)) => {
+                let parsed: ShortFictionBatchDraft = serde_json::from_slice(&original.bytes)
+                    .map_err(|error| ShortRunError::new("SHORT_REVISION_BASELINE_INVALID", error.to_string()))?;
+                Some((reference.clone(), request.clone(), parsed))
+            }
+            _ => None,
+        };
+    if author_scope.is_none() {
+        if let (Some(request), Some(original), Some(artifact)) =
+            (author_request, &author_original, original_artifact)
+        {
+            let scope_key = short_input_hash(&serde_json::json!({
+                "version": 4,
+                "authorRequest": request,
+                "baseline": original.revision.checksum,
+            }))
+            .strip_prefix("sha256:")
+            .unwrap_or_default()
+            .to_string();
+            let scope_path = format!(".inkos/short-author-scopes/{story_id}/{scope_key}.json");
+            let saved_scope = try_read_project_text(root, &scope_path).await?;
+            author_scope = match &saved_scope {
+                Some(text) => Some(serde_json::from_str(text).map_err(|error| {
+                    ShortRunError::new("SHORT_AUTHOR_SCOPE_INVALID", error.to_string())
+                })?),
+                None => {
+                    let original_draft: ShortFictionBatchDraft =
+                        serde_json::from_slice(&original.bytes).map_err(|error| {
+                            ShortRunError::new("SHORT_REVISION_BASELINE_INVALID", error.to_string())
+                        })?;
+                    let scope =
+                        select_author_scope(&options.runtimes.writer, &original_draft, request).await?;
+                    commit_atomic_file_set(&AtomicFileSet {
+                        root_dir: root,
+                        writes: vec![AtomicFileWrite {
+                            relative_path: scope_path.clone(),
+                            content: FileContent::Text(format!(
+                                "{}\n",
+                                serde_json::to_string_pretty(&scope).unwrap_or_default().trim_end()
+                            )),
+                        }],
+                        deletes: Vec::new(),
+                    })
+                    .await
+                    .map_err(|error| ShortRunError::new("ATOMIC_WRITE_FAILED", error.to_string()))?;
+                    Some(scope)
+                }
+            };
+            // TS recordExecutionEvidence('edit-scope-selected')——证据汇面 M4 接线。
+            let _ = artifact;
+        }
+    }
+
+    let recovery_of = |checkpoint: &ShortRevisionCheckpoint| {
+        revision_recovery_with(story_id, &checkpoint_path, checkpoint)
+    };
+    // 有效修订入参（owned——续跑自 checkpoint.request 恢复，TS `{...options, ...saved.request}`）。
+    let mut eff_direction = options.direction.to_string();
+    let mut eff_chapter_count = options.chapter_count;
+    let mut eff_chars_per_chapter = options.chars_per_chapter;
+    let mut eff_min_chapter_length = options.min_chapter_length;
+    let mut eff_max_chapter_length = options.max_chapter_length;
+    let eff_ratio = options.min_chapter_length_ratio;
+    let mut eff_opening_hook_chars = options.opening_hook_chars;
+    let mut eff_revision_chapter_numbers = options.revision_chapter_numbers.clone();
+    if options.resume_operation_id.is_some() {
+        // 续跑只收 operation ID；新指令或约束即冲突（TS L800-806）。
+        let has_new_instructions = !options.direction.trim().is_empty()
+            || options.restart_pending_revision
+            || options.chapter_count.is_some()
+            || options.chars_per_chapter.is_some()
+            || options.max_chapter_length.is_some()
+            || options.min_chapter_length.is_some()
+            || options.min_chapter_length_ratio.is_some()
+            || options.opening_hook_chars.is_some()
+            || options.revision_chapter_numbers.is_some();
+        if has_new_instructions {
+            return Err(ShortRunError::new(
+                "SHORT_REVISION_RESUME_CONFLICT",
+                "A revision resume accepts only its operation ID, not new instructions or constraints.",
+            ));
+        }
+        let Some(saved) = &saved else {
+            return Err(ShortRunError::new(
+                "SHORT_REVISION_NOT_FOUND",
+                "The requested revision operation is not the pending operation for this Work.",
+            ));
+        };
+        if saved.operation_id.as_deref() != options.resume_operation_id || saved.request.is_none() {
+            return Err(ShortRunError::new(
+                "SHORT_REVISION_NOT_FOUND",
+                "The requested revision operation is not the pending operation for this Work.",
+            ));
+        }
+        let owned_sources: Vec<String> = saved
+            .finalization
+            .as_ref()
+            .map(|finalization| {
+                vec![
+                    short_input_hash(&serde_json::json!({
+                        "draft": serde_json::to_value(&finalization.baseline.draft).unwrap_or(Value::Null),
+                        "outlineMarkdown": finalization.result.outline_markdown,
+                    })),
+                    short_input_hash(&serde_json::json!({
+                        "draft": serde_json::to_value(&finalization.result.draft).unwrap_or(Value::Null),
+                        "outlineMarkdown": finalization.result.outline_markdown,
+                    })),
+                ]
+            })
+            .unwrap_or_default();
+        if saved.source_hash.as_deref() != Some(source_hash.as_str()) && !owned_sources.contains(&source_hash) {
+            return Err(ShortRunError::new(
+                "SHORT_REVISION_SOURCE_CHANGED",
+                "The manuscript or outline changed after this revision began. Start an explicit new revision from the current source.",
+            ));
+        }
+        if let Some(finalization) = &saved.finalization {
+            // 完成审查不重写章节、不重置变更基线（TS 注释逐字）。
+            draft = finalization.baseline.draft.clone();
+            outline_markdown = finalization.baseline.outline_markdown.clone();
+            source_hash = short_input_hash(&serde_json::json!({
+                "draft": serde_json::to_value(&draft).unwrap_or(Value::Null),
+                "outlineMarkdown": outline_markdown,
+            }));
+        }
+        if let Some(request) = &saved.request {
+            eff_direction = request.direction.clone();
+            eff_chapter_count = request.chapter_count;
+            eff_chars_per_chapter = request.chars_per_chapter;
+            eff_min_chapter_length = request.min_chapter_length;
+            eff_max_chapter_length = request.max_chapter_length;
+            eff_opening_hook_chars = request.opening_hook_chars;
+            eff_revision_chapter_numbers = request.revision_chapter_numbers.clone();
+        }
+        review = saved.review.clone().unwrap_or_default();
+    } else if options.direction.trim().is_empty() {
+        return Err(ShortRunError::new(
+            "SHORT_REVISION_REQUEST_REQUIRED",
+            "Supply a new revision instruction or the pending operation ID.",
+        ));
+    }
+    let chapter_count = match eff_chapter_count {
+        Some(count) => positive_integer(Some(count), draft.chapters.len() as u32, "chapterCount")?,
+        None => draft.chapters.len() as u32,
+    };
+    if let Some(scope) = &author_scope {
+        if !scope.whole_manuscript {
+            let mut allowed: Vec<u32> = scope.chapter_numbers.clone();
+            allowed.extend(scope.chapter_title_numbers.clone().unwrap_or_default());
+            allowed.sort_unstable();
+            allowed.dedup();
+            let requested = eff_revision_chapter_numbers.clone().unwrap_or_else(|| allowed.clone());
+            if chapter_count != draft.chapters.len() as u32
+                || requested.iter().any(|number| !allowed.contains(number))
+            {
+                return Err(ShortRunError::new(
+                    "SHORT_REVISION_OUT_OF_SCOPE",
+                    "The requested chapters exceed the original author permission. Review findings do not expand revision scope.",
+                )
+                .with_recovery(serde_json::json!({ "allowedChapterNumbers": allowed })));
+            }
+            eff_revision_chapter_numbers = Some(requested);
+        }
+    }
+    if eff_revision_chapter_numbers.is_some() && chapter_count != draft.chapters.len() as u32 {
+        return Err(ShortRunError::new(
+            "SHORT_REVISION_SCOPE_CONFLICT",
+            "A chapter-count change requires whole-manuscript scope; describe which source chapters to retain in the instruction.",
+        ));
+    }
+    let state_target = state.as_ref().and_then(|state| state.target.clone());
+    let revision_title_owned = state_target
+        .as_ref()
+        .and_then(|target| target.title.clone())
+        .unwrap_or_else(|| draft.story_title.clone());
+    let profile_ratio = profile.production.min_chapter_length_ratio;
+    let revision_options = ShortFictionRunOptions {
+        direction: &eff_direction,
+        revision_request: Some(&eff_direction),
+        language: Some(language),
+        chapter_count: Some(chapter_count),
+        title: Some(&revision_title_owned),
+        min_chapter_length: eff_min_chapter_length.or_else(|| state_target.as_ref().and_then(|target| target.min_chapter_length)),
+        opening_hook_chars: eff_opening_hook_chars.or_else(|| state_target.as_ref().and_then(|target| target.opening_hook_chars)),
+        chars_per_chapter: eff_chars_per_chapter.or_else(|| {
+            eff_max_chapter_length.map(|max| {
+                std::cmp::min(state_target.as_ref().map(|target| target.chars_per_chapter).unwrap_or(max), max)
+            }).or_else(|| state_target.as_ref().map(|target| target.chars_per_chapter))
+        }),
+        min_chapter_length_ratio: eff_ratio.or(profile_ratio),
+        max_chapter_length: eff_max_chapter_length.or_else(|| state_target.as_ref().and_then(|target| target.max_chapter_length)),
+        cover: Some(false),
+        ..options.clone()
+    };
+    let minimum = short_draft_minimum(&revision_options)?;
+    let chapter_numbers = eff_revision_chapter_numbers.clone();
+    if let Some(numbers) = &chapter_numbers {
+        if numbers.iter().any(|number| *number == 0 || *number as usize > draft.chapters.len()) {
+            return Err(ShortRunError::new("SHORT_REVISION_SCOPE_INVALID", "Invalid revision chapter scope"));
+        }
+    }
+    let input_hash = revision_input_hash(
+        &draft,
+        &outline_markdown,
+        &review,
+        &eff_direction,
+        revision_options.chars_per_chapter,
+        chapter_count,
+        chapter_numbers.as_deref(),
+        &minimum,
+    );
+    let restart = options.restart_pending_revision;
+    let reuse = saved.is_some()
+        && !restart
+        && (options.resume_operation_id.is_some()
+            || saved.as_ref().map(|saved| saved.input_hash == input_hash).unwrap_or(false));
+    if let Some(saved) = saved.as_ref().filter(|_| !reuse && !restart) {
+        return Err(ShortRunError::new(
+            "SHORT_REVISION_PENDING",
+            "A revision is already pending. Resume it by ID or explicitly replace it; changed retry wording does not discard its progress.",
+        )
+        .with_recovery(recovery_of(saved)));
+    }
+    let mut resume: Option<ShortRevisionProgress> = None;
+    if reuse {
+        if let Some(saved) = saved.as_ref().filter(|saved| saved.progress.is_some()) {
+            let progress = saved.progress.clone().unwrap();
+            let valid = progress.completed.iter().all(|number| {
+                progress.plan.chapters.iter().any(|chapter| chapter.number == *number)
+            });
+            if !valid {
+                return Err(ShortRunError::new("SHORT_REVISION_CHECKPOINT_INVALID", "Invalid short revision checkpoint"));
+            }
+            resume = Some(progress);
+        }
+    }
+    let operation_id = match (&reuse, &saved) {
+        (true, Some(saved)) if saved.operation_id.is_some() => saved.operation_id.clone().unwrap(),
+        _ => uuid::Uuid::new_v4().to_string(),
+    };
+    let mut checkpoint = ShortRevisionCheckpoint {
+        operation_id: Some(operation_id),
+        input_hash: input_hash.clone(),
+        source_hash: Some(source_hash.clone()),
+        review: Some(review.clone()),
+        author_scope: author_scope.clone(),
+        author_request: scope_author_request.clone(),
+        author_source: author_source_ref.clone(),
+        request: Some(ShortRevisionRequest {
+            direction: revision_options.direction.to_string(),
+            chapter_count: Some(chapter_count),
+            chars_per_chapter: revision_options.chars_per_chapter,
+            min_chapter_length: Some(minimum.min_chapter_length),
+            max_chapter_length: minimum.max_chapter_length,
+            opening_hook_chars: minimum.opening_hook_chars,
+            revision_chapter_numbers: chapter_numbers.clone(),
+        }),
+        progress: resume.clone(),
+        finalization: if reuse {
+            saved.as_ref().and_then(|saved| saved.finalization.clone())
+        } else {
+            None
+        },
+    };
+    let mut writes = Vec::new();
+    if let (Some(saved_text), true) = (&saved_text, restart) {
+        writes.push(AtomicFileWrite {
+            relative_path: format!(".inkos/short-revisions/archive/{}.json", uuid::Uuid::new_v4()),
+            content: FileContent::Text(format!("{}\n", saved_text.trim_end())),
+        });
+    }
+    writes.push(AtomicFileWrite {
+        relative_path: checkpoint_path.clone(),
+        content: FileContent::Text(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&checkpoint).unwrap_or_default().trim_end()
+        )),
+    });
+    commit_atomic_file_set(&AtomicFileSet { root_dir: root, writes, deletes: Vec::new() })
+        .await
+        .map_err(|error| ShortRunError::new("ATOMIC_WRITE_FAILED", error.to_string()))?;
+
+    // reviseDraft（TS L876-889）：checkpoint finalization 优先。
+    let revised = if let Some(finalization) = &checkpoint.finalization {
+        (finalization.result.draft.clone(), finalization.result.outline_markdown.clone())
+    } else {
+        // TS：direction = authorScope ? JSON.stringify({authorRequest, revisionInstruction, permission}) : direction。
+        let revise_direction: String = match &author_scope {
+            Some(scope) => serde_json::json!({
+                "authorRequest": scope_author_request.clone().unwrap_or_default(),
+                "revisionInstruction": eff_direction,
+                "permission": serde_json::to_value(scope).unwrap_or(Value::Null),
+            })
+            .to_string(),
+            None => eff_direction.clone(),
+        };
+        let checkpoint_for_progress = Arc::new(std::sync::Mutex::new(checkpoint.clone()));
+        let checkpoint_path_for_progress = checkpoint_path.clone();
+        let root_for_progress = root.to_path_buf();
+        let progress_message = options.on_progress.clone();
+        let on_revision_progress: crate::production::short_fiction_writer_chain::OnRevisionProgress =
+            Arc::new(move |draft: &ShortFictionBatchDraft, completed: &[u32]| {
+                let checkpoint_state = Arc::clone(&checkpoint_for_progress);
+                let path = checkpoint_path_for_progress.clone();
+                let root = root_for_progress.clone();
+                let progress_message = progress_message.clone();
+                let completed: Vec<u32> = completed.to_vec();
+                let draft = draft.clone();
+                Box::pin(async move {
+                    {
+                        let mut guard = checkpoint_state.lock().unwrap();
+                        guard.progress = Some(ShortRevisionProgress {
+                            plan: guard.progress.as_ref().map(|progress| progress.plan.clone()).unwrap_or_else(|| crate::production::short_fiction::ShortRevisionPlan {
+                                story_title: None,
+                                revision_brief: String::new(),
+                                outline_markdown: None,
+                                opening_hook: None,
+                                chapters: Vec::new(),
+                            }),
+                            draft,
+                            completed,
+                        });
+                    }
+                    let payload = {
+                        let guard = checkpoint_state.lock().unwrap();
+                        serde_json::to_string_pretty(&*guard).unwrap_or_default()
+                    };
+                    commit_atomic_file_set(&AtomicFileSet {
+                        root_dir: &root,
+                        writes: vec![AtomicFileWrite {
+                            relative_path: path,
+                            content: FileContent::Text(format!("{}\n", payload.trim_end())),
+                        }],
+                        deletes: Vec::new(),
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    if let Some(notify) = &progress_message {
+                        let snapshot = checkpoint_state.lock().unwrap();
+                        if let Some(state_progress) = &snapshot.progress {
+                            notify(&format!(
+                                "Short revision progress: {}/{} chapters",
+                                state_progress.completed.len(),
+                                state_progress.plan.chapters.len()
+                            ));
+                        }
+                    }
+                    Ok(())
+                })
+            });
+        let (revised_draft, revised_outline) =
+            crate::production::short_fiction_writer_chain::writer_revise_draft(
+                &options.runtimes.writer,
+                &crate::production::short_fiction_writer_chain::ReviseDraftInput {
+                    direction: &revise_direction,
+                    outline_markdown: &outline_markdown,
+                    chapter_count,
+                    chars_per_chapter: revision_options.chars_per_chapter.unwrap_or(match language {
+                        WritingLanguage::En => SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
+                        _ => SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
+                    }),
+                    min_chapter_length: Some(minimum.min_chapter_length),
+                    max_chapter_length: minimum.max_chapter_length,
+                    opening_hook_chars: minimum.opening_hook_chars,
+                    language,
+                    draft: &draft,
+                    review: &review,
+                    chapter_numbers: chapter_numbers.clone(),
+                    author_scope: author_scope.as_ref(),
+                    author_source_request: author_source.as_ref().map(|(_, request, _)| request.as_str()),
+                },
+                None,
+                on_revision_progress,
+            )
+            .await
+            .map_err(|error| {
+                let mut current = checkpoint.clone();
+                ShortRunError { code: error.code, message: error.message, recovery: Some(recovery_of(&{
+                    current.progress = checkpoint.progress.clone();
+                    current
+                })) }
+            })?;
+        (revised_draft, revised_outline)
+    };
+    let (revised_draft, revised_outline) = revised;
+    if let Some(scope) = &author_scope {
+        // 887 契约型 ShortAuthorScope（assert 消费面）与 tools 型经 serde 转换。
+        let contract_scope: crate::production::short_fiction::ShortAuthorScope =
+            serde_json::from_value(serde_json::to_value(scope).unwrap_or(Value::Null))
+                .map_err(|error| ShortRunError::new("SHORT_AUTHOR_SCOPE_INVALID", error.to_string()))?;
+        crate::production::short_fiction::assert_short_author_scope(
+            &contract_scope,
+            &draft,
+            &revised_draft,
+            &outline_markdown,
+            &revised_outline,
+        )
+        .map_err(|error| ShortRunError::new("SHORT_REVISION_OUT_OF_SCOPE", error.message))?;
+    }
+    if revised_draft.story_title != draft.story_title
+        && !author_scope.as_ref().and_then(|scope| scope.story_title).unwrap_or(false)
+    {
+        return Err(ShortRunError::new(
+            "SHORT_REVISION_OUT_OF_SCOPE",
+            "Changing the book title requires original author permission.",
+        )
+        .with_recovery(serde_json::json!({ "changedParts": ["title"] })));
+    }
+    let outline_write = if revised_outline == outline_markdown {
+        None
+    } else {
+        Some(revised_outline.clone())
+    };
+    checkpoint.finalization = Some(ShortRevisionFinalization {
+        baseline: ShortRevisionSnapshot { draft: draft.clone(), outline_markdown: outline_markdown.clone() },
+        result: ShortRevisionSnapshot {
+            draft: revised_draft.clone(),
+            outline_markdown: outline_write.clone().unwrap_or_else(|| outline_markdown.clone()),
+        },
+    });
+    let mut writes = Vec::new();
+    if let Some(outline_content) = &outline_write {
+        writes.push(text_write(
+            format!("{}/outline/v001.md", posix_base(&base)),
+            outline_content,
+        ));
+    }
+    writes.push(text_write(
+        format!("{}/drafts/v001/draft.json", posix_base(&base)),
+        &serde_json::to_string_pretty(&revised_draft).unwrap_or_default(),
+    ));
+    writes.push(AtomicFileWrite {
+        relative_path: checkpoint_path.clone(),
+        content: FileContent::Text(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&checkpoint).unwrap_or_default().trim_end()
+        )),
+    });
+    commit_atomic_file_set(&AtomicFileSet { root_dir: root, writes, deletes: Vec::new() })
+        .await
+        .map_err(|error| ShortRunError::new("ATOMIC_WRITE_FAILED", error.to_string()))?;
+
+    // produceShort(revisedDraft, stopAfter='review')（TS L903）。
+    let produce_result = produce_short(
+        &revision_options_with_title(&revision_options, &revised_draft.story_title),
+        root,
+        Some(story_id),
+        Some(&revised_draft),
+        Some(ShortProductionStage::Review),
+    )
+    .await;
+    match produce_result {
+        Ok(ProduceOutcome::Stage(stage)) => {
+            let committed = try_read_short_fiction_draft(root, &base.join("final/short-story.json").to_string_lossy())
+                .await?
+                .ok_or_else(|| ShortRunError::new("SHORT_MANUSCRIPT_NOT_READY", "committed manuscript missing"))?;
+            let changed: std::collections::BTreeSet<u32> = draft
+                .chapters
+                .iter()
+                .filter(|before| {
+                    committed
+                        .chapters
+                        .iter()
+                        .find(|after| after.number == before.number)
+                        .map(|after| after.title != before.title || after.content != before.content)
+                        .unwrap_or(true)
+                })
+                .chain(committed.chapters.iter().filter(|after| {
+                    !draft.chapters.iter().any(|before| before.number == after.number)
+                }))
+                .map(|chapter| chapter.number)
+                .collect();
+            let revision_changes = ShortRevisionChanges {
+                chapter_numbers: changed.into_iter().collect(),
+                opening_changed: draft.opening_hook.clone().unwrap_or_default()
+                    != committed.opening_hook.clone().unwrap_or_default(),
+                title_changed: draft.story_title != committed.story_title,
+                outline_changed: outline_markdown
+                    != read_text(root, &base.join("outline/v001.md")).await?,
+            };
+            let _ = commit_delete(root, &PathBuf::from(&checkpoint_path)).await;
+            let stage_status_failed = stage.stage_status == ShortStageStatus::Failed;
+            Ok(ShortFictionRevisionResult {
+                story_id: stage.story_id,
+                delivery: stage.delivery,
+                reviewed_artifact: stage.reviewed_artifact,
+                observations: stage.observations,
+                revision_changes,
+                outline_path: to_project_path(&base.join("outline/v001.md").to_string_lossy()),
+                draft_review_path: to_project_path(
+                    &base.join(if stage_status_failed { "reviews/draft-warning.md" } else { "reviews/draft-v001.md" }).to_string_lossy(),
+                ),
+                final_markdown_path: to_project_path(&base.join("final/full.md").to_string_lossy()),
+                final_json_path: to_project_path(&base.join("final/short-story.json").to_string_lossy()),
+            })
+        }
+        Ok(ProduceOutcome::Run(_)) => unreachable!("stopAfter=review 时必为 Stage"),
+        Err(error) => {
+            let _ = sync_work_source_artifacts(SyncWorkSourceInput {
+                project_root: root,
+                work_id: story_id,
+                accept: false,
+                accept_paths: None,
+                episode_id: None,
+                updated_at: None,
+                writes: Vec::new(),
+                title: None,
+                status: None,
+            })
+            .await;
+            Err(error.with_recovery(recovery_of(&checkpoint)))
+        }
+    }
+}
+
+fn revision_options_with_title<'a>(
+    revision_options: &ShortFictionRunOptions<'a>,
+    title: &'a str,
+) -> ShortFictionRunOptions<'a> {
+    let mut options = revision_options.clone();
+    options.title = Some(title);
+    options
+}
+
 // ── 测试（mock 端到端：四阶段产物形态 + 幂等重放 + 失败恢复）─────────
 
 #[cfg(test)]
@@ -3118,5 +4039,130 @@ mod tests {
         // 保留名表（保留名比对的是最终文件名）。
         assert_eq!(short_title_path("full.md"), Some("source/final/full.md.md".into()));
         assert_eq!(short_title_path("夜航"), Some("source/final/夜航.md".into()));
+    }
+
+    fn revise_options<'a>(
+        root: &'a Path,
+        runtimes: &'a ShortFictionRunRuntimes,
+        direction: &'a str,
+    ) -> ShortFictionRunOptions<'a> {
+        // TS revise 工具参数面不含 minChapterLength——续跑守卫的「新约束」判定
+        // 语义以此为准（min 由 saved.request 或 saved target 恢复）。
+        let mut options = ShortFictionRunOptions::new(root, direction, runtimes);
+        options.chapter_count = Some(2);
+        options.chars_per_chapter = Some(30);
+        options.cover = Some(false);
+        options
+    }
+
+    fn review_pair() -> Vec<ChatTurnResponse> {
+        vec![
+            review_record("R-1", "outline"),
+            tool_response(
+                "submit_short_fiction_review",
+                serde_json::json!({ "summary": "修订后一处观察。", "observationCodes": ["R-1"] }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn revise_flow_checkpoint_lifecycle() {
+        let root = temp_root("revise");
+        let (planner, writer, draft_review, package) = full_scripts();
+        let runtimes = runtimes_of(&planner, &writer, &draft_review, &package);
+        let options = base_options(&root, &runtimes);
+        tokio().block_on(run_short_fiction_production(&options)).unwrap();
+        let checkpoint_path = root.join(".inkos/short-revisions/夜航.json");
+        assert!(!checkpoint_path.exists());
+
+        // 修订：单章快路径（submit_short_revision_chapter）→ review 阶段 →
+        // checkpoint 建档→删除 + revisionChanges 面。
+        let revise_writer = ScriptedAgent::new(vec![tool_response(
+            "submit_short_revision_chapter",
+            serde_json::json!({ "title": "启航（修）", "content": "修订后的第一章正文，长度满足要求且事实一致。" }),
+        )]);
+        let revise_review = ScriptedAgent::new(review_pair());
+        let revise_runtimes = ShortFictionRunRuntimes {
+            planner: planner.agents(),
+            writer: revise_writer.agents(),
+            draft_review: revise_review.agents(),
+            package: package.agents(),
+        };
+        let mut revise = revise_options(&root, &revise_runtimes, "重写第一章");
+        revise.story_id = Some("夜航");
+        revise.revision_chapter_numbers = Some(vec![1]);
+        let result = tokio().block_on(revise_short_fiction_production(&revise, "夜航")).unwrap();
+        assert_eq!(result.revision_changes.chapter_numbers, vec![1]);
+        assert!(!result.revision_changes.title_changed);
+        assert!(!result.revision_changes.outline_changed);
+        assert!(!result.revision_changes.opening_changed);
+        assert!(result.draft_review_path.ends_with("reviews/draft-v001.md"));
+        // checkpoint 删除 + final 落修订稿。
+        assert!(!checkpoint_path.exists(), "成功后 checkpoint 应删除");
+        let final_draft = std::fs::read_to_string(root.join("works/夜航/source/final/short-story.json")).unwrap();
+        assert!(final_draft.contains("启航（修）"), "final 应落修订章题");
+        assert!(final_draft.contains("雾里有旧船"), "第二章应保持原样");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn revise_pending_then_resume_by_operation_id() {
+        let root = temp_root("revise-resume");
+        let (planner, writer, draft_review, package) = full_scripts();
+        let runtimes = runtimes_of(&planner, &writer, &draft_review, &package);
+        let options = base_options(&root, &runtimes);
+        tokio().block_on(run_short_fiction_production(&options)).unwrap();
+        let checkpoint_path = root.join(".inkos/short-revisions/夜航.json");
+
+        // a) 修订脚本耗尽 → 失败，checkpoint 留存（操作 ID 可续）。
+        let failed_writer = ScriptedAgent::new(Vec::new());
+        let failed_runtimes = ShortFictionRunRuntimes {
+            planner: planner.agents(),
+            writer: failed_writer.agents(),
+            draft_review: ScriptedAgent::new(Vec::new()).agents(),
+            package: package.agents(),
+        };
+        let mut first = revise_options(&root, &failed_runtimes, "重写第一章");
+        first.story_id = Some("夜航");
+        first.revision_chapter_numbers = Some(vec![1]);
+        let _error = tokio().block_on(revise_short_fiction_production(&first, "夜航")).unwrap_err();
+        assert!(checkpoint_path.exists(), "失败后 checkpoint 应留存");
+        let saved: ShortRevisionCheckpoint =
+            serde_json::from_str(&std::fs::read_to_string(&checkpoint_path).unwrap()).unwrap();
+        let operation_id = saved.operation_id.clone().unwrap();
+
+        // b) 不同措辞重试（无 resume ID）→ SHORT_REVISION_PENDING + recovery。
+        let mut second = revise_options(&root, &failed_runtimes, "换个说法重写第一章");
+        second.story_id = Some("夜航");
+        second.revision_chapter_numbers = Some(vec![1]);
+        let pending = tokio().block_on(revise_short_fiction_production(&second, "夜航")).unwrap_err();
+        assert_eq!(pending.code, "SHORT_REVISION_PENDING");
+        assert_eq!(
+            pending.recovery.as_ref().unwrap().get("parameters").unwrap().get("resumeOperationId").and_then(Value::as_str),
+            Some(operation_id.as_str())
+        );
+
+        // c) resume（只带 operation ID）→ 续跑成功 → checkpoint 删除。
+        let resume_writer = ScriptedAgent::new(vec![tool_response(
+            "submit_short_revision_chapter",
+            serde_json::json!({ "title": "启航（修）", "content": "续跑修订后的第一章正文，长度满足要求。" }),
+        )]);
+        let resume_review = ScriptedAgent::new(review_pair());
+        let resume_runtimes = ShortFictionRunRuntimes {
+            planner: planner.agents(),
+            writer: resume_writer.agents(),
+            draft_review: resume_review.agents(),
+            package: package.agents(),
+        };
+        // TS resume 工具面只带 resumeOperationId（其余约束参数必须缺省——
+        // conflict 守卫语义）。
+        let mut resume = ShortFictionRunOptions::new(&root, "", &resume_runtimes);
+        resume.story_id = Some("夜航");
+        resume.cover = Some(false);
+        resume.resume_operation_id = Some(&operation_id);
+        let result = tokio().block_on(revise_short_fiction_production(&resume, "夜航")).unwrap();
+        assert_eq!(result.revision_changes.chapter_numbers, vec![1]);
+        assert!(!checkpoint_path.exists(), "续跑成功后 checkpoint 应删除");
+        std::fs::remove_dir_all(&root).ok();
     }
 }

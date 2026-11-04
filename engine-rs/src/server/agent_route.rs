@@ -1969,6 +1969,8 @@ enum PayloadField<'a> {
     StrNonEmpty,
     /// z.number().int().min(min).max(max)
     IntRange { min: Option<f64>, max: Option<f64> },
+    /// z.number().min(min).max(max)（非整数约束——893 号 shortRun ratio 面）
+    FloatRange { min: Option<f64>, max: Option<f64> },
     /// z.enum([...]).optional()
     Enum(&'a [&'a str]),
     /// z.boolean().optional()
@@ -2002,10 +2004,18 @@ fn payload_schemas() -> Vec<PayloadSchema> {
             ("chapterCount", IntRange { min: Some(1.0), max: Some(20.0) }),
         ]),
         ("shortRun", true, vec![
-            ("direction", StrNonEmpty), ("reference", StrNonEmpty), ("storyId", StrNonEmpty),
+            // TS ShortRunActionPayloadSchema（action-envelope.ts L50-63）对齐——
+            // 章数/篇幅为 min(1)（旧链滑条 12-18/600-1200 残留已清；语言越界
+            // 组合由执行层双语守卫拦截，schema 层只在 language 显式时复核）。
+            ("title", StrNonEmpty), ("direction", StrNonEmpty), ("reference", StrNonEmpty),
+            ("storyId", StrNonEmpty),
             ("language", Enum(&["zh", "en"])),
-            ("chapters", IntRange { min: Some(12.0), max: Some(18.0) }),
-            ("charsPerChapter", IntRange { min: Some(600.0), max: Some(1200.0) }),
+            ("chapters", IntRange { min: Some(1.0), max: None }),
+            ("charsPerChapter", IntRange { min: Some(1.0), max: None }),
+            ("minChapterLength", IntRange { min: Some(1.0), max: None }),
+            ("maxChapterLength", IntRange { min: Some(1.0), max: None }),
+            ("openingHookChars", IntRange { min: Some(1.0), max: None }),
+            ("minChapterLengthRatio", FloatRange { min: Some(0.0), max: Some(1.0) }),
             ("cover", Bool),
         ]),
         ("playStart", true, vec![
@@ -2139,6 +2149,9 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
                     number.fract() == 0.0
                         && min.is_none_or(|min| number >= min)
                         && max.is_none_or(|max| number <= max)
+                }),
+                PayloadField::FloatRange { min, max } => field_value.as_f64().is_some_and(|number| {
+                    min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
                 }),
                 PayloadField::Enum(values) => field_value
                     .as_str()

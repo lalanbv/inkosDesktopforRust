@@ -1786,62 +1786,153 @@ pub(crate) async fn execute_create_book(
     })
 }
 
-/// `createShortFictionRunTool`（78 号）：runShortFictionProduction 同链。
-/// 结果文本逐字（含封面未生成的三行降级说明）；details = kind + result 全字段。
+/// `createShortFictionRunTool`（2.0 形态，893 号 M3e 切链）：production::
+/// short_fiction_runner 新链——runtimes 四上下文路由（short-outline/short-writer/
+/// short-draft-review/short-package）+ 每作品书锁 + 幂等重放。结果文本 = TS
+/// tool multi-line 汇总逐字（含封面未生成三行降级）；details = kind + result
+/// 全字段。旧 78 号链（pipeline/short_fiction_runner.rs）保留待 live duel
+/// 退役（695 纪律——并行期开始备案）。
 #[allow(clippy::too_many_arguments)]
 async fn execute_short_run(
     runtime: &BooksRuntime,
+    title: Option<&str>,
     direction: &str,
     reference: Option<&str>,
     story_id: Option<&str>,
     chapter_count: Option<u32>,
     chars_per_chapter: Option<u32>,
+    min_chapter_length: Option<u32>,
+    max_chapter_length: Option<u32>,
+    opening_hook_chars: Option<u32>,
+    min_chapter_length_ratio: Option<f64>,
+    max_chapters_per_call: Option<u32>,
+    retry_stages: Vec<crate::production::short_fiction_runner::ShortRetryStage>,
     language: crate::utils::language::WritingLanguage,
     cover: bool,
-    mut on_progress: impl FnMut(String) + Send,
+    on_progress: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
 ) -> Result<ToolOutcome, String> {
-    use crate::agents::short_fiction::ShortFictionReference;
-    use crate::pipeline::short_fiction_runner::{run_short_fiction_production, ShortFictionRunOptions};
+    use crate::production::short_fiction_runner::{
+        run_short_fiction_production, ShortFictionRunOptions, ShortFictionRunRuntimes,
+    };
     let root = runtime.state.project_root();
-    let reference_struct = reference.map(|text| ShortFictionReference { text: text.to_string() });
-    let result = run_short_fiction_production(ShortFictionRunOptions {
-        project_root: root,
-        router: &*runtime.effective_router().await,
-        direction,
-        reference: reference_struct.as_ref(),
-        story_id,
-        out_dir: None,
-        chapter_count,
-        chars_per_chapter,
-        language,
-        cover,
-        on_progress: &mut on_progress,
-    })
-    .await?;
-    let cover_lines = match &result.cover_image_path {
-        Some(path) => format!("Cover image: {path}"),
-        None => [
-            "Cover image: not generated.".to_string(),
-            format!(
+    let router = runtime.effective_router().await;
+    let runtimes = ShortFictionRunRuntimes {
+        planner: short_production_agents(&router, "short-outline"),
+        writer: short_production_agents(&router, "short-writer"),
+        draft_review: short_production_agents(&router, "short-draft-review"),
+        package: short_production_agents(&router, "short-package"),
+    };
+    let builtin_registry = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
+        .map_err(|error| error.to_string())?;
+    let builtin_profile = builtin_registry
+        .require("short-fiction")
+        .map_err(|error| error.to_string())?;
+    let mut options = ShortFictionRunOptions::new(root, direction, &runtimes);
+    options.title = title;
+    options.reference = reference.map(|text| crate::production::short_fiction_runner::ShortFictionReference {
+        text: text.to_string(),
+        ..Default::default()
+    });
+    options.story_id = story_id;
+    options.chapter_count = chapter_count;
+    options.chars_per_chapter = chars_per_chapter;
+    options.min_chapter_length = min_chapter_length;
+    options.max_chapter_length = max_chapter_length;
+    options.opening_hook_chars = opening_hook_chars;
+    options.min_chapter_length_ratio = min_chapter_length_ratio.or(builtin_profile.production.min_chapter_length_ratio);
+    options.max_chapters_per_call = max_chapters_per_call.or(builtin_profile.production.max_chapters_per_call);
+    options.retry_stages = retry_stages;
+    options.language = Some(language);
+    options.cover = Some(cover);
+    options.on_progress = Some(on_progress);
+    let result = run_short_fiction_production(&options)
+        .await
+        .map_err(|error| error.message)?;
+    // TS tool 文本（multi-line 汇总，agent-tools.ts L1782-1801 逐字）。
+    let delivery = result.delivery.as_ref();
+    let mut lines = vec![format!(
+        "Short fiction manuscript \"{}\" saved with {} observation(s).",
+        result.story_id,
+        result.observations.len()
+    )];
+    if let Some(delivery) = delivery {
+        let status = match delivery.status {
+            crate::production::short_fiction::ShortDeliveryStatus::ChecksPassed => "checks_passed",
+            crate::production::short_fiction::ShortDeliveryStatus::NeedsRevision => "needs_revision",
+            crate::production::short_fiction::ShortDeliveryStatus::Unverified => "unverified",
+        };
+        lines.push(format!("Delivery checks: {status}"));
+        if let Some(measurements) = &delivery.measurements {
+            lines.push(format!(
+                "Measured manuscript: {}",
+                serde_json::to_string(measurements).unwrap_or_default()
+            ));
+        }
+    }
+    if let Some(stages) = &result.stage_results {
+        for (stage_name, stage) in [
+            ("review", stages.review.as_ref()),
+            ("package", stages.package.as_ref()),
+            ("cover", stages.cover.as_ref()),
+        ] {
+            if let Some(stage) = stage {
+                let status = match stage.status {
+                    crate::production::short_fiction::ShortStageStatus::Completed => "completed",
+                    crate::production::short_fiction::ShortStageStatus::Failed => "failed",
+                };
+                match &stage.error {
+                    Some(error) => lines.push(format!("{stage_name}: {status} — {error}")),
+                    None => lines.push(format!("{stage_name}: {status}")),
+                }
+            }
+        }
+    }
+    lines.push(format!("Final: {}", result.final_markdown_path));
+    lines.push(format!("Sales package: {}", result.sales_package_path));
+    lines.push(format!("Cover prompt: {}", result.cover_prompt_path));
+    match &result.cover_image_path {
+        Some(path) => lines.push(format!("Cover image: {path}")),
+        None => {
+            lines.push("Cover image: not generated.".to_string());
+            lines.push(format!(
                 "Cover image reason: {}",
                 summarize_cover_generation_error(result.cover_error.as_deref())
-            ),
-            "The short fiction draft, synopsis, selling points, and cover prompt were still written successfully.".to_string(),
-        ]
-        .join("\n"),
-    };
-    let text = format!(
-        "Short fiction \"{}\" completed.\nFinal: {}\nSales package: {}\nCover prompt: {}\n{cover_lines}",
-        result.story_id,
-        result.final_markdown_path,
-        result.sales_package_path,
-        result.cover_prompt_path
-    );
+            ));
+            lines.push(
+                "The manuscript remains available. See the persisted stage results for review, packaging and cover status."
+                    .to_string(),
+            );
+        }
+    }
+    let text = lines.join("\n");
     let mut details = serde_json::to_value(&result).unwrap_or(Value::Null);
     if let Some(map) = details.as_object_mut() {
         map.insert("kind".to_string(), json!("short_fiction_created"));
+        map.insert("workId".to_string(), json!(result.story_id));
+        // skillIds：resolveProductionToolSkills 会话技能面——确认任务路径无
+        // 激活技能（备案：M4 工具面接线）。
+        map.insert("skillIds".to_string(), json!([]));
     }
     Ok(ToolOutcome { is_error: false, text, details })
+}
+
+/// 四上下文路由装配：router_chat_turn_fn 生产适配器（889 基座）+ resolve 模型
+/// 面 + defaults.maxTokens=角色解析输出（TS createAgentContext(agent) 同构）。
+fn short_production_agents(
+    router: &std::sync::Arc<crate::llm::agent_router::AgentRouter>,
+    agent: &'static str,
+) -> crate::production::short_fiction_agents::ShortAgents {
+    let endpoint = router.resolve(agent);
+    let mut agents = crate::production::short_fiction_agents::ShortAgents::new(
+        crate::production::structured_agent::router_chat_turn_fn(Arc::clone(router), agent),
+        endpoint.model,
+        crate::production::structured_agent::StructuredDefaults {
+            temperature: 0.7,
+            max_tokens: endpoint.max_tokens,
+        },
+    );
+    agents.author_request = None;
+    agents
 }
 
 /// `assertShortRunCharsPerChapter`：最终语言（payload ?? 会话）下的范围断言——
@@ -2731,7 +2822,7 @@ async fn run_confirmed_production_locked(
                     )
                 })?;
             params.insert("direction".into(), json!(direction));
-            for name in ["reference", "storyId"] {
+            for name in ["reference", "storyId", "title"] {
                 if let Some(value) = payload
                     .and_then(|p| p.get(name))
                     .and_then(Value::as_str)
@@ -2741,7 +2832,14 @@ async fn run_confirmed_production_locked(
                     params.insert(name.into(), json!(value));
                 }
             }
-            for name in ["chapters", "charsPerChapter"] {
+            // 893 号：2.0 链篇幅入参全面透传（TS tool params 同面）。
+            for name in [
+                "chapters",
+                "charsPerChapter",
+                "minChapterLength",
+                "maxChapterLength",
+                "openingHookChars",
+            ] {
                 if let Some(value) = payload
                     .and_then(|p| p.get(name))
                     .and_then(Value::as_u64)
@@ -2749,6 +2847,13 @@ async fn run_confirmed_production_locked(
                 {
                     params.insert(name.into(), json!(value));
                 }
+            }
+            if let Some(value) = payload
+                .and_then(|p| p.get("minChapterLengthRatio"))
+                .and_then(Value::as_f64)
+                .filter(|v| *v > 0.0 && *v <= 1.0)
+            {
+                params.insert("minChapterLengthRatio".into(), json!(value));
             }
             // cover：显式 false 也展开（TS `cover !== undefined` 判定）。
             if let Some(cover) = payload.and_then(|p| p.get("cover")).and_then(Value::as_bool) {
@@ -3384,7 +3489,7 @@ async fn run_confirmed_production_locked(
     };
     let outcome = match request.intent {
         RequestedIntent::ShortRun => {
-            let mut on_progress = make_on_progress;
+            let on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();
             let field = |name: &str| {
                 args.get(name)
@@ -3419,21 +3524,50 @@ async fn run_confirmed_production_locked(
                     let value = field(name);
                     if value.is_empty() { None } else { Some(value) }
                 };
+                let optional_u32 = |name: &str| {
+                    args.get(name).and_then(Value::as_u64).map(|v| v as u32)
+                };
                 // cover 缺省 = true（TS `options.cover === false` 才禁用）。
                 let cover = args
                     .get("cover")
                     .and_then(Value::as_bool)
                     .unwrap_or(true);
+                let retry_stages: Vec<crate::production::short_fiction_runner::ShortRetryStage> =
+                    args.get("retryStages")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .filter_map(|stage| match stage {
+                                    "review" => Some(crate::production::short_fiction_runner::ShortRetryStage::Review),
+                                    "package" => Some(crate::production::short_fiction_runner::ShortRetryStage::Package),
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                let on_progress: std::sync::Arc<dyn Fn(&str) + Send + Sync> =
+                    std::sync::Arc::new(move |message: &str| {
+                        on_progress(message.to_string());
+                    });
                 execute_short_run(
                     runtime,
+                    optional("title").as_deref(),
                     &field("direction"),
                     optional("reference").as_deref(),
                     optional("storyId").as_deref(),
                     args.get("chapters").and_then(Value::as_u64).map(|v| v as u32),
                     chars_per_chapter,
+                    optional_u32("minChapterLength"),
+                    optional_u32("maxChapterLength"),
+                    optional_u32("openingHookChars"),
+                    args.get("minChapterLengthRatio").and_then(Value::as_f64),
+                    optional_u32("maxChaptersPerCall"),
+                    retry_stages,
                     language,
                     cover,
-                    &mut on_progress,
+                    on_progress,
                 )
                 .await
             }

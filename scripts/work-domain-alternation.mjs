@@ -155,6 +155,81 @@ const seedWorkEntity = async (root) => {
   }
 };
 
+// ── runner 产物面种子（893 号 M3e：TS 2.0 形态 runner 工件 → Rust work 域交替）──
+// production-state.json（zod strict 可读）+ outline + final 五件 + reviews 双件——
+// Rust adopt 的源工件全量注册必须收编这些文件且校验和与种子字节闭环。
+const RUNNER_OUTLINE = "# 总纲\n\n少年提灯夜航（交替互证种子）。\n";
+const RUNNER_DRAFT = {
+  storyTitle: "夜航",
+  chapters: [
+    { number: 1, title: "启航", content: "少年提灯出门，河面浮起第一层雾。", charCount: 15 },
+    { number: 2, title: "遇雾", content: "雾里有旧船，船上有旧名字。", charCount: 13 },
+  ],
+  rawContent: "# 夜航\n\n## 第1章 启航\n\n少年提灯出门，河面浮起第一层雾。\n\n## 第2章 遇雾\n\n雾里有旧船，船上有旧名字。",
+};
+const RUNNER_STATE = {
+  version: 2,
+  intent: "写一个提灯夜航的短篇（交替互证）",
+  target: {
+    title: "夜航",
+    chapterCount: 2,
+    charsPerChapter: 30,
+    minChapterLength: 1,
+    language: "zh",
+  },
+  reviewScope: "whole-story",
+  stages: {
+    review: {
+      status: "completed",
+      inputHash: "sha256:" + sha256("alt-review-input"),
+      requestHash: "sha256:" + sha256("alt-review-request"),
+      updatedAt: "2026-11-05T00:00:00.000Z",
+      observations: [
+        {
+          code: "ALT-1",
+          summary: "交替互证审稿观察。",
+          evidence: [],
+          category: "quality",
+          assessment: "observation",
+        },
+      ],
+    },
+    package: {
+      status: "completed",
+      inputHash: "sha256:" + sha256("alt-package-input"),
+      reviewHash: "sha256:" + sha256("alt-package-review"),
+      updatedAt: "2026-11-05T00:01:00.000Z",
+      observations: [],
+    },
+  },
+};
+const RUNNER_PACKAGE = {
+  title: "夜航",
+  intro: "以灯航雾。",
+  sellingPoints: ["灯"],
+  coverPrompt: "雾中的灯。",
+  rawContent: "# 夜航\n\n## 简介\n\n以灯航雾。\n\n## 卖点\n\n- 灯\n\n## 封面提示词\n\n雾中的灯。",
+};
+
+const seedRunnerArtifacts = (root) => {
+  const source = join(root, "works", WORK_ID, "source");
+  const write = (relative, value) => {
+    mkdirSync(dirname(join(source, relative)), { recursive: true });
+    writeFileSync(join(source, relative), value);
+  };
+  write("outline/v001.md", RUNNER_OUTLINE);
+  write("production-state.json", `${JSON.stringify(RUNNER_STATE, null, 2)}\n`);
+  write("drafts/v001/draft.json", `${JSON.stringify(RUNNER_DRAFT, null, 2)}\n`);
+  write("final/short-story.json", `${JSON.stringify(RUNNER_DRAFT, null, 2)}\n`);
+  write("final/full.md", `${RUNNER_DRAFT.rawContent}\n`);
+  write("final/sales-package.json", `${JSON.stringify(RUNNER_PACKAGE, null, 2)}\n`);
+  write("final/sales-package.md", `${RUNNER_PACKAGE.rawContent}\n`);
+  write("final/cover-prompt.md", `${RUNNER_PACKAGE.coverPrompt}\n`);
+  write("reviews/draft-v001.md", "# 成稿审查\n\n没有有证据的审稿观察。\n");
+  write("reviews/package-v001.md", "# 销售包装审查\n\n没有有证据的审稿观察。\n");
+};
+const RUNNER_STATE_CHECKSUM = `sha256:${sha256(`${JSON.stringify(RUNNER_STATE, null, 2)}\n`)}`;
+
 const getJson = async (port, path) => {
   const res = await fetchT(`http://127.0.0.1:${port}${path}`);
   let body = null;
@@ -178,6 +253,7 @@ writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: {
 console.log(`[alt] 项目根：${root}${keep ? "（--keep 保留）" : ""}`);
 
 await seedWorkEntity(root);
+seedRunnerArtifacts(root);
 if (process.exitCode === 1) {
   stopAll();
   if (!keep) rmSync(root, { recursive: true, force: true });
@@ -221,6 +297,8 @@ const stopEngines = () => {
 };
 
 const checks = [];
+// runner 产物面（893 号）：③c 注册态 → ⑤ Node 引擎读回（跨腿传递）。
+let registeredState = null;
 const check = (label, ok, detail = "") => {
   checks.push({ label, ok });
   console.log(`[alt] ${ok ? "✓" : "✗"} ${label}${detail ? `｜${detail}` : ""}`);
@@ -294,6 +372,38 @@ try {
         "③ Rust 自读翻转态（r1→superseded + 新 current）",
         detail.status === 200 && detail.body?.work?.artifacts?.[0]?.currentRevisionId === REV2_ID,
       );
+
+      // ── ③c runner 产物面（893 号 M3e）：adopt 源工件注册收编 TS runner 工件
+      // （非采纳路径 = candidate 态——currentRevisionId 为 null，校验和仍闭环）──
+      const paths = (detail.body?.work?.artifacts ?? []).flatMap((artifact) =>
+        (artifact.revisions ?? []).map((revision) => revision.path),
+      );
+      const runnerPaths = [
+        "source/production-state.json",
+        "source/outline/v001.md",
+        "source/final/short-story.json",
+        "source/final/full.md",
+        "source/final/sales-package.json",
+        "source/final/sales-package.md",
+        "source/final/cover-prompt.md",
+        "source/reviews/draft-v001.md",
+        "source/reviews/package-v001.md",
+      ];
+      check(
+        "③c Rust adopt 注册 runner 产物集（production-state+outline+final 五件+reviews 双件）",
+        runnerPaths.every((path) => paths.includes(path)),
+        `registered=${paths.length}`,
+      );
+      const stateArtifact = (detail.body?.work?.artifacts ?? []).find((artifact) =>
+        (artifact.revisions ?? []).some((revision) => revision.path === "source/production-state.json"),
+      );
+      const stateRevision = stateArtifact?.revisions?.find((revision) => revision.checksum === RUNNER_STATE_CHECKSUM);
+      check(
+        "③c production-state 注册校验和 = 种子字节（TS canonical 形态闭环）",
+        stateRevision?.checksum === RUNNER_STATE_CHECKSUM && stateRevision?.id != null,
+        `checksum=${stateRevision?.checksum}`,
+      );
+      registeredState = { artifactId: stateArtifact?.id, revisionId: stateRevision?.id };
     }
 
     // ── ③b Rust 写面（885 号 M2）：profiles POST/PUT + documents PUT ──
@@ -433,6 +543,33 @@ try {
       );
       const noteBytes = readFileSync(join(root, ".agents", "skills", "doc-skill", "docs", "alt-note.md"), "utf-8");
       check("④ Rust 写的文档追加页在位", noteBytes === "# 交替互证追加\n");
+
+      // ── ④ runner 产物面（893 号 M3e）：TS zod strict 读 runner 工件 + 引擎读取器回读 ──
+      const stateModule = join(repoRoot, "packages", "core", "dist", "pipeline", "short-production-state.js");
+      if (!existsSync(stateModule)) {
+        fail("core dist pipeline/short-production-state.js 缺失——runner 产物面验证跳过");
+      } else {
+        const stateModuleLoaded = await import(pathToFileURL(stateModule).href);
+        const stateRaw = readFileSync(join(root, "works", WORK_ID, "source", "production-state.json"), "utf-8");
+        const parsed = stateModuleLoaded.ShortProductionStateSchema.parse(JSON.parse(stateRaw));
+        check(
+          "④ TS zod strict 解析 runner production-state（stages 双完成）",
+          parsed.version === 2 && parsed.stages.review?.status === "completed" && parsed.stages.package?.status === "completed",
+        );
+        const reread = await stateModuleLoaded.readShortProductionState(root, join("works", WORK_ID, "source"));
+        check(
+          "④ core readShortProductionState 回读（引擎同款读取器）",
+          reread?.target?.title === "夜航" && reread.target?.chapterCount === 2,
+        );
+        const draftRaw = readFileSync(join(root, "works", WORK_ID, "source", "final", "short-story.json"), "utf-8");
+        const draftParsed = core.ShortFictionBatchDraftSchema?.parse
+          ? core.ShortFictionBatchDraftSchema.parse(JSON.parse(draftRaw))
+          : null;
+        check(
+          "④ TS 解析 runner final/short-story.json（成稿契约面）",
+          draftParsed?.storyTitle === "夜航" && draftParsed.chapters?.length === 2,
+        );
+      }
     }
   }
 
@@ -447,6 +584,15 @@ try {
     );
     const revision = await getJson(nodePort, `/api/v1/works/${WORK_ID}/artifacts/chapter/revisions/${REV2_ID}`);
     check("⑤ Node 读 Rust 写的快照", revision.status === 200 && revision.body?.content === REV2_TEXT);
+    // runner 产物面（893 号）：Node 引擎读 adopt 注册的 production-state 内容。
+    const stateContent = registeredState?.artifactId && registeredState.revisionId
+      ? await getJson(nodePort, `/api/v1/works/${WORK_ID}/artifacts/${registeredState.artifactId}/revisions/${registeredState.revisionId}`)
+      : null;
+    check(
+      "⑤ Node 读 adopt 注册的 production-state 内容（runner 产物交替读回）",
+      stateContent?.status === 200 && stateContent.body?.content?.includes?.("夜航") === true,
+      `status=${stateContent?.status}`,
+    );
     // M2 写面用户可见等价：Node 引擎归并出 Rust 写的自定义/覆盖 profile 与追加文档
     const profiles = await getJson(nodePort, "/api/v1/profiles");
     const served = profiles.body?.profiles ?? [];

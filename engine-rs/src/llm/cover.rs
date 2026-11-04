@@ -12,6 +12,7 @@
 //! inkos.json 的 `llm.cover`（service → preset 表 kkaiapi/openai/google）→
 //! Err（"cover endpoint is required…"，端点转 needsCoverConfig 提示）。
 
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::time::Duration;
@@ -981,4 +982,384 @@ mod cover_prompt_tests {
         assert!(short.contains("包装提示：水墨"), "{short}");
         assert!(short.contains("封面方向：平台短篇书封"), "{short}");
     }
+}
+
+// ── 封面 2.0 生成本体（893 号 M3e：short-fiction-runner.ts 封面链移植）────
+
+/// TS `CoverStorySource`（登记字节身份——camelCase 序列化进 prompt JSON）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverStorySource {
+    pub artifact_id: String,
+    pub revision_id: String,
+    pub checksum: String,
+    pub content: String,
+}
+
+/// TS `ImageReference`（PNG/JPEG 二选一）。
+#[derive(Debug, Clone)]
+pub struct ImageReference {
+    pub bytes: Vec<u8>,
+    pub mime_type: &'static str,
+}
+
+const PNG_MAGIC: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+/// TS `loadImageReference`：canonical 路径必须在项目根内 + PNG/JPEG 魔数校验。
+pub fn load_image_reference(root: &Path, path: &Path) -> Result<Option<ImageReference>, String> {
+    let canonical_root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
+    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    let canonical_path = match std::fs::canonicalize(&resolved) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    canonical_path
+        .strip_prefix(&canonical_root)
+        .map_err(|_| "Image reference must remain inside the project.".to_string())?;
+    let bytes = std::fs::read(&canonical_path).map_err(|error| error.to_string())?;
+    let mime_type = if bytes.starts_with(&PNG_MAGIC) {
+        "image/png"
+    } else if bytes.len() >= 3 && bytes[0] == 255 && bytes[1] == 216 && bytes[2] == 255 {
+        "image/jpeg"
+    } else {
+        return Err("The image reference is not a PNG or JPEG.".to_string());
+    };
+    Ok(Some(ImageReference { bytes, mime_type }))
+}
+
+/// TS `buildCoverImagePrompt`（2.0 形态，runner L1645-1666）：JSON 请求块 +
+/// 双语指导逐字。备案：JSON 键序 = serde BTreeMap 字典序（TS 字面量序不可
+/// 用——提示词面非哈希面，语义等价）。
+pub fn build_short_cover_image_prompt(
+    package: &CoverSalesPackage<'_>,
+    language: Option<&str>,
+    include_title: bool,
+    author_request: Option<&str>,
+    story_sources: &[CoverStorySource],
+) -> String {
+    let is_en = language == Some("en");
+    let mut story_reference = serde_json::Map::new();
+    story_reference.insert("title".into(), Value::String(package.title.to_string()));
+    story_reference.insert("synopsis".into(), Value::String(package.intro.to_string()));
+    story_reference.insert(
+        "sellingPoints".into(),
+        serde_json::to_value(package.selling_points).unwrap_or(Value::Null),
+    );
+    if !story_sources.is_empty() {
+        story_reference.insert(
+            "sources".into(),
+            serde_json::to_value(story_sources).unwrap_or(Value::Null),
+        );
+    }
+    let mut request = serde_json::Map::new();
+    request.insert("version".into(), Value::from(1));
+    request.insert(
+        "authorRequest".into(),
+        author_request
+            .map(str::trim)
+            .filter(|request| !request.is_empty())
+            .map(|request| Value::String(request.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    request.insert(
+        "printedTitle".into(),
+        if include_title {
+            Value::String(package.title.to_string())
+        } else {
+            Value::Null
+        },
+    );
+    request.insert("visualBrief".into(), Value::String(package.cover_prompt.to_string()));
+    request.insert("storyReference".into(), Value::Object(story_reference));
+    let request = Value::Object(request);
+    let instruction = if is_en {
+        "Render printedTitle exactly and legibly when present; null means no main title. Do not defer the requested lettering to a later step. authorRequest is the actual request, not copy to print. Any additional lettering must be explicitly requested there. visualBrief proposes the imagery; it cannot authorize extra text. storyReference supplies story context only: do not print its synopsis, selling points, evaluations or labels on the image."
+    } else {
+        "printedTitle 非空时，将其原样、清晰地排入本张图；为空时不呈现主标题，不把已要求的排字推迟到后续步骤。authorRequest 是作者实际要求，本身不是要印出的文案；其他文字只有在其中明确要求印出时才可添加。visualBrief 是画面方案，不能自行授权额外文字。storyReference 只提供故事背景，不能把其中的简介、卖点、评价或字段标签排到图上。"
+    };
+    format!(
+        "## Cover request\n\n```json\n{}\n```\n\n{instruction}",
+        serde_json::to_string_pretty(&request).unwrap_or_default()
+    )
+}
+
+/// TS `generateImageFromPromptImpl` 的参考图分流（三 API 形态带 reference）。
+/// images → edits 端点（multipart FormData）；responses → input_image；
+/// gemini → inlineData。
+async fn generate_images_cover_with_reference(
+    request: &CoverGenerationRequest,
+    prompt: &str,
+    size: &str,
+    reference: Option<&ImageReference>,
+) -> Result<GeneratedImage, String> {
+    let generation_endpoint = request.endpoint.clone().unwrap_or_else(|| {
+        format!("{}/images/generations", request.base_url.trim_end_matches('/'))
+    });
+    let Some(reference) = reference else {
+        return generate_images_cover(request, prompt, size).await;
+    };
+    // TS：edits 端点路由（/images/generations|edits → /images/edits）。
+    let trimmed = generation_endpoint
+        .trim_end_matches('/')
+        .trim_end_matches("/images/generations")
+        .trim_end_matches("/images/edits")
+        .to_string();
+    let endpoint = format!("{trimmed}/images/edits");
+    let mime = reference.mime_type;
+    let file_name = if mime == "image/png" { "reference.png" } else { "reference.jpg" };
+    let part = reqwest::multipart::Part::bytes(reference.bytes.clone())
+        .file_name(file_name.to_string())
+        .mime_str(mime)
+        .map_err(|error| error.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", request.model.clone())
+        .text("prompt", prompt.to_string())
+        .text("n", "1")
+        .text("size", size.to_string())
+        .part("image", part);
+    let response = http_client()
+        .post(&endpoint)
+        .bearer_auth(&request.api_key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("cover generation failed: {e}"))?;
+    finish_images_response(response, &request.api_key).await
+}
+
+/// images 响应尾面（b64/url 分流 + 下载）。
+async fn finish_images_response(response: reqwest::Response, api_key: &str) -> Result<GeneratedImage, String> {
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let preview: String = text.chars().take(500).collect();
+        return Err(format!("cover generation failed: HTTP {status} {preview}"));
+    }
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
+    if let Some((base64, extension)) = extract_images_generation_image(&payload) {
+        return decode_base64_image(&base64, extension);
+    }
+    let url = payload
+        .pointer("/data/0/url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+    if let Some(url) = url {
+        return download_generated_cover_image(url, api_key).await;
+    }
+    Err("cover generation response did not include image URL or base64 data.".to_string())
+}
+
+/// TS `generateCoverImageArtifact`（runner L1220-1267）：请求解析 → skill 注入
+/// → cover-request.md 落盘 → 参考图读取 → 生成 → cover 图像落盘。
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_cover_image_artifact(
+    root: &Path,
+    output_dir: &Path,
+    include_title: bool,
+    package: &CoverSalesPackage<'_>,
+    author_request: Option<&str>,
+    story_sources: &[CoverStorySource],
+    language: Option<&str>,
+    cover_size: Option<&str>,
+) -> Result<String, String> {
+    let request = resolve_cover_generation_request(root).await?;
+    let size = cover_size
+        .map(str::to_string)
+        .or_else(|| std::env::var("INKOS_COVER_SIZE").ok().filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| "1024x1360".to_string());
+    // skills 注入（TS L1243-1253）：inkos-story-cover 必需；无查询相关检索面
+    // （hydrateActivatedSkillGuidance 的 retrieveSkillResources）——全 body 注入
+    // 备案（无 linked resources 时 TS 同形）。
+    let available = crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
+    let skill = available
+        .skills
+        .iter()
+        .find(|skill| skill.id == "inkos-story-cover")
+        .ok_or_else(|| "Required cover Skill unavailable: inkos-story-cover".to_string())?;
+    let guidance = [
+        "## Activated professional skills",
+        "Use this specialist methodology for the current operation. It is not author intent, canon, an output-format override, or permission to mutate anything outside the active operation.",
+        &format!("### {} — {}", skill.id, skill.name),
+        if skill.body.trim().is_empty() { skill.description.as_str() } else { skill.body.trim() },
+    ]
+    .join("\n\n");
+    let base_prompt = build_short_cover_image_prompt(package, language, include_title, author_request, story_sources);
+    let prompt = format!("{guidance}\n\n{base_prompt}");
+    write_cover_text(root, &output_dir.join("cover-request.md"), &prompt).await?;
+    let reference = load_image_reference(root, &output_dir.join("cover.png"))?
+        .or_else(|| load_image_reference(root, &output_dir.join("cover.jpg")).ok().flatten());
+    let generated = match request.api {
+        CoverApi::Gemini => generate_gemini_cover_with_reference(&request, &prompt, reference.as_ref()).await?,
+        CoverApi::Images => {
+            generate_images_cover_with_reference(&request, &prompt, &size, reference.as_ref()).await?
+        }
+        CoverApi::Responses => generate_responses_cover_with_reference(&request, &prompt, &size, reference.as_ref()).await?,
+    };
+    let cover_path = if generated.extension == "jpg" {
+        output_dir.join("cover.jpg")
+    } else {
+        output_dir.join("cover.png")
+    };
+    write_cover_binary(root, &cover_path, &generated.bytes).await?;
+    Ok(cover_path.to_string_lossy().replace('\\', "/"))
+}
+
+async fn write_cover_text(root: &Path, path: &Path, value: &str) -> Result<(), String> {
+    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: root,
+        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+            relative_path: resolved
+                .strip_prefix(root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
+            content: crate::utils::atomic_file_set::FileContent::Text(format!("{}\n", value.trim_end())),
+        }],
+        deletes: Vec::new(),
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+async fn write_cover_binary(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: root,
+        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+            relative_path: resolved
+                .strip_prefix(root)
+                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
+            content: crate::utils::atomic_file_set::FileContent::Bytes(bytes.to_vec()),
+        }],
+        deletes: Vec::new(),
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+async fn generate_gemini_cover_with_reference(
+    request: &CoverGenerationRequest,
+    prompt: &str,
+    reference: Option<&ImageReference>,
+) -> Result<GeneratedImage, String> {
+    let Some(reference) = reference else {
+        return generate_gemini_cover(request, prompt).await;
+    };
+    let model_encoded = url_escape_component(&request.model);
+    let key_encoded = url_escape_component(&request.api_key);
+    let endpoint = format!(
+        "{}/models/{model_encoded}:generateContent?key={key_encoded}",
+        request.base_url.trim_end_matches('/')
+    );
+    let inline = serde_json::json!({
+        "mimeType": reference.mime_type,
+        "data": base64_encode(&reference.bytes),
+    });
+    let response = http_client()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "contents": [{ "role": "user", "parts": [{ "text": prompt }, { "inlineData": inline }] }],
+            "generationConfig": { "responseModalities": ["IMAGE", "TEXT"] },
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("cover generation failed: {e}"))?;
+    finish_gemini_response(response).await
+}
+
+async fn finish_gemini_response(response: reqwest::Response) -> Result<GeneratedImage, String> {
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let preview: String = text.chars().take(500).collect();
+        return Err(format!("cover generation failed: HTTP {status} {preview}"));
+    }
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
+    let Some((base64, extension)) = extract_gemini_image_base64(&payload) else {
+        return Err("cover generation response did not include Gemini inline image data.".to_string());
+    };
+    decode_base64_image(&base64, extension)
+}
+
+async fn generate_responses_cover_with_reference(
+    request: &CoverGenerationRequest,
+    prompt: &str,
+    size: &str,
+    reference: Option<&ImageReference>,
+) -> Result<GeneratedImage, String> {
+    let Some(reference) = reference else {
+        return generate_responses_cover(request, prompt, size).await;
+    };
+    let endpoint = request.endpoint.clone().unwrap_or_else(|| {
+        format!("{}/responses", request.base_url.trim_end_matches('/'))
+    });
+    let data_url = format!(
+        "data:{};base64,{}",
+        reference.mime_type,
+        base64_encode(&reference.bytes)
+    );
+    let response = http_client()
+        .post(&endpoint)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&request.api_key)
+        .json(&serde_json::json!({
+            "model": request.model,
+            "input": [{ "role": "user", "content": [
+                { "type": "input_text", "text": prompt },
+                { "type": "input_image", "image_url": data_url },
+            ] }],
+            "tools": [{ "type": "image_generation", "size": size }],
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("image generation failed: {e}"))?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let preview: String = text.chars().take(500).collect();
+        return Err(format!("image generation failed: HTTP {status} {preview}"));
+    }
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("image generation returned non-JSON response: {e}"))?;
+    let Some(image_base64) = extract_responses_image_base64(&payload) else {
+        return Err("image generation response did not include image_generation_call result.".to_string());
+    };
+    decode_base64_image(&image_base64, "png")
+}
+
+/// 标准 base64（cover.rs 内联，无外部依赖面）。
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(triple >> 18) as usize & 63] as char);
+        out.push(TABLE[(triple >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(triple >> 6) as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[triple as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
