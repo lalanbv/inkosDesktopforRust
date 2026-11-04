@@ -246,4 +246,54 @@ describe("Pi worker harness", () => {
       toolChoice: "required",
     });
   });
+
+  // 888 号 M3b：finish-by-calling system 追加文本双端金标准（与 Rust
+  // production/structured_agent.rs finish_by_calling_text 逐字共用）。
+  it("appends the finish-by-calling instruction to the merged system prompt verbatim", async () => {
+    const { createAssistantMessageEventStream } = await import("@mariozechner/pi-ai");
+    let capturedSystemPrompt: string | undefined;
+    guardedPiStreamMock.mockImplementation(
+      (_model: AgentContext["client"]["_piModel"], context: { systemPrompt: string }) => {
+        capturedSystemPrompt = context.systemPrompt;
+        const stream = createAssistantMessageEventStream();
+        const message = {
+          role: "assistant" as const,
+          content: [{
+            type: "toolCall" as const,
+            id: "state-3",
+            name: "submit_state",
+            arguments: { label: "母亲", status: "等待退烧药" },
+          }],
+          api: _model?.api ?? "openai-completions",
+          provider: _model?.provider ?? "openai",
+          model: _model?.id ?? "deepseek-v4-flash",
+          usage: {
+            input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse" as const,
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end(message);
+        return stream;
+      },
+    );
+    await runWorkerAgentTool(
+      client(),
+      "deepseek-v4-flash",
+      [{ role: "system", content: "你是角色状态记录员。" }, { role: "user", content: "登记当前角色状态" }],
+      {
+        name: "submit_state",
+        label: "提交状态",
+        description: "提交角色状态。",
+        parameters: Type.Object({ label: Type.String(), status: Type.String() }),
+      },
+    );
+    // 双端逐字：system 合并（\n\n）+ finish-by-calling 尾追加。
+    expect(capturedSystemPrompt).toBe(
+      "你是角色状态记录员。\n\nFinish by calling submit_state exactly once. "
+        + "Do not print the result as prose or JSON.",
+    );
+  });
 });
