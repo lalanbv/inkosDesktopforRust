@@ -692,6 +692,99 @@ pub async fn import_skill(
     )
 }
 
+// ── GET /api/v1/skills/:skillId/documents（884 号 M1b）────────────
+// TS server.ts 同名端点移植：技能文档编辑器读面（PUT 写面属 M2）。
+// 884 号双端对齐：documents 按 path 排序——TS 原为 readdir 顺序，顺序对编辑
+// 器 UI 无语义；排序使双端契约确定性（差分活体 body 对比前提）。
+pub async fn list_skill_documents(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(skill_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let id = match normalize_studio_skill_id(&skill_id, "skillId") {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let env_dirs = env_skill_dirs();
+    let home = home_dir();
+    let available = load_available_agent_skills(root, &env_dirs, home.as_deref()).await;
+    let skill = available.skills.iter().find(|skill| skill.id == id);
+    let Some(base_dir) = skill.and_then(|skill| skill.base_dir.clone()) else {
+        return api_error(StatusCode::NOT_FOUND, "SKILL_NOT_FOUND", "Skill documents unavailable");
+    };
+    let mut documents: Vec<(String, String)> = Vec::new();
+    if let Err(response) = visit_skill_documents(Path::new(&base_dir), &mut documents).await {
+        return response;
+    }
+    documents.sort_by(|left, right| left.0.cmp(&right.0));
+    (
+        StatusCode::OK,
+        Json(json!({
+            "id": id,
+            "documents": documents
+                .into_iter()
+                .map(|(path, content)| json!({ "path": path, "content": content }))
+                .collect::<Vec<_>>(),
+        })),
+    )
+}
+
+/// 递归收集 `.md`/`.txt` 文档（符号链接跳过；单文件 2MB 上限 → 413）。
+/// 迭代栈遍历（async 递归需装箱；documents 最终按 path 排序，遍历序无关）。
+async fn visit_skill_documents(
+    base_dir: &Path,
+    documents: &mut Vec<(String, String)>,
+) -> Result<(), ApiErrorResponse> {
+    let mut stack: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let mut entries = tokio::fs::read_dir(&directory)
+            .await
+            .map_err(|error| internal_error_message(&error.to_string()))?;
+        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| internal_error_message(&error.to_string()))?
+        {
+            paths.push(entry.path());
+        }
+        for path in paths {
+            let meta = tokio::fs::symlink_metadata(&path)
+                .await
+                .map_err(|error| internal_error_message(&error.to_string()))?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(path);
+            } else if meta.is_file() {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if name.ends_with(".md") || name.ends_with(".txt") {
+                    if meta.len() > MAX_SKILL_IMPORT_FILE_BYTES as u64 {
+                        return Err(api_error(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "SKILL_FILE_TOO_LARGE",
+                            "Skill file exceeds editor limit",
+                        ));
+                    }
+                    let content = tokio::fs::read_to_string(&path)
+                        .await
+                        .map_err(|error| internal_error_message(&error.to_string()))?;
+                    let relative = path
+                        .strip_prefix(base_dir)
+                        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+                    documents.push((relative, content));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── DELETE /api/v1/skills/:skillId ─────────────────────────────
 
 /// `normalizeStudioSkillId`：SkillIdSchema 校验（消息带 zod 默认文本）。

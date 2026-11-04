@@ -8,9 +8,16 @@
 //! `tests/work_domain_cross_engine.rs` ↔
 //! `packages/core/src/__tests__/work-store-cross-engine.test.ts`（逐字共用）。
 
+pub mod action_error;
+pub mod adopt;
+pub mod artifact_edit_policy;
+pub mod artifact_reader;
 pub mod artifact_revisions;
+pub mod artifact_validation;
 pub mod contracts;
 pub mod episode_store;
+pub mod profile_registry;
+pub mod source_sync;
 pub mod work_store;
 
 pub use artifact_revisions::{

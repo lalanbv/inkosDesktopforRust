@@ -267,17 +267,22 @@ impl CreativeEpisodeStore {
         if status_text == "running" {
             return Err("Cannot finish into running".into());
         }
-        let conn = self.lock();
-        let changed = conn
-            .execute(
-                "UPDATE creative_episodes SET status = ?, completed_at = ? WHERE episode_id = ? AND status = 'running'",
-                rusqlite::params![status_text, completed_at, episode_id],
-            )
-            .map_err(|e| e.to_string())?;
-        if changed != 1 {
-            return Err(format!(
-                "Creative episode is missing or already terminal: {episode_id}"
-            ));
+        {
+            // 锁作用域收紧：std Mutex 不可重入——require_episode 在锁外调用
+            //（884 号根因修复：M1a 备案的「episode 测试进程挂起」即本方法的
+            // 持锁重入自死锁，非 WAL 竞态）。
+            let conn = self.lock();
+            let changed = conn
+                .execute(
+                    "UPDATE creative_episodes SET status = ?, completed_at = ? WHERE episode_id = ? AND status = 'running'",
+                    rusqlite::params![status_text, completed_at, episode_id],
+                )
+                .map_err(|e| e.to_string())?;
+            if changed != 1 {
+                return Err(format!(
+                    "Creative episode is missing or already terminal: {episode_id}"
+                ));
+            }
         }
         self.require_episode(episode_id)
     }
@@ -356,7 +361,11 @@ impl CreativeEpisodeStore {
             Ok(())
         })();
         match result {
-            Ok(()) => self.require_episode(episode_id),
+            // Ok 臂先放锁再取行（std Mutex 不可重入，884 号同族修复）。
+            Ok(()) => {
+                drop(conn);
+                self.require_episode(episode_id)
+            }
             Err(error) => {
                 let _ = conn.execute_batch("ROLLBACK");
                 Err(error)
@@ -397,7 +406,10 @@ impl CreativeEpisodeStore {
             .map_err(|e| e.to_string())?;
         let rows = statement
             .query_map(
-                rusqlite::params![work_id, work_id, work_id, work_id, work_id, work_id, profile_id, profile_id, status, status, limit],
+                // SQL 用编号参数 ?1..?4——占位 4 个，重复引用同一 ?n 不增参数计数
+                //（884 号修正：M1a 误按出现次数传 11 参，且该路径被 #[ignore]
+                // 遮蔽从未真跑——死锁修复后端点测试揪出）。
+                rusqlite::params![work_id, profile_id, status, limit],
                 parse_episode_row,
             )
             .map_err(|e| e.to_string())?;

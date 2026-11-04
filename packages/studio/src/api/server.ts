@@ -4119,6 +4119,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
     };
     await visit(skill.baseDir);
+    // 884 号双端对齐：原为 readdir 顺序——顺序对编辑器 UI 无语义；排序使双端
+    // 契约确定性（engine-contract-diff works 域活体 body 对比前提）。
+    documents.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     return c.json({ id, documents });
   });
 

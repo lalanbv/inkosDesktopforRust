@@ -28,6 +28,7 @@ pub mod project_files_routes;
 pub mod segment_guard;
 pub mod service_routes;
 pub mod session_routes;
+pub mod work_routes;
 pub mod skill_routes;
 pub mod translation_routes;
 pub mod upload_common;
@@ -571,9 +572,48 @@ pub fn router_books(
             "/api/v1/skills/import",
             post(skill_routes::import_skill).with_state(books.clone()),
         )
+        // 884 号 M1b：skill 文档编辑器读面（GET——PUT 属 M2 写面）。
+        .route(
+            "/api/v1/skills/:skillId/documents",
+            get(skill_routes::list_skill_documents).with_state(books.clone()),
+        )
         .route(
             "/api/v1/skills/:skillId",
             axum::routing::delete(skill_routes::delete_skill).with_state(books.clone()),
+        )
+        // 884 号 M1b：work 域 L1 读写面（881 设计 §一）——works/episodes/profiles
+        // GET 全域 + adopt（episode 最小环）。
+        .route(
+            "/api/v1/works",
+            get(work_routes::list_works).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/works/:id",
+            get(work_routes::get_work).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/works/:id/artifacts",
+            get(work_routes::list_work_artifacts).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId",
+            get(work_routes::get_artifact_revision).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId/adopt",
+            post(work_routes::post_adopt_work_revision).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/episodes",
+            get(work_routes::list_episodes).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/episodes/:id",
+            get(work_routes::get_episode).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/profiles",
+            get(work_routes::list_profiles).with_state(books.clone()),
         )
         .route(
             "/api/v1/prompt-packs",

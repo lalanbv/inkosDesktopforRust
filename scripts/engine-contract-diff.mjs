@@ -942,7 +942,88 @@ try {
       else upstreamNewConfirmed += 1; // TS 404 typed = 路由在位、资源缺失（空集合常态）
     }
 
-    console.log(`[diff] ── 度量：共享面 ${sharedCompared} 对比 / ${sharedDiffs} 分歧；fork-only ${forkOnlyConfirmed}/${FORK_ONLY_ROUTES.length} 声明确认；上游新增 ${upstreamNewConfirmed}/${UPSTREAM_NEW_ROUTES.length - upstreamNewDeclared} 声明确认（+${upstreamNewDeclared} 深链静态声明）`);
+    // ── 884 号 M1b：works 域活体对比（923 行「随迁移面验收」兑现）────────
+    // Rust 腿已接线 works/episodes/profiles GET 全域 + adopt：works 域从上游
+    // 新增「声明确认」升级为逐端点归一化深比对。前提 = walkthrough-fixture
+    // §2.9 双腿同源播种（walk-diff work 双版本 artifact + ep-walkdiff-1）。
+    // 归一化：episode 随机 id（episode-<uuid>）与事件时间戳为腿内随机量；
+    // work.json 的 createdAt/updatedAt 为固定夹具值，走 VOLATILE 剪除。
+    const episodePlaceholder = (node) => {
+      if (typeof node === "string") {
+        return node.replace(/episode-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "$EPISODE");
+      }
+      if (Array.isArray(node)) return node.map(episodePlaceholder);
+      if (node && typeof node === "object") {
+        const out = {};
+        for (const [key, value] of Object.entries(node)) {
+          if (key === "startedAt" || key === "completedAt") {
+            out[key] = "$TIME";
+            continue;
+          }
+          out[key] = episodePlaceholder(value);
+        }
+        return out;
+      }
+      return node;
+    };
+    // 夹具不对称备案：node 腿 fixture 独跑 migrateLegacyWorks（§2.5 对称深播）
+    // → /works 全集 node 多出 legacy 迁移工作（镜花水月等）；rust 腿仅 §2.9
+    // 对称播种（walk-diff）。活体对比锚定对称夹具 walk-diff：列表面比对称子集
+    //（全集差异=夹具差异非引擎差异），深链全用 walk-diff。
+    const worksWorkId = "walk-diff";
+    const WORKS_LIVE_ROUTES = [
+      { method: "GET", path: "/api/v1/works", symmetric: true },
+      { method: "GET", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}` },
+      { method: "GET", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}/artifacts` },
+      // 深链：夹具 outline r2（快照固定 checksum）→ content 面逐字节等价
+      { method: "GET", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}/artifacts/outline/revisions/r2` },
+      // 列表面用 workId 过滤（全集含 node-only legacy 迁移工作）
+      { method: "GET", path: `/api/v1/episodes?workId=${encodeURIComponent(worksWorkId)}` },
+      // 固定夹具 episode（非列表首项——adopt 会插入 NOW 时间戳新 episode）
+      { method: "GET", path: "/api/v1/episodes/ep-walkdiff-1" },
+      { method: "GET", path: "/api/v1/profiles" },
+      // adopt：夹具工件路径为 artifacts/outline（非 source/）→ 双端同因失败
+      //（ARTIFACT_DERIVED → 500 INTERNAL_ERROR 固定文案），对比 = 状态码 + 错误面
+      { method: "POST", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}/artifacts/outline/revisions/r2/adopt`, body: { expectedCurrentRevisionId: "r2" } },
+    ];
+    const symmetricSubset = (body) => {
+      if (body && Array.isArray(body.works)) {
+        return { works: body.works.filter((work) => work?.id === worksWorkId) };
+      }
+      return body;
+    };
+    let worksCompared = 0;
+    let worksDiffs = 0;
+    const worksLive = [];
+    for (const spec of WORKS_LIVE_ROUTES) {
+      const init = spec.body
+        ? { method: spec.method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec.body) }
+        : { method: spec.method };
+      const [nodeRes, rustRes] = await Promise.all([
+        nodeApi(spec.path, init).catch(() => null),
+        rustApi(spec.path, init).catch(() => null),
+      ]);
+      if (!nodeRes || !rustRes) {
+        worksDiffs += 1;
+        worksLive.push(`✗ ${spec.method} ${spec.path}：双腿探测失败（node=${nodeRes ? "ok" : "fail"} rust=${rustRes ? "ok" : "fail"}）`);
+        continue;
+      }
+      worksCompared += 1;
+      const nodeBody = spec.symmetric ? symmetricSubset(nodeRes.body ?? null) : (nodeRes.body ?? null);
+      const rustBody = spec.symmetric ? symmetricSubset(rustRes.body ?? null) : (rustRes.body ?? null);
+      const statusEqual = nodeRes.status === rustRes.status;
+      const bodyEqual = JSON.stringify(prune(episodePlaceholder(nodeBody)))
+        === JSON.stringify(prune(episodePlaceholder(rustBody)));
+      if (statusEqual && bodyEqual) {
+        worksLive.push(`✓ ${spec.method} ${spec.path} → ${nodeRes.status}（归一化深比对一致）`);
+      } else {
+        worksDiffs += 1;
+        worksLive.push(`✗ ${spec.method} ${spec.path} → node=${nodeRes.status} rust=${rustRes.status}${statusEqual ? "｜body 分歧：" + JSON.stringify({ node: prune(episodePlaceholder(nodeBody)), rust: prune(episodePlaceholder(rustBody)) }).slice(0, BODY_PREVIEW) : ""}`);
+      }
+    }
+    for (const line of worksLive) console.log(`[diff] [works 活体] ${line}`);
+
+    console.log(`[diff] ── 度量：共享面 ${sharedCompared} 对比 / ${sharedDiffs} 分歧；fork-only ${forkOnlyConfirmed}/${FORK_ONLY_ROUTES.length} 声明确认；上游新增 ${upstreamNewConfirmed}/${UPSTREAM_NEW_ROUTES.length - upstreamNewDeclared} 声明确认（+${upstreamNewDeclared} 深链静态声明）；works 活体 ${worksCompared - worksDiffs}/${worksCompared} 对比 / ${worksDiffs} 分歧（884 M1b）`);
     for (const d of forkOnlyDrift) console.log(`[diff] [fork-only 漂移] ${d}`);
     for (const d of upstreamNewDrift) console.log(`[diff] [上游新增 漂移] ${d}`);
     console.log("[diff] [695 豁免记账] fork 契约全量字节级对跑待 Rust 2.0 迁移落地后自动恢复（688 号 §五）；");

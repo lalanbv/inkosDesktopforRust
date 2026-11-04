@@ -197,7 +197,6 @@ fn malformed_manifest_is_rejected_strictly() {
 }
 
 #[test]
-#[ignore = "879 号：rusqlite WAL + tempdir 交互在测试进程内挂起（create 后 append 的 SELECT 偶发不可见）；单独 cargo test --test 跑则正常，待排查竞态根因"]
 fn episode_store_cross_engine_golden_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let store = CreativeEpisodeStore::new(&dir.path().join("harness.sqlite")).unwrap();
