@@ -680,15 +680,15 @@ async fn adopt_failures_match_global_error_face_and_record_events() {
 }
 
 #[tokio::test]
-async fn adopt_fail_closed_on_domain_projection_schema() {
+async fn adopt_regenerates_short_manuscript_projections() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    // short-fiction profile + authority 文档路径 → 884 号 fail-closed 边界。
-    // authority 路径 schema=short-manuscript：种子须为合法 JSON 才能越过
-    // ARTIFACT_INVALID parse 门（TS 同序：先 parse 后 schema 校验），抵达
-    // fail-closed 分支。
+    // short-fiction profile + authority 文档路径 → 887 号 M3a 兑换后的**成功**
+    // 再生路径（884 号该场景为 fail-closed：ARTIFACT_DOMAIN_PROJECTION_UNAVAILABLE；
+    // M3a 纯函数层落位后与 TS 对齐：parse→charCount 重算→终稿校验→投影族多写
+    // + storyTitle 覆写 work 标题）。
     seed_adopt_work(root, "short-work", "short-fiction", "source/final/short-story.json");
-    let candidate = r#"{"chapters":[{"number":1,"title":"雨夜","content":"来客叩门；镜中人影。"}]}"#;
+    let candidate = r#"{"storyTitle":"镜中雨","openingHook":"雨夜来客叩门。","chapters":[{"number":1,"title":"换名","content":"斋主以镜换名，来客留下一个再未使用的名字。","charCount":21},{"number":2,"title":"窥影","content":"镜中人影与来客同貌，交易自此刻开始。","charCount":18}],"rawContent":""}"#;
     let snapshot = root
         .join("works")
         .join("short-work")
@@ -711,34 +711,58 @@ async fn adopt_fail_closed_on_domain_projection_schema() {
         adopt_body("r1"),
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body["error"]["code"], "INTERNAL_ERROR");
+    assert_eq!(status, StatusCode::OK, "{}", body);
+    // storyTitle 覆写 work 标题（adopt title_override，TS L172 同款）
+    assert_eq!(body["action"]["status"], "success");
+    let detail = request(&app, "GET", "/api/v1/works/short-work", None).await.1;
+    assert_eq!(detail["work"]["title"], "镜中雨", "storyTitle 覆写 work 标题");
 
-    // action-failed 事件携带显式迁移边界码（而非静默裸写）
-    let store = CreativeEpisodeStore::new(&root.join(".inkos").join("harness.sqlite")).unwrap();
-    let listed = store
-        .list_episodes(&ListEpisodesOptions {
-            work_id: Some("short-work".into()),
-            profile_id: None,
-            status: None,
-            limit: Some(50),
-        })
-        .unwrap();
-    let events = store.list_events(&listed[0].id).unwrap();
-    let failed = events.iter().find(|event| event.event_type == "action-failed").unwrap();
+    // 投影族落盘（acceptPaths 只注册 authority 修订；投影文件为写入面产物）
+    let work_dir = root.join("works").join("short-work");
+    for path in [
+        "source/final/full.md",
+        "source/drafts/v001/draft.json",
+        "source/drafts/v001/full.md",
+        "source/final/chapters/0001.md",
+        "source/final/chapters/0002.md",
+        "source/drafts/v001/chapters/0001.md",
+    ] {
+        assert!(work_dir.join(path).exists(), "投影在位：{path}");
+    }
+    let full = std::fs::read_to_string(work_dir.join("source/final/full.md")).unwrap();
     assert_eq!(
-        failed.payload["code"],
-        "ARTIFACT_DOMAIN_PROJECTION_UNAVAILABLE",
-        "L2 域投影分支 fail-closed（884 号迁移边界）"
+        full,
+        "# 镜中雨\n\n## 开篇钩子\n\n雨夜来客叩门。\n\n## 第1章 换名\n\n斋主以镜换名，来客留下一个再未使用的名字。\n\n## 第2章 窥影\n\n镜中人影与来客同貌，交易自此刻开始。",
+        "full.md 渲染与 TS 逐字一致（金标准共用串）"
     );
-    store.close();
-
-    // 清单未被触碰（对比：静默裸写会翻转 current 而不产出投影——腐化态）
+    // authority 修订翻转（acceptPaths 注册）。注意：注册字节 = **重算后的 draft
+    // JSON**（charCount 重算+rawContent=markdown，TS write(authority, stringify(draft))
+    // 同款）——非候选原文，故 checksum ≠ 候选 hash 是正确行为。
     let manifest = parse_work_manifest_json(
         &std::fs::read_to_string(work_manifest_path(root, "short-work").unwrap()).unwrap(),
     )
     .unwrap();
-    assert_eq!(manifest.artifacts[0].current_revision_id.as_deref(), Some("r1"));
+    assert_ne!(manifest.artifacts[0].current_revision_id.as_deref(), Some("r1"));
+    let adopted = &manifest.artifacts[0]
+        .revisions
+        .iter()
+        .find(|revision| Some(&revision.id) == manifest.artifacts[0].current_revision_id.as_ref())
+        .unwrap();
+    assert_eq!(adopted.path, "source/final/short-story.json");
+    let registered_bytes =
+        std::fs::read_to_string(work_dir.join("source/final/short-story.json")).unwrap();
+    assert_eq!(
+        adopted.checksum,
+        format!("sha256:{}", sha256_hex(&registered_bytes)),
+        "清单 checksum = authority 落盘字节（重算后 draft JSON）"
+    );
+    // 注册内容含重算后的 charCount 与 rawContent（markdown）
+    let registered: Value = serde_json::from_str(&registered_bytes).unwrap();
+    assert_eq!(registered["chapters"][0]["charCount"], 21);
+    assert_eq!(
+        registered["rawContent"],
+        "# 镜中雨\n\n## 开篇钩子\n\n雨夜来客叩门。\n\n## 第1章 换名\n\n斋主以镜换名，来客留下一个再未使用的名字。\n\n## 第2章 窥影\n\n镜中人影与来客同貌，交易自此刻开始。"
+    );
 }
 
 // ── episodes 端点 ────────────────────────────────────────────────────

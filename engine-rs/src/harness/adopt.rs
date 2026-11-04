@@ -161,12 +161,22 @@ async fn execute_adopt_tool(
         } else {
             vec![AtomicFileWrite {
                 relative_path: format!("works/{}/{}", work_id, revision.path),
-                content: FileContent::Bytes(bytes),
+                content: FileContent::Bytes(bytes.clone()),
             }]
         };
     // TS：revision.path === "source/final/short-story.json" 时以文档 storyTitle
-    // 更新 work 标题——该路径在 validatedArtifactWrites 已被 884 号 fail-closed
-    // 边界拒绝，title 覆写不可达；M3 移植 authority 再生后随分支接通。
+    // 更新 work 标题（887 号 M3a 接通——884 号 fail-closed 边界已兑换，authority
+    // 采纳路径可达；此分支处 bytes 已在 validatedArtifactWeights 内通过 strict
+    // parse，此处 parse 必成）。storyTitle 非字符串 → 不覆写（TS undefined 同款）。
+    let title_override: Option<String> = if revision.path == "source/final/short-story.json" {
+        serde_json::from_str::<Value>(&String::from_utf8_lossy(&bytes))
+            .ok()
+            .and_then(|document| {
+                document.get("storyTitle").and_then(Value::as_str).map(str::to_string)
+            })
+    } else {
+        None
+    };
     let sync = sync_work_source_artifacts(SyncWorkSourceInput {
         project_root,
         work_id,
@@ -175,7 +185,7 @@ async fn execute_adopt_tool(
         episode_id: None,
         updated_at: None,
         writes,
-        title: None,
+        title: title_override.as_deref(),
         status: None,
     })
     .await

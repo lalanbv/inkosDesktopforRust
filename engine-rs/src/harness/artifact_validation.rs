@@ -1,20 +1,25 @@
-//! 工件写入校验（884 号 M1b）：`packages/core/src/harness/artifact-validation.ts`
-//! `validatedArtifactWrites` 移植。
+//! 工件写入校验（884 号 M1b 移植；887 号 M3a 兑换短篇 fail-closed 分支）：
+//! `packages/core/src/harness/artifact-validation.ts` `validatedArtifactWrites` 移植。
 //!
-//! ## 884 号迁移边界（fail-closed 原则）
-//! L2 生产管线（短篇 authority 文档投影再生 / 销售包渲染 / 翻译所有权校验 /
-//! story-graph 变量类型投影）属 M3 域，未随本轮迁移。这些 schema 分支在 TS adopt
-//! 会**成功**并再生确定性投影；Rust 侧 fail-closed（`ARTIFACT_DOMAIN_PROJECTION_UNAVAILABLE`
-//! 显式报错）而非静默裸写——裸写会写出「Node 预期投影已再生而实际没有」的腐化
-//! 清单态，违反双引擎交替读写硬门禁。TS 侧**失败**分支（exports/drafts/派生 .md）
-//! 则逐字对齐错误码。M3 移植对应 runner 时移除 fail-closed 分支。
+//! ## 域分支状态（884 fail-closed 边界 → 887 兑换）
+//! - `short-manuscript`（authority 文档投影再生）与 `short-package`（销售包三件
+//!   投影）：**887 号已兑换为真实实现**（纯函数层 `production::short_fiction`）。
+//! - `translation-*` / `story-graph`：仍 fail-closed（各自属翻译/影游管线，M3
+//!   后续轮兑换）——比 884 号范围收窄。
+//!
+//! TS 侧**失败**分支（exports/drafts/派生 .md/packaging 对）逐字对齐错误码。
 
 use serde_json::{json, Value};
 
 use super::action_error::ActionError;
 use super::artifact_edit_policy::assert_generic_artifact_editable;
 use super::contracts::WorkManifest;
+use crate::production::short_fiction::{
+    self as short_fiction, ShortDraftBounds, ShortFictionBatchDraft,
+};
 use crate::utils::atomic_file_set::AtomicFileWrite;
+use crate::utils::language::WritingLanguage;
+use crate::utils::length_metrics::{count_chapter_length, resolve_length_counting_mode};
 
 /// 短篇 final 的派生 .md 豁免三件（cover-request 是可编辑正典件）。
 const SHORT_FICTION_EXEMPT_FINAL_MD: &[&str] = &[
@@ -139,20 +144,40 @@ pub fn validated_artifact_writes(
         }
     }
 
-    // 884 号 fail-closed 分支：带域 schema 的文档在 TS 会做域校验/投影再生。
-    // 注意 story-graph 通常已在 assertGenericArtifactEditable 被域归属拒绝
-    //（owner=interactive-film）；此处兜底自定义 profile 的 schema 直配路径。
+    // TS 顶部 try 的 schema 快验（artifact-validation.ts L39-40）：parse 失败 =
+    // ARTIFACT_INVALID（887 号 M3a 兑换 884 号 fail-closed：短篇两支真实校验；
+    // translation-*/story-graph 仍 fail-closed——各自属翻译/影游管线 M3 后续轮）。
     if let Some(schema) = schema {
-        if matches!(
-            schema,
-            "short-manuscript"
-                | "short-package"
-                | "translation-manifest"
-                | "translation-glossary"
-                | "translation-chapter"
-                | "story-graph"
-        ) {
-            return Err(domain_projection_unavailable(schema));
+        match schema {
+            "short-manuscript" => {
+                if let Some(document) = &document {
+                    if let Err(error) =
+                        serde_json::from_value::<crate::production::short_fiction::ShortFictionBatchDraft>(
+                            document.clone(),
+                        )
+                    {
+                        return Err(ActionError::coded(
+                            format!("Error: {error}"),
+                            "ARTIFACT_INVALID",
+                        ));
+                    }
+                }
+            }
+            "short-package" => {
+                if let Some(document) = &document {
+                    if crate::production::short_fiction::check_short_package_tool(document).is_err() {
+                        return Err(ActionError::coded(
+                            "Error: Invalid short package",
+                            "ARTIFACT_INVALID",
+                        ));
+                    }
+                }
+            }
+            "translation-manifest" | "translation-glossary" | "translation-chapter" | "story-graph" => {
+                // 884 号 fail-closed 边界残余（范围已收窄：短篇两支 887 号兑换）。
+                return Err(domain_projection_unavailable(schema));
+            }
+            _ => {}
         }
     }
 
@@ -198,9 +223,51 @@ pub fn validated_artifact_writes(
     }
     if short_manuscript && path.starts_with("source/final/") {
         let authority = "source/final/short-story.json";
-        // TS：sales-package.json 在此再生三件投影——M3 边界，fail-closed。
+        // TS L62-68：sales-package.json → 校验 + rawContent 渲染 + 三件投影
+        //（887 号 M3a 兑换）。document 额外键保留（sales = {...document, rawContent}）。
         if path == "source/final/sales-package.json" {
-            return Err(domain_projection_unavailable("short-package"));
+            let document = document.as_ref().ok_or_else(|| {
+                ActionError::coded("Invalid short-fiction sales package", "ARTIFACT_INVALID")
+            })?;
+            if crate::production::short_fiction::check_short_package_tool(document).is_err() {
+                return Err(artifact_validation_error(
+                    "ARTIFACT_INVALID",
+                    "Invalid short-fiction sales package",
+                    Some(path),
+                ));
+            }
+            let language =
+                if work.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+            let mut sales = document.clone();
+            let rendered = crate::production::short_fiction::render_sales_package_from_value(
+                &sales,
+                language,
+            )
+            .map_err(|error| {
+                artifact_validation_error("ARTIFACT_INVALID", error, Some(path))
+            })?;
+            if let Value::Object(map) = &mut sales {
+                map.insert("rawContent".into(), Value::String(rendered));
+            }
+            let raw_content = sales
+                .get("rawContent")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let cover_prompt = sales
+                .get("coverPrompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            return Ok(vec![
+                write_for(
+                    work,
+                    path,
+                    serde_json::to_string_pretty(&sales).unwrap_or_default(),
+                ),
+                write_for(work, "source/final/sales-package.md", raw_content),
+                write_for(work, "source/final/cover-prompt.md", cover_prompt),
+            ]);
         }
         if path.ends_with(".md") && !SHORT_FICTION_EXEMPT_FINAL_MD.contains(&path) {
             return Err(ActionError {
@@ -211,9 +278,25 @@ pub fn validated_artifact_writes(
                 capability_id: None,
             });
         }
-        // TS：authority 文档在此再生 drafts/v001 + full.md + chapters + 投影——M3 边界。
+        // TS L72-94：authority 文档 → parse→charCount 重算→终稿校验→连续性检查
+        //→markdown 再渲染→drafts/v001+full.md+chapters+已注册 final .md 投影族
+        // 多写（887 号 M3a 兑换）。
         if path == authority {
-            return Err(domain_projection_unavailable("short-manuscript"));
+            let document = document.clone().ok_or_else(|| {
+                ActionError::coded("Artifact is not valid JSON", "ARTIFACT_INVALID")
+            })?;
+            let result = regenerate_short_manuscript_projections(work, &document);
+            match result {
+                Ok(writes) => return Ok(writes),
+                Err(message) => {
+                    // TS catch → ArtifactValidationError("ARTIFACT_INVALID", error.message, authority)。
+                    return Err(artifact_validation_error(
+                        "ARTIFACT_INVALID",
+                        message,
+                        Some(authority),
+                    ));
+                }
+            }
         }
         if path == "source/final/sales-package.md" || path == "source/final/cover-prompt.md" {
             return Err(ActionError {
@@ -264,4 +347,96 @@ pub fn encode_uri_component(value: &str) -> String {
         }
     }
     out
+}
+
+/// TS `validatedArtifactWrites` authority 分支（artifact-validation.ts L72-94，
+/// 887 号 M3a 兑换）：authority 文档 → parse → charCount 重算 → 终稿校验 →
+/// 连续性检查 → markdown 再渲染 → drafts/v001 + full.md + chapters + 已注册
+/// final .md 投影族多写。错误统一上抛为 message（catch → ARTIFACT_INVALID）。
+fn regenerate_short_manuscript_projections(
+    work: &WorkManifest,
+    document: &Value,
+) -> Result<Vec<AtomicFileWrite>, String> {
+    let authority = "source/final/short-story.json";
+    let language = if work.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+
+    let run = || -> Result<Vec<AtomicFileWrite>, String> {
+        let mut draft: ShortFictionBatchDraft = serde_json::from_value(document.clone())
+            .map_err(|error| error.to_string())?;
+        let mode = resolve_length_counting_mode(language);
+        for chapter in &mut draft.chapters {
+            chapter.char_count = count_chapter_length(&chapter.content, mode);
+        }
+        short_fiction::validate_short_fiction_draft_for_final(
+            &draft,
+            &ShortDraftBounds {
+                expected_chapters: Some(draft.chapters.len() as u32),
+                language: Some(language),
+                ..ShortDraftBounds::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        if draft.chapters.is_empty()
+            || draft
+                .chapters
+                .iter()
+                .enumerate()
+                .any(|(index, chapter)| chapter.number != index as u32 + 1)
+        {
+            return Err("Chapters must be contiguous".into());
+        }
+        let markdown = short_fiction::render_short_fiction_draft_markdown(&draft, language)
+            .map_err(|error| error.to_string())?;
+        draft.raw_content = markdown.clone();
+
+        // 投影族：current 修订中以 source/final/*.md 注册、排除 chapters/ 与三
+        // 豁免、排除 full.md 本身（TS 同款 filter）。
+        let projections: Vec<String> = work
+            .artifacts
+            .iter()
+            .flat_map(|artifact| {
+                artifact
+                    .revisions
+                    .iter()
+                    .filter(|revision| Some(&revision.id) == artifact.current_revision_id.as_ref())
+            })
+            .map(|revision| &revision.path)
+            .filter(|path| {
+                path.starts_with("source/final/")
+                    && path.ends_with(".md")
+                    && !path.contains("/chapters/")
+                    && !SHORT_FICTION_EXEMPT_FINAL_MD.contains(&path.as_str())
+                    && path.as_str() != "source/final/full.md"
+            })
+            .cloned()
+            .collect();
+
+        let draft_json = serde_json::to_string_pretty(&draft).map_err(|error| error.to_string())?;
+        let mut writes = vec![
+            write_for(work, authority, draft_json.clone()),
+            write_for(work, "source/drafts/v001/draft.json", draft_json),
+            write_for(work, "source/drafts/v001/full.md", markdown.clone()),
+            write_for(work, "source/final/full.md", markdown.clone()),
+        ];
+        for projection in &projections {
+            writes.push(write_for(work, projection, markdown.clone()));
+        }
+        for chapter in &draft.chapters {
+            let heading = short_fiction::format_short_fiction_chapter_heading(
+                chapter.number,
+                &chapter.title,
+                language,
+            )
+            .map_err(|error| error.to_string())?;
+            for base in ["source/final", "source/drafts/v001"] {
+                writes.push(write_for(
+                    work,
+                    &format!("{base}/chapters/{:04}.md", chapter.number),
+                    format!("# {heading}\n\n{}", chapter.content),
+                ));
+            }
+        }
+        Ok(writes)
+    };
+    run()
 }

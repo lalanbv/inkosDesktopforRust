@@ -18,6 +18,7 @@ pub mod chapter;
 pub mod context_compression;
 pub mod detection;
 pub mod genre_profile;
+pub mod observation;
 pub mod input_governance;
 pub mod length_governance;
 pub mod project;

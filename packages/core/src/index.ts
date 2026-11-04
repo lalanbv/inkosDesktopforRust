@@ -330,6 +330,11 @@ export {
   ShortFictionPackagingAgent,
   validateShortFictionDraftForFinal,
   renderShortFictionDraftMarkdown,
+  // 887 号 M3a：纯函数层跨引擎金标准面（production/short_fiction.rs 对应）
+  ShortFictionBatchDraftSchema,
+  measureShortFictionDraft,
+  buildShortFictionChapterBatches,
+  formatShortFictionChapterHeading,
   type ShortFictionOutline,
   type ShortFictionBatchDraft,
   type ShortFictionChapter,

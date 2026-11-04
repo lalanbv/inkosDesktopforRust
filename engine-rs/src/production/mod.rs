@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::atomic_file_set::{commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent};
 
+// 887 号 M3a：短篇生产 2.0 形态纯函数层（旧 agents/short_fiction.rs 为 78 号
+// tagged 链活体不动——处置关系见 production/short_fiction.rs 模块头）。
+pub mod short_fiction;
+
 /// 生产类型。对齐 TS `ProductionKind`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductionKind {
