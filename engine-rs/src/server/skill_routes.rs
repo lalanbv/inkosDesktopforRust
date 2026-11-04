@@ -785,6 +785,123 @@ async fn visit_skill_documents(
     Ok(())
 }
 
+/// PUT /api/v1/skills/:skillId/documents —— 技能文档编辑器写面（885 号 M2）。
+/// TS：normalizeSkillImportFiles（复用 import 校验）→ SKILL.md 必在根 →
+/// parse 身份不可变 → 逐段符号链接检查 → 原子提交。**无 skills:change 广播**
+///（TS 同：仅 import/delete 广播）。
+pub async fn put_skill_documents(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(skill_id): AxumPath<String>,
+    body: Option<Json<Value>>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let id = match normalize_studio_skill_id(&skill_id, "skillId") {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    // TS body.documents 缺失 → TypeError 无局部 catch → 500 固定文案。
+    let Some(Json(body)) = body else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected server error.");
+    };
+    let Some(documents) = body.get("documents") else {
+        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected server error.");
+    };
+    // TS：每条 {path, content} 包成 text/plain dataUrl 后走共享归一化。
+    use base64::Engine as _;
+    let payload = {
+        let mut arr = Vec::new();
+        if let Some(items) = documents.as_array() {
+            for item in items {
+                let path = item.get("path").cloned().unwrap_or(Value::Null);
+                let content = item.get("content").and_then(Value::as_str).unwrap_or("");
+                arr.push(json!({
+                    "path": path,
+                    "dataUrl": format!(
+                        "data:text/plain;base64,{}",
+                        base64::engine::general_purpose::STANDARD.encode(content.as_bytes())
+                    ),
+                }));
+            }
+        }
+        Value::Array(arr)
+    };
+    let (files, _) = match normalize_skill_import_files(Some(&payload)) {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+    let Some(manifest) = files.iter().find(|file| file.path == "SKILL.md") else {
+        return bad_request("INVALID_SKILL_MANIFEST", "SKILL.md must be at the folder root");
+    };
+    let skill_path = project_skill_path(root, &id);
+    // TS：parseAgentSkillDocument 抛错=普通 Error 无局部 catch → 500 固定文案
+    //（勿降级为 400——身份不匹配才是 400 面）。
+    let parsed = match parse_agent_skill_document(
+        std::str::from_utf8(&manifest.buffer).unwrap_or(""),
+        &skill_path,
+        SkillSource::Project,
+        None,
+    ) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "Unexpected server error.",
+            );
+        }
+    };
+    if parsed.id != id {
+        return bad_request("SKILL_ID_MISMATCH", "Skill identity cannot change");
+    }
+    let skill_dir = project_skill_dir(root, &id);
+    for file in &files {
+        // TS：逐段 lstat 符号链接检查（含文件名段；ENOENT 容忍）。
+        let mut parent = skill_dir.clone();
+        for part in std::iter::once("").chain(file.path.split('/')) {
+            if !part.is_empty() {
+                parent = parent.join(part);
+            }
+            match std::fs::symlink_metadata(&parent) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return bad_request(
+                        "INVALID_SKILL_PATH",
+                        "Skill editor cannot follow symlinks",
+                    );
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return api_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "INTERNAL_ERROR",
+                        "Unexpected server error.",
+                    );
+                }
+            }
+        }
+    }
+    let writes = files
+        .iter()
+        .map(|file| crate::utils::atomic_file_set::AtomicFileWrite {
+            relative_path: format!(
+                ".agents/skills/{id}/{}",
+                file.path.replace('\\', "/")
+            ),
+            content: crate::utils::atomic_file_set::FileContent::Bytes(file.buffer.clone()),
+        })
+        .collect();
+    let commit = crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: root,
+        writes,
+        deletes: Vec::new(),
+    };
+    if let Err(error) = crate::utils::atomic_file_set::commit_atomic_file_set(&commit).await {
+        return internal_error_message(&error.to_string());
+    }
+    let saved: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    (StatusCode::OK, Json(json!({ "id": id, "saved": saved })))
+}
+
 // ── DELETE /api/v1/skills/:skillId ─────────────────────────────
 
 /// `normalizeStudioSkillId`：SkillIdSchema 校验（消息带 zod 默认文本）。

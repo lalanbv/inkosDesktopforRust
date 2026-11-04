@@ -971,8 +971,24 @@ try {
     // 对称播种（walk-diff）。活体对比锚定对称夹具 walk-diff：列表面比对称子集
     //（全集差异=夹具差异非引擎差异），深链全用 walk-diff。
     const worksWorkId = "walk-diff";
+    const WORKS_PROBE_PROFILE = {
+      version: 2, id: "work-probe", title: "差分探针", description: "",
+      capabilityIds: ["workspace"], requiredSkillIds: [], recommendedSkillIds: [],
+      artifactKinds: [],
+      confirmation: { inferredMutation: "execute", explicitRecoverableMutation: "execute", destructiveMutation: "confirm" },
+      artifactSchemas: {}, qualityCriteria: [], production: {},
+    };
+    const WORKS_PROBE_PROFILE_TITLE_OVERRIDE = { ...WORKS_PROBE_PROFILE, title: "差分探针（改题）" };
+    const SUBSETS = {
+      works: (body) => (body && Array.isArray(body.works)
+        ? { works: body.works.filter((work) => work?.id === worksWorkId) }
+        : body),
+      profiles: (body) => (body && Array.isArray(body.profiles)
+        ? { profiles: body.profiles.filter((profile) => profile?.id === "work-probe") }
+        : body),
+    };
     const WORKS_LIVE_ROUTES = [
-      { method: "GET", path: "/api/v1/works", symmetric: true },
+      { method: "GET", path: "/api/v1/works", subset: "works" },
       { method: "GET", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}` },
       { method: "GET", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}/artifacts` },
       // 深链：夹具 outline r2（快照固定 checksum）→ content 面逐字节等价
@@ -982,16 +998,15 @@ try {
       // 固定夹具 episode（非列表首项——adopt 会插入 NOW 时间戳新 episode）
       { method: "GET", path: "/api/v1/episodes/ep-walkdiff-1" },
       { method: "GET", path: "/api/v1/profiles" },
+      // 885 号 M2：profiles 写面活体（双腿各播同一探针 → 写后归并对比）
+      { method: "POST", path: "/api/v1/profiles", body: WORKS_PROBE_PROFILE, label: "POST profiles(探针)" },
+      { method: "GET", path: "/api/v1/profiles", subset: "profiles", label: "GET profiles(含探针)" },
+      { method: "PUT", path: "/api/v1/profiles/work-probe", body: WORKS_PROBE_PROFILE_TITLE_OVERRIDE, label: "PUT profiles(探针改题)" },
+      { method: "POST", path: "/api/v1/profiles", body: WORKS_PROBE_PROFILE, label: "POST profiles(重名→409)" },
       // adopt：夹具工件路径为 artifacts/outline（非 source/）→ 双端同因失败
       //（ARTIFACT_DERIVED → 500 INTERNAL_ERROR 固定文案），对比 = 状态码 + 错误面
       { method: "POST", path: `/api/v1/works/${encodeURIComponent(worksWorkId)}/artifacts/outline/revisions/r2/adopt`, body: { expectedCurrentRevisionId: "r2" } },
     ];
-    const symmetricSubset = (body) => {
-      if (body && Array.isArray(body.works)) {
-        return { works: body.works.filter((work) => work?.id === worksWorkId) };
-      }
-      return body;
-    };
     let worksCompared = 0;
     let worksDiffs = 0;
     const worksLive = [];
@@ -1003,22 +1018,24 @@ try {
         nodeApi(spec.path, init).catch(() => null),
         rustApi(spec.path, init).catch(() => null),
       ]);
+      const label = spec.label ?? `${spec.method} ${spec.path}`;
       if (!nodeRes || !rustRes) {
         worksDiffs += 1;
-        worksLive.push(`✗ ${spec.method} ${spec.path}：双腿探测失败（node=${nodeRes ? "ok" : "fail"} rust=${rustRes ? "ok" : "fail"}）`);
+        worksLive.push(`✗ ${label}：双腿探测失败（node=${nodeRes ? "ok" : "fail"} rust=${rustRes ? "ok" : "fail"}）`);
         continue;
       }
       worksCompared += 1;
-      const nodeBody = spec.symmetric ? symmetricSubset(nodeRes.body ?? null) : (nodeRes.body ?? null);
-      const rustBody = spec.symmetric ? symmetricSubset(rustRes.body ?? null) : (rustRes.body ?? null);
+      const subset = spec.subset ? SUBSETS[spec.subset] : null;
+      const nodeBody = subset ? subset(nodeRes.body ?? null) : (nodeRes.body ?? null);
+      const rustBody = subset ? subset(rustRes.body ?? null) : (rustRes.body ?? null);
       const statusEqual = nodeRes.status === rustRes.status;
       const bodyEqual = JSON.stringify(prune(episodePlaceholder(nodeBody)))
         === JSON.stringify(prune(episodePlaceholder(rustBody)));
       if (statusEqual && bodyEqual) {
-        worksLive.push(`✓ ${spec.method} ${spec.path} → ${nodeRes.status}（归一化深比对一致）`);
+        worksLive.push(`✓ ${label} → ${nodeRes.status}（归一化深比对一致）`);
       } else {
         worksDiffs += 1;
-        worksLive.push(`✗ ${spec.method} ${spec.path} → node=${nodeRes.status} rust=${rustRes.status}${statusEqual ? "｜body 分歧：" + JSON.stringify({ node: prune(episodePlaceholder(nodeBody)), rust: prune(episodePlaceholder(rustBody)) }).slice(0, BODY_PREVIEW) : ""}`);
+        worksLive.push(`✗ ${label} → node=${nodeRes.status} rust=${rustRes.status}${statusEqual ? "｜body 分歧：" + JSON.stringify({ node: prune(episodePlaceholder(nodeBody)), rust: prune(episodePlaceholder(rustBody)) }).slice(0, BODY_PREVIEW) : ""}`);
       }
     }
     for (const line of worksLive) console.log(`[diff] [works 活体] ${line}`);

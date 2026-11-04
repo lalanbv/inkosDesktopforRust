@@ -116,6 +116,15 @@ const seedWorkEntity = async (root) => {
   writeFileSync(join(workDir, "revisions", "chapter", "r2.md"), REV2_TEXT);
   writeFileSync(join(workDir, "work.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
+  // 项目技能种子（M2 documents PUT 写面载体）
+  const skillDir = join(root, ".agents", "skills", "doc-skill");
+  mkdirSync(join(skillDir, "docs"), { recursive: true });
+  writeFileSync(
+    join(skillDir, "SKILL.md"),
+    "---\nname: doc-skill\ndescription: 交替互证种子技能\n---\n\n# doc-skill\n",
+  );
+  writeFileSync(join(skillDir, "docs", "notes.md"), "# 笔记\n");
+
   // episode 经 core dist CreativeEpisodeStore 播种（与 Node 回退端同一实现同一 schema）
   const storeModule = join(repoRoot, "packages", "core", "dist", "harness", "episode-store.js");
   if (!existsSync(storeModule)) {
@@ -264,28 +273,93 @@ try {
     check("② Rust /profiles", profiles.status === 200 && profiles.body?.profiles?.length === 9);
   }
 
-  // ── ③ Rust adopt（写面）──
-  {
-    const res = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/works/${WORK_ID}/artifacts/chapter/revisions/r2/adopt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expectedCurrentRevisionId: "r1" }),
-    });
-    const body = await res.json().catch(() => null);
-    check(
-      "③ Rust adopt 200 + ActionResult 形状",
-      res.status === 200 && body?.action?.status === "success"
-        && body.action?.artifacts?.[0]?.revisionId === REV2_ID
-        && body.action?.data?.kind === "work_revision_adopted"
-        && body.action?.data?.previousRevisionId === "r1",
-      `status=${res.status} body=${JSON.stringify(body)?.slice(0, 200)}`,
-    );
-    const detail = await getJson(rustPort, `/api/v1/works/${WORK_ID}`);
-    check(
-      "③ Rust 自读翻转态（r1→superseded + 新 current）",
-      detail.status === 200 && detail.body?.work?.artifacts?.[0]?.currentRevisionId === REV2_ID,
-    );
-  }
+    // ── ③ Rust adopt（写面）──
+    {
+      const res = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/works/${WORK_ID}/artifacts/chapter/revisions/r2/adopt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expectedCurrentRevisionId: "r1" }),
+      });
+      const body = await res.json().catch(() => null);
+      check(
+        "③ Rust adopt 200 + ActionResult 形状",
+        res.status === 200 && body?.action?.status === "success"
+          && body.action?.artifacts?.[0]?.revisionId === REV2_ID
+          && body.action?.data?.kind === "work_revision_adopted"
+          && body.action?.data?.previousRevisionId === "r1",
+        `status=${res.status} body=${JSON.stringify(body)?.slice(0, 200)}`,
+      );
+      const detail = await getJson(rustPort, `/api/v1/works/${WORK_ID}`);
+      check(
+        "③ Rust 自读翻转态（r1→superseded + 新 current）",
+        detail.status === 200 && detail.body?.work?.artifacts?.[0]?.currentRevisionId === REV2_ID,
+      );
+    }
+
+    // ── ③b Rust 写面（885 号 M2）：profiles POST/PUT + documents PUT ──
+    {
+      const postProfile = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/profiles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          version: 2,
+          id: "alt-custom",
+          title: "交替互证自定义",
+          description: "Rust 写面播种",
+          capabilityIds: ["workspace"],
+          requiredSkillIds: [],
+          recommendedSkillIds: [],
+          artifactKinds: [],
+          confirmation: { inferredMutation: "execute", explicitRecoverableMutation: "execute", destructiveMutation: "confirm" },
+          artifactSchemas: {},
+          qualityCriteria: [],
+          production: {},
+        }),
+      });
+      const postBody = await postProfile.json().catch(() => null);
+      check(
+        "③b Rust POST /profiles 201（自定义落盘）",
+        postProfile.status === 201 && postBody?.profile?.id === "alt-custom",
+        `status=${postProfile.status}`,
+      );
+      const dupProfile = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/profiles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(await (await fetchT(`http://127.0.0.1:${rustPort}/api/v1/profiles`)).json()).profiles.find((p) => p.id === "alt-custom") }),
+      });
+      check("③b 重复 POST → 409 PROFILE_EXISTS", dupProfile.status === 409);
+
+      const putProfile = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/profiles/short-fiction`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(await (await fetchT(`http://127.0.0.1:${rustPort}/api/v1/profiles`)).json()).profiles.find((p) => p.id === "short-fiction"),
+          title: "短篇（交替互证覆盖）",
+        }),
+      });
+      check("③b Rust PUT /profiles 内置覆盖 200", putProfile.status === 200);
+
+      // documents PUT：先 GET 现文档，原样写回 + 新增一页（Rust 写面闭环）
+      const docsBefore = await getJson(rustPort, "/api/v1/skills/doc-skill/documents").catch(() => ({ status: 404, body: null }));
+      if (docsBefore.status === 200) {
+        const documents = docsBefore.body.documents.map((doc) => ({ path: doc.path, content: doc.content }));
+        documents.push({ path: "docs/alt-note.md", content: "# 交替互证追加\n" });
+        const putDocs = await fetchT(`http://127.0.0.1:${rustPort}/api/v1/skills/doc-skill/documents`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ documents }),
+        });
+        const putBody = await putDocs.json().catch(() => null);
+        check(
+          "③b Rust PUT documents 200 + saved 面形状",
+          putDocs.status === 200 && putBody?.id === "doc-skill" && Array.isArray(putBody?.saved)
+            && putBody.saved.includes("docs/alt-note.md"),
+          `status=${putDocs.status}`,
+        );
+      } else {
+        check("③b Rust PUT documents（无 doc-skill 种子，跳过=信息行）", true, `GET=${docsBefore.status}`);
+      }
+    }
   await stopEngines();
 
   // ── ④ Node 文件级验证（Rust 写 → TS zod strict 读：876 号活体闭环）──
@@ -342,6 +416,23 @@ try {
       } finally {
         store.close();
       }
+      // M2 写面文件级验证：TS zod 解析 Rust 写的 profile 文件（strict 字段集互逆）
+      const customRaw = readFileSync(join(root, ".inkos", "profiles", "alt-custom.json"), "utf-8");
+      const customParsed = core.WorkProfileSchema.parse(JSON.parse(customRaw));
+      check(
+        "④ TS zod strict 解析 Rust 写的自定义 profile",
+        customParsed.id === "alt-custom" && customParsed.title === "交替互证自定义",
+      );
+      const overriddenRaw = readFileSync(join(root, ".inkos", "profiles", "short-fiction.json"), "utf-8");
+      const overriddenParsed = core.WorkProfileSchema.parse(JSON.parse(overriddenRaw));
+      check(
+        "④ TS zod strict 解析 Rust 写的内置覆盖 profile（contextRecipe 保持）",
+        overriddenParsed.title === "短篇（交替互证覆盖）"
+          && overriddenParsed.contextRecipe?.id === "short-fiction"
+          && overriddenParsed.artifactSchemas?.["source/final/short-story.json"] === "short-manuscript",
+      );
+      const noteBytes = readFileSync(join(root, ".agents", "skills", "doc-skill", "docs", "alt-note.md"), "utf-8");
+      check("④ Rust 写的文档追加页在位", noteBytes === "# 交替互证追加\n");
     }
   }
 
@@ -356,6 +447,24 @@ try {
     );
     const revision = await getJson(nodePort, `/api/v1/works/${WORK_ID}/artifacts/chapter/revisions/${REV2_ID}`);
     check("⑤ Node 读 Rust 写的快照", revision.status === 200 && revision.body?.content === REV2_TEXT);
+    // M2 写面用户可见等价：Node 引擎归并出 Rust 写的自定义/覆盖 profile 与追加文档
+    const profiles = await getJson(nodePort, "/api/v1/profiles");
+    const served = profiles.body?.profiles ?? [];
+    const custom = served.find((profile) => profile.id === "alt-custom");
+    const overridden = served.find((profile) => profile.id === "short-fiction");
+    check(
+      "⑤ Node 读 Rust 写的 profiles（自定义在列+内置覆盖生效）",
+      profiles.status === 200 && served.length === 10
+        && custom?.title === "交替互证自定义"
+        && overridden?.title === "短篇（交替互证覆盖）",
+      `profiles=${served.length}`,
+    );
+    const documents = await getJson(nodePort, "/api/v1/skills/doc-skill/documents");
+    check(
+      "⑤ Node 读 Rust 写的文档追加页",
+      documents.status === 200
+        && (documents.body?.documents ?? []).some((doc) => doc.path === "docs/alt-note.md"),
+    );
   }
 } finally {
   await stopEngines();

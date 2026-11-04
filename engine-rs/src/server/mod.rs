@@ -572,10 +572,12 @@ pub fn router_books(
             "/api/v1/skills/import",
             post(skill_routes::import_skill).with_state(books.clone()),
         )
-        // 884 号 M1b：skill 文档编辑器读面（GET——PUT 属 M2 写面）。
+        // 884/885 号：skill 文档编辑器读写面（M2 补 PUT 写面）。
         .route(
             "/api/v1/skills/:skillId/documents",
-            get(skill_routes::list_skill_documents).with_state(books.clone()),
+            get(skill_routes::list_skill_documents)
+                .put(skill_routes::put_skill_documents)
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/skills/:skillId",
@@ -613,7 +615,13 @@ pub fn router_books(
         )
         .route(
             "/api/v1/profiles",
-            get(work_routes::list_profiles).with_state(books.clone()),
+            get(work_routes::list_profiles)
+                .post(work_routes::post_profile)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/profiles/:id",
+            put(work_routes::put_profile).with_state(books.clone()),
         )
         .route(
             "/api/v1/prompt-packs",

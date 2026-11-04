@@ -236,6 +236,47 @@ impl WorkProfileRegistry {
     }
 }
 
+/// TS `WorkProfileSchema.parse(JSON.parse(raw))` 对应：strict 反序列化 +
+/// version literal(2)（contracts.validate 未含字面量检查，此处补齐——自定义
+/// profile 加载/写面共用）+ zod parse 等价校验。
+pub fn parse_work_profile_json(raw: &str) -> Result<WorkProfile, ProfileRegistryError> {
+    let profile: WorkProfile = serde_json::from_str(raw)
+        .map_err(|error| ProfileRegistryError::Invalid(error.to_string()))?;
+    if profile.version != HARNESS_VERSION {
+        return Err(ProfileRegistryError::Invalid(format!(
+            "Profile version must be {HARNESS_VERSION}"
+        )));
+    }
+    profile.validate().map_err(ProfileRegistryError::Invalid)?;
+    Ok(profile)
+}
+
+/// TS `POST/PUT /profiles` 落盘：`.inkos/profiles/<id>.json`，
+/// `JSON.stringify(profile, null, 2)`——**无尾换行**（work.json 才有 +"\n"，TS 同）。
+/// 经 atomic-file-set 原子提交（885 号 M2 写面）。
+pub async fn save_work_profile(
+    project_root: &Path,
+    profile: &WorkProfile,
+) -> Result<std::path::PathBuf, ProfileRegistryError> {
+    profile.validate().map_err(ProfileRegistryError::Invalid)?;
+    // 嵌套 artifactSchemas 为 BTreeMap（键序=字母序）——JSON 对象键序无契约
+    // 语义（双端经 zod/serde parse 读回），备案见 884 号变更记录。
+    let text = serde_json::to_string_pretty(profile)
+        .map_err(|error| ProfileRegistryError::Io(error.to_string()))?;
+    let commit = crate::utils::atomic_file_set::AtomicFileSet {
+        root_dir: project_root,
+        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+            relative_path: format!("{PROFILES_DIRECTORY}/{}.json", profile.id),
+            content: crate::utils::atomic_file_set::FileContent::Text(text),
+        }],
+        deletes: Vec::new(),
+    };
+    crate::utils::atomic_file_set::commit_atomic_file_set(&commit)
+        .await
+        .map_err(|error| ProfileRegistryError::Io(error.to_string()))?;
+    Ok(project_root.join(PROFILES_DIRECTORY).join(format!("{}.json", profile.id)))
+}
+
 /// TS `createBuiltInWorkProfileRegistry(projectRoot)`：内置 9 个 + `.inkos/profiles/*.json`
 /// 归并。目录缺失 = 仅内置；文件按名排序逐个 replace；符号链接/非常规文件 = 错
 ///（TS "Profile must be a regular file"）。
@@ -266,16 +307,7 @@ pub fn create_built_in_work_profile_registry(
         }
         let raw = std::fs::read_to_string(&path)
             .map_err(|error| ProfileRegistryError::Io(error.to_string()))?;
-        let profile: WorkProfile = serde_json::from_str(&raw)
-            .map_err(|error| ProfileRegistryError::Invalid(error.to_string()))?;
-        // TS WorkProfileSchema.parse：version literal(2) 由 zod 字面量强制；
-        // Rust contracts.validate 未含字面量检查，此处补齐（自定义 profile 加载面）。
-        if profile.version != HARNESS_VERSION {
-            return Err(ProfileRegistryError::Invalid(format!(
-                "Profile version must be {HARNESS_VERSION}"
-            )));
-        }
-        registry.replace(profile)?;
+        registry.replace(parse_work_profile_json(&raw)?)?;
     }
     Ok(registry)
 }

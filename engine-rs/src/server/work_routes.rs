@@ -22,7 +22,9 @@ use super::books_routes::BooksRuntime;
 use crate::harness::adopt::{adopt_work_revision, ActionResult};
 use crate::harness::contracts::WorkManifest;
 use crate::harness::episode_store::{CreativeEpisodeStore, ListEpisodesOptions};
-use crate::harness::profile_registry::create_built_in_work_profile_registry;
+use crate::harness::profile_registry::{
+    create_built_in_work_profile_registry, parse_work_profile_json, save_work_profile,
+};
 use crate::harness::source_sync::hex_sha256;
 use crate::harness::work_store::{list_work_manifests, load_work_manifest, work_directory, WorkStoreError};
 
@@ -348,6 +350,81 @@ pub async fn list_profiles(State(runtime): State<BooksRuntime>) -> Response {
                 .collect();
             (StatusCode::OK, Json(json!({ "profiles": profiles }))).into_response()
         }
+        Err(_) => internal_error_response(),
+    }
+}
+
+/// POST /api/v1/profiles —— 创作配置新建（885 号 M2 写面）。
+/// TS：WorkProfileSchema.parse 失败=zod 异常无局部 catch → 500 固定文案；
+/// 重复 id（内置或自定义，registry 全集判断）→ 409 PROFILE_EXISTS。
+pub async fn post_profile(
+    State(runtime): State<BooksRuntime>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let Some(Json(body)) = body else {
+        return internal_error_response();
+    };
+    let root = runtime.state.project_root();
+    let raw = serde_json::to_string(&body).unwrap_or_default();
+    let profile = match parse_work_profile_json(&raw) {
+        Ok(profile) => profile,
+        Err(_) => return internal_error_response(),
+    };
+    match create_built_in_work_profile_registry(root) {
+        Ok(registry) => {
+            if registry.get(&profile.id).is_some() {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": { "code": "PROFILE_EXISTS", "message": "Choose a new profile ID" }
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        Err(_) => return internal_error_response(),
+    }
+    match save_work_profile(root, &profile).await {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(json!({ "profile": serde_json::to_value(&profile).unwrap_or(Value::Null) })),
+        )
+            .into_response(),
+        Err(_) => internal_error_response(),
+    }
+}
+
+/// PUT /api/v1/profiles/:id —— 创作配置覆盖（内置亦可覆盖写盘——TS 同，
+/// registry 归并时自定义文件 replace 内置）。id 不可变 → 400 PROFILE_ID_MISMATCH。
+pub async fn put_profile(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(profile_id): AxumPath<String>,
+    body: Option<Json<Value>>,
+) -> Response {
+    let Some(Json(body)) = body else {
+        return internal_error_response();
+    };
+    let root = runtime.state.project_root();
+    let raw = serde_json::to_string(&body).unwrap_or_default();
+    let profile = match parse_work_profile_json(&raw) {
+        Ok(profile) => profile,
+        Err(_) => return internal_error_response(),
+    };
+    if profile.id != profile_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": { "code": "PROFILE_ID_MISMATCH", "message": "Profile identity cannot change" }
+            })),
+        )
+            .into_response();
+    }
+    match save_work_profile(root, &profile).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(json!({ "profile": serde_json::to_value(&profile).unwrap_or(Value::Null) })),
+        )
+            .into_response(),
         Err(_) => internal_error_response(),
     }
 }
