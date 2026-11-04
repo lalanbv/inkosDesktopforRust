@@ -20,6 +20,17 @@ pub mod short_fiction_prompts;
 // continueDraft/reviseDraft/applyRevisionPlan 随 890 轮 Reviser 链）。
 pub mod short_fiction_agents;
 
+// 890 号 M3c 下：行区间/选区编辑合同（text-range-edits.ts 移植）。
+pub mod text_range_edits;
+
+// 890 号 M3c 下：章节文档壳（chapter-document.ts 移植）。
+pub mod chapter_document;
+
+// 890 号 M3c 下：作者授权范围 + 源定位 + 权限解析。
+pub mod author_edit_scope;
+pub mod source_locator;
+pub mod author_text_permission;
+
 // 888 号 M3b：结构化 worker 基座（runWorkerAgentTool 等价环——通用件，
 // M3c 四代理与 M4 复用）。
 pub mod structured_agent;

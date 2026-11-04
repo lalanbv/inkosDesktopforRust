@@ -6,6 +6,8 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::utils::language::WritingLanguage;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
 use std::sync::OnceLock;
@@ -113,6 +115,118 @@ fn infer_fallback_title(heading_line: &str, chapter_number: usize) -> String {
         return format!("第{chapter_number}回");
     }
     format!("第{chapter_number}章")
+}
+
+/// 编号标题读取（890 号：TS `readChapterHeading` 对应——chapter_document 剥
+/// 标题壳用；`#{0,6}` 头与 `/i` 旗标对齐）。
+pub fn read_chapter_heading(line: &str) -> Option<(u32, String, WritingLanguage)> {
+    use std::sync::OnceLock;
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| {
+        Regex::new(
+            r"(?i)^#{0,6}\s*(?:第([零〇○Ｏ０一二三四五六七八九十百千万0-9]+)(章|回)(?:[:：]|\s+)?\s*(.*)|Chapter\s+(\d+|[IVXLCDM]+)[.:]?\s*(.*))",
+        )
+        .expect("编号标题正则合法")
+    });
+    let captures = re.captures(line.trim())?;
+    let (ordinal_text, is_zh) = if let Some(ordinal) = captures.get(1) {
+        (ordinal.as_str().to_string(), true)
+    } else if let Some(ordinal) = captures.get(4) {
+        (ordinal.as_str().to_string(), false)
+    } else {
+        return None;
+    };
+    let number = if is_zh {
+        parse_chinese_ordinal(&ordinal_text)?
+    } else if ordinal_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        ordinal_text.parse::<u32>().ok()?
+    } else {
+        parse_roman_ordinal(&ordinal_text)?
+    };
+    let title = captures
+        .get(3)
+        .or_else(|| captures.get(5))
+        .map(|text| text.as_str().trim().to_string())
+        .unwrap_or_default();
+    Some((number, title, if is_zh { WritingLanguage::Zh } else { WritingLanguage::En }))
+}
+
+/// TS 中文序数解析（零〇○Ｏ０一二三四五六七八九十百千万 + 十/百/千/万 单位制；
+/// `value*10+digit` 与 TS `value*10+(digits[character]??Number(character))` 同构）。
+fn parse_chinese_ordinal(ordinal: &str) -> Option<u32> {
+    fn digit_value(character: char) -> Option<u64> {
+        match character {
+            '零' | '〇' | '○' | 'Ｏ' | '０' => Some(0),
+            '一' => Some(1),
+            '二' => Some(2),
+            '三' => Some(3),
+            '四' => Some(4),
+            '五' => Some(5),
+            '六' => Some(6),
+            '七' => Some(7),
+            '八' => Some(8),
+            '九' => Some(9),
+            _ => None,
+        }
+    }
+    fn unit_value(character: char) -> Option<u64> {
+        match character {
+            '十' => Some(10),
+            '百' => Some(100),
+            '千' => Some(1000),
+            '万' => Some(10_000),
+            _ => None,
+        }
+    }
+    let mut total: u64 = 0;
+    let mut section: u64 = 0;
+    let mut value: u64 = 0;
+    for character in ordinal.chars() {
+        if let Some(unit) = unit_value(character) {
+            if unit == 10_000 {
+                total += (section + value + u64::from(section == 0 && value == 0)) * unit;
+                section = 0;
+            } else {
+                section += (value + u64::from(value == 0)) * unit;
+            }
+            value = 0;
+        } else if let Some(digit) = digit_value(character) {
+            value = value * 10 + digit;
+        } else if character.is_ascii_digit() {
+            value = value * 10 + u64::from(character as u8 - b'0');
+        } else {
+            return None;
+        }
+    }
+    let number = total + section + value;
+    u32::try_from(number).ok()
+}
+
+/// TS 罗马序数解析（I=1 V=5 X=10 L=50 C=100 D=500 M=1000；小前大减）。
+fn parse_roman_ordinal(ordinal: &str) -> Option<u32> {
+    fn value_of(character: char) -> Option<u64> {
+        match character.to_ascii_uppercase() {
+            'I' => Some(1),
+            'V' => Some(5),
+            'X' => Some(10),
+            'L' => Some(50),
+            'C' => Some(100),
+            'D' => Some(500),
+            'M' => Some(1000),
+            _ => None,
+        }
+    }
+    let digits: Vec<u64> = ordinal.chars().map(value_of).collect::<Option<Vec<_>>>()?;
+    let mut number: u64 = 0;
+    for (index, value) in digits.iter().enumerate() {
+        let next = digits.get(index + 1).copied().unwrap_or(0);
+        if *value < next {
+            number = number.saturating_sub(*value);
+        } else {
+            number += value;
+        }
+    }
+    u32::try_from(number).ok()
 }
 
 #[cfg(test)]
