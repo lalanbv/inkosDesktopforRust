@@ -421,6 +421,74 @@ pub async fn sync_work_source_artifacts(
     Ok(SyncWorkSourceOutput { manifest: next, evidence })
 }
 
+/// TS `captureWorkSourceState`：源目录全量字节指纹（键 = `source/` 相对 posix
+/// 路径）。源目录不存在 → 空表。.db/.sqlite 额外并入 `-wal` 字节——已提交的
+/// SQLite 变更在 checkpoint 前驻留 WAL，只为观察「是否写过」不做备份快照（TS
+/// 同源注释语义）。
+pub async fn capture_work_source_state(
+    project_root: &Path,
+    work_id: &str,
+) -> Result<BTreeMap<String, String>, SyncError> {
+    let root = work_directory(project_root, work_id)
+        .map_err(|error| SyncError::Invalid(error.to_string()))?
+        .join("source");
+    match std::fs::symlink_metadata(&root) {
+        Ok(_) => {}
+        // TS：lstat ENOENT → 空 Map；其余错误上抛。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(SyncError::Io(error.to_string())),
+    }
+    let files = list_files(&root)?;
+    let mut state = BTreeMap::new();
+    for file in files {
+        let path = root.join(&file);
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|error| SyncError::Io(error.to_string()))?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let extension = path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if extension == "db" || extension == "sqlite" {
+            if let Ok(wal) = tokio::fs::read(path_with_wal_suffix(&path)).await {
+                hasher.update(&wal);
+            }
+        }
+        let digest = hasher.finalize();
+        state.insert(
+            to_posix_path(&format!("source/{file}")),
+            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        );
+    }
+    Ok(state)
+}
+
+fn path_with_wal_suffix(path: &Path) -> PathBuf {
+    let os = path.to_string_lossy().into_owned();
+    PathBuf::from(format!("{os}-wal"))
+}
+
+/// TS `changedWorkSourcePaths`：前后指纹并集中哈希不同的路径，全局排序。
+pub async fn changed_work_source_paths(
+    project_root: &Path,
+    work_id: &str,
+    before: &BTreeMap<String, String>,
+) -> Result<Vec<String>, SyncError> {
+    let after = capture_work_source_state(project_root, work_id).await?;
+    let mut changed: Vec<String> = before
+        .keys()
+        .chain(after.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect();
+    changed.sort();
+    Ok(changed)
+}
+
 /// TS `relative(join("works", workId, "source"), relativePath)`：前缀剥离 + 归一化
 /// 后的 `..` 段检查（TS path.relative 归一化输出再判 "../" 前缀的等价实现）。
 fn relative_to_source(prefix: &str, relative_path: &str) -> Result<String, SyncError> {

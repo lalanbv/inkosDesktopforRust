@@ -28,18 +28,59 @@ use super::structured_agent::{
 };
 use crate::llm::provider::LLMMessage;
 use crate::models::observation::{
-    resolve_observation_sources, Observation, ReviewObservationSubmission,
+    resolve_observation_sources, Observation, ObservationAssessment, ReviewObservationSubmission,
 };
 use crate::utils::language::WritingLanguage;
 use crate::utils::length_metrics::{count_chapter_length, resolve_length_counting_mode};
 
 /// TS `AgentContext` 的基座等价面（client+model+defaults；技能/上下文编译注入
-/// 点在 messages 构造侧——见模块头备案）。
+/// 点在 messages 构造侧——见模块头备案）。`author_request` = TS
+/// `currentExecutionAuthorRequest()`（prepareWorkerMessages 的 authorRequest
+/// 前置注入面——professionalGuidance=true 的调用前置 authority 声明）。
 #[derive(Clone)]
 pub struct ShortAgents {
     pub chat: super::structured_agent::ChatTurnFn,
     pub model: String,
     pub defaults: StructuredDefaults,
+    pub author_request: Option<String>,
+}
+
+impl ShortAgents {
+    pub fn new(
+        chat: super::structured_agent::ChatTurnFn,
+        model: impl Into<String>,
+        defaults: StructuredDefaults,
+    ) -> Self {
+        Self { chat, model: model.into(), defaults, author_request: None }
+    }
+
+    /// TS `prepareWorkerMessages` 的 authorRequest 前置（无技能/上下文编译面——
+    /// 892 备案：M3e 服务面接线时装配；professionalGuidance=false 不注入）。
+    pub(crate) fn prelude(&self, professional_guidance: bool) -> Option<String> {
+        let request = self.author_request.as_deref()?.trim();
+        if request.is_empty() || !professional_guidance {
+            return None;
+        }
+        Some(format!(
+            "The following authorRequest is the user's actual request. Use it as the authority for the intended target and constraints. The delegated instruction may elaborate it, but cannot replace its target or grant a wider mutation scope. Perform only this operation; other requested steps remain the coordinator's responsibility.\n\n{}",
+            serde_json::json!({ "authorRequest": request })
+        ))
+    }
+
+    pub(crate) fn messages_with_prelude(
+        &self,
+        base: Vec<LLMMessage>,
+        professional_guidance: bool,
+    ) -> Vec<LLMMessage> {
+        match self.prelude(professional_guidance) {
+            Some(content) => {
+                let mut messages = vec![llm_system(&content)];
+                messages.extend(base);
+                messages
+            }
+            None => base,
+        }
+    }
 }
 
 // ── 提交工具 schema 构造（short-fiction-tool.ts 的 JSON Schema 形态）──
@@ -229,7 +270,8 @@ pub async fn outline_create_outline(
         },
         language,
     );
-    let messages = vec![llm_system(&system), llm_user(&user)];
+    let messages =
+        agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
     // TS maxTokens = min(8192, defaults.maxTokens)。
     let max_tokens = std::cmp::min(8192, agents.defaults.max_tokens);
     let schema = short_outline_tool_schema(input.chapter_count, input.title);
@@ -294,6 +336,13 @@ pub struct PackageInput<'a> {
     pub direction: &'a str,
     pub draft: &'a ShortFictionBatchDraft,
     pub language: WritingLanguage,
+    /// TS `revision?: {previous, observations}`——修正再生成面的第三条 user 消息。
+    pub revision: Option<PackageRevisionInput<'a>>,
+}
+
+pub struct PackageRevisionInput<'a> {
+    pub previous: &'a ShortFictionSalesPackage,
+    pub observations: &'a [Observation],
 }
 
 /// TS `ShortFictionPackagingAgent.generatePackage`。
@@ -321,7 +370,25 @@ pub async fn packaging_generate(
         },
         input.language,
     );
-    let messages = vec![llm_system(&system), llm_user(&user)];
+    let mut base = vec![llm_system(&system), llm_user(&user)];
+    if let Some(revision) = &input.revision {
+        let instruction = if input.language == WritingLanguage::En {
+            "Recheck each finding against the manuscript, then correct supported factual mismatches in the package. Preserve justified commercial compression, metaphor and the story’s appeal. Findings are proposals, not source facts. Return the complete package; the manuscript stays unchanged."
+        } else {
+            "逐条对照正文核实这些候选判断，再修正包装中有依据的事实偏差。保留合理的商业化压缩、隐喻与故事吸引力。审稿意见是待核实的判断，不是故事事实。提交完整包装，正文保持。"
+        };
+        base.push(llm_user(
+            &serde_json::json!({
+                "previousPackage": serde_json::to_value(revision.previous).unwrap_or(Value::Null),
+                "candidateFindings": serde_json::to_value(revision.observations).unwrap_or(Value::Null),
+                "instruction": instruction,
+            })
+            .to_string(),
+        ));
+    }
+    let messages = agents.messages_with_prelude(base, true);
+    // TS 直传 submitStructured：min(4096, safe(defaults))（safe 裁剪与 defaults
+    // 直比等价——见 889 备案）。
     let max_tokens = std::cmp::min(4096, agents.defaults.max_tokens);
     let outcome = run_structured_tool(
         Arc::clone(&agents.chat),
@@ -469,7 +536,7 @@ fn as_short_draft_batch(
 
 /// TS `validateRequestedShortChapter`：标题精确/章号面/长度合同（enforce）。
 #[allow(clippy::too_many_arguments)]
-fn validate_requested_short_chapter(
+pub(crate) fn validate_requested_short_chapter(
     result: &Value,
     numbers: &[u32],
     input: &WriteDraftInput<'_>,
@@ -546,11 +613,12 @@ fn validate_requested_short_chapter(
     Ok((story_title, opening_hook, chapters))
 }
 
-/// TS `WriterAgent.writeDraft`：批次循环 + 每批 merge + onBatchComplete。
+/// TS `WriterAgent.writeDraft`：批次循环 + 每批 merge + onBatchComplete（async
+/// 回调——TS persistDraftBatch 的落盘顺序面；回调 future 由调用方 await）。
 pub async fn writer_write_draft(
     agents: &ShortAgents,
     input: &WriteDraftInput<'_>,
-    mut on_batch_complete: impl FnMut(&ShortFictionBatchDraft, &[u32]),
+    mut on_batch_complete: impl FnMut(&ShortFictionBatchDraft, &[u32]) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>,
 ) -> Result<WriteDraftOutcome, StructuredAgentError> {
     let chapter_numbers: Vec<u32> = input
         .chapter_numbers
@@ -584,7 +652,8 @@ pub async fn writer_write_draft(
             },
             input.language,
         );
-        let messages = vec![llm_system(&system), llm_user(&user)];
+        let messages =
+        agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
         let schema = if chapter_batch.len() == 1 {
             short_draft_chapter_tool_schema()
         } else {
@@ -719,7 +788,14 @@ pub async fn writer_write_draft(
             })
             .unwrap_or_default();
         if let Some(draft) = &current {
-            on_batch_complete(draft, &complete_numbers);
+            on_batch_complete(draft, &complete_numbers)
+                .await
+                .map_err(|message| StructuredAgentError {
+                    code: "WORKER_PERSIST_FAILED".into(),
+                    message,
+                    attempts: None,
+                    result_tool: Some("submit_short_draft_batch".into()),
+                })?;
         }
     }
     let Some(draft) = current else {
@@ -743,6 +819,8 @@ pub struct ReviewDraftInput<'a> {
     pub revision_request: Option<&'a str>,
     pub review_scope: Option<&'a str>,
     pub measurements: Option<&'a super::short_fiction::ShortFictionMeasurements>,
+    /// TS `comparison`（宿主核验对照面——runner 传入，prompts 层原样 JSON）。
+    pub comparison: Option<&'a serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -786,7 +864,7 @@ pub async fn reviewer_review_draft(
             revision_request: input.revision_request,
             review_scope: input.review_scope,
             measurements: input.measurements,
-            comparison: None,
+            comparison: input.comparison,
         },
         language,
     );
@@ -810,7 +888,7 @@ pub async fn reviewer_review_draft(
         Arc::new(Mutex::new(BTreeMap::new()));
     let sources_arc = Arc::new(sources.clone());
     let recorded_for_support = Arc::clone(&recorded);
-    let supporting = vec![SupportingToolSpec {
+    let mut supporting = vec![SupportingToolSpec {
         name: "record_review_observation".into(),
         description: "Record an assessed finding after checking its reasoning and any arithmetic. This tool validates source addresses and returns their excerpts; it does not verify whether the claim is true. Resubmitting the same code replaces that finding.".into(),
         parameters_schema: serde_json::json!({
@@ -877,6 +955,10 @@ pub async fn reviewer_review_draft(
             })
         }),
     }];
+    // TS submitSourcedReview supportingTools 恒为三件：record_review_observation
+    // + calculate_review_values + calculate_story_interval（889 缺漏补齐）。
+    supporting.push(super::short_fiction_tools::review_calculation_tool());
+    supporting.push(super::short_fiction_tools::story_interval_tool());
     let recorded_for_validate = Arc::clone(&recorded);
     let validate: ValidateFn = Arc::new(move |value: Value| {
         let recorded = Arc::clone(&recorded_for_validate);
@@ -985,6 +1067,279 @@ use std::sync::Mutex;
 // ReviewSourceError re-export 供上层（endpoint 兑换面）引用。
 pub use crate::models::observation::ReviewSourceError as ShortReviewSourceError;
 
+// ── PackagingReviewer（TS ShortFictionDraftReviewerAgent.reviewPackage L591-616）──
+
+pub struct ReviewPackageInput<'a> {
+    pub draft: &'a super::short_fiction::ShortFictionBatchDraft,
+    pub sales: &'a super::short_fiction::ShortFictionSalesPackage,
+}
+
+/// 包审查配对校验（TS validateObservations）：issue 观察必须同时引用 package
+/// 原句与 manuscript 证据；仅批评正文不在本审查范围。记录时与终态各执行一次。
+fn validate_package_review_pairs(
+    observations: &[Observation],
+) -> Result<(), super::structured_agent::StructuredToolError> {
+    let unpaired: Vec<String> = observations
+        .iter()
+        .filter(|observation| {
+            observation.assessment == Some(ObservationAssessment::Issue)
+                && (!observation
+                    .source_refs
+                    .iter()
+                    .flatten()
+                    .any(|reference| reference.source_id == "package")
+                    || !observation
+                        .source_refs
+                        .iter()
+                        .flatten()
+                        .any(|reference| reference.source_id == "manuscript"))
+        })
+        .map(|observation| observation.code.clone())
+        .collect();
+    if unpaired.is_empty() {
+        return Ok(());
+    }
+    Err(super::structured_agent::StructuredToolError::coded(
+        "SHORT_PACKAGE_REVIEW_PAIR_REQUIRED",
+        serde_json::json!({
+            "code": "SHORT_PACKAGE_REVIEW_PAIR_REQUIRED",
+            "observationCodes": unpaired,
+            "instruction": "Cite the sales-package claim and manuscript evidence establishing each package issue, or withdraw it. A manuscript-only critique is outside this review.",
+        })
+        .to_string(),
+    ))
+}
+
+/// TS `reviewPackage`：包装承诺与成稿事实核对（professionalGuidance=false——
+/// 写作方法论与生产指令不构成核对证据）。sources 插入序 = 提示词序（package
+/// 前、manuscript 后——BTreeMap 会按字典序重排，提示词面用有序 Vec 构造）。
+pub async fn reviewer_review_package(
+    agents: &ShortAgents,
+    input: &ReviewPackageInput<'_>,
+    language: WritingLanguage,
+) -> Result<ReviewOutcome, StructuredAgentError> {
+    let package_markdown =
+        super::short_fiction::render_short_fiction_sales_package(input.sales, language);
+    let manuscript_markdown = super::short_fiction::render_short_fiction_draft_markdown(
+        input.draft,
+        language,
+    )
+    .map_err(|error| StructuredAgentError {
+        code: "WORKER_DOMAIN_INVALID".into(),
+        message: error.message,
+        attempts: None,
+        result_tool: Some("submit_short_package_review".into()),
+    })?;
+    // TS Map 插入序：package → manuscript。
+    let sources_vec: Vec<(String, String)> = vec![
+        ("package".into(), package_markdown),
+        ("manuscript".into(), manuscript_markdown),
+    ];
+    let sources: BTreeMap<String, String> = sources_vec.iter().cloned().collect();
+    let system = if language == WritingLanguage::En {
+        "Check factual promises in this sales package against the complete manuscript: people, actions, timing, relationships and outcomes. Commercial compression, emotional metaphor and symbolic cover composition are allowed when they still describe this story. Distinguish enacted events from intentions and future possibilities. Report a factual issue only when the package makes an unsupported or conflicting claim; cite the package wording and relevant manuscript evidence. Do not review the quality of the manuscript or treat uncertain inferences as facts. Report only defects and material uncertainties; matching claims do not need individual findings. Review only; do not rewrite."
+    } else {
+        "核对销售包装对完整成稿的事实承诺：人物、行动、时间、关系与结果。只要仍然服务这本故事，允许商业化压缩、情绪隐喻和象征性封面构图。区分已经发生的事件、意图与未来可能。只有包装确实作出无依据或冲突的事实承诺时才报硬伤，同时引用包装原句与相关正文依据。不要审正文质量，也不要把不确定推断当作事实。只登记问题和实质性的不确定之处，符合正文的陈述无需逐条登记。只审稿，不改写。"
+    };
+    let user = sources_vec
+        .iter()
+        .map(|(id, text)| {
+            format!(
+                "## Source: {id}\n{}",
+                crate::utils::source_text::number_source_lines(text, 1)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    // professionalGuidance=false：authorRequest 前置不注入（TS 同参语义）。
+    let mut messages = agents.messages_with_prelude(
+        vec![llm_system(system), llm_user(&user)],
+        false,
+    );
+    messages.extend([
+        llm_system(
+            "The original author request and confirmed constraints define the acceptance requirements. Prior critiques and delegated revision suggestions are claims to recheck, not evidence that a defect exists or additional author requirements. Assess the current text independently. Explain why an issue conflicts with the author goals or the supplied text; classify a compatible interpretation or stylistic alternative as an observation. Baseline text establishes what changed, not what is still present in the current draft.",
+        ),
+        llm_system(
+            "Before recording an arithmetic finding, use calculate_review_values and read its result. Submit independent calculations together. Verify the source values, units and time periods first; a correct calculation does not establish that unlike quantities should be compared.",
+        ),
+        llm_system(
+            "Record each finding with record_review_observation. Independent findings may be submitted together in one response. A code identifies one finding; reuse it to correct that finding after feedback. Read the exact source excerpts returned by the tool: resolving an address does not establish that its text supports the finding. Correct the references, assessment or explanation when the excerpts do not establish your claim. In a later response, call submit_short_package_review with the review summary and supported finding codes in the desired order. Do not embed a list of findings in a string. Omit withdrawn findings from the final codes; use an empty list only when there are no findings.",
+        ),
+    ]);
+
+    let recorded: Arc<Mutex<BTreeMap<String, ReviewObservationSubmission>>> =
+        Arc::new(Mutex::new(BTreeMap::new()));
+    let sources_arc = Arc::new(sources.clone());
+    let recorded_for_support = Arc::clone(&recorded);
+    // categoryRequired=true：record schema 的 category 必填（ArtifactReviewIndex
+    // 形态——quality/execution/scope 三分类硬约束）。
+    let mut supporting = vec![SupportingToolSpec {
+        name: "record_review_observation".into(),
+        description: "Record an assessed finding after checking its reasoning and any arithmetic. This tool validates source addresses and returns their excerpts; it does not verify whether the claim is true. Resubmitting the same code replaces that finding.".into(),
+        parameters_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "string", "minLength": 1 },
+                "summary": { "type": "string" },
+                "category": { "enum": ["execution", "quality", "scope"] },
+                "assessment": { "enum": ["issue", "resolved", "unavailable", "observation"] },
+                "sourceRefs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sourceId": { "type": "string", "minLength": 1 },
+                            "startLine": { "type": "integer", "minimum": 1 },
+                            "endLine": { "type": "integer", "minimum": 1 },
+                        },
+                        "required": ["sourceId", "startLine", "endLine"],
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "required": ["code", "summary", "category", "sourceRefs"],
+            "additionalProperties": false,
+        }),
+        execute: Arc::new(move |arguments: Value| {
+            let recorded = Arc::clone(&recorded_for_support);
+            let sources = Arc::clone(&sources_arc);
+            Box::pin(async move {
+                let submission: ReviewObservationSubmission =
+                    serde_json::from_value(arguments).map_err(|error| {
+                        super::structured_agent::StructuredToolError::coded(
+                            "WORKER_SCHEMA_INVALID",
+                            error.to_string(),
+                        )
+                    })?;
+                if submission.category.is_none() {
+                    return Err(super::structured_agent::StructuredToolError::coded(
+                        "WORKER_SCHEMA_INVALID",
+                        "category is required".to_string(),
+                    ));
+                }
+                let resolved = resolve_observation_sources(std::slice::from_ref(&submission), &sources)
+                    .map_err(|error| {
+                        super::structured_agent::StructuredToolError::coded(&error.code, error.message)
+                    })?;
+                validate_package_review_pairs(&resolved)?;
+                let receipt = serde_json::json!({
+                    "code": submission.code,
+                    "status": "source_resolved",
+                    "sourceRefs": resolved[0].source_refs,
+                    "instruction": "These are the actual selected excerpts. Check that they support this finding before keeping its code in the final review.",
+                });
+                recorded
+                    .lock()
+                    .unwrap()
+                    .insert(submission.code.clone(), submission);
+                Ok(receipt)
+            })
+        }),
+    }];
+    supporting.push(super::short_fiction_tools::review_calculation_tool());
+    supporting.push(super::short_fiction_tools::story_interval_tool());
+    let recorded_for_validate = Arc::clone(&recorded);
+    let validate: ValidateFn = Arc::new(move |value: Value| {
+        let recorded = Arc::clone(&recorded_for_validate);
+        Box::pin(async move {
+            let codes: Vec<String> = value
+                .get("observationCodes")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
+                })
+                .unwrap_or_default();
+            let recorded = recorded.lock().unwrap();
+            let unknown: Vec<String> = codes
+                .iter()
+                .filter(|code| !recorded.contains_key(*code))
+                .cloned()
+                .collect();
+            if !unknown.is_empty()
+                || codes.iter().collect::<std::collections::BTreeSet<_>>().len() != codes.len()
+            {
+                return Err(super::structured_agent::StructuredToolError::coded(
+                    "REVIEW_OBSERVATIONS_UNRECORDED",
+                    serde_json::to_string(&serde_json::json!({
+                        "code": "REVIEW_OBSERVATIONS_UNRECORDED",
+                        "unknownCodes": unknown,
+                        "acceptedCodes": recorded.keys().cloned().collect::<Vec<_>>(),
+                        "instruction": "Submit and correct each selected finding through record_review_observation, then finish with its accepted code exactly once. Remove withdrawn findings from the final list.",
+                    }))
+                    .unwrap_or_default(),
+                ));
+            }
+            Ok(value)
+        })
+    });
+    let index_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "summary": { "type": "string" },
+            "observationCodes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        },
+        "required": ["summary", "observationCodes"],
+        "additionalProperties": false,
+    });
+    // TS：requested = min(4096, safe(defaults))，实际 = min(requested*2, defaults)。
+    let max_tokens = std::cmp::min(4096 * 2, agents.defaults.max_tokens);
+    let outcome = run_structured_tool(
+        Arc::clone(&agents.chat),
+        &agents.model,
+        &messages,
+        agents.defaults.clone(),
+        WorkerToolSpec {
+            name: "submit_short_package_review".into(),
+            description: "Submit source-grounded findings about the package factual promises.".into(),
+            parameters_schema: index_schema,
+            max_turns: Some(16),
+        },
+        Some(validate),
+        supporting,
+        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+    )
+    .await?;
+
+    let recorded = recorded.lock().unwrap();
+    let codes: Vec<String> = outcome
+        .result
+        .get("observationCodes")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    let submissions: Vec<ReviewObservationSubmission> = codes
+        .iter()
+        .filter_map(|code| recorded.get(code).cloned())
+        .collect();
+    let observations = resolve_observation_sources(&submissions, &sources)
+        .map_err(|error| StructuredAgentError {
+            code: error.code,
+            message: error.message,
+            attempts: Some(outcome.turns),
+            result_tool: Some("submit_short_package_review".into()),
+        })
+        .and_then(|observations| {
+            validate_package_review_pairs(&observations).map_err(|error| StructuredAgentError {
+                code: error.code.unwrap_or_else(|| "SHORT_PACKAGE_REVIEW_PAIR_REQUIRED".into()),
+                message: error.message,
+                attempts: Some(outcome.turns),
+                result_tool: Some("submit_short_package_review".into()),
+            })?;
+            Ok(observations)
+        })?;
+    Ok(ReviewOutcome {
+        summary: outcome
+            .result
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        observations,
+        usage: outcome.usage,
+    })
+}
+
 // ── 测试（mock 注入：同 prompt+同 mock 响应 → 同产物字节）────────────
 
 #[cfg(test)]
@@ -1032,6 +1387,7 @@ mod tests {
             chat,
             model: "test-model".into(),
             defaults: StructuredDefaults { temperature: 0.7, max_tokens: 8192 },
+            author_request: None,
         };
         (agents, captured)
     }
@@ -1120,7 +1476,7 @@ mod tests {
         }))]);
         let sales = packaging_generate(
             &agents,
-            &PackageInput { direction: "雨夜来客的故事", draft: &draft, language: WritingLanguage::Zh },
+            &PackageInput { direction: "雨夜来客的故事", draft: &draft, language: WritingLanguage::Zh, revision: None },
         )
         .await
         .unwrap();
@@ -1156,7 +1512,7 @@ mod tests {
                 chapter_numbers: None,
                 language: WritingLanguage::Zh,
             },
-            |_draft, _complete| {},
+            |_draft, _complete| Box::pin(async { Ok(()) }),
         )
         .await
         .unwrap();
@@ -1215,6 +1571,7 @@ mod tests {
                 revision_request: None,
                 review_scope: None,
                 measurements: None,
+                comparison: None,
             },
             WritingLanguage::Zh,
         )
@@ -1262,6 +1619,7 @@ mod tests {
                 revision_request: None,
                 review_scope: None,
                 measurements: None,
+                comparison: None,
             },
             WritingLanguage::Zh,
         )

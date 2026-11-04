@@ -44,7 +44,7 @@ static WORK_MUTATION_LOCKS: std::sync::Mutex<Option<HashMap<String, Arc<Mutex<()
 
 /// 取 per-work 锁句柄；调用方持有 Arc 同时 `lock().await`（guard 生命周期锚定
 /// 本地 Arc，二者同作用域存活）。
-fn acquire_work_mutation_lock(project_root: &Path, work_id: &str) -> Arc<Mutex<()>> {
+pub(crate) fn acquire_work_mutation_lock(project_root: &Path, work_id: &str) -> Arc<Mutex<()>> {
     let key = format!("{}\0{work_id}", project_root.display());
     let mut guards = WORK_MUTATION_LOCKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     guards

@@ -41,6 +41,20 @@ pub mod short_fiction_revision;
 // M3c 四代理与 M4 复用）。
 pub mod structured_agent;
 
+// 892 号 M3d：supporting 工具（story-interval/review-calculation）+ 修订计划
+// 提交 schema + author scope 契约（story-interval.ts/review-calculation.ts/
+// short-fiction-tool.ts/short-revision-scope.ts 移植）。
+pub mod short_fiction_tools;
+
+// 892 号 M3d：writer 继续/修订链（continueDraft/planRevision/reviseDraft——
+// ReviseChapterFn 压缩回退装配）。
+pub mod short_fiction_writer_chain;
+
+// 892 号 M3d：runner 编排层（short-fiction-runner.ts 四阶段 produceShort +
+// loadCompletedShortRun 幂等重放 + stageResult acceptPaths 族 + 产物落盘 +
+// 失败恢复 + 每作品 tokio 书锁）。
+pub mod short_fiction_runner;
+
 /// 生产类型。对齐 TS `ProductionKind`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProductionKind {
