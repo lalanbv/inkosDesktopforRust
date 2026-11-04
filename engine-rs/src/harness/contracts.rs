@@ -219,6 +219,17 @@ impl WorkManifest {
     pub fn validate(&self) -> Result<(), String> {
         validate_work_resource_id(&self.id)?;
         validate_harness_id(&self.profile_id)?;
+        // 882 号对抗审查补齐：language/createdAt/updatedAt min(1)（TS
+        // z.string().min(1)），此前仅 id/title 域校验。
+        if self.language.is_empty() {
+            return Err("language must not be empty".into());
+        }
+        if self.created_at.is_empty() {
+            return Err("createdAt must not be empty".into());
+        }
+        if self.updated_at.is_empty() {
+            return Err("updatedAt must not be empty".into());
+        }
         if self.title.is_empty() {
             return Err("title must not be empty".into());
         }
