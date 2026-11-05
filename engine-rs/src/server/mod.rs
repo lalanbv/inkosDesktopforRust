@@ -15,6 +15,7 @@ pub mod audit_route;
 pub mod backup_routes;
 pub mod books_routes;
 pub mod book_create_routes;
+pub mod short_capability_route;
 pub mod fanfic_routes;
 pub mod books_state_routes;
 pub mod series_backfill_routes;
@@ -604,6 +605,10 @@ pub fn router_books(
         .route(
             "/api/v1/works/:id/artifacts/:artifactId/revisions/:revisionId/adopt",
             post(work_routes::post_adopt_work_revision).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/works/:id/capabilities/short-fiction/:actionId",
+            post(short_capability_route::post_short_capability_action).with_state(books.clone()),
         )
         .route(
             "/api/v1/episodes",

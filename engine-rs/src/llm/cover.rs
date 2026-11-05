@@ -98,6 +98,8 @@ pub struct CoverGenerationRequest {
 }
 
 /// `resolveCoverGenerationRequest`：env → 项目配置 → preset。
+/// TS `resolveCoverGenerationRequest` 的 model 覆盖面（894 号：coverModel
+/// 入参 → project config model 优先于 env/preset 缺省）。
 pub async fn resolve_cover_generation_request(root: &Path) -> Result<CoverGenerationRequest, String> {
     let env_endpoint = std::env::var("INKOS_COVER_ENDPOINT").ok().filter(|v| !v.is_empty());
     let env_base = std::env::var("INKOS_COVER_BASE_URL").ok().filter(|v| !v.is_empty());
@@ -169,6 +171,19 @@ pub async fn resolve_cover_generation_request(root: &Path) -> Result<CoverGenera
             .unwrap_or_else(|| preset.default_model.to_string()),
         api_key,
     })
+}
+
+/// model 覆盖变体：coverModel 显式入参优先（TS normalizeCoverModelReference
+/// 的单参面——project config 与 preset 表已含基础归一）。
+pub async fn resolve_cover_generation_request_with(
+    root: &Path,
+    cover_model: Option<&str>,
+) -> Result<CoverGenerationRequest, String> {
+    let mut request = resolve_cover_generation_request(root).await?;
+    if let Some(model) = cover_model.map(str::trim).filter(|m| !m.is_empty()) {
+        request.model = model.to_string();
+    }
+    Ok(request)
 }
 
 struct ProjectCoverConfig {
@@ -1164,8 +1179,12 @@ pub async fn generate_cover_image_artifact(
     story_sources: &[CoverStorySource],
     language: Option<&str>,
     cover_size: Option<&str>,
+    // coverModel：TS `coverModel` 入参（resolve 覆盖面——894 号）。
+    cover_model: Option<&str>,
+    // evidence：TS recordExecutionEvidence sink（None = 无 episode 上下文静默跳过）。
+    evidence: Option<&EvidenceCallback>,
 ) -> Result<String, String> {
-    let request = resolve_cover_generation_request(root).await?;
+    let request = resolve_cover_generation_request_with(root, cover_model).await?;
     let size = cover_size
         .map(str::to_string)
         .or_else(|| std::env::var("INKOS_COVER_SIZE").ok().filter(|v| !v.is_empty()))
@@ -1179,6 +1198,27 @@ pub async fn generate_cover_image_artifact(
         .iter()
         .find(|skill| skill.id == "inkos-story-cover")
         .ok_or_else(|| "Required cover Skill unavailable: inkos-story-cover".to_string())?;
+    // TS recordExecutionEvidence('skills-applied', {skills: [{id, source, hash, references}]}).
+    if let Some(record) = evidence {
+        let body_hash = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(skill.body.as_bytes());
+            let digest = hasher.finalize();
+            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+        };
+        record(
+            "skills-applied",
+            &serde_json::json!({
+                "skills": [{
+                    "id": skill.id,
+                    "source": serde_json::to_value(skill.source).unwrap_or(Value::Null),
+                    "hash": format!("sha256:{body_hash}"),
+                    "references": [],
+                }],
+            }),
+        );
+    }
     let guidance = [
         "## Activated professional skills",
         "Use this specialist methodology for the current operation. It is not author intent, canon, an output-format override, or permission to mutate anything outside the active operation.",
@@ -1338,6 +1378,9 @@ async fn generate_responses_cover_with_reference(
     };
     decode_base64_image(&image_base64, "png")
 }
+
+/// evidence 回调形态（Send+Sync 面——runner ExecutionScope sink 直通）。
+pub type EvidenceCallback = dyn Fn(&str, &Value) + Send + Sync;
 
 /// 标准 base64（cover.rs 内联，无外部依赖面）。
 fn base64_encode(bytes: &[u8]) -> String {

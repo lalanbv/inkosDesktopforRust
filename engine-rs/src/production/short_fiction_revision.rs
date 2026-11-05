@@ -224,7 +224,8 @@ type CompressOutcomeFuture = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<(String, Vec<String>, ShortFictionChapter), RevisionPlanError>> + Send>,
 >;
 
-/// ReviserAgent.reviseChapter 的注入请求（892 号装配面——compress 分支消费）。
+/// ReviserAgent.reviseChapter 的注入请求（892 号装配面——compress 分支消费；
+/// 894 号扩 scoped 分支面——author 权限解析 + governed 上下文逐字）。
 pub struct ReviseChapterRequest {
     pub chapter_number: u32,
     pub pending_content: String,
@@ -232,6 +233,24 @@ pub struct ReviseChapterRequest {
     pub max_chapter_length: Option<u32>,
     /// TS `onCandidate`：候选收集 sink（环内 push；调用方环后按序复刻采纳面）。
     pub candidate_sink: Option<Arc<std::sync::Mutex<Vec<String>>>>,
+    /// scoped 分支面（None = compress 回退形态）。
+    pub scoped: Option<ScopedReviseInput>,
+}
+
+/// TS applyRevisionPlan scoped 分支的逐章输入（L296-312 逐字面）。
+pub struct ScopedReviseInput {
+    /// `JSON.stringify({revisionBrief, chapterInstruction: chapterPlan.instruction})`。
+    pub instruction_json: String,
+    /// select identity 的章题（original.title）。
+    pub chapter_title: Option<String>,
+    /// governed 上下文（otherChapters 摘录——TS original-manuscript selectedContext）。
+    pub selected_context: Vec<super::narrative_context::ContextSource>,
+    /// author 源引用（resolveAuthorTextPermission 输入 + 原章内容）。
+    pub author_work_id: String,
+    pub author_artifact_id: String,
+    pub author_revision_id: String,
+    pub author_request: String,
+    pub author_original_content: String,
 }
 
 pub struct ReviseChapterOutcome {
@@ -272,11 +291,23 @@ pub struct ApplyRevisionPlanContext<'a> {
     pub on_revision_progress: RevisionProgressCallback,
     /// TS `input.chapterNumbers`（修订范围——validateRevisionPlan 的范围面）。
     pub chapter_numbers: Option<Vec<u32>>,
-    /// TS `input.authorScope`（892：validate 的 title/opening 权限面；scoped
-    /// 执行分支随 893 revise 入口接线）。
+    /// TS `input.authorScope`（892：validate 的 title/opening 权限面；894：
+    /// scoped 执行分支的允许面）。
     pub author_scope: Option<super::short_fiction_tools::ShortAuthorScope>,
+    /// TS `input.authorSource`（894 scoped 分支——原稿+源引用+作者请求）。
+    pub author_source: Option<ScopedAuthorSource>,
     /// TS `input.openingHookChars`（validateRevisionPlan 的开篇合同面）。
     pub opening_hook_chars: Option<u32>,
+}
+
+/// TS `input.authorSource` 的宿主引用面（episode 原始成稿登记 + 作者请求）。
+#[derive(Debug, Clone)]
+pub struct ScopedAuthorSource {
+    pub work_id: String,
+    pub artifact_id: String,
+    pub revision_id: String,
+    pub request: String,
+    pub draft: ShortFictionBatchDraft,
 }
 
 pub struct ApplyRevisionPlanOutcome {
@@ -403,7 +434,8 @@ async fn merge_improved_candidates(
 }
 
 /// TS `applyRevisionPlan`（非 scoped 主干 + compress 回退经 ReviseChapterFn
-/// 装配——892 号 M3d 接线；scoped 执行分支随 893 revise 入口接 author 权限）。
+/// 装配——892 号 M3d 接线；894 号 scoped 执行分支接通：authorScope→逐章
+/// reviseChapter + 章题提交）。
 #[allow(clippy::too_many_lines)]
 pub async fn apply_revision_plan(
     context: &ApplyRevisionPlanContext<'_>,
@@ -451,10 +483,19 @@ pub async fn apply_revision_plan(
     }
     let draft_state: Arc<std::sync::Mutex<ShortFictionBatchDraft>> =
         Arc::new(std::sync::Mutex::new(draft));
-    let _restructuring = context.chapter_count as usize != original.chapters.len()
+    let restructuring = context.chapter_count as usize != original.chapters.len()
         || plan.chapters.iter().any(|chapter| {
             chapter.source_number.map(|source| source != chapter.number).unwrap_or(false)
         });
+    // TS：scoped = authorSource && authorScope && (!wholeManuscript || !restructuring)。
+    let scoped_active = context.author_source.is_some()
+        && context.author_scope.is_some()
+        && (!context
+            .author_scope
+            .as_ref()
+            .map(|scope| scope.whole_manuscript)
+            .unwrap_or(false)
+            || !restructuring);
     for chapter_plan in &plan.chapters {
         let number = chapter_plan.number;
         let original_chapter = if chapter_plan.source_number == Some(0) {
@@ -472,6 +513,235 @@ pub async fn apply_revision_plan(
             .map(str::trim)
             .map(|text| !text.is_empty())
             .unwrap_or(false);
+
+        // ── scoped 执行分支（TS L291-328）──
+        if scoped_active {
+            let scope = context.author_scope.as_ref().expect("scoped_active 已保证");
+            let author_source = context.author_source.as_ref().expect("scoped_active 已保证");
+            let Some(author_original) = author_source.draft.chapters.iter().find(|item| item.number == number).cloned() else {
+                return Err(plan_error(
+                    "SHORT_REVISION_OUT_OF_SCOPE",
+                    "The authorized chapter is absent from the original manuscript.",
+                ));
+            };
+            let mut content = {
+                let guard = draft_state.lock().unwrap();
+                guard
+                    .chapters
+                    .iter()
+                    .find(|item| item.number == number)
+                    .cloned()
+                    .expect("padding 已保证槽位在场")
+                    .content
+            };
+            let mut title = author_original.title.clone();
+            let prose_authorized = scope.chapter_numbers.contains(&number)
+                || (scope.whole_manuscript && scope.chapter_numbers.is_empty());
+            if prose_authorized {
+                let revise = context.revise_chapter.clone().ok_or_else(|| RevisionPlanError {
+                    code: "SHORT_REVISION_SUBMIT_FAILED",
+                    message: "scoped revision requires a wired ReviserAgent".into(),
+                    details: None,
+                })?;
+                let other_chapters: Vec<ShortFictionChapter> = {
+                    let guard = draft_state.lock().unwrap();
+                    guard
+                        .chapters
+                        .iter()
+                        .filter(|item| item.number != number)
+                        .cloned()
+                        .collect()
+                };
+                let sink: Arc<std::sync::Mutex<Vec<String>>> =
+                    Arc::new(std::sync::Mutex::new(Vec::new()));
+                let request = ReviseChapterRequest {
+                    chapter_number: number,
+                    pending_content: content.clone(),
+                    observations: Vec::new(),
+                    max_chapter_length: context.max_chapter_length,
+                    candidate_sink: Some(Arc::clone(&sink)),
+                    scoped: Some(ScopedReviseInput {
+                        instruction_json: serde_json::json!({
+                            "revisionBrief": plan.revision_brief,
+                            "chapterInstruction": chapter_plan.instruction.clone().unwrap_or_default(),
+                        })
+                        .to_string(),
+                        chapter_title: Some(author_original.title.clone()),
+                        selected_context: vec![super::narrative_context::ContextSource {
+                            source: "original-manuscript".into(),
+                            reason: "Preserve established facts in the other chapters.".into(),
+                            excerpt: Some(serde_json::to_string(&other_chapters).unwrap_or_default()),
+                            protection: super::narrative_context::ContextProtection::Protected,
+                        }],
+                        author_work_id: author_source.work_id.clone(),
+                        author_artifact_id: author_source.artifact_id.clone(),
+                        author_revision_id: author_source.revision_id.clone(),
+                        author_request: author_source.request.clone(),
+                        author_original_content: author_original.content.clone(),
+                    }),
+                };
+                let outcome = revise(request).await.map_err(|message| RevisionPlanError {
+                    code: "SHORT_REVISION_SUBMIT_FAILED",
+                    message,
+                    details: None,
+                })?;
+                content = outcome.revised_content;
+                // TS scoped onCandidate（L304-311）：距离改良即并入。
+                let min_length = context.min_chapter_length.unwrap_or(1);
+                let distance = |text: &str| {
+                    let length = count_chapter_length(text, mode);
+                    std::cmp::max(
+                        min_length.saturating_sub(length),
+                        length.saturating_sub(context.max_chapter_length.unwrap_or(u32::MAX)),
+                    )
+                };
+                // guard 临时不跨 await（for 头临时活整个循环——先取 owned）。
+                let candidates = sink.lock().unwrap().clone();
+                for candidate in candidates {
+                    let (current_content, original_content) = {
+                        let guard = draft_state.lock().unwrap();
+                        let current = guard
+                            .chapters
+                            .iter()
+                            .find(|item| item.number == number)
+                            .cloned()
+                            .expect("padding 已保证槽位在场");
+                        (current.content, author_original.content.clone())
+                    };
+                    let improves = current_content == original_content
+                        || distance(&candidate) < distance(&current_content);
+                    if improves {
+                        {
+                            let mut guard = draft_state.lock().unwrap();
+                            if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
+                                slot.content = candidate.clone();
+                                slot.char_count = count_chapter_length(&candidate, mode);
+                            }
+                        }
+                        let snapshot = draft_state.lock().unwrap().clone();
+                        (context.on_revision_progress)(&snapshot, &[]).await.map_err(|message| {
+                            RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
+                        })?;
+                    }
+                }
+            }
+            if scope
+                .chapter_title_numbers
+                .as_ref()
+                .map(|numbers| numbers.contains(&number))
+                .unwrap_or(false)
+            {
+                // 章题提交（TS L315-321 逐字）。
+                let current_title = draft_state
+                    .lock()
+                    .unwrap()
+                    .chapters
+                    .iter()
+                    .find(|item| item.number == number)
+                    .map(|item| item.title.clone())
+                    .unwrap_or_default();
+                let title_messages = vec![
+                    LLMMessage {
+                        role: crate::llm::provider::LLMRole::System,
+                        content: "Revise only this chapter title as requested by the author. Keep its promise grounded in the supplied chapter.".into(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: crate::llm::provider::LLMRole::User,
+                        content: serde_json::json!({
+                            "authorRequest": author_source.request,
+                            "chapterNumber": number,
+                            "currentTitle": current_title,
+                            "content": content,
+                        })
+                        .to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                ];
+                let title_schema = serde_json::json!({
+                    "type": "object",
+                    "properties": { "title": { "type": "string", "minLength": 1 } },
+                    "required": ["title"],
+                    "additionalProperties": false,
+                });
+                let title_outcome = run_structured_tool(
+                    Arc::clone(context.chat),
+                    context.model,
+                    &title_messages,
+                    context.defaults.clone(),
+                    WorkerToolSpec {
+                        name: "submit_short_revision_title".into(),
+                        description: "Revise an authorized chapter title".into(),
+                        parameters_schema: title_schema,
+                        max_turns: None,
+                    },
+                    None,
+                    Vec::new(),
+                    super::structured_agent::StructuredRunOptions {
+                        temperature: None,
+                        max_tokens: Some(std::cmp::min(8192, context.defaults.max_tokens)),
+                    },
+                )
+                .await
+                .map_err(|error| RevisionPlanError {
+                    code: "SHORT_REVISION_TITLE_SUBMIT_FAILED",
+                    message: error.message,
+                    details: None,
+                })?;
+                title = title_outcome
+                    .result
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+            }
+            // 严格单章校验（TS L323）+ 并槽 + 进度。
+            let story_title = draft_state.lock().unwrap().story_title.clone();
+            let bound = serde_json::json!({
+                "storyTitle": story_title,
+                "number": number,
+                "title": title,
+                "content": content,
+            });
+            validate_single_chapter_submission(
+                &bound,
+                number,
+                context.language,
+                context.min_chapter_length,
+                context.max_chapter_length,
+                true,
+            )?;
+            {
+                let mut guard = draft_state.lock().unwrap();
+                if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
+                    slot.title = title;
+                    slot.content = content;
+                    slot.char_count = count_chapter_length(&slot.content, mode);
+                }
+            }
+            let completed: Vec<u32> = {
+                let guard = draft_state.lock().unwrap();
+                plan.chapters
+                    .iter()
+                    .filter(|item| {
+                        guard
+                            .chapters
+                            .iter()
+                            .any(|slot| slot.number == item.number && !slot.content.trim().is_empty())
+                    })
+                    .map(|item| item.number)
+                    .collect()
+            };
+            {
+                let snapshot = draft_state.lock().unwrap().clone();
+                (context.on_revision_progress)(&snapshot, &completed).await.map_err(|message| {
+                    RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
+                })?;
+            }
+            continue;
+        }
         if !has_instruction {
             // 无 instruction 且非 scoped：原章复制（TS 非 scoped 复制分支）。
             if let Some(source_chapter) = original_chapter {
@@ -553,6 +823,7 @@ pub async fn apply_revision_plan(
                 }],
                 max_chapter_length: Some(max),
                 candidate_sink: Some(Arc::clone(&sink)),
+                scoped: None,
             };
             Ok(Box::pin(async move {
                 let outcome = revise(request).await.map_err(|message| RevisionPlanError {
@@ -827,9 +1098,8 @@ pub async fn apply_revision_plan(
                 )
                 .await?;
                 // 严格校验（TS compressCandidate 出口）。
-                let story_title = draft_state.lock().unwrap().story_title.clone();
                 let bound = serde_json::json!({
-                    "storyTitle": story_title,
+                    "storyTitle": draft_state.lock().unwrap().story_title,
                     "number": number,
                     "title": pending.title,
                     "content": revised_content,

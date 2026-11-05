@@ -414,6 +414,7 @@ pub async fn writer_continue_draft(
         on_revision_progress,
         chapter_numbers: Some(missing.clone()),
         author_scope: None,
+        author_source: None,
         opening_hook_chars: input.opening_hook_chars,
     };
     let revised = apply_revision_plan(&context, &current, &plan)
@@ -423,6 +424,154 @@ pub async fn writer_continue_draft(
 }
 
 // ── planRevision / reviseDraft ───────────────────────────────────────
+
+/// 894 号 scoped 分支装配：ReviseChapterFn 双分发（scoped=select→resolve→
+/// ReviserAgent 注入；compress=892 回退面）。TS applyRevisionPlan scoped
+/// 分支内联 `new ReviserAgent(this.ctx).reviseChapter(...)` 的注入等价物。
+#[allow(clippy::too_many_arguments)]
+pub fn scoped_or_compress_revise_chapter_fn(
+    chat: super::structured_agent::ChatTurnFn,
+    model: impl Into<String>,
+    defaults: super::structured_agent::StructuredDefaults,
+    language: WritingLanguage,
+    chars_per_chapter: u32,
+    min_chapter_length: Option<u32>,
+    max_chapter_length: Option<u32>,
+    direction: impl Into<String>,
+    author_source: super::short_fiction_revision::ScopedAuthorSource,
+) -> ReviseChapterFn {
+    let model = model.into();
+    let direction = direction.into();
+    Arc::new(move |request: ReviseChapterRequest| {
+        let chat = Arc::clone(&chat);
+        let model = model.clone();
+        let defaults = defaults.clone();
+        let direction = direction.clone();
+        let author_source = author_source.clone();
+        let scoped_for_compress = request.scoped.is_none();
+        let Some(scoped) = request.scoped else {
+            // compress 回退（892 面）。author_source 仅在 scoped 分支消费
+            // （scoped_for_compress=false 时 compress 装配不用它——克隆面由
+            // 返回 future 的捕获面决定；此处显式消费防 unused 告警）。
+            let _ = &author_source;
+            let _ = scoped_for_compress;
+            let compress = compress_revise_chapter_fn(
+                Arc::clone(&chat),
+                model,
+                defaults,
+                language,
+                chars_per_chapter,
+                min_chapter_length,
+                request.max_chapter_length,
+                direction,
+            );
+            return compress(request);
+        };
+        Box::pin(async move {
+            // select 回调（SourceLocatorAgent——TS reviser 内联同款）。
+            let chapter_number = request.chapter_number;
+            let chapter_title = scoped.chapter_title.clone();
+            let select_language = language;
+            let select_chat = Arc::clone(&chat);
+            let select_model = model.clone();
+            let select_defaults = defaults.clone();
+            let select = move |source: String, select_request: String| {
+                let chat = Arc::clone(&select_chat);
+                let model = select_model.clone();
+                let defaults = select_defaults.clone();
+                let title = chapter_title.clone();
+                Box::pin(async move {
+                    let agents = super::source_locator::LocatorAgents {
+                        chat: &chat,
+                        model: &model,
+                        defaults: &defaults,
+                    };
+                    let identity = super::source_locator::SourceIdentity {
+                        kind: "chapter",
+                        chapter_number: Some(chapter_number),
+                        title: title.as_deref(),
+                        path: None,
+                    };
+                    super::source_locator::select(&agents, &source, &select_request, Some(&identity), select_language)
+                        .await
+                        .map_err(|error| error.message)
+                })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Result<crate::production::author_edit_scope::AuthorTextScope, String>> + Send>,
+                    >
+            };
+            // TS body()：章题在场时剥文档壳（chapterDocumentBody）。
+            let body = |content: &str| match &scoped.chapter_title {
+                Some(title) => super::chapter_document::chapter_document_body(
+                    content,
+                    request.chapter_number,
+                    title,
+                    language,
+                ),
+                None => content.to_string(),
+            };
+            let original_body = body(&scoped.author_original_content);
+            let current_body = body(&request.pending_content);
+            let permission = crate::production::author_text_permission::resolve_author_text_permission(
+                select,
+                crate::production::author_text_permission::ResolveAuthorTextPermissionInput {
+                    work_id: &scoped.author_work_id,
+                    artifact_id: &scoped.author_artifact_id,
+                    revision_id: &scoped.author_revision_id,
+                    original_content: &original_body,
+                    current_content: &current_body,
+                    author_request: &scoped.author_request,
+                    selector_version: 7,
+                },
+            )
+            .await
+            .map_err(|error| error.message)?;
+            // TS：ranges[0] 有 startOffset 才走 authorized 直接执行；行区间
+            // 面走 edit_ranges 自主（未授权 spot-fix 同形态）。
+            let resolved = match permission.contract {
+                crate::production::author_edit_scope::AuthorTextEditContract::Scoped(scoped_contract) => {
+                    Some(super::short_fiction_reviser::ResolvedPermission {
+                        scoped: Arc::new(scoped_contract),
+                        original_selection_texts: permission.original_selection_texts,
+                    })
+                }
+                crate::production::author_edit_scope::AuthorTextEditContract::Ranges(_) => None,
+            };
+            let length_spec = super::length_contract::build_length_spec(
+                chars_per_chapter,
+                language,
+                (min_chapter_length, max_chapter_length),
+            );
+            let agents = super::short_fiction_reviser::ReviseChapterAgents {
+                chat: &chat,
+                model: &model,
+                defaults: &defaults,
+            };
+            let input = super::short_fiction_reviser::ReviseChapterInput {
+                chapter_content: &request.pending_content,
+                chapter_number: request.chapter_number,
+                observations: &request.observations,
+                mode: super::short_fiction_reviser::ReviseMode::SpotFix,
+                language,
+                chapter_title: scoped.chapter_title.as_deref(),
+                instruction: Some(&scoped.instruction_json),
+                context_package_chapter: request.chapter_number,
+                selected_context: &scoped.selected_context,
+                length_spec: Some(&length_spec),
+                candidate_sink: request.candidate_sink.clone(),
+            };
+            let output = super::short_fiction_reviser::revise_chapter(&agents, input, resolved.as_ref()).await?;
+            let accepted = request
+                .candidate_sink
+                .map(|sink| sink.lock().unwrap().clone())
+                .unwrap_or_default();
+            Ok(ReviseChapterOutcome {
+                revised_content: output.revised_content,
+                accepted_candidates: accepted,
+            })
+        })
+    })
+}
 
 pub struct PlanRevisionInput<'a> {
     pub direction: &'a str,
@@ -653,6 +802,8 @@ pub struct ReviseDraftInput<'a> {
     pub chapter_numbers: Option<Vec<u32>>,
     pub author_scope: Option<&'a ShortAuthorScope>,
     pub author_source_request: Option<&'a str>,
+    /// 894 scoped 分支：author 源引用（resolveAuthorTextPermission + 原稿）。
+    pub author_source: Option<super::short_fiction_revision::ScopedAuthorSource>,
 }
 
 /// TS `reviseDraft`（L207-218）：单章快路径（无 opening/outline/title 权限）→
@@ -726,6 +877,7 @@ pub async fn writer_revise_draft(
         on_revision_progress,
         chapter_numbers: input.chapter_numbers.clone(),
         author_scope: input.author_scope.cloned(),
+        author_source: input.author_source.clone(),
         opening_hook_chars: input.opening_hook_chars,
     };
     let revised = apply_revision_plan(&context, input.draft, &plan)
@@ -932,6 +1084,7 @@ mod tests {
                 chapter_numbers: Some(vec![1]),
                 author_scope: None,
                 author_source_request: None,
+                author_source: None,
             },
             None,
             Arc::new(|_, _| Box::pin(async { Ok(()) })),

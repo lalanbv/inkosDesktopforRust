@@ -10499,6 +10499,12 @@ mod short78_e2e {
         axum::Router::new()
             .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
             .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/works/:workId/capabilities/short-fiction/:actionId",
+                axum::routing::post(
+                    inkos_engine::server::short_capability_route::post_short_capability_action,
+                ),
+            )
             .with_state(runtime)
     }
 
@@ -10723,6 +10729,155 @@ mod short78_e2e {
             text.starts_with("Short fiction manuscript \"existing\" saved with"),
             "text: {text}"
         );
+    }
+
+    #[tokio::test]
+    async fn capability_stage_actions_episode_flow() {
+        // 894 号 M4：四阶段能力动作（episode 环 + evidence 面）——outline/draft/
+        // review/package 逐动作调用 + episode 事件序列断言 + revise 动作续跑面。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, calls) = llm_mock_short_v2(vec![
+            ("submit_short_outline", outline_turn()),
+            ("submit_short_draft_batch", batch_turn()),
+            ("submit_short_fiction_review", review_record_turn()),
+            ("submit_short_fiction_review", review_final_turn()),
+            ("submit_short_package", package_turn()),
+            ("submit_short_package_review", package_record_turn()),
+            ("submit_short_package_review", package_final_turn()),
+            // revise 动作：author_request 在场 → scope 派生（submit_short_author_scope）
+            // → 单章快路径。
+            (
+                "submit_short_author_scope",
+                MockTurn::Tool(
+                    "submit_short_author_scope",
+                    serde_json::json!({
+                        "wholeManuscript": false,
+                        "chapterNumbers": [1],
+                        "opening": false,
+                        "outline": false,
+                    }),
+                ),
+            ),
+            // scoped 授权链：select → 直接 replacements（单段——authorized
+            // 面不做 edit_ranges 前置；双段形态=未授权 spot-fix 的自主定位面）。
+            (
+                "submit_edit_location",
+                MockTurn::Tool(
+                    "submit_edit_location",
+                    serde_json::json!({ "kind": "paragraphs", "boundary": "first", "count": 1, "targets": [] }),
+                ),
+            ),
+            (
+                "submit_chapter_range_replacements",
+                MockTurn::Tool(
+                    "submit_chapter_range_replacements",
+                    serde_json::json!({ "selection_0_text": "雨夜里少年提灯出门，第一层雾漫过河面。" }),
+                ),
+            ),
+            ("submit_short_fiction_review", review_record_turn()),
+            ("submit_short_fiction_review", review_final_turn()),
+        ])
+        .await;
+        let app = app78(rt78(&root, &llm));
+        let call_action = |app: axum::Router, action: &'static str, body: String| {
+            let app = app.clone();
+            async move {
+                call(
+                    app,
+                    "POST",
+                    &format!("/api/v1/works/night-rain3/capabilities/short-fiction/{action}"),
+                    Some(&body),
+                )
+                .await
+            }
+        };
+        let work_json = serde_json::json!({
+            "version": 2,
+            "id": "night-rain3",
+            "title": "夜雨追凶",
+            "profileId": "short-fiction",
+            "language": "zh",
+            "status": "active",
+            "lineage": [],
+            "artifacts": [],
+            "metadata": {},
+            "createdAt": "2026-11-05T00:00:00.000Z",
+            "updatedAt": "2026-11-05T00:00:00.000Z",
+        });
+        std::fs::create_dir_all(root.join("works/night-rain3")).unwrap();
+        std::fs::write(
+            root.join("works/night-rain3/work.json"),
+            format!("{work_json}\n"),
+        )
+        .unwrap();
+
+        // plan（outline 阶段）：先建 work 再四动作。
+        let (status, parsed) =
+            call_action(app.clone(), "plan_short_fiction", serde_json::json!({ "direction": "雨夜追凶，双线收束", "chapters": 2, "charsPerChapter": 900 }).to_string()).await;
+        assert_eq!(status, StatusCode::OK, "plan: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_stage_completed", "plan: {parsed}");
+        assert!(
+            parsed["content"].as_str().unwrap().starts_with("outline completed: "),
+            "content: {parsed}"
+        );
+        assert!(root.join("works/night-rain3/source/outline/v001.md").is_file());
+
+        let (status, parsed) =
+            call_action(app.clone(), "draft_short_fiction", serde_json::json!({ "chapters": 2, "charsPerChapter": 900 }).to_string()).await;
+        assert_eq!(status, StatusCode::OK, "draft: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_stage_completed");
+        assert!(root.join("works/night-rain3/source/drafts/v001/draft.json").is_file());
+        assert!(root.join("works/night-rain3/source/final/short-story.json").is_file());
+
+        let (status, parsed) =
+            call_action(app.clone(), "review_short_fiction", serde_json::json!({}).to_string()).await;
+        assert_eq!(status, StatusCode::OK, "review: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_stage_completed");
+        assert!(root.join("works/night-rain3/source/reviews/draft-v001.md").is_file());
+
+        let (status, parsed) =
+            call_action(app.clone(), "package_short_fiction", serde_json::json!({}).to_string()).await;
+        assert_eq!(status, StatusCode::OK, "package: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_stage_completed");
+        assert!(root.join("works/night-rain3/source/final/sales-package.json").is_file());
+
+        // episode 事件序列（每动作一个 completed episode）。
+        let store = inkos_engine::harness::episode_store::CreativeEpisodeStore::new(
+            &root.join(".inkos/harness.sqlite"),
+        )
+        .unwrap();
+        let options = inkos_engine::harness::episode_store::ListEpisodesOptions {
+            work_id: Some("night-rain3".into()),
+            profile_id: None,
+            status: None,
+            limit: Some(50),
+        };
+        let episodes = store.list_episodes(&options).unwrap();
+        assert_eq!(episodes.len(), 4, "四动作各一 episode: {}", episodes.len());
+        let first = &episodes[episodes.len() - 4];
+        let events = store.list_events(&first.id).unwrap();
+        let types: Vec<String> = events.iter().map(|event| event.event_type.clone()).collect();
+        assert!(
+            types.starts_with(&[
+                "episode-started".to_string(),
+                "action-started".to_string(),
+                "work-artifacts-synced".to_string(),
+            ]),
+            "事件序: {types:?}"
+        );
+        assert_eq!(types.last().map(String::as_str), Some("episode-completed"));
+        store.close();
+
+        // revise 动作（单章快路径 + review 阶段复用）。
+        let (status, parsed) =
+            call_action(app, "revise_short_fiction", serde_json::json!({ "instruction": "重写第一章", "chapterNumbers": [1] }).to_string()).await;
+        assert_eq!(status, StatusCode::OK, "revise: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_fiction_revised", "revise: {parsed}");
+        assert!(parsed["content"].as_str().unwrap().starts_with("Revised short fiction \"night-rain3\""));
+        let final_draft = std::fs::read_to_string(root.join("works/night-rain3/source/final/short-story.json")).unwrap();
+        assert!(final_draft.contains("雨夜里少年提灯出门"), "final 应落 scoped 替换文本: {final_draft}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 12);
     }
 }
 

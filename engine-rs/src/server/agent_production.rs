@@ -1918,7 +1918,7 @@ async fn execute_short_run(
 
 /// 四上下文路由装配：router_chat_turn_fn 生产适配器（889 基座）+ resolve 模型
 /// 面 + defaults.maxTokens=角色解析输出（TS createAgentContext(agent) 同构）。
-fn short_production_agents(
+pub(crate) fn short_production_agents(
     router: &std::sync::Arc<crate::llm::agent_router::AgentRouter>,
     agent: &'static str,
 ) -> crate::production::short_fiction_agents::ShortAgents {

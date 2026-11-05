@@ -84,6 +84,9 @@ pub struct ShortFictionRunRuntimes {
     pub package: crate::production::short_fiction_agents::ShortAgents,
 }
 
+/// TS `recordExecutionEvidence` 的 sink 形态（episode 事件面）。
+pub type EvidenceSink = Arc<dyn Fn(&str, &Value) + Send + Sync>;
+
 /// TS 执行上下文（`currentExecutionAuthorRequest`/`currentExecutionBaselineWork`）
 /// 的显式注入面——episode 执行由 M3e 服务面装配。
 #[derive(Clone, Default)]
@@ -91,6 +94,18 @@ pub struct ShortRunExecutionScope {
     pub author_request: Option<String>,
     /// episode 基线 Work 快照（None = 无 episode 上下文 → parent_revision 对照）。
     pub baseline_work: Option<Arc<WorkManifest>>,
+    /// TS `recordExecutionEvidence` 的 sink 注入（894 号：episode 事件面——
+    /// source-material-used / edit-scope-selected / skills-applied 观测点）。
+    pub evidence_sink: Option<EvidenceSink>,
+}
+
+impl ShortRunExecutionScope {
+    /// TS `recordExecutionEvidence(type, payload)`：sink 缺省为空操作。
+    pub fn record(&self, evidence_type: &str, payload: &Value) {
+        if let Some(sink) = &self.evidence_sink {
+            sink(evidence_type, payload);
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,6 +128,8 @@ pub struct ShortFictionRunOptions<'a> {
     pub reference: Option<ShortFictionReference>,
     /// None = 默认 true（TS cover?: boolean）。
     pub cover: Option<bool>,
+    /// TS `coverModel`（894 号 resolve 覆盖面）。
+    pub cover_model: Option<&'a str>,
     pub story_id: Option<&'a str>,
     pub chapter_count: Option<u32>,
     pub chars_per_chapter: Option<u32>,
@@ -145,6 +162,7 @@ impl<'a> ShortFictionRunOptions<'a> {
             runtimes,
             reference: None,
             cover: None,
+            cover_model: None,
             story_id: None,
             chapter_count: None,
             chars_per_chapter: None,
@@ -291,7 +309,8 @@ pub struct ShortReviewedArtifact {
 }
 
 /// TS `ShortProductionStageResult`。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShortProductionStageResult {
     pub story_id: String,
     pub stage: ShortProductionStage,
@@ -303,7 +322,8 @@ pub struct ShortProductionStageResult {
     pub reviewed_artifact: Option<ShortReviewedArtifact>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ShortProductionStage {
     Outline,
     Draft,
@@ -705,6 +725,7 @@ async fn short_outline_reference(
     work_id: Option<&str>,
     notes: Option<&ShortFictionReference>,
     worker: &str,
+    execution: &ShortRunExecutionScope,
 ) -> Result<Option<ShortFictionReference>, ShortRunError> {
     let Some(work_id) = work_id else {
         return Ok(notes.cloned());
@@ -725,8 +746,20 @@ async fn short_outline_reference(
     let read = read_artifact_revision(root, work_id, &artifact.id, None)
         .await
         .map_err(|error| ShortRunError::new("ARTIFACT_NOT_FOUND", error.to_string()))?;
-    // TS recordExecutionEvidence('source-material-used')——证据汇面 M3e 接线。
-    let _ = worker;
+    // TS recordExecutionEvidence('source-material-used', {worker, source, lineage})。
+    execution.record(
+        "source-material-used",
+        &serde_json::json!({
+            "worker": worker,
+            "source": {
+                "workId": work_id,
+                "artifactId": artifact.id,
+                "revisionId": read.revision.id,
+                "checksum": read.revision.checksum,
+            },
+            "lineage": work.lineage,
+        }),
+    );
     Ok(Some(ShortFictionReference {
         text: String::from_utf8_lossy(&read.bytes).into_owned(),
         path: Some(read.revision.path.clone()),
@@ -1012,7 +1045,7 @@ pub async fn produce_short(
         options.progress("Resuming from existing outline (skipping outline stages)...");
     } else {
         options.progress("Creating short fiction outline...");
-        let reference = short_outline_reference(root, provided_story_id, options.reference.as_ref(), "short-fiction-outline").await?;
+        let reference = short_outline_reference(root, provided_story_id, options.reference.as_ref(), "short-fiction-outline", &options.execution).await?;
         outline_source = reference.as_ref().and_then(|value| value.source.clone());
         let outline_result = outline_create_outline(
             &options.runtimes.planner,
@@ -1442,7 +1475,7 @@ pub async fn produce_short(
     let mut draft_review_warning: Option<String> = None;
     if stop_after != Some(ShortProductionStage::Package) {
         options.progress("Reviewing completed short fiction...");
-        let reference = short_outline_reference(root, Some(&story_id), options.reference.as_ref(), "short-fiction-review").await?;
+        let reference = short_outline_reference(root, Some(&story_id), options.reference.as_ref(), "short-fiction-review", &options.execution).await?;
         let request_hash = short_review_request_hash(
             &minimum_for_options,
             &story_id,
@@ -1973,6 +2006,7 @@ pub async fn produce_short(
             selling_points: &package.selling_points,
             cover_prompt: &package.cover_prompt,
         };
+        let evidence_ref = options.execution.evidence_sink.as_deref();
         match crate::llm::cover::generate_cover_image_artifact(
             root,
             &base_dir.join("final"),
@@ -1982,6 +2016,8 @@ pub async fn produce_short(
             &[],
             Some(language_code(language)),
             None,
+            options.cover_model,
+            evidence_ref,
         )
         .await
         {
@@ -2959,7 +2995,8 @@ pub struct ShortRevisionSnapshot {
 }
 
 /// TS `ShortFictionRevisionResult`（ShortFictionRunResult 去 sales/cover 面）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShortFictionRevisionResult {
     pub story_id: String,
     pub delivery: Option<ShortDelivery>,
@@ -3123,6 +3160,16 @@ pub async fn revise_short_fiction_production(
     let root = options.project_root;
     let lock = acquire_work_mutation_lock(root, story_id);
     let _guard = lock.lock().await;
+    revise_short_fiction_production_locked(options, root, story_id).await
+}
+
+/// 已持锁入口（894 号：capability 路由环持有 work 锁时调用——tokio Mutex
+/// 不可重入，双重 `lock().await` 即自死锁，M1a episode_store 先例同源）。
+pub async fn revise_short_fiction_production_locked(
+    options: &ShortFictionRunOptions<'_>,
+    root: &Path,
+    story_id: &str,
+) -> Result<ShortFictionRevisionResult, ShortRunError> {
     revise_short_fiction_with_lock(options, root, story_id).await
 }
 
@@ -3226,12 +3273,18 @@ async fn revise_short_fiction_with_lock(
         ),
         _ => None,
     };
-    let author_source: Option<(ShortReviewedArtifact, String, ShortFictionBatchDraft)> =
+    let author_source: Option<crate::production::short_fiction_revision::ScopedAuthorSource> =
         match (&author_original, &author_source_ref, &scope_author_request) {
             (Some(original), Some(reference), Some(request)) => {
                 let parsed: ShortFictionBatchDraft = serde_json::from_slice(&original.bytes)
                     .map_err(|error| ShortRunError::new("SHORT_REVISION_BASELINE_INVALID", error.to_string()))?;
-                Some((reference.clone(), request.clone(), parsed))
+                Some(crate::production::short_fiction_revision::ScopedAuthorSource {
+                    work_id: story_id.to_string(),
+                    artifact_id: reference.artifact_id.clone(),
+                    revision_id: reference.revision_id.clone(),
+                    request: request.clone(),
+                    draft: parsed,
+                })
             }
             _ => None,
         };
@@ -3276,8 +3329,18 @@ async fn revise_short_fiction_with_lock(
                     Some(scope)
                 }
             };
-            // TS recordExecutionEvidence('edit-scope-selected')——证据汇面 M4 接线。
-            let _ = artifact;
+            // TS recordExecutionEvidence('edit-scope-selected', {workId, artifactId,
+            // revisionId, authority:'author_request', scope})。
+            options.execution.record(
+                "edit-scope-selected",
+                &serde_json::json!({
+                    "workId": story_id,
+                    "artifactId": artifact.id,
+                    "revisionId": original.revision.id,
+                    "authority": "author_request",
+                    "scope": serde_json::to_value(&author_scope).unwrap_or(Value::Null),
+                }),
+            );
         }
     }
 
@@ -3578,6 +3641,39 @@ async fn revise_short_fiction_with_lock(
                     Ok(())
                 })
             });
+        // ReviserAgent 分发（894 scoped 分支）：author 源在场 → scoped 解析链；
+        // 否则 892 compress 回退面。
+        let revise_dispatch = match &author_source {
+            Some(source) => {
+                crate::production::short_fiction_writer_chain::scoped_or_compress_revise_chapter_fn(
+                    Arc::clone(&options.runtimes.writer.chat),
+                    options.runtimes.writer.model.clone(),
+                    options.runtimes.writer.defaults.clone(),
+                    language,
+                    revision_options.chars_per_chapter.unwrap_or(match language {
+                        WritingLanguage::En => SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
+                        _ => SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
+                    }),
+                    Some(minimum.min_chapter_length),
+                    minimum.max_chapter_length,
+                    revision_options.direction.to_string(),
+                    source.clone(),
+                )
+            }
+            None => crate::production::short_fiction_writer_chain::compress_revise_chapter_fn(
+                Arc::clone(&options.runtimes.writer.chat),
+                options.runtimes.writer.model.clone(),
+                options.runtimes.writer.defaults.clone(),
+                language,
+                revision_options.chars_per_chapter.unwrap_or(match language {
+                    WritingLanguage::En => SHORT_FICTION_EN_DEFAULT_WORDS_PER_CHAPTER,
+                    _ => SHORT_FICTION_DEFAULT_CHARS_PER_CHAPTER,
+                }),
+                Some(minimum.min_chapter_length),
+                minimum.max_chapter_length,
+                revision_options.direction.to_string(),
+            ),
+        };
         let (revised_draft, revised_outline) =
             crate::production::short_fiction_writer_chain::writer_revise_draft(
                 &options.runtimes.writer,
@@ -3597,9 +3693,10 @@ async fn revise_short_fiction_with_lock(
                     review: &review,
                     chapter_numbers: chapter_numbers.clone(),
                     author_scope: author_scope.as_ref(),
-                    author_source_request: author_source.as_ref().map(|(_, request, _)| request.as_str()),
+                    author_source_request: author_source.as_ref().map(|source| source.request.as_str()),
+                    author_source: author_source.clone(),
                 },
-                None,
+                Some(&revise_dispatch),
                 on_revision_progress,
             )
             .await
@@ -4163,6 +4260,78 @@ mod tests {
         let result = tokio().block_on(revise_short_fiction_production(&resume, "夜航")).unwrap();
         assert_eq!(result.revision_changes.chapter_numbers, vec![1]);
         assert!(!checkpoint_path.exists(), "续跑成功后 checkpoint 应删除");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn revise_scoped_branch_runs_reviser_chain() {
+        // 894 scoped 执行分支：authorSource 在场 → 逐章 reviseChapter
+        // （select→resolve→authorized/edit_ranges）+ 章题提交 + 权限终验。
+        // mock 序：scope 派生（submit_short_author_scope）→ locate → spot-fix
+        // 两段（edit_ranges→replacements）→ 章题提交 → review 双轮。
+        let root = temp_root("revise-scoped");
+        let (planner, writer, draft_review, package) = full_scripts();
+        let runtimes = runtimes_of(&planner, &writer, &draft_review, &package);
+        let options = base_options(&root, &runtimes);
+        tokio().block_on(run_short_fiction_production(&options)).unwrap();
+
+        let scope_submission = tool_response(
+            "submit_short_author_scope",
+            serde_json::json!({
+                "wholeManuscript": false,
+                "chapterNumbers": [1],
+                "chapterTitleNumbers": [1],
+                "opening": false,
+                "outline": false,
+            }),
+        );
+        // locate：段落 1 选区（TS LocationSchema 形态——kind/boundary/count + quote）。
+        let locate = tool_response(
+            "submit_edit_location",
+            serde_json::json!({
+                "kind": "paragraphs",
+                "boundary": "first",
+                "count": 1,
+                "targets": [],
+            }),
+        );
+        let edit_ranges = tool_response(
+            "submit_chapter_edit_ranges",
+            serde_json::json!({ "ranges": [{ "startLine": 1, "endLine": 1, "note": "开场微调" }] }),
+        );
+        let replacements = tool_response(
+            "submit_chapter_range_replacements",
+            serde_json::json!({ "selection_0_text": "雨夜里少年提灯出门，第一层雾漫过河面。" }),
+        );
+        let chapter_title = tool_response(
+            "submit_short_revision_title",
+            serde_json::json!({ "title": "启航·雨雾" }),
+        );
+        let scoped_writer = ScriptedAgent::new(vec![
+            scope_submission,
+            locate,
+            edit_ranges,
+            replacements,
+            chapter_title,
+        ]);
+        let scoped_review = ScriptedAgent::new(review_pair());
+        let scoped_runtimes = ShortFictionRunRuntimes {
+            planner: planner.agents(),
+            writer: scoped_writer.agents(),
+            draft_review: scoped_review.agents(),
+            package: package.agents(),
+        };
+        let mut scoped = revise_options(&root, &scoped_runtimes, "微调第一章开场；章题点出雨雾");
+        scoped.story_id = Some("夜航");
+        scoped.revision_chapter_numbers = Some(vec![1]);
+        // execution.author_request 驱动 scope 派生（TS currentExecutionAuthorRequest）。
+        scoped.execution.author_request = Some("微调第一章开场；章题点出雨雾".to_string());
+        let manifest = tokio().block_on(load_work_manifest(&root, "夜航")).unwrap();
+        scoped.execution.baseline_work = Some(Arc::new(manifest));
+        let result = tokio().block_on(revise_short_fiction_production(&scoped, "夜航")).unwrap();
+        assert_eq!(result.revision_changes.chapter_numbers, vec![1]);
+        // scoped 分支走 ReviserAgent（submit_chapter_edit_ranges 面在 mock 序可见
+        // ——脚本耗尽即证明链路经过）。
         std::fs::remove_dir_all(&root).ok();
     }
 }
