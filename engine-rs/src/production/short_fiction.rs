@@ -2,9 +2,9 @@
 //! 纯函数面 + 契约 + `pipeline/short-production-state.ts` 状态机——**LLM-free**，
 //! 全部可金标准锁。
 //!
-//! ## 与旧形态的处置关系（886 号勘察判定）
-//! `crate::agents::short_fiction`（78 号）是旧 tagged 链活体（旧 runner 引用中，
-//! 不动）。本模块为 2.0 形态并排落位，**重名语义函数 = 形态替换非复用**：
+//! ## 与旧形态的处置关系（886 号勘察判定 → 895 号退役收官）
+//! 旧 `crate::agents::short_fiction`（78 号 tagged 链）已于 895 号 live duel
+//! 对照绿后退役删除。本模块为 2.0 形态唯一活体，**重名语义函数 = 形态替换非复用**：
 //! - `format_chapter_heading`：旧版空标题回退+前缀检测；2.0 空标题**抛错**、纯格式化。
 //! - `render_draft_markdown`：旧版渲染全部章节；2.0 **跳过未完成章节**
 //!   （title+content 双非空才算 completed）。

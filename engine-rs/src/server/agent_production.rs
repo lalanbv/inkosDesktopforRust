@@ -1790,8 +1790,9 @@ pub(crate) async fn execute_create_book(
 /// short_fiction_runner 新链——runtimes 四上下文路由（short-outline/short-writer/
 /// short-draft-review/short-package）+ 每作品书锁 + 幂等重放。结果文本 = TS
 /// tool multi-line 汇总逐字（含封面未生成三行降级）；details = kind + result
-/// 全字段。旧 78 号链（pipeline/short_fiction_runner.rs）保留待 live duel
-/// 退役（695 纪律——并行期开始备案）。
+/// 全字段。旧 78 号链（pipeline/short_fiction_runner.rs、agents/short_fiction.rs、
+/// prompts/short_fiction.rs 三件）已于 895 号 live duel（INKOS_DUEL=1 真跑对照绿）
+/// 后退役删除（695 纪律收官）。
 #[allow(clippy::too_many_arguments)]
 async fn execute_short_run(
     runtime: &BooksRuntime,

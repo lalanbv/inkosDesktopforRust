@@ -10879,6 +10879,122 @@ mod short78_e2e {
         assert!(final_draft.contains("雨夜里少年提灯出门"), "final 应落 scoped 替换文本: {final_draft}");
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 12);
     }
+
+    #[tokio::test]
+    async fn capability_params_contract_895() {
+        // 895 号 M4 收尾：per-action 参数契约（TS OutlineParameters/DraftParameters/
+        // ReviewParameters/PackageParameters + ShortRevisionParams 的 Value.Decode
+        // 语义——声明键类型+minimum 强制、未声明键透传）+ direction 回退链
+        // （production-state intent → work.metadata.intent）+ outline 空方向守卫。
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, calls) = llm_mock_short_v2(vec![("submit_short_outline", outline_turn())]).await;
+        let app = app78(rt78(&root, &llm));
+        let seed_work = |root: &std::path::Path, id: &str, intent: serde_json::Value| {
+            let work_json = serde_json::json!({
+                "version": 2, "id": id, "title": "参数面", "profileId": "short-fiction",
+                "language": "zh", "status": "active", "lineage": [], "artifacts": [],
+                "metadata": { "intent": intent },
+                "createdAt": "2026-11-06T00:00:00.000Z", "updatedAt": "2026-11-06T00:00:00.000Z",
+            });
+            std::fs::create_dir_all(root.join("works").join(id)).unwrap();
+            std::fs::write(
+                root.join("works").join(id).join("work.json"),
+                format!("{work_json}\n"),
+            )
+            .unwrap();
+        };
+        seed_work(&root, "params-face", serde_json::json!("雾夜寻踪，单线收束"));
+        seed_work(&root, "guard-work", serde_json::Value::Null);
+        let action = |app: axum::Router, work: &'static str, action: &'static str, body: String| {
+            let app = app.clone();
+            async move {
+                call(
+                    app,
+                    "POST",
+                    &format!("/api/v1/works/{work}/capabilities/short-fiction/{action}"),
+                    Some(&body),
+                )
+                .await
+            }
+        };
+
+        // ① 声明键类型面：direction 非字符串 → decode 失败（capability-registry
+        //    错误文案镜像），先于工件门、零 LLM 调用。
+        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", r#"{"direction":42}"#.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        let message = parsed["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Capability short-fiction.plan_short_fiction params decode failed"),
+            "{message}"
+        );
+        assert!(message.contains("/direction: Expected string"), "{message}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        // ② minimum 面：chapters=0 拒；minChapterLength=null 继承合法（不产生违约项）。
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "plan_short_fiction",
+            r#"{"direction":"x","chapters":0,"minChapterLength":null}"#.to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        let message = parsed["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("/chapters: Expected integer >= 1"), "{message}");
+        assert!(!message.contains("minChapterLength"), "{message}");
+
+        // ③ outline 空方向守卫：direction 缺席 + 无 intent 回退 → TS 逐字文案。
+        let (status, parsed) = action(app.clone(), "guard-work", "plan_short_fiction", "{}".to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["message"].as_str().unwrap_or_default(),
+            "An outline needs a creative direction"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        // ④ metadata.intent 回退链：plan 无 direction → intent 兜底成稿。
+        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", "{}".to_string()).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["details"]["kind"], "short_stage_completed");
+        let state: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works/params-face/source/production-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(state["intent"], "雾夜寻踪，单线收束", "state: {state}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // ⑤ review/package 声明键类型面（校验先于工件门）。
+        let (status, parsed) = action(app.clone(), "params-face", "review_short_fiction", r#"{"reviewScope":42}"#.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap_or_default().contains("/reviewScope: Expected string"),
+            "body: {parsed}"
+        );
+        let (status, parsed) = action(app.clone(), "params-face", "package_short_fiction", r#"{"direction":[]}"#.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap_or_default().contains("/direction: Expected string"),
+            "body: {parsed}"
+        );
+
+        // ⑥ revise 面：chapterNumbers 越界拒；chapterCount（TS 键名，非 stage 面
+        //    chapters）类型面拒——修正前 Rust 误读 chapters 键。
+        let (status, parsed) = action(app.clone(), "params-face", "revise_short_fiction", r#"{"instruction":"重写","chapterNumbers":[0]}"#.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap_or_default().contains("/chapterNumbers: Expected array of integer >= 1"),
+            "body: {parsed}"
+        );
+        let (status, parsed) = action(app.clone(), "params-face", "revise_short_fiction", r#"{"instruction":"重写","chapterCount":0}"#.to_string()).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap_or_default().contains("/chapterCount: Expected integer >= 1"),
+            "body: {parsed}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "参数违约全程零额外 LLM 调用");
+    }
 }
 
 mod play79_e2e {

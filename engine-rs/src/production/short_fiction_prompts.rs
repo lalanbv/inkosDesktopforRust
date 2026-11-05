@@ -1,8 +1,8 @@
 //! 短篇提示词构造（889 号 M3c）：`packages/core/src/prompts/short-fiction.ts`
 //! 忠实移植——7 个构造函数全部确定性拼接，双端逐字金标准（同输入同字节）。
 //!
-//! 旧 `crate::prompts::short_fiction`（78 号 tagged 链）活体不动（处置表同
-//! production/short_fiction.rs 模式）。
+//! 旧 `crate::prompts::short_fiction`（78 号 tagged 链）已于 895 号随旧 runner
+//! 退役删除（对照证据见变更记录 895 号）。
 
 use serde::Serialize;
 use serde_json::Value;

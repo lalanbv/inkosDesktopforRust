@@ -230,6 +230,132 @@ fn finish_episode(
         .map(|_| ())
 }
 
+// ── 参数契约（895 号 M4 收尾）────────────────────────────────────
+// TS per-action schema（short-production.ts OutlineParameters=
+// Omit(Parameters,['maxChaptersPerCall','reviewScope']) / DraftParameters=
+// Omit(Parameters,['workId','reviewScope']) / ReviewParameters=
+// Pick(Parameters,['workId','reviewScope']) / PackageParameters=
+// Pick(Parameters,['workId','direction']) + agent-tools.ts ShortRevisionParams）
+// 的 Value.Decode 语义：声明键类型+minimum 强制，未声明键透传（TypeBox
+// additionalProperties 缺省开放）。错误文案镜像 capability-registry.ts
+// decode 失败形态（path: message 分号拼接）。
+
+fn capability_params_error(action_id: &str, violations: &[String]) -> ShortRunError {
+    ShortRunError::new(
+        "CAPABILITY_PARAMS_INVALID",
+        format!(
+            "Capability {CAPABILITY_ID}.{action_id} params decode failed: {}",
+            violations.join("; ")
+        ),
+    )
+}
+
+fn require_uint_min1(params: &Value, key: &str, violations: &mut Vec<String>) {
+    if let Some(value) = params.get(key) {
+        match value.as_u64() {
+            Some(n) if n >= 1 => {}
+            _ => violations.push(format!("/{key}: Expected integer >= 1")),
+        }
+    }
+}
+
+/// `Type.Union([Type.Integer({minimum:1}),Type.Null()])`——null 合法（继承面）。
+fn require_length_or_null(params: &Value, key: &str, violations: &mut Vec<String>) {
+    if let Some(value) = params.get(key) {
+        if value.is_null() {
+            return;
+        }
+        match value.as_u64() {
+            Some(n) if n >= 1 => {}
+            _ => violations.push(format!("/{key}: Expected integer >= 1 or null")),
+        }
+    }
+}
+
+fn require_string(params: &Value, key: &str, violations: &mut Vec<String>) {
+    if let Some(value) = params.get(key) {
+        if value.as_str().is_none() {
+            violations.push(format!("/{key}: Expected string"));
+        }
+    }
+}
+
+fn validate_stage_params(
+    stage: ShortProductionStage,
+    action_id: &str,
+    params: &Value,
+) -> Result<(), ShortRunError> {
+    let mut violations: Vec<String> = Vec::new();
+    match stage {
+        ShortProductionStage::Outline | ShortProductionStage::Draft => {
+            require_string(params, "direction", &mut violations);
+            require_uint_min1(params, "chapters", &mut violations);
+            require_uint_min1(params, "charsPerChapter", &mut violations);
+            require_length_or_null(params, "minChapterLength", &mut violations);
+            require_length_or_null(params, "openingHookChars", &mut violations);
+            require_length_or_null(params, "maxChapterLength", &mut violations);
+            if let Some(value) = params.get("coverRequired") {
+                if !value.is_boolean() && !value.is_null() {
+                    violations.push("/coverRequired: Expected boolean or null".to_string());
+                }
+            }
+            if stage == ShortProductionStage::Draft {
+                require_uint_min1(params, "maxChaptersPerCall", &mut violations);
+            }
+        }
+        ShortProductionStage::Review => {
+            require_string(params, "reviewScope", &mut violations);
+        }
+        ShortProductionStage::Package => {
+            require_string(params, "direction", &mut violations);
+        }
+    }
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(capability_params_error(action_id, &violations))
+    }
+}
+
+fn validate_revise_params(params: &Value) -> Result<(), ShortRunError> {
+    const ACTION_ID: &str = "revise_short_fiction";
+    let mut violations: Vec<String> = Vec::new();
+    for key in ["instruction", "resumeOperationId"] {
+        if let Some(value) = params.get(key) {
+            match value.as_str() {
+                Some(text) if !text.is_empty() => {}
+                _ => violations.push(format!("/{key}: Expected string minLength 1")),
+            }
+        }
+    }
+    if let Some(value) = params.get("restartPendingRevision") {
+        if !value.is_boolean() {
+            violations.push("/restartPendingRevision: Expected boolean".to_string());
+        }
+    }
+    for key in ["chapterCount", "charsPerChapter", "maxChapterLength"] {
+        require_uint_min1(params, key, &mut violations);
+    }
+    if let Some(value) = params.get("chapterNumbers") {
+        let valid = value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .all(|item| item.as_u64().map(|n| n >= 1).unwrap_or(false))
+            })
+            .unwrap_or(false);
+        if !valid {
+            violations.push("/chapterNumbers: Expected array of integer >= 1".to_string());
+        }
+    }
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(capability_params_error(ACTION_ID, &violations))
+    }
+}
+
 async fn execute_action(
     runtime: &BooksRuntime,
     root: &Path,
@@ -240,16 +366,16 @@ async fn execute_action(
 ) -> Result<CapabilityOutcome, ShortRunError> {
     match action_id {
         "plan_short_fiction" => {
-            stage_action(runtime, root, work_id, ShortProductionStage::Outline, params, execution_scope).await
+            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Outline, params, execution_scope).await
         }
         "draft_short_fiction" => {
-            stage_action(runtime, root, work_id, ShortProductionStage::Draft, params, execution_scope).await
+            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Draft, params, execution_scope).await
         }
         "review_short_fiction" => {
-            stage_action(runtime, root, work_id, ShortProductionStage::Review, params, execution_scope).await
+            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Review, params, execution_scope).await
         }
         "package_short_fiction" => {
-            stage_action(runtime, root, work_id, ShortProductionStage::Package, params, execution_scope).await
+            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Package, params, execution_scope).await
         }
         "revise_short_fiction" => revise_action(runtime, root, work_id, params, execution_scope).await,
         _ => Err(ShortRunError::new(
@@ -269,35 +395,85 @@ async fn stage_runtimes(runtime: &BooksRuntime) -> ShortFictionRunRuntimes {
     }
 }
 
+/// revise 链 runtimes（TS createShortFictionReviseTool L1836：writer 上下文 =
+/// `short-reviser`——与 stage 链的 short-writer 分模型/温度面）。
+async fn revise_runtimes(runtime: &BooksRuntime) -> ShortFictionRunRuntimes {
+    let router = runtime.effective_router().await;
+    ShortFictionRunRuntimes {
+        planner: short_production_agents(&router, "short-outline"),
+        writer: short_production_agents(&router, "short-reviser"),
+        draft_review: short_production_agents(&router, "short-draft-review"),
+        package: short_production_agents(&router, "short-package"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn stage_action(
     runtime: &BooksRuntime,
     root: &Path,
     work_id: &str,
+    action_id: &str,
     stage: ShortProductionStage,
     params: &Value,
     execution_scope: &ShortRunExecutionScope,
 ) -> Result<CapabilityOutcome, ShortRunError> {
+    validate_stage_params(stage, action_id, params)?;
     let work = load_work_manifest(root, work_id).await?;
     let language = if work.language == "en" {
         crate::utils::language::WritingLanguage::En
     } else {
         crate::utils::language::WritingLanguage::Zh
     };
+    // direction 回退链（TS L45 逐字）：params.direction 在场即用（含空串——
+    // ?? 不穿透空值）；缺席 → production-state intent（含空串）→ work.metadata.
+    // intent → ""。outline 阶段全链空 = TS "An outline needs a creative direction"。
+    let direction = match params.get("direction") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Null) | None => {
+            let source_dir = root.join("works").join(work_id).join("source");
+            match crate::production::short_fiction::read_short_production_state(root, &source_dir) {
+                Ok(Some(state)) => state.intent,
+                Ok(None) => work
+                    .metadata
+                    .get("intent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                Err(error) => return Err(ShortRunError::new("PRODUCTION_STATE_INVALID", error)),
+            }
+        }
+        Some(_) => {
+            return Err(capability_params_error(
+                action_id,
+                &["/direction: Expected string".to_string()],
+            ))
+        }
+    };
+    if stage == ShortProductionStage::Outline && direction.trim().is_empty() {
+        return Err(ShortRunError::new(
+            "SHORT_OUTLINE_DIRECTION_REQUIRED",
+            "An outline needs a creative direction",
+        ));
+    }
     let field_u32 = |name: &str| params.get(name).and_then(Value::as_u64).map(|v| v as u32);
     let runtimes = stage_runtimes(runtime).await;
-    let mut options = ShortFictionRunOptions::new(
-        root,
-        params.get("direction").and_then(Value::as_str).unwrap_or_default(),
-        &runtimes,
-    );
+    let mut options = ShortFictionRunOptions::new(root, &direction, &runtimes);
     options.story_id = Some(work_id);
     options.title = Some(&work.title);
-    options.chapter_count = field_u32("chapters");
-    options.chars_per_chapter = field_u32("charsPerChapter");
-    options.min_chapter_length = field_u32("minChapterLength");
-    options.max_chapter_length = field_u32("maxChapterLength");
-    options.opening_hook_chars = field_u32("openingHookChars");
-    options.max_chapters_per_call = field_u32("maxChaptersPerCall");
+    // production 面（TS `stage==='outline'||stage==='draft' ? params : {}`）：
+    // review/package 阶段不读产出参数（TS execute production={} 同语义）。
+    let production = matches!(stage, ShortProductionStage::Outline | ShortProductionStage::Draft);
+    options.chapter_count = production.then(|| field_u32("chapters")).flatten();
+    options.chars_per_chapter = production.then(|| field_u32("charsPerChapter")).flatten();
+    options.min_chapter_length = production.then(|| field_u32("minChapterLength")).flatten();
+    options.max_chapter_length = production.then(|| field_u32("maxChapterLength")).flatten();
+    options.opening_hook_chars = production.then(|| field_u32("openingHookChars")).flatten();
+    options.max_chapters_per_call = production.then(|| field_u32("maxChaptersPerCall")).flatten();
+    options.cover = production
+        .then(|| params.get("coverRequired").and_then(Value::as_bool))
+        .flatten();
+    // reviewScope 全阶段透传（TS `'reviewScope' in params ? params.reviewScope : undefined`）。
+    options.review_scope = params.get("reviewScope").and_then(Value::as_str);
     options.retry_stages = match stage {
         ShortProductionStage::Review => vec![crate::production::short_fiction_runner::ShortRetryStage::Review],
         ShortProductionStage::Package => vec![crate::production::short_fiction_runner::ShortRetryStage::Package],
@@ -336,6 +512,7 @@ async fn revise_action(
     params: &Value,
     execution_scope: &ShortRunExecutionScope,
 ) -> Result<CapabilityOutcome, ShortRunError> {
+    validate_revise_params(params)?;
     let work = load_work_manifest(root, work_id).await?;
     let language = if work.language == "en" {
         crate::utils::language::WritingLanguage::En
@@ -344,10 +521,11 @@ async fn revise_action(
     };
     let field_u32 = |name: &str| params.get(name).and_then(Value::as_u64).map(|v| v as u32);
     let direction = params.get("instruction").and_then(Value::as_str).unwrap_or_default();
-    let runtimes = stage_runtimes(runtime).await;
+    let runtimes = revise_runtimes(runtime).await;
     let mut options = ShortFictionRunOptions::new(root, direction, &runtimes);
     options.story_id = Some(work_id);
-    options.chapter_count = field_u32("chapters");
+    // TS ShortRevisionParams：chapterCount（非 stage 面的 chapters）。
+    options.chapter_count = field_u32("chapterCount");
     options.chars_per_chapter = field_u32("charsPerChapter");
     options.max_chapter_length = field_u32("maxChapterLength");
     options.cover = Some(false);

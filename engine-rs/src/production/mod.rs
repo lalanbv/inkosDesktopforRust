@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::atomic_file_set::{commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent};
 
-// 887 号 M3a：短篇生产 2.0 形态纯函数层（旧 agents/short_fiction.rs 为 78 号
-// tagged 链活体不动——处置关系见 production/short_fiction.rs 模块头）。
+// 887 号 M3a：短篇生产 2.0 形态纯函数层（旧 agents/short_fiction.rs 78 号
+// tagged 链已于 895 号 duel 绿后退役——处置关系见 production/short_fiction.rs 模块头）。
 pub mod short_fiction;
 
 // 889 号 M3c：短篇提示词构造（prompts/short-fiction.ts 逐字面）。

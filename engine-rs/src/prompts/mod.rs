@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub mod prompt_pack;
-pub mod short_fiction;
 
 /// prompt 来源。对齐 TS `z.enum(["builtin","project","user","external"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
