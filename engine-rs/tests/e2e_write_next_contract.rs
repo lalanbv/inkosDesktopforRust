@@ -10824,11 +10824,21 @@ mod short78_e2e {
         assert!(root.join("works/night-rain3/source/outline/v001.md").is_file());
 
         let (status, parsed) =
-            call_action(app.clone(), "draft_short_fiction", serde_json::json!({ "chapters": 2, "charsPerChapter": 900 }).to_string()).await;
+            call_action(app.clone(), "draft_short_fiction", serde_json::json!({ "chapters": 2, "charsPerChapter": 900, "coverRequired": true }).to_string()).await;
         assert_eq!(status, StatusCode::OK, "draft: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
         assert!(root.join("works/night-rain3/source/drafts/v001/draft.json").is_file());
         assert!(root.join("works/night-rain3/source/final/short-story.json").is_file());
+        // coverRequired 优先级（896 审查修复：TS L427 coverRequired ?? 逐字——
+        // stage 调用显式要求覆盖 previous 继承面）。
+        let state_after_draft: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works/night-rain3/source/production-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state_after_draft["target"]["coverRequired"], true,
+            "state: {state_after_draft}"
+        );
 
         let (status, parsed) =
             call_action(app.clone(), "review_short_fiction", serde_json::json!({}).to_string()).await;
@@ -10954,15 +10964,19 @@ mod short78_e2e {
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        // ④ metadata.intent 回退链：plan 无 direction → intent 兜底成稿。
-        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", "{}".to_string()).await;
+        // ④ metadata.intent 回退链：plan 无 direction → intent 兜底成稿；
+        // coverRequired:false 显式要求（TS L427 coverRequired ?? 优先级——
+        // Some(false) 有别于缺省缺省面）。
+        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", r#"{"coverRequired":false}"#.to_string()).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
+        assert_eq!(parsed["details"]["coverRequired"], false, "stage 结果面 coverRequired 透传: {parsed}");
         let state: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join("works/params-face/source/production-state.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(state["intent"], "雾夜寻踪，单线收束", "state: {state}");
+        assert_eq!(state["target"]["coverRequired"], false, "state: {state}");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // ⑤ review/package 声明键类型面（校验先于工件门）。

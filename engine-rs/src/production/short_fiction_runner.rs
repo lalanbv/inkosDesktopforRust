@@ -128,6 +128,10 @@ pub struct ShortFictionRunOptions<'a> {
     pub reference: Option<ShortFictionReference>,
     /// None = 默认 true（TS cover?: boolean）。
     pub cover: Option<bool>,
+    /// TS `coverRequired`（2.0 显式封面要求——**优先于** stopAfter/previous 分支，
+    /// stage-runner L427 `options.coverRequired ?? …` 逐字；与全链 `cover`
+    /// legacy 布尔分字段）。
+    pub cover_required: Option<bool>,
     /// TS `coverModel`（894 号 resolve 覆盖面）。
     pub cover_model: Option<&'a str>,
     pub story_id: Option<&'a str>,
@@ -162,6 +166,7 @@ impl<'a> ShortFictionRunOptions<'a> {
             runtimes,
             reference: None,
             cover: None,
+            cover_required: None,
             cover_model: None,
             story_id: None,
             chapter_count: None,
@@ -1111,11 +1116,19 @@ pub async fn produce_short(
         .as_ref()
         .map(|state| state.intent.clone())
         .unwrap_or_else(|| if options.revision_request.is_some() { String::new() } else { options.direction.to_string() });
-    let cover_required = if stop_after.is_none() && options.revision_request.is_none() {
-        (options.cover.unwrap_or(true)).then_some(true)
-    } else {
-        previous_state.as_ref().and_then(|state| state.target.as_ref()).and_then(|target| target.cover_required)
-    };
+    // TS L427 逐字：`options.coverRequired ?? (!stopAfter && !revisionRequest
+    // ? options.cover !== false || undefined : previousState?.target?.coverRequired)`
+    // ——显式 coverRequired 优先（false = Some(false) 有别于缺省 None）。
+    let cover_required = options.cover_required.or_else(|| {
+        if stop_after.is_none() && options.revision_request.is_none() {
+            (options.cover.unwrap_or(true)).then_some(true)
+        } else {
+            previous_state
+                .as_ref()
+                .and_then(|state| state.target.as_ref())
+                .and_then(|target| target.cover_required)
+        }
+    });
     let outline_source_reference = outline_source.map(|source| crate::production::short_fiction::ShortStageReviewedReference {
         work_id: source.work_id,
         artifact_id: source.artifact_id,
@@ -3483,6 +3496,7 @@ async fn revise_short_fiction_with_lock(
         min_chapter_length_ratio: eff_ratio.or(profile_ratio),
         max_chapter_length: eff_max_chapter_length.or_else(|| state_target.as_ref().and_then(|target| target.max_chapter_length)),
         cover: Some(false),
+        cover_required: None,
         ..options.clone()
     };
     let minimum = short_draft_minimum(&revision_options)?;

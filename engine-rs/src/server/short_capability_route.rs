@@ -469,7 +469,7 @@ async fn stage_action(
     options.max_chapter_length = production.then(|| field_u32("maxChapterLength")).flatten();
     options.opening_hook_chars = production.then(|| field_u32("openingHookChars")).flatten();
     options.max_chapters_per_call = production.then(|| field_u32("maxChaptersPerCall")).flatten();
-    options.cover = production
+    options.cover_required = production
         .then(|| params.get("coverRequired").and_then(Value::as_bool))
         .flatten();
     // reviewScope 全阶段透传（TS `'reviewScope' in params ? params.reviewScope : undefined`）。
