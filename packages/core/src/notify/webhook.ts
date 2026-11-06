@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { notifyFetch } from "./http.js";
 
 export interface WebhookConfig {
   readonly url: string;
@@ -43,7 +44,7 @@ export async function sendWebhook(
     headers["X-InkOS-Signature"] = `sha256=${signature}`;
   }
 
-  const response = await fetch(config.url, {
+  const response = await notifyFetch(config.url, {
     method: "POST",
     headers,
     body,

@@ -511,6 +511,9 @@ impl StreamingChatClient {
         };
         let status = resp.status();
         if !status.is_success() {
+            // 899：流面错误体读取此前无窗——错误体挂起即永久卡死。TS 流面
+            // fetch signal=deadline.signal 同样约束 body 读，超时映射
+            // first-event 不活动错误；Rust 用布防时刻起的同一时钟窗逐字对齐。
             let text = match non_stream_total {
                 Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
                     Ok(text) => text.unwrap_or_default(),
@@ -520,7 +523,20 @@ impl StreamingChatClient {
                         });
                     }
                 },
-                None => resp.text().await.unwrap_or_default(),
+                None => match armed_at.zip(first_window) {
+                    Some((armed, window)) => {
+                        match tokio::time::timeout_at(armed + window, resp.text()).await {
+                            Ok(text) => text.unwrap_or_default(),
+                            Err(_) => {
+                                return Err(StreamError::Inactivity {
+                                    stage: InactivityStage::FirstEvent,
+                                    timeout_ms: params.deadline.first_event_ms,
+                                });
+                            }
+                        }
+                    }
+                    None => resp.text().await.unwrap_or_default(),
+                },
             };
             return Err(StreamError::BadStatus(status.as_u16(), text));
         }
@@ -779,6 +795,8 @@ impl StreamingChatClient {
         };
         let status = resp.status();
         if !status.is_success() {
+            // 899：流面错误体读取套窗（chat 传输同款，TS 流面 signal 覆盖
+            // body 读的时钟窗逐字对齐）。
             let text = match non_stream_total {
                 Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
                     Ok(text) => text.unwrap_or_default(),
@@ -788,7 +806,20 @@ impl StreamingChatClient {
                         });
                     }
                 },
-                None => resp.text().await.unwrap_or_default(),
+                None => match armed_at.zip(first_window) {
+                    Some((armed, window)) => {
+                        match tokio::time::timeout_at(armed + window, resp.text()).await {
+                            Ok(text) => text.unwrap_or_default(),
+                            Err(_) => {
+                                return Err(StreamError::Inactivity {
+                                    stage: InactivityStage::FirstEvent,
+                                    timeout_ms: params.deadline.first_event_ms,
+                                });
+                            }
+                        }
+                    }
+                    None => resp.text().await.unwrap_or_default(),
+                },
             };
             return Err(StreamError::BadStatus(status.as_u16(), text));
         }
@@ -1343,7 +1374,7 @@ mod tests {
     #[tokio::test]
     async fn non_stream_request_is_bounded_by_total_deadline() {
         // 898 号：停靠但不响应的本地端点——非流式 send 此前可永久挂死（TS
-        // buffered fetch 同洞同修），总窗到期必须报 RequestTimeout。
+        // buffered 同洞同修），总窗到期必须报 RequestTimeout。
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1373,6 +1404,52 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "总窗 50ms 到期应即刻失败，实际耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_error_body_read_is_bounded_by_first_event_window() {
+        // 899 号：流面 502 后错误体挂起——此前 resp.text() 无窗永久卡死，
+        // 布防时刻起的同一时钟窗到期报 first-event 不活动（TS 流面 signal
+        // 覆盖 body 读的时钟窗逐字对齐）。
+        async fn stalled_error_body() -> axum::body::Body {
+            axum::body::Body::from_stream(async_stream::stream! {
+                // 只发头不发体——错误体停摆形态（窗到期远早于本次长眠）。
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                yield Ok::<_, std::convert::Infallible>(axum::body::Bytes::new());
+            })
+        }
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|| async {
+                axum::response::IntoResponse::into_response((
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    stalled_error_body().await,
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client =
+            StreamingChatClient::new(format!("http://{addr}"), "fixture".to_string(), HashMap::new());
+        let params = deadline_params(StreamDeadlineSpec {
+            first_event_ms: 50,
+            idle_ms: 50,
+            request_ms: 300_000,
+        });
+        let started = std::time::Instant::now();
+        let err = client.stream_chat(&params).await.unwrap_err();
+        assert!(
+            matches!(err, StreamError::Inactivity { stage: InactivityStage::FirstEvent, timeout_ms: 50 }),
+            "实际错误：{err:?}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "50ms 窗到期应即刻失败，实际耗时 {:?}",
             started.elapsed()
         );
     }

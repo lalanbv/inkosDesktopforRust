@@ -67,3 +67,21 @@ it("resolves configured service labels to model IDs while preserving other expli
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("ends a stalled cover generation at the fallback total window even without a caller signal (899)", async () => {
+  // 停摆端点：接受连接后持有不响应（此前 caller signal 未传即裸 fetch 无限挂死）。
+  const server = createServer((_req, _res) => { /* 故意不响应 */ });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  try {
+    vi.stubEnv("INKOS_COVER_REQUEST_TIMEOUT_MS", "100");
+    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: "fixture-key" };
+    const started = Date.now();
+    // 关键回归锚：不传 caller signal——修复前这是 signal-less 裸 fetch。
+    await expect(generateImageFromPrompt(request, "A lantern", "1024x1024")).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  } finally {
+    vi.unstubAllEnvs();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}, 20_000);

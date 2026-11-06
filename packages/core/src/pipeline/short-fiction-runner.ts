@@ -1292,6 +1292,23 @@ export async function loadImageReference(root: string, path: string): Promise<Im
   return {buffer, mimeType};
 }
 
+const DEFAULT_COVER_REQUEST_TIMEOUT_MS = 600_000;
+const ENV_COVER_REQUEST_TIMEOUT = "INKOS_COVER_REQUEST_TIMEOUT_MS";
+
+/**
+ * 899: every cover HTTP site carries the caller signal (cancellation) plus a
+ * fallback total window (budget). Image generation legitimately takes minutes,
+ * but a stalled endpoint previously hung an unabortable fetch forever when the
+ * caller passed no signal — the same family as the buffered LLM hole fixed in
+ * 898, with a generation-scale budget instead of 300s.
+ */
+function coverRequestSignal(signal?: AbortSignal): AbortSignal {
+  const raw = Number(process.env[ENV_COVER_REQUEST_TIMEOUT]);
+  const timeoutMs = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_COVER_REQUEST_TIMEOUT_MS;
+  const budget = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, budget]) : budget;
+}
+
 export async function generateImageFromPrompt(
   request: ShortFictionCoverRequest,
   prompt: string,
@@ -1335,7 +1352,7 @@ async function generateImageFromPromptImpl(request: ShortFictionCoverRequest, pr
       input: reference ? [{role:"user",content:[{type:"input_text",text:prompt},{type:"input_image",image_url:`data:${reference.mimeType};base64,${reference.buffer.toString("base64")}`}]}] : prompt,
       tools: [{ type: "image_generation", size }],
     }),
-    signal,
+    signal: coverRequestSignal(signal),
   });
   const text = await response.text();
   if (!response.ok) {
@@ -1463,7 +1480,7 @@ async function generateImagesCover(
       n: 1,
       size,
     }),
-    signal,
+    signal: coverRequestSignal(signal),
   });
   const text = await response.text();
   if (!response.ok) {
@@ -1490,7 +1507,7 @@ async function generateImagesCover(
     };
   }
   if (image?.url) {
-    return downloadGeneratedCoverImage(image.url, request.apiKey, request.endpoint ?? request.baseUrl, signal);
+    return downloadGeneratedCoverImage(image.url, request.apiKey, request.endpoint ?? request.baseUrl, coverRequestSignal(signal));
   }
   throw new Error("cover generation response did not include image URL or base64 data.");
 }
@@ -1559,7 +1576,7 @@ async function generateGeminiCover(
       contents: [{ role: "user", parts: [{ text: prompt }, ...(reference ? [{inlineData:{mimeType:reference.mimeType,data:reference.buffer.toString("base64")}}] : [])] }],
       generationConfig: { responseModalities: ["IMAGE", "TEXT"] },
     }),
-    signal,
+    signal: coverRequestSignal(signal),
   });
   const text = await response.text();
   if (!response.ok) {

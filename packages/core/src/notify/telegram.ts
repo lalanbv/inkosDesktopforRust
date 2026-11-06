@@ -1,4 +1,5 @@
 import type { NotifyFormat } from "./format.js";
+import { notifyFetch } from "./http.js";
 
 export interface TelegramConfig {
   readonly botToken: string;
@@ -11,7 +12,7 @@ export async function sendTelegram(
   format: NotifyFormat = "markdown",
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${config.botToken}/sendMessage`;
-  const response = await fetch(url, {
+  const response = await notifyFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

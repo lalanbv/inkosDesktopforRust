@@ -1,4 +1,5 @@
 import type { NotifyFormat } from "./format.js";
+import { notifyFetch } from "./http.js";
 
 export interface FeishuConfig {
   readonly webhookUrl: string;
@@ -30,7 +31,7 @@ export async function sendFeishu(
           ],
         },
       };
-  const response = await fetch(config.webhookUrl, {
+  const response = await notifyFetch(config.webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
