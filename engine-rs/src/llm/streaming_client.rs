@@ -87,17 +87,23 @@ pub struct ChatImage {
 pub struct StreamDeadlineSpec {
     pub first_event_ms: u64,
     pub idle_ms: u64,
+    /// 非流式请求总窗（898 号：TS `createRequestDeadline` 对等——send/错误体/
+    /// 响应体端点停摆即永久挂死族，覆盖整个非流式请求生命周期）。
+    pub request_ms: u64,
 }
 
 impl StreamDeadlineSpec {
     /// 交互聊天面（TS `guardAssistantMessageStream` 默认 120s/90s）。
-    pub const INTERACTIVE: Self = Self { first_event_ms: 120_000, idle_ms: 90_000 };
+    pub const INTERACTIVE: Self =
+        Self { first_event_ms: 120_000, idle_ms: 90_000, request_ms: 300_000 };
     /// 管线 agent 面（TS `chatCompletion` 流式默认 300s/180s——长文生成
-    /// 首Token 前的长时间思考常见，不套交互面的紧窗）。
-    pub const PIPELINE: Self = Self { first_event_ms: 300_000, idle_ms: 180_000 };
+    /// 首 Token 前的长时间思考常见，不套交互面的紧窗）。
+    pub const PIPELINE: Self =
+        Self { first_event_ms: 300_000, idle_ms: 180_000, request_ms: 300_000 };
 
-    /// env（INKOS_LLM_FIRST_EVENT_TIMEOUT_MS / INKOS_LLM_STREAM_IDLE_TIMEOUT_MS）
-    /// > 显式覆盖 > 面默认（TS `readPositiveTimeout` 嵌套解析逐字）。
+    /// env（INKOS_LLM_FIRST_EVENT_TIMEOUT_MS / INKOS_LLM_STREAM_IDLE_TIMEOUT_MS /
+    /// INKOS_LLM_REQUEST_TIMEOUT_MS）> 显式覆盖 > 面默认（TS
+    /// `readPositiveTimeout` 嵌套解析逐字）。
     pub fn resolve(defaults: Self, first_override: Option<u64>, idle_override: Option<u64>) -> Self {
         resolve_deadline(
             defaults,
@@ -105,6 +111,7 @@ impl StreamDeadlineSpec {
             idle_override,
             std::env::var(ENV_FIRST_EVENT_TIMEOUT).ok().as_deref(),
             std::env::var(ENV_IDLE_TIMEOUT).ok().as_deref(),
+            std::env::var(ENV_REQUEST_TIMEOUT).ok().as_deref(),
         )
     }
 }
@@ -112,6 +119,7 @@ impl StreamDeadlineSpec {
 /// TS 环境变量名逐字。
 const ENV_FIRST_EVENT_TIMEOUT: &str = "INKOS_LLM_FIRST_EVENT_TIMEOUT_MS";
 const ENV_IDLE_TIMEOUT: &str = "INKOS_LLM_STREAM_IDLE_TIMEOUT_MS";
+const ENV_REQUEST_TIMEOUT: &str = "INKOS_LLM_REQUEST_TIMEOUT_MS";
 
 /// 纯核心（可测）：解析序 env > override > default。
 fn resolve_deadline(
@@ -120,6 +128,7 @@ fn resolve_deadline(
     idle_override: Option<u64>,
     env_first: Option<&str>,
     env_idle: Option<&str>,
+    env_request: Option<&str>,
 ) -> StreamDeadlineSpec {
     StreamDeadlineSpec {
         first_event_ms: env_first
@@ -128,6 +137,9 @@ fn resolve_deadline(
         idle_ms: env_idle
             .and_then(parse_positive_timeout)
             .unwrap_or_else(|| read_positive_timeout(idle_override, defaults.idle_ms)),
+        request_ms: env_request
+            .and_then(parse_positive_timeout)
+            .unwrap_or(defaults.request_ms),
     }
 }
 
@@ -382,6 +394,11 @@ pub enum StreamError {
         stage: InactivityStage,
         timeout_ms: u64,
     },
+    /// 非流式请求总窗到期（898 号：TS `LLMRequestTimeoutError` 对应物——
+    /// send/错误体/响应体停摆族；不可重试语义同 TS）。
+    RequestTimeout {
+        timeout_ms: u64,
+    },
 }
 
 /// 不活动超时阶段（错误文案与 TS 逐字）。
@@ -410,6 +427,9 @@ impl std::fmt::Display for StreamError {
                     write!(f, "LLM stream produced no new event for {timeout_ms}ms")
                 }
             },
+            StreamError::RequestTimeout { timeout_ms } => {
+                write!(f, "LLM request did not complete within {timeout_ms}ms")
+            }
         }
     }
 }
@@ -455,8 +475,16 @@ impl StreamingChatClient {
             req = req.header(k, v);
         }
         let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
+        // 898 号同族修复：非流式此前无看门狗（TS chatCompletion buffered 同洞
+        // 同修）——端点停摆时 send/错误体/响应体均可永久挂死。总窗覆盖三面，
+        // 到期报 RequestTimeout（TS LLM_REQUEST_TIMEOUT 同款文案；不可重试
+        // 语义同 TS isRetryableLLMError）。
+        let non_stream_total = (!params.stream).then(|| {
+            tokio::time::Instant::now()
+                + std::time::Duration::from_millis(params.deadline.request_ms)
+        });
         // 看门狗布防（仅流式；TS 在 fetch 前创建 deadline——首事件窗覆盖
-        // 连接+响应头+首个流事件）。非流式无看门狗（TS client.stream 同款门）。
+        // 连接+响应头+首个流事件）。
         let first_window = params.stream.then(|| {
             std::time::Duration::from_millis(params.deadline.first_event_ms)
         });
@@ -467,18 +495,49 @@ impl StreamingChatClient {
                 .map_err(|_| StreamError::Inactivity {
                     stage: InactivityStage::FirstEvent,
                     timeout_ms: params.deadline.first_event_ms,
-                })?,
-            _ => req.send().await,
-        }?;
+                })?
+                .map_err(StreamError::Http)?,
+            _ => match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, req.send()).await {
+                    Ok(response) => response.map_err(StreamError::Http)?,
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => req.send().await?,
+            },
+        };
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let text = match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
+                    Ok(text) => text.unwrap_or_default(),
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => resp.text().await.unwrap_or_default(),
+            };
             return Err(StreamError::BadStatus(status.as_u16(), text));
         }
         // 非流式（108 号 stream 维度）：整体 JSON——choices[0].message.content +
         // message.tool_calls + usage（TS chatCompletion 非流式同构）。
         if !params.stream {
-            let raw = resp.text().await?;
+            let raw = match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
+                    Ok(text) => text?,
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => resp.text().await?,
+            };
             let json: serde_json::Value = serde_json::from_str(&raw)
                 .map_err(|e| StreamError::Protocol(format!("invalid JSON response: {e}")))?;
             let message = json
@@ -688,6 +747,11 @@ impl StreamingChatClient {
             req = req.header(k, v);
         }
         let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
+        // 898 号同族修复（chat 传输同款）：非流式总窗覆盖 send/错误体/响应体。
+        let non_stream_total = (!params.stream).then(|| {
+            tokio::time::Instant::now()
+                + std::time::Duration::from_millis(params.deadline.request_ms)
+        });
         // 看门狗与 chat 传输同构（TS 两传输共用 deadline.signal/activity）。
         let first_window = params.stream.then(|| {
             std::time::Duration::from_millis(params.deadline.first_event_ms)
@@ -699,16 +763,47 @@ impl StreamingChatClient {
                 .map_err(|_| StreamError::Inactivity {
                     stage: InactivityStage::FirstEvent,
                     timeout_ms: params.deadline.first_event_ms,
-                })?,
-            _ => req.send().await,
-        }?;
+                })?
+                .map_err(StreamError::Http)?,
+            _ => match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, req.send()).await {
+                    Ok(response) => response.map_err(StreamError::Http)?,
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => req.send().await?,
+            },
+        };
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let text = match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
+                    Ok(text) => text.unwrap_or_default(),
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => resp.text().await.unwrap_or_default(),
+            };
             return Err(StreamError::BadStatus(status.as_u16(), text));
         }
         if !params.stream {
-            let raw = resp.text().await?;
+            let raw = match non_stream_total {
+                Some(total) => match tokio::time::timeout_at(total, resp.text()).await {
+                    Ok(text) => text?,
+                    Err(_) => {
+                        return Err(StreamError::RequestTimeout {
+                            timeout_ms: params.deadline.request_ms,
+                        });
+                    }
+                },
+                None => resp.text().await?,
+            };
             let json: serde_json::Value = serde_json::from_str(&raw)
                 .map_err(|e| StreamError::Protocol(format!("invalid JSON response: {e}")))?;
             let content = extract_responses_content(&json);
@@ -1161,12 +1256,16 @@ mod tests {
     fn deadline_resolution_order_env_overrides_defaults() {
         // 无 env 无覆盖 → 面默认。
         assert_eq!(
-            resolve_deadline(StreamDeadlineSpec::PIPELINE, None, None, None, None),
-            StreamDeadlineSpec::PIPELINE
+            resolve_deadline(StreamDeadlineSpec::PIPELINE, None, None, None, None, None),
+            StreamDeadlineSpec {
+                first_event_ms: 300_000,
+                idle_ms: 180_000,
+                request_ms: 300_000
+            }
         );
         // 显式覆盖 > 面默认。
         assert_eq!(
-            resolve_deadline(StreamDeadlineSpec::PIPELINE, Some(500), None, None, None)
+            resolve_deadline(StreamDeadlineSpec::PIPELINE, Some(500), None, None, None, None)
                 .first_event_ms,
             500
         );
@@ -1177,9 +1276,10 @@ mod tests {
                 Some(60_000),
                 None,
                 Some("10"),
+                None,
                 None
             ),
-            StreamDeadlineSpec { first_event_ms: 10, idle_ms: 180_000 }
+            StreamDeadlineSpec { first_event_ms: 10, idle_ms: 180_000, request_ms: 300_000 }
         );
         // env 非法值回退到覆盖值。
         assert_eq!(
@@ -1188,10 +1288,41 @@ mod tests {
                 Some(700),
                 None,
                 Some("not-a-number"),
+                None,
                 None
             )
             .first_event_ms,
             700
+        );
+    }
+
+    #[test]
+    fn request_deadline_resolves_env_over_default() {
+        // env > 面默认（TS createRequestDeadline 的 readPositiveTimeout 同序）。
+        assert_eq!(
+            resolve_deadline(
+                StreamDeadlineSpec::PIPELINE,
+                None,
+                None,
+                None,
+                None,
+                Some("45000")
+            )
+            .request_ms,
+            45_000
+        );
+        // env 非法值回退面默认。
+        assert_eq!(
+            resolve_deadline(
+                StreamDeadlineSpec::PIPELINE,
+                None,
+                None,
+                None,
+                None,
+                Some("not-a-number")
+            )
+            .request_ms,
+            300_000
         );
     }
 
@@ -1201,6 +1332,49 @@ mod tests {
         assert_eq!(first.to_string(), "LLM stream produced no event within 10ms");
         let idle = StreamError::Inactivity { stage: InactivityStage::Idle, timeout_ms: 90_000 };
         assert_eq!(idle.to_string(), "LLM stream produced no new event for 90000ms");
+    }
+
+    #[test]
+    fn request_timeout_error_message_matches_ts() {
+        let err = StreamError::RequestTimeout { timeout_ms: 300_000 };
+        assert_eq!(err.to_string(), "LLM request did not complete within 300000ms");
+    }
+
+    #[tokio::test]
+    async fn non_stream_request_is_bounded_by_total_deadline() {
+        // 898 号：停靠但不响应的本地端点——非流式 send 此前可永久挂死（TS
+        // buffered fetch 同洞同修），总窗到期必须报 RequestTimeout。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                // 接受后持有不读不写也不关——停摆端点形态（连接挂着但永不响应；
+                // 丢弃 socket 会立即 IncompleteMessage 而非停摆）。
+                if let Ok((stream, _addr)) = listener.accept().await {
+                    held.push(stream);
+                }
+            }
+        });
+        let client =
+            StreamingChatClient::new(format!("http://{addr}/v1"), "fixture".to_string(), HashMap::new());
+        let mut params = deadline_params(StreamDeadlineSpec {
+            first_event_ms: 50,
+            idle_ms: 50,
+            request_ms: 50,
+        });
+        params.stream = false;
+        let started = std::time::Instant::now();
+        let err = client.stream_chat(&params).await.unwrap_err();
+        assert!(
+            matches!(err, StreamError::RequestTimeout { timeout_ms: 50 }),
+            "实际错误：{err:?}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "总窗 50ms 到期应即刻失败，实际耗时 {:?}",
+            started.elapsed()
+        );
     }
 
     /// 起 mock SSE 服务：响应头立即返回，body 按脚本逐段产出（脚本产出的
@@ -1286,7 +1460,7 @@ mod tests {
         ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "正文从这里开始。");
     }
@@ -1299,7 +1473,7 @@ mod tests {
         ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "<think>推理没有闭合");
     }
@@ -1314,7 +1488,7 @@ mod tests {
         });
         let base = spawn_scripted_llm(vec![body.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 });
+        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 });
         params.stream = false;
         let completion = client.stream_chat(&params).await.unwrap();
         assert_eq!(completion.content, "非流式正文。");
@@ -1376,7 +1550,7 @@ mod tests {
     async fn non_kkaiapi_endpoint_sends_no_trajectory_headers_even_with_scope() {
         let (base, seen) = spawn_recording_llm(vec![content_chunk("正文"), DONE.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 });
+        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 });
         params.trajectory = Some(std::sync::Arc::new(
             crate::llm::agent_trajectory::AgentTrajectoryScope::main(
                 "inkos-test".to_string(),
@@ -1416,7 +1590,7 @@ mod tests {
         });
         let client =
             StreamingChatClient::new(format!("http://{addr}"), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 150 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 150, request_ms: 300_000 };
         let err = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             client.stream_chat(&deadline_params(spec)),
@@ -1455,7 +1629,7 @@ mod tests {
         });
         let client =
             StreamingChatClient::new(format!("http://{addr}"), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 150, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 150, idle_ms: 5_000, request_ms: 300_000 };
         let err = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             client.stream_chat(&deadline_params(spec)),
@@ -1471,7 +1645,7 @@ mod tests {
         // 有内容但流"干净地"结束且无 [DONE]/finish_reason → 截断，非完成。
         let base = spawn_scripted_llm(vec![content_chunk("写到一半")]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1484,7 +1658,7 @@ mod tests {
         let base = spawn_scripted_llm(            vec![content_chunk("被掐断的正文"), finish_chunk("length"), DONE.to_string()])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1500,7 +1674,7 @@ mod tests {
             ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1513,7 +1687,7 @@ mod tests {
         // 无内容无工具无推理 + [DONE] → 空响应。
         let base = spawn_scripted_llm(vec![DONE.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1526,7 +1700,7 @@ mod tests {
         let base = spawn_scripted_llm(            vec![content_chunk("正文"), finish_chunk("stop"), DONE.to_string()])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let completion = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1548,7 +1722,7 @@ mod tests {
             ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000 };
+        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
         let completion = client
             .stream_chat(&deadline_params(spec))
             .await

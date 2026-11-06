@@ -83,6 +83,9 @@ export function createRequestDeadline(callerSignal?: AbortSignal) {
   return {
     signal: callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal,
     timeoutError: () => error,
+    // No-op on the buffered path (no stream-activity clock); keeps the
+    // chatCompletion deadline call sites uniform across both deadline families.
+    activity: () => {},
     stop: () => clearTimeout(timer),
   };
 }
@@ -1504,7 +1507,13 @@ export async function chatCompletion(
         });
         // Pipeline agents often perform long-form generation before yielding the
         // first token. Keep that path bounded, but do not apply the tighter
-        // interactive-chat deadline to it.
+        // interactive-chat deadline to it. 898: buffered requests previously had
+        // NO deadline here — the fetch went out with a signal-less init, so a
+        // stalled endpoint hung the call until undici's own 5-min headers
+        // timeout, once per pipeline turn (suite-saturation flow-test victims
+        // lingered ~900s+ before worker teardown). Arm the same total-request
+        // deadline the pi-stream path already uses (300s default +
+        // INKOS_LLM_REQUEST_TIMEOUT_MS knob; non-retryable by design).
         const deadline = client.stream
           ? createStreamActivityDeadline(
               signal,
@@ -1517,7 +1526,7 @@ export async function chatCompletion(
                 idleTimeoutMs: options?.streamIdleTimeoutMs,
               },
             )
-          : undefined;
+          : createRequestDeadline(signal);
         assertWithinContextWindow({
           piModel: resolvePiModel(client, model),
           model,

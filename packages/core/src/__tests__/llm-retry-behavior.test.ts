@@ -104,4 +104,53 @@ describe("chatCompletion transient retry behavior (206 号双端对跑)", () => 
     // 非瞬时直接失败
     expect(fetchCalls.length).toBe(1);
   });
+
+  // ── 898 号：buffered 请求此前无总 deadline（signal-less fetch 挂死族）──
+  it("ends a stalled buffered request at the configured deadline without retrying (898)", async () => {
+    const { chatCompletion } = await import("../llm/provider.js");
+    const { fetchWithProxy } = await import("../utils/proxy-fetch.js");
+    const fetchMock = vi.mocked(fetchWithProxy);
+    process.env.INKOS_LLM_REQUEST_TIMEOUT_MS = "10";
+    try {
+      fetchMock.mockImplementationOnce(async (_input, init) => {
+        const signal = init?.signal as AbortSignal;
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+        throw new Error("unreachable");
+      });
+      const client = await makeClient();
+      await expect(chatCompletion(client, "test-model", userMessage(), { retry: false }))
+        .rejects.toMatchObject({ code: "LLM_REQUEST_TIMEOUT", timeoutMs: 10 });
+      // 回归锚：fetch 必须拿到组合 deadline signal（修复前为 undefined——
+      // 端点停摆即永久挂死，只能靠 undici 300s headersTimeout 逐次兜底）。
+      // 恰 1 次 fetch：LLMRequestTimeoutError 明确不可重试，不进退避环。
+      expect(fetchMock.mock.calls.length).toBe(1);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      delete process.env.INKOS_LLM_REQUEST_TIMEOUT_MS;
+    }
+  }, 20_000);
+
+  it("caller abort interrupts an in-flight buffered request (898: AbortSignal.any composition)", async () => {
+    const { chatCompletion } = await import("../llm/provider.js");
+    const { fetchWithProxy } = await import("../utils/proxy-fetch.js");
+    const fetchMock = vi.mocked(fetchWithProxy);
+    const controller = new AbortController();
+    fetchMock.mockImplementationOnce(async (_input, init) => {
+      const signal = init?.signal as AbortSignal;
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    const client = await makeClient();
+    const pending = chatCompletion(client, "test-model", userMessage(), { retry: false, signal: controller.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    // 修复前 buffered fetch 无 signal——caller abort 够不着在途请求，只能等
+    // undici 兜底；修复后组合 signal 直达 fetch，abort 即刻中断。
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  }, 20_000);
 });
