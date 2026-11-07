@@ -45,6 +45,17 @@ const keep = has("--keep");
 
 const children = [];
 const sharedChildren = [];
+// 903 号：退出兜底——detached 子进程组不随父死，异常死亡时的孤儿靠下方
+// 「spawn 前清场」在下一轮回收（SIGTERM 信号兜底形态实证不可靠：smoke 主
+// 进程 handler 0 触发、对 TERM 完全免疫，sample 栈=SpinEventLoop 空转，
+// 同法最小复现正常——谜团备案不钉死）。exit 钩子覆盖正常/异常默认退出
+// 路径的收尸；SIGKILL 面不可捕获，同样归入清场回收。
+const killAllTrackedChildren = () => {
+  for (const child of [...children, ...sharedChildren]) {
+    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+  }
+};
+process.on("exit", killAllTrackedChildren);
 let failures = 0;
 // 700 号：契约源软失败模式——被测腿=上游 2.0 时（/prompt-packs 404 实证），
 // fork 契约断言的失败转入记账（照打 ✗ 不计入门禁判定）；Rust 腿恒严格。
@@ -332,6 +343,21 @@ async function runEngineLeg(engine) {
 // 置于任何子进程 spawn 之前：build 失败早退不留孤儿子进程。node 单腿不消费
 // Rust 二进制，不启用。
 if (engineMode !== "node") ensureRustBinFreshOrExit(repoRoot);
+
+// 903 号：spawn 前清场——上一轮异常死亡留下的 detached 孤儿（api/engine/
+// mock）占端口并拖垮系统（903 实证 ~600 孤儿使后续门禁步 35s→1573s+
+// test 步假失败）。特征限定本 smoke 家族的 tmp root 与 walkthrough-mock
+// （全仓仅两 smoke 使用），不会误伤 studio dev（vite）或用户进程。
+// 不依赖信号语义（信号兜底实证不可靠，见上方备案），pkill 无匹配非零
+// 退出属正常路径。
+for (const orphanPattern of [
+  "inkos-smoke-node-",
+  "inkos-smoke-rust-",
+  "inkos-epub-smoke-",
+  "walkthrough-mock\\.mjs",
+]) {
+  try { execFileSync("pkill", ["-f", orphanPattern], { stdio: "ignore" }); } catch { /* 无匹配 */ }
+}
 
 const legs =
   engineMode === "both"

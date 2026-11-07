@@ -35,6 +35,15 @@ const keep = args.includes("--keep");
 
 const children = [];
 const sharedChildren = [];
+// 903 号：退出兜底（node-fallback-smoke 同款）——exit 钩子覆盖正常/异常
+// 默认退出路径的收尸；孤儿靠「spawn 前清场」在下一轮回收（SIGTERM 信号
+// 兜底实证不可靠：handler 0 触发、进程对 TERM 完全免疫，备案不钉死）。
+const killAllTrackedChildren = () => {
+  for (const child of [...children, ...sharedChildren]) {
+    try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+  }
+};
+process.on("exit", killAllTrackedChildren);
 let failures = 0;
 
 const startChild = (cmd, cmdArgs, opts, logPath, shared = false) => {
@@ -192,6 +201,18 @@ function check(name, ok, detail = "") {
 // 643 号：活体腿自带新鲜度闸（置于任何子进程 spawn 之前，build 失败早退不留
 // 孤儿子进程；node 单腿不消费 Rust 二进制，不启用）。
 if (engineMode !== "node") ensureRustBinFreshOrExit(repoRoot);
+
+// 903 号：spawn 前清场（node-fallback-smoke 同款）——回收上一轮异常死亡
+// 留下的 detached 孤儿（903 实证 ~600 孤儿拖垮后续门禁步）。特征限定本
+// smoke 家族 tmp root 与 walkthrough-mock，不误伤 studio dev/用户进程。
+for (const orphanPattern of [
+  "inkos-smoke-node-",
+  "inkos-smoke-rust-",
+  "inkos-epub-smoke-",
+  "walkthrough-mock\\.mjs",
+]) {
+  try { execFileSync("pkill", ["-f", orphanPattern], { stdio: "ignore" }); } catch { /* 无匹配 */ }
+}
 const legs = engineMode === "both" ? ["node", ...(existsSync(rustBinary) ? ["rust"] : [])] : [engineMode];
 if (engineMode !== "node" && !legs.includes("rust")) {
   console.warn(`[epub-smoke] ⚠ Rust 二进制缺失（${rustBinary}）——rust 腿跳过`);
