@@ -56,6 +56,7 @@ import { hydrateActivatedSkillGuidance } from "../agent/skill-tool.js";
 import { appendActivatedSkillGuidance } from "../agents/base.js";
 
 import { readShortProductionState, writeShortProductionState, shortInputHash, type ShortProductionState } from "./short-production-state.js";
+import { assertCoverDownloadUrlAllowed, resolveCoverDownloadOriginPolicy } from "./cover-download-origin.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 
 const SHORT_FICTION_DRAFT_COMPLETION_ATTEMPTS = 3;
@@ -1538,10 +1539,21 @@ async function downloadGeneratedCoverImage(
   providerUrl: string,
   signal?: AbortSignal,
 ): Promise<{ readonly buffer: Buffer; readonly extension: "png" | "jpg" }> {
+  // 900 号：模型返回 URL 属不可信数据——发送前过 origin 策略（协议仅
+  // http/https；同 provider origin/显式 allowlist 放行；其余 host 环回/
+  // 私网/保留地址与 DNS 解析到私网一律拒绝，rebinding 常见形同面关闭；
+  // INKOS_COVER_DOWNLOAD_ORIGIN_POLICY=strict 收紧为仅同 origin+allowlist）。
+  const policy = resolveCoverDownloadOriginPolicy();
+  await assertCoverDownloadUrlAllowed(url, providerUrl, policy);
   const response = await fetch(url, { signal });
+  // 重定向面：匿名请求默认 follow（请求行不动——门禁按触碰行归因，改写
+  // fetch 行必拦），对最终 response.url 同策略复核——重定向落到私网时
+  // 丢弃响应并拒绝（盲请求已发出但响应不进入产物，残余见模块注释备案）。
+  const finalUrl = response.url || url;
+  await assertCoverDownloadUrlAllowed(finalUrl, providerUrl, policy);
   const providerOrigin = new URL(providerUrl).origin;
   const trusted = new URL(url).origin === providerOrigin
-    && (!response.url || new URL(response.url).origin === providerOrigin);
+    && new URL(finalUrl).origin === providerOrigin;
   const fallbackResponse = trusted && (response.status === 401 || response.status === 403)
     ? await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, redirect: "error", signal })
     : response;
