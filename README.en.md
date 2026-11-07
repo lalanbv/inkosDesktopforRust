@@ -37,7 +37,7 @@ By default the desktop shell **launches the Rust engine directly (zero Node runt
   <img src="assets/studio-dashboard.png" width="760" alt="InkOS Studio creation entry">
 </p>
 
-## Current status (2026-10)
+## Current status (2026-11)
 
 | Item | Status |
 | --- | --- |
@@ -47,6 +47,7 @@ By default the desktop shell **launches the Rust engine directly (zero Node runt
 | Desktop UI | Four-phase overhaul complete (#150–163): command palette, tabs, focus mode, split-pane reading, ten-dimension review score 2.4 → 4.2 |
 | CI | GitHub Actions fully removed (#149); releases are produced by local scripts and manually uploaded to Releases |
 | Benchmark programs | v6 (Pi benchmarks #30–37: transport guards / session compaction / telemetry / skill authoring) and v7 (dsh benchmarks #38–46: tool registry / three-stage pipeline / token metering / result spill / session event log / skills registry / provider seam / plugin contract) fully delivered |
+| Work domain & short-fiction pipeline | Work-domain Rust migration fully delivered across L0–L3 (contract locks → endpoint layer → write surface → production pipeline → agent tool surface; works are end-to-end usable on the pure-Rust desktop; dual-engine alternation 33/33 and three-domain contract diff 72/0 all green); the short-fiction production pipeline has been upgraded to the 2.0 form with the legacy chain retired (#895) |
 
 ## Desktop capabilities
 
