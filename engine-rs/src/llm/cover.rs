@@ -313,7 +313,7 @@ async fn generate_images_cover(
         .map(str::trim)
         .filter(|u| !u.is_empty());
     if let Some(url) = url {
-        return download_generated_cover_image(url, &request.api_key).await;
+        return download_generated_cover_image(url, &request.api_key, &request.base_url).await;
     }
     Err("cover generation response did not include image URL or base64 data.".to_string())
 }
@@ -484,18 +484,39 @@ pub fn extract_gemini_image_base64(payload: &Value) -> Option<(String, &'static 
     None
 }
 
-/// url 下载（401/403 时带 Bearer 重试）。
-async fn download_generated_cover_image(url: &str, api_key: &str) -> Result<GeneratedImage, String> {
+/// url 下载（401/403 时带 Bearer 重试；仅 provider 同源携带凭据）。
+async fn download_generated_cover_image(url: &str, api_key: &str, provider_base_url: &str) -> Result<GeneratedImage, String> {
+    // 924 号：模型返回 URL 属不可信数据——发送前过 origin 策略（900 号
+    // cover-download-origin.ts 的 Rust 镜像：协议仅 http/https；同 provider
+    // origin/allowlist 放行；其余 host 环回/私网/保留地址与解析到私网一律
+    // 拒绝；strict 收紧；未知取值 fail-closed）。
+    let mut env_map = std::collections::BTreeMap::new();
+    for key in [crate::llm::cover_origin::ENV_COVER_DOWNLOAD_ORIGIN_POLICY, crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS] {
+        if let Ok(value) = std::env::var(key) {
+            env_map.insert(key.to_string(), value);
+        }
+    }
+    let policy = crate::llm::cover_origin::resolve_cover_download_origin_policy(&env_map);
+    crate::llm::cover_origin::assert_cover_download_url_allowed(url, provider_base_url, &policy).await?;
+    let provider_origin = url::Url::parse(provider_base_url).ok().map(|p| p.origin().unicode_serialization());
     let client = http_client();
     let response = client
         .get(url)
         .send()
         .await
         .map_err(|e| format!("cover image download failed: {e}"))?;
+    // 924 号：终态 URL 同策略复核——重定向盲请求已发出但响应不进产物；
+    // Bearer 凭据仅对 provider 同源重试（原形态对任意 401/403 都带
+    // key，泄露面更宽，一并收口）。
+    let final_url = response.url().to_string();
+    crate::llm::cover_origin::assert_cover_download_url_allowed(&final_url, provider_base_url, &policy).await?;
+    let trusted = provider_origin.as_deref() == Some(url::Url::parse(&final_url).ok().map(|p| p.origin().unicode_serialization()).as_deref().unwrap_or(""));
     let response = if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-        client
-            .get(url)
-            .bearer_auth(api_key)
+        let mut retry = client.get(url);
+        if trusted {
+            retry = retry.bearer_auth(api_key);
+        }
+        retry
             .send()
             .await
             .map_err(|e| format!("cover image download failed: {e}"))?
@@ -854,6 +875,9 @@ mod tests {
         let download_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let download_addr = download_listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(download_listener, download_app).await.unwrap(); });
+        // 924 号：provider 与下载服务器异 origin（端口不同）=「provider 返回
+        // 异 origin CDN URL」场景——allowlist 显式放行（900 产品语义的镜像）。
+        std::env::set_var(crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS, format!("http://{download_addr}"));
 
         let url_payload = json!({ "data": [ { "url": format!("http://{download_addr}/downloaded.jpg") } ] }).to_string();
         let app = axum::Router::new().route(
@@ -878,6 +902,7 @@ mod tests {
         let image = generate_image_from_prompt(&request, "封面", "512x512").await.unwrap();
         assert_eq!(image.bytes, b"\xff\xd8fakejpg");
         assert_eq!(image.extension, "jpg");
+        std::env::remove_var(crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS);
     }
 
     #[tokio::test]
@@ -1140,11 +1165,11 @@ async fn generate_images_cover_with_reference(
         .send()
         .await
         .map_err(|e| format!("cover generation failed: {e}"))?;
-    finish_images_response(response, &request.api_key).await
+    finish_images_response(response, &request.api_key, &request.base_url).await
 }
 
 /// images 响应尾面（b64/url 分流 + 下载）。
-async fn finish_images_response(response: reqwest::Response, api_key: &str) -> Result<GeneratedImage, String> {
+async fn finish_images_response(response: reqwest::Response, api_key: &str, provider_base_url: &str) -> Result<GeneratedImage, String> {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1162,7 +1187,7 @@ async fn finish_images_response(response: reqwest::Response, api_key: &str) -> R
         .map(str::trim)
         .filter(|u| !u.is_empty());
     if let Some(url) = url {
-        return download_generated_cover_image(url, api_key).await;
+        return download_generated_cover_image(url, api_key, provider_base_url).await;
     }
     Err("cover generation response did not include image URL or base64 data.".to_string())
 }
