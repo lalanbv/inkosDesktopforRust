@@ -4,7 +4,13 @@
     "outDir": "dist",
     "rootDir": "src",
     "lib": ["ES2022"],
-    "types": ["node"]
+    "types": ["node"],
+    // 917 号：生产构建产物不带源码映射（根 tsconfig sourceMap:true 为
+    // dev/watch 链服务；build:server 产物由桌壳/发布包消费——36 个 .map
+    // 泄入发布面=源码可还原+508KB 体积，dev 调试走 tsx 直跑 src 不经此链）。
+    // declarationMap 同族同关（.d.ts.map 声明映射同泄源码结构）。
+    "sourceMap": false,
+    "declarationMap": false
   },
   "include": ["src/api"],
   "exclude": ["src/api/**/*.test.ts"]
