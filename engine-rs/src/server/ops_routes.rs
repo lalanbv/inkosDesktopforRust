@@ -600,7 +600,9 @@ async fn run_detection(
         tokio::fs::read_to_string(chapters_dir.join(&chapter_file))
             .await
             .map_err(|e| e.to_string())?;
-    let client = reqwest::Client::new();
+    // 925 号：检测链换有界客户端（零超时 Client::new() 为无界请求族漏网
+    // 面——检测端点挂起=写作任务检测段无限挂死）。
+    let client = crate::pipeline::detection_runner::detection_http_client();
     let det = crate::pipeline::detection_runner::detect_chapter(&client, config, &chapter_content, chapter_number).await?;
     if !det.passed && config.auto_rewrite {
         let book = runtime.state.load_book_config(book_id).await.map_err(|e| e.to_string())?;

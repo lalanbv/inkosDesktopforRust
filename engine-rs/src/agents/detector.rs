@@ -184,6 +184,34 @@ async fn detect_custom(
 mod tests {
     use super::*;
 
+    /// 925 号：检测 provider 请求有界——挂起端点在注入窗内如实报错
+    /// （无界族漏网面的回归锚；INKOS_DETECT_HTTP_TIMEOUT_MS 注入窗）。
+    #[tokio::test]
+    async fn detect_gptzero_ends_stalled_endpoint_at_injected_window() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 接受连接后持有不响应（挂起端点）。
+        tokio::spawn(async move {
+            let (_sock, _conn) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+        std::env::set_var(crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS, "100");
+        let client = crate::pipeline::detection_runner::detection_http_client();
+        let started = std::time::Instant::now();
+        let result = detect_gptzero(
+            &client,
+            &format!("http://{addr}/detect"),
+            "test-key",
+            "正文内容",
+            "2026-11-08T00:00:00Z",
+        )
+        .await;
+        std::env::remove_var(crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS);
+        let elapsed = started.elapsed();
+        assert!(result.is_err(), "挂起端点必须在窗内报错");
+        assert!(elapsed < std::time::Duration::from_secs(5), "实测耗时 {elapsed:?} 超过注入窗预期");
+    }
+
     #[test]
     fn parse_gptzero_score_extracts_first_doc_prob() {
         let data = serde_json::json!({

@@ -5,11 +5,34 @@
 //! 与 52 号 `utils/detection_insights` 共用（此处补齐写入面）。
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::agents::continuity::{AuditIssue, AuditSeverity};
 use crate::agents::detector::{detect_ai_content, DetectionResult};
+
+/// 925 号：检测链 HTTP 客户端（provider 请求总预算，默认 30s）——注入的
+/// client 曾是零超时 `Client::new()`（903/898 无界请求族的漏网面：检测
+/// 端点挂起=write-next 检测段无限挂死）。超时可经
+/// INKOS_DETECT_HTTP_TIMEOUT_MS 注入（测试/运维调窗）。
+pub const ENV_DETECT_HTTP_TIMEOUT_MS: &str = "INKOS_DETECT_HTTP_TIMEOUT_MS";
+pub const DEFAULT_DETECT_HTTP_TIMEOUT_MS: u64 = 30_000;
+
+pub fn detection_http_timeout_ms() -> u64 {
+    std::env::var(ENV_DETECT_HTTP_TIMEOUT_MS)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(DEFAULT_DETECT_HTTP_TIMEOUT_MS)
+}
+
+pub fn detection_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(detection_http_timeout_ms()))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 use crate::agents::reviser::{revise_chapter as reviser_revise_chapter, ReviseMode, ReviseOptions, ReviserChat, ReviserCtx};
 use crate::models::project::DetectionConfig;
 use crate::utils::utc_time::utc_now_iso;
