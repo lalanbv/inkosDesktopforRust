@@ -205,6 +205,36 @@ rm "/path/to/project/.inkos/tasks/book%3Amy-book%3Awrite.json"
 2. 确认后列表自动热刷新；已信任清单在「外部 Skill 来源信任」区，可随时撤销（撤销后该目录技能回到待确认态）；
 3. 若条目带 `min-engine-version` 提示，说明技能要求的引擎版本高于当前契约版本，待引擎升级后可用。
 
+### 封面生成或下载报 `COVER_DOWNLOAD_ORIGIN_BLOCKED`（912 号文档对齐补条）
+
+**现象**： 封面生成成功但下载图片阶段失败，错误信息含 `cover image download blocked by origin policy (原因)`。
+
+**说明**： 这是**预期安全策略**（900 号）——封面图片 URL 由模型/提供方返回，属不可信数据：与作品配置的 provider 同源一律放行（本地推理网关场景不受影响）；其余地址仅当 host 为公网时放行，环回/私有/保留地址与「公网域名解析到私网」一律拒绝；部署方可用两个环境变量调整：
+
+```bash
+# 显式放行特定来源（逗号分隔 origin，如 provider 返回异源 CDN/本地辅助服务）
+INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS="https://cdn.example,http://127.0.0.1:8189"
+# 收紧模式：跨 origin 一律拒绝（仅同源 + allowlist），适合服务端部署
+INKOS_COVER_DOWNLOAD_ORIGIN_POLICY=strict
+```
+
+相关预算：封面生成总窗 600 秒（`INKOS_COVER_REQUEST_TIMEOUT_MS`）、写作完成通知 15 秒（`INKOS_NOTIFY_TIMEOUT_MS`）——超时错误各自带标签可溯源。
+
+### LLM 请求报 `LLM_REQUEST_TIMEOUT`（约 300 秒后被终止）
+
+**现象**： 任务失败，错误含 `LLM request did not complete within 300000ms`（毫秒数随配置）。
+
+**说明**： 这是**预期看门狗**（898 号）——LLM 请求默认 300 秒无响应即终止并标注（非流式与流式同族有界），不再无限挂死任务。处理：
+
+1. 多数为模型端点停摆/极慢：先确认端点可达（浏览器或 curl 直连 baseUrl）；
+2. 确属长耗时请求（超大上下文慢模型）可放宽：
+
+```bash
+INKOS_LLM_REQUEST_TIMEOUT_MS=600000   # 毫秒；未设置=默认 300000
+```
+
+3. 该错误**不进入自动重试**（898 号语义）：修复端点后直接重新发起任务即可。
+
 ### 任务完成后书籍列表/详情未刷新
 
 写作完成事件（`write:complete`）经 SSE 推送驱动刷新。若 SSE 断连（状态栏「实时」标识变灰）：
