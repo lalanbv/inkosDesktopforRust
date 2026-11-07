@@ -12,6 +12,10 @@
 //   6. node scripts/node-fallback-smoke.mjs   双引擎一致性（mock+fixture+端点）
 //   7. node scripts/engine-contract-diff.mjs  GET/写入/DELETE 契约差分
 //   8. node scripts/export-epub-smoke.mjs     EPUB 导出结构冒烟
+//   9. node scripts/work-domain-alternation.mjs work 域双引擎交替读写互证
+//     （914 号入常驻：884 M1b 验收器械此前仅手动轮跑；works 域零 LLM/mock
+//     依赖、磁盘事务形态稳定性历史良好——「器械不留门禁=护栏半闭环」，
+//     与 913 docs 逻辑同型）
 // Rust 门禁（clippy:gate / audit:rust / cargo test / duel / bench）不受本脚本
 // 管理——Xcode 许可阻断期间亦不影响本脚本可用性。
 
@@ -38,6 +42,8 @@ const steps = [
         ["node-fallback-smoke", ["node", ["scripts/node-fallback-smoke.mjs"]]],
         ["engine-contract-diff", ["node", ["scripts/engine-contract-diff.mjs"]]],
         ["export-epub-smoke", ["node", ["scripts/export-epub-smoke.mjs"]]],
+        // 914 号：work 域交替读写互证入常驻（884 验收器械→回归护栏）。
+        ["work-alternation", ["node", ["scripts/work-domain-alternation.mjs"]]],
       ]),
 ];
 
