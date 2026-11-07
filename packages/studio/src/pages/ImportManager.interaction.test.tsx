@@ -92,4 +92,59 @@ describe("ImportManager 写面交互（911 号）", () => {
     // 成功回执（spinoffDone: nb1）。
     expect(screen.getByText(/import\.spinoffDone/).textContent).toContain("nb1");
   });
+
+  it("同人 init 全链：POST /fanfic/init body 五字段 → fanficDone 导航", async () => {
+    fetchJsonMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (path === "/fanfic/init" && init?.method === "POST") return Promise.resolve({ bookId: "nb2" });
+      return Promise.reject(new Error(`unrouted: ${init?.method ?? "GET"} ${path}`));
+    });
+    render(<ImportManager nav={{ toDashboard: () => {}, toBook: toBookMock }} theme="dark" t={t} initialTab="fanfic" />);
+    fireEvent.change(screen.getByPlaceholderText(/import\.fanficTitle/), { target: { value: "同人：坊市之女" } });
+    fireEvent.change(screen.getByPlaceholderText(/import\.pasteMaterial/), { target: { value: "同人正文素材" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /import\.fanfic/ }).at(-1)!);
+    await waitFor(() => expect(toBookMock).toHaveBeenCalledWith("nb2"));
+    const fanfic = fetchJsonMock.mock.calls.find(([path, init]) => path === "/fanfic/init");
+    expect(fanfic).toBeTruthy();
+    // body 五字段契约：title/sourceText/mode/genre/language（mode/genre 取默认首项）。
+    expect(JSON.parse(String((fanfic![1] as RequestInit).body))).toEqual({
+      title: "同人：坊市之女",
+      sourceText: "同人正文素材",
+      mode: "canon",
+      genre: "other",
+      language: "zh",
+    });
+    expect(screen.getByText(/import\.fanficDone/).textContent).toContain("nb2");
+    expect(invalidateMock).toHaveBeenCalled();
+  });
+
+  it("仿写 init 全链：postApi /imitation/init body 四字段 → imitationDone 导航", async () => {
+    postApiMock.mockResolvedValue({ bookId: "nb3" });
+    render(<ImportManager nav={{ toDashboard: () => {}, toBook: toBookMock }} theme="dark" t={t} initialTab="imitation" />);
+    fireEvent.change(screen.getByPlaceholderText(/import\.imitationTitle/), { target: { value: "仿写：市井长卷" } });
+    fireEvent.change(screen.getByPlaceholderText(/import\.imitationIdea/), { target: { value: "保留双线结构" } });
+    fireEvent.change(screen.getByPlaceholderText(/import\.imitationRef/), { target: { value: "参考文本全文" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /import\.imitation/ }).at(-1)!);
+    await waitFor(() => expect(toBookMock).toHaveBeenCalledWith("nb3"));
+    const imitation = postApiMock.mock.calls.find(([path]) => path === "/imitation/init");
+    expect(imitation![1]).toEqual({
+      title: "仿写：市井长卷",
+      referenceText: "参考文本全文",
+      storyIdea: "保留双线结构",
+      genre: "other",
+      language: "zh",
+    });
+    expect(screen.getByText(/import\.imitationDone/).textContent).toContain("nb3");
+  });
+
+  it("母本导入（book 来源）：postApi /books/:id/import/canon body {fromBookId} + 成功回执", async () => {
+    render(<ImportManager nav={{ toDashboard: () => {}, toBook: toBookMock }} theme="dark" t={t} initialTab="canon" />);
+    // canon 段两个 combobox：第一个=canonFrom（来源书），第二个=canonTarget（衍生目标书）。
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[0]!, { target: { value: "b1" } });
+    fireEvent.change(selects[1]!, { target: { value: "b1" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /import\.canon/ }).at(-1)!);
+    await waitFor(() => expect(postApiMock.mock.calls.some(([path, body]) => path === "/books/b1/import/canon" && JSON.stringify(body) === JSON.stringify({ fromBookId: "b1" }))).toBe(true));
+    // tr 真双语：zh 环境回执为中文文案。
+    expect(screen.getByText(/母本导入成功|Canon imported successfully/)).toBeTruthy();
+  });
 });
