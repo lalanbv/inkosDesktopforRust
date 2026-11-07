@@ -184,6 +184,20 @@ pnpm test && pnpm typecheck                # studio / core / cli 的 vitest 与�
 cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/html   # 覆盖率
 ```
 
+### 门禁脚本（提交/发版前全量）
+
+```bash
+pnpm gate:ts           # TS 十步门禁：build / typecheck / 全量测试 / npm 审计 /
+                       # rust 二进制新鲜度闸 / 双引擎一致性冒烟 / 契约差分
+                       # （三域活体） / EPUB 导出冒烟 / works 交替读写互证 /
+                       # 路由注册完整性哨
+pnpm cargo:testgate    # engine-rs + src-tauri 双 crate 全量测试
+pnpm clippy:gate       # 双 crate clippy（-D warnings，--all-targets）
+pnpm audit:rust        # cargo-audit（必红夹具自检活体）
+pnpm audit:npm         # npm 审计（白名单语义）
+pnpm bench:gate        # 性能基准门禁（对照基线阈值，巡检周期跑）
+```
+
 ## 文档
 
 - 📖 [用户指南](docs/USER_GUIDE.md) / 🚀 [快速开始](docs/QUICK_START.md) / 🔧 [故障排查](docs/TROUBLESHOOTING.md)
