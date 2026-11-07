@@ -209,14 +209,40 @@ const BOOK = encodeURIComponent("镜花水月");
  * 已知分歧豁免表（487 号）：路径段数组，"*" 匹配任意单段；命中子树整体剪除。
  * 每条必须注明备案依据——豁免=已知双端行为差异，不是错误默认放行。
  */
+// 905 号：quality-trend 双键（BOOK 具体名/:id 模板）共用的字段级豁免面
+// （结构面 points 集合/chapter/passed/failingChapters/urgency/currentChapter
+// 不豁免、纳入比对；理由与活体证据见 WAIVERS 内 quality-trend 条目注释）。
+const QUALITY_TREND_WAIVED_PATHS = [
+  ["trend", "averageScore"],
+  ["trend", "scoredChapters"],
+  ["trend", "points", "*", "issueCount"],
+  ["trend", "points", "*", "overallScore"],
+];
 const WAIVERS = new Map([
   // 519 号裁决：resync 端点双端幂等等价（活体精测），483 备案的 currentChapter
   // 分歧实为 Rust write-next 投影段时序缺陷（persist 前读旧 state）——修复后
   // promises/roster-candidates 豁免撤销。仅存 context-lens 装配留痕差异：
   // TS resync 产出 ch1 留痕而 Rust 不产（透明回放完整性，不影响写作数据）。
   [`/api/v1/books/${BOOK}/context-lens`, { reason: "519 号裁决备案：TS resync 产出 ch1 装配留痕而 Rust 不产（仅 lens 回放面）", paths: [["chapters"]] }],
-  // 审计内部计数：双端机检维度实现差异，非契约面（issueCount 随审计轮次波动）
-  [`/api/v1/books/${BOOK}/quality-trend`, { reason: "审计计数波动 + null-vs-缺键序列化（359 号先例）", paths: [["trend"]] }],
+  // 905 号豁免精准化（勘误 815/884 备案）：quality-trend 分歧四字段收窄——
+  // 活体取证（INKOS_DIFF_BODY_PREVIEW=4000 双端响应对照）定案：
+  // ① node 正典派生（808 号：2.0 原生书无 review_metrics 写链，账本缺席走
+  //    chapters/index.json observations 计数；scoredChapters/averageScore/
+  //    overallScore 诚实空=协议扩展登记面）；rust 账本路径（815 号 record_
+  //    chapter_review_metric 写链在位）→ 双端数据源结构差为设计内。
+  // ② rust issueCount=审稿+机检合成合流（write_next run_post_write_checks
+  //    经 Arc 注入审核环+title-dedup/paragraph-shape 多源 push 后 record 计
+  //    数）；node=纯 review observations（submitSourcedReview 记录面）——
+  //    ch2 1 vs 0 的 1 来自机检维度，**815「mock 两协议审改内容不对称」归因
+  //    勘误**（mock 恒 88 分零 issue，与该分叉无关；「mock 记录工具支」出口
+  //    撤销）。结构面（points 集合/chapter/passed/failingChapters/urgency/
+  //    currentChapter）活体全同，本豁免只剪四字段，结构面纳入比对。
+  // ③ 勘误 884/885 备案载体：该端点在共享面清单存在 BOOK 具体名与 :id 模板
+  //    两种形态——具体名键豁免生效而 :id 键从未命中（每跑报 ✗ 即此），双键
+  //    同 paths 修正。现场终态≠比对时刻态（收尾重置，899 --keep 教训同族），
+  //    取证以 INKOS_DIFF_BODY_PREVIEW 跑中响应为准。
+  [`/api/v1/books/${BOOK}/quality-trend`, { reason: "905 号定性：双端数据源结构差（node 正典派生 vs rust 审稿+机检合流账本）+数值分协议缺口（815 上游面登记）——结构面已纳入比对", paths: QUALITY_TREND_WAIVED_PATHS }],
+  [`/api/v1/books/:id/quality-trend`, { reason: "905 号定性（同上；:id 模板形态键——共享面扫描清单用 :id，此前从未命中豁免）", paths: QUALITY_TREND_WAIVED_PATHS }],
   // 章节审计 issue 明细随双端机检维度差异波动（种子内容分叉叙事已废：
   // 505 号活体证实三库种子归一后逐字节一致，产品决策需求撤销——567/572 号
   // 勘误链把本注释对齐 505 裁决）
@@ -827,8 +853,12 @@ try {
       // 裸 stringify 会把双端序列化键序差异误报为分歧。
       // 698 号：超集键声明——TS 超集（2.0 加法字段，fork 契约面无此键）与
       // Rust 超集（fork 诊断扩展）取交集键对比，超集键打印声明不拦截。
-      const pn = prune(n.body);
-      const pr = prune(r.body);
+      // 905 号：接入 WAIVERS 豁免（685 号「集合以模板串为键」同口径——
+      // 此前本段无豁免机制，quality-trend 的字段级豁免从未命中，每跑报
+      // ✗ 分叉即此；命中后结构面纳入比对、仅豁免字段剪除）。
+      const sharedWaiverPaths = WAIVERS.get(endpoint)?.paths ?? [];
+      const pn = pruneWaivedPaths(prune(n.body), sharedWaiverPaths);
+      const pr = pruneWaivedPaths(prune(r.body), sharedWaiverPaths);
       let declaredKeys = "";
       let cn = pn;
       let cr = pr;
