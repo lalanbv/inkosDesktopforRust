@@ -27,5 +27,10 @@ export default defineConfig({
     // server.ts is large enough that first-load esbuild transforms can exceed
     // Vitest's default 5s timeout on a cold full-suite run.
     testTimeout: 30_000,
+    // 902 号实测采纳：threads 池省每文件 fork 开销，isolate:true 语义不变。
+    // 2×全量 0 败 38.24s/38.21s vs forks 2×0 败 50.45s/48.55s（-21~24%）。
+    // cli 面同款实验否决（6 败稳定复现=process.chdir worker 不支持，
+    // 收益微 3.8→3.5s）——forks 留守，勿顺手改 cli。
+    pool: "threads",
   },
 });
