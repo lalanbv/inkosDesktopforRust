@@ -16,6 +16,9 @@
 //     （914 号入常驻：884 M1b 验收器械此前仅手动轮跑；works 域零 LLM/mock
 //     依赖、磁盘事务形态稳定性历史良好——「器械不留门禁=护栏半闭环」，
 //     与 913 docs 逻辑同型）
+//  10. node scripts/check-routes.mjs 路由注册 vs handler 机械对照（915 号
+//     入常驻：411/412 号孤儿端点两例实证的检测器，静态 0.07s 零依赖——
+//     「已实现 axum handler 但 mod.rs 未挂路由」的注册完整性哨）
 // Rust 门禁（clippy:gate / audit:rust / cargo test / duel / bench）不受本脚本
 // 管理——Xcode 许可阻断期间亦不影响本脚本可用性。
 
@@ -44,6 +47,8 @@ const steps = [
         ["export-epub-smoke", ["node", ["scripts/export-epub-smoke.mjs"]]],
         // 914 号：work 域交替读写互证入常驻（884 验收器械→回归护栏）。
         ["work-alternation", ["node", ["scripts/work-domain-alternation.mjs"]]],
+        // 915 号：路由注册完整性哨（孤儿端点检测器，411/412 实证器械入常驻）。
+        ["check-routes", ["node", ["scripts/check-routes.mjs"]]],
       ]),
 ];
 
