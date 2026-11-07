@@ -7,17 +7,18 @@ import { createProgram } from "../program.js";
 
 describe("tui command", () => {
   const originalArgv = process.argv;
-  const originalCwd = process.cwd();
   let tempDir: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "inkos-default-studio-"));
-    process.chdir(tempDir);
+    // 904 号：process.chdir 在 worker_threads 下硬不可用（threads 池阻断站，
+    // 902 备案），改 mock cwd 读数——被测链（init/tui 命令）经 process.cwd()
+    // 取当前目录，mock 同语境等价；restoreAllMocks 复原。
+    vi.spyOn(process, "cwd").mockReturnValue(tempDir);
   });
 
   afterEach(async () => {
     process.argv = originalArgv;
-    process.chdir(originalCwd);
     vi.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -29,7 +30,7 @@ describe("tui command", () => {
     await program.parseAsync([], { from: "user" });
 
     expect(launchStudio).toHaveBeenCalledTimes(1);
-    expect(launchStudio).toHaveBeenCalledWith(process.cwd(), "4567");
+    expect(launchStudio).toHaveBeenCalledWith(tempDir, "4567");
   });
 
   it("auto-initializes a minimal project before launching Studio by default", async () => {
