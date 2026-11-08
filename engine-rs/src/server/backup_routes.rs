@@ -113,6 +113,31 @@ pub async fn export(
     let root = runtime.state.project_root().to_path_buf();
     // 763 号：整书 staging 复制 + tar + gzip 是秒级阻塞工作，移出 runtime
     // 线程（run_export 本体保持同步签名——725 号 bench 契约面语义不变）。
+    // 948 号：打包前 per-work source_sync 快照补齐（幂等，accept=false 只
+    // 快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即打包
+    // 的完整性窗口（947 端到端验证发现备案）。sync 失败不阻断备份。
+    if let Ok(entries) = std::fs::read_dir(root.join("works")) {
+        for entry in entries.flatten() {
+            let work_id = entry.file_name().to_string_lossy().to_string();
+            let synced = crate::harness::source_sync::sync_work_source_artifacts(
+                crate::harness::source_sync::SyncWorkSourceInput {
+                    project_root: &root,
+                    work_id: &work_id,
+                    accept: false,
+                    accept_paths: None,
+                    episode_id: None,
+                    updated_at: None,
+                    writes: Vec::new(),
+                    title: None,
+                    status: None,
+                },
+            )
+            .await;
+            if let Err(error) = synced {
+                tracing::warn!("[backup] works/{work_id} source sync 失败（不阻断备份）: {error}");
+            }
+        }
+    }
     let result = tokio::task::spawn_blocking(move || run_export(&root, include_secrets, include_sessions))
         .await;
     match result {

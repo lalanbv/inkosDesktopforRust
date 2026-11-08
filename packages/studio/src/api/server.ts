@@ -199,7 +199,7 @@ import {
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
-import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints } from "@actalk/inkos-core";
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, syncWorkSourceArtifacts } from "@actalk/inkos-core";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
@@ -5938,6 +5938,19 @@ function yamlScalar(value: unknown): string {
         if (child === "secrets.json" && !includeSecrets) continue;
         await cp(join(source, child), join(inkosDir, child), { recursive: true });
       }
+    }
+    // 948 号：打包前 per-work source_sync 快照补齐（幂等，accept=false
+    // 只快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即
+    // 打包的完整性窗口（947 端到端验证发现备案）。sync 失败不阻断备份。
+    try {
+      const worksRoot = join(root, "works");
+      if (await access(worksRoot).then(() => true).catch(() => false)) {
+        for (const workId of await readdir(worksRoot)) {
+          await syncWorkSourceArtifacts({ projectRoot: root, workId, accept: false });
+        }
+      }
+    } catch {
+      // sync 失败不阻断备份（warn 语义）
     }
     // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进
     // manifest scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL
