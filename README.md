@@ -157,7 +157,10 @@ cd src-tauri && cargo run
 | 运行 | `INKOS_BUILTIN_GENRES_DIR` / `INKOS_BUILTIN_SKILLS_DIR` / `INKOS_SKILL_DIRS` | 内置题材 / 技能目录 |
 | LLM 默认端点 | `INKOS_LLM_BASE_URL` / `INKOS_LLM_API_KEY` / `INKOS_LLM_MODEL` / `INKOS_LLM_MAX_TOKENS` / `INKOS_LLM_CONTEXT_WINDOW` | inkos.json 服务项 + secrets 优先，配置不可用回退此组；上下文窗口缺省按模型卡（两层查，miss 128k），驱动写作链上下文压缩预算（441 号） |
 | LLM 行为 | `INKOS_LLM_TRANSIENT_RETRY`（0=关）/ `INKOS_LLM_STREAM` / `INKOS_LLM_STREAM_IDLE_TIMEOUT_MS` / `INKOS_LLM_FIRST_EVENT_TIMEOUT_MS` | 瞬态重试与流式超时 |
+| LLM 行为 | `INKOS_LLM_REQUEST_TIMEOUT_MS`（默认 300000） | LLM 请求总预算（buffered/流式同族有界；超时报 `LLM_REQUEST_TIMEOUT`，不自动重试——898 号） |
+| 网络预算 | `INKOS_NOTIFY_TIMEOUT_MS`（默认 15000）/ `INKOS_COVER_REQUEST_TIMEOUT_MS`（默认 600000）/ `INKOS_DETECT_HTTP_TIMEOUT_MS`（默认 30000） | 通知 / 封面生成 / AI 检测链的请求总预算（903/899/925 号，各自超时错误带标签可溯源） |
 | 专项 | `INKOS_COVER_*` / `INKOS_FILM_IMAGE_SIZE` | 封面生成端点与尺寸 |
+| 专项 | `INKOS_COVER_DOWNLOAD_ORIGIN_POLICY`（strict=仅同源+allowlist）/ `INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS`（逗号分隔 origin） | 封面下载 origin 策略（900 号：模型返回 URL 的环回/私网/保留地址默认拒绝；双端同键） |
 | 专项 | `INKOS_ENGINE_LOOPBACK_GUARD` / `INKOS_ENGINE_ALLOWED_ORIGINS` | loopback 加固与 CORS 白名单 |
 | 专项 | `INKOS_RUNTIME_RETENTION_CHAPTERS`（默认 20，0=关）/ `INKOS_REVISION_GATE` / `INKOS_PLAN_MEMO_START\|END` | 运行工件保留 / 修订门 / memo 标记 |
 | agent 覆盖 | `INKOS_AGENT_<NAME>_MODEL` | 按 agent 覆盖模型（完整 model-overrides 走配置端点） |
