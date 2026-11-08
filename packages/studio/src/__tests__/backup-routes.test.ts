@@ -205,6 +205,16 @@ describe("backup export/import routes (710)", () => {
     const snapshotBook = snapshotEntries.find((e) => e.name === "books/b1/book.json");
     expect(snapshotBook).toBeDefined();
     expect(new TextDecoder().decode(snapshotBook!.bytes)).toBe('{"tampered":true}');
+    // 951 号：回滚闭环——pre-restore 快照（951 起附带裸名 manifest）直接
+    // 灌回 import 端点，book.json 回到「导入前」状态（=tampered 版本）。
+    const rollback = await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: snapshotRaw,
+    });
+    expect(rollback.status).toBe(200); // 此前快照无 manifest → 400，回滚保险半成品
+    const rollbackBody = await rollback.json() as { ok: boolean; restored: number };
+    expect(rollbackBody.ok).toBe(true);
+    expect(rollbackBody.restored).toBe(snapshotEntries.length - 1); // 全部覆盖文件-manifest
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe('{"tampered":true}');
   });
 
   it("import 守卫面: 空载荷/缺 manifest/坏 generator/不安全条目整包 400", async () => {

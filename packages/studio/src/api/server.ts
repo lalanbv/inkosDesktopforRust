@@ -6090,6 +6090,19 @@ function yamlScalar(value: unknown): string {
         const data = await readFile(join(root, name)).catch(() => null);
         if (data) snapshotFiles.push({ name, bytes: new Uint8Array(data) });
       }
+      // 951 号：快照附带 manifest（裸名形态，双端 import 端点均兼容裸名查
+      // 找与写回跳过）——pre-restore 快照可直接经 backup/import?confirm=1
+      // 回灌=回滚保险从「留档」到「可执行」闭环。部分回滚边界：恢复引入
+      // 的新文件不在快照中（保守不引入删除语义，备案）。
+      snapshotFiles.push({
+        name: "backup-manifest.json",
+        bytes: new TextEncoder().encode(JSON.stringify({
+          version: 1,
+          generator: "inkos-desktop",
+          kind: "pre-restore-snapshot",
+          overwriting,
+        })),
+      });
       const backupsDir = join(root, "backups");
       await mkdir(backupsDir, { recursive: true });
       const chunks: Buffer[] = [];

@@ -391,6 +391,25 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
                         .map_err(|e| e.to_string())?;
                 }
             }
+            // 951 号：快照附带 manifest（裸名形态，双端 import 端点均兼容
+            // 裸名查找与写回跳过）——pre-restore 快照可直接经
+            // backup/import?confirm=1 回灌=回滚保险从「留档」到「可执行」
+            // 闭环。部分回滚边界：恢复引入的新文件不在快照（保守不引入
+            // 删除语义，备案）。
+            let snapshot_manifest = serde_json::json!({
+                "version": 1,
+                "generator": "inkos-desktop",
+                "kind": "pre-restore-snapshot",
+            })
+            .to_string()
+            .into_bytes();
+            let mut header = tar::Header::new_gnu();
+            header.set_size(snapshot_manifest.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, MANIFEST_NAME, snapshot_manifest.as_slice())
+                .map_err(|e| e.to_string())?;
             let file = builder.into_inner().map_err(|e| e.to_string())?;
             // 762 号同款：落盘后才 rename，掉电后快照要么缺失要么完整。
             file.sync_all().map_err(|e| e.to_string())?;
@@ -674,9 +693,16 @@ mod tests {
             .join("backups")
             .join(std::fs::read_dir(root.join("backups")).unwrap().next().unwrap().unwrap().file_name());
         let snapshot_entries = parse_archive(&std::fs::read(&snapshot_path).unwrap()).unwrap().0;
-        assert_eq!(snapshot_entries.len(), 1);
+        assert_eq!(snapshot_entries.len(), 2); // 951 号起：快照附 manifest 条目
         assert_eq!(snapshot_entries[0].name, "books/b1/book.json");
         assert_eq!(snapshot_entries[0].bytes, original);
+        // 951 号：回滚闭环——快照（附 manifest）直接灌回 import，回到导入前状态。
+        let snapshot_bytes = std::fs::read(&snapshot_path).unwrap();
+        let rollback = run_import(&root, &snapshot_bytes, true).unwrap();
+        assert_eq!(rollback["ok"], true);
+        assert_eq!(rollback["restored"], 1); // manifest 不计
+        let rolled_back = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        assert_eq!(rolled_back, original);
         drop(dir);
     }
 
