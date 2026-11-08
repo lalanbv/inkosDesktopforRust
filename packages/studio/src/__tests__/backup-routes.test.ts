@@ -328,16 +328,39 @@ describe("backup export/import routes (710)", () => {
     const restored = JSON.parse(await readFile(join(root, longName.slice("inkos-backup/".length)), "utf-8"));
     expect(restored).toEqual({ rev: "from-rust-gnu" });
   });
+
+  it("import 接受 Rust 形态 pre-restore 快照回滚（GNU 头裸名条目+manifest）——跨端快照回滚", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    // Rust 快照形态（951 起）：Header::new_gnu + 裸名条目 + 裸名 manifest。
+    // 场景：Rust 引擎恢复留档 → Node 回退端回滚。
+    const tar = simpleTar([
+      { name: "backup-manifest.json", payload: new TextEncoder().encode(JSON.stringify({ version: 1, generator: "inkos-desktop", kind: "pre-restore-snapshot" })), gnuMagic: true },
+      { name: "books/b1/book.json", payload: new TextEncoder().encode('{"rolled-back":true}'), gnuMagic: true },
+    ]);
+    const res = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: tar });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; restored: number };
+    expect(body.ok).toBe(true);
+    expect(body.restored).toBe(1); // manifest 不计
+    expect(JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8"))).toEqual({ "rolled-back": true });
+  });
 });
 
 /** 与 Rust 测试 simple_tar 对偶的最小 USTAR 构建（512B 头+payload+补齐+双零块）。 */
-function simpleTar(entries: Array<{ name: string; payload: Uint8Array; typeflag?: string }>): Uint8Array<ArrayBuffer> {
+function simpleTar(entries: Array<{ name: string; payload: Uint8Array; typeflag?: string; gnuMagic?: boolean }>): Uint8Array<ArrayBuffer> {
   const chunks: Buffer[] = [];
-  for (const { name, payload, typeflag } of entries) {
+  for (const { name, payload, typeflag, gnuMagic } of entries) {
     const header = Buffer.alloc(512, 0);
     Buffer.from(name, "utf-8").copy(header, 0);
     header.write(payload.length.toString(8).padStart(11, "0"), 124);
     header.write(typeflag ?? "0", 156);
+    // gnuMagic：Rust Header::new_gnu 形态（"ustar "+" \0"）；缺省=TS 快照
+    // 构造形态（257 区全零，v7/基础头）。
+    if (gnuMagic) {
+      header.write("ustar ", 257, "utf-8");
+      header.write(" \0", 263);
+    }
     for (let i = 148; i < 156; i += 1) header[i] = 0x20;
     let sum = 0;
     for (const byte of header) sum += byte;

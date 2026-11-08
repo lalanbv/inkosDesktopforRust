@@ -812,8 +812,7 @@ mod tests {
     /// 100 字节上限——Rust 导出侧经 GNU LongLink 表达、TS 导出侧经
     /// POSIX prefix 拆分/'L' 表达（同轮对偶改造）；双端读侧均须恢复完整名。
     #[test]
-    fn export_long_paths_roundtrip_via_gnu_longname() {
-        let (_dir, root) = temp_root();
+    fn export_long_paths_roundtrip_via_gnu_longname() {        let (_dir, root) = temp_root();
         let rel = "works/w-12345678-1234-5678-1234-567812345678/revisions/r-87654321-4321-8765-4321-876543218765/chapter-0001-r2.json";
         assert!(rel.len() > 100, "{rel}");
         std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
@@ -852,6 +851,24 @@ mod tests {
         assert_eq!(response["restored"], 1);
         let restored = std::fs::read(root.join("works/w1/revisions/r1/chapter-0001-r2.json")).unwrap();
         assert_eq!(restored, payload.to_vec());
+    }
+
+    /// 952 号：跨端快照回滚互灌（Rust 腿）——TS 端 pre-restore 快照形态
+    /// （手写 tar 头无 magic 字段：257 区全零，仅 name/size/typeflag/cksum）
+    /// +裸名条目+裸名 manifest（951 起）。Node 端恢复留档 → Rust 引擎回滚
+    /// 场景：tar crate 须按 v7/基础头形态接受并恢复。
+    #[test]
+    fn import_accepts_ts_form_snapshot_rollback() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (MANIFEST_NAME, &manifest_bytes("inkos-desktop", 1)),
+            ("books/b1/book.json", br#"{"id":"b1","rolled-back":true}"#),
+        ]);
+        let response = run_import(&root, &tar_bytes, true).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["restored"], 1); // manifest 不计
+        let restored = std::fs::read_to_string(root.join("books/b1/book.json")).unwrap();
+        assert!(restored.contains("rolled-back"), "{restored}");
     }
 
     /// 950 号：单条目 tar 块（512B 头+payload+补齐），支持 POSIX prefix 字段
