@@ -32,10 +32,24 @@ use std::collections::HashMap;
 
 use crate::server::books_routes::BooksRuntime;
 
-// 938 号：`works` 入备份域（works/<id>/work.json = work 域用户创作数据
-// ——缺失即「备份导出不含 works 作品，恢复后作品全丢」；import 为通用
-// staging 复制天然支持 works 条目，恢复端无需改动）。
-const BACKUP_ROOT_ENTRIES: [&str; 5] = ["books", "inkos.json", ".inkos", "prompt", "works"];
+// 938/939 号：备份域对照引擎数据目录全集补缺——`works`（work 域创作
+// 数据）+`translations`（翻译工程）+`genres`（用户自定义题材）+`skills`
+// （项目技能）+`radar`（radar 数据）+`worlds`（影游项目）；缺失即对应
+// 用户数据不进备份（恢复后丢失）。import 为通用 staging 复制天然支持
+// 全部条目，恢复端无需改动。assets 素材库在 .inkos/asset-library 内
+// （已覆盖）；backups/（pre-restore 快照）与 inkos.log 不自包含。
+const BACKUP_ROOT_ENTRIES: [&str; 10] = [
+    "books",
+    "inkos.json",
+    ".inkos",
+    "prompt",
+    "works",
+    "translations",
+    "genres",
+    "skills",
+    "radar",
+    "worlds",
+];
 const PACKAGE_ROOT_NAME: &str = "inkos-backup";
 const MANIFEST_NAME: &str = "backup-manifest.json";
 const TAR_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
@@ -466,13 +480,17 @@ mod tests {
         std::fs::write(root.join(".inkos/secrets.json"), r#"{"services":{}}"#).unwrap();
         std::fs::create_dir_all(root.join("prompt")).unwrap();
         std::fs::write(root.join("prompt/writer.md"), "写作守则。").unwrap();
-        // 938 号：works 域种子（用户创作数据，备份域补缺的断言对象）。
+        // 938/939 号：works+五新目录种子（用户创作数据，备份域补缺的断言对象）。
         std::fs::create_dir_all(root.join("works/w1")).unwrap();
         std::fs::write(
             root.join("works/w1/work.json"),
             r#"{"id":"w1","title":"坊市旧事","profileId":"short-story","language":"zh","status":"draft"}"#,
         )
         .unwrap();
+        for dir in ["translations", "genres", "skills", "radar", "worlds"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(format!("{dir}/data.json")), format!("{{\"seeded\":\"{dir}\"}}")).unwrap();
+        }
         (dir, root)
     }
 
@@ -516,6 +534,13 @@ mod tests {
         assert!(names.contains(&"inkos-backup/books/b1/book.json"), "{names:?}");
         assert!(names.contains(&"inkos-backup/prompt/writer.md"), "{names:?}");
         assert!(names.contains(&"inkos-backup/works/w1/work.json"), "{names:?}"); // 938 号：works 域入备份
+        // 939 号：五新目录种子条目全部入包。
+        for dir in ["translations", "genres", "skills", "radar", "worlds"] {
+            assert!(
+                names.contains(&format!("inkos-backup/{dir}/data.json").as_str()),
+                "{names:?}"
+            );
+        }
         assert!(!names.iter().any(|n| n.contains("secrets.json")), "secrets must be excluded: {names:?}");
         let manifest: serde_json::Value = serde_json::from_slice(
             entries

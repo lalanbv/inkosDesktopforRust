@@ -5902,9 +5902,21 @@ function yamlScalar(value: unknown): string {
   // staging 聚合 books/ + inkos.json + .inkos/（secrets 默认排除）+ prompt/ +
   // manifest → inkos-backup/ 前缀 tar.gz；sessions/ 默认排除（scope 仅记录）。
 
-  // 938 号：`works` 入备份域（works/<id>/work.json = work 域用户创作数据；
-  // import 为通用 staging 复制天然支持 works 条目，恢复端无需改动）。
-  const BACKUP_ROOT_ENTRIES = ["books", "inkos.json", ".inkos", "prompt", "works"] as const;
+  // 938/939 号：备份域对照引擎数据目录全集补缺（works/translations/
+  // genres/skills/radar/worlds——缺失即对应用户数据不进备份；import 为
+  // 通用 staging 复制天然支持全部条目；assets 在 .inkos 内已覆盖）。
+  const BACKUP_ROOT_ENTRIES = [
+    "books",
+    "inkos.json",
+    ".inkos",
+    "prompt",
+    "works",
+    "translations",
+    "genres",
+    "skills",
+    "radar",
+    "worlds",
+  ] as const;
 
   app.get("/api/v1/backup/export", async (c) => {
     const includeSecrets = c.req.query("includeSecrets") === "1";
