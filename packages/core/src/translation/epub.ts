@@ -12,13 +12,27 @@ export interface ExtractedEpub {
   readonly chapters: ReadonlyArray<ExtractedEpubChapter>;
 }
 
+// 926 号：显式拒绝 `<!ENTITY` 声明（XXE 注入源拔除）。手写正则解析无实
+// 体展开机制（decodeXml 只替换五个预定义实体），DOCTYPE 本身不展开故放
+// 行（真实 EPUB 章节普遍携带 XHTML DTD 声明，拒之会破坏兼容性）——
+// fail-loud 让损坏/恶意包得到明确错误而非静默怪异行为。
+function rejectEntityDeclarations(name: string, text: string): void {
+  if (text.includes("<!ENTITY")) {
+    throw new Error(
+      `EPUB entry ${name} declares <!ENTITY> (unsupported XML dialect); re-export without entity declarations.`,
+    );
+  }
+}
+
 export async function extractEpub(buffer: Buffer): Promise<ExtractedEpub> {
   const zip = await JSZip.loadAsync(buffer);
   const containerXml = await zip.file("META-INF/container.xml")?.async("string");
+  rejectEntityDeclarations("META-INF/container.xml", containerXml ?? "");
   const opfPath = extractOpfPath(containerXml ?? "");
   if (!opfPath) throw new Error("EPUB container.xml does not point to an OPF package.");
 
   const opf = await zip.file(opfPath)?.async("string");
+  rejectEntityDeclarations(opfPath, opf ?? "");
   if (!opf) throw new Error(`EPUB OPF package not found: ${opfPath}`);
 
   const title = decodeXml(extractFirst(opf, /<dc:title[^>]*>([\s\S]*?)<\/dc:title>/i) ?? "").trim() || undefined;
@@ -32,6 +46,7 @@ export async function extractEpub(buffer: Buffer): Promise<ExtractedEpub> {
     if (!href) continue;
     const chapterPath = normalizeZipPath(baseDir === "." ? href : posix.join(baseDir, href));
     const html = await zip.file(chapterPath)?.async("string");
+    rejectEntityDeclarations(chapterPath, html ?? "");
     if (!html) continue;
     const titleFromHtml = decodeXml(extractFirst(html, /<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i) ?? "").replace(/<[^>]+>/g, "").trim();
     const content = normalizeTranslationText(stripHtml(html));

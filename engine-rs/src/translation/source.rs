@@ -148,19 +148,35 @@ pub struct ExtractedEpub {
 pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
     let reader =
         zip::ZipArchive::new(std::io::Cursor::new(buffer)).map_err(|e| e.to_string())?;
-    let read_entry = |name: &str| -> Option<String> {
+    // 926 号：显式拒绝 `<!ENTITY` 声明（XXE 注入源拔除）。手写正则解析
+    // 无实体展开机制（decode_xml 只替换五个预定义实体，未声明实体保持
+    // 字面），DOCTYPE 本身不展开故放行（真实 EPUB 章节普遍携带 XHTML
+    // DTD 声明，拒之会破坏兼容性）——fail-loud 让损坏/恶意包得到明确
+    // 错误而非静默怪异行为。
+    // Err = ENTITY 声明（致命）；Ok(None) = entry 缺失（调用点按既有语义
+    // 跳过/报缺包，不致命）。
+    let read_entry = |name: &str| -> Result<Option<String>, String> {
         let mut reader = reader.clone();
-        let mut file = reader.by_name(name).ok()?;
+        let Some(mut file) = reader.by_name(name).ok() else {
+            return Ok(None);
+        };
         let mut text = String::new();
-        std::io::Read::read_to_string(&mut file, &mut text).ok()?;
-        Some(text)
+        std::io::Read::read_to_string(&mut file, &mut text)
+            .map_err(|e| format!("EPUB entry {name}: {e}"))?;
+        if text.contains("<!ENTITY") {
+            return Err(format!(
+                "EPUB entry {name} declares <!ENTITY> (unsupported XML dialect); re-export without entity declarations."
+            ));
+        }
+        Ok(Some(text))
     };
 
-    let container_xml = read_entry("META-INF/container.xml")
-        .ok_or("EPUB container.xml does not point to an OPF package.")?;
+    let container_xml = read_entry("META-INF/container.xml")?.ok_or(
+        "EPUB container.xml does not point to an OPF package.",
+    )?;
     let opf_path = extract_opf_path(&container_xml)
         .ok_or("EPUB container.xml does not point to an OPF package.")?;
-    let opf = read_entry(&opf_path)
+    let opf = read_entry(&opf_path)?
         .ok_or_else(|| format!("EPUB OPF package not found: {opf_path}"))?;
 
     let title = extract_first(&opf, r"(?i)<dc:title[^>]*>([\s\S]*?)</dc:title>")
@@ -183,7 +199,7 @@ pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
         } else {
             normalize_zip_path(&format!("{base_dir}/{href}"))
         };
-        let Some(html) = read_entry(&chapter_path) else {
+        let Some(html) = read_entry(&chapter_path)? else {
             continue;
         };
         let title_from_html = extract_first(&html, r"(?i)<h[1-6][^>]*>([\s\S]*?)</h[1-6]>")
@@ -209,6 +225,7 @@ pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
     }
     Ok(ExtractedEpub { title, chapters })
 }
+
 
 fn extract_opf_path(container_xml: &str) -> Option<String> {
     extract_first(
@@ -269,4 +286,64 @@ fn decode_xml(text: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
+
+    fn write_epub(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+
+    #[test]
+    fn extracts_epub_with_doctype_but_rejects_entity_declarations() {
+        // 兼容性锚：章节带 XHTML DOCTYPE（真实 EPUB 普遍形态）正常提取。
+        let ok_epub = write_epub(&[
+            ("META-INF/container.xml", CONTAINER),
+            (
+                "OEBPS/content.opf",
+                r#"<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#,
+            ),
+            (
+                "OEBPS/c1.xhtml",
+                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"><html><body><h1>首章</h1><p>正文内容足够长以通过过滤。</p></body></html>",
+            ),
+        ]);
+        let extracted = extract_epub(&ok_epub).unwrap();
+        assert_eq!(extracted.chapters.len(), 1);
+        assert_eq!(extracted.chapters[0].title, "首章");
+
+        // XXE 注入源拔除：`<!ENTITY` 声明显式拒绝（fail-loud）。
+        let xxe_epub = write_epub(&[
+            ("META-INF/container.xml", CONTAINER),
+            (
+                "OEBPS/content.opf",
+                r#"<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="c1.xhtml"/></manifest><spine><itemref idref="c1"/></spine></package>"#,
+            ),
+            (
+                "OEBPS/c1.xhtml",
+                "<!DOCTYPE html [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><html><body><p>&xxe;</p></body></html>",
+            ),
+        ]);
+        let Err(error) = extract_epub(&xxe_epub) else {
+            panic!("含 <!ENTITY 的 EPUB 必须被拒绝");
+        };
+        assert!(error.contains("declares <!ENTITY>"), "{error}");
+        assert!(error.contains("c1.xhtml"), "{error}");
+    }
 }

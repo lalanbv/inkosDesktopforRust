@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import JSZip from "jszip";
+import { extractEpub } from "../translation/epub.js";
 import { createTranslationProjectFromFile } from "../translation/index.js";
 import { segmentTranslationText } from "../translation/text.js";
 import {loadWorkManifest} from "../harness/work-store.js";
@@ -49,6 +50,43 @@ async function writeMinimalEpub(path: string): Promise<void> {
   zip.file("OEBPS/chapter2.xhtml", `<html><body><h1>Chapter Two</h1><p>Second gate.</p></body></html>`);
   await writeFile(path, await zip.generateAsync({ type: "nodebuffer" }));
 }
+
+const zipMeta = `<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
+const zipOpf = `<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`;
+
+describe("epub entity declaration rejection (926)", () => {
+  it("extracts EPUBs carrying DOCTYPE but rejects <!ENTITY> declarations (fail-loud)", async () => {
+    const path = join(tmpdir(), `inkos-epub-entity-${Date.now()}.epub`);
+    const zip = new JSZip();
+    zip.file("mimetype", "application/epub+zip");
+    zip.file(
+      "META-INF/container.xml",
+      `<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`,
+    );
+    zip.file(
+      "OEBPS/content.opf",
+      `<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`,
+    );
+    // 兼容性锚：DOCTYPE（真实 EPUB 普遍形态）放行。
+    zip.file("OEBPS/c1.xhtml", `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"><html><body><h1>首章</h1><p>正文内容足够长。</p></body></html>`);
+    await writeFile(path, await zip.generateAsync({ type: "nodebuffer" }));
+    const ok = await extractEpub(await readFile(path));
+    expect(ok.chapters.length).toBe(1);
+
+    // XXE 注入源拔除：`<!ENTITY` 声明显式拒绝（fail-loud）。
+    const xxePath = join(tmpdir(), `inkos-epub-xxe-${Date.now()}.epub`);
+    const xxeZip = new JSZip();
+    xxeZip.file("mimetype", "application/epub+zip");
+    xxeZip.file("META-INF/container.xml", zipMeta);
+    xxeZip.file("OEBPS/content.opf", zipOpf);
+    xxeZip.file(
+      "OEBPS/c1.xhtml",
+      `<!DOCTYPE html [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><html><body><p>&xxe;</p></body></html>`,
+    );
+    await writeFile(xxePath, await xxeZip.generateAsync({ type: "nodebuffer" }));
+    await expect(extractEpub(await readFile(xxePath))).rejects.toThrow(/declares <!ENTITY>/);
+  });
+});
 
 describe("translation ingestion", () => {
   let root: string;
