@@ -780,4 +780,77 @@ mod tests {
         let restored = std::fs::read_to_string(root.join("books/b1/book.json")).unwrap();
         assert!(restored.contains("gz"));
     }
+
+    /// 950 号：长路径三通道回归锁。真实 works 路径
+    /// `inkos-backup/works/<长id>/revisions/<长rev>/...` 超 USTAR name 字段
+    /// 100 字节上限——Rust 导出侧经 GNU LongLink 表达、TS 导出侧经
+    /// POSIX prefix 拆分/'L' 表达（同轮对偶改造）；双端读侧均须恢复完整名。
+    #[test]
+    fn export_long_paths_roundtrip_via_gnu_longname() {
+        let (_dir, root) = temp_root();
+        let rel = "works/w-12345678-1234-5678-1234-567812345678/revisions/r-87654321-4321-8765-4321-876543218765/chapter-0001-r2.json";
+        assert!(rel.len() > 100, "{rel}");
+        std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
+        std::fs::write(root.join(rel), br#"{"rev":"long-path-body"}"#).unwrap();
+        // 无 work.json 的手工形态目录不得阻断导出（sync 隔离面活体）。
+        let gz = run_export(&root, false, false).unwrap();
+        let entries = parse_archive(&gz).unwrap().0;
+        let full = format!("{PACKAGE_ROOT_NAME}/{rel}");
+        let entry = entries
+            .iter()
+            .find(|e| e.name == full)
+            .unwrap_or_else(|| panic!("long path entry missing: {full}; got {:?}", entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>()));
+        assert_eq!(entry.bytes, br#"{"rev":"long-path-body"}"#.to_vec());
+    }
+
+    /// TS 写侧 POSIX USTAR prefix 拆分形态（950）：name 字段=末段、prefix
+    /// 字段(345)=前段、magic "ustar\0"+"00"——tar::Archive 拼接恢复完整名
+    /// （跨端互灌 TS 导出→Rust 导入；simple_tar 末尾含双零块故全内联构造）。
+    #[test]
+    fn import_accepts_ustar_prefix_entries() {
+        let (_dir, root) = temp_root();
+        let payload: &[u8] = br#"{"rev":"from-ts-prefix"}"#;
+        let mut tar_bytes = tar_entry_block(
+            &format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}"),
+            None,
+            &manifest_bytes("inkos-desktop", 1),
+        );
+        tar_bytes.extend_from_slice(&tar_entry_block(
+            "chapter-0001-r2.json",
+            Some("inkos-backup/works/w1/revisions/r1"),
+            payload,
+        ));
+        tar_bytes.extend(std::iter::repeat_n(0u8, 1024));
+        let response = run_import(&root, &tar_bytes, true).unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["restored"], 1);
+        let restored = std::fs::read(root.join("works/w1/revisions/r1/chapter-0001-r2.json")).unwrap();
+        assert_eq!(restored, payload.to_vec());
+    }
+
+    /// 950 号：单条目 tar 块（512B 头+payload+补齐），支持 POSIX prefix 字段
+    /// 与任意 typeflag——`simple_tar` 的可变体（其末尾双零块使拼接需分块构造）。
+    fn tar_entry_block(name: &str, prefix: Option<&str>, payload: &[u8]) -> Vec<u8> {
+        let mut header = vec![0u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = format!("{:011o}", payload.len());
+        header[124..124 + size.len()].copy_from_slice(size.as_bytes());
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        if let Some(prefix) = prefix {
+            header[345..345 + prefix.len()].copy_from_slice(prefix.as_bytes());
+        }
+        for byte in &mut header[148..156] {
+            *byte = b' ';
+        }
+        let sum: u32 = header.iter().map(|&b| b as u32).sum();
+        let octal = format!("{:06o}\0 ", sum);
+        header[148..156].copy_from_slice(octal.as_bytes());
+        let mut out = header;
+        out.extend_from_slice(payload);
+        let padding = (512 - (payload.len() % 512)) % 512;
+        out.extend(std::iter::repeat_n(0u8, padding));
+        out
+    }
 }

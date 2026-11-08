@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -241,16 +242,92 @@ describe("backup export/import routes (710)", () => {
     await expect(readFile(join(root, "evil.md"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(root, "inkos-backup/safe.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  // —— 950 号：跨端备份包互灌（长路径三通道端到端）——
+
+  it("export 长路径回灌: >100 字节路径经 prefix/LongLink 通道入包并恢复落盘（此前 export 抛错）", async () => {
+    await seedProject();
+    // 真实形态长路径：works/<长id>/revisions/<长rev>/...（>100 字节）。
+    const workId = "w-12345678-1234-5678-1234-567812345678";
+    const revDir = join(root, "works", workId, "revisions", "r-87654321-4321-8765-4321-876543218765");
+    await mkdir(revDir, { recursive: true });
+    const longRel = join("works", workId, "revisions", "r-87654321-4321-8765-4321-876543218765", "chapter-0001-r2.json");
+    expect(longRel.length).toBeGreaterThan(100);
+    await writeFile(join(revDir, "chapter-0001-r2.json"), JSON.stringify({ rev: "long-path-body" }), "utf-8");
+    // >255 字节路径（prefix 拆分不可达）→ GNU LongLink 'L' 写法通道。
+    const deepId = `w-${"d".repeat(250)}`;
+    const deepDir = join(root, "works", deepId, "revisions", "r1");
+    await mkdir(deepDir, { recursive: true });
+    const deepRel = join("works", deepId, "revisions", "r1", "chapter-0001-r9.json");
+    expect(deepRel.length).toBeGreaterThan(255);
+    await writeFile(join(deepDir, "chapter-0001-r9.json"), JSON.stringify({ rev: "longlink-body" }), "utf-8");
+
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/backup/export");
+    expect(res.status).toBe(200); // 此前 >100 字节路径 writeTarString 抛错=export 500
+    const exported = new Uint8Array(await res.arrayBuffer());
+    const { entries, rejected } = untar(exported);
+    expect(rejected).toEqual([]);
+    // prefix 通道（≤255 有边界）：完整名恢复。
+    const fullName = `inkos-backup/${longRel.replace(/\\/g, "/")}`;
+    const longEntry = entries.find((e) => e.name === fullName);
+    expect(longEntry).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode(longEntry!.bytes))).toEqual({ rev: "long-path-body" });
+    // 'L' 通道（>255 或无边界）：完整名恢复（GNU 扩展写法，Rust 读侧同形态）。
+    const deepName = `inkos-backup/${deepRel.replace(/\\/g, "/")}`;
+    const deepEntry = entries.find((e) => e.name === deepName);
+    expect(deepEntry).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode(deepEntry!.bytes))).toEqual({ rev: "longlink-body" });
+
+    // 回灌到另一个项目根：写回后长路径文件原样落盘。
+    const root2 = await mkdtemp(join(tmpdir(), "backup-restore-"));
+    try {
+      const app2 = createStudioServer({} as never, root2);
+      const confirmed = await app2.request("/api/v1/backup/import?confirm=1", {
+        method: "POST", body: exported,
+      });
+      expect(confirmed.status).toBe(200);
+      const body = await confirmed.json() as { ok: boolean; restored: number };
+      expect(body.ok).toBe(true);
+      expect(body.restored).toBe(entries.length - 1);
+      expect(JSON.parse(await readFile(join(root2, longRel), "utf-8"))).toEqual({ rev: "long-path-body" });
+      expect(JSON.parse(await readFile(join(root2, deepRel), "utf-8"))).toEqual({ rev: "longlink-body" });
+    } finally {
+      await rm(root2, { recursive: true, force: true });
+    }
+  });
+
+  it("import 接受 Rust 形态 GNU LongLink gzip 包（此前 'L' 条目 rejected 整包 400）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    // 模拟 Rust 导出侧（tar::Builder + Header::new_gnu）长路径产出：
+    // 'L' 扩展条目 + 截断名真条目 + manifest，gzip 层与 Rust GzEncoder 同。
+    const longName = "inkos-backup/works/w-12345678-1234-5678-1234-567812345678/revisions/r-12345678-1234-5678-1234-567812345678/chapter-0001-r2.json";
+    const tar = simpleTar([
+      { name: "inkos-backup/backup-manifest.json", payload: new TextEncoder().encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+      { name: "././@LongLink", payload: new TextEncoder().encode(`${longName}\0`), typeflag: "L" },
+      { name: longName.slice(0, 100), payload: new TextEncoder().encode('{"rev":"from-rust-gnu"}') },
+    ]);
+    const res = await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: new Uint8Array(gzipSync(tar)),
+    });
+    expect(res.status).toBe(200); // 此前 'L' 进 rejected → unsafe entries 400
+    const body = await res.json() as { ok: boolean; restored: number };
+    expect(body.ok).toBe(true);
+    expect(body.restored).toBe(1); // manifest 不计；'L' 扩展条目不产出文件条目
+    const restored = JSON.parse(await readFile(join(root, longName.slice("inkos-backup/".length)), "utf-8"));
+    expect(restored).toEqual({ rev: "from-rust-gnu" });
+  });
 });
 
 /** 与 Rust 测试 simple_tar 对偶的最小 USTAR 构建（512B 头+payload+补齐+双零块）。 */
-function simpleTar(entries: Array<{ name: string; payload: Uint8Array }>): Uint8Array<ArrayBuffer> {
+function simpleTar(entries: Array<{ name: string; payload: Uint8Array; typeflag?: string }>): Uint8Array<ArrayBuffer> {
   const chunks: Buffer[] = [];
-  for (const { name, payload } of entries) {
+  for (const { name, payload, typeflag } of entries) {
     const header = Buffer.alloc(512, 0);
     Buffer.from(name, "utf-8").copy(header, 0);
     header.write(payload.length.toString(8).padStart(11, "0"), 124);
-    header.write("0", 156);
+    header.write(typeflag ?? "0", 156);
     for (let i = 148; i < 156; i += 1) header[i] = 0x20;
     let sum = 0;
     for (const byte of header) sum += byte;
