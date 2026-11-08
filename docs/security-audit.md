@@ -1,4 +1,4 @@
-# 安全审计报告 — 2026-08-07
+# 安全审计报告 — 2026-08-07（2026-11 补引擎侧修复族，见文末段）
 
 > 范围：inkosDesktop Rust/Tauri 后端不可信边界与安全关键路径
 > 方法：聚焦 OWASP 相关 Rust/Tauri 攻击面（路径穿越、任意执行、签名降级、不可信反序列化、密钥处理），结合源码审查 + 回归单测
@@ -76,3 +76,26 @@
 1. ~~**R1 安装期拒符号链接**~~：✅ 已闭环（`c849bfac`，见上表 R1）
 2. **签名密钥采购落地**：按 `docs/signing-procurement.md` 生成 Ed25519 密钥，CI 设置 `INKOS_ENGINE_PUBKEY`/`INKOS_ENGINE_SIGNING_KEY`，使 S1 的 Verify 分支在生产生效
 3. **SystemCommand 白名单**（若计划暴露给 WASM）：把 `Capability::SystemCommand` 升级为 `{ allowed_commands: Vec<String> }`，对称 Network 模型
+
+---
+
+## 2026-11 引擎侧安全修复族（engine-rs + TS，898-925 号）
+
+> 范围补充：本报告原范围以 src-tauri 为主；2026-11 的安全关键修复集中在
+> engine-rs 引擎与 TS 引擎链（同为不可信边界——LLM 端点/模型返回 URL/
+> 检测 provider 均为不可信外部服务）。逐轮细节见
+> `变更记录文档/20261108/898-925_*.md`。
+
+| 修复项 | 位置 | 机制 | 回归锚 |
+|--------|------|------|--------|
+| LLM 请求总预算（898） | TS `chatCompletion` buffered/流式；Rust `streaming_client` 非流式总窗+流窗 | 请求级 deadline（默认 300s，`INKOS_LLM_REQUEST_TIMEOUT_MS`），超时 `LLM_REQUEST_TIMEOUT` 带标签、不自动重试 | TS/Rust 停摆端点窗内报错+回归锚（init.signal 必为 AbortSignal） |
+| 封面下载 SSRF origin 策略（900/924 双端） | TS `cover-download-origin.ts`；Rust `cover_origin.rs`（同表同语义镜像，`tests/cover_origin_matrix.rs` 39 用例零漂移机械锁） | 协议仅 http/https；同 provider origin/allowlist（`INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS`）放行；环回/私网/保留地址与「解析到私网」拒绝；strict 收紧；invalid fail-closed | 双端判定矩阵 39 条 + 15 形私网字面量表 |
+| 重定向终态复核（900/924） | TS `downloadGeneratedCoverImage`；Rust `download_generated_cover_image` | 重定向盲请求残余备案；终态 URL 同策略复核——落私网响应不进产物 | 异 origin 重定向拒绝用例 |
+| Bearer 凭据泄露面收口（924，Rust 侧族内修复） | Rust `download_generated_cover_image` 401/403 重试 | 仅 provider 同源才携带 `Bearer`（原形态任意 URL 401/403 都发 api_key） | 同源/异源门控用例 |
+| 通知链预算（903） | TS notify 四通道 `notifyFetch` | AbortSignal.timeout（默认 15s，`INKOS_NOTIFY_TIMEOUT_MS`） | 停摆端点真链窗内报错 |
+| 检测链预算（925） | Rust `detection_http_client`（detector 五 provider） | client 级 timeout（默认 30s，`INKOS_DETECT_HTTP_TIMEOUT_MS` 注入窗） | 挂起端点窗内报错（实测 <5s） |
+| EPUB 实体拒绝（926） | TS `epub.ts` / Rust `translation/source.rs` | `<!ENTITY` 声明 fail-loud 拒绝（XXE 注入源拔除）；DOCTYPE 放行（真实 EPUB 兼容性取舍入档） | 双端双形态用例（DOCTYPE 锚+ENTITY 拒绝） |
+| src-tauri 网络面（928 确认） | supervisor 健康探测 / 插件宿主 HTTP GET / registry 拉取 / SSE | 2s 窗 / 域名白名单 / 禁重定向+验签 / 长连接设计内 | 既有目标族 |
+
+**无界请求族收官**：engine-rs 8 站 Client 构造面全部有界 + TS 三族预算 +
+src-tauri 四形态全防护——三腿零已知无界/SSRF 残留（928 号收官确认）。
