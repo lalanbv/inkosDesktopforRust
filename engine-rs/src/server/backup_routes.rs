@@ -667,6 +667,42 @@ mod tests {
         ]), true).unwrap_err(), "unsafe entries rejected: /etc/passwd");
     }
 
+    // 941 号：includeSessions 参数真化的 Rust 侧行为锁（对齐 TS 双用例）。
+    #[test]
+    fn export_include_sessions_true_packs_sessions() {
+        let (_dir, root) = temp_root();
+        std::fs::create_dir_all(root.join("sessions/sess-1")).unwrap();
+        std::fs::write(root.join("sessions/sess-1/session.jsonl"), r#"{"seq":1,"type":"turn"}"#).unwrap();
+        let gz = run_export(&root, false, true).unwrap();
+        let entries = parse_archive(&gz).unwrap().0;
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"inkos-backup/sessions/sess-1/session.jsonl"),
+            "{names:?}"
+        ); // 参数真化：sessions 入包
+        let manifest: serde_json::Value = serde_json::from_slice(
+            entries
+                .iter()
+                .find(|e| e.name.ends_with(MANIFEST_NAME))
+                .unwrap()
+                .bytes
+                .as_slice(),
+        )
+        .unwrap();
+        assert_eq!(manifest["scope"]["includeSessions"], true);
+    }
+
+    #[test]
+    fn export_default_excludes_sessions() {
+        let (_dir, root) = temp_root();
+        std::fs::create_dir_all(root.join("sessions/sess-1")).unwrap();
+        std::fs::write(root.join("sessions/sess-1/session.jsonl"), "{}").unwrap();
+        let gz = run_export(&root, false, false).unwrap();
+        let entries = parse_archive(&gz).unwrap().0;
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.iter().any(|n| n.starts_with("inkos-backup/sessions/")), "{names:?}"); // 默认排除保持
+    }
+
     #[test]
     fn import_accepts_gzip_layer() {
         let (_dir, root) = temp_root();
