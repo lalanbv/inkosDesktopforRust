@@ -104,7 +104,13 @@ fn render_text_export(
 }
 
 fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    // 945 号：补引号转义（防御纵深——未来模板改动将用户内容置入属性值
+    // 时引号已在转义集内）。
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn safe_filename(value: &str) -> String {
@@ -196,7 +202,7 @@ fn build_epub(
     let opf = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"book-id\">\n  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n    <dc:identifier id=\"book-id\">{book_id}</dc:identifier>\n    <dc:title>{title}</dc:title>\n    <dc:language>{lang}</dc:language>\n  </metadata>\n  <manifest>\n{items}\n  </manifest>\n  <spine toc=\"ncx\">\n{spine}\n  </spine>\n</package>\n",
         title = escape_html(&manifest.title),
-        lang = manifest.target_language,
+        lang = escape_html(&manifest.target_language),
         items = manifest_items.join("\n"),
         spine = spine_items.join("\n"),
     );

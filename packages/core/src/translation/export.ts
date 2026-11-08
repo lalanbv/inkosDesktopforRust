@@ -75,10 +75,14 @@ async function renderTextExport(
 }
 
 function escapeHtml(text: string): string {
+  // 945 号：补引号转义（防御纵深——未来模板改动将用户内容置入属性值时
+  // 引号已在转义集内；与 Rust export.rs escape_html 同集对齐）。
   return text
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 function safeFilename(value: string): string {

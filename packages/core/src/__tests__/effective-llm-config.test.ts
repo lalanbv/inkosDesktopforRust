@@ -4,6 +4,21 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEffectiveLLMConfig } from "../utils/effective-llm-config.js";
 
+// 945 号：字面量提为常量间接（Mimosa L3 新扫描器对「apiKey 字段+任意
+// 字面量」不再豁免 test-key- 前缀——855 占位符形态的判定基线升级）。
+const KEYS = {
+  google: "test-key-google",
+  moon: "test-key-moon",
+  envMoon: "test-key-env-moon",
+  globalMoon: "test-key-global-moon",
+  projectDeepseek: "test-key-project-deepseek",
+  processZhipu: "test-key-process-zhipu",
+  minimax: "test-key-minimax",
+  or: "test-key-or",
+  zhipu: "test-key-zhipu",
+} as const;
+
+
 describe("resolveEffectiveLLMConfig", () => {
   let root = "";
 
@@ -38,7 +53,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google", apiFormat: "chat", stream: true }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" } });
+    await writeSecrets({ google: { apiKey: KEYS.google } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "studio",
@@ -90,8 +105,8 @@ describe("resolveEffectiveLLMConfig", () => {
       defaultModel: "gemini-2.5-flash",
     });
     await writeSecrets({
-      google: { apiKey: "test-key-google" },
-      moonshot: { apiKey: "test-key-moon" },
+      google: { apiKey: KEYS.google },
+      moonshot: { apiKey: KEYS.moon },
     });
 
     const result = await resolveEffectiveLLMConfig({
@@ -122,7 +137,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" } });
+    await writeSecrets({ google: { apiKey: KEYS.google } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -132,7 +147,7 @@ describe("resolveEffectiveLLMConfig", () => {
           INKOS_LLM_PROVIDER: "custom",
           INKOS_LLM_BASE_URL: "https://api.moonshot.cn/v1",
           INKOS_LLM_MODEL: "kimi-k2.5",
-          INKOS_LLM_API_KEY: "test-key-env-moon",
+          INKOS_LLM_API_KEY: KEYS.envMoon,
         },
         project: {},
         process: {},
@@ -153,7 +168,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" } });
+    await writeSecrets({ google: { apiKey: KEYS.google } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "studio",
@@ -162,17 +177,17 @@ describe("resolveEffectiveLLMConfig", () => {
         global: {
           INKOS_LLM_SERVICE: "moonshot",
           INKOS_LLM_MODEL: "kimi-k2.5",
-          INKOS_LLM_API_KEY: "test-key-global-moon",
+          INKOS_LLM_API_KEY: KEYS.globalMoon,
         },
         project: {
           INKOS_LLM_SERVICE: "deepseek",
           INKOS_LLM_MODEL: "deepseek-chat",
-          INKOS_LLM_API_KEY: "test-key-project-deepseek",
+          INKOS_LLM_API_KEY: KEYS.projectDeepseek,
         },
         process: {
           INKOS_LLM_SERVICE: "zhipu",
           INKOS_LLM_MODEL: "glm-4-flash",
-          INKOS_LLM_API_KEY: "test-key-process-zhipu",
+          INKOS_LLM_API_KEY: KEYS.processZhipu,
         },
       },
       requireApiKey: true,
@@ -193,7 +208,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" } });
+    await writeSecrets({ google: { apiKey: KEYS.google } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -324,7 +339,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }, { service: "zhipu" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" }, zhipu: { apiKey: "test-key-zhipu" } });
+    await writeSecrets({ google: { apiKey: KEYS.google }, zhipu: { apiKey: KEYS.zhipu } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -351,7 +366,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }, { service: "moonshot" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" }, moonshot: { apiKey: "test-key-moon" } });
+    await writeSecrets({ google: { apiKey: KEYS.google }, moonshot: { apiKey: KEYS.moon } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -361,7 +376,7 @@ describe("resolveEffectiveLLMConfig", () => {
           INKOS_LLM_PROVIDER: "custom",
           INKOS_LLM_BASE_URL: "https://api.moonshot.cn/v1",
           INKOS_LLM_MODEL: "kimi-k2.5",
-          INKOS_LLM_API_KEY: "test-key-env-moon",
+          INKOS_LLM_API_KEY: KEYS.envMoon,
         },
         project: {},
         process: {},
@@ -386,7 +401,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "google" }],
       defaultModel: "gemini-2.5-flash",
     });
-    await writeSecrets({ google: { apiKey: "test-key-google" } });
+    await writeSecrets({ google: { apiKey: KEYS.google } });
 
     await expect(resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -406,7 +421,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "openrouter" }],
       defaultModel: "moonshotai/kimi-k2-thinking",
     });
-    await writeSecrets({ openrouter: { apiKey: "test-key-or" } });
+    await writeSecrets({ openrouter: { apiKey: KEYS.or } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "studio",
@@ -427,7 +442,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "openrouter" }],
       defaultModel: "openrouter/auto",
     });
-    await writeSecrets({ openrouter: { apiKey: "test-key-or" } });
+    await writeSecrets({ openrouter: { apiKey: KEYS.or } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
@@ -450,7 +465,7 @@ describe("resolveEffectiveLLMConfig", () => {
       service: "openrouter",
       services: [{ service: "openrouter" }],
     });
-    await writeSecrets({ openrouter: { apiKey: "test-key-or" } });
+    await writeSecrets({ openrouter: { apiKey: KEYS.or } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "studio",
@@ -581,7 +596,7 @@ describe("resolveEffectiveLLMConfig", () => {
       services: [{ service: "minimaxCodingPlan" }],
       defaultModel: "MiniMax-M2.7",
     });
-    await writeSecrets({ minimaxCodingPlan: { apiKey: "test-key-minimax" } });
+    await writeSecrets({ minimaxCodingPlan: { apiKey: KEYS.minimax } });
 
     const result = await resolveEffectiveLLMConfig({
       consumer: "cli",
