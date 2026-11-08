@@ -35,6 +35,10 @@ describe("backup export/import routes (710)", () => {
     await writeFile(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: {} }), "utf-8");
     await mkdir(join(root, "prompt"), { recursive: true });
     await writeFile(join(root, "prompt", "writer.md"), "写作守则。", "utf-8");
+    // 938 号：works 域种子（用户创作数据，备份域补缺的断言对象）。
+    const worksDir = join(root, "works", "w1");
+    await mkdir(worksDir, { recursive: true });
+    await writeFile(join(worksDir, "work.json"), JSON.stringify({ id: "w1", title: "坊市旧事", profileId: "short-story", language: "zh", status: "draft" }), "utf-8");
   };
 
   it("export: staging 聚合 + manifest + inkos-backup/ 前缀 + secrets 默认排除", async () => {
@@ -54,6 +58,7 @@ describe("backup export/import routes (710)", () => {
     expect(names).toContain("inkos-backup/books/b1/story/current_state.md");
     expect(names).toContain("inkos-backup/prompt/writer.md");
     expect(names).toContain("inkos-backup/inkos.json");
+    expect(names).toContain("inkos-backup/works/w1/work.json"); // 938 号：works 域入备份
     expect(names.some((n) => n.includes("secrets.json"))).toBe(false);
 
     const manifestEntry = entries.find((e) => e.name === "inkos-backup/backup-manifest.json")!;

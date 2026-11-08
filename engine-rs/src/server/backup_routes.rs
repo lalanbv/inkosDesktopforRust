@@ -32,7 +32,10 @@ use std::collections::HashMap;
 
 use crate::server::books_routes::BooksRuntime;
 
-const BACKUP_ROOT_ENTRIES: [&str; 4] = ["books", "inkos.json", ".inkos", "prompt"];
+// 938 号：`works` 入备份域（works/<id>/work.json = work 域用户创作数据
+// ——缺失即「备份导出不含 works 作品，恢复后作品全丢」；import 为通用
+// staging 复制天然支持 works 条目，恢复端无需改动）。
+const BACKUP_ROOT_ENTRIES: [&str; 5] = ["books", "inkos.json", ".inkos", "prompt", "works"];
 const PACKAGE_ROOT_NAME: &str = "inkos-backup";
 const MANIFEST_NAME: &str = "backup-manifest.json";
 const TAR_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
@@ -463,6 +466,13 @@ mod tests {
         std::fs::write(root.join(".inkos/secrets.json"), r#"{"services":{}}"#).unwrap();
         std::fs::create_dir_all(root.join("prompt")).unwrap();
         std::fs::write(root.join("prompt/writer.md"), "写作守则。").unwrap();
+        // 938 号：works 域种子（用户创作数据，备份域补缺的断言对象）。
+        std::fs::create_dir_all(root.join("works/w1")).unwrap();
+        std::fs::write(
+            root.join("works/w1/work.json"),
+            r#"{"id":"w1","title":"坊市旧事","profileId":"short-story","language":"zh","status":"draft"}"#,
+        )
+        .unwrap();
         (dir, root)
     }
 
@@ -505,6 +515,7 @@ mod tests {
         assert!(names.contains(&"inkos-backup/backup-manifest.json"), "{names:?}");
         assert!(names.contains(&"inkos-backup/books/b1/book.json"), "{names:?}");
         assert!(names.contains(&"inkos-backup/prompt/writer.md"), "{names:?}");
+        assert!(names.contains(&"inkos-backup/works/w1/work.json"), "{names:?}"); // 938 号：works 域入备份
         assert!(!names.iter().any(|n| n.contains("secrets.json")), "secrets must be excluded: {names:?}");
         let manifest: serde_json::Value = serde_json::from_slice(
             entries
