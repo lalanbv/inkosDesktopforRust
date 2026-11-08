@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -36,9 +36,15 @@ describe("backup export/import routes (710)", () => {
     await mkdir(join(root, "prompt"), { recursive: true });
     await writeFile(join(root, "prompt", "writer.md"), "写作守则。", "utf-8");
     // 938/939 号：works+五新目录种子（用户创作数据，备份域补缺的断言对象）。
+    // 949 号：manifest 补齐 schema 必填面（version/lineage/metadata/时间戳）
+    // + source/ 目录——种子成为合法 work，948 打包前 sync 全走成功路径。
     const worksDir = join(root, "works", "w1");
-    await mkdir(worksDir, { recursive: true });
-    await writeFile(join(worksDir, "work.json"), JSON.stringify({ id: "w1", title: "坊市旧事", profileId: "short-story", language: "zh", status: "draft" }), "utf-8");
+    await mkdir(join(worksDir, "source"), { recursive: true });
+    await writeFile(join(worksDir, "work.json"), JSON.stringify({
+      version: 2, id: "w1", title: "坊市旧事", profileId: "short-story", language: "zh", status: "draft",
+      lineage: [], artifacts: [], metadata: {},
+      createdAt: "2026-11-09T00:00:00.000Z", updatedAt: "2026-11-09T00:00:00.000Z",
+    }), "utf-8");
     for (const dir of ["translations", "genres", "skills", "radar", "worlds"]) {
       await mkdir(join(root, dir), { recursive: true });
       await writeFile(join(root, dir, "data.json"), JSON.stringify({ seeded: dir }), "utf-8");
@@ -81,6 +87,32 @@ describe("backup export/import routes (710)", () => {
 
     // staging 清理：导出后 .inkos-backup-staging 不残留
     await expect(readdir(join(root, ".inkos-backup-staging"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("export: 打包前 per-work sync 快照补齐——手工放置 source 补登 + 杂散文件/坏 work 不阻断（948/949）", async () => {
+    await seedProject();
+    // 手工放置形态：source 有文件、manifest 未注册（947 备案的补齐对象）。
+    await writeFile(join(root, "works", "w1", "source", "outline.md"), "# 大纲\n\n- 第一幕。\n", "utf-8");
+    // Finder .DS_Store 形态杂散文件 + 坏 work 目录——不得阻断 w1 补齐与备份。
+    await writeFile(join(root, "works", ".DS_Store"), "junk", "utf-8");
+    await mkdir(join(root, "works", "w-broken"), { recursive: true });
+    await writeFile(join(root, "works", "w-broken", "work.json"), "{not-json", "utf-8");
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/backup/export");
+    expect(res.status).toBe(200);
+    // 补齐集成实证：手工放置的 source 文件被补登为 candidate 修订（accept=false
+    // 不翻转 accept 面——currentRevisionId 保持空）且快照落盘。
+    const manifest = JSON.parse(await readFile(join(root, "works", "w1", "work.json"), "utf-8")) as {
+      artifacts: Array<{ currentRevisionId: string | null; revisions: Array<{ status: string; snapshotPath: string }> }>;
+    };
+    expect(manifest.artifacts).toHaveLength(1);
+    expect(manifest.artifacts[0]!.currentRevisionId).toBeNull();
+    expect(manifest.artifacts[0]!.revisions[0]!.status).toBe("candidate");
+    await expect(stat(join(root, "works", "w1", manifest.artifacts[0]!.revisions[0]!.snapshotPath))).resolves.toBeTruthy();
+    // 快照工件入包（works/ 目录整体复制覆盖多版本形态——938 目录级复制设计）。
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const { entries } = untar(bytes);
+    expect(entries.some((e) => e.name.startsWith("inkos-backup/works/w1/revisions/"))).toBe(true);
   });
 
   it("export includeSessions=1: sessions/ 入包（940 号参数真化）", async () => {

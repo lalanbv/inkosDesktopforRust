@@ -5921,6 +5921,22 @@ function yamlScalar(value: unknown): string {
   app.get("/api/v1/backup/export", async (c) => {
     const includeSecrets = c.req.query("includeSecrets") === "1";
     const includeSessions = c.req.query("includeSessions") === "1";
+    // 948/949 号：打包前 per-work source_sync 快照补齐（幂等，accept=false
+    // 只快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即打包
+    // 的完整性窗口（947 端到端验证发现备案）。949 号两点：①必须先于 staging
+    // 复制执行——补齐产物（revisions 快照/重写的 work.json）才能进包；②逐
+    // work 隔离（单 work 失败 warn 不中止循环）+ 只遍历目录条目（.DS_Store
+    // 等杂散文件不是 work）——与 Rust sync_works_for_backup 对齐。
+    const worksRoot = join(root, "works");
+    const workEntries = await readdir(worksRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of workEntries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        await syncWorkSourceArtifacts({ projectRoot: root, workId: entry.name, accept: false });
+      } catch (error) {
+        console.warn(`[studio] backup: works/${entry.name} source sync 失败（不阻断备份）:`, error instanceof Error ? error.message : error);
+      }
+    }
     const staging = join(root, ".inkos-backup-staging");
     await rm(staging, { recursive: true, force: true });
     await mkdir(staging, { recursive: true });
@@ -5938,19 +5954,6 @@ function yamlScalar(value: unknown): string {
         if (child === "secrets.json" && !includeSecrets) continue;
         await cp(join(source, child), join(inkosDir, child), { recursive: true });
       }
-    }
-    // 948 号：打包前 per-work source_sync 快照补齐（幂等，accept=false
-    // 只快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即
-    // 打包的完整性窗口（947 端到端验证发现备案）。sync 失败不阻断备份。
-    try {
-      const worksRoot = join(root, "works");
-      if (await access(worksRoot).then(() => true).catch(() => false)) {
-        for (const workId of await readdir(worksRoot)) {
-          await syncWorkSourceArtifacts({ projectRoot: root, workId, accept: false });
-        }
-      }
-    } catch {
-      // sync 失败不阻断备份（warn 语义）
     }
     // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进
     // manifest scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL

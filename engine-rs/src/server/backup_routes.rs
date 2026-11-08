@@ -103,6 +103,41 @@ fn list_archive_files(dir: &Path, prefix: &str, out: &mut Vec<String>) -> std::i
     Ok(())
 }
 
+/// 948/949 号：打包前 per-work source_sync 快照补齐（幂等，accept=false 只
+/// 快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即打包的完整
+/// 性窗口（947 端到端验证发现备案）。949 号：只遍历目录条目——.DS_Store 等
+/// 杂散文件不是 work，跳过且不告警（list_archive_files 同族先例）；逐 work
+/// 隔离——单个 work sync 失败只 warn，不中止其余 work 的补齐（与 TS 对齐）。
+async fn sync_works_for_backup(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root.join("works")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_directory = entry.file_type().map(|file_type| file_type.is_dir()).unwrap_or(false);
+        if !is_directory {
+            continue;
+        }
+        let work_id = entry.file_name().to_string_lossy().to_string();
+        let synced = crate::harness::source_sync::sync_work_source_artifacts(
+            crate::harness::source_sync::SyncWorkSourceInput {
+                project_root: root,
+                work_id: &work_id,
+                accept: false,
+                accept_paths: None,
+                episode_id: None,
+                updated_at: None,
+                writes: Vec::new(),
+                title: None,
+                status: None,
+            },
+        )
+        .await;
+        if let Err(error) = synced {
+            tracing::warn!("[backup] works/{work_id} source sync 失败（不阻断备份）: {error}");
+        }
+    }
+}
+
 /// `GET /api/v1/backup/export`——全量 tar.gz 下载。
 pub async fn export(
     State(runtime): State<BooksRuntime>,
@@ -113,31 +148,7 @@ pub async fn export(
     let root = runtime.state.project_root().to_path_buf();
     // 763 号：整书 staging 复制 + tar + gzip 是秒级阻塞工作，移出 runtime
     // 线程（run_export 本体保持同步签名——725 号 bench 契约面语义不变）。
-    // 948 号：打包前 per-work source_sync 快照补齐（幂等，accept=false 只
-    // 快照不 accept）——防「手工放置/启动竞态」下 works 数据未同步即打包
-    // 的完整性窗口（947 端到端验证发现备案）。sync 失败不阻断备份。
-    if let Ok(entries) = std::fs::read_dir(root.join("works")) {
-        for entry in entries.flatten() {
-            let work_id = entry.file_name().to_string_lossy().to_string();
-            let synced = crate::harness::source_sync::sync_work_source_artifacts(
-                crate::harness::source_sync::SyncWorkSourceInput {
-                    project_root: &root,
-                    work_id: &work_id,
-                    accept: false,
-                    accept_paths: None,
-                    episode_id: None,
-                    updated_at: None,
-                    writes: Vec::new(),
-                    title: None,
-                    status: None,
-                },
-            )
-            .await;
-            if let Err(error) = synced {
-                tracing::warn!("[backup] works/{work_id} source sync 失败（不阻断备份）: {error}");
-            }
-        }
-    }
+    sync_works_for_backup(&root).await;
     let result = tokio::task::spawn_blocking(move || run_export(&root, include_secrets, include_sessions))
         .await;
     match result {
@@ -517,10 +528,12 @@ mod tests {
         std::fs::create_dir_all(root.join("prompt")).unwrap();
         std::fs::write(root.join("prompt/writer.md"), "写作守则。").unwrap();
         // 938/939 号：works+五新目录种子（用户创作数据，备份域补缺的断言对象）。
-        std::fs::create_dir_all(root.join("works/w1")).unwrap();
+        // 949 号：manifest 补齐 serde 必填面（version/lineage/metadata/时间戳）
+        // + source/ 目录——种子成为合法 work，打包前 sync 全走成功路径。
+        std::fs::create_dir_all(root.join("works/w1/source")).unwrap();
         std::fs::write(
             root.join("works/w1/work.json"),
-            r#"{"id":"w1","title":"坊市旧事","profileId":"short-story","language":"zh","status":"draft"}"#,
+            r#"{"version":2,"id":"w1","title":"坊市旧事","profileId":"short-story","language":"zh","status":"draft","lineage":[],"artifacts":[],"metadata":{},"createdAt":"2026-11-09T00:00:00.000Z","updatedAt":"2026-11-09T00:00:00.000Z"}"#,
         )
         .unwrap();
         for dir in ["translations", "genres", "skills", "radar", "worlds"] {
@@ -557,6 +570,30 @@ mod tests {
 
     fn manifest_bytes(generator: &str, version: i64) -> Vec<u8> {
         serde_json::json!({ "version": version, "generator": generator }).to_string().into_bytes()
+    }
+
+    /// 949 号：打包前 sync 循环单元面——手工放置 source 补登为 candidate
+    /// 修订（accept=false 不翻转 accept 面）、杂散文件跳过、坏 work 隔离。
+    #[tokio::test]
+    async fn backup_sync_covers_manual_works_and_isolates_failures() {
+        let (_dir, root) = temp_root();
+        // 手工放置形态：source 有文件、manifest 未注册（947 备案的补齐对象）。
+        std::fs::write(root.join("works/w1/source/outline.md"), "# 大纲\n\n- 第一幕。\n").unwrap();
+        // Finder .DS_Store 形态杂散文件 + 坏 work 目录——不得影响 w1 补齐。
+        std::fs::write(root.join("works/.DS_Store"), "junk").unwrap();
+        std::fs::create_dir_all(root.join("works/w-broken")).unwrap();
+        std::fs::write(root.join("works/w-broken/work.json"), "{not-json").unwrap();
+        sync_works_for_backup(&root).await;
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works/w1/work.json")).unwrap(),
+        )
+        .unwrap();
+        let artifacts = manifest["artifacts"].as_array().unwrap();
+        assert_eq!(artifacts.len(), 1, "{manifest}");
+        assert_eq!(artifacts[0]["currentRevisionId"], serde_json::Value::Null, "{manifest}");
+        assert_eq!(artifacts[0]["revisions"][0]["status"], "candidate", "{manifest}");
+        let snapshot = artifacts[0]["revisions"][0]["snapshotPath"].as_str().unwrap();
+        assert!(root.join("works/w1").join(snapshot).is_file(), "{snapshot}");
     }
 
     #[test]
