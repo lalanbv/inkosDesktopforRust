@@ -83,6 +83,36 @@ describe("backup export/import routes (710)", () => {
     await expect(readdir(join(root, ".inkos-backup-staging"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("export includeSessions=1: sessions/ 入包（940 号参数真化）", async () => {
+    await seedProject();
+    const sessionsDir = join(root, "sessions", "sess-1");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, "session.jsonl"), JSON.stringify({ seq: 1, type: "turn" }), "utf-8");
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/backup/export?includeSessions=1");
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const { entries, rejected } = untar(bytes);
+    expect(rejected).toEqual([]);
+    const names = entries.map((e) => e.name);
+    expect(names).toContain("inkos-backup/sessions/sess-1/session.jsonl"); // 940 号参数真化
+    const manifestEntry = entries.find((e) => e.name === "inkos-backup/backup-manifest.json")!;
+    const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
+    expect(manifest.scope).toEqual({ includeSecrets: false, includeSessions: true });
+  });
+
+  it("export 默认（未设 includeSessions）：sessions/ 不入包（默认排除语义保持）", async () => {
+    await seedProject();
+    const sessionsDir = join(root, "sessions", "sess-1");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, "session.jsonl"), "{}", "utf-8");
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/backup/export");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const names = untar(bytes).entries.map((e) => e.name);
+    expect(names.some((n) => n.startsWith("inkos-backup/sessions/"))).toBe(false); // 默认排除保持
+  });
+
   it("export includeSecrets=1: secrets 入包", async () => {
     await seedProject();
     const app = createStudioServer({} as never, root);

@@ -5939,6 +5939,12 @@ function yamlScalar(value: unknown): string {
         await cp(join(source, child), join(inkosDir, child), { recursive: true });
       }
     }
+    // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进
+    // manifest scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL
+    // 用户创作上下文）。默认仍排除。
+    if (includeSessions && (await access(join(root, "sessions")).then(() => true).catch(() => false))) {
+      await cp(join(root, "sessions"), join(staging, "sessions"), { recursive: true });
+    }
     let fileCount = 0;
     let totalBytes = 0;
     for (const file of await listArchiveFiles(staging)) {

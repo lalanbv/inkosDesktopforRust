@@ -141,7 +141,9 @@ pub async fn export(
 // 725 号 0GC：pub 化供 bench 消费（hot_paths backup_export 组基线——staging
 // 复制为 443 号契约面语义保持，gzip level 6 为合理档位不做压缩级别调参）。
 pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) -> std::io::Result<Vec<u8>> {
-    let _ = include_sessions; // scope 记录用；打包范围与 TS 一致不含 sessions/
+    // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进 manifest
+    // scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL 用户创作上
+    // 下文）。默认仍排除。
     let staging = root.join(".inkos-backup-staging");
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging)?;
@@ -164,6 +166,15 @@ pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) ->
                     continue;
                 }
                 copy_recursive(&child.path(), &inkos_dir.join(&name))?;
+            }
+        }
+        // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进
+        // manifest scope、打包范围静默忽略=参数骗人；sessions/ 为会话
+        // JSONL 用户创作上下文）。默认仍排除。
+        if include_sessions {
+            let sessions_source = root.join("sessions");
+            if is_existing(&sessions_source) {
+                copy_recursive(&sessions_source, &staging.join("sessions"))?;
             }
         }
         Ok(())
