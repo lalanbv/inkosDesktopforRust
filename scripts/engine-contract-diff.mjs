@@ -184,6 +184,38 @@ const firstDiffPath = (a, b, path = "") => {
   return path || "$";
 };
 
+/**
+ * 698 号超集键声明：TS 超集（2.0 加法字段）与 Rust 超集（fork 诊断扩展）取交集键
+ * 对比，超集键打印声明不拦截。958 号：共有键为空=形状全分叉（超集关系以共有核为
+ * 前提）——必红实证：Rust 返回 StyleProfile 九键、TS 返回 {guide} 时双侧剥离后
+ * 同为 {} 恒判 ✓（846 号「解析型门禁正向确认」同族）。
+ */
+const stripDeclaredSupersetKeys = (pn, pr) => {
+  if (!pn || !pr || typeof pn !== "object" || typeof pr !== "object" || Array.isArray(pn) || Array.isArray(pr)) {
+    return { cn: pn, cr: pr, declaredKeys: "", shapeDisjoint: false };
+  }
+  const nk = Object.keys(pn).filter((k) => !(k in pr));
+  const rk = Object.keys(pr).filter((k) => !(k in pn));
+  if (!nk.length && !rk.length) return { cn: pn, cr: pr, declaredKeys: "", shapeDisjoint: false };
+  return {
+    cn: Object.fromEntries(Object.entries(pn).filter(([k]) => !nk.includes(k))),
+    cr: Object.fromEntries(Object.entries(pr).filter(([k]) => !rk.includes(k))),
+    declaredKeys: `（声明超集键：node=[${nk.join(",")}] rust=[${rk.join(",")}]）`,
+    shapeDisjoint: Object.keys(pn).length === nk.length,
+  };
+};
+// 958 号门禁自检（847 号必红夹具同形）：形状全分叉必判 disjoint、真超集必不判——
+// 自检失败即门禁失效，拒绝运行（不得以恒绿门禁出具「0 分歧」）。
+{
+  const disjoint = stripDeclaredSupersetKeys({ guide: "g" }, { avgSentenceLength: 1, sourceName: "s" });
+  const emptySide = stripDeclaredSupersetKeys({}, { a: 1 });
+  const superset = stripDeclaredSupersetKeys({ a: 1, extra: 2 }, { a: 1 });
+  if (!disjoint.shapeDisjoint || !emptySide.shapeDisjoint || superset.shapeDisjoint || JSON.stringify(superset.cn) !== '{"a":1}') {
+    console.error("[diff] ✗ 超集键剥离自检失败——共有键为空判定失效，门禁拒绝运行");
+    process.exit(2);
+  }
+}
+
 // 契约端点清单（GET；:id=镜花水月）。
 const BOOK = encodeURIComponent("镜花水月");
 
@@ -684,6 +716,14 @@ try {
       // profile name，名字直拼盘路径守卫同判据同消息；真实档案写读面由双端
       // 套件锁定）。
       { path: "/api/v1/style-profiles", method: "POST", body: { name: "../evil", profile: {} } },
+      // 958 号：文风分析 2.0 形态（compileStyleGuide → {guide}）——walkthrough-mock
+      // 回显 system 首段+激活技能标题行+user 全文，fullBody 全 body 比对即锁双端
+      // 提示词/技能注入序/响应形态同形（55 号 Rust 旧形态返回 StyleProfile=文风页
+      // 分析结果恒空）。
+      {
+        path: "/api/v1/style/analyze", method: "POST", fullBody: true,
+        body: { text: "  林动握紧了拳。他抬起头，灵气涌动。  ", sourceName: "契约样本" },
+      },
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
       // 703 号：genre 写面 + experience 读面回收（第三批）。
@@ -866,40 +906,36 @@ try {
       // 与严格比对同口径：prune 规范化（键排序 + VOLATILE 剔除）——
       // 裸 stringify 会把双端序列化键序差异误报为分歧。
       // 698 号：超集键声明——TS 超集（2.0 加法字段，fork 契约面无此键）与
-      // Rust 超集（fork 诊断扩展）取交集键对比，超集键打印声明不拦截。
+      // Rust 超集（fork 诊断扩展）取交集键对比，超集键打印声明不拦截
+      //（stripDeclaredSupersetKeys；958 号起共有键为空=形状全分叉判分歧）。
       // 905 号：接入 WAIVERS 豁免（685 号「集合以模板串为键」同口径——
       // 此前本段无豁免机制，quality-trend 的字段级豁免从未命中，每跑报
       // ✗ 分叉即此；命中后结构面纳入比对、仅豁免字段剪除）。
       const sharedWaiverPaths = WAIVERS.get(endpoint)?.paths ?? [];
       const pn = pruneWaivedPaths(prune(n.body), sharedWaiverPaths);
       const pr = pruneWaivedPaths(prune(r.body), sharedWaiverPaths);
-      let declaredKeys = "";
-      let cn = pn;
-      let cr = pr;
-      if (pn && pr && typeof pn === "object" && typeof pr === "object" && !Array.isArray(pn) && !Array.isArray(pr)) {
-        const nk = Object.keys(pn).filter((k) => !(k in pr));
-        const rk = Object.keys(pr).filter((k) => !(k in pn));
-        if (nk.length || rk.length) {
-          declaredKeys = `（声明超集键：node=[${nk.join(",")}] rust=[${rk.join(",")}]）`;
-          cn = Object.fromEntries(nk.length ? Object.entries(pn).filter(([k]) => !nk.includes(k)) : Object.entries(pn));
-          cr = Object.fromEntries(rk.length ? Object.entries(pr).filter(([k]) => !rk.includes(k)) : Object.entries(pr));
-        }
-      }
       // 非 GET（写面）探针：状态码对比即可——空载荷的错误体形状属 fork/2.0
       // 错误协议差（495 号 422 对齐面），非契约分歧；GET 面保持全 body 对比。
       // 710 号：statusOnly 标记=二进制容器面（gzip/tar）扩展——双腿压缩器不同，
       // 字节级 body 对比不可行，与严格模式 STATUS_ONLY_ENDPOINTS（686 号）同口径。
+      // 958 号：fullBody 标记=非 GET 探针显式选入**严格**全 body 对比（不做超集键
+      // 剥离——响应确定且双端契约同形的计算面，如 mock 回显锁定的 style/analyze）。
       const statusOnly = typeof endpointEntry === "object" && endpointEntry.statusOnly === true;
-      const same = probeMethod === "GET" && !statusOnly
-        ? n.status === r.status && JSON.stringify(cn) === JSON.stringify(cr)
+      const fullBody = typeof endpointEntry === "object" && endpointEntry.fullBody === true;
+      const { cn, cr, declaredKeys, shapeDisjoint } = fullBody
+        ? { cn: pn, cr: pr, declaredKeys: "", shapeDisjoint: false }
+        : stripDeclaredSupersetKeys(pn, pr);
+      const same = (probeMethod === "GET" || fullBody) && !statusOnly
+        ? n.status === r.status && !shapeDisjoint && JSON.stringify(cn) === JSON.stringify(cr)
         : n.status === r.status;
       if (same) {
         console.log(`✓ 共享面 ${endpoint}（${n.status}）${declaredKeys}`);
       } else {
         sharedDiffs += 1;
-        console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${firstDiffPath(cn, cr) ?? "?"}` : ""}${declaredKeys}`);
-        console.log(`    node : ${JSON.stringify(cn).slice(0, BODY_PREVIEW)}`);
-        console.log(`    rust : ${JSON.stringify(cr).slice(0, BODY_PREVIEW)}`);
+        const fork = shapeDisjoint ? "共有键为空（形状全分叉）" : firstDiffPath(cn, cr) ?? "?";
+        console.log(`✗ 共享面 ${endpoint}：状态 node=${n.status} rust=${r.status}${n.status === r.status ? `；首个分叉：${fork}` : ""}${declaredKeys}`);
+        console.log(`    node : ${JSON.stringify(shapeDisjoint ? pn : cn).slice(0, BODY_PREVIEW)}`);
+        console.log(`    rust : ${JSON.stringify(shapeDisjoint ? pr : cr).slice(0, BODY_PREVIEW)}`);
       }
     }
 

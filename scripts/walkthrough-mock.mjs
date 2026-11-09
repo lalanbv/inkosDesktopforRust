@@ -392,7 +392,18 @@ http.createServer((req, res) => {
         return;
       }
       let content;
-      if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) {
+      // 958 号：compileStyleGuide 编译面（TS agents/style-guide.ts ↔ Rust
+      // agents/style_guide.rs）——回显 system 首段+激活技能标题行+user 全文，
+      // 差分器全 body 比对 {guide} 即锁双端提示词/技能注入序/响应形态同形
+      // （技能引用资源 hydrate 属 139 号既有备案，只取标题行不纳入正文）。
+      // 置于分派链首：技能正文拼进 system 后可能含下方各分支的识别词。
+      if (sys.includes("把参考文本编译为有证据、可执行的文风指南") || sys.includes("Compile the reference into an evidence-backed operational style guide")) {
+        const head = String(sys).split("\n\n")[0];
+        const skills = String(sys).split("\n").filter((line) => /^### inkos-[a-z0-9-]+ — /.test(line)).join("\n");
+        const user = msgs.filter((m) => m.role === "user").map((m) => String(m.content)).join("\n\n");
+        content = `# 文风指南（mock 回显）\n\n${head}\n\n${skills}\n\n${user}`;
+      }
+      else if (sys.includes("同人架构师") || sys.includes("网络小说架构师") || sys.includes("总架构师")) {
         if (FAIL_ARCHITECT) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: { message: "mock injected production failure (WALKTHROUGH_MOCK_FAIL_ARCHITECT=1)" } }));

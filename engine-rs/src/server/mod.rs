@@ -511,7 +511,10 @@ pub fn router_books(
         )
         .route("/api/v1/spinoff/init", post(fanfic_routes::spinoff_init).with_state(books.clone()))
         .route("/api/v1/imitation/init", post(fanfic_routes::imitation_init).with_state(books.clone()))
-        .route("/api/v1/style/analyze", post(style_routes::style_analyze))
+        .route(
+            "/api/v1/style/analyze",
+            post(style_routes::style_analyze).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/style/import",
             post(style_routes::style_import).with_state(books.clone()),

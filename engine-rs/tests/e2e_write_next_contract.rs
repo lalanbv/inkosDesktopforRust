@@ -3314,31 +3314,141 @@ mod style55_e2e {
         (status, parsed)
     }
 
+    /// 958 号：捕获式 mock——记录每次请求体，固定回复 `reply`（SSE 单块）。
+    #[derive(Clone)]
+    struct Capture958 {
+        bodies: Arc<Mutex<Vec<serde_json::Value>>>,
+        reply: Arc<String>,
+    }
+
+    async fn mock958_llm(
+        axum::extract::State(capture): axum::extract::State<Capture958>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        capture.bodies.lock().unwrap().push(body);
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            sse_body(&capture.reply),
+        ))
+    }
+
+    async fn spawn_mock958(reply: &str) -> (String, Arc<Mutex<Vec<serde_json::Value>>>) {
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(mock958_llm))
+            .with_state(Capture958 { bodies: bodies.clone(), reply: Arc::new(reply.to_string()) });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        (format!("http://{addr}"), bodies)
+    }
+
+    /// 真内置 SKILL.md 入项目约定 skills 目录（测试进程 builtin 根 cwd/assets/skills
+    /// 缺失；configured 层同 id 同正文，与生产 builtin 注入面等价）。
+    fn seed958_skills(root: &std::path::Path) {
+        let builtin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("packages")
+            .join("core")
+            .join("skills");
+        for id in ["inkos-long-story-analysis", "inkos-imitation-writing"] {
+            let dest = root.join("skills").join(id);
+            std::fs::create_dir_all(&dest).unwrap();
+            std::fs::copy(builtin.join(id).join("SKILL.md"), dest.join("SKILL.md")).unwrap();
+        }
+    }
+
+    /// 958 号：TS 2.0 `compileStyleGuide` 形态——`{guide}`（trim）+ system 逐字 +
+    /// 两必需技能按声明序注入 + user「来源：…」。55 号旧形态返回 StyleProfile
+    /// （无 guide 字段）=文风页分析结果恒空。
     #[tokio::test]
-    async fn style_analyze_returns_profile_and_validates() {
+    async fn style_analyze_compiles_guide_with_required_skills_like_ts() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture55(&root);
+        seed958_skills(&root);
+        let (llm, bodies) = spawn_mock958("  ## 文风指南\n冷峻克制，短句推进。  ").await;
 
         let (status, parsed) = call(
-            app55(rt55(&root, "http://127.0.0.1:9")),
+            app55(rt55(&root, &llm)),
             "POST",
             "/api/v1/style/analyze",
-            Some(r#"{ "text": "林动握紧了拳。他抬起头，灵气涌动。多年屈辱涌上心头。", "sourceName": "斗破" }"#),
+            Some(r#"{ "text": "  林动握紧了拳。他抬起头，灵气涌动。  ", "sourceName": "斗破" }"#),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert_eq!(parsed["sourceName"], "斗破");
-        assert!(parsed["avgSentenceLength"].as_f64().unwrap() > 0.0);
-        assert!(parsed["analyzedAt"].as_str().is_some_and(|s| s.ends_with('Z')));
-        assert!(parsed.get("paragraphLengthRange").is_some());
+        assert_eq!(parsed, serde_json::json!({ "guide": "## 文风指南\n冷峻克制，短句推进。" }));
+        let request = bodies.lock().unwrap().last().cloned().expect("LLM 被调用");
+        let messages = request["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2, "{request}");
+        assert_eq!(messages[0]["role"], "system");
+        let system = messages[0]["content"].as_str().unwrap();
+        assert!(
+            system.starts_with("把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。\n\n## Activated professional skills"),
+            "{system}"
+        );
+        let analysis = system.find("### inkos-long-story-analysis — ").expect("analysis 技能注入");
+        let imitation = system.find("### inkos-imitation-writing — ").expect("imitation 技能注入");
+        assert!(analysis < imitation, "声明序注入");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "来源：斗破\n\n林动握紧了拳。他抬起头，灵气涌动。");
+    }
 
-        // text 空/缺 → 400；缺 sourceName → "unknown"。
-        let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "  " }"#)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "text is required");
-        let (_, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
-        assert_eq!(parsed["sourceName"], "unknown");
+    /// 958 号：语言 = 请求 language（"en" → en，其余 → zh）缺省回项目配置；来源
+    /// 缺省 "unknown"（TS `sourceName ?? "unknown"`），空白 → 双语兜底标签。
+    #[tokio::test]
+    async fn style_analyze_language_and_source_resolution_like_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+        seed958_skills(&root);
+        let (llm, bodies) = spawn_mock958("guide").await;
+        let last_messages = || bodies.lock().unwrap().last().unwrap()["messages"].clone();
+
+        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "He ran.", "language": "en" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        let messages = last_messages();
+        assert!(messages[0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("Compile the reference into an evidence-backed operational style guide. Return Markdown only."));
+        assert_eq!(messages[1]["content"], "Source: unknown\n\nHe ran.");
+
+        std::fs::write(root.join("inkos.json"), r#"{"language":"en"}"#).unwrap();
+        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "He ran.", "sourceName": "   " }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(last_messages()[1]["content"], "Source: reference\n\nHe ran.");
+
+        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。", "sourceName": "样", "language": "zh" }"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(last_messages()[1]["content"], "来源：样\n\n短句。");
+    }
+
+    /// 958 号：错误面——text 空/缺 400 先于一切；必需技能缺失 500 且不触达 LLM；
+    /// LLM 空白回复 500 空指南。
+    #[tokio::test]
+    async fn style_analyze_error_faces_like_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture55(&root);
+        for body in [r#"{ "text": "  " }"#, "{}"] {
+            let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(body)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(parsed["error"], "text is required");
+        }
+
+        let (llm, bodies) = spawn_mock958("guide").await;
+        let (status, parsed) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Style extraction requires unavailable skill: inkos-long-story-analysis");
+        assert!(bodies.lock().unwrap().is_empty(), "技能先验失败不得触达 LLM");
+
+        seed958_skills(&root);
+        let (blank_llm, _) = spawn_mock958("   \n  ").await;
+        let (status, parsed) = call(app55(rt55(&root, &blank_llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "Style extraction returned an empty guide.");
     }
 
     #[tokio::test]
@@ -18607,13 +18717,13 @@ mod sub273_upload_caps_e2e {
         std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
         let app = app273(&root, "http://127.0.0.1:1");
 
-        // style/analyze（纯统计，无 LLM）：2.4MB 文本 → 200 StyleProfile
-        let big_text = "字".repeat(800_000);
-        let body = format!(r#"{{"text":"{big_text}","sourceName":"x"}}"#);
-        assert!(body.len() > 2 * 1024 * 1024);
-        let (status, parsed) = call273(app.clone(), "/api/v1/style/analyze", Some(&body)).await;
-        assert_eq!(status, StatusCode::OK, "style/analyze 应接受 >2MB（{parsed}）");
-        assert!(parsed["sourceName"].is_string(), "{parsed}");
+        // style/analyze：前导空白垫到 >2MB，text 空 → 400「text is required」
+        //（958 号起该端点走 LLM 编译——垫片形态证明 body 完整读取，不依赖 LLM）
+        let padded = format!("{}{}", " ".repeat(2_500_000), r#"{"text":"  ","sourceName":"x"}"#);
+        assert!(padded.len() > 2 * 1024 * 1024);
+        let (status, parsed) = call273(app.clone(), "/api/v1/style/analyze", Some(&padded)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "style/analyze 应接受 >2MB（{parsed}）");
+        assert_eq!(parsed["error"], "text is required");
 
         // import/chapters：前导空白垫到 >2MB，payload 校验失败 → 400「text is required」
         //（证明 body 完整读取并解析——旧代码在读取阶段即 axum 413）

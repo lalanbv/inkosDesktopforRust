@@ -1,8 +1,10 @@
 //! 风格与导入域端点（55 号）：风格指纹 / LLM 文风向导 / 正典导入 / 番外正典读。
 //!
 //! 契约来源 `packages/studio/src/api/server.ts`：
-//! - `POST /style/analyze`（L6184）：`analyzeStyle` 纯函数（默认 zh）→ 直接返回
-//!   StyleProfile；text 空 → 400 `"text is required"`
+//! - `POST /style/analyze`（958 号对齐 2.0）：`compileStyleGuide` LLM 编译文风
+//!   指南 → `{guide}`（[`crate::agents::style_guide`]）；text 空 → 400
+//!   `"text is required"`（55 号旧形态 `analyzeStyle` 纯统计返回 StyleProfile
+//!   已随上游 7aed0d82 退役）
 //! - `POST /books/:id/style/import`（L6199）：`generateStyleGuide`——统计指纹
 //!   （style_profile.json）+ LLM 定性拆解（≥500 字；否则/失败/空响应回退
 //!   确定性指南）+ 写作方法论拼接 → style_guide.md；SSE style:*
@@ -50,7 +52,16 @@ fn flat_internal(message: impl std::fmt::Display) -> ApiError {
 
 // ── POST /api/v1/style/analyze ───────────────────────────────────
 
-pub async fn style_analyze(req: axum::extract::Request) -> impl IntoResponse {
+/// 958 号：TS 2.0 形态——`compileStyleGuide` LLM 编译文风指南 → `{guide}`（studio
+/// 文风页读 `guide` 渲染；55 号旧形态返回 StyleProfile 致 Rust 后端分析结果恒空）。
+/// 语言 = 请求 `language`（"en" → en，其余任意值含空串/非字符串 → zh——TS
+/// `compileStyleGuide` 只判 `=== "en"`）缺省/null 回项目配置；
+/// 来源 = 请求 sourceName（字符串）缺省 "unknown"（TS `sourceName ?? "unknown"`）；
+/// 编译失败 → 500 平铺 `{error}`。
+pub async fn style_analyze(
+    State(runtime): State<BooksRuntime>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     // 273 号：风格样本可传整本文本——`Bytes` 提取器 2MB 默认上限截断，改手工读。
     let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
         Ok(body) => body,
@@ -65,10 +76,34 @@ pub async fn style_analyze(req: axum::extract::Request) -> impl IntoResponse {
     if text.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
     }
-    // TS analyzeStyle(text, sourceName ?? "unknown")：默认 zh。
     let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("unknown");
-    let profile = analyze_style(text, Some(source_name), WritingLanguage::Zh, Some(&utc_now_iso()));
-    (StatusCode::OK, Json(serde_json::to_value(&profile).unwrap_or_default()))
+    let root = runtime.state.project_root();
+    let language = match parsed.get("language") {
+        None | Some(Value::Null) => match crate::server::agent_production::current_project_language(root).await {
+            crate::server::agent_production::StudioLang::En => WritingLanguage::En,
+            crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
+        },
+        Some(Value::String(lang)) if lang == "en" => WritingLanguage::En,
+        Some(_) => WritingLanguage::Zh,
+    };
+    let available = crate::skills::external_loader::load_available_agent_skills(
+        root,
+        &crate::server::skill_routes::env_skill_dirs_public(),
+        crate::server::skill_routes::home_dir_public().as_deref(),
+    )
+    .await;
+    match crate::agents::style_guide::compile_style_guide(
+        &*runtime.effective_router().await,
+        &available.skills,
+        text,
+        Some(source_name),
+        language,
+    )
+    .await
+    {
+        Ok(guide) => (StatusCode::OK, Json(json!({ "guide": guide }))),
+        Err(error) => flat_internal(error),
+    }
 }
 
 // ── 风格向导核心（generateStyleGuide） ───────────────────────────
