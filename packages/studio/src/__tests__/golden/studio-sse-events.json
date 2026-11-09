@@ -24,6 +24,7 @@
     "audit:start",
     "audit:complete",
     "audit:error",
+    "review:complete",
     "revise:start",
     "revise:complete",
     "revise:error",

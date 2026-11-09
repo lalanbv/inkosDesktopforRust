@@ -13,6 +13,8 @@ const BOOK_REFRESH_EVENTS = new Set([
   "revise:error",
   "audit:complete",
   "audit:error",
+  // 961 号：TS 2.0 回退端审阅完成名（Rust 仍发 audit:complete）。
+  "review:complete",
 ]);
 
 const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
@@ -29,6 +31,7 @@ const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
   "revise:error",
   "audit:complete",
   "audit:error",
+  "review:complete",
 ]);
 
 const DAEMON_STATUS_REFRESH_EVENTS = new Set([

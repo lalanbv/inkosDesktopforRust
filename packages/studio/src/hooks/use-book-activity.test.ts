@@ -83,6 +83,9 @@ describe("shouldRefetchBookView", () => {
     expect(shouldRefetchBookView(msg("rewrite:complete", { bookId: "alpha", chapterNumber: 3 }, 1), "alpha")).toBe(true);
     expect(shouldRefetchBookView(msg("revise:error", { bookId: "alpha", error: "bad" }, 1), "alpha")).toBe(true);
     expect(shouldRefetchBookView(msg("audit:complete", { bookId: "alpha", chapter: 3, passed: true }, 1), "alpha")).toBe(true);
+    // 961 号：TS 2.0 回退端审阅完成改名 review:complete（Rust 仍 audit:complete）。
+    expect(shouldRefetchBookView(msg("review:complete", { bookId: "alpha", chapter: 3, observationCount: 2 }, 1), "alpha")).toBe(true);
+    expect(shouldRefetchBookCollections(msg("review:complete", { bookId: "alpha", chapter: 3 }, 1))).toBe(true);
     expect(shouldRefetchBookView(msg("audit:start", { bookId: "alpha", chapter: 3 }, 1), "alpha")).toBe(false);
     expect(shouldRefetchBookView(msg("rewrite:complete", { bookId: "beta" }, 1), "alpha")).toBe(false);
   });

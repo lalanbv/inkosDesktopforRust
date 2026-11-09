@@ -34,6 +34,9 @@ export const STUDIO_SSE_EVENTS = [
   "audit:start",
   "audit:complete",
   "audit:error",
+  // 961 号：TS 2.0 回退端章节审阅完成事件（上游 fb8c8e3e 起把 audit:complete 改发
+  // review:complete；Rust 仍发 audit:complete——双名同收）。
+  "review:complete",
   "revise:start",
   "revise:complete",
   "revise:error",

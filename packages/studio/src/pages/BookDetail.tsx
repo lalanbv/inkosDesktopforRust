@@ -1,5 +1,6 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useEffect, useMemo, useState } from "react";
+import { formatAuditOutcome, summarizeAuditResult } from "../lib/audit-outcome";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
 import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import { StyleBindingCard } from "../components/StyleBindingCard";
@@ -986,8 +987,9 @@ export function BookDetail({
                       <button
                         onClick={async () => {
                           try {
-                            const auditResult = await fetchJson<{ passed?: boolean; issues?: unknown[] }>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(auditResult.passed ? "Audit passed" : `Audit failed: ${auditResult.issues?.length ?? 0} issues`);
+                            // 961 号：双形态归一（Rust {passed,issues} / TS 2.0 {summary,observations}）。
+                            const auditResult = await fetchJson<unknown>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
+                            alert(formatAuditOutcome(summarizeAuditResult(auditResult)));
                             refetch();
                           } catch (e) {
                             alert(e instanceof Error ? e.message : "Audit failed");
