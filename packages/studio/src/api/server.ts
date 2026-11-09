@@ -6106,14 +6106,13 @@ function yamlScalar(value: unknown): string {
       const backupsDir = join(root, "backups");
       await mkdir(backupsDir, { recursive: true });
       const chunks: Buffer[] = [];
+      // 953 号审查修复：快照条目走与 export 同一三通道（appendTarEntry）——
+      // 此前手写头对 >100 字节名经 Buffer.copy 静默截断，长路径包恢复时
+      // 快照条目名截断 → 回滚写错位置（950 起 export 可产长路径包，患激活；
+      // Rust 侧 tar::Builder 自动 GNU 'L' 无此患）。manifest 条目（20 字节）
+      // 走单头分支，形态等价。
       for (const file of snapshotFiles) {
-        const header = Buffer.alloc(512, 0);
-        Buffer.from(file.name, "utf-8").copy(header, 0);
-        header.write(file.bytes.length.toString(8).padStart(11, "0"), 124);
-        header.write("0", 156);
-        chunks.push(header, Buffer.from(file.bytes));
-        const padding = (512 - (file.bytes.length % 512)) % 512;
-        if (padding > 0) chunks.push(Buffer.alloc(padding));
+        appendTarEntry(chunks, file.name, Buffer.from(file.bytes));
       }
       chunks.push(Buffer.alloc(1024));
       const snapshotName = `pre-restore-${Date.now()}.tar`;

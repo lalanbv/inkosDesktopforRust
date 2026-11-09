@@ -125,4 +125,16 @@ describe("tar read (R18 预研)", () => {
     const tar = makeGnuLongLinkTar("inkos-backup/" + "d".repeat(200) + "/f.txt", "x", "f.txt");
     expect(() => untar(tar, { maxTotalBytes: 8 })).toThrow(/max total bytes/);
   });
+
+  it("'L' payload coinciding with truncated name does not join prefix (953 来源判定)", () => {
+    // 畸形形态：'L' payload 恰等于真条目截断名且真条目带 USTAR prefix——
+    // 来源判定下不拼 prefix（值比较会误拼得 prefix+名）。
+    const tar = makeTar([
+      { name: "truncated-name.json", content: "truncated-name.json\0", typeflag: "L", prefix: "some/dir" },
+      { name: "truncated-name.json", content: "body", prefix: "some/dir" },
+    ]);
+    const { entries, rejected } = untar(tar);
+    expect(rejected).toHaveLength(0);
+    expect(entries.map((e) => e.name)).toEqual(["truncated-name.json"]);
+  });
 });

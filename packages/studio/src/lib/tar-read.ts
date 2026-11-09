@@ -86,12 +86,15 @@ export function untar(
     }
 
     const rawName = cleanName(header, 0, 100).replace(/^\.?\//, "");
-    let name = pendingLongName ?? rawName;
+    // 953 号审查修复：以来源判定（而非值比较）决定是否拼 prefix——若用值
+    // 比较，畸形包中 'L' payload 恰等于截断名时会误拼 prefix 得错误名。
+    const fromLongName = pendingLongName !== null;
+    let name = fromLongName ? pendingLongName! : rawName;
     pendingLongName = null;
     // POSIX USTAR prefix 字段（magic "ustar\0"）拼接：>100 字节路径可由
     // prefix(≤155)+name(≤100) 表达——GNU 头（magic "ustar \0"）该区无
     // prefix 语义，不得拼接。
-    if (name === rawName && header[257] === 0x75 && header[258] === 0x73 && header[259] === 0x74
+    if (!fromLongName && header[257] === 0x75 && header[258] === 0x73 && header[259] === 0x74
       && header[260] === 0x61 && header[261] === 0x72 && header[262] === 0) {
       const prefix = cleanName(header, 345, 155).replace(/^\.?\//, "");
       if (prefix) name = `${prefix}/${name}`;

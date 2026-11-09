@@ -345,6 +345,41 @@ describe("backup export/import routes (710)", () => {
     expect(body.restored).toBe(1); // manifest 不计
     expect(JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8"))).toEqual({ "rolled-back": true });
   });
+
+  it("快照长名回滚回归: 长路径 overwriting 的快照条目名不截断（953 审查修复——修复前 Buffer.copy 静默截断致回滚写错位置）", async () => {
+    await seedProject();
+    const workId = "w-12345678-1234-5678-1234-567812345678";
+    const longRel = join("works", workId, "revisions", "r-87654321-4321-8765-4321-876543218765", "chapter-0001-r2.json");
+    expect(longRel.length).toBeGreaterThan(100);
+    const longPath = join(root, longRel);
+    await mkdir(join(longPath, ".."), { recursive: true });
+    await writeFile(longPath, '{"v":1}', "utf-8");
+
+    const app = createStudioServer({} as never, root);
+    // 导入含长路径条目的包（GNU 'L' 形态=模拟 Rust 导出）→ 覆盖现网 v1，
+    // 快照必须以完整长名留档 v1（950 前 export 抛错/手写快照截断名）。
+    const longName = `inkos-backup/${longRel.replace(/\\/g, "/")}`;
+    const pack = simpleTar([
+      { name: "inkos-backup/backup-manifest.json", payload: new TextEncoder().encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })), gnuMagic: true },
+      { name: "././@LongLink", payload: new TextEncoder().encode(`${longName}\0`), typeflag: "L", gnuMagic: true },
+      { name: longName.slice(0, 100), payload: new TextEncoder().encode('{"v":2}'), gnuMagic: true },
+    ]);
+    const res1 = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: pack });
+    expect(res1.status).toBe(200);
+    expect(JSON.parse(await readFile(longPath, "utf-8"))).toEqual({ v: 2 });
+
+    // 快照条目名=完整长名（修复前：前 100 字节截断名）。
+    const backups = await readdir(join(root, "backups"));
+    const snapshotRaw = await readFile(join(root, "backups", backups[0]!));
+    const snapNames = untar(new Uint8Array(snapshotRaw)).entries.map((e) => e.name);
+    expect(snapNames).toContain(longName.slice("inkos-backup/".length));
+
+    // 回滚 → 长路径文件回到快照留档的 v1（修复前：回滚写到截断名路径，
+    // 长路径文件停留 v2）。
+    const res2 = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: snapshotRaw });
+    expect(res2.status).toBe(200);
+    expect(JSON.parse(await readFile(longPath, "utf-8"))).toEqual({ v: 1 });
+  });
 });
 
 /** 与 Rust 测试 simple_tar 对偶的最小 USTAR 构建（512B 头+payload+补齐+双零块）。 */

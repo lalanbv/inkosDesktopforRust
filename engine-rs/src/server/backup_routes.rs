@@ -812,7 +812,8 @@ mod tests {
     /// 100 字节上限——Rust 导出侧经 GNU LongLink 表达、TS 导出侧经
     /// POSIX prefix 拆分/'L' 表达（同轮对偶改造）；双端读侧均须恢复完整名。
     #[test]
-    fn export_long_paths_roundtrip_via_gnu_longname() {        let (_dir, root) = temp_root();
+    fn export_long_paths_roundtrip_via_gnu_longname() {
+        let (_dir, root) = temp_root();
         let rel = "works/w-12345678-1234-5678-1234-567812345678/revisions/r-87654321-4321-8765-4321-876543218765/chapter-0001-r2.json";
         assert!(rel.len() > 100, "{rel}");
         std::fs::create_dir_all(root.join(rel).parent().unwrap()).unwrap();
