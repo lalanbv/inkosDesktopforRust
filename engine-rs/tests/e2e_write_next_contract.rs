@@ -8072,51 +8072,78 @@ mod translations70_e2e {
     /// 翻译 LLM mock：按 system 关键词分流（Translation Agent → 逐段回译 JSON；
     /// Review Agent → passed）。
     async fn mock_translation_llm() -> String {
+        mock_translation_llm_capturing().await.0
+    }
+
+    fn translation_mock_reply(system: &str, user: &str) -> String {
+        if system.contains("Translation Agent") {
+            // 从请求 JSON 抽 segments，逐段回译。
+            let parsed: serde_json::Value = serde_json::from_str(user).unwrap_or_default();
+            let segments: Vec<serde_json::Value> = parsed["segments"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|segment| {
+                            serde_json::json!({
+                                "index": segment["index"],
+                                "target": format!("[译]{}", segment["source"].as_str().unwrap_or("")),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "segments": segments,
+                "glossary": [{ "source": "Mana", "target": "魔力" }],
+            })
+            .to_string()
+        } else if system.contains("Translation Review Agent") {
+            serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] }).to_string()
+        } else {
+            "PASS".to_string()
+        }
+    }
+
+    /// 960 号：同分流 + 记录每次请求的 system 全文（技能注入面断言）。
+    async fn mock_translation_llm_capturing() -> (String, Arc<Mutex<Vec<String>>>) {
+        let systems: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let app = axum::Router::new()
             .route(
                 "/chat/completions",
-                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
-                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
-                    let content = if system.contains("Translation Agent") {
-                        // 从请求 JSON 抽 segments，逐段回译。
-                        let parsed: serde_json::Value = serde_json::from_str(&user).unwrap_or_default();
-                        let segments: Vec<serde_json::Value> = parsed["segments"]
-                            .as_array()
-                            .map(|items| {
-                                items
-                                    .iter()
-                                    .map(|segment| {
-                                        serde_json::json!({
-                                            "index": segment["index"],
-                                            "target": format!("[译]{}", segment["source"].as_str().unwrap_or("")),
-                                        })
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        serde_json::json!({
-                            "segments": segments,
-                            "glossary": [{ "source": "Mana", "target": "魔力" }],
-                        })
-                        .to_string()
-                    } else if system.contains("Translation Review Agent") {
-                        serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] }).to_string()
-                    } else {
-                        "PASS".to_string()
-                    };
-                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
-                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
-                    axum::response::IntoResponse::into_response((
-                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                        format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
-                    ))
-                }),
-            );
+                axum::routing::post(
+                    |axum::extract::State(systems): axum::extract::State<Arc<Mutex<Vec<String>>>>,
+                     axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                        let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                        let content = translation_mock_reply(&system, &user);
+                        systems.lock().unwrap().push(system);
+                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                        ))
+                    },
+                ),
+            )
+            .with_state(systems.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        format!("http://{addr}")
+        (format!("http://{addr}"), systems)
+    }
+
+    /// 960 号：真内置 inkos-translation SKILL.md 入项目约定 skills 目录（translation
+    /// profile 必需技能；测试进程 builtin 根缺失）。
+    fn seed_translation_skill(root: &std::path::Path) {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("packages/core/skills/inkos-translation/SKILL.md");
+        let dest = root.join("skills").join("inkos-translation");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::copy(source, dest.join("SKILL.md")).unwrap();
     }
 
     /// 上传并创建一个翻译项目，返回 projectId。
@@ -8162,6 +8189,7 @@ mod translations70_e2e {
     async fn upload_create_detail_run_export_full_chain() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
         let llm = mock_translation_llm().await;
         let app = app70(&root, &llm);
         let project_id = seed_project(&root, &app).await;
@@ -8194,6 +8222,7 @@ mod translations70_e2e {
         assert_eq!(run["translatedSegments"], 2);
         assert_eq!(run["reviewedChapters"], 1);
         assert_eq!(run["reportPath"], format!("translations/{project_id}/review-report.md"));
+        assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
 
         // detail：状态推进 + 段回填 + 报告更新 + 术语表。
         let (status, detail) = call(
@@ -8339,6 +8368,7 @@ mod translations70_e2e {
     async fn run_upstream_failure_maps_502() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
         // LLM 端口不可达 → chat 错误 → 上游分类 502。
         let app = app70(&root, "http://127.0.0.1:9");
         let project_id = seed_project(&root, &app).await;
@@ -8351,6 +8381,52 @@ mod translations70_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
+    }
+
+    /// 960 号：TS 2.0 translation run——profile "translation" 必需技能 inkos-translation
+    /// 注入翻译与审校每次调用的 system（Rust 此前链上零技能指导）+响应 skillIds；
+    /// 技能缺失 → 500 消息逐字（TS resolveProfileSkillActivations）且不触达 LLM。
+    #[tokio::test]
+    async fn run_injects_translation_skill_and_requires_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let (llm, systems) = mock_translation_llm_capturing().await;
+        let app = app70(&root, &llm);
+        let project_id = seed_project(&root, &app).await;
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Profile \"translation\" requires unavailable skill(s): inkos-translation"
+        );
+        assert!(systems.lock().unwrap().is_empty(), "技能先验失败不得触达 LLM");
+
+        seed_translation_skill(&root);
+        let (status, run) = call(
+            app,
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
+        let systems = systems.lock().unwrap().clone();
+        assert!(systems.iter().any(|s| s.contains("Translation Agent")), "翻译调用在场");
+        assert!(systems.iter().any(|s| s.contains("Translation Review Agent")), "审校调用在场");
+        for system in &systems {
+            assert!(system.contains("\n\n## Activated professional skills"), "{system}");
+            assert!(system.contains("### inkos-translation — inkos-translation"), "{system}");
+            assert!(system.contains("# Long-form translation"), "技能正文注入：{system}");
+        }
     }
 }
 

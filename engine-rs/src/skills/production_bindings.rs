@@ -135,6 +135,42 @@ pub fn activated_skill_ids(activations: &[ActivatedSkillGuidance]) -> Vec<String
     activations.iter().map(|a| a.skill.id.clone()).collect()
 }
 
+/// TS `resolveProfileSkillActivations`（skills/activations.ts）：可用集按 id 建表
+/// （后写胜——TS `new Map(...)`，configured 同名覆盖 builtin）；缺必需技能即错
+/// （`Profile "{id}" requires unavailable skill(s): {a, b}`）；`include_recommended`
+/// 追加推荐集；id 去重保序；resources 恒空。
+pub fn resolve_profile_skill_activations(
+    available_skills: &[AgentSkill],
+    profile: &crate::harness::contracts::WorkProfile,
+    include_recommended: bool,
+) -> Result<Vec<ActivatedSkillGuidance>, String> {
+    let by_id: HashMap<&str, &AgentSkill> =
+        available_skills.iter().map(|skill| (skill.id.as_str(), skill)).collect();
+    let missing: Vec<&str> = profile
+        .required_skill_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !by_id.contains_key(id))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "Profile \"{}\" requires unavailable skill(s): {}",
+            profile.id,
+            missing.join(", ")
+        ));
+    }
+    let recommended: &[String] = if include_recommended { &profile.recommended_skill_ids } else { &[] };
+    let mut seen = std::collections::HashSet::new();
+    Ok(profile
+        .required_skill_ids
+        .iter()
+        .chain(recommended)
+        .filter(|id| seen.insert(id.as_str()))
+        .filter_map(|id| by_id.get(id.as_str()))
+        .map(|skill| ActivatedSkillGuidance { skill: (*skill).clone(), resources: Vec::new() })
+        .collect())
+}
+
 /// TS agent-session `workerSkills` 闭包逐字：architect/writer → longWriting；
 /// auditor/reviser → longReview；其它面空。
 pub fn worker_skills_for_agent(
@@ -328,6 +364,36 @@ mod tests {
         let play = resolve_production_skill_activations(&available, ProductionSkillCapability::Play);
         assert!(play.is_empty());
         assert!(play.iter().all(|a| a.resources.is_empty()), "resources 恒空");
+    }
+
+    /// 960 号：TS `resolveProfileSkillActivations` 三语义——缺必需即错（消息逐字）/
+    /// 后写胜（configured 同名覆盖 builtin）/推荐集按需追加且去重保序。
+    #[test]
+    fn profile_skill_activations_mirror_ts() {
+        let profiles = crate::harness::profile_registry::built_in_work_profiles();
+        let profile = |id: &str| profiles.iter().find(|p| p.id == id).unwrap();
+        let err = resolve_profile_skill_activations(&[skill("inkos-story-review")], profile("translation"), false)
+            .unwrap_err();
+        assert_eq!(err, "Profile \"translation\" requires unavailable skill(s): inkos-translation");
+
+        let mut configured = skill("inkos-translation");
+        configured.body = "项目同名覆盖".into();
+        let resolved =
+            resolve_profile_skill_activations(&[skill("inkos-translation"), configured], profile("translation"), false)
+                .unwrap();
+        assert_eq!(activated_skill_ids(&resolved), ["inkos-translation"]);
+        assert_eq!(resolved[0].skill.body, "项目同名覆盖", "后写胜");
+        assert!(resolved[0].resources.is_empty());
+
+        let available = vec![skill("inkos-long-writing"), skill("inkos-story-review")];
+        let required_only = resolve_profile_skill_activations(&available, profile("longform-novel"), false).unwrap();
+        assert_eq!(activated_skill_ids(&required_only), ["inkos-long-writing"]);
+        let with_recommended = resolve_profile_skill_activations(&available, profile("longform-novel"), true).unwrap();
+        assert_eq!(activated_skill_ids(&with_recommended), ["inkos-long-writing", "inkos-story-review"]);
+        // 推荐技能缺失不报错（TS 只校验 required）。
+        let partial =
+            resolve_profile_skill_activations(&[skill("inkos-long-writing")], profile("longform-novel"), true).unwrap();
+        assert_eq!(activated_skill_ids(&partial), ["inkos-long-writing"]);
     }
 
     #[test]

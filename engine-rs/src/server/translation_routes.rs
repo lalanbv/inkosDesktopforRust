@@ -294,6 +294,23 @@ fn is_upstream_error(message: &str) -> bool {
     re.is_match(message)
 }
 
+/// 960 号：TS `resolveProfileSkillActivations(loadAvailableAgentSkills(root).skills,
+/// createBuiltInWorkProfileRegistry(root).require("translation"))`（required only）。
+async fn translation_skill_activations(
+    root: &Path,
+) -> Result<Vec<crate::skills::production_bindings::ActivatedSkillGuidance>, String> {
+    let available = crate::skills::external_loader::load_available_agent_skills(
+        root,
+        &crate::server::skill_routes::env_skill_dirs_public(),
+        crate::server::skill_routes::home_dir_public().as_deref(),
+    )
+    .await;
+    let registry = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
+        .map_err(|error| error.to_string())?;
+    let profile = registry.require("translation").map_err(|error| error.to_string())?;
+    crate::skills::production_bindings::resolve_profile_skill_activations(&available.skills, profile, false)
+}
+
 pub async fn run_translation(
     State(runtime): State<BooksRuntime>,
     AxumPath(id): AxumPath<String>,
@@ -312,18 +329,32 @@ pub async fn run_translation(
         .and_then(Value::as_u64)
         .map(|v| v as u32);
     let root = runtime.state.project_root();
+    // 960 号：TS 2.0 translation run——profile "translation" 必需技能（inkos-translation）
+    // 激活，翻译/审校链经 AgentRouter::chat 出口注入（runner 无 spawn，task-local
+    // 作用域覆盖全部调用）；缺技能/档案注册表异常即错（TS 同抛 500）；响应附 skillIds
+    //（TranslationManager 回执「Skill：…」读此字段——此前 Rust 后端恒缺且链上无技能指导）。
+    let activations = match translation_skill_activations(root).await {
+        Ok(activations) => activations,
+        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "TRANSLATION_RUN_FAILED", message),
+    };
+    let skill_ids = crate::skills::production_bindings::activated_skill_ids(&activations);
     let model = crate::translation::llm_model::LlmTranslationModel {
         router: &*runtime.effective_router().await,
         max_tokens,
     };
-    match crate::translation::runner::run_translation_project(root, &id, &model, batch_size)
-        .await
+    match crate::skills::production_bindings::scope_operation_skills(
+        Some(std::sync::Arc::new(activations)),
+        crate::translation::runner::run_translation_project(root, &id, &model, batch_size),
+    )
+    .await
     {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::to_value(&result).unwrap_or(Value::Null)),
-        )
-            .into_response(),
+        Ok(result) => {
+            let mut body = serde_json::to_value(&result).unwrap_or(Value::Null);
+            if let Some(object) = body.as_object_mut() {
+                object.insert("skillIds".to_string(), json!(skill_ids));
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(message) => {
             let status = if is_upstream_error(&message) {
                 StatusCode::BAD_GATEWAY
