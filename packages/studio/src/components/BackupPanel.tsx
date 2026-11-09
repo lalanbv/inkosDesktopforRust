@@ -13,10 +13,31 @@ interface SnapshotItem {
   readonly size: number;
 }
 
-/** 954 号：从快照名（pre-restore-<millis>.tar）解析本地时间展示；解析失败回退原名。 */
+/**
+ * 954 号：从快照名（pre-restore-<millis>.tar）解析本地时间展示；解析失败回退原名。
+ * 955 号：越界毫秒（16 位名可超 Date 上限 8.64e15 → Invalid Date）同样回退原名。
+ */
 function snapshotLabel(name: string): string {
-  const millis = Number(name.match(/^pre-restore-(\d+)\.tar$/)?.[1] ?? NaN);
-  return Number.isSafeInteger(millis) ? new Date(millis).toLocaleString() : name;
+  const digits = name.match(/^pre-restore-(\d{1,16})\.tar$/)?.[1];
+  if (digits === undefined) return name;
+  const date = new Date(Number(digits));
+  return Number.isNaN(date.getTime()) ? name : date.toLocaleString();
+}
+
+/**
+ * 955 号：列表标签——同秒快照（连续/并发恢复各留一份）秒级标签相同、大小也常
+ * 相同，用户无从分辨该回滚哪份（真引擎走查实证两行同为「11:03:13 · 7168 字节」）；
+ * 同标签者追加毫秒。
+ */
+function snapshotLabels(items: ReadonlyArray<SnapshotItem>): ReadonlyArray<string> {
+  const labels = items.map((item) => snapshotLabel(item.name));
+  const counts = new Map<string, number>();
+  for (const label of labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  return labels.map((label, index) => {
+    if ((counts.get(label) ?? 0) < 2) return label;
+    const digits = items[index]!.name.match(/^pre-restore-(\d{1,16})\.tar$/)?.[1];
+    return digits === undefined ? label : `${label}.${digits.slice(-3).padStart(3, "0")}`;
+  });
 }
 
 /**
@@ -26,12 +47,12 @@ function snapshotLabel(name: string): string {
  * 回滚走服务端同一两段式（预览覆盖面 → 确认），恢复/回滚全程有保险。
  */
 export function BackupPanel() {
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<{ readonly text: string; readonly error: boolean } | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [snapshots, setSnapshots] = useState<ReadonlyArray<SnapshotItem>>([]);
-  const [rollback, setRollback] = useState<{ name: string; preview: Preview } | null>(null);
+  const [rollback, setRollback] = useState<{ name: string; label: string; preview: Preview } | null>(null);
 
   const loadSnapshots = useCallback(async () => {
     try {
@@ -45,70 +66,86 @@ export function BackupPanel() {
     void loadSnapshots();
   }, [loadSnapshots]);
 
+  // 955 号：在途互斥——预览/确认请求未返回前操作按钮禁用+重入早退（真人双击
+  // 「确认」=两次恢复请求与冗余快照）；ref 兜住 state 渲染前的同帧连击窗口。
+  // 失败统一落 error 通知（954 前错误与成功同为绿色，失败看起来像成功），且
+  // 失败后重列快照：盘面可能已变（快照被外部删除=列表残留死行；确认恢复在
+  // 快照落盘后中途失败=新快照已在盘却不在列表，回滚保险对用户不可见）。
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const runExclusive = async (action: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await action();
+    } catch (error) {
+      setNotice({ text: String(error), error: true });
+      void loadSnapshots();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
   const doExport = () => {
     window.open(`${location.origin}/api/v1/backup/export`, "_blank");
   };
 
-  const onFile = async (file: File) => {
+  const onFile = (file: File) => runExclusive(async () => {
+    // 955 号：新选文件先收起旧预览（954 前选 B 失败时 A 的预览仍在、待恢复
+    // 文件已换成 B——确认会按 A 的数字恢复 B）；导入预览与回滚预览互斥。
+    setPreview(null);
+    setRollback(null);
+    setNotice(null);
     setPendingFile(file);
-    try {
-      const raw = await file.arrayBuffer();
-      // 443 号：服务端线格式为 {preview:{...}}（TS/Rust 一致）——面板此前按
-      // 平铺读取，预览数字全为 undefined，导入预览从未真正可读。
-      const result = await fetchJson<{ preview: Preview }>("/backup/import", {
-        method: "POST",
-        body: raw as unknown as BodyInit,
-      });
-      setPreview(result.preview);
-    } catch (error) {
-      setNotice(String(error));
-    }
-  };
+    const raw = await file.arrayBuffer();
+    // 443 号：服务端线格式为 {preview:{...}}（TS/Rust 一致）——面板此前按
+    // 平铺读取，预览数字全为 undefined，导入预览从未真正可读。
+    const result = await fetchJson<{ preview: Preview }>("/backup/import", {
+      method: "POST",
+      body: raw as unknown as BodyInit,
+    });
+    setPreview(result.preview);
+  });
 
-  const confirmImport = async () => {
+  const confirmImport = () => runExclusive(async () => {
     if (!pendingFile) return;
-    try {
-      const raw = await pendingFile.arrayBuffer();
-      const result = await fetchJson<{ ok: boolean; restored: number }>(
-        "/backup/import?confirm=1",
-        { method: "POST", body: raw as unknown as BodyInit },
-      );
-      setNotice(tr(`已恢复 ${result.restored} 个文件（原文件快照在 backups/）`, `Restored ${result.restored} files (snapshot in backups/)`));
-      setPreview(null);
-      setPendingFile(null);
-      void loadSnapshots();
-    } catch (error) {
-      setNotice(String(error));
-    }
-  };
+    const raw = await pendingFile.arrayBuffer();
+    const result = await fetchJson<{ ok: boolean; restored: number }>(
+      "/backup/import?confirm=1",
+      { method: "POST", body: raw as unknown as BodyInit },
+    );
+    setNotice({ text: tr(`已恢复 ${result.restored} 个文件（原文件快照在 backups/）`, `Restored ${result.restored} files (snapshot in backups/)`), error: false });
+    setPreview(null);
+    setPendingFile(null);
+    void loadSnapshots();
+  });
 
-  const previewRollback = async (name: string) => {
-    try {
-      const result = await fetchJson<{ preview: Preview }>(
-        `/backup/rollback?name=${encodeURIComponent(name)}`,
-        { method: "POST" },
-      );
-      setRollback({ name, preview: result.preview });
-      setNotice("");
-    } catch (error) {
-      setNotice(String(error));
-    }
-  };
+  const previewRollback = (name: string, label: string) => runExclusive(async () => {
+    const result = await fetchJson<{ preview: Preview }>(
+      `/backup/rollback?name=${encodeURIComponent(name)}`,
+      { method: "POST" },
+    );
+    // 955 号：与导入预览互斥（并存时确认其一后另一份预览已过期）。
+    setPreview(null);
+    setPendingFile(null);
+    setRollback({ name, label, preview: result.preview });
+    setNotice(null);
+  });
 
-  const confirmRollback = async () => {
+  const confirmRollback = () => runExclusive(async () => {
     if (!rollback) return;
-    try {
-      const result = await fetchJson<{ ok: boolean; restored: number }>(
-        `/backup/rollback?name=${encodeURIComponent(rollback.name)}&confirm=1`,
-        { method: "POST" },
-      );
-      setNotice(tr(`已回滚到快照时刻（恢复 ${result.restored} 个文件；回滚前状态已另存快照）`, `Rolled back (restored ${result.restored} files; prior state snapshotted)`));
-      setRollback(null);
-      void loadSnapshots();
-    } catch (error) {
-      setNotice(String(error));
-    }
-  };
+    const result = await fetchJson<{ ok: boolean; restored: number }>(
+      `/backup/rollback?name=${encodeURIComponent(rollback.name)}&confirm=1`,
+      { method: "POST" },
+    );
+    setNotice({ text: tr(`已回滚到快照时刻（恢复 ${result.restored} 个文件；回滚前状态已另存快照）`, `Rolled back (restored ${result.restored} files; prior state snapshotted)`), error: false });
+    setRollback(null);
+    void loadSnapshots();
+  });
+
+  const labels = snapshotLabels(snapshots);
 
   return (
     <div className="rounded-lg border border-border/60 px-5 py-4 mb-8 flex items-center justify-between gap-4 flex-wrap">
@@ -132,6 +169,7 @@ export function BackupPanel() {
             type="file"
             accept=".tar.gz,.tgz,application/gzip"
             className="hidden"
+            disabled={busy}
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) void onFile(file);
@@ -153,8 +191,9 @@ export function BackupPanel() {
             </p>
           )}
           <button
-            onClick={confirmImport}
-            className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground"
+            onClick={() => void confirmImport()}
+            disabled={busy}
+            className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground disabled:opacity-50"
           >
             {tr("确认恢复", "Confirm restore")}
           </button>
@@ -163,15 +202,16 @@ export function BackupPanel() {
       {snapshots.length > 0 && (
         <div className="w-full space-y-1 border-t border-border/40 pt-2">
           <p className="text-xs font-medium">{tr("可回滚快照（恢复前自动留档）", "Rollback snapshots (auto-saved before restore)")}</p>
-          {snapshots.map((snapshot) => (
+          {snapshots.map((snapshot, index) => (
             <div key={snapshot.name} className="flex items-center justify-between gap-3 text-xs">
               <span className="text-muted-foreground truncate">
-                {snapshotLabel(snapshot.name)} · {snapshot.size}
+                {labels[index]} · {snapshot.size}
                 {tr(" 字节", " bytes")}
               </span>
               <button
-                onClick={() => void previewRollback(snapshot.name)}
-                className="px-3 py-1 shrink-0 rounded-md border border-border font-medium cursor-pointer hover:bg-primary/10 transition-colors"
+                onClick={() => void previewRollback(snapshot.name, labels[index]!)}
+                disabled={busy}
+                className="px-3 py-1 shrink-0 rounded-md border border-border font-medium cursor-pointer hover:bg-primary/10 transition-colors disabled:opacity-50"
               >
                 {tr("回滚到此快照", "Roll back to this snapshot")}
               </button>
@@ -182,7 +222,8 @@ export function BackupPanel() {
       {rollback && (
         <div className="w-full space-y-1 border-t border-border/40 pt-2">
           <p className="text-xs">
-            {tr(`回滚该快照：将覆盖 ${rollback.preview.overwriting.length} 个文件`, `Rollback: ${rollback.preview.overwriting.length} files to overwrite`)}
+            {/* 955 号：预览点名所选快照（多行快照时确认前须知回滚到哪一份）。 */}
+            {tr(`回滚该快照（${rollback.label}）：将覆盖 ${rollback.preview.overwriting.length} 个文件`, `Rollback (${rollback.label}): ${rollback.preview.overwriting.length} files to overwrite`)}
           </p>
           {rollback.preview.overwriting.length > 0 && (
             <p className="text-[11px] text-amber-600">
@@ -192,14 +233,17 @@ export function BackupPanel() {
             </p>
           )}
           <button
-            onClick={confirmRollback}
-            className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground"
+            onClick={() => void confirmRollback()}
+            disabled={busy}
+            className="px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground disabled:opacity-50"
           >
             {tr("确认回滚", "Confirm rollback")}
           </button>
         </div>
       )}
-      {notice && <p className="w-full text-[11px] text-emerald-600">{notice}</p>}
+      {notice && (
+        <p className={`w-full text-[11px] ${notice.error ? "text-destructive" : "text-emerald-600"}`}>{notice.text}</p>
+      )}
     </div>
   );
 }

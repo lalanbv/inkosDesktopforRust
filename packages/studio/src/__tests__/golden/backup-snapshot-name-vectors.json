@@ -1,0 +1,54 @@
+{
+  "_header": "955 号：pre-restore 快照名规范形态双端唯一事实源。TS 断言 packages/studio/src/__tests__/backup-routes.test.ts，Rust 断言 engine-rs/src/server/backup_routes.rs tests（include_str 同文件）。规则：pre-restore-<D>.tar，D = 0 或无前导零的 1-16 位 ASCII 十进制数字（16 位 = JS 安全整数位数；毫秒时间戳 13 位可用至 2286 年）；纯串级判定，不依赖任何数值解析语义（954 版 TS 安全整数 vs Rust u64 在 16-19 位名上双端分叉）。排序：规范形态同前后缀，(长度, 字典序) 即毫秒数值序；列举按数值倒序（新快照在前）。",
+  "accept": [
+    "pre-restore-0.tar",
+    "pre-restore-7.tar",
+    "pre-restore-10.tar",
+    "pre-restore-1731100000000.tar",
+    "pre-restore-9007199254740991.tar",
+    "pre-restore-9007199254740993.tar",
+    "pre-restore-9999999999999999.tar"
+  ],
+  "reject": [
+    "",
+    "pre-restore-.tar",
+    "pre-restore-00.tar",
+    "pre-restore-01.tar",
+    "pre-restore-01731100000000.tar",
+    "pre-restore-12345678901234567.tar",
+    "pre-restore-18446744073709551616.tar",
+    "pre-restore--1.tar",
+    "pre-restore-+1.tar",
+    "pre-restore-1e3.tar",
+    "pre-restore-0x1F.tar",
+    "pre-restore-1.5.tar",
+    "pre-restore- 1.tar",
+    "pre-restore-1 .tar",
+    "pre-restore-1.tar\n",
+    "pre-restore-1.tar.tmp",
+    ".pre-restore-1731100000000.tmp",
+    "pre-restore-1731100000000.TAR",
+    "Pre-restore-1.tar",
+    "pre-restore-١٢٣.tar",
+    "pre-restore-１２３.tar",
+    "../pre-restore-1.tar",
+    "pre-restore-1.tar/..",
+    "other.tar"
+  ],
+  "sortedDesc": {
+    "input": [
+      "pre-restore-9.tar",
+      "pre-restore-1731100000000.tar",
+      "pre-restore-0.tar",
+      "pre-restore-10.tar",
+      "pre-restore-1731200000000.tar"
+    ],
+    "expected": [
+      "pre-restore-1731200000000.tar",
+      "pre-restore-1731100000000.tar",
+      "pre-restore-10.tar",
+      "pre-restore-9.tar",
+      "pre-restore-0.tar"
+    ]
+  }
+}

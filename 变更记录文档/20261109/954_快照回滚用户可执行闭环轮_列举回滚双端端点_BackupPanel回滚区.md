@@ -35,7 +35,10 @@
   留快照=import 不变式自动保持（回滚自身有保险）。
 - **形态守卫**：`pre-restore-<纯数字毫秒>.tar` 唯一放行形态（路径穿
   越无从谈起；先形态后盘面——非法名 400 invalid snapshot name，合
-  法形态缺失 400 snapshot not found；超大数溢出双端同拒）。
+  法形态缺失 400 snapshot not found；~~超大数溢出双端同拒~~ **955
+  勘误：该表述不准确——954 版 TS 安全整数 vs Rust u64 在 16-19 位
+  名上双端分叉（TS 判非法名/Rust 判缺失且列举可见），955 号已统一
+  为规范形态纯串级判定并以共享 golden 向量表锁定**）。
 - **结构收编**：tar 写侧自 server.ts 迁出为 `lib/tar-write.ts`（与
   lib/tar-read.ts 对偶的独立打包面模块——buildTarArchive/
   appendTarEntry/长路径三通道单一真源；备份 export、快照构造、交互

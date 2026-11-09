@@ -17,7 +17,8 @@
 //! （version=1 + generator 前缀 `inkos-desktop`）。
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Query, State};
@@ -61,6 +62,16 @@ struct ArchiveEntry {
 
 fn is_existing(path: &Path) -> bool {
     std::fs::metadata(path).is_ok()
+}
+
+/// 955 号：manifest 条目判定（包根前缀名或裸名；TS `isManifestEntry` 同语义）。
+/// 零分配比较——954 前写回循环逐条目 `format!` 拼前缀名比对。
+fn is_manifest_entry(name: &str) -> bool {
+    name == MANIFEST_NAME
+        || name
+            .strip_prefix(PACKAGE_ROOT_NAME)
+            .and_then(|rest| rest.strip_prefix('/'))
+            == Some(MANIFEST_NAME)
 }
 
 /// 递归复制（.inkos 拆层用）；符号链接按其目标文件/目录复制。
@@ -312,7 +323,27 @@ pub async fn import(
     }
 }
 
+/// 955 号：当前 Unix 毫秒（时钟早于纪元回退 0，与 954 前快照命名同语义）。
+fn current_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Value, String> {
+    run_import_with_clock(root, body, confirm, current_millis)
+}
+
+/// import 两段式执行体（import 与 rollback 共用）。955 号：`now` 为时钟注入
+/// 缝（测试固定毫秒以确定性复现同毫秒碰撞），且在恢复串行锁内读取——快照
+/// 名取持锁时刻，排队等锁的恢复不会以更早的请求时刻命名更晚的快照。
+fn run_import_with_clock(
+    root: &Path,
+    body: &[u8],
+    confirm: bool,
+    now: fn() -> u128,
+) -> Result<serde_json::Value, String> {
     let (entries, rejected) = parse_archive(body)?;
     // 安全一则：不安全条目整包拒绝（TS 逐字：`unsafe entries rejected: ...`）。
     if !rejected.is_empty() {
@@ -345,17 +376,32 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
     let restore_name = |name: &str| -> String {
         name.strip_prefix(package_prefix.as_str()).unwrap_or(name).to_string()
     };
-    // 将覆盖项 = root 下已存在的同名文件。
+    // 955 号：确认段持 per-root 恢复串行锁——覆盖面盘点须在锁内（锁外盘点
+    // 与写回之间他者恢复新建的文件会漏出快照=回滚面缺口）；预览只读不持锁。
+    let lock = confirm.then(|| restore_lock(root));
+    let _guard = lock
+        .as_ref()
+        .map(|lock| lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    // 将覆盖项 = root 下已存在的同名文件。955 号：manifest 条目不参与——写回
+    // 本就跳过它（根目录同名文件不会被覆盖），954 前却计入覆盖面：根目录存在
+    // backup-manifest.json 时预览误报「将覆盖」，且该文件以裸名入快照、与快照
+    // 自身 manifest 同名并存——回滚时裸名查找先命中用户文件，先验失败=快照不
+    // 可回滚。
     let overwriting: Vec<String> = entries
         .iter()
+        .filter(|entry| !is_manifest_entry(&entry.name))
         .map(|entry| restore_name(&entry.name))
         .filter(|name| is_existing(&root.join(name)))
         .collect();
     if !confirm {
-        let new_files = entries.len() - overwriting.len();
+        // 955 号：计数面=数据条目（manifest 元数据除外）=写回面——954 前把
+        // manifest 计入 fileCount/newFiles：真实导出包预览「新增 1」而实际不
+        // 写任何新文件，且预览总数比确认后的 restored 多 1。
+        let file_count = entries.iter().filter(|entry| !is_manifest_entry(&entry.name)).count();
+        let new_files = file_count - overwriting.len();
         return Ok(json!({
             "preview": {
-                "fileCount": entries.len(),
+                "fileCount": file_count,
                 "overwriting": overwriting,
                 "newFiles": new_files,
             }
@@ -367,10 +413,9 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
     if has_snapshot {
         let backups_dir = root.join("backups");
         std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
-        let millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
+        // 955 号：唯一名分配（持锁探测）——954 前同毫秒二次恢复 rename 覆盖
+        // 前一份快照，回滚保险静默丢失。
+        let millis = allocate_snapshot_millis(&backups_dir, now())?;
         let snapshot_path = backups_dir.join(format!("pre-restore-{millis}.tar"));
         // 782 号：快照是恢复的回滚保险件——「恢复中掉电」窗口内撕裂 tar 等于
         // 保险失效（恢复目标本尊已由 779 号 write_file_atomic_sync 兜住，此处
@@ -426,7 +471,7 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
     // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数。
     let mut restored = 0usize;
     for entry in &entries {
-        if entry.name == format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}") || entry.name == MANIFEST_NAME {
+        if is_manifest_entry(&entry.name) {
             continue;
         }
         let target = root.join(restore_name(&entry.name));
@@ -450,20 +495,68 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
 // 外部备份包完全相同的检查，非语义旁路；回滚执行时对被覆盖文件再留快照
 // =import 不变式自动保持）。
 
-/// 快照文件名形态校验（`pre-restore-<纯数字毫秒>.tar`）——回滚面唯一放行
-/// 形态，路径穿越无从谈起；与 TS `parseSnapshotName` 同语义（超大数溢出
-/// 双端均拒）。
-fn snapshot_name_millis(name: &str) -> Option<u64> {
-    let stem = name.strip_prefix("pre-restore-")?.strip_suffix(".tar")?;
-    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    stem.parse::<u64>().ok()
+/// 955 号：快照名规范形态（`pre-restore-<D>.tar`，D = `0` 或无前导零的
+/// 1-16 位 ASCII 十进制数字）——回滚面唯一放行形态，路径穿越无从谈起。
+/// 双端纯串级判定逐字对齐（TS `isSnapshotName`；向量表
+/// `packages/studio/src/__tests__/golden/backup-snapshot-name-vectors.json`
+/// 双端断言同文件）。954 版按数值解析判定（TS 安全整数 vs 此处 u64）在
+/// 16-19 位名上双端分叉（TS 判非法名、此处判缺失且列举可见），本形态不依
+/// 赖任何数值语义；规范形态=名与毫秒一一对应。
+fn is_snapshot_name(name: &str) -> bool {
+    let Some(stem) = name
+        .strip_prefix("pre-restore-")
+        .and_then(|rest| rest.strip_suffix(".tar"))
+    else {
+        return false;
+    };
+    matches!(stem.len(), 1..=16)
+        && stem.bytes().all(|b| b.is_ascii_digit())
+        && (stem == "0" || !stem.starts_with('0'))
 }
 
-/// 列举 `backups/pre-restore-*.tar`（形态过滤+名倒序=时间倒序，millis 等
-/// 长名字典序=数值序）。目录缺失=空列表；tmp 残留 `.pre-restore-*.tmp`
-/// 天然被形态过滤排除。
+/// 955 号：快照名数值序比较——规范形态同前后缀，(长度, 字典序) 即毫秒数值
+/// 序（954 版纯字典序在位数不同的名上错序：`pre-restore-9` 排在 13 位新快
+/// 照之前）。TS `compareSnapshotNames` 同算法。
+fn compare_snapshot_names(a: &str, b: &str) -> std::cmp::Ordering {
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+/// 955 号：快照名探测上限（同毫秒连续占用的病态防护；正常 1 次命中）。
+const SNAPSHOT_NAME_PROBE_LIMIT: u128 = 1000;
+
+/// 955 号：快照唯一名分配——自 `now_millis` 起探测首个未占用毫秒名（任意
+/// 类型占用均跳过：同名目录也会令 rename 失败）。调用方须持 per-root 恢复
+/// 串行锁（探测→就位之间无进程内竞争者）；非 NotFound 的探测错误直接上抛，
+/// 不把不可访问误判为占用而空转。
+fn allocate_snapshot_millis(backups_dir: &Path, now_millis: u128) -> Result<u128, String> {
+    for millis in now_millis..now_millis.saturating_add(SNAPSHOT_NAME_PROBE_LIMIT) {
+        match std::fs::symlink_metadata(backups_dir.join(format!("pre-restore-{millis}.tar"))) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(millis),
+            Err(error) => return Err(error.to_string()),
+            Ok(_) => {}
+        }
+    }
+    Err("no free snapshot name".to_string())
+}
+
+/// 955 号：per-root 恢复串行锁——确认段（覆盖面盘点→快照→写回）整体互斥
+/// （954 前并发两次恢复：写回交错成混合态，同毫秒共写
+/// `.pre-restore-<ms>.tmp` 撕裂快照）。run_import 只在 spawn_blocking 线程
+/// 执行，std Mutex 阻塞合法；锁内数据为 ()，中毒无不变式可破——into_inner
+/// 恢复（某次恢复 panic 不永久锁死备份域）。条目按项目根常驻（task_store
+/// path_lock 同款判定：根数有限无泄漏）。
+fn restore_lock(root: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.entry(root.to_path_buf()).or_default().clone()
+}
+
+/// 列举 `backups/pre-restore-*.tar`（规范形态+常规文件过滤，数值倒序=时间
+/// 倒序）。目录缺失=空列表；tmp 残留 `.pre-restore-*.tmp`、同名目录、符号
+/// 链接天然被过滤（DirEntry::metadata 不跟随链接）。
 fn list_snapshots(root: &Path) -> serde_json::Value {
     let mut items: Vec<(String, u64)> = Vec::new();
     if let Ok(children) = std::fs::read_dir(root.join("backups")) {
@@ -473,13 +566,13 @@ fn list_snapshots(root: &Path) -> serde_json::Value {
                 continue;
             }
             let name = child.file_name().to_string_lossy().to_string();
-            if snapshot_name_millis(&name).is_none() {
+            if !is_snapshot_name(&name) {
                 continue;
             }
             items.push((name, meta.len()));
         }
     }
-    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.sort_by(|a, b| compare_snapshot_names(&b.0, &a.0));
     json!({
         "snapshots": items.iter().map(|(name, size)| json!({ "name": name, "size": size })).collect::<Vec<_>>()
     })
@@ -492,23 +585,36 @@ enum RollbackFailure {
     Import(String),
 }
 
-/// 快照回滚：校验形态 → 读快照字节 → 走 import 同一执行体。
+/// 快照回滚：校验形态 → 读快照字节 → 走 import 同一执行体。955 号：回滚面=
+/// 列举面——仅放行常规文件（符号链接/目录按缺失处理，与 list_snapshots 同
+/// 判据：954 版 fs::read 跟随链接，列举不可见的链接名可被直接回滚）。
 fn run_rollback(root: &Path, name: &str, confirm: bool) -> Result<serde_json::Value, RollbackFailure> {
-    if snapshot_name_millis(name).is_none() {
+    if !is_snapshot_name(name) {
         return Err(RollbackFailure::InvalidName);
     }
-    let bytes = std::fs::read(root.join("backups").join(name)).map_err(|_| RollbackFailure::NotFound)?;
+    let path = root.join("backups").join(name);
+    let is_regular = std::fs::symlink_metadata(&path).map(|meta| meta.is_file()).unwrap_or(false);
+    if !is_regular {
+        return Err(RollbackFailure::NotFound);
+    }
+    let bytes = std::fs::read(&path).map_err(|_| RollbackFailure::NotFound)?;
     run_import(root, &bytes, confirm).map_err(RollbackFailure::Import)
 }
 
 /// `GET /api/v1/backup/snapshots`——列举可回滚快照。
 pub async fn snapshots(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root().to_path_buf();
-    // 763 号同款：盘面列举移出 runtime 线程。
-    let response = tokio::task::spawn_blocking(move || list_snapshots(&root))
-        .await
-        .unwrap_or_else(|_| json!({ "snapshots": [] }));
-    (StatusCode::OK, Json(response)).into_response()
+    // 763 号同款：盘面列举移出 runtime 线程。955 号：JoinError 走 500（与同
+    // 文件 import/rollback 一致——954 版吞成 200 空列表会把 panic 伪装成
+    // 「无快照」）。
+    match tokio::task::spawn_blocking(move || list_snapshots(&root)).await {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// `POST /api/v1/backup/rollback[?confirm=1]`——回滚指定快照（name 走
@@ -604,10 +710,7 @@ fn parse_archive(body: &[u8]) -> Result<(Vec<ArchiveEntry>, Vec<String>), String
 
 /// ISO-8601 UTC 时间戳（manifest createdAt；避免为单一字段引入 chrono）。
 fn iso_now() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+    let millis = current_millis();
     let secs = (millis / 1000) as u64;
     let ms = millis % 1000;
     let days = secs / 86_400;
@@ -769,9 +872,13 @@ mod tests {
         ]);
         let response = run_import(&root, &tar_bytes, false).unwrap();
         let preview = response.get("preview").unwrap();
-        assert_eq!(preview["fileCount"], 3); // manifest 元数据计入包内文件数（TS 口径）
+        // 955 号：计数面=数据条目（manifest 元数据不计）——954 前 3/2 口径把
+        // manifest 报成「新增文件」，预览总数比确认 restored 多 1。
+        assert_eq!(preview["fileCount"], 2);
         assert_eq!(preview["overwriting"], serde_json::json!(["books/b1/book.json"]));
-        assert_eq!(preview["newFiles"], 2);
+        assert_eq!(preview["newFiles"], 1);
+        // 预览总数=确认后的写回数（用户看到的两个数字一致）。
+        assert_eq!(run_import(&root, &tar_bytes, true).unwrap()["restored"], 2);
     }
 
     #[test]
@@ -864,7 +971,7 @@ mod tests {
         };
         // preview 段：服务端读快照走 import 同一管道（安全三则+manifest 先验生效）。
         let preview = run_rollback(&root, &snapshot_name, false).unwrap();
-        assert_eq!(preview["preview"]["fileCount"], 2); // 文件条目+manifest
+        assert_eq!(preview["preview"]["fileCount"], 1); // 955 号：manifest 不计（数据条目=写回面）
         assert_eq!(preview["preview"]["overwriting"], serde_json::json!(["books/b1/book.json"]));
         // confirm 段：回滚执行——book.json 回 original。
         let done = run_rollback(&root, &snapshot_name, true).unwrap();
@@ -874,6 +981,159 @@ mod tests {
         assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
         // 回滚自身也留快照（import 不变式自动保持）：backups/ 现有 2 份。
         assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 2);
+        drop(dir);
+    }
+
+    // ── 955 号：954 新增代码审查修复（命名碰撞/并发串行/形态对齐/回滚面=列举面）──
+
+    /// 双端共享向量表（TS backup-routes.test.ts 断言同文件）。
+    const SNAPSHOT_NAME_VECTORS: &str =
+        include_str!("../../../packages/studio/src/__tests__/golden/backup-snapshot-name-vectors.json");
+
+    fn listed_snapshot_names(root: &Path) -> Vec<String> {
+        list_snapshots(root)["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn snapshot_book(root: &Path, name: &str) -> Vec<u8> {
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(name)).unwrap()).unwrap().0;
+        entries.into_iter().find(|entry| entry.name == "books/b1/book.json").unwrap().bytes
+    }
+
+    fn marker_package(marker: &str) -> Vec<u8> {
+        simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", format!("{{\"marker\":\"{marker}\"}}").as_bytes()),
+            ("inkos-backup/inkos.json", format!("{{\"name\":\"{marker}\"}}").as_bytes()),
+        ])
+    }
+
+    #[test]
+    fn snapshot_name_shape_matches_shared_golden_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(SNAPSHOT_NAME_VECTORS).unwrap();
+        for name in vectors["accept"].as_array().unwrap() {
+            let name = name.as_str().unwrap();
+            assert!(is_snapshot_name(name), "accept: {name:?}");
+        }
+        for name in vectors["reject"].as_array().unwrap() {
+            let name = name.as_str().unwrap();
+            assert!(!is_snapshot_name(name), "reject: {name:?}");
+        }
+        // 排序向量：落盘为常规文件后经 list_snapshots 列举=数值倒序（954 版纯
+        // 字典序把 pre-restore-9 排在 13 位新快照之前）。
+        let (_dir, root) = temp_root();
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        for name in vectors["sortedDesc"]["input"].as_array().unwrap() {
+            std::fs::write(root.join("backups").join(name.as_str().unwrap()), b"x").unwrap();
+        }
+        let expected: Vec<String> = vectors["sortedDesc"]["expected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(listed_snapshot_names(&root), expected);
+    }
+
+    #[test]
+    fn snapshot_allocation_skips_occupied_millis() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path();
+        assert_eq!(allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(), 1_731_100_000_000);
+        std::fs::write(backups.join("pre-restore-1731100000000.tar"), b"a").unwrap();
+        // 同名目录同样视为占用（rename 到目录会失败，不能当空位）。
+        std::fs::create_dir_all(backups.join("pre-restore-1731100000001.tar")).unwrap();
+        assert_eq!(allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(), 1_731_100_000_002);
+    }
+
+    /// 同毫秒二次恢复：两份快照并存且首份内容不被覆盖（954 前 rename 覆盖=
+    /// 回滚保险静默丢失；固定时钟确定性复现）。
+    #[test]
+    fn same_millis_restores_keep_both_snapshots() {
+        let (dir, root) = temp_root();
+        let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let first = run_import_with_clock(&root, &marker_package("A"), true, || 1_731_100_000_000).unwrap();
+        assert_eq!(first["snapshot"], true);
+        let second = run_import_with_clock(&root, &marker_package("B"), true, || 1_731_100_000_000).unwrap();
+        assert_eq!(second["snapshot"], true);
+        assert_eq!(
+            listed_snapshot_names(&root),
+            vec!["pre-restore-1731100000001.tar", "pre-restore-1731100000000.tar"]
+        );
+        // 首份=首次恢复前（original），次份=二次恢复前（A 的恢复结果）。
+        assert_eq!(snapshot_book(&root, "pre-restore-1731100000000.tar"), original);
+        assert_eq!(snapshot_book(&root, "pre-restore-1731100000001.tar"), br#"{"marker":"A"}"#.to_vec());
+        drop(dir);
+    }
+
+    /// 并发两次确认恢复：串行锁保证终态为某一包整体（不交错）、两份快照并存，
+    /// 且后执行者的快照恰为先执行者的恢复结果（954 前同毫秒共写同一 tmp/终名）。
+    #[test]
+    fn concurrent_restores_serialize_with_distinct_snapshots() {
+        let (dir, root) = temp_root();
+        let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let (pack_a, pack_b) = (marker_package("A"), marker_package("B"));
+        std::thread::scope(|scope| {
+            let a = scope.spawn(|| run_import_with_clock(&root, &pack_a, true, || 1_731_100_000_000));
+            let b = scope.spawn(|| run_import_with_clock(&root, &pack_b, true, || 1_731_100_000_000));
+            assert_eq!(a.join().unwrap().unwrap()["ok"], true);
+            assert_eq!(b.join().unwrap().unwrap()["ok"], true);
+        });
+        let book = std::fs::read_to_string(root.join("books/b1/book.json")).unwrap();
+        let config = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        let (winner, loser) = if book.contains("\"A\"") { ("A", "B") } else { ("B", "A") };
+        assert!(config.contains(&format!("\"{winner}\"")), "写回交错: {book} / {config}");
+        let names = listed_snapshot_names(&root);
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(snapshot_book(&root, &names[1]), original);
+        assert_eq!(snapshot_book(&root, &names[0]), format!("{{\"marker\":\"{loser}\"}}").into_bytes());
+        drop(dir);
+    }
+
+    /// 回滚面=列举面：列举不可见的符号链接名不得被直接回滚（954 版 fs::read
+    /// 跟随链接）；真快照本体照常可回滚（守卫不误伤）。
+    #[cfg(unix)]
+    #[test]
+    fn rollback_rejects_symlinked_snapshot_names() {
+        let (dir, root) = temp_root();
+        run_import(&root, &marker_package("A"), true).unwrap();
+        let real = listed_snapshot_names(&root).remove(0);
+        std::os::unix::fs::symlink(root.join("backups").join(&real), root.join("backups/pre-restore-1.tar")).unwrap();
+        assert_eq!(listed_snapshot_names(&root), vec![real.clone()]);
+        assert!(matches!(run_rollback(&root, "pre-restore-1.tar", false), Err(RollbackFailure::NotFound)));
+        assert!(run_rollback(&root, &real, false).is_ok());
+        drop(dir);
+    }
+
+    /// 根目录同名 backup-manifest.json（用户文件）：不入覆盖面（写回本就跳过、
+    /// 不会被覆盖）、不入快照——954 前它以裸名入快照，与快照自身 manifest 并存，
+    /// 回滚时裸名查找先命中用户文件，先验失败=该快照永远不可回滚。
+    #[test]
+    fn root_level_manifest_file_is_neither_overwritten_nor_snapshotted() {
+        let (dir, root) = temp_root();
+        let user_note = r#"{"note":"用户自己的清单笔记"}"#;
+        std::fs::write(root.join(MANIFEST_NAME), user_note).unwrap();
+        let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let package = marker_package("A");
+        let preview = run_import(&root, &package, false).unwrap();
+        assert_eq!(
+            preview["preview"]["overwriting"],
+            serde_json::json!(["books/b1/book.json", "inkos.json"])
+        );
+        run_import(&root, &package, true).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(), user_note);
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
+        assert_eq!(entries.iter().filter(|entry| entry.name == MANIFEST_NAME).count(), 1);
+        // 快照可回滚：book.json 回到恢复前原件，用户笔记原样保留。
+        let rolled = run_rollback(&root, &snapshot, true).unwrap();
+        assert_eq!(rolled["ok"], true);
+        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(), user_note);
         drop(dir);
     }
 

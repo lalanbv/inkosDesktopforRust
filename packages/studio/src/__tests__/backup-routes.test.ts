@@ -1,10 +1,18 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStudioServer } from "../api/server.js";
+import { allocateSnapshotName, isSnapshotName, listBackupSnapshots } from "../api/backup-snapshot.js";
 import { untar } from "../lib/tar-read.js";
+
+/** 955 号：快照名规范形态双端共享向量表（Rust backup_routes.rs tests include_str 同文件）。 */
+const snapshotNameVectors = JSON.parse(
+  readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "golden", "backup-snapshot-name-vectors.json"), "utf8"),
+) as { accept: string[]; reject: string[]; sortedDesc: { input: string[]; expected: string[] } };
 
 /**
  * 710 号：备份双端点回收端到端——GET /backup/export（staging 聚合+manifest+
@@ -175,6 +183,10 @@ describe("backup export/import routes (710)", () => {
     expect(previewBody.preview.fileCount).toBe(
       previewBody.preview.overwriting.length + previewBody.preview.newFiles,
     );
+    // 955 号：计数面=数据条目（manifest 元数据不计）——954 前 fileCount 含
+    // manifest、newFiles 把它报成「新增 1」（真实导出包实际无新文件可写）。
+    expect(previewBody.preview.fileCount).toBe(untar(exported).entries.length - 1);
+    expect(previewBody.preview.newFiles).toBe(0);
     // 预览不改动现网文件
     expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(originalBook);
 
@@ -191,6 +203,8 @@ describe("backup export/import routes (710)", () => {
     // restored = 全部条目 - manifest 元数据
     const { entries } = untar(exported);
     expect(confirmBody.restored).toBe(entries.length - 1);
+    // 955 号：预览总数=确认后的写回数（用户看到的两个数字一致）。
+    expect(confirmBody.restored).toBe(previewBody.preview.fileCount);
     // 写回生效：被篡改文件恢复为导出内容
     expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(originalBook);
     // manifest 不落盘
@@ -292,6 +306,122 @@ describe("backup export/import routes (710)", () => {
     );
     expect(missing.status).toBe(400);
     expect(((await missing.json()) as { error: string }).error).toBe("snapshot not found");
+  });
+
+  // ── 955 号：954 新增代码审查修复（命名碰撞/并发串行/形态对齐/回滚面=列举面）──
+
+  const snapshotBook = async (name: string): Promise<string | undefined> => {
+    const entries = untar(new Uint8Array(await readFile(join(root, "backups", name)))).entries;
+    const book = entries.find((entry) => entry.name === "books/b1/book.json");
+    return book ? new TextDecoder().decode(book.bytes) : undefined;
+  };
+
+  it("快照名形态+排序: 双端共享 golden 向量（955——954 版安全整数判定与 Rust u64 在 16-19 位名上分叉）", async () => {
+    for (const name of snapshotNameVectors.accept) expect(isSnapshotName(name), name).toBe(true);
+    for (const name of snapshotNameVectors.reject) expect(isSnapshotName(name), JSON.stringify(name)).toBe(false);
+    // 排序向量：落盘为常规文件后经列举=数值倒序（954 版纯字典序把 pre-restore-9
+    // 排在 13 位新快照之前）。
+    await mkdir(join(root, "backups"), { recursive: true });
+    for (const name of snapshotNameVectors.sortedDesc.input) {
+      await writeFile(join(root, "backups", name), "x", "utf-8");
+    }
+    const listed = (await listBackupSnapshots(root)).map((item) => item.name);
+    expect(listed).toEqual(snapshotNameVectors.sortedDesc.expected);
+  });
+
+  it("快照唯一名分配: 已占用毫秒名（含同名目录）顺延探测（955）", async () => {
+    const backupsDir = join(root, "backups");
+    await mkdir(backupsDir, { recursive: true });
+    expect(await allocateSnapshotName(backupsDir, 1731100000000)).toBe("pre-restore-1731100000000.tar");
+    await writeFile(join(backupsDir, "pre-restore-1731100000000.tar"), "a", "utf-8");
+    // 同名目录同样视为占用（rename 到目录会失败，不能当空位）。
+    await mkdir(join(backupsDir, "pre-restore-1731100000001.tar"));
+    expect(await allocateSnapshotName(backupsDir, 1731100000000)).toBe("pre-restore-1731100000002.tar");
+  });
+
+  it("同毫秒二次恢复: 两份快照并存且首份不被覆盖（955——954 版 writeFile 覆盖=回滚保险静默丢失）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const originalBook = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1731100000000);
+    try {
+      for (const marker of ["A", "B"]) {
+        const res = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: markerPackage(marker) });
+        expect(res.status).toBe(200);
+      }
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const listed = (await listBackupSnapshots(root)).map((item) => item.name);
+    expect(listed).toEqual(["pre-restore-1731100000001.tar", "pre-restore-1731100000000.tar"]);
+    // 首份=首次恢复前（原件），次份=二次恢复前（A 的恢复结果）。
+    expect(await snapshotBook("pre-restore-1731100000000.tar")).toBe(originalBook);
+    expect(await snapshotBook("pre-restore-1731100000001.tar")).toBe('{"marker":"A"}');
+  });
+
+  it("并发两次确认恢复: 串行锁保证终态为某一包整体、两份快照并存且后者=先执行者恢复结果（955）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const originalBook = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1731100000000);
+    try {
+      const results = await Promise.all(["A", "B"].map((marker) =>
+        app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: markerPackage(marker) })));
+      expect(results.map((res) => res.status)).toEqual([200, 200]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+    const book = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    const winner = book.includes('"A"') ? "A" : "B";
+    const loser = winner === "A" ? "B" : "A";
+    // 不交错：两文件同出一包。
+    expect(await readFile(join(root, "inkos.json"), "utf-8")).toBe(`{"name":"${winner}"}`);
+    const listed = (await listBackupSnapshots(root)).map((item) => item.name);
+    expect(listed).toHaveLength(2);
+    expect(await snapshotBook(listed[1]!)).toBe(originalBook);
+    expect(await snapshotBook(listed[0]!)).toBe(`{"marker":"${loser}"}`);
+    // 原子写零残留：快照与写回目标目录无 writeTextAtomic 临时文件。
+    for (const dir of [join(root, "backups"), join(root, "books", "b1")]) {
+      expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("回滚面=列举面: 列举不可见的符号链接名不得被直接回滚（955——954 版 readFile 跟随链接）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: markerPackage("A") });
+    const [real] = (await listBackupSnapshots(root)).map((item) => item.name);
+    await symlink(join(root, "backups", real!), join(root, "backups", "pre-restore-1.tar"));
+    const listed = await app.request("/api/v1/backup/snapshots");
+    const listedNames = ((await listed.json()) as { snapshots: Array<{ name: string }> }).snapshots.map((s) => s.name);
+    expect(listedNames).toEqual([real]);
+    const viaLink = await app.request("/api/v1/backup/rollback?name=pre-restore-1.tar", { method: "POST" });
+    expect(viaLink.status).toBe(400);
+    expect(((await viaLink.json()) as { error: string }).error).toBe("snapshot not found");
+    // 真快照本体照常可回滚（守卫不误伤）。
+    const viaReal = await app.request(`/api/v1/backup/rollback?name=${encodeURIComponent(real!)}`, { method: "POST" });
+    expect(viaReal.status).toBe(200);
+  });
+
+  it("根目录同名 backup-manifest.json: 不入覆盖面不入快照、快照仍可回滚（955——954 前快照内双 manifest 致回滚先验失败）", async () => {
+    await seedProject();
+    const userNote = JSON.stringify({ note: "用户自己的清单笔记" });
+    await writeFile(join(root, "backup-manifest.json"), userNote, "utf-8");
+    const originalBook = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    const app = createStudioServer({} as never, root);
+    const preview = await app.request("/api/v1/backup/import", { method: "POST", body: markerPackage("A") });
+    const previewBody = await preview.json() as { preview: { fileCount: number; overwriting: string[]; newFiles: number } };
+    expect(previewBody.preview).toEqual({ fileCount: 2, overwriting: ["books/b1/book.json", "inkos.json"], newFiles: 0 });
+    await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: markerPackage("A") });
+    expect(await readFile(join(root, "backup-manifest.json"), "utf-8")).toBe(userNote);
+    const [snapshot] = (await listBackupSnapshots(root)).map((item) => item.name);
+    const snapshotEntries = untar(new Uint8Array(await readFile(join(root, "backups", snapshot!)))).entries;
+    expect(snapshotEntries.filter((entry) => entry.name === "backup-manifest.json")).toHaveLength(1);
+    // 快照可回滚：book.json 回到恢复前原件，用户笔记原样保留。
+    const rolled = await app.request(`/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}&confirm=1`, { method: "POST" });
+    expect(rolled.status).toBe(200);
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(originalBook);
+    expect(await readFile(join(root, "backup-manifest.json"), "utf-8")).toBe(userNote);
   });
 
   it("import 守卫面: 空载荷/缺 manifest/坏 generator/不安全条目整包 400", async () => {
@@ -458,6 +588,16 @@ describe("backup export/import routes (710)", () => {
     expect(JSON.parse(await readFile(longPath, "utf-8"))).toEqual({ v: 1 });
   });
 });
+
+/** 955 号：标记包（manifest+book.json+inkos.json 同标记）——同毫秒/并发恢复用例的可辨识载荷。 */
+function markerPackage(marker: string): Uint8Array<ArrayBuffer> {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  return simpleTar([
+    { name: "inkos-backup/backup-manifest.json", payload: encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+    { name: "inkos-backup/books/b1/book.json", payload: encode(`{"marker":"${marker}"}`) },
+    { name: "inkos-backup/inkos.json", payload: encode(`{"name":"${marker}"}`) },
+  ]);
+}
 
 /** 与 Rust 测试 simple_tar 对偶的最小 USTAR 构建（512B 头+payload+补齐+双零块）。 */
 function simpleTar(entries: Array<{ name: string; payload: Uint8Array; typeflag?: string; gnuMagic?: boolean }>): Uint8Array<ArrayBuffer> {
