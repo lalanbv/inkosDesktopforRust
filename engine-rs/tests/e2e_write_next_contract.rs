@@ -4371,6 +4371,64 @@ name: 萧炎
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "title, referenceText and storyIdea are required");
     }
+
+    /// 962 号：后台创建失败（LLM 不可达）→ `{spinoff,imitation}:error` 后紧跟
+    /// `book:error`（同 bookId、同 error）——TS 同点位双发；studio 事件名单只收
+    /// book:error（书目刷新集），Rust 此前缺发=失败对 UI 不可见。
+    #[tokio::test]
+    async fn spinoff_and_imitation_failures_also_broadcast_book_error() {
+        async fn next_pair(
+            subscriber: &mut tokio::sync::broadcast::Receiver<inkos_engine::server::sse::SsePayload>,
+            domain_error: &str,
+        ) -> (serde_json::Value, String) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                let payload = tokio::time::timeout_at(deadline, subscriber.recv())
+                    .await
+                    .expect("等待失败事件超时")
+                    .unwrap();
+                if payload.event == domain_error {
+                    let data: serde_json::Value = serde_json::from_str(&payload.data).unwrap();
+                    let next = tokio::time::timeout_at(deadline, subscriber.recv()).await.unwrap().unwrap();
+                    assert_eq!(next.data, payload.data, "book:error 负载与领域错误同形");
+                    return (data, next.event);
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture59(&root);
+
+        let runtime = rt59(&root, "http://127.0.0.1:9");
+        let mut subscriber = runtime.hub.subscribe();
+        let (status, parsed) = call(
+            app59(runtime),
+            "POST",
+            "/api/v1/spinoff/init",
+            Some(r#"{ "title": "失败前传", "parentBookId": "parent" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let (data, follow) = next_pair(&mut subscriber, "spinoff:error").await;
+        assert_eq!(data["bookId"], "失败前传");
+        assert!(data["error"].as_str().is_some_and(|e| !e.is_empty()));
+        assert_eq!(follow, "book:error");
+
+        let runtime2 = rt59(&root, "http://127.0.0.1:9");
+        let mut subscriber2 = runtime2.hub.subscribe();
+        let reference = "少年握紧了拳，抬起头来。".repeat(60);
+        let (status, parsed) = call(
+            app59(runtime2),
+            "POST",
+            "/api/v1/imitation/init",
+            Some(&format!(r#"{{ "title": "失败仿写", "genre": "xianxia", "referenceText": "{reference}", "storyIdea": "逆袭" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let (data, follow) = next_pair(&mut subscriber2, "imitation:error").await;
+        assert_eq!(data["bookId"], "失败仿写");
+        assert_eq!(follow, "book:error");
+    }
 }
 
 // ── 60 号：skills / prompt-packs 轻域（server.ts L4209-L4268）─────────

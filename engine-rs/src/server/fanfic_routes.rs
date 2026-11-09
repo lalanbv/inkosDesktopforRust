@@ -516,6 +516,11 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
                     runtime
                         .hub
                         .broadcast("spinoff:error", &json!({ "bookId": book_id, "error": error }));
+                    // 962 号：TS 同点位 spinoff:error 后紧跟 book:error——studio 事件名单
+                    // 只收 book:error（书目刷新集），Rust 此前缺发=后台创建失败 UI 无感知。
+                    runtime
+                        .hub
+                        .broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
                 }
             }
         }
@@ -625,6 +630,10 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
                     runtime
                         .hub
                         .broadcast("imitation:error", &json!({ "bookId": book_id, "error": error }));
+                    // 962 号：TS 同点位 imitation:error 后紧跟 book:error（同 spinoff）。
+                    runtime
+                        .hub
+                        .broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
                 }
             }
         }
