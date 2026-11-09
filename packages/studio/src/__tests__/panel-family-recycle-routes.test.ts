@@ -102,13 +102,25 @@ describe("panel family recycle routes (718)", () => {
       body: JSON.stringify({ query: "祖符", k: 5 }),
     });
     expect(hit.status).toBe(200);
+    // 959 号：命中分支与无库分支、Rust 同形 {fts,semantic,fused,mode}（RecallTestCard
+    // 读 fused——718 号 {results,mode} 形态在 memory.db 在位时致面板崩溃）；纯词法
+    // 命中标 fts5（RRF 实参倒置时被标 semantic）；RRF 常数恒 60（名次 1 = 1/61，
+    // 不随请求 top-k 漂移）。
     const hitBody = (await hit.json()) as {
-      results: ReadonlyArray<{ id: string; score: number }>;
+      fts: ReadonlyArray<{ id: string; score: number; source: string; title: string }>;
+      semantic: ReadonlyArray<unknown>;
+      fused: ReadonlyArray<{ id: string; score: number; sources: ReadonlyArray<string> }>;
       mode: string;
     };
+    expect(Object.keys(hitBody).sort()).toEqual(["fts", "fused", "mode", "semantic"]);
     expect(hitBody.mode).toBe("fts5-fallback");
-    expect(hitBody.results.length).toBeGreaterThan(0);
-    expect(hitBody.results[0]?.id).toBe("chapter_summaries-1");
+    expect(hitBody.semantic).toEqual([]);
+    expect(hitBody.fts[0]).toMatchObject({ id: "chapter_summaries-1", source: "story/chapter_summaries.md", title: "第1章 镜中醒来" });
+    expect(Object.keys(hitBody.fts[0]!).sort()).toEqual(["id", "score", "source", "title"]);
+    expect(hitBody.fused.length).toBeGreaterThan(0);
+    expect(hitBody.fused[0]?.id).toBe("chapter_summaries-1");
+    expect(hitBody.fused[0]?.score).toBeCloseTo(1 / 61, 12);
+    for (const fusedHit of hitBody.fused) expect(fusedHit.sources).toEqual(["fts5"]);
 
     // 坏 id 400。
     const evil = await app.request("/api/v1/books/a%2Fb%2F..%2Fevil/hybrid-search", {

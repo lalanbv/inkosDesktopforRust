@@ -5764,19 +5764,17 @@ function yamlScalar(value: unknown): string {
           mode = "fts5-fallback";
         }
       }
-      const fused = reciprocalRankFusion(ftsRanked, semanticRanked, k);
-      const byId = new Map(fts.map((hit) => [hit.id, hit]));
+      // 959 号：①RRF 签名 (semanticRanking, ftsRanking, k=RRF_K)——349 号起实参倒置
+      // （Rust 同患），纯词法命中被标 semantic；且 718 号回收时把请求 top-k 误作
+      // RRF 常数（UI 发 k=10 → 1/(10+rank)，Rust 恒 60）。②响应形态回到 349 号
+      // RecallTestCard 契约 {fts,semantic,fused,mode}（与无库分支、Rust 同形）——
+      // 718 号改出的 {results,mode} 无 fused，2.0 写作链 memory-retrieval 建出
+      // memory.db 后面板 result.fused.length 即 TypeError 崩溃。
+      const fused = reciprocalRankFusion(semanticRanked, ftsRanked);
       return c.json({
-        results: fused.map((entry) => {
-          const hit = byId.get(entry.id);
-          return {
-            id: entry.id,
-            score: entry.score,
-            title: hit?.title ?? "",
-            excerpt: hit?.body ?? "",
-            source: hit?.scope ?? "story-memory",
-          };
-        }),
+        fts: fts.map((hit) => ({ id: hit.id, score: hit.score, source: hit.source, title: hit.title })),
+        semantic: semanticRanked,
+        fused,
         mode,
       });
     } finally {

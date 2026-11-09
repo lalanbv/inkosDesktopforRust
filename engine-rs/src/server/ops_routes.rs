@@ -1358,7 +1358,10 @@ pub async fn post_hybrid_search(
             rank: i as i64 + 1,
         })
         .collect();
-    let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(&fts_for_rrf, &semantic_for_rrf, 60);
+    // 959 号：RRF 签名为 (semantic_ranking, fts_ranking, k)——349 号起本调用面实参
+    // 倒置（TS 端同患），纯词法命中被标 sources=["semantic"]：召回测试面板在
+    //「词法降级」模式下把词法命中显示为「·语义」。分数对称（1/(k+rank) 累加）不变。
+    let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(&semantic_for_rrf, &fts_for_rrf, 60);
 
     (
         StatusCode::OK,
@@ -2386,6 +2389,58 @@ mod tests {
         let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
         (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// 959 号：RRF 来源标注——纯词法命中必须标 `["fts5"]`（349 号起调用面实参倒置，
+    /// 词法命中被标 `["semantic"]`，召回测试面板「词法降级」下显示「·语义」）；
+    /// 响应形态 `{fts,semantic,fused,mode}`（RecallTestCard 契约）+fts 元素四键。
+    #[tokio::test]
+    async fn hybrid_search_labels_lexical_hits_as_fts5() {
+        use crate::utils::local_search::{LocalSearchIndex, SearchDocument};
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(dir.path(), "[]");
+        let db_path = dir.path().join("books/b1/story/memory.db");
+        let index = LocalSearchIndex::new(db_path.to_str().unwrap()).unwrap();
+        let doc = |id: &str, kind: &str, source: &str, title: &str, body: &str| SearchDocument {
+            id: id.into(),
+            scope: "story-memory".into(),
+            kind: kind.into(),
+            source: source.into(),
+            title: title.into(),
+            body: body.into(),
+            metadata: None,
+        };
+        index
+            .replace_scope(
+                "story-memory",
+                &[
+                    doc("chapter_summaries-1", "chapter_summary", "story/chapter_summaries.md", "第1章 镜中醒来", "苏檀在坊市对峙中夺回祖符玉佩，玉符异象初显。"),
+                    doc("current_state-1", "state", "story/current_state.md", "当前状态", "林动修为浅薄，正为七日内应对雷家寻仇做准备。"),
+                ],
+            )
+            .unwrap();
+        index.close();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/hybrid-search", axum::routing::post(post_hybrid_search))
+            .with_state(runtime_for(dir.path()));
+        let (status, body) =
+            post_json(app, "POST", "/api/v1/books/b1/hybrid-search", json!({ "query": "祖符", "k": 5 })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let mut keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["fts", "fused", "mode", "semantic"]);
+        assert_eq!(body["mode"], "fts5-fallback");
+        assert_eq!(body["semantic"], json!([]));
+        assert_eq!(body["fts"][0]["id"], "chapter_summaries-1");
+        assert_eq!(body["fts"][0]["source"], "story/chapter_summaries.md");
+        assert_eq!(body["fts"][0]["title"], "第1章 镜中醒来");
+        let fused = body["fused"].as_array().unwrap();
+        assert!(!fused.is_empty(), "{body}");
+        assert_eq!(fused[0]["id"], "chapter_summaries-1");
+        assert!((fused[0]["score"].as_f64().unwrap() - 1.0 / 61.0).abs() < 1e-12, "RRF k=60 名次 1");
+        for hit in fused {
+            assert_eq!(hit["sources"], json!(["fts5"]), "纯词法命中不得标 semantic：{hit}");
+        }
     }
 
     /// 957 号：档案名穿越（`../../books/b1/book`）=覆写项目内任意 .json——400 且
