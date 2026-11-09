@@ -957,11 +957,18 @@ pub async fn post_deconstruct(
     if body.chapters.is_empty() {
         return flat_error(StatusCode::BAD_REQUEST, String::from("chapters is required"));
     }
+    // 957 号：与 TS 对齐 trim（`.filter(|n| !n.trim().is_empty())` 保留原串导致
+    // Rust 腿文件名可带首尾空白——名字直拼 `{name}.md`，含空白名写盘即与 TS 产物
+    // 名不同源）；随后过规范段判据——穿越名（`../../secrets`）写出项目根。
     let name = body
         .name
         .clone()
-        .filter(|n| !n.trim().is_empty())
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("decon-{}", crate::interaction::session::utc_now_ms()));
+    if !crate::utils::is_safe_book_id(&name) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid export name"));
+    }
     let depth = body.depth.clone().unwrap_or_else(|| "full".into());
     let language = body.language.clone().unwrap_or_else(|| "zh".into());
 
@@ -1546,6 +1553,12 @@ pub async fn save_style_profile(
     if name.is_empty() {
         return flat_error(StatusCode::BAD_REQUEST, String::from("name is required"));
     }
+    // 957 号：档案名直拼 `{name}.json` 落盘——`../../books/b1/book` 即覆写项目内任意
+    // .json（secrets/inkos.json/他书 book.json），更深的 `../` 写出项目根。复用 201 号
+    // 规范段判据（books/projects id 段同一真源；TS 同端点同判据同消息）。
+    if !crate::utils::is_safe_book_id(&name) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid profile name"));
+    }
     let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
     let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join(format!("{name}.json"));
@@ -1600,6 +1613,12 @@ pub async fn save_style_binding(
     let profile_name = body.profile_name.trim().to_string();
     if profile_name.is_empty() {
         return flat_error(StatusCode::BAD_REQUEST, String::from("profileName is required"));
+    }
+    // 957 号：档案名直拼存在性探针路径——穿越名=盘外文件存在性预言机（200/404 区分），
+    // 且名字落盘进 style_binding.json 由 composer 读面二次拼路径（存储型穿越）。存在性
+    // 探针之前先过规范段判据（与保存端点同判据同消息——合法档案名必然可绑定）。
+    if !crate::utils::is_safe_book_id(&profile_name) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid profile name"));
     }
     let profile_path = runtime
         .state
@@ -2343,6 +2362,117 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let history = load_radar_history(dir.path()).await.unwrap();
         assert!(history.is_empty());
+    }
+
+    // ── 957 号：写法档案域路径穿越守卫（三站同判据同消息，TS 同端点对偶）──
+
+    async fn post_json(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// 957 号：档案名穿越（`../../books/b1/book`）=覆写项目内任意 .json——400 且
+    /// 目标文件原样；合法中文名照常落盘。
+    #[tokio::test]
+    async fn save_style_profile_rejects_traversal_names() {
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(dir.path(), "[]");
+        let book_json = dir.path().join("books/b1/book.json");
+        let before = std::fs::read(&book_json).unwrap();
+        let app = || {
+            axum::Router::new()
+                .route("/api/v1/style-profiles", axum::routing::post(save_style_profile))
+                .with_state(runtime_for(dir.path()))
+        };
+        for evil in ["../../books/b1/book", "../../../outside", "a/b", "a\\b", "x:y"] {
+            let (status, body) =
+                post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": evil, "profile": {} })).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{evil}");
+            assert_eq!(body["error"], "invalid profile name", "{evil}");
+        }
+        assert_eq!(std::fs::read(&book_json).unwrap(), before);
+        let (status, _) =
+            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "古风·诗意", "profile": {} })).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(dir.path().join(".inkos/style-profiles/古风·诗意.json").is_file());
+    }
+
+    /// 957 号：绑定名穿越=盘外存在性预言机（inkos.json 在根 → 修复前 200 并落盘绑定）
+    /// ——存在性探针之前 400，绑定文件不落盘。
+    #[tokio::test]
+    async fn save_style_binding_rejects_traversal_before_existence_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(dir.path(), "[]");
+        std::fs::write(dir.path().join("inkos.json"), "{}").unwrap();
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/style-binding", axum::routing::put(save_style_binding))
+            .with_state(runtime_for(dir.path()));
+        let (status, body) = post_json(
+            app,
+            "PUT",
+            "/api/v1/books/b1/style-binding",
+            json!({ "profileName": "../../inkos" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid profile name");
+        assert!(!dir.path().join("books/b1/story/style_binding.json").exists());
+    }
+
+    /// 957 号：拆书产物名穿越写出项目根→400；首尾空白与 TS 同 trim 落盘；chapters
+    /// 守卫先于名字守卫（双端错误次序一致）。
+    #[tokio::test]
+    async fn post_deconstruct_rejects_traversal_and_trims_like_ts() {
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(dir.path(), "[]");
+        let app = || {
+            axum::Router::new()
+                .route("/api/v1/books/:id/deconstruct", axum::routing::post(post_deconstruct))
+                .with_state(runtime_for(dir.path()))
+        };
+        let chapters = json!([{ "chapter": 1, "characters": ["林昭"], "events": "事件" }]);
+        let (status, body) = post_json(
+            app(),
+            "POST",
+            "/api/v1/books/b1/deconstruct",
+            json!({ "name": "../../../../escaped", "chapters": chapters }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid export name");
+        assert!(!dir.path().join("escaped.md").exists());
+        // chapters 守卫在前：空 chapters + 坏名 → chapters is required（TS 同次序）。
+        let (status, body) =
+            post_json(app(), "POST", "/api/v1/books/b1/deconstruct", json!({ "name": "../x", "chapters": [] })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "chapters is required");
+        // 首尾空白 trim 后落盘（957 前 Rust 腿保留原串：文件名带空白与 TS 不同源）。
+        let (status, _) = post_json(
+            app(),
+            "POST",
+            "/api/v1/books/b1/deconstruct",
+            json!({ "name": "  拆书·卷二  ", "chapters": chapters }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(dir.path().join("books/b1/story/deconstruction/拆书·卷二.md").is_file());
     }
 }
 

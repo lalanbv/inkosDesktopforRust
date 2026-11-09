@@ -375,6 +375,9 @@ impl ProjectIndex {
              LIMIT ?1",
         )?;
 
+        // rusqlite 0.33 起 ToSql/FromSql 移除 usize 实现（SQLite 整列语义 i64；
+        // RUSTSEC-2026-0459 升级面）——显式转换，越界饱和。
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let projects = stmt
             .query_map(params![limit], |row| {
                 let tags_json: String = row.get(9)?;
@@ -487,7 +490,7 @@ impl ProjectIndex {
                 health.checked_at,
                 health.status.as_str(),
                 issues_json,
-                health.dependency_count,
+                i64::try_from(health.dependency_count).unwrap_or(i64::MAX),
                 missing_deps_json,
             ],
         )?;
@@ -518,7 +521,8 @@ impl ProjectIndex {
                         status: HealthStatus::parse_str(&row.get::<_, String>(2)?)
                             .unwrap_or(HealthStatus::Unknown),
                         issues,
-                        dependency_count: row.get(4)?,
+                        // 负值=损坏数据，归 0（usize 不可表示）。
+                        dependency_count: usize::try_from(row.get::<_, i64>(4)?).unwrap_or(0),
                         missing_dependencies,
                     })
                 },

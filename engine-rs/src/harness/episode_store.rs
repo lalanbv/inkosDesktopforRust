@@ -64,7 +64,9 @@ fn parse_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreativeEpisodeE
     Ok(CreativeEpisodeEvent {
         version: HARNESS_VERSION,
         episode_id: row.get("episodeId")?,
-        seq: row.get("seq")?,
+        // rusqlite 0.33 起 FromSql 移除 u64 实现（SQLite 整列语义 i64）——
+        // RUSTSEC-2026-0459 升级面：经 i64 读取转 u64（负值=损坏数据归 0，不回绕）。
+        seq: u64::try_from(row.get::<_, i64>("seq")?).unwrap_or(0),
         timestamp: row.get("timestamp")?,
         event_type: row.get("type")?,
         work_id: row.get("workId")?,
@@ -175,10 +177,11 @@ impl CreativeEpisodeStore {
     }
 
     fn next_seq(conn: &Connection, episode_id: &str) -> rusqlite::Result<u64> {
-        let seq: u64 = conn
+        // rusqlite 0.33 起 FromSql 移除 u64 实现——i64 读取转 u64（COALESCE(MAX,-1)+1 恒非负）。
+        let seq: i64 = conn
             .prepare("SELECT COALESCE(MAX(seq), -1) + 1 AS seq FROM creative_episode_events WHERE episode_id = ?")?
             .query_row([episode_id], |row| row.get("seq"))?;
-        Ok(seq)
+        Ok(u64::try_from(seq).unwrap_or(0))
     }
 
     fn insert_event(conn: &Connection, event: &CreativeEpisodeEvent) -> rusqlite::Result<()> {

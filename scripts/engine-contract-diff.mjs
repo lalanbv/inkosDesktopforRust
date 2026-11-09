@@ -680,6 +680,10 @@ try {
       "/api/v1/books/:id/tension-curve",
       "/api/v1/task-routing",
       "/api/v1/style-profiles",
+      // 957 号：写法档案域穿越守卫探针（POST name=`../evil`——双端 400 invalid
+      // profile name，名字直拼盘路径守卫同判据同消息；真实档案写读面由双端
+      // 套件锁定）。
+      { path: "/api/v1/style-profiles", method: "POST", body: { name: "../evil", profile: {} } },
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
       // 703 号：genre 写面 + experience 读面回收（第三批）。

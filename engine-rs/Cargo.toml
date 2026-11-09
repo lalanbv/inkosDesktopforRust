@@ -46,7 +46,7 @@ futures-util = "0.3"
 ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 # SQLite：memory-db 移植（node:sqlite → rusqlite）。用 bundled 从源码编译并静态链接，
 # 与 crate 已有「rustls-tls 避系统 OpenSSL」的自包含哲学一致，跨平台一致行为、零系统依赖。
-rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+rusqlite = { version = "0.41", features = ["bundled", "backup"] }
 # async trait：state-bootstrap/runtime-state-store/manager 等 async 编排的 fs 抽象基座（StateStore trait）。
 async-trait = "0.1"
 # UUID：chapter-workspace 版本归档的版本 id 生成（v4，与 TS crypto.randomUUID 对齐）。

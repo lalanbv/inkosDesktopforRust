@@ -2034,6 +2034,13 @@ pub fn load_style_binding_entry(
     if binding.profile_name.is_empty() {
         return None;
     }
+    // 957 号：绑定文件是用户数据（手工可编辑/旧版穿越名可落盘）——profile_name
+    // 直拼 `{name}.json` 读面在穿越名上读出项目外任意 .json（解析失败虽返 None，
+    // 文件内容已被读入进程）。不规范名（含分隔符/`..`）一律零打扰跳过，与
+    // 「缺失/解析失败返回 None」同契约。
+    if !crate::utils::is_safe_book_id(&binding.profile_name) {
+        return None;
+    }
     let profile_raw = std::fs::read_to_string(
         book_dir
             .join("story")
@@ -2602,5 +2609,30 @@ mod tests {
             entries.iter().all(|entry| entry.source != "rules/anti-ai"),
             "explicit empty rules must disable the baseline"
         );
+    }
+
+    /// 957 号：绑定文件 profile_name 穿越=读面越界——修复前 `../../outside` 经
+    /// `story/style-profiles/../../outside.json` 读出 book_dir 外 .json 并产 style 条目
+    /// 注入写作链（盘外内容进提示词）。正对照：合法名同夹具可解析（证 None 非夹具失效）。
+    #[test]
+    fn style_binding_entry_rejects_traversal_profile_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path();
+        let story = book_dir.join("story");
+        std::fs::create_dir_all(story.join("style-profiles")).unwrap();
+        let profile = |source: &str| {
+            format!(
+                r#"{{"avgSentenceLength":18.0,"sentenceLengthStdDev":4.0,"avgParagraphLength":80.0,"paragraphLengthRange":{{"min":40,"max":120}},"vocabularyDiversity":0.6,"topPatterns":[],"rhetoricalFeatures":[],"sourceName":"{source}"}}"#
+            )
+        };
+        // 正对照：合法名（当前读面=书级 story/style-profiles，340 号形态）可解析。
+        std::fs::write(story.join("style-profiles").join("古风.json"), profile("古风")).unwrap();
+        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"古风"}"#).unwrap();
+        let entry = load_style_binding_entry(book_dir).expect("safe profile name resolves");
+        assert_eq!(entry.source, "style/古风");
+        // 穿越名：目标 = book_dir/outside.json（存在且可解析）——一律 None 不读。
+        std::fs::write(book_dir.join("outside.json"), profile("../../outside")).unwrap();
+        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"../../outside"}"#).unwrap();
+        assert!(load_style_binding_entry(book_dir).is_none());
     }
 }

@@ -4310,6 +4310,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!name || !body.profile || typeof body.profile !== "object") {
       return c.json({ error: "name and profile are required" }, 400);
     }
+    // 957 号：档案名直拼 `{name}.json` 落盘——穿越名（`../../books/b1/book`）覆写项目
+    // 内任意 .json、更深 `../` 写出项目根。复用 books id 段规范判据（201 号同一真源；
+    // Rust 同端点同判据同消息）。
+    if (!isSafeBookId(name)) return c.json({ error: "invalid profile name" }, 400);
     const dir = join(root, ".inkos", "style-profiles");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${name}.json`), JSON.stringify(body.profile, null, 2), "utf-8");
@@ -4873,6 +4877,9 @@ function yamlScalar(value: unknown): string {
     if (chapters.length === 0) {
       return c.json({ error: "chapters is required" }, 400);
     }
+    // 957 号：产物名直拼 `{name}.md`——穿越名写出项目根；同判据（与 Rust 同端点同消息
+    // 同次序：chapters 守卫在前）。
+    if (!isSafeBookId(name)) return c.json({ error: "invalid export name" }, 400);
     const core = await import("@actalk/inkos-core");
     const result = core.buildDeconstructionExport({
       chapters,
@@ -5800,6 +5807,10 @@ function yamlScalar(value: unknown): string {
     }>();
     const profileName = typeof body.profileName === "string" ? body.profileName.trim() : "";
     if (!profileName) return c.json({ error: "profileName is required" }, 400);
+    // 957 号：档案名直拼存在性探针路径——穿越名=盘外文件存在性预言机（200/404 区分），
+    // 且名字落盘进 style_binding.json 由 composer 读面二次拼路径（存储型穿越）。与保存
+    // 端点同判据同消息（合法档案名必然可绑定）。
+    if (!isSafeBookId(profileName)) return c.json({ error: "invalid profile name" }, 400);
     const profilePath = join(root, ".inkos", "style-profiles", `${profileName}.json`);
     const profileExists = await stat(profilePath).then(() => true).catch(() => false);
     if (!profileExists) return c.json({ error: "profile not found" }, 404);
