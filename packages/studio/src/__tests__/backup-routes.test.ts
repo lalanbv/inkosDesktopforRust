@@ -6,13 +6,18 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStudioServer } from "../api/server.js";
-import { allocateSnapshotName, isSnapshotName, listBackupSnapshots } from "../api/backup-snapshot.js";
+import { allocateSnapshotName, isSafeRelativePath, isSnapshotName, listBackupSnapshots } from "../api/backup-snapshot.js";
 import { untar } from "../lib/tar-read.js";
 
 /** 955 号：快照名规范形态双端共享向量表（Rust backup_routes.rs tests include_str 同文件）。 */
 const snapshotNameVectors = JSON.parse(
   readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "golden", "backup-snapshot-name-vectors.json"), "utf8"),
 ) as { accept: string[]; reject: string[]; sortedDesc: { input: string[]; expected: string[] } };
+
+/** 956 号：回滚删除面 introduced 路径安全判定双端共享向量表（Rust include_str 同文件）。 */
+const introducedPathVectors = JSON.parse(
+  readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "golden", "backup-introduced-path-vectors.json"), "utf8"),
+) as { accept: string[]; reject: string[] };
 
 /**
  * 710 号：备份双端点回收端到端——GET /backup/export（staging 聚合+manifest+
@@ -586,6 +591,288 @@ describe("backup export/import routes (710)", () => {
     const res2 = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: snapshotRaw });
     expect(res2.status).toBe(200);
     expect(JSON.parse(await readFile(longPath, "utf-8"))).toEqual({ v: 1 });
+  });
+
+  // ── 956 号：完全回滚语义（快照 manifest 决策面 + introduced 可选删除）──
+
+  /** 956 号：真流恢复包（覆盖 books/b1/book.json + 新增 notes/new-file.md）。 */
+  const restorePack = (overwrittenPayload: string, introducedPayload: string): Uint8Array<ArrayBuffer> => {
+    const encode = (text: string) => new TextEncoder().encode(text);
+    return simpleTar([
+      { name: "inkos-backup/backup-manifest.json", payload: encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+      { name: "inkos-backup/books/b1/book.json", payload: encode(overwrittenPayload) },
+      { name: "inkos-backup/notes/new-file.md", payload: encode(introducedPayload) },
+    ]);
+  };
+  /** 956 号：读快照内 manifest（裸名条目）。 */
+  const readSnapshotManifest = async (name: string): Promise<Record<string, unknown>> => {
+    const raw = await readFile(join(root, "backups", name));
+    const entries = untar(new Uint8Array(raw)).entries;
+    const manifestEntry = entries.find((e) => e.name === "backup-manifest.json")!;
+    return JSON.parse(new TextDecoder().decode(manifestEntry.bytes)) as Record<string, unknown>;
+  };
+  const listSnapshots = async (app: ReturnType<typeof createStudioServer>): Promise<string[]> => {
+    const res = await app.request("/api/v1/backup/snapshots");
+    const body = await res.json() as { snapshots: Array<{ name: string }> };
+    return body.snapshots.map((item) => item.name);
+  };
+
+  it("快照 manifest 决策面: overwriting/introduced 名单精确，新文件不入快照数据条目（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const res = await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: restorePack('{"restored":true}', "introduced content"),
+    });
+    expect(res.status).toBe(200);
+    const confirmBody = await res.json() as { snapshot: boolean };
+    expect(confirmBody.snapshot).toBe(true);
+    const [snapshot] = await listSnapshots(app);
+    const raw = untar(new Uint8Array(await readFile(join(root, "backups", snapshot!))));
+    const names = raw.entries.map((e) => e.name);
+    expect(names).toContain("books/b1/book.json");
+    expect(names).not.toContain("notes/new-file.md"); // 保守回滚不删它，不入快照
+    const manifest = await readSnapshotManifest(snapshot!);
+    expect(manifest.kind).toBe("pre-restore-snapshot");
+    expect(manifest.overwriting).toEqual(["books/b1/book.json"]);
+    expect(manifest.introduced).toEqual(["notes/new-file.md"]);
+  });
+
+  it("纯新增恢复也留快照: manifest 记 introduced 名单（956——此前 overwriting 空=无快照=纯新增无回滚保险）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const encode = (text: string) => new TextEncoder().encode(text);
+    const pack = simpleTar([
+      { name: "inkos-backup/backup-manifest.json", payload: encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+      { name: "inkos-backup/notes/only-new.md", payload: encode("only new") },
+    ]);
+    const res = await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: pack });
+    const confirmBody = await res.json() as { snapshot: boolean; restored: number };
+    expect(confirmBody.snapshot).toBe(true);
+    expect(confirmBody.restored).toBe(1);
+    const [snapshot] = await listSnapshots(app);
+    const entries = untar(new Uint8Array(await readFile(join(root, "backups", snapshot!)))).entries;
+    expect(entries).toHaveLength(1); // 唯一条目=自身 manifest（无被覆盖文件可留档）
+    expect(entries[0]!.name).toBe("backup-manifest.json");
+    const manifest = JSON.parse(new TextDecoder().decode(entries[0]!.bytes)) as Record<string, unknown>;
+    expect(manifest.introduced).toEqual(["notes/only-new.md"]);
+  });
+
+  it("回滚预览透传 introduced 清单（取自快照 manifest 非盘面推断）；import 端点同字节永不透传（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: restorePack('{"v2":true}', "new content"),
+    });
+    const [snapshot] = await listSnapshots(app);
+    await mkdir(join(root, "notes"), { recursive: true });
+    await writeFile(join(root, "notes", "new-file.md"), "mutated", "utf-8"); // 现网改文件
+    const previewRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}`, { method: "POST" },
+    );
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json() as { preview: { introduced?: string[] } };
+    expect(preview.preview.introduced).toEqual(["notes/new-file.md"]);
+    // 同一快照字节走 import（Ignore 模式）——无 introduced 键。
+    const bytes = await readFile(join(root, "backups", snapshot!));
+    const importRes = await app.request("/api/v1/backup/import", { method: "POST", body: new Uint8Array(bytes) });
+    const importPreview = await importRes.json() as { preview: { introduced?: string[] } };
+    expect(importPreview.preview.introduced).toBeUndefined();
+  });
+
+  it("完全回滚: 写回+删除 introduced+回滚自身保险快照自洽，保守回滚保险快照复原待删文件（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const original = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: restorePack('{"v2":true}', "introduced-v2"),
+    });
+    const [snapshot] = await listSnapshots(app);
+    await mkdir(join(root, "notes"), { recursive: true });
+    await writeFile(join(root, "notes", "new-file.md"), "mutated-before-full-rollback", "utf-8");
+
+    const doneRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}&confirm=1&deleteIntroduced=1`,
+      { method: "POST" },
+    );
+    expect(doneRes.status).toBe(200);
+    const done = await doneRes.json() as {
+      ok: boolean; restored: number; snapshot: boolean; removed: number;
+      deleteFailed?: Array<{ path: string; error: string }>;
+    };
+    expect(done.ok).toBe(true);
+    expect(done.restored).toBe(1);
+    expect(done.snapshot).toBe(true);
+    expect(done.removed).toBe(1);
+    expect(done.deleteFailed).toBeUndefined();
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(original);
+    await expect(stat(join(root, "notes", "new-file.md"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // 回滚自身保险快照（第 2 份）自洽：数据条目=被覆盖+待删删除前内容；
+    // manifest 撤销面=overwriting 被覆盖/introduced 空/removing 被删。
+    const names = await listSnapshots(app);
+    expect(names).toHaveLength(2);
+    const guard = names[0]!; // 数值倒序首位=本次回滚留档
+    const guardEntries = untar(new Uint8Array(await readFile(join(root, "backups", guard)))).entries;
+    const dataNames = guardEntries.filter((e) => e.name !== "backup-manifest.json").map((e) => e.name);
+    expect(dataNames).toEqual(["books/b1/book.json", "notes/new-file.md"]);
+    const guardManifest = await readSnapshotManifest(guard);
+    expect(guardManifest.overwriting).toEqual(["books/b1/book.json"]);
+    expect(guardManifest.introduced).toEqual([]);
+    expect(guardManifest.removing).toEqual(["notes/new-file.md"]);
+    // 保险闭环：保守回滚保险快照 → 待删文件复原（内容=删除前时刻）。
+    const undoneRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(guard)}&confirm=1`, { method: "POST" },
+    );
+    const undone = await undoneRes.json() as { restored: number };
+    expect(undone.restored).toBe(2);
+    expect(await readFile(join(root, "notes", "new-file.md"), "utf-8")).toBe("mutated-before-full-rollback");
+  });
+
+  it("保守回滚语义不变: 不带 deleteIntroduced 时 introduced 保留、响应无 removed 键（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: restorePack('{"v2":true}', "new content"),
+    });
+    const [snapshot] = await listSnapshots(app);
+    await mkdir(join(root, "notes"), { recursive: true });
+    await writeFile(join(root, "notes", "new-file.md"), "new content", "utf-8");
+    const doneRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}&confirm=1`, { method: "POST" },
+    );
+    const done = await doneRes.json() as { restored: number; removed?: number };
+    expect(done.restored).toBe(1);
+    expect(done.removed).toBeUndefined();
+    await expect(stat(join(root, "notes", "new-file.md"))).resolves.toBeTruthy();
+  });
+
+  it("955- 旧形态快照 + deleteIntroduced=1 → 400 lacks（先验于盘面零变更）；同快照保守回滚照常（向后兼容）（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await mkdir(join(root, "backups"), { recursive: true });
+    const encode = (text: string) => new TextEncoder().encode(text);
+    const legacy = simpleTar([
+      { name: "backup-manifest.json", payload: encode(JSON.stringify({ version: 1, generator: "inkos-desktop", kind: "pre-restore-snapshot" })) },
+      { name: "books/b1/book.json", payload: encode('{"legacy":true}') },
+    ]);
+    await writeFile(join(root, "backups", "pre-restore-1731100000000.tar"), legacy);
+    const before = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    const errRes = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731100000000.tar&confirm=1&deleteIntroduced=1",
+      { method: "POST" },
+    );
+    expect(errRes.status).toBe(400);
+    expect(((await errRes.json()) as { error: string }).error).toContain("lacks introduced list");
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(before);
+    expect(await listSnapshots(app)).toEqual(["pre-restore-1731100000000.tar"]); // 无新增快照
+    // 向后兼容：同快照保守回滚成功。
+    const doneRes = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731100000000.tar&confirm=1", { method: "POST" },
+    );
+    expect(((await doneRes.json()) as { restored: number }).restored).toBe(1);
+  });
+
+  it("introduced 路径安全判定=双端共享 golden 向量；篡改快照 delete 模式 preview/confirm 同一先验 400、keep 宽容（956）", async () => {
+    for (const path of introducedPathVectors.accept) {
+      expect(isSafeRelativePath(path), `accept: ${path}`).toBe(true);
+    }
+    for (const path of introducedPathVectors.reject) {
+      expect(isSafeRelativePath(path), `reject: ${path}`).toBe(false);
+    }
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await mkdir(join(root, "backups"), { recursive: true });
+    const encode = (text: string) => new TextEncoder().encode(text);
+    const evil = simpleTar([
+      {
+        name: "backup-manifest.json",
+        payload: encode(JSON.stringify({
+          version: 1, generator: "inkos-desktop", kind: "pre-restore-snapshot",
+          introduced: ["../../../outside/secret.txt"],
+        })),
+      },
+      { name: "books/b1/book.json", payload: encode('{"evil":true}') },
+    ]);
+    await writeFile(join(root, "backups", "pre-restore-1731200000000.tar"), evil);
+    const before = await readFile(join(root, "books", "b1", "book.json"), "utf-8");
+    // delete 模式 preview=confirm 同一先验（预览预言确认结果）。
+    const previewRes = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731200000000.tar&deleteIntroduced=1", { method: "POST" },
+    );
+    expect(previewRes.status).toBe(400);
+    expect(((await previewRes.json()) as { error: string }).error).toContain("unsafe introduced path");
+    const confirmRes = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731200000000.tar&confirm=1&deleteIntroduced=1",
+      { method: "POST" },
+    );
+    expect(confirmRes.status).toBe(400);
+    expect(((await confirmRes.json()) as { error: string }).error).toContain("unsafe introduced path");
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe(before);
+    expect(await listSnapshots(app)).toEqual(["pre-restore-1731200000000.tar"]); // 无新增快照/tmp
+    // keep 模式：宽容展示（200 无 introduced 键），confirm 不删。
+    const keepPreview = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731200000000.tar", { method: "POST" },
+    );
+    expect(((await keepPreview.json()) as { preview: { introduced?: string[] } }).preview.introduced).toBeUndefined();
+    const keepConfirm = await app.request(
+      "/api/v1/backup/rollback?name=pre-restore-1731200000000.tar&confirm=1", { method: "POST" },
+    );
+    const keepBody = await keepConfirm.json() as { restored: number; removed?: number };
+    expect(keepBody.restored).toBe(1);
+    expect(keepBody.removed).toBeUndefined();
+  });
+
+  it("待删文件在操作前已被外部删除=终态已达成：removed=0（本次未删，诚实计数）、无 deleteFailed、不留快照（956）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    // 纯新增包（与 Rust 同名用例同形）：回滚时无覆盖面，删除面终态已达成。
+    await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: simpleTar([
+        { name: "inkos-backup/backup-manifest.json", payload: new TextEncoder().encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+        { name: "inkos-backup/notes/new-file.md", payload: new TextEncoder().encode("new content") },
+      ]),
+    });
+    const [snapshot] = await listSnapshots(app);
+    await mkdir(join(root, "notes"), { recursive: true });
+    await writeFile(join(root, "notes", "new-file.md"), "new content", "utf-8");
+    await rm(join(root, "notes", "new-file.md")); // 外部删除
+    const doneRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}&confirm=1&deleteIntroduced=1`,
+      { method: "POST" },
+    );
+    const done = await doneRes.json() as { removed: number; deleteFailed?: unknown[]; snapshot: boolean };
+    expect(done.removed).toBe(0); // 终态已达成=本次未删任何文件（诚实计数）
+    expect(done.deleteFailed).toBeUndefined();
+    expect(done.snapshot).toBe(false); // 无覆盖/新建/删除=不留快照
+    expect(await listSnapshots(app)).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform === "win32")("待删名字为符号链接: 不跟随不删、deleteFailed 明示、目标不动（956 删除面=常规文件）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    await app.request("/api/v1/backup/import?confirm=1", {
+      method: "POST", body: simpleTar([
+        { name: "inkos-backup/backup-manifest.json", payload: new TextEncoder().encode(JSON.stringify({ version: 1, generator: "inkos-desktop" })) },
+        { name: "inkos-backup/notes/link.md", payload: new TextEncoder().encode("placeholder") },
+      ]),
+    });
+    const [snapshot] = await listSnapshots(app);
+    await mkdir(join(root, "notes"), { recursive: true });
+    const target = join(root, "notes", "real-target.txt");
+    await writeFile(target, "keep me", "utf-8");
+    await rm(join(root, "notes", "link.md")); // 恢复写出的常规文件
+    await symlink(target, join(root, "notes", "link.md"));
+    const doneRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshot!)}&confirm=1&deleteIntroduced=1`,
+      { method: "POST" },
+    );
+    const done = await doneRes.json() as {
+      removed: number; deleteFailed: Array<{ path: string; error: string }>;
+    };
+    expect(done.removed).toBe(0);
+    expect(done.deleteFailed).toEqual([{ path: "notes/link.md", error: "not a regular file" }]);
+    await expect(stat(join(root, "notes", "link.md"))).resolves.toBeTruthy(); // 链接本身保留
+    expect(await readFile(target, "utf-8")).toBe("keep me"); // 目标不动
   });
 });
 

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchJson } from "../hooks/use-api";
+import { fetchJson, invalidateApiPaths } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 
 interface Preview {
   readonly fileCount: number;
   readonly overwriting: ReadonlyArray<string>;
   readonly newFiles: number;
+  /** 956 号：快照记录的恢复期间新增文件（回滚预览透传，可勾选一并删除）。 */
+  readonly introduced?: ReadonlyArray<string>;
 }
 
 interface SnapshotItem {
@@ -53,6 +55,9 @@ export function BackupPanel() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [snapshots, setSnapshots] = useState<ReadonlyArray<SnapshotItem>>([]);
   const [rollback, setRollback] = useState<{ name: string; label: string; preview: Preview } | null>(null);
+  // 956 号：完全回滚复选框——「同时删除恢复期间新增文件」默认不勾（保守回滚
+  // 语义不变，删除是用户显式选择）。
+  const [deleteIntroduced, setDeleteIntroduced] = useState(false);
 
   const loadSnapshots = useCallback(async () => {
     try {
@@ -119,6 +124,10 @@ export function BackupPanel() {
     setNotice({ text: tr(`已恢复 ${result.restored} 个文件（原文件快照在 backups/）`, `Restored ${result.restored} files (snapshot in backups/)`), error: false });
     setPreview(null);
     setPendingFile(null);
+    // 956 号走查反挖（P9）：恢复会增删书/改书目内容——广播 /api/v1/books 失效
+    // （postApi 的自动失效面不含 backup 路由，deriveInvalidationPaths 对其返回空），
+    // 否则书籍列表停留在恢复前状态（真引擎走查实证：完全回滚删除 b2 后列表仍显示）。
+    invalidateApiPaths(["/api/v1/books"]);
     void loadSnapshots();
   });
 
@@ -131,17 +140,37 @@ export function BackupPanel() {
     setPreview(null);
     setPendingFile(null);
     setRollback({ name, label, preview: result.preview });
+    // 956 号：新预览重置删除勾选（不同快照的 introduced 清单不同，勾选不得跨快照残留）。
+    setDeleteIntroduced(false);
     setNotice(null);
   });
 
   const confirmRollback = () => runExclusive(async () => {
     if (!rollback) return;
-    const result = await fetchJson<{ ok: boolean; restored: number }>(
-      `/backup/rollback?name=${encodeURIComponent(rollback.name)}&confirm=1`,
+    const suffix = deleteIntroduced && rollback.preview.introduced ? "&deleteIntroduced=1" : "";
+    const result = await fetchJson<{ ok: boolean; restored: number; removed?: number; deleteFailed?: ReadonlyArray<{ path: string; error: string }> }>(
+      `/backup/rollback?name=${encodeURIComponent(rollback.name)}&confirm=1${suffix}`,
       { method: "POST" },
     );
-    setNotice({ text: tr(`已回滚到快照时刻（恢复 ${result.restored} 个文件；回滚前状态已另存快照）`, `Rolled back (restored ${result.restored} files; prior state snapshotted)`), error: false });
+    // 956 号：完全回滚通知含删除计数；删除失败明细随通知展示（写回已成功，
+    // 服务端保持 200——部分失败不谎报整体失败）。
+    const deletedPart = result.removed !== undefined
+      ? tr(`、删除 ${result.removed} 个恢复期间新增文件`, `, removed ${result.removed} files introduced by restore`)
+      : "";
+    const failedPart = result.deleteFailed?.length
+      ? tr(`；${result.deleteFailed.length} 个删除失败（${result.deleteFailed.map((f) => f.path).slice(0, 3).join("、")}${result.deleteFailed.length > 3 ? "…" : ""}）`, `; ${result.deleteFailed.length} deletions failed`)
+      : "";
+    setNotice({
+      text: tr(
+        `已回滚到快照时刻（恢复 ${result.restored} 个文件${deletedPart}；回滚前状态已另存快照${failedPart}）`,
+        `Rolled back (restored ${result.restored} files${deletedPart}; prior state snapshotted${failedPart})`,
+      ),
+      error: false,
+    });
     setRollback(null);
+    setDeleteIntroduced(false);
+    // 956 号走查反挖（P9）：回滚（保守或完全）同样改变书目面——同上广播失效。
+    invalidateApiPaths(["/api/v1/books"]);
     void loadSnapshots();
   });
 
@@ -231,6 +260,27 @@ export function BackupPanel() {
               {rollback.preview.overwriting.slice(0, 6).join("、")}
               {rollback.preview.overwriting.length > 6 ? "…" : ""}
             </p>
+          )}
+          {rollback.preview.introduced && rollback.preview.introduced.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[11px] text-muted-foreground">
+                {tr(
+                  `恢复期间新增 ${rollback.preview.introduced.length} 个文件（勾选可一并删除，完全回到快照时刻）：`,
+                  `${rollback.preview.introduced.length} files introduced by restore (check to also remove them for a full rollback): `,
+                )}
+                {rollback.preview.introduced.slice(0, 6).join("、")}
+                {rollback.preview.introduced.length > 6 ? "…" : ""}
+              </p>
+              <label className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteIntroduced}
+                  disabled={busy}
+                  onChange={(event) => setDeleteIntroduced(event.target.checked)}
+                />
+                {tr("同时删除这些新增文件（删除前自动留档）", "Also remove these files (auto-snapshotted first)")}
+              </label>
+            </div>
           )}
           <button
             onClick={() => void confirmRollback()}

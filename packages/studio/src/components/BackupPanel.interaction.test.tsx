@@ -32,15 +32,20 @@ const defaultFetch = async (path: string, _init?: { method?: string; body?: stri
   return {};
 };
 const fetchJsonMock = vi.fn(defaultFetch);
+const invalidateApiPathsMock = vi.fn((paths: ReadonlyArray<string>) => {
+  window.dispatchEvent(new CustomEvent("inkos:api-invalidate", { detail: { paths: [...paths] } }));
+});
 
 vi.mock("../hooks/use-api", () => ({
   fetchJson: (path: string, init?: { method?: string; body?: string }) => fetchJsonMock(path, init),
+  invalidateApiPaths: (paths: ReadonlyArray<string>) => invalidateApiPathsMock(paths),
 }));
 
 afterEach(() => {
   cleanup();
   fetchJsonMock.mockClear();
   fetchJsonMock.mockImplementation(defaultFetch);
+  invalidateApiPathsMock.mockClear();
 });
 
 const buttonByText = (text: string): HTMLButtonElement | undefined =>
@@ -228,5 +233,116 @@ describe("BackupPanel 交互（443 号预览解包回归）", () => {
       return node!;
     });
     expect(success.className).toContain("text-emerald-600");
+  });
+
+  // ── 956 号：完全回滚——introduced 清单展示 + 删除复选框（默认不勾）──
+
+  it("956 完全回滚: introduced 清单展示，复选框默认不勾=保守回滚不带 deleteIntroduced", async () => {
+    const user = userEvent.setup();
+    fetchJsonMock.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path.includes("/backup/rollback") && !path.includes("confirm=1")) {
+        return { preview: { fileCount: 1, overwriting: ["books/b1/book.json"], newFiles: 0, introduced: ["notes/new.md", "works/w9/work.json"] } };
+      }
+      return defaultFetch(path, init);
+    });
+    render(<BackupPanel />);
+    await vi.waitFor(() => expect(buttonByText("回滚到此快照")).toBeDefined());
+    await user.click(buttonByText("回滚到此快照")!);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("恢复期间新增 2 个文件"));
+    expect(document.body.textContent).toContain("notes/new.md、works/w9/work.json");
+    const checkbox = document.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(false); // 默认不勾=保守语义不变
+
+    await user.click(buttonByText("确认回滚")!);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("已回滚到快照时刻"));
+    const confirmCall = fetchJsonMock.mock.calls
+      .map(([path]) => path as string)
+      .find((p) => p.includes("/backup/rollback") && p.includes("confirm=1"))!;
+    expect(confirmCall).not.toContain("deleteIntroduced");
+  });
+
+  it("956 完全回滚: 勾选后 confirm 带 deleteIntroduced=1，通知含删除计数与失败明细", async () => {
+    const user = userEvent.setup();
+    fetchJsonMock.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path.includes("/backup/rollback") && !path.includes("confirm=1")) {
+        return { preview: { fileCount: 1, overwriting: ["books/b1/book.json"], newFiles: 0, introduced: ["notes/new.md", "notes/link.md"] } };
+      }
+      if (path.includes("/backup/rollback") && path.includes("confirm=1")) {
+        return { ok: true, restored: 1, snapshot: true, removed: 1, deleteFailed: [{ path: "notes/link.md", error: "not a regular file" }] };
+      }
+      return defaultFetch(path, init);
+    });
+    render(<BackupPanel />);
+    await vi.waitFor(() => expect(buttonByText("回滚到此快照")).toBeDefined());
+    await user.click(buttonByText("回滚到此快照")!);
+    await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
+    await user.click(document.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    expect((document.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true);
+
+    await user.click(buttonByText("确认回滚")!);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("删除 1 个恢复期间新增文件"));
+    expect(document.body.textContent).toContain("1 个删除失败（notes/link.md）");
+    const confirmCall = fetchJsonMock.mock.calls
+      .map(([path]) => path as string)
+      .find((p) => p.includes("/backup/rollback") && p.includes("confirm=1"))!;
+    expect(confirmCall).toContain("&deleteIntroduced=1");
+  });
+
+  it("956 完全回滚: 无 introduced 清单（旧快照/全覆盖）时不渲染删除区，换快照预览重置勾选", async () => {
+    const user = userEvent.setup();
+    let withIntroduced = true;
+    fetchJsonMock.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path.includes("/backup/rollback") && !path.includes("confirm=1")) {
+        return withIntroduced
+          ? { preview: { fileCount: 1, overwriting: ["books/b1/book.json"], newFiles: 0, introduced: ["notes/new.md"] } }
+          : { preview: { fileCount: 1, overwriting: ["books/b1/book.json"], newFiles: 0 } };
+      }
+      return defaultFetch(path, init);
+    });
+    render(<BackupPanel />);
+    await vi.waitFor(() => expect(buttonByText("回滚到此快照")).toBeDefined());
+    const rows = () => Array.from(document.querySelectorAll("button")).filter((b) => b.textContent?.trim() === "回滚到此快照");
+    await user.click(rows()[0]!);
+    await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
+    await user.click(document.querySelector('input[type="checkbox"]') as HTMLInputElement);
+
+    // 换另一份快照预览（旧形态无 introduced）：删除区不渲染，勾选不跨快照残留。
+    withIntroduced = false;
+    await user.click(rows()[1]!);
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain("恢复期间新增"));
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+    await user.click(buttonByText("确认回滚")!);
+    await vi.waitFor(() => expect(document.body.textContent).toContain("已回滚到快照时刻"));
+    const confirmCall = fetchJsonMock.mock.calls
+      .map(([path]) => path as string)
+      .find((p) => p.includes("/backup/rollback") && p.includes("confirm=1"))!;
+    expect(confirmCall).not.toContain("deleteIntroduced");
+  });
+
+  it("956 P9 书目同步: 恢复与回滚确认后广播 /api/v1/books 失效（走查反挖：完全回滚删书后书籍列表停留恢复前）", async () => {
+    const user = userEvent.setup();
+    const invalidated: string[][] = [];
+    const listener = (event: Event) => invalidated.push((event as CustomEvent<{ paths: string[] }>).detail.paths);
+    window.addEventListener("inkos:api-invalidate", listener);
+    try {
+      render(<BackupPanel />);
+      await vi.waitFor(() => expect(buttonByText("回滚到此快照")).toBeDefined());
+      await user.click(buttonByText("回滚到此快照")!);
+      await vi.waitFor(() => expect(buttonByText("确认回滚")).toBeDefined());
+      await user.click(buttonByText("确认回滚")!);
+      await vi.waitFor(() => expect(document.body.textContent).toContain("已回滚到快照时刻"));
+      expect(invalidated).toContainEqual(["/api/v1/books"]);
+
+      // 恢复确认同样广播（导入包可能增删书）。
+      await uploadBackup(user, "backup.tar.gz");
+      await vi.waitFor(() => expect(buttonByText("确认恢复")).toBeDefined());
+      await user.click(buttonByText("确认恢复")!);
+      await vi.waitFor(() => expect(document.body.textContent).toContain("已恢复 3 个文件"));
+      const bookInvalidations = invalidated.filter((paths) => paths.includes("/api/v1/books"));
+      expect(bookInvalidations.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      window.removeEventListener("inkos:api-invalidate", listener);
+    }
   });
 });

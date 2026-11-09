@@ -332,16 +332,80 @@ fn current_millis() -> u128 {
 }
 
 fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Value, String> {
-    run_import_with_clock(root, body, confirm, current_millis)
+    run_import_with_clock(root, body, confirm, IntroducedMode::Ignore, current_millis)
+}
+
+/// 956 号：introduced 清单处理模式。import 端点恒 `Ignore`（外部包恢复永不
+/// 透传不删除——契约面不变）；rollback 端点 `Keep`（保守回滚：预览透传清单，
+/// 确认不删）或 `Delete`（完全回滚 deleteIntroduced=1：预览与确认同一先验
+/// ——预览预言确认结果，确认写回后删除）。TS `IntroducedMode` 同语义。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum IntroducedMode {
+    Ignore,
+    Keep,
+    Delete,
+}
+
+/// 956 号：快照 manifest 中 introduced 清单的可信度三分（回滚删除面先验）。
+/// `Absent` = 无该字段或 kind 非 pre-restore-snapshot（export 包/955- 旧快
+/// 照）；`Malformed` = 字段存在但非纯 string 数组（清单不可信）；`Present`
+/// = 可用清单。preview 仅 `Present` 且全路径安全才透传；confirm 带删除时
+/// `Absent`→lacks、`Malformed`→unsafe（写回前先验，写回不可回退）。
+enum IntroducedList {
+    Absent,
+    Malformed,
+    Present(Vec<String>),
+}
+
+/// 956 号：读快照 manifest 的 introduced 清单（kind 限定 pre-restore-snapshot
+/// ——introduced 语义只对回滚保险快照成立，export 包即便被手工塞入该字段也
+/// 不透传不执行）。TS `manifestIntroducedList` 同语义。
+fn manifest_introduced_list(manifest: &serde_json::Value) -> IntroducedList {
+    if manifest.get("kind").and_then(serde_json::Value::as_str) != Some("pre-restore-snapshot") {
+        return IntroducedList::Absent;
+    }
+    let Some(items) = manifest.get("introduced").and_then(serde_json::Value::as_array) else {
+        return IntroducedList::Absent;
+    };
+    let mut paths = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(path) = item.as_str() else {
+            return IntroducedList::Malformed;
+        };
+        paths.push(path.to_string());
+    }
+    IntroducedList::Present(paths)
+}
+
+/// 956 号：回滚删除面路径安全判定（TS `isSafeRelativePath` 同判据，纯串级
+/// 跨平台一致；向量表 `backup-introduced-path-vectors.json` 双端断言同文件）。
+/// introduced 清单来自 manifest JSON 自由字符串，不经 tar 条目安全三则——
+/// 不安全路径若放行可删 root 外任意文件（unlink 对绝对/穿越名直达盘外）。
+fn is_safe_relative_path(path: &str) -> bool {
+    if path.is_empty() || path.contains('\0') || path.contains('\\') || path.starts_with('/') {
+        return false;
+    }
+    let bytes = path.as_bytes();
+    // 盘符形态（`C:/x` 绝对与 `C:x` 驱动器相对）一并拒绝。
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    // 空段（`a//b`）、当前段（`.`）、穿越段（`..`）一律拒绝——保守整拒不归一化。
+    !path
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
 }
 
 /// import 两段式执行体（import 与 rollback 共用）。955 号：`now` 为时钟注入
 /// 缝（测试固定毫秒以确定性复现同毫秒碰撞），且在恢复串行锁内读取——快照
 /// 名取持锁时刻，排队等锁的恢复不会以更早的请求时刻命名更晚的快照。
+/// 956 号：`mode` 见 [`IntroducedMode`]——introduced 透传（preview）与删除
+/// 语义（confirm+deleteIntroduced=1）只对回滚端点成立。
 fn run_import_with_clock(
     root: &Path,
     body: &[u8],
     confirm: bool,
+    mode: IntroducedMode,
     now: fn() -> u128,
 ) -> Result<serde_json::Value, String> {
     let (entries, rejected) = parse_archive(body)?;
@@ -382,34 +446,111 @@ fn run_import_with_clock(
     let _guard = lock
         .as_ref()
         .map(|lock| lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
-    // 将覆盖项 = root 下已存在的同名文件。955 号：manifest 条目不参与——写回
-    // 本就跳过它（根目录同名文件不会被覆盖），954 前却计入覆盖面：根目录存在
-    // backup-manifest.json 时预览误报「将覆盖」，且该文件以裸名入快照、与快照
-    // 自身 manifest 同名并存——回滚时裸名查找先命中用户文件，先验失败=快照不
-    // 可回滚。
-    let overwriting: Vec<String> = entries
-        .iter()
-        .filter(|entry| !is_manifest_entry(&entry.name))
-        .map(|entry| restore_name(&entry.name))
-        .filter(|name| is_existing(&root.join(name)))
-        .collect();
+    // 将覆盖项/恢复新增项 = root 下同名文件的存在性。955 号：manifest 条目
+    // 不参与——写回本就跳过它（根目录同名文件不会被覆盖），954 前却计入覆盖
+    // 面：根目录存在 backup-manifest.json 时预览误报「将覆盖」，且该文件以裸
+    // 名入快照、与快照自身 manifest 同名并存——回滚时裸名查找先命中用户文件，
+    // 先验失败=快照不可回滚。956 号：单次遍历双清单（覆盖面=存在，introduced
+    // =不存在）——同一时刻同一存在性视图，撤销恢复=写回 overwriting+可选删
+    // 除 introduced=完全回到快照时刻（952 备案「部分回滚边界」清偿）。
+    let mut overwriting: Vec<String> = Vec::new();
+    let mut introduced: Vec<String> = Vec::new();
+    for entry in entries.iter().filter(|entry| !is_manifest_entry(&entry.name)) {
+        let name = restore_name(&entry.name);
+        if is_existing(&root.join(&name)) {
+            overwriting.push(name);
+        } else {
+            introduced.push(name);
+        }
+    }
+
+    // 956 号：完全回滚删除面先验——必须在任何盘面变更前（写回一旦发生不可
+    // 回退，先验失败须整体 400 无副作用）。仅 `Delete` 模式进入，预览与确认
+    // 同一先验（预览预言确认结果）；`Absent`（export 包/955- 旧快照）、
+    // `Malformed`（清单非纯 string 数组）、含不安全路径的 `Present` 一律拒绝
+    // ——不安全路径若放行可删 root 外任意文件。重复项去重（篡改清单的重复名
+    // 不得重复留档/重复计数）。
+    let delete_list: Option<Vec<String>> = if mode == IntroducedMode::Delete {
+        match manifest_introduced_list(&manifest) {
+            IntroducedList::Absent => {
+                return Err("snapshot manifest lacks introduced list".to_string());
+            }
+            IntroducedList::Malformed => return Err("unsafe introduced path".to_string()),
+            IntroducedList::Present(paths) => {
+                if let Some(bad) = paths.iter().find(|path| !is_safe_relative_path(path)) {
+                    return Err(format!("unsafe introduced path: {bad}"));
+                }
+                let mut seen = std::collections::HashSet::with_capacity(paths.len());
+                Some(paths.into_iter().filter(|path| seen.insert(path.clone())).collect())
+            }
+        }
+    } else {
+        None
+    };
+
     if !confirm {
         // 955 号：计数面=数据条目（manifest 元数据除外）=写回面——954 前把
         // manifest 计入 fileCount/newFiles：真实导出包预览「新增 1」而实际不
         // 写任何新文件，且预览总数比确认后的 restored 多 1。
         let file_count = entries.iter().filter(|entry| !is_manifest_entry(&entry.name)).count();
         let new_files = file_count - overwriting.len();
-        return Ok(json!({
-            "preview": {
-                "fileCount": file_count,
-                "overwriting": overwriting,
-                "newFiles": new_files,
+        // 956 号：回滚预览透传 introduced 清单（快照记录的恢复期间新增文件，
+        // 供 UI 呈现「可一并删除」决策面）。仅回滚端点且清单可用且全路径安全
+        // 才透传——不安全路径绝不入 UI（用户看不到删除区就不会选择删除；即便
+        // 绕过 UI 强发 confirm，Delete 模式先验仍 400）。
+        let mut preview = json!({
+            "fileCount": file_count,
+            "overwriting": overwriting,
+            "newFiles": new_files,
+        });
+        if mode != IntroducedMode::Ignore {
+            if let IntroducedList::Present(paths) = manifest_introduced_list(&manifest) {
+                if paths.iter().all(|path| is_safe_relative_path(path)) {
+                    // 键序双端无需字节一致（serde_json 默认 BTreeMap 排序 vs TS
+                    // 构造序；差分器 parse 后结构对比，消费方按字段名取值）。
+                    preview["introduced"] = json!(paths);
+                }
             }
-        }));
+        }
+        return Ok(json!({ "preview": preview }));
     }
 
-    // 恢复前自动快照：将覆盖的现有文件打包留存（回滚保险）。
-    let has_snapshot = !overwriting.is_empty();
+    // 956 号：完全回滚时待删文件须先留档（每个破坏性操作都有保险，951 号不
+    // 变式——删除前内容入本次快照，回滚该快照即复原=完全回滚自身也有保险）。
+    // 仅常规文件可删（symlink_metadata 不跟随，与 955 回滚面同判据：目录/
+    // 链接/特殊文件不删且报 deleteFailed）；已不存在=终态一致直接跳过；其余
+    // 读取失败不留档即不删，同样报 deleteFailed（用户要求删除而未删，不得静默）。
+    let mut deletable: Vec<String> = Vec::new();
+    let mut deletable_files: Vec<Vec<u8>> = Vec::new();
+    let mut delete_failed: Vec<serde_json::Value> = Vec::new();
+    for name in delete_list.iter().flatten() {
+        let target = root.join(name);
+        match std::fs::symlink_metadata(&target) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                delete_failed.push(json!({ "path": name, "error": e.to_string() }));
+                continue;
+            }
+            Ok(meta) if !meta.is_file() => {
+                delete_failed.push(json!({ "path": name, "error": "not a regular file" }));
+                continue;
+            }
+            Ok(_) => {}
+        }
+        match std::fs::read(&target) {
+            Ok(data) => {
+                deletable.push(name.clone());
+                deletable_files.push(data);
+            }
+            Err(e) => delete_failed.push(json!({ "path": name, "error": e.to_string() })),
+        }
+    }
+
+    // 恢复前自动快照（回滚保险）。956 号：本次操作改变盘面即留快照——覆盖/
+    // 新建/删除任一非空。此前仅 overwriting 非空才留：纯新增恢复无任何回滚
+    // 保险；且纯新增恢复产的快照（无数据条目）被完全回滚时若不计 deletable，
+    // 待删文件将被无保险删除。
+    let has_snapshot = !overwriting.is_empty() || !introduced.is_empty() || !deletable.is_empty();
     if has_snapshot {
         let backups_dir = root.join("backups");
         std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
@@ -436,15 +577,32 @@ fn run_import_with_clock(
                         .map_err(|e| e.to_string())?;
                 }
             }
+            // 956 号：完全回滚（Delete 模式）时待删文件将真实删除——删除前
+            // 先入快照（内容=删除前时刻；回滚本保险快照即可恢复它们=完全回
+            // 滚自身也有保险）。条目在 overwriting 之后。
+            for (name, data) in deletable.iter().zip(deletable_files.iter()) {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, name, data.as_slice())
+                    .map_err(|e| e.to_string())?;
+            }
             // 951 号：快照附带 manifest（裸名形态，双端 import 端点均兼容
             // 裸名查找与写回跳过）——pre-restore 快照可直接经
             // backup/import?confirm=1 回灌=回滚保险从「留档」到「可执行」
-            // 闭环。部分回滚边界：恢复引入的新文件不在快照（保守不引入
-            // 删除语义，备案）。
+            // 闭环。956 号：manifest 补撤销决策面（三数组恒在，形状统一）
+            // ——撤销本次操作=写回快照数据条目（overwriting 与 removing 的
+            // 删除前内容）+ 可选删除 introduced（本次操作新建的文件）=精确
+            // 逆运算。removing 仅 Delete 模式非空（本次将删的已留档文件）。
             let snapshot_manifest = serde_json::json!({
                 "version": 1,
                 "generator": "inkos-desktop",
                 "kind": "pre-restore-snapshot",
+                "overwriting": overwriting,
+                "introduced": introduced,
+                "removing": deletable,
             })
             .to_string()
             .into_bytes();
@@ -483,7 +641,26 @@ fn run_import_with_clock(
             .map_err(|e| e.to_string())?;
         restored += 1;
     }
-    Ok(json!({ "ok": true, "restored": restored, "snapshot": has_snapshot }))
+    // 956 号：完全回滚删除执行（写回全部完成后）——名单=已留档的 deletable
+    // （不留档不删）。留档与删除之间被外部删除（ENOENT）=终态一致计入；其他
+    // 失败收集 deleteFailed 且保持 200——写回已成功，谎报 500 会诱导用户重试
+    // （重复快照+写回）。空目录不删（只删文件——不可能误删用户目录内容）。
+    let mut removed = 0usize;
+    for path in &deletable {
+        match std::fs::remove_file(root.join(path)) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => removed += 1,
+            Err(e) => delete_failed.push(json!({ "path": path, "error": e.to_string() })),
+        }
+    }
+    let mut response = json!({ "ok": true, "restored": restored, "snapshot": has_snapshot });
+    if delete_list.is_some() {
+        response["removed"] = json!(removed);
+        if !delete_failed.is_empty() {
+            response["deleteFailed"] = json!(delete_failed);
+        }
+    }
+    Ok(response)
 }
 
 // ── 954 号：快照回滚用户可执行闭环——列举 + 服务端回滚执行 ──
@@ -588,7 +765,13 @@ enum RollbackFailure {
 /// 快照回滚：校验形态 → 读快照字节 → 走 import 同一执行体。955 号：回滚面=
 /// 列举面——仅放行常规文件（符号链接/目录按缺失处理，与 list_snapshots 同
 /// 判据：954 版 fs::read 跟随链接，列举不可见的链接名可被直接回滚）。
-fn run_rollback(root: &Path, name: &str, confirm: bool) -> Result<serde_json::Value, RollbackFailure> {
+/// 956 号：`delete_introduced` 透传删除语义（rollback 是唯一放行端点）。
+fn run_rollback(
+    root: &Path,
+    name: &str,
+    confirm: bool,
+    delete_introduced: bool,
+) -> Result<serde_json::Value, RollbackFailure> {
     if !is_snapshot_name(name) {
         return Err(RollbackFailure::InvalidName);
     }
@@ -598,7 +781,8 @@ fn run_rollback(root: &Path, name: &str, confirm: bool) -> Result<serde_json::Va
         return Err(RollbackFailure::NotFound);
     }
     let bytes = std::fs::read(&path).map_err(|_| RollbackFailure::NotFound)?;
-    run_import(root, &bytes, confirm).map_err(RollbackFailure::Import)
+    let mode = if delete_introduced { IntroducedMode::Delete } else { IntroducedMode::Keep };
+    run_import_with_clock(root, &bytes, confirm, mode, current_millis).map_err(RollbackFailure::Import)
 }
 
 /// `GET /api/v1/backup/snapshots`——列举可回滚快照。
@@ -617,16 +801,21 @@ pub async fn snapshots(State(runtime): State<BooksRuntime>) -> impl IntoResponse
     }
 }
 
-/// `POST /api/v1/backup/rollback[?confirm=1]`——回滚指定快照（name 走
-/// query，与 import 的 confirm 同族语义；线格式与 import 两段式同构）。
+/// `POST /api/v1/backup/rollback[?confirm=1][&deleteIntroduced=1]`——回滚指
+/// 定快照（name/confirm 走 query，同族语义；线格式与 import 两段式同构）。
+/// 956 号：deleteIntroduced=1=完全回滚（预览透传 introduced，确认在写回后
+/// 一并删除快照记录的恢复期间新增文件——每份待删文件删除前留档）。
 pub async fn rollback(
     State(runtime): State<BooksRuntime>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root().to_path_buf();
     let confirm = params.get("confirm").map(|v| v == "1").unwrap_or(false);
+    let delete_introduced = params.get("deleteIntroduced").map(|v| v == "1").unwrap_or(false);
     let name = params.get("name").cloned().unwrap_or_default();
-    let result = tokio::task::spawn_blocking(move || run_rollback(&root, &name, confirm)).await;
+    let result =
+        tokio::task::spawn_blocking(move || run_rollback(&root, &name, confirm, delete_introduced))
+            .await;
     match result {
         Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(Err(RollbackFailure::InvalidName)) => (
@@ -942,12 +1131,12 @@ mod tests {
     fn rollback_rejects_invalid_or_missing_names() {
         let (_dir, root) = temp_root();
         // 形态守卫：穿越/非数字/空名一律 InvalidName（先于盘面访问）。
-        assert!(matches!(run_rollback(&root, "../../etc/passwd", false), Err(RollbackFailure::InvalidName)));
-        assert!(matches!(run_rollback(&root, "pre-restore-abc.tar", false), Err(RollbackFailure::InvalidName)));
-        assert!(matches!(run_rollback(&root, "", false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(run_rollback(&root, "../../etc/passwd", false, false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(run_rollback(&root, "pre-restore-abc.tar", false, false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(run_rollback(&root, "", false, false), Err(RollbackFailure::InvalidName)));
         // 形态合法但文件不存在。
         assert!(matches!(
-            run_rollback(&root, "pre-restore-1731100000000.tar", false),
+            run_rollback(&root, "pre-restore-1731100000000.tar", false, false),
             Err(RollbackFailure::NotFound)
         ));
     }
@@ -970,11 +1159,11 @@ mod tests {
             names.pop().unwrap()
         };
         // preview 段：服务端读快照走 import 同一管道（安全三则+manifest 先验生效）。
-        let preview = run_rollback(&root, &snapshot_name, false).unwrap();
+        let preview = run_rollback(&root, &snapshot_name, false, false).unwrap();
         assert_eq!(preview["preview"]["fileCount"], 1); // 955 号：manifest 不计（数据条目=写回面）
         assert_eq!(preview["preview"]["overwriting"], serde_json::json!(["books/b1/book.json"]));
         // confirm 段：回滚执行——book.json 回 original。
-        let done = run_rollback(&root, &snapshot_name, true).unwrap();
+        let done = run_rollback(&root, &snapshot_name, true, false).unwrap();
         assert_eq!(done["ok"], true);
         assert_eq!(done["restored"], 1); // manifest 不计
         assert_eq!(done["snapshot"], true);
@@ -1056,9 +1245,9 @@ mod tests {
     fn same_millis_restores_keep_both_snapshots() {
         let (dir, root) = temp_root();
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
-        let first = run_import_with_clock(&root, &marker_package("A"), true, || 1_731_100_000_000).unwrap();
+        let first = run_import_with_clock(&root, &marker_package("A"), true, IntroducedMode::Ignore, || 1_731_100_000_000).unwrap();
         assert_eq!(first["snapshot"], true);
-        let second = run_import_with_clock(&root, &marker_package("B"), true, || 1_731_100_000_000).unwrap();
+        let second = run_import_with_clock(&root, &marker_package("B"), true, IntroducedMode::Ignore, || 1_731_100_000_000).unwrap();
         assert_eq!(second["snapshot"], true);
         assert_eq!(
             listed_snapshot_names(&root),
@@ -1078,8 +1267,8 @@ mod tests {
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
         let (pack_a, pack_b) = (marker_package("A"), marker_package("B"));
         std::thread::scope(|scope| {
-            let a = scope.spawn(|| run_import_with_clock(&root, &pack_a, true, || 1_731_100_000_000));
-            let b = scope.spawn(|| run_import_with_clock(&root, &pack_b, true, || 1_731_100_000_000));
+            let a = scope.spawn(|| run_import_with_clock(&root, &pack_a, true, IntroducedMode::Ignore, || 1_731_100_000_000));
+            let b = scope.spawn(|| run_import_with_clock(&root, &pack_b, true, IntroducedMode::Ignore, || 1_731_100_000_000));
             assert_eq!(a.join().unwrap().unwrap()["ok"], true);
             assert_eq!(b.join().unwrap().unwrap()["ok"], true);
         });
@@ -1104,8 +1293,8 @@ mod tests {
         let real = listed_snapshot_names(&root).remove(0);
         std::os::unix::fs::symlink(root.join("backups").join(&real), root.join("backups/pre-restore-1.tar")).unwrap();
         assert_eq!(listed_snapshot_names(&root), vec![real.clone()]);
-        assert!(matches!(run_rollback(&root, "pre-restore-1.tar", false), Err(RollbackFailure::NotFound)));
-        assert!(run_rollback(&root, &real, false).is_ok());
+        assert!(matches!(run_rollback(&root, "pre-restore-1.tar", false, false), Err(RollbackFailure::NotFound)));
+        assert!(run_rollback(&root, &real, false, false).is_ok());
         drop(dir);
     }
 
@@ -1130,7 +1319,7 @@ mod tests {
         let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
         assert_eq!(entries.iter().filter(|entry| entry.name == MANIFEST_NAME).count(), 1);
         // 快照可回滚：book.json 回到恢复前原件，用户笔记原样保留。
-        let rolled = run_rollback(&root, &snapshot, true).unwrap();
+        let rolled = run_rollback(&root, &snapshot, true, false).unwrap();
         assert_eq!(rolled["ok"], true);
         assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
         assert_eq!(std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(), user_note);
@@ -1301,6 +1490,272 @@ mod tests {
         assert_eq!(response["restored"], 1); // manifest 不计
         let restored = std::fs::read_to_string(root.join("books/b1/book.json")).unwrap();
         assert!(restored.contains("rolled-back"), "{restored}");
+    }
+
+    // ── 956 号：完全回滚语义（快照 manifest 决策面 + introduced 可选删除）──
+
+    const INTRODUCED_PATH_VECTORS: &str =
+        include_str!("../../../packages/studio/src/__tests__/golden/backup-introduced-path-vectors.json");
+
+    /// 956 号真流（覆盖 1+新增 1）confirm 后快照 manifest 决策面精确：
+    /// overwriting=被覆盖名单、introduced=恢复新增名单；快照数据条目仅含
+    /// 被覆盖文件（新文件保守回滚不删，不入快照）。
+    #[test]
+    fn snapshot_manifest_records_overwriting_and_introduced_lists() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","restored":true}"#),
+            ("inkos-backup/notes/new-file.md", b"introduced content"),
+        ]);
+        let response = run_import(&root, &tar_bytes, true).unwrap();
+        assert_eq!(response["snapshot"], true);
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert!(names.contains(&"books/b1/book.json"));
+        assert!(!names.contains(&"notes/new-file.md"));
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&entries.iter().find(|entry| entry.name == MANIFEST_NAME).unwrap().bytes).unwrap();
+        assert_eq!(manifest["kind"], "pre-restore-snapshot");
+        assert_eq!(manifest["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        assert_eq!(manifest["introduced"], serde_json::json!(["notes/new-file.md"]));
+    }
+
+    /// 956 号：纯新增恢复（全 introduced）也留快照——此前 overwriting 空=
+    /// 无快照=纯新增恢复无任何回滚保险；现在 manifest 记 introduced 名单，
+    /// 完全回滚=删除恢复引入文件。
+    #[test]
+    fn pure_addition_restore_now_snapshots_introduced_list() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/notes/only-new.md", b"only new"),
+        ]);
+        let response = run_import(&root, &tar_bytes, true).unwrap();
+        assert_eq!(response["snapshot"], true);
+        assert_eq!(response["restored"], 1);
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
+        // 快照唯一条目=自身 manifest（无被覆盖文件可留档）。
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, MANIFEST_NAME);
+        let manifest: serde_json::Value = serde_json::from_slice(&entries[0].bytes).unwrap();
+        assert_eq!(manifest["introduced"], serde_json::json!(["notes/only-new.md"]));
+    }
+
+    /// 956 号：回滚预览（Keep 模式）透传 introduced 清单——内容取自快照
+    /// manifest 非盘面推断（现网改文件后清单不变）；import 端点（Ignore）
+    /// 同字节永不透传（契约面不变）。
+    #[test]
+    fn rollback_preview_passes_through_introduced_list() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
+            ("inkos-backup/notes/new.md", b"new content"),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap();
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/new.md"), b"mutated").unwrap();
+        let preview = run_rollback(&root, &snapshot, false, false).unwrap();
+        assert_eq!(preview["preview"]["introduced"], serde_json::json!(["notes/new.md"]));
+        // 同一快照字节走 import（Ignore 模式）——无 introduced 键。
+        let bytes = std::fs::read(root.join("backups").join(&snapshot)).unwrap();
+        let import_preview = run_import(&root, &bytes, false).unwrap();
+        assert!(import_preview.get("preview").unwrap().get("introduced").is_none());
+    }
+
+    /// 956 号完全回滚闭环：写回覆盖文件回快照时刻 + 删除 introduced + 回滚
+    /// 自身保险快照自洽（数据条目=被覆盖+待删删除前内容；manifest 撤销面=
+    /// overwriting 被覆盖/introduced 空/removing 被删），保守回滚该保险快照
+    /// 即复原待删文件（完全回滚自身也有保险）。
+    #[test]
+    fn full_rollback_restores_and_deletes_with_own_snapshot() {
+        let (_dir, root) = temp_root();
+        let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
+            ("inkos-backup/notes/new.md", b"introduced-v2"),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap();
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/new.md"), b"mutated-before-full-rollback").unwrap();
+
+        let done = run_rollback(&root, &snapshot, true, true).unwrap();
+        assert_eq!(done["ok"], true);
+        assert_eq!(done["restored"], 1);
+        assert_eq!(done["snapshot"], true);
+        assert_eq!(done["removed"], 1);
+        assert!(done.get("deleteFailed").is_none());
+        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
+        assert!(!root.join("notes/new.md").exists());
+
+        // 回滚自身保险快照（第 2 份）自洽。
+        let names = listed_snapshot_names(&root);
+        assert_eq!(names.len(), 2);
+        let guard = &names[0]; // 数值倒序首位=本次回滚留档
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(guard)).unwrap()).unwrap().0;
+        let data_names: Vec<&str> =
+            entries.iter().filter(|entry| entry.name != MANIFEST_NAME).map(|entry| entry.name.as_str()).collect();
+        assert_eq!(data_names, vec!["books/b1/book.json", "notes/new.md"]);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&entries.iter().find(|entry| entry.name == MANIFEST_NAME).unwrap().bytes).unwrap();
+        assert_eq!(manifest["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        assert_eq!(manifest["introduced"], serde_json::json!([]));
+        assert_eq!(manifest["removing"], serde_json::json!(["notes/new.md"]));
+        // 保险闭环：保守回滚保险快照 → 待删文件复原（内容=删除前时刻）。
+        let undone = run_rollback(&root, guard, true, false).unwrap();
+        assert_eq!(undone["restored"], 2);
+        assert_eq!(std::fs::read(root.join("notes/new.md")).unwrap(), b"mutated-before-full-rollback");
+    }
+
+    /// 956 号：保守回滚（不带 deleteIntroduced）语义不变——introduced 文件
+    /// 保留、响应无 removed 键。
+    #[test]
+    fn conservative_rollback_keeps_introduced_files() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
+            ("inkos-backup/notes/new.md", b"new content"),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap();
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/new.md"), b"new content").unwrap();
+        let done = run_rollback(&root, &snapshot, true, false).unwrap();
+        assert_eq!(done["restored"], 1);
+        assert!(done.get("removed").is_none());
+        assert!(root.join("notes/new.md").exists());
+    }
+
+    /// 956 号：955- 旧形态快照（manifest 无 introduced）+ deleteIntroduced=1
+    /// → 400 lacks（先验于盘面：写回/快照/tmp 均不发生）；同快照保守回滚
+    /// 照常成功（向后兼容）。
+    #[test]
+    fn full_rollback_rejects_snapshot_without_introduced_list() {
+        let (_dir, root) = temp_root();
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        let legacy = simple_tar(&[
+            (
+                MANIFEST_NAME,
+                br#"{"version":1,"generator":"inkos-desktop","kind":"pre-restore-snapshot"}"#,
+            ),
+            ("books/b1/book.json", br#"{"legacy":true}"#),
+        ]);
+        std::fs::write(root.join("backups/pre-restore-1731100000000.tar"), &legacy).unwrap();
+        let before = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let err = run_rollback(&root, "pre-restore-1731100000000.tar", true, true);
+        assert!(
+            matches!(err, Err(RollbackFailure::Import(ref error)) if error.contains("lacks introduced list")),
+            "{err:?}"
+        );
+        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), before);
+        // 无新增快照、无 tmp 残留（backups/ 仅源快照一项）。
+        assert_eq!(listed_snapshot_names(&root), vec!["pre-restore-1731100000000.tar".to_string()]);
+        assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 1);
+        // 向后兼容：同快照保守回滚成功。
+        let done = run_rollback(&root, "pre-restore-1731100000000.tar", true, false).unwrap();
+        assert_eq!(done["restored"], 1);
+    }
+
+    /// 956 号：introduced 路径安全判定=双端共享 golden 向量表（include_str
+    /// 同文件）；篡改快照（introduced 含穿越）Delete 模式 preview 与 confirm
+    /// 同一先验 400 unsafe（写回/快照零变更），Keep 模式宽容展示（200 无
+    /// introduced 键、confirm 不删）。
+    #[test]
+    fn full_rollback_rejects_unsafe_introduced_paths_and_matches_golden() {
+        let vectors: serde_json::Value = serde_json::from_str(INTRODUCED_PATH_VECTORS).unwrap();
+        for path in vectors["accept"].as_array().unwrap() {
+            let path = path.as_str().unwrap();
+            assert!(is_safe_relative_path(path), "accept: {path:?}");
+        }
+        for path in vectors["reject"].as_array().unwrap() {
+            let path = path.as_str().unwrap();
+            assert!(!is_safe_relative_path(path), "reject: {path:?}");
+        }
+        let (_dir, root) = temp_root();
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        let evil = simple_tar(&[
+            (
+                MANIFEST_NAME,
+                br#"{"version":1,"generator":"inkos-desktop","kind":"pre-restore-snapshot","introduced":["../../../outside/secret.txt"]}"#,
+            ),
+            ("books/b1/book.json", br#"{"evil":true}"#),
+        ]);
+        std::fs::write(root.join("backups/pre-restore-1731200000000.tar"), &evil).unwrap();
+        let before = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        // Delete 模式 preview=confirm 同一先验（预览预言确认结果）。
+        let preview = run_rollback(&root, "pre-restore-1731200000000.tar", false, true);
+        assert!(
+            matches!(preview, Err(RollbackFailure::Import(ref error)) if error.contains("unsafe introduced path")),
+            "{preview:?}"
+        );
+        let confirm = run_rollback(&root, "pre-restore-1731200000000.tar", true, true);
+        assert!(
+            matches!(confirm, Err(RollbackFailure::Import(ref error)) if error.contains("unsafe introduced path")),
+            "{confirm:?}"
+        );
+        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), before);
+        assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 1); // 无新增快照/tmp
+        // Keep 模式：宽容展示（200 无 introduced 键），confirm 不删。
+        let keep_preview = run_rollback(&root, "pre-restore-1731200000000.tar", false, false).unwrap();
+        assert!(keep_preview.get("preview").unwrap().get("introduced").is_none());
+        let keep_confirm = run_rollback(&root, "pre-restore-1731200000000.tar", true, false).unwrap();
+        assert_eq!(keep_confirm["restored"], 1);
+        assert!(keep_confirm.get("removed").is_none());
+    }
+
+    /// 956 号：待删文件在操作前已被外部删除=终态已达成——不计 removed（本次
+    /// 未删任何文件，诚实计数）、无 deleteFailed、盘面无变化不留快照。
+    #[test]
+    fn full_rollback_skips_already_missing_introduced_files() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/notes/new.md", b"new content"),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap();
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/new.md"), b"new content").unwrap();
+        std::fs::remove_file(root.join("notes/new.md")).unwrap();
+        let done = run_rollback(&root, &snapshot, true, true).unwrap();
+        assert_eq!(done["removed"], 0);
+        assert!(done.get("deleteFailed").is_none());
+        assert_eq!(done["snapshot"], false); // 无覆盖/新建/删除=不留快照
+        assert_eq!(listed_snapshot_names(&root).len(), 1);
+    }
+
+    /// 956 号（unix）：待删名字为符号链接时不跟随不删（删除面=常规文件，与
+    /// 955 回滚面同判据）——链接保留、目标不动、deleteFailed 明示。
+    #[test]
+    #[cfg(unix)]
+    fn full_rollback_skips_symlinked_introduced_targets() {
+        let (_dir, root) = temp_root();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/notes/link.md", b"placeholder"),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap();
+        let snapshot = listed_snapshot_names(&root).remove(0);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        let target = root.join("notes/real-target.txt");
+        std::fs::write(&target, b"keep me").unwrap();
+        std::fs::remove_file(root.join("notes/link.md")).unwrap(); // 恢复写出的常规文件
+        std::os::unix::fs::symlink(&target, root.join("notes/link.md")).unwrap();
+        let done = run_rollback(&root, &snapshot, true, true).unwrap();
+        assert_eq!(done["removed"], 0);
+        let failed = done["deleteFailed"].as_array().unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["path"], "notes/link.md");
+        assert_eq!(failed[0]["error"], "not a regular file");
+        assert!(root.join("notes/link.md").exists()); // 链接本身保留
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep me"); // 目标不动
     }
 
     /// 950 号：单条目 tar 块（512B 头+payload+补齐），支持 POSIX prefix 字段

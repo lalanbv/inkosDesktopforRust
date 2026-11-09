@@ -752,6 +752,9 @@ try {
       // 套件锁定（rollback 走 import 同一执行体）。
       "/api/v1/backup/snapshots",
       { path: "/api/v1/backup/rollback", method: "POST" },
+      // 956 号：完全回滚（deleteIntroduced=1）守卫探针——合法形态缺失先
+      // 400 snapshot not found（形态守卫先于盘面，删除语义不触达）。
+      { path: "/api/v1/backup/rollback?name=pre-restore-1.tar&deleteIntroduced=1", method: "POST" },
       // 713 号：导演域三面 + context-meter 双探针回收（G6/353-354 + R41/564，
       // 3 条目 23→20）。GET 先于 PUT：GET 比缺省基线全 body（session=null,
       // resumeAdvice 双端 golden 同源，savedChapters 在 VOLATILE）；PUT 走状态

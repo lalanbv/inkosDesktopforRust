@@ -5938,12 +5938,15 @@ function yamlScalar(value: unknown): string {
   // 954 号：快照回滚用户可执行闭环——列举 backups/pre-restore-*.tar（951 的
   // 回滚保险此前只留档不可从 UI 执行）；回滚=服务端读快照字节走 import 同一
   // 执行体（两段式 preview/confirm 同构，回滚执行时对被覆盖文件再留快照）。
+  // 956 号：deleteIntroduced=1=完全回滚（写回后一并删除快照记录的恢复期间
+  // 新增文件——每份待删文件删除前留档；Rust backup_routes.rs 同参同语义）。
   app.get("/api/v1/backup/snapshots", async (c) => {
     return c.json({ snapshots: await listBackupSnapshots(root) });
   });
   app.post("/api/v1/backup/rollback", async (c) => {
     const confirm = c.req.query("confirm") === "1";
-    const outcome = await runBackupRollback(root, c.req.query("name") ?? "", confirm);
+    const deleteIntroduced = c.req.query("deleteIntroduced") === "1";
+    const outcome = await runBackupRollback(root, c.req.query("name") ?? "", confirm, deleteIntroduced);
     if (outcome.status === 400) return c.json({ error: outcome.error }, 400);
     return c.json(outcome.body);
   });

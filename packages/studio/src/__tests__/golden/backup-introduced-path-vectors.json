@@ -1,0 +1,36 @@
+{
+  "_header": "956 号：回滚删除面 introduced 路径安全判定双端唯一事实源。TS 断言 packages/studio/src/__tests__/backup-routes.test.ts（isSafeRelativePath），Rust 断言 engine-rs/src/server/backup_routes.rs tests（include_str 同文件，is_safe_relative_path）。规则（纯串级，跨平台一致，双端同判据）：非空；不含 NUL；不含反斜杠（Windows 分隔符语义跨平台保守拒绝）；不以 / 开头（绝对路径）；不匹配 ^[A-Za-z]:（盘符绝对 C:/x 与盘符相对 C:x 一并拒绝）；按 / 分段后任一段不得为空串、. 或 ..（空段 a//b、当前段、穿越段一律拒绝——保守整拒不归一化）。背景：introduced 清单来自快照 manifest JSON（自由字符串），不经 tar 条目安全三则，删除面（unlink）必须自校验——不安全路径若放行可删 root 外任意文件；任一路径不安全=整包 400 先验于写回（写回一旦发生不可回退）。合法 introduced 名是我们自己产出的（restore_name(安全三则放行条目名)），故严格规则不误伤真实快照。",
+  "accept": [
+    "books/b1/book.json",
+    "inkos.json",
+    "works/w1/work.json",
+    "works/w1/story/chapters/chapter-001.md",
+    ".inkos/secrets.json",
+    "prompt/writer.md",
+    "a",
+    "中文名.md",
+    "书/章节/第一回.md"
+  ],
+  "reject": [
+    "",
+    "a\u0000b",
+    "a\\b",
+    "windows\\path\\file.json",
+    "/etc/passwd",
+    "/",
+    "C:/x",
+    "C:/x/y.json",
+    "C:x",
+    "z:relative.json",
+    "..",
+    "../x",
+    "a/../b",
+    "a/..",
+    "a/../../b",
+    "./a",
+    "a/./b",
+    "a//b",
+    "a//",
+    "//a"
+  ]
+}
