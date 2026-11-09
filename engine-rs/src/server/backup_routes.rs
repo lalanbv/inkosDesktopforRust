@@ -441,6 +441,109 @@ fn run_import(root: &Path, body: &[u8], confirm: bool) -> Result<serde_json::Val
     Ok(json!({ "ok": true, "restored": restored, "snapshot": has_snapshot }))
 }
 
+// ── 954 号：快照回滚用户可执行闭环——列举 + 服务端回滚执行 ──
+//
+// 951 的 pre-restore 快照此前只留档（回滚须手工到文件系统取 tar 灌回
+// import）；本轮补齐：`GET /api/v1/backup/snapshots` 列举 +
+// `POST /api/v1/backup/rollback` 服务端读快照字节走 run_import 同一管道
+// （安全三则+manifest 先验+两段式 preview/confirm 同构——快照回滚过与
+// 外部备份包完全相同的检查，非语义旁路；回滚执行时对被覆盖文件再留快照
+// =import 不变式自动保持）。
+
+/// 快照文件名形态校验（`pre-restore-<纯数字毫秒>.tar`）——回滚面唯一放行
+/// 形态，路径穿越无从谈起；与 TS `parseSnapshotName` 同语义（超大数溢出
+/// 双端均拒）。
+fn snapshot_name_millis(name: &str) -> Option<u64> {
+    let stem = name.strip_prefix("pre-restore-")?.strip_suffix(".tar")?;
+    if stem.is_empty() || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    stem.parse::<u64>().ok()
+}
+
+/// 列举 `backups/pre-restore-*.tar`（形态过滤+名倒序=时间倒序，millis 等
+/// 长名字典序=数值序）。目录缺失=空列表；tmp 残留 `.pre-restore-*.tmp`
+/// 天然被形态过滤排除。
+fn list_snapshots(root: &Path) -> serde_json::Value {
+    let mut items: Vec<(String, u64)> = Vec::new();
+    if let Ok(children) = std::fs::read_dir(root.join("backups")) {
+        for child in children.flatten() {
+            let Ok(meta) = child.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let name = child.file_name().to_string_lossy().to_string();
+            if snapshot_name_millis(&name).is_none() {
+                continue;
+            }
+            items.push((name, meta.len()));
+        }
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    json!({
+        "snapshots": items.iter().map(|(name, size)| json!({ "name": name, "size": size })).collect::<Vec<_>>()
+    })
+}
+
+#[derive(Debug)]
+enum RollbackFailure {
+    InvalidName,
+    NotFound,
+    Import(String),
+}
+
+/// 快照回滚：校验形态 → 读快照字节 → 走 import 同一执行体。
+fn run_rollback(root: &Path, name: &str, confirm: bool) -> Result<serde_json::Value, RollbackFailure> {
+    if snapshot_name_millis(name).is_none() {
+        return Err(RollbackFailure::InvalidName);
+    }
+    let bytes = std::fs::read(root.join("backups").join(name)).map_err(|_| RollbackFailure::NotFound)?;
+    run_import(root, &bytes, confirm).map_err(RollbackFailure::Import)
+}
+
+/// `GET /api/v1/backup/snapshots`——列举可回滚快照。
+pub async fn snapshots(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let root = runtime.state.project_root().to_path_buf();
+    // 763 号同款：盘面列举移出 runtime 线程。
+    let response = tokio::task::spawn_blocking(move || list_snapshots(&root))
+        .await
+        .unwrap_or_else(|_| json!({ "snapshots": [] }));
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+/// `POST /api/v1/backup/rollback[?confirm=1]`——回滚指定快照（name 走
+/// query，与 import 的 confirm 同族语义；线格式与 import 两段式同构）。
+pub async fn rollback(
+    State(runtime): State<BooksRuntime>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root().to_path_buf();
+    let confirm = params.get("confirm").map(|v| v == "1").unwrap_or(false);
+    let name = params.get("name").cloned().unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || run_rollback(&root, &name, confirm)).await;
+    match result {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(RollbackFailure::InvalidName)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid snapshot name" })),
+        )
+            .into_response(),
+        Ok(Err(RollbackFailure::NotFound)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "snapshot not found" })),
+        )
+            .into_response(),
+        Ok(Err(RollbackFailure::Import(error))) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// 解析（可能 gzip 的）tar 归档；安全三则内置（TS `tar-read.ts` 同语义）。
 /// 返回 `(文件条目, 被拒绝条目名)`——拒绝项非空时调用方整包 400。
 fn parse_archive(body: &[u8]) -> Result<(Vec<ArchiveEntry>, Vec<String>), String> {
@@ -703,6 +806,74 @@ mod tests {
         assert_eq!(rollback["restored"], 1); // manifest 不计
         let rolled_back = std::fs::read(root.join("books/b1/book.json")).unwrap();
         assert_eq!(rolled_back, original);
+        drop(dir);
+    }
+
+    // ── 954 号：快照回滚用户可执行闭环（列举 + 服务端回滚执行）──
+
+    #[test]
+    fn snapshots_list_filters_and_sorts_pre_restore_tars() {
+        let (_dir, root) = temp_root();
+        // 缺 backups/ 目录 = 空列表（不报错）。
+        assert_eq!(list_snapshots(&root)["snapshots"], serde_json::json!([]));
+        std::fs::create_dir_all(root.join("backups")).unwrap();
+        std::fs::write(root.join("backups/pre-restore-1731100000000.tar"), b"old").unwrap();
+        std::fs::write(root.join("backups/pre-restore-1731200000000.tar"), b"newer-longer").unwrap();
+        // 形态外残留：tmp 半成品、杂散文件、同名目录——一律不入列。
+        std::fs::write(root.join("backups/.pre-restore-1731300000000.tmp"), b"partial").unwrap();
+        std::fs::write(root.join("backups/other.tar"), b"junk").unwrap();
+        std::fs::create_dir_all(root.join("backups/pre-restore-1731400000000.tar")).unwrap();
+        let items = list_snapshots(&root)["snapshots"].as_array().unwrap().clone();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["name"], "pre-restore-1731200000000.tar"); // 名倒序=时间倒序
+        assert_eq!(items[0]["size"], 12);
+        assert_eq!(items[1]["name"], "pre-restore-1731100000000.tar");
+        assert_eq!(items[1]["size"], 3);
+    }
+
+    #[test]
+    fn rollback_rejects_invalid_or_missing_names() {
+        let (_dir, root) = temp_root();
+        // 形态守卫：穿越/非数字/空名一律 InvalidName（先于盘面访问）。
+        assert!(matches!(run_rollback(&root, "../../etc/passwd", false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(run_rollback(&root, "pre-restore-abc.tar", false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(run_rollback(&root, "", false), Err(RollbackFailure::InvalidName)));
+        // 形态合法但文件不存在。
+        assert!(matches!(
+            run_rollback(&root, "pre-restore-1731100000000.tar", false),
+            Err(RollbackFailure::NotFound)
+        ));
+    }
+
+    #[test]
+    fn rollback_restores_snapshot_via_import_pipeline_two_phase() {
+        let (dir, root) = temp_root();
+        let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
+        let tar_bytes = simple_tar(&[
+            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","tampered":true}"#),
+        ]);
+        run_import(&root, &tar_bytes, true).unwrap(); // 产生 pre-restore 快照（含 original）
+        let snapshot_name = {
+            let mut names: Vec<String> = std::fs::read_dir(root.join("backups"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            names.pop().unwrap()
+        };
+        // preview 段：服务端读快照走 import 同一管道（安全三则+manifest 先验生效）。
+        let preview = run_rollback(&root, &snapshot_name, false).unwrap();
+        assert_eq!(preview["preview"]["fileCount"], 2); // 文件条目+manifest
+        assert_eq!(preview["preview"]["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        // confirm 段：回滚执行——book.json 回 original。
+        let done = run_rollback(&root, &snapshot_name, true).unwrap();
+        assert_eq!(done["ok"], true);
+        assert_eq!(done["restored"], 1); // manifest 不计
+        assert_eq!(done["snapshot"], true);
+        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
+        // 回滚自身也留快照（import 不变式自动保持）：backups/ 现有 2 份。
+        assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 2);
         drop(dir);
     }
 

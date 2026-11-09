@@ -201,6 +201,8 @@ import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, syncWorkSourceArtifacts } from "@actalk/inkos-core";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
+import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
+import { listBackupSnapshots, runBackupImport, runBackupRollback } from "./backup-snapshot.js";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
 import { ApiError } from "./errors.js";
@@ -353,120 +355,9 @@ function compareServiceListItems(
   return 0;
 }
 
-async function buildTarArchive(sourceDir: string, packageRootName: string): Promise<Buffer> {
-  const files = await listArchiveFiles(sourceDir);
-  const chunks: Buffer[] = [];
-  for (const file of files) {
-    const payload = await readFile(join(sourceDir, file));
-    const archiveName = normalizeArchivePath(join(packageRootName, file));
-    appendTarEntry(chunks, archiveName, payload);
-  }
-  chunks.push(Buffer.alloc(1024));
-  return Buffer.concat(chunks);
-}
-
-// 950 号：长路径三通道——≤100 单头；100<x≤255 且存在 '/' 边界走 POSIX
-// USTAR prefix 拆分（读侧 Rust tar::Archive 与本仓 untar 均支持）；
-// 其余（>255 或无边界）走 GNU LongLink（typeflag 'L'，Rust 导出侧
-// tar::Builder 同形态，双端读侧均以 'L' payload 为准）。此前 >100 直接
-// 抛错=export 对真实长路径（works/<id>/revisions/<rev>/...）不可用。
-function appendTarEntry(chunks: Buffer[], archiveName: string, payload: Buffer): void {
-  const split = splitUstarPath(archiveName);
-  if (split) {
-    chunks.push(createTarHeader(split.name, payload.byteLength, split.prefix));
-  } else if (Buffer.byteLength(archiveName, "utf-8") <= 100) {
-    chunks.push(createTarHeader(archiveName, payload.byteLength));
-  } else {
-    const longName = Buffer.from(`${archiveName}\0`, "utf-8");
-    chunks.push(createTarHeader("././@LongLink", longName.byteLength, "", "L"));
-    chunks.push(longName);
-    const longPadding = (512 - (longName.byteLength % 512)) % 512;
-    if (longPadding > 0) chunks.push(Buffer.alloc(longPadding));
-    // 真条目 name 字段放截断名（GNU tar 形态；读取侧以 'L' payload 为准）。
-    chunks.push(createTarHeader(truncateTarName(archiveName), payload.byteLength));
-  }
-  chunks.push(payload);
-  const padding = (512 - (payload.byteLength % 512)) % 512;
-  if (padding > 0) chunks.push(Buffer.alloc(padding));
-}
-
-/** POSIX USTAR 拆分：>100 字节路径按 '/' 边界拆 prefix(≤155)+name(≤100)。 */
-function splitUstarPath(path: string): { prefix: string; name: string } | null {
-  const bytes = Buffer.from(path, "utf-8");
-  if (bytes.byteLength <= 100) return null;
-  for (let i = bytes.byteLength - 1; i > 0; i--) {
-    if (bytes[i] !== 0x2f) continue; // '/'
-    if (i <= 155 && bytes.byteLength - i - 1 <= 100) {
-      return { prefix: bytes.subarray(0, i).toString("utf-8"), name: bytes.subarray(i + 1).toString("utf-8") };
-    }
-  }
-  return null;
-}
-
-/** 字节安全截断至 USTAR name 字段上限（不切 UTF-8 多字节中间）。 */
-function truncateTarName(path: string): string {
-  const bytes = Buffer.from(path, "utf-8");
-  if (bytes.byteLength <= 100) return path;
-  let end = 100;
-  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
-  return bytes.subarray(0, end).toString("utf-8");
-}
-
-async function listArchiveFiles(dir: string, prefix = ""): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.name === ".DS_Store") continue;
-    const relativePath = prefix ? join(prefix, entry.name) : entry.name;
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listArchiveFiles(fullPath, relativePath));
-    } else if (entry.isFile()) {
-      files.push(normalizeArchivePath(relativePath));
-    } else {
-      const info = await stat(fullPath).catch(() => null);
-      if (info?.isFile()) files.push(normalizeArchivePath(relativePath));
-    }
-  }
-  return files.sort((a, b) => a.localeCompare(b));
-}
-
-function normalizeArchivePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\/+/g, "");
-}
-
-function createTarHeader(name: string, size: number, prefix = "", typeflag: "0" | "L" = "0"): Buffer {
-  const header = Buffer.alloc(512, 0);
-  writeTarString(header, 0, 100, name);
-  writeTarOctal(header, 100, 8, 0o644);
-  writeTarOctal(header, 108, 8, 0);
-  writeTarOctal(header, 116, 8, 0);
-  writeTarOctal(header, 124, 12, size);
-  writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
-  header.fill(0x20, 148, 156);
-  header[156] = typeflag.charCodeAt(0);
-  writeTarString(header, 257, 6, "ustar");
-  writeTarString(header, 263, 2, "00");
-  if (prefix) writeTarString(header, 345, 155, prefix);
-  let checksum = 0;
-  for (const byte of header) checksum += byte;
-  writeTarOctal(header, 148, 8, checksum);
-  return header;
-}
-
-function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
-  const encoded = Buffer.from(value);
-  if (encoded.byteLength > length) {
-    throw new Error(`Archive path is too long for tar header: ${value}`);
-  }
-  encoded.copy(header, offset);
-}
-
-function writeTarOctal(header: Buffer, offset: number, length: number, value: number): void {
-  const text = value.toString(8).padStart(length - 1, "0").slice(-(length - 1));
-  header.write(text, offset, length - 1, "ascii");
-  header[offset + length - 1] = 0;
-}
+// 954 号：tar 写侧（buildTarArchive/appendTarEntry/长路径三通道等）迁出至
+// lib/tar-write.ts——与 lib/tar-read.ts 对偶的独立打包面模块，备份 export、
+// pre-restore 快照构造（api/backup-snapshot.ts）与交互电影 source 导出共用。
 
 function isHeaderSafeApiKey(value: string): boolean {
   if (!value) return true;
@@ -6035,101 +5926,26 @@ function yamlScalar(value: unknown): string {
   });
 
   app.post("/api/v1/backup/import", async (c) => {
+    // 954 号：两段式执行体迁至 api/backup-snapshot.ts 的 runBackupImport——
+    // 与 rollback（快照回滚）共用同一核心（安全三则+manifest 先验+快照构造）。
     const confirm = c.req.query("confirm") === "1";
     const bytes = new Uint8Array(await c.req.arrayBuffer());
-    const { untar } = await import("../lib/tar-read.js");
-    let entries: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
-    let rejected: ReadonlyArray<string>;
-    try {
-      const result = untar(bytes);
-      entries = result.entries;
-      rejected = result.rejected;
-    } catch (error) {
-      return c.json({ error: String(error) }, 400);
-    }
-    if (rejected.length > 0) {
-      return c.json({ error: `unsafe entries rejected: ${rejected.join(", ")}` }, 400);
-    }
-    // 444 号：manifest 查找与恢复路径按「能工作的契约」对齐 Rust 移植
-    // （backup_routes.rs）——导出以 `inkos-backup/` 为包根前缀，导入须剥前缀
-    // 落回项目根；此前裸名精确查找 + 原样写回 = 导出→导入端到端断裂。
-    const BACKUP_PACKAGE_ROOT = "inkos-backup";
-    const manifestName = `${BACKUP_PACKAGE_ROOT}/backup-manifest.json`;
-    const restoreName = (name: string): string =>
-      name.startsWith(`${BACKUP_PACKAGE_ROOT}/`) ? name.slice(BACKUP_PACKAGE_ROOT.length + 1) : name;
-    const manifestEntry = entries.find((entry) => entry.name === manifestName || entry.name === "backup-manifest.json");
-    if (!manifestEntry) return c.json({ error: "backup-manifest.json missing" }, 400);
-    try {
-      const manifest = JSON.parse(new TextDecoder().decode(manifestEntry.bytes));
-      if (manifest.version !== 1 || typeof manifest.generator !== "string"
-        || !manifest.generator.startsWith("inkos-desktop")) {
-        return c.json({ error: "unsupported backup generator/version" }, 400);
-      }
-    } catch {
-      return c.json({ error: "backup-manifest.json unreadable" }, 400);
-    }
+    const outcome = await runBackupImport(root, bytes, confirm);
+    if (outcome.status === 400) return c.json({ error: outcome.error }, 400);
+    return c.json(outcome.body);
+  });
 
-    // 将覆盖项 = root 下已存在的同名文件（剥包根前缀后的真实路径）。
-    const overwriting: string[] = [];
-    for (const entry of entries) {
-      const name = restoreName(entry.name);
-      if (await stat(join(root, name)).then(() => true).catch(() => false)) {
-        overwriting.push(name);
-      }
-    }
-    if (!confirm) {
-      return c.json({
-        preview: { fileCount: entries.length, overwriting, newFiles: entries.length - overwriting.length },
-      });
-    }
-
-    // 恢复前自动快照：将覆盖的现有文件打包留存（回滚保险）。
-    if (overwriting.length > 0) {
-      const snapshotFiles: Array<{ name: string; bytes: Uint8Array }> = [];
-      for (const name of overwriting) {
-        const data = await readFile(join(root, name)).catch(() => null);
-        if (data) snapshotFiles.push({ name, bytes: new Uint8Array(data) });
-      }
-      // 951 号：快照附带 manifest（裸名形态，双端 import 端点均兼容裸名查
-      // 找与写回跳过）——pre-restore 快照可直接经 backup/import?confirm=1
-      // 回灌=回滚保险从「留档」到「可执行」闭环。部分回滚边界：恢复引入
-      // 的新文件不在快照中（保守不引入删除语义，备案）。
-      snapshotFiles.push({
-        name: "backup-manifest.json",
-        bytes: new TextEncoder().encode(JSON.stringify({
-          version: 1,
-          generator: "inkos-desktop",
-          kind: "pre-restore-snapshot",
-          overwriting,
-        })),
-      });
-      const backupsDir = join(root, "backups");
-      await mkdir(backupsDir, { recursive: true });
-      const chunks: Buffer[] = [];
-      // 953 号审查修复：快照条目走与 export 同一三通道（appendTarEntry）——
-      // 此前手写头对 >100 字节名经 Buffer.copy 静默截断，长路径包恢复时
-      // 快照条目名截断 → 回滚写错位置（950 起 export 可产长路径包，患激活；
-      // Rust 侧 tar::Builder 自动 GNU 'L' 无此患）。manifest 条目（20 字节）
-      // 走单头分支，形态等价。
-      for (const file of snapshotFiles) {
-        appendTarEntry(chunks, file.name, Buffer.from(file.bytes));
-      }
-      chunks.push(Buffer.alloc(1024));
-      const snapshotName = `pre-restore-${Date.now()}.tar`;
-      await writeFile(join(backupsDir, snapshotName), Buffer.concat(chunks), "utf-8");
-    }
-
-    // 写回（快照已兜底）。manifest 是元数据不落盘；restored 计实际写回文件数
-    // （与 Rust backup_routes.rs 同契约）。
-    let restored = 0;
-    for (const entry of entries) {
-      if (entry.name === manifestName || entry.name === "backup-manifest.json") continue;
-      const target = join(root, restoreName(entry.name));
-      await mkdir(join(target, ".."), { recursive: true });
-      await writeFile(target, entry.bytes);
-      restored += 1;
-    }
-    return c.json({ ok: true, restored, snapshot: overwriting.length > 0 });
+  // 954 号：快照回滚用户可执行闭环——列举 backups/pre-restore-*.tar（951 的
+  // 回滚保险此前只留档不可从 UI 执行）；回滚=服务端读快照字节走 import 同一
+  // 执行体（两段式 preview/confirm 同构，回滚执行时对被覆盖文件再留快照）。
+  app.get("/api/v1/backup/snapshots", async (c) => {
+    return c.json({ snapshots: await listBackupSnapshots(root) });
+  });
+  app.post("/api/v1/backup/rollback", async (c) => {
+    const confirm = c.req.query("confirm") === "1";
+    const outcome = await runBackupRollback(root, c.req.query("name") ?? "", confirm);
+    if (outcome.status === 400) return c.json({ error: outcome.error }, 400);
+    return c.json(outcome.body);
   });
 
   app.get("/api/v1/project/files/:file{.+}", async (c) => {

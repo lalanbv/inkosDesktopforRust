@@ -37,6 +37,9 @@ const ALLOWLIST = new Set([
 const modules = [
   "ops_routes", "books_routes", "books_state_routes",
   "book_create_routes", "write_next_route", "service_routes", "agent_production",
+  // 954 号：backup_routes 补登记（443 号移植时漏列 modules 清单——孤儿检测
+  // 对备份域 handler 从未生效；当前 4 handler 全部注册在位，差集为空）。
+  "backup_routes",
 ];
 const orphans = [];
 let total = 0;

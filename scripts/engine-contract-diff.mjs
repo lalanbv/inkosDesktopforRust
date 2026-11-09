@@ -745,6 +745,13 @@ try {
       // 荷探针=无 manifest 守卫（400/400），不传真实归档。
       { path: "/api/v1/backup/export", statusOnly: true },
       { path: "/api/v1/backup/import", method: "POST", body: {} },
+      // 954 号：快照回滚用户可执行闭环双面（2 条目）。snapshots 缺省基线=
+      // 空列表 `{snapshots:[]}`（差分器 root 无 backups/，双端一致全 body
+      // 对比）；rollback 空探针=name 形态守卫（invalid snapshot name
+      // 400/400）——真实回滚需先产快照，管道同一性由 backup-routes 双端
+      // 套件锁定（rollback 走 import 同一执行体）。
+      "/api/v1/backup/snapshots",
+      { path: "/api/v1/backup/rollback", method: "POST" },
       // 713 号：导演域三面 + context-meter 双探针回收（G6/353-354 + R41/564，
       // 3 条目 23→20）。GET 先于 PUT：GET 比缺省基线全 body（session=null,
       // resumeAdvice 双端 golden 同源，savedChapters 在 VOLATILE）；PUT 走状态

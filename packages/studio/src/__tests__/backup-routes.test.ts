@@ -217,6 +217,83 @@ describe("backup export/import routes (710)", () => {
     expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe('{"tampered":true}');
   });
 
+  // ── 954 号：快照回滚用户可执行闭环（列举 + 服务端回滚执行）──
+
+  it("snapshots: backups/ 形态过滤列举 + 缺目录=空列表（954）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    // 缺 backups/ = 空列表（不报错）
+    const empty = await app.request("/api/v1/backup/snapshots");
+    expect(empty.status).toBe(200);
+    expect(((await empty.json()) as { snapshots: unknown[] }).snapshots).toEqual([]);
+    // import confirm 产快照 + 形态外残留（tmp 半成品/杂散/同名目录）不入列
+    const exported = new Uint8Array(
+      await (await app.request("/api/v1/backup/export")).arrayBuffer(),
+    );
+    await writeFile(join(root, "books", "b1", "book.json"), '{"tampered":true}', "utf-8");
+    await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: exported });
+    await writeFile(join(root, "backups", ".pre-restore-1.tmp"), "partial", "utf-8");
+    await writeFile(join(root, "backups", "other.tar"), "junk", "utf-8");
+    await mkdir(join(root, "backups", "pre-restore-999.tar"), { recursive: true });
+    const listed = await app.request("/api/v1/backup/snapshots");
+    expect(listed.status).toBe(200);
+    const { snapshots } = await listed.json() as { snapshots: Array<{ name: string; size: number }> };
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.name).toMatch(/^pre-restore-\d+\.tar$/);
+    expect(snapshots[0]!.size).toBeGreaterThan(0);
+  });
+
+  it("rollback 两段式: preview 盘点 → confirm 回滚 + 回滚自身留新快照（服务端走 import 同一管道）", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const exported = new Uint8Array(
+      await (await app.request("/api/v1/backup/export")).arrayBuffer(),
+    );
+    await writeFile(join(root, "books", "b1", "book.json"), '{"tampered":true}', "utf-8");
+    await app.request("/api/v1/backup/import?confirm=1", { method: "POST", body: exported });
+    const backups = await readdir(join(root, "backups"));
+    const snapshotName = backups.find((n) => /^pre-restore-\d+\.tar$/.test(n))!;
+    // 现网已恢复为导出内容；快照正体=导入前时刻（tampered 版本）。
+    // preview 段：服务端读快照走 import 同一执行体（安全三则+manifest 先验生效）。
+    const previewRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshotName)}`,
+      { method: "POST" },
+    );
+    expect(previewRes.status).toBe(200);
+    const previewBody = await previewRes.json() as { preview: { fileCount: number; overwriting: string[] } };
+    expect(previewBody.preview.overwriting).toContain("books/b1/book.json");
+    // confirm 段：回滚执行——book.json 回导入前时刻。
+    const confirmRes = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent(snapshotName)}&confirm=1`,
+      { method: "POST" },
+    );
+    expect(confirmRes.status).toBe(200);
+    const confirmBody = await confirmRes.json() as { ok: boolean; restored: number; snapshot: boolean };
+    expect(confirmBody.ok).toBe(true);
+    expect(confirmBody.snapshot).toBe(true);
+    // restored 派生断言：快照条目=全部被覆盖文件（11 种子文件全存在）+manifest。
+    const snapshotEntries = untar(new Uint8Array(await readFile(join(root, "backups", snapshotName)))).entries;
+    expect(confirmBody.restored).toBe(snapshotEntries.length - 1);
+    expect(await readFile(join(root, "books", "b1", "book.json"), "utf-8")).toBe('{"tampered":true}');
+    // 回滚自身也留快照（import 不变式自动保持）：backups/ 现有 2 份。
+    const after = await readdir(join(root, "backups"));
+    expect(after.filter((n) => /^pre-restore-\d+\.tar$/.test(n))).toHaveLength(2);
+  });
+
+  it("rollback 守卫: 非法名/穿越先 400 invalid（先于盘面）+ 合法形态缺失 400 not found", async () => {
+    await seedProject();
+    const app = createStudioServer({} as never, root);
+    const traversal = await app.request("/api/v1/backup/rollback?name=..%2F..%2Fsecrets.json", { method: "POST" });
+    expect(traversal.status).toBe(400);
+    expect(((await traversal.json()) as { error: string }).error).toBe("invalid snapshot name");
+    const missing = await app.request(
+      `/api/v1/backup/rollback?name=${encodeURIComponent("pre-restore-1731100000000.tar")}`,
+      { method: "POST" },
+    );
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toBe("snapshot not found");
+  });
+
   it("import 守卫面: 空载荷/缺 manifest/坏 generator/不安全条目整包 400", async () => {
     await seedProject();
     const app = createStudioServer({} as never, root);

@@ -333,6 +333,9 @@ pub fn router_books(
                 .layer(axum::extract::DefaultBodyLimit::max(512 * 1024 * 1024))
                 .with_state(books.clone()),
         )
+        // 954 号：快照回滚用户可执行闭环（列举 + 服务端回滚执行）。
+        .route("/api/v1/backup/snapshots", get(backup_routes::snapshots).with_state(books.clone()))
+        .route("/api/v1/backup/rollback", post(backup_routes::rollback).with_state(books.clone()))
         // 48 号：状态端点组（列表/详情/更新/删除 + 章节读 + approve/reject +
         // truth 文件 + chapter-review-mode）。
         .route("/api/v1/books", get(books_state_routes::list_books).with_state(books.clone()))
