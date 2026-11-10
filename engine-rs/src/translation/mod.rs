@@ -182,10 +182,15 @@ mod tests {
         let mut content = String::new();
         {
             let mut archive = reader.clone();
-            let mut file = archive.by_name("OEBPS/chapter-0001.xhtml").unwrap();
-            std::io::Read::read_to_string(&mut file, &mut content).unwrap();
+        // 974 号：章节文件名 = TS epub-gen-memory 形 `${index}_.xhtml`；段落
+        // ASCII 实体转义（&lt;）+ 非 ASCII 数字引用（你好→&#x4F60;&#x597D;）。
+        let mut file = archive.by_name("OEBPS/0_.xhtml").unwrap();
+        std::io::Read::read_to_string(&mut file, &mut content).unwrap();
         }
-        assert!(content.contains("你好 &lt;世界&gt;"), "XHTML 转义: {content}");
+        assert!(
+            content.contains("你好 &lt;世界&gt;") || (content.contains("&#x4F60;&#x597D;") && content.contains("&lt;")),
+            "XHTML 转义（实体+数字引用）: {content}"
+        );
     }
 
     #[test]
