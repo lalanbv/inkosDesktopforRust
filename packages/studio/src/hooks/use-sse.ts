@@ -69,6 +69,11 @@ export const STUDIO_SSE_EVENTS = [
   "radar:start",
   "radar:complete",
   "radar:error",
+  // 976 号：方向候选生成（R4/364 号端点双端广播；与 radar 同构——无 bookId 的
+  // LLM 长任务，发射面显式注册进名单+通知表，刷新集不收）。
+  "director:start",
+  "director:complete",
+  "director:error",
   "log",
   "llm:progress",
   "ping",

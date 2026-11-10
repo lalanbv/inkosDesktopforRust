@@ -59,6 +59,10 @@ describe("STUDIO_SSE_EVENTS", () => {
       "radar:start",
       "radar:complete",
       "radar:error",
+      // 976 号：方向候选生成面（与 radar 同构收编）。
+      "director:start",
+      "director:complete",
+      "director:error",
       "log",
       "llm:progress",
       "ping",

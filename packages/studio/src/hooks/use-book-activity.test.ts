@@ -105,8 +105,13 @@ describe("shouldRefetchBookView", () => {
       expect(shouldRefetchBookView(msg(event, data, 1), "alpha"), event).toBe(true);
       expect(shouldRefetchBookView(msg(event, { ...data, bookId: "beta" }, 1), "alpha"), event).toBe(false);
     }
-    // director:* 无 bookId 且结果走 HTTP 响应——不入刷新集。
+    // director:* 无 bookId（976 号定性复核维持）——结果随 HTTP 响应返回、无书
+    // 可定向，刷新集不收；可见性走名单+通知面（STUDIO_SSE_EVENTS/通知表），
+    // 与 radar 同构（radar 亦不在刷新集）。
+    expect(shouldRefetchBookView(msg("director:start", {}, 1), "alpha")).toBe(false);
     expect(shouldRefetchBookView(msg("director:complete", { count: 3 }, 1), "alpha")).toBe(false);
+    expect(shouldRefetchBookView(msg("director:error", { error: "x" }, 1), "alpha")).toBe(false);
+    expect(shouldRefetchBookCollections(msg("director:complete", { count: 3 }, 1))).toBe(false);
   });
 });
 

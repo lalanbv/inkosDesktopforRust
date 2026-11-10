@@ -143,4 +143,25 @@ describe("author report contract (G8b)", () => {
     expect(failure).not.toBeNull();
     expect(failure?.title).toBe("写章失败");
   });
+
+  it("reports direction-candidate completion with count detail, start stays silent (976)", () => {
+    // 与 radar 同构定性：无 bookId 的 LLM 长任务——完成/失败进通知面，start 不入表。
+    expect(resolveTaskLabel("director:start")).toBeNull();
+    expect(resolveTaskLabel("director:complete")).toBe("方向候选生成完成");
+    expect(resolveTaskLabel("director:error", "en")).toBe("Direction candidates failed");
+
+    const done = buildTaskReport("director:complete", { count: 3 });
+    expect(done).toMatchObject({ level: "info", title: "方向候选生成完成" });
+    expect(done?.detail).toContain("3 个方向候选已生成");
+    // 缺 count 降级人话，禁裸 JSON。
+    const degraded = buildTaskReport("director:complete", {});
+    expect(degraded?.detail).toContain("方向候选已生成");
+    expect(degraded?.detail).not.toContain("{");
+    const en = buildTaskReport("director:complete", { count: 2 }, "en");
+    expect(en?.detail).toContain("2 direction candidates ready");
+
+    const failed = buildTaskReport("director:error", { error: "LLM upstream timeout" });
+    expect(failed).toMatchObject({ level: "warn", title: "方向候选生成失败" });
+    expect(failed?.detail).toContain("建议确认");
+  });
 });

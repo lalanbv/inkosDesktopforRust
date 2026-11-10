@@ -55,6 +55,9 @@
     "radar:start",
     "radar:complete",
     "radar:error",
+    "director:start",
+    "director:complete",
+    "director:error",
     "log",
     "llm:progress",
     "ping"

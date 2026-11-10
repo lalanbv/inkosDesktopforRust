@@ -180,6 +180,10 @@ export function resolveTaskLabel(event: string, language: "zh" | "en" = "zh"): s
     ["fanfic:error", "同人导入失败", "Fanfic import failed"],
     ["radar:complete", "市场雷达完成", "Radar complete"],
     ["radar:error", "市场雷达失败", "Radar failed"],
+    // 976 号：方向候选生成（与 radar 同构——无 bookId 的 LLM 长任务，完成/失败
+    // 进通知面；start 不入表=零开始噪音，与 radar:start 同例）。
+    ["director:complete", "方向候选生成完成", "Direction candidates ready"],
+    ["director:error", "方向候选生成失败", "Direction candidates failed"],
     ["daemon:chapter", "批量调度产出", "Batch chapter"],
     ["daemon:error", "批量调度出错", "Batch error"],
     ["book:created", "建书完成", "Book created"],
@@ -267,6 +271,14 @@ export function buildTaskReport(
       );
     } else if (event === "book:created") {
       completed.push(collapseToLine(optionalString("title") ?? optionalString("bookId") ?? (language === "en" ? "book ready" : "新书已就绪")));
+    } else if (event === "director:complete") {
+      // 976 号：负载 {count}（双端同形）——候选数是作者关心的完成度。
+      const count = optionalNumber("count");
+      completed.push(
+        count !== undefined
+          ? (language === "en" ? `${count} direction candidates ready` : `${count} 个方向候选已生成`)
+          : (language === "en" ? "direction candidates ready" : "方向候选已生成"),
+      );
     } else {
       completed.push(optionalString("result") ?? optionalString("status") ?? (language === "en" ? "task finished" : "任务已收尾"));
     }
