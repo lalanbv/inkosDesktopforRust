@@ -80,6 +80,7 @@ async fn run_translation_inner(
     let mut report_lines: Vec<String> = vec!["# Translation Review".to_string(), String::new()];
     let mut translated_segments = 0usize;
     let mut reviewed_chapters = 0usize;
+    let mut run_observations: Vec<serde_json::Value> = Vec::new();
     let batch_size = batch_size.unwrap_or(8).clamp(1, 32);
 
     for chapter_info in manifest.chapters.clone() {
@@ -177,6 +178,8 @@ async fn run_translation_inner(
         let completed_chapter =
             load_translation_chapter(project_root, &chapter_info.translated_path).await?;
         let mut status = TranslationChapterStatus::Translated;
+        // 967 号：本章审校摘要/观察（未审校则保持既有值）。
+        let mut reviewed: Option<(String, Vec<serde_json::Value>)> = None;
         if completed_chapter
             .segments
             .iter()
@@ -202,15 +205,25 @@ async fn run_translation_inner(
             report_lines.push(format!("- passed: {}", if review.passed { "yes" } else { "no" }));
             report_lines.push(format!("- summary: {}", review.summary));
             report_lines.push(String::new());
+            let observations: Vec<serde_json::Value> =
+                review.issues.iter().filter_map(|issue| review_issue_observation(issue)).collect();
             for issue in review.issues {
                 report_lines.push(format!("- issue: {issue}"));
             }
             report_lines.push(String::new());
+            run_observations.extend(observations.iter().cloned());
+            reviewed = Some((review.summary, observations));
         }
+        let translated_count = count_translated_segments(&source.segments, &completed_chapter.segments);
         manifest.updated_at = crate::utils::utc_time::utc_now_iso();
         for chapter in &mut manifest.chapters {
             if chapter.number == chapter_info.number {
                 chapter.status = status;
+                chapter.translated_segments = translated_count;
+                if let Some((summary, observations)) = reviewed.take() {
+                    chapter.review_summary = Some(summary);
+                    chapter.observations = Some(observations);
+                }
             }
         }
         save_translation_manifest(project_root, &manifest)
@@ -251,10 +264,20 @@ async fn run_translation_inner(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // 967 号：TS 回执口径——total=源段总数、completed=已译段数（manifest 已逐章更新）。
+    let total_segments: usize = manifest.chapters.iter().map(|chapter| chapter.segment_count).sum();
+    let completed_segments: usize = manifest.chapters.iter().map(|chapter| chapter.translated_segments).sum();
+    let pending_segments = total_segments.saturating_sub(completed_segments);
     Ok(RunTranslationProjectResult {
+        kind: if pending_segments > 0 { "translation_pending" } else { "translation_completed" },
+        work_id: project_id.to_string(),
         project_id: project_id.to_string(),
         translated_segments,
         reviewed_chapters,
         report_path,
+        total_segments,
+        completed_segments,
+        pending_segments,
+        observations: run_observations,
     })
 }

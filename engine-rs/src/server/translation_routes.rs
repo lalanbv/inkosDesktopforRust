@@ -12,7 +12,8 @@
 //!   400 → createTranslationProjectFromFile → 响应展开 + projectId/title
 //! - `GET /translations/:id`（L6588）：manifest + review 报告 + 章节段级合并
 //! - `POST /translations/:id/run`（L6625）：LLM 翻译模型 + 上游错误 502
-//!   TRANSLATION_RUN_FAILED / 其余 500 同 code
+//!   / 其余 500，错误码 `INKOS_TRANSLATION_ACTION_FAILED`（967 号对齐 TS 2.0；
+//!   上游失败 502 分类为 Rust 刻意增强，TS 恒 500）
 //! - `POST /translations/:id/export`（L6655）：txt / md / epub
 
 use std::path::Path;
@@ -230,6 +231,9 @@ pub async fn get_translation_detail(
         .await
         .unwrap_or_default();
     let mut chapters: Vec<Value> = Vec::new();
+    // 967 号：已译段数按译文文件现场计（旧 manifest 无该字段/早于本轮落盘也即时正确）；
+    // manifest 章节与 chapters 双处补 TS 2.0 三字段（UI 读 manifest.chapters[] 计数）。
+    let mut live_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     for chapter_info in &manifest.chapters {
         let Ok(source) = load_translation_chapter(root, &chapter_info.source_path).await else {
             continue;
@@ -240,15 +244,18 @@ pub async fn get_translation_detail(
                 segments: Vec::new(),
                 ..source.clone()
             });
+        let translated_count = count_translated_segments(&source.segments, &translated.segments);
+        live_counts.insert(chapter_info.number, translated_count);
         let targets: std::collections::HashMap<u32, &TranslationSegment> = translated
             .segments
             .iter()
             .map(|segment| (segment.index, segment))
             .collect();
-        chapters.push(json!({
+        let mut chapter_json = json!({
             "number": chapter_info.number,
             "title": chapter_info.title,
             "status": chapter_status_str(chapter_info.status),
+            "translatedSegments": translated_count,
             "segments": source.segments.iter().map(|segment| {
                 let target = targets.get(&segment.index);
                 json!({
@@ -258,12 +265,28 @@ pub async fn get_translation_detail(
                     "notes": target.and_then(|s| s.notes.clone()).unwrap_or_default(),
                 })
             }).collect::<Vec<_>>(),
-        }));
+        });
+        if let Some(summary) = &chapter_info.review_summary {
+            chapter_json["reviewSummary"] = json!(summary);
+        }
+        if let Some(observations) = &chapter_info.observations {
+            chapter_json["observations"] = json!(observations);
+        }
+        chapters.push(chapter_json);
+    }
+    let mut manifest_json = serde_json::to_value(&manifest).unwrap_or(Value::Null);
+    if let Some(items) = manifest_json.get_mut("chapters").and_then(Value::as_array_mut) {
+        for item in items {
+            let number = item.get("number").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+            if let Some(count) = number.and_then(|n| live_counts.get(&n)) {
+                item["translatedSegments"] = json!(count);
+            }
+        }
     }
     (
         StatusCode::OK,
         Json(json!({
-            "manifest": serde_json::to_value(&manifest).unwrap_or(Value::Null),
+            "manifest": manifest_json,
             "report": report,
             "chapters": chapters,
         })),
@@ -293,6 +316,10 @@ fn is_upstream_error(message: &str) -> bool {
     });
     re.is_match(message)
 }
+
+/// 967 号：run 失败错误码对齐 TS 2.0（server.ts ApiError 500
+/// `INKOS_TRANSLATION_ACTION_FAILED`；此前 Rust 为 `TRANSLATION_RUN_FAILED`）。
+const TRANSLATION_ACTION_FAILED: &str = "INKOS_TRANSLATION_ACTION_FAILED";
 
 /// 960 号：TS `resolveProfileSkillActivations(loadAvailableAgentSkills(root).skills,
 /// createBuiltInWorkProfileRegistry(root).require("translation"))`（required only）。
@@ -335,7 +362,7 @@ pub async fn run_translation(
     //（TranslationManager 回执「Skill：…」读此字段——此前 Rust 后端恒缺且链上无技能指导）。
     let activations = match translation_skill_activations(root).await {
         Ok(activations) => activations,
-        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "TRANSLATION_RUN_FAILED", message),
+        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, TRANSLATION_ACTION_FAILED, message),
     };
     let skill_ids = crate::skills::production_bindings::activated_skill_ids(&activations);
     let model = crate::translation::llm_model::LlmTranslationModel {
@@ -363,7 +390,7 @@ pub async fn run_translation(
             };
             api_error(
                 status,
-                "TRANSLATION_RUN_FAILED",
+                TRANSLATION_ACTION_FAILED,
                 if message.is_empty() {
                     "Translation run failed.".to_string()
                 } else {

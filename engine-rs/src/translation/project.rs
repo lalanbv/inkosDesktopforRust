@@ -64,6 +64,9 @@ pub async fn create_translation_project_from_file(
             segment_count: segments.len(),
             char_count: chapter.content.chars().count() as u64,
             status: TranslationChapterStatus::Pending,
+            translated_segments: 0,
+            review_summary: None,
+            observations: None,
         });
     }
 

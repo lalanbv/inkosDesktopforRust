@@ -8267,6 +8267,9 @@ mod translations70_e2e {
         assert_eq!(detail["chapters"][0]["segments"].as_array().unwrap().len(), 2);
         assert_eq!(detail["chapters"][0]["segments"][0]["target"], "");
         assert_eq!(detail["report"], "# Translation Review\n\nPending.\n");
+        // 967 号：TS 2.0 章节计数字段双处在位（UI 读 manifest.chapters[].translatedSegments）。
+        assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 0);
+        assert_eq!(detail["chapters"][0]["translatedSegments"], 0);
 
         // run：翻译 + 评审全链。
         let (status, run) = call(
@@ -8281,6 +8284,13 @@ mod translations70_e2e {
         assert_eq!(run["reviewedChapters"], 1);
         assert_eq!(run["reportPath"], format!("translations/{project_id}/review-report.md"));
         assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
+        // 967 号：TS 2.0 回执形（kind/workId/total·completed·pending/observations）。
+        assert_eq!(run["kind"], "translation_completed");
+        assert_eq!(run["workId"], project_id.as_str());
+        assert_eq!(run["totalSegments"], 2);
+        assert_eq!(run["completedSegments"], 2);
+        assert_eq!(run["pendingSegments"], 0);
+        assert_eq!(run["observations"], serde_json::json!([]));
 
         // detail：状态推进 + 段回填 + 报告更新 + 术语表。
         let (status, detail) = call(
@@ -8292,6 +8302,11 @@ mod translations70_e2e {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(detail["manifest"]["chapters"][0]["status"], "reviewed");
+        assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 2);
+        assert_eq!(detail["manifest"]["chapters"][0]["reviewSummary"], "全部通过。");
+        assert_eq!(detail["manifest"]["chapters"][0]["observations"], serde_json::json!([]));
+        assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
+        assert_eq!(detail["chapters"][0]["reviewSummary"], "全部通过。");
         assert_eq!(detail["chapters"][0]["segments"][0]["target"], "[译]The mountain stood tall.");
         assert!(detail["report"].as_str().unwrap().contains("- passed: yes"));
         let glossary_raw = std::fs::read_to_string(
@@ -8438,7 +8453,7 @@ mod translations70_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
+        assert_eq!(parsed["error"]["code"], "INKOS_TRANSLATION_ACTION_FAILED");
     }
 
     /// 960 号：TS 2.0 translation run——profile "translation" 必需技能 inkos-translation
@@ -8460,7 +8475,7 @@ mod translations70_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "TRANSLATION_RUN_FAILED");
+        assert_eq!(parsed["error"]["code"], "INKOS_TRANSLATION_ACTION_FAILED");
         assert_eq!(
             parsed["error"]["message"],
             "Profile \"translation\" requires unavailable skill(s): inkos-translation"
@@ -8485,6 +8500,75 @@ mod translations70_e2e {
             assert!(system.contains("### inkos-translation — inkos-translation"), "{system}");
             assert!(system.contains("# Long-form translation"), "技能正文注入：{system}");
         }
+    }
+
+    /// 967 号：审校问题 → TS ObservationSchema 形 observations（manifest 落盘+详情+回执三处，
+    /// 空白问题不产出）；旧 manifest 无 translatedSegments 字段 → 详情按译文文件现场计数。
+    #[tokio::test]
+    async fn review_issues_surface_as_observations_and_legacy_manifest_counts_live() {
+        let review = serde_json::json!({
+            "passed": false,
+            "summary": "两处问题。",
+            "issues": ["术语不一致：Mana 应统一为「魔力」", "  ", "第 2 段语气偏差"],
+        });
+        let app_llm = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let review = review.clone();
+                async move {
+                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
+                    let content = if system.contains("Translation Review Agent") {
+                        review.to_string()
+                    } else {
+                        translation_mock_reply(&system, &user)
+                    };
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+                    ))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
+        let app = app70(&root, &format!("http://{addr}"));
+        let project_id = seed_project(&root, &app).await;
+
+        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        let expected_observations = serde_json::json!([
+            { "code": "translation-review", "summary": "术语不一致：Mana 应统一为「魔力」", "evidence": [], "category": "quality", "assessment": "issue" },
+            { "code": "translation-review", "summary": "第 2 段语气偏差", "evidence": [], "category": "quality", "assessment": "issue" },
+        ]);
+        assert_eq!(run["observations"], expected_observations, "空白问题不产出");
+        let detail_uri = format!("/api/v1/translations/{project_id}");
+        let (_, detail) = call(app.clone(), "GET", &detail_uri, None).await;
+        assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "审校未过不升 reviewed");
+        assert_eq!(detail["manifest"]["chapters"][0]["reviewSummary"], "两处问题。");
+        assert_eq!(detail["manifest"]["chapters"][0]["observations"], expected_observations);
+        assert_eq!(detail["chapters"][0]["observations"], expected_observations);
+
+        // 旧 manifest（967 前落盘形态）：剥三字段 → 详情现场计数仍为 2。
+        let manifest_path = root.join("translations").join(&project_id).join("manifest.json");
+        let mut legacy: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        for chapter in legacy["chapters"].as_array_mut().unwrap() {
+            let chapter = chapter.as_object_mut().unwrap();
+            chapter.remove("translatedSegments");
+            chapter.remove("reviewSummary");
+            chapter.remove("observations");
+        }
+        std::fs::write(&manifest_path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+        let (status, detail) = call(app, "GET", &detail_uri, None).await;
+        assert_eq!(status, StatusCode::OK, "旧 manifest 仍可读：{detail}");
+        assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 2);
+        assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
+        assert!(detail["manifest"]["chapters"][0].get("observations").is_none());
     }
 }
 

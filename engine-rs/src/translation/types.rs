@@ -60,6 +60,15 @@ pub struct TranslationChapterManifest {
     pub segment_count: usize,
     pub char_count: u64,
     pub status: TranslationChapterStatus,
+    /// 967 号：TS 2.0 manifest 章节三字段（translatedSegments 必有；reviewSummary/
+    /// observations 可选，形同 TS ObservationSchema）——serde default 读旧 manifest，
+    /// 随运行落盘。TranslationManager 读 `manifest.chapters[].translatedSegments`。
+    #[serde(default)]
+    pub translated_segments: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -188,13 +197,48 @@ pub struct TranslationProjectCreateResult {
 }
 
 /// run 产物（RunTranslationProjectResult）。
+///
+/// 967 号：补 TS 2.0 回执形（harness/tools/translation.ts：kind/workId/total·completed·
+/// pendingSegments/observations）——`reviewSourcePaths` 属审校 2.0（P3）不在此期。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunTranslationProjectResult {
+    pub kind: &'static str,
+    pub work_id: String,
     pub project_id: String,
     pub translated_segments: usize,
     pub reviewed_chapters: usize,
     pub report_path: String,
+    pub total_segments: usize,
+    pub completed_segments: usize,
+    pub pending_segments: usize,
+    pub observations: Vec<Value>,
+}
+
+/// 967 号：审校问题 → TS ObservationSchema 形（strict 键集内：code/summary/evidence/
+/// category/assessment）；空白问题不产出（TS summary min(1)）。
+pub fn review_issue_observation(issue: &str) -> Option<Value> {
+    let summary = issue.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "code": "translation-review",
+        "summary": summary,
+        "evidence": [],
+        "category": "quality",
+        "assessment": "issue",
+    }))
+}
+
+/// 967 号：章节已译段数（源段在译文中有非空 target 的个数——TS translatedSegments 语义）。
+pub fn count_translated_segments(source: &[TranslationSegment], translated: &[TranslationSegment]) -> usize {
+    let done: std::collections::HashSet<u32> = translated
+        .iter()
+        .filter(|segment| segment.target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
+        .map(|segment| segment.index)
+        .collect();
+    source.iter().filter(|segment| done.contains(&segment.index)).count()
 }
 
 /// export 产物（TranslationExportResult）。
