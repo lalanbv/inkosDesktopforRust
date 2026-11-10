@@ -80,7 +80,6 @@ async fn run_translation_inner(
     let mut report_lines: Vec<String> = vec!["# Translation Review".to_string(), String::new()];
     let mut translated_segments = 0usize;
     let mut reviewed_chapters = 0usize;
-    let mut run_observations: Vec<serde_json::Value> = Vec::new();
     let batch_size = batch_size.unwrap_or(8).clamp(1, 32);
 
     for chapter_info in manifest.chapters.clone() {
@@ -94,6 +93,8 @@ async fn run_translation_inner(
             .into_iter()
             .map(|segment| (segment.index, segment))
             .collect();
+        // 968 号：译后标题（TS translatedTitle——首轮结果即采用，后续批保留）。
+        let mut translated_title = translated.title.clone();
         let pending: Vec<&TranslationSegment> = source
             .segments
             .iter()
@@ -119,9 +120,11 @@ async fn run_translation_inner(
                     glossary: &glossary,
                 })
                 .await?;
+            // 968 号：严格校验后的结果段号必在批内且齐全——未知/重复/缺失/空 target
+            // 已在模型端口硬失败（TS runner 同语义）。
             for item in result.segments {
                 let Some(original) = source.segments.iter().find(|s| s.index == item.index) else {
-                    continue;
+                    return Err(format!("Translation source segment {} is missing.", item.index));
                 };
                 translated_by_index.insert(
                     item.index,
@@ -134,6 +137,9 @@ async fn run_translation_inner(
                 );
                 translated_segments += 1;
             }
+            if let Some(title) = result.chapter_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                translated_title = title.to_string();
+            }
             if !result.glossary.is_empty() {
                 let mut merged = glossary.clone();
                 merged.extend(result.glossary.iter().cloned());
@@ -145,11 +151,12 @@ async fn run_translation_inner(
                 .map(|segment| translated_by_index.get(&segment.index).cloned().unwrap_or_else(|| segment.clone()))
                 .collect();
             // 143 号：章译文 + 术语表同事务单点（TS saveTranslationProgress）。
+            // 968 号：标题用译后标题（TS `{...source, title: translatedTitle}`）。
             save_translation_progress(
                 project_root,
                 project_id,
                 &chapter_info.translated_path,
-                &TranslationChapterFile { segments: ordered_segments, ..source.clone() },
+                &TranslationChapterFile { title: translated_title.clone(), segments: ordered_segments, ..source.clone() },
                 &glossary,
             )
             .await?;
@@ -178,18 +185,20 @@ async fn run_translation_inner(
         let completed_chapter =
             load_translation_chapter(project_root, &chapter_info.translated_path).await?;
         let mut status = TranslationChapterStatus::Translated;
-        // 967 号：本章审校摘要/观察（未审校则保持既有值）。
+        // 967 号：本章审校摘要/观察；968 号：未审校即清空（TS updateChapterProgress
+        // 以 undefined 覆写同语义）。
         let mut reviewed: Option<(String, Vec<serde_json::Value>)> = None;
         if completed_chapter
             .segments
             .iter()
             .any(|segment| segment.target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
         {
+            // 968 号：审校输入标题=译后标题（TS `chapterTitle: completedChapter.title`）。
             let review = model
                 .review_chapter(ReviewChapterInput {
                     source_language: &manifest.source_language,
                     target_language: &manifest.target_language,
-                    chapter_title: &source.title,
+                    chapter_title: &completed_chapter.title,
                     segments: &completed_chapter.segments,
                     glossary: &glossary,
                 })
@@ -200,7 +209,7 @@ async fn run_translation_inner(
             } else {
                 TranslationChapterStatus::Translated
             };
-            report_lines.push(format!("## {}", source.title));
+            report_lines.push(format!("## {}", completed_chapter.title));
             report_lines.push(String::new());
             report_lines.push(format!("- passed: {}", if review.passed { "yes" } else { "no" }));
             report_lines.push(format!("- summary: {}", review.summary));
@@ -211,7 +220,6 @@ async fn run_translation_inner(
                 report_lines.push(format!("- issue: {issue}"));
             }
             report_lines.push(String::new());
-            run_observations.extend(observations.iter().cloned());
             reviewed = Some((review.summary, observations));
         }
         let translated_count = count_translated_segments(&source.segments, &completed_chapter.segments);
@@ -220,10 +228,11 @@ async fn run_translation_inner(
             if chapter.number == chapter_info.number {
                 chapter.status = status;
                 chapter.translated_segments = translated_count;
-                if let Some((summary, observations)) = reviewed.take() {
-                    chapter.review_summary = Some(summary);
-                    chapter.observations = Some(observations);
-                }
+                // 968 号：manifest 章节标题=译后标题（TS updateChapterProgress）。
+                chapter.title = completed_chapter.title.clone();
+                let (summary, observations) = reviewed.take().unzip();
+                chapter.review_summary = summary;
+                chapter.observations = observations;
             }
         }
         save_translation_manifest(project_root, &manifest)
@@ -268,6 +277,23 @@ async fn run_translation_inner(
     let total_segments: usize = manifest.chapters.iter().map(|chapter| chapter.segment_count).sum();
     let completed_segments: usize = manifest.chapters.iter().map(|chapter| chapter.translated_segments).sum();
     let pending_segments = total_segments.saturating_sub(completed_segments);
+    // 968 号：回执 observations=manifest 全章 flatMap（TS 同口径，非仅本次运行）+
+    // category/assessment/scope 缺省补齐（`chapter:N`）；targetHash/target 属 P4 工件面。
+    let observations: Vec<serde_json::Value> = manifest
+        .chapters
+        .iter()
+        .flat_map(|chapter| {
+            chapter.observations.iter().flatten().map(move |observation| {
+                let mut observation = observation.clone();
+                if let Some(object) = observation.as_object_mut() {
+                    object.entry("category").or_insert_with(|| serde_json::json!("quality"));
+                    object.entry("assessment").or_insert_with(|| serde_json::json!("observation"));
+                    object.entry("scope").or_insert_with(|| serde_json::json!(format!("chapter:{}", chapter.number)));
+                }
+                observation
+            })
+        })
+        .collect();
     Ok(RunTranslationProjectResult {
         kind: if pending_segments > 0 { "translation_pending" } else { "translation_completed" },
         work_id: project_id.to_string(),
@@ -278,6 +304,6 @@ async fn run_translation_inner(
         total_segments,
         completed_segments,
         pending_segments,
-        observations: run_observations,
+        observations,
     })
 }

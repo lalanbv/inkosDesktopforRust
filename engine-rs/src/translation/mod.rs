@@ -241,6 +241,7 @@ mod tests {
                     target: "魔力".into(),
                     note: None,
                 }],
+                chapter_title: None,
             })
         }
 

@@ -8127,40 +8127,85 @@ mod translations70_e2e {
         (status, parsed)
     }
 
-    /// 翻译 LLM mock：按 system 关键词分流（Translation Agent → 逐段回译 JSON；
-    /// Review Agent → passed）。
+    /// 翻译 LLM mock：968 号起翻译走 submit_translation 结构化工具（非流式 JSON
+    /// tool_calls 应答），审校仍为单轮 JSON（SSE content）。
     async fn mock_translation_llm() -> String {
         mock_translation_llm_capturing().await.0
     }
 
-    fn translation_mock_reply(system: &str, user: &str) -> String {
-        if system.contains("Translation Agent") {
-            // 从请求 JSON 抽 segments，逐段回译。
-            let parsed: serde_json::Value = serde_json::from_str(user).unwrap_or_default();
-            let segments: Vec<serde_json::Value> = parsed["segments"]
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|segment| {
-                            serde_json::json!({
-                                "index": segment["index"],
-                                "target": format!("[译]{}", segment["source"].as_str().unwrap_or("")),
-                            })
+    /// submit_translation 参数：自请求首个 user 消息 JSON 抽 segments 逐段回译 +
+    /// chapterTitle 加「[译]」前缀。`drop_last` 模拟模型漏译最后一段（校验回喂重试面）。
+    fn translation_submission(body: &serde_json::Value, drop_last: bool) -> serde_json::Value {
+        let user = body["messages"]
+            .as_array()
+            .and_then(|messages| messages.iter().find(|m| m["role"] == "user"))
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("");
+        let parsed: serde_json::Value = serde_json::from_str(user).unwrap_or_default();
+        let mut segments: Vec<serde_json::Value> = parsed["segments"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|segment| {
+                        serde_json::json!({
+                            "index": segment["index"],
+                            "target": format!("[译]{}", segment["source"].as_str().unwrap_or("")),
                         })
-                        .collect()
-                })
-                .unwrap_or_default();
-            serde_json::json!({
-                "segments": segments,
-                "glossary": [{ "source": "Mana", "target": "魔力" }],
+                    })
+                    .collect()
             })
-            .to_string()
-        } else if system.contains("Translation Review Agent") {
-            serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] }).to_string()
-        } else {
-            "PASS".to_string()
+            .unwrap_or_default();
+        if drop_last {
+            segments.pop();
         }
+        serde_json::json!({
+            "chapterTitle": format!("[译]{}", parsed["chapterTitle"].as_str().unwrap_or("")),
+            "segments": segments,
+            "glossary": [{ "source": "Mana", "target": "魔力" }],
+        })
+    }
+
+    fn is_translation_tool_request(body: &serde_json::Value) -> bool {
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "submit_translation"))
+    }
+
+    fn tool_call_response(arguments: &serde_json::Value) -> axum::response::Response {
+        let response = serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": null, "tool_calls": [
+                { "id": "call-tr", "type": "function", "function": { "name": "submit_translation", "arguments": arguments.to_string() } }
+            ] }, "finish_reason": "tool_calls" }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 },
+        });
+        axum::response::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(response.to_string()))
+            .unwrap()
+    }
+
+    fn sse_content_response(content: &str) -> axum::response::Response {
+        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
+        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
+        axum::response::IntoResponse::into_response((
+            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+        ))
+    }
+
+    /// 统一分流：翻译=工具调用；审校=`review` JSON（缺省全部通过）；其余 PASS。
+    fn translation_mock_response(body: &serde_json::Value, review: Option<&serde_json::Value>) -> axum::response::Response {
+        if is_translation_tool_request(body) {
+            return tool_call_response(&translation_submission(body, false));
+        }
+        let system = body["messages"][0]["content"].as_str().unwrap_or("");
+        if system.contains("Translation Review Agent") {
+            let default_review = serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] });
+            return sse_content_response(&review.unwrap_or(&default_review).to_string());
+        }
+        sse_content_response("PASS")
     }
 
     /// 960 号：同分流 + 记录每次请求的 system 全文（技能注入面断言）。
@@ -8173,15 +8218,8 @@ mod translations70_e2e {
                     |axum::extract::State(systems): axum::extract::State<Arc<Mutex<Vec<String>>>>,
                      axum::Json(body): axum::Json<serde_json::Value>| async move {
                         let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                        let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
-                        let content = translation_mock_reply(&system, &user);
                         systems.lock().unwrap().push(system);
-                        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
-                        let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 } });
-                        axum::response::IntoResponse::into_response((
-                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                            format!("data: {chunk}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
-                        ))
+                        translation_mock_response(&body, None)
                     },
                 ),
             )
@@ -8493,7 +8531,11 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::OK, "body: {run}");
         assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
         let systems = systems.lock().unwrap().clone();
-        assert!(systems.iter().any(|s| s.contains("Translation Agent")), "翻译调用在场");
+        // 968 号：翻译 system 为 TS 2.0 结构化提示（旧「Translation Agent」JSON 提示退役）。
+        assert!(
+            systems.iter().any(|s| s.starts_with("Translate the chapter title and all segments with the activated translation Skill.")),
+            "翻译调用在场"
+        );
         assert!(systems.iter().any(|s| s.contains("Translation Review Agent")), "审校调用在场");
         for system in &systems {
             assert!(system.contains("\n\n## Activated professional skills"), "{system}");
@@ -8515,20 +8557,7 @@ mod translations70_e2e {
             "/chat/completions",
             axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
                 let review = review.clone();
-                async move {
-                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                    let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
-                    let content = if system.contains("Translation Review Agent") {
-                        review.to_string()
-                    } else {
-                        translation_mock_reply(&system, &user)
-                    };
-                    let chunk = serde_json::json!({ "choices": [{ "delta": { "content": content } }] });
-                    axum::response::IntoResponse::into_response((
-                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                        format!("data: {chunk}\n\ndata: [DONE]\n\n"),
-                    ))
-                }
+                async move { translation_mock_response(&body, Some(&review)) }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -8546,7 +8575,12 @@ mod translations70_e2e {
             { "code": "translation-review", "summary": "术语不一致：Mana 应统一为「魔力」", "evidence": [], "category": "quality", "assessment": "issue" },
             { "code": "translation-review", "summary": "第 2 段语气偏差", "evidence": [], "category": "quality", "assessment": "issue" },
         ]);
-        assert_eq!(run["observations"], expected_observations, "空白问题不产出");
+        // 968 号：回执层按 TS 补 scope 缺省（`chapter:N`）；manifest/详情为落盘原形。
+        let mut receipt_observations = expected_observations.clone();
+        for observation in receipt_observations.as_array_mut().unwrap() {
+            observation["scope"] = serde_json::json!("chapter:1");
+        }
+        assert_eq!(run["observations"], receipt_observations, "空白问题不产出");
         let detail_uri = format!("/api/v1/translations/{project_id}");
         let (_, detail) = call(app.clone(), "GET", &detail_uri, None).await;
         assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "审校未过不升 reviewed");
@@ -8569,6 +8603,100 @@ mod translations70_e2e {
         assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 2);
         assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
         assert!(detail["manifest"]["chapters"][0].get("observations").is_none());
+    }
+
+    /// 968 号：结构化提交校验回喂重试（TS runWorkerAgentTool validate 语义）——首轮漏译
+    /// 末段 → 工具结果回喂 `Translation omitted segment index(es): …` → 次轮补全成功；
+    /// 章节标题译后落盘（manifest 章节 title + 译文文件 title）。
+    #[tokio::test]
+    async fn structured_submission_retries_on_validation_and_translates_title() {
+        let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let app_llm = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    if is_translation_tool_request(&body) {
+                        // 首轮（无 tool 结果消息）漏译末段；含校验回喂后补全。
+                        let has_feedback = body["messages"]
+                            .as_array()
+                            .is_some_and(|messages| messages.iter().any(|m| m["role"] == "tool"));
+                        captured.lock().unwrap().push(body.clone());
+                        return tool_call_response(&translation_submission(&body, !has_feedback));
+                    }
+                    translation_mock_response(&body, None)
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
+        let app = app70(&root, &format!("http://{addr}"));
+        let project_id = seed_project(&root, &app).await;
+
+        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        assert_eq!(run["completedSegments"], 2);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2, "校验失败回喂一次后成功");
+        let feedback = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or("")
+            .to_string();
+        assert!(feedback.contains("Translation omitted segment index(es): "), "{feedback}");
+        assert_eq!(requests[0]["tool_choice"], "required");
+        assert!(requests[0]["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Finish by calling submit_translation exactly once."));
+        let (_, detail) = call(app, "GET", &format!("/api/v1/translations/{project_id}"), None).await;
+        assert_eq!(detail["manifest"]["chapters"][0]["title"], "[译]Chapter 1", "{detail}");
+        let translated = std::fs::read_to_string(
+            root.join(detail["manifest"]["chapters"][0]["translatedPath"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert!(translated.contains("\"title\": \"[译]Chapter 1\""), "{translated}");
+    }
+
+    /// 968 号：模型持续漏译 → 环预算耗尽 → run 失败 500 INKOS_TRANSLATION_ACTION_FAILED
+    /// 且消息为末次校验错误（此前 Rust 静默丢弃坏段=部分漏译仍「成功」）；译文不落盘。
+    #[tokio::test]
+    async fn structured_submission_exhaustion_fails_loudly_without_partial_write() {
+        let app_llm = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+                if is_translation_tool_request(&body) {
+                    return tool_call_response(&translation_submission(&body, true));
+                }
+                translation_mock_response(&body, None)
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
+        let app = app70(&root, &format!("http://{addr}"));
+        let project_id = seed_project(&root, &app).await;
+
+        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INKOS_TRANSLATION_ACTION_FAILED");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap().starts_with("Translation omitted segment index(es): "),
+            "{parsed}"
+        );
+        let (_, detail) = call(app, "GET", &format!("/api/v1/translations/{project_id}"), None).await;
+        assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 0, "坏批不落盘：{detail}");
     }
 }
 

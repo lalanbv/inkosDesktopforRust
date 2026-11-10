@@ -366,7 +366,7 @@ pub async fn run_translation(
     };
     let skill_ids = crate::skills::production_bindings::activated_skill_ids(&activations);
     let model = crate::translation::llm_model::LlmTranslationModel {
-        router: &*runtime.effective_router().await,
+        router: std::sync::Arc::clone(&runtime.effective_router().await),
         max_tokens,
     };
     match crate::skills::production_bindings::scope_operation_skills(

@@ -146,6 +146,8 @@ pub struct TranslateSegmentsInput<'a> {
 pub struct TranslateSegmentsOutput {
     pub segments: Vec<TranslatedSegmentItem>,
     pub glossary: Vec<TranslationGlossaryTerm>,
+    /// 968 号：TS 2.0 `chapterTitle`（译后章节标题，trim 非空才有值）。
+    pub chapter_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +214,7 @@ pub struct RunTranslationProjectResult {
     pub total_segments: usize,
     pub completed_segments: usize,
     pub pending_segments: usize,
+    /// 967 号：回执 observations=manifest 全章审校观察（TS flatMap 口径——非仅本次运行）。
     pub observations: Vec<Value>,
 }
 
