@@ -37,6 +37,16 @@ export const STUDIO_SSE_EVENTS = [
   // 961 号：TS 2.0 回退端章节审阅完成事件（上游 fb8c8e3e 起把 audit:complete 改发
   // review:complete；Rust 仍发 audit:complete——双名同收）。
   "review:complete",
+  // 965 号：书籍状态变更类（962 号 C 类定性收编）——双端均带 bookId 广播；经聊天/
+  // 代理外部触发时已打开的书籍视图与书目据此刷新（低频，通知表不含=零噪音）。
+  "chapter:deleted",
+  "chapter:restored",
+  "consolidate:complete",
+  "consolidate:error",
+  "foundation:revised",
+  "foundation:error",
+  "repair-state:complete",
+  "repair-state:error",
   "revise:start",
   "revise:complete",
   "revise:error",

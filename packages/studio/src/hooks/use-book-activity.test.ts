@@ -89,6 +89,25 @@ describe("shouldRefetchBookView", () => {
     expect(shouldRefetchBookView(msg("audit:start", { bookId: "alpha", chapter: 3 }, 1), "alpha")).toBe(false);
     expect(shouldRefetchBookView(msg("rewrite:complete", { bookId: "beta" }, 1), "alpha")).toBe(false);
   });
+
+  it("965 号：书籍状态变更类（双端同名同 bookId 负载）刷新本书视图，他书不刷", () => {
+    const changed: Array<[string, Record<string, unknown>]> = [
+      ["chapter:deleted", { bookId: "alpha", chapterNumber: 5 }],
+      ["chapter:restored", { bookId: "alpha", chapterNumber: 4 }],
+      ["consolidate:complete", { bookId: "alpha", archivedVolumes: 1 }],
+      ["consolidate:error", { bookId: "alpha", error: "x" }],
+      ["foundation:revised", { bookId: "alpha" }],
+      ["foundation:error", { bookId: "alpha", error: "x" }],
+      ["repair-state:complete", { bookId: "alpha", chapter: 3 }],
+      ["repair-state:error", { bookId: "alpha", chapter: 3, error: "x" }],
+    ];
+    for (const [event, data] of changed) {
+      expect(shouldRefetchBookView(msg(event, data, 1), "alpha"), event).toBe(true);
+      expect(shouldRefetchBookView(msg(event, { ...data, bookId: "beta" }, 1), "alpha"), event).toBe(false);
+    }
+    // director:* 无 bookId 且结果走 HTTP 响应——不入刷新集。
+    expect(shouldRefetchBookView(msg("director:complete", { count: 3 }, 1), "alpha")).toBe(false);
+  });
 });
 
 describe("shouldRefetchBookCollections", () => {
@@ -98,6 +117,11 @@ describe("shouldRefetchBookCollections", () => {
     expect(shouldRefetchBookCollections(msg("write:complete", { bookId: "alpha" }, 1))).toBe(true);
     expect(shouldRefetchBookCollections(msg("draft:error", { bookId: "alpha" }, 1))).toBe(true);
     expect(shouldRefetchBookCollections(msg("rewrite:complete", { bookId: "alpha" }, 1))).toBe(true);
+    // 965 号：章节数变化类同步书目「N 章」；归并/地基/修复不改章数不刷书目。
+    expect(shouldRefetchBookCollections(msg("chapter:deleted", { bookId: "alpha", chapterNumber: 5 }, 1))).toBe(true);
+    expect(shouldRefetchBookCollections(msg("chapter:restored", { bookId: "alpha", chapterNumber: 4 }, 1))).toBe(true);
+    expect(shouldRefetchBookCollections(msg("consolidate:complete", { bookId: "alpha" }, 1))).toBe(false);
+    expect(shouldRefetchBookCollections(msg("foundation:revised", { bookId: "alpha" }, 1))).toBe(false);
     expect(shouldRefetchBookCollections(msg("audit:start", { bookId: "alpha" }, 1))).toBe(false);
     expect(shouldRefetchBookCollections(undefined)).toBe(false);
   });

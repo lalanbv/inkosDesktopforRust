@@ -15,6 +15,16 @@ const BOOK_REFRESH_EVENTS = new Set([
   "audit:error",
   // 961 号：TS 2.0 回退端审阅完成名（Rust 仍发 audit:complete）。
   "review:complete",
+  // 965 号：书籍状态变更类——章节删除/恢复、卷归并、地基修订、状态修复（双端带
+  // bookId；经聊天/代理外部触发时已打开的书籍视图须刷新）。
+  "chapter:deleted",
+  "chapter:restored",
+  "consolidate:complete",
+  "consolidate:error",
+  "foundation:revised",
+  "foundation:error",
+  "repair-state:complete",
+  "repair-state:error",
 ]);
 
 const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
@@ -32,6 +42,9 @@ const BOOK_COLLECTION_REFRESH_EVENTS = new Set([
   "audit:complete",
   "audit:error",
   "review:complete",
+  // 965 号：章节数变化类（书目卡「N 章」须同步；归并/地基/修复不改章数不入此集）。
+  "chapter:deleted",
+  "chapter:restored",
 ]);
 
 const DAEMON_STATUS_REFRESH_EVENTS = new Set([
