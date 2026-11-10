@@ -455,3 +455,73 @@ pub async fn export_translation(
         Err(message) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message),
     }
 }
+
+// ── POST /translations/:id/revise（971 号 P5：revise_paragraph HTTP 面）──
+
+/// 971 号：段落修订端点。TS 无独立路由（修订走代理工具 revise_paragraph），HTTP 面
+/// 为 Rust 自有扩展（与 run/export 同错误协议）；错误码=TS 码面（UI 可据此分支）。
+pub async fn revise_translation(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(id): AxumPath<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !is_safe_book_id(&id) {
+        return invalid_id(&id);
+    }
+    let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    let chapter_number = payload.get("chapterNumber").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok());
+    let paragraph = match payload.get("paragraph") {
+        Some(Value::String(text)) if text == "last" => None,
+        Some(Value::Number(number)) => number.as_u64().and_then(|v| u32::try_from(v).ok()),
+        _ => None,
+    };
+    let instruction = payload.get("instruction").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    if chapter_number.is_none() {
+        return api_error(StatusCode::BAD_REQUEST, "TRANSLATION_CHAPTER_REQUIRED", "chapterNumber is required");
+    }
+    if instruction.is_empty() {
+        return api_error(StatusCode::BAD_REQUEST, "TRANSLATION_INSTRUCTION_REQUIRED", "instruction is required");
+    }
+    let root = runtime.state.project_root();
+    // 960/968/969 号同款技能装配（修订=翻译技能域）。
+    let activations = match translation_skill_activations(root).await {
+        Ok(activations) => activations,
+        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, TRANSLATION_ACTION_FAILED, message),
+    };
+    let model = crate::translation::llm_model::LlmTranslationModel {
+        router: std::sync::Arc::clone(&runtime.effective_router().await),
+        max_tokens: payload.get("maxTokens").and_then(Value::as_u64).map(|v| v as u32),
+    };
+    match crate::skills::production_bindings::scope_operation_skills(
+        Some(std::sync::Arc::new(activations)),
+        crate::translation::revision::revise_translation_segment(
+            root,
+            &id,
+            chapter_number.unwrap(),
+            paragraph,
+            &instruction,
+            &model,
+        ),
+    )
+    .await
+    {
+        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+        Err(message) => {
+            let (code, status) = coded_error(&message);
+            api_error(status, &code, message)
+        }
+    }
+}
+
+/// 971 号：TS 码面错误 → 状态码（校验面 400，缺失面 404，其余 500）。
+fn coded_error(message: &str) -> (String, StatusCode) {
+    let code = message.split(": ").next().unwrap_or("").to_string();
+    match code.as_str() {
+        "TRANSLATION_PARAGRAPH_REQUIRED"
+        | "TRANSLATION_TARGET_EMPTY"
+        | "TRANSLATION_TARGET_MISSING" => (code, StatusCode::BAD_REQUEST),
+        "TRANSLATION_CHAPTER_NOT_FOUND" | "TRANSLATION_SEGMENT_NOT_FOUND" => (code, StatusCode::NOT_FOUND),
+        "TRANSLATION_REVISION_UNAVAILABLE" => (code, StatusCode::NOT_IMPLEMENTED),
+        _ => ("TRANSLATION_REVISION_FAILED".into(), StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}

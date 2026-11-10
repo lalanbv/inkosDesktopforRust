@@ -34,30 +34,34 @@ fn translation_artifact_kind(work_relative_path: &str) -> &'static str {
     "source-chapter"
 }
 
-/// TS `artifactId`：Work 内相对路径去扩展名、`/`→`-`。
-fn artifact_id_for_path(work_relative_path: &str) -> String {
-    let without_dirs = work_relative_path.replace('/', "-");
-    match without_dirs.rsplit_once('.') {
-        Some((stem, extension)) if !extension.is_empty() => stem.to_string(),
-        _ => without_dirs,
-    }
-}
-
 struct PendingWrite {
     /// `works/<id>/…`（project 根相对 posix）。
     work_root_path: String,
     /// `source/…`（work 根相对 posix，即 artifact.path）。
     artifact_path: String,
+    /// `source/…`（baseDir=source 相对 posix，即 TS artifactId 源串）。
+    source_relative: String,
     content: String,
 }
 
 impl PendingWrite {
     fn new(work_id: &str, work_root_path: String, content: String) -> Self {
+        let prefix = format!("works/{work_id}/source/");
+        let source_relative = work_root_path.strip_prefix(&prefix).unwrap_or(&work_root_path).to_string();
         let artifact_path = work_root_path
             .strip_prefix(&format!("works/{work_id}/"))
             .unwrap_or(&work_root_path)
             .to_string();
-        Self { work_root_path, artifact_path, content }
+        Self { work_root_path, artifact_path, source_relative, content }
+    }
+
+    /// TS `artifactId`：baseDir 相对路径去扩展、`/`→`-`（manifest/glossary/
+    /// review-report/source-chapter-N/translated-chapter-N——全 Work 唯一）。
+    fn artifact_id(&self) -> String {
+        match self.source_relative.rsplit_once('.') {
+            Some((stem, extension)) if !extension.is_empty() => stem.replace('/', "-"),
+            _ => self.source_relative.replace('/', "-"),
+        }
     }
 }
 
@@ -66,7 +70,7 @@ fn current_artifact(write: &PendingWrite, now: &str) -> ArtifactManifest {
     let content_type = if write.work_root_path.ends_with(".md") { "text/markdown" } else { "application/json" };
     let bytes = write.content.as_bytes();
     ArtifactManifest {
-        id: artifact_id_for_path(&write.artifact_path),
+        id: write.artifact_id(),
         kind: translation_artifact_kind(&write.work_root_path).to_string(),
         current_revision_id: Some("rev-1".into()),
         revisions: vec![ArtifactRevision {

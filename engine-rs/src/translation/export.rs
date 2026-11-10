@@ -44,6 +44,7 @@ pub async fn write_translation_export(
         output_path: to_posix_path(project_root, &output_path),
         format,
         chapters_exported: manifest.chapters.len(),
+        export_source_paths: manifest.chapters.iter().map(|chapter| chapter.translated_path.clone()).collect(),
     })
 }
 

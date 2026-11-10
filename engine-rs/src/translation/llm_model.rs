@@ -282,6 +282,86 @@ impl TranslationModelPort for LlmTranslationModel {
         Ok(output_from_value(&outcome.result))
     }
 
+    /// 971 号：段落修订（TS `reviseSegment` 逐字）——submit_translation_revision
+    /// 结构化提交（target minLength 1 + trim 校验回喂）；system 逐字。
+    async fn revise_segment(
+        &self,
+        input: ReviseSegmentInput<'_>,
+    ) -> Result<ReviseSegmentOutput, String> {
+        let mut messages = vec![
+            LLMMessage {
+                role: LLMRole::System,
+                content: "Revise only the supplied translated paragraph according to the instruction. Preserve all facts, identities, terminology and point of view in its source. Use neighboring paragraphs only for continuity. Return the complete revised target text, without commentary.".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: serde_json::to_string_pretty(&serde_json::json!({
+                    "sourceLanguage": input.source_language,
+                    "targetLanguage": input.target_language,
+                    "chapterTitle": input.chapter_title,
+                    "segment": input.segment,
+                    "neighbors": input.neighbors,
+                    "glossary": input.glossary,
+                    "instruction": input.instruction,
+                }))
+                .unwrap_or_default(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+        if let Some(skills) = crate::skills::production_bindings::current_operation_skills() {
+            crate::agents::append_activated_skill_guidance(&mut messages, &skills);
+        }
+        let max_tokens = self.max_tokens.unwrap_or(4096);
+        let endpoint = self.router.resolve("translator");
+        let outcome = run_structured_tool(
+            router_chat_turn_fn(Arc::clone(&self.router), "translator"),
+            &endpoint.model,
+            &messages,
+            StructuredDefaults { temperature: 0.2, max_tokens },
+            WorkerToolSpec {
+                name: "submit_translation_revision".into(),
+                description: "Submit only the revised target paragraph.".into(),
+                parameters_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "target": { "type": "string", "minLength": 1 } },
+                    "required": ["target"],
+                }),
+                max_turns: None,
+            },
+            Some(Arc::new(|args: Value| {
+                Box::pin(async move {
+                    let target = args
+                        .get("target")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|target| !target.is_empty())
+                        .ok_or_else(|| {
+                            StructuredToolError::coded(
+                                "TRANSLATION_TARGET_EMPTY",
+                                "A translated paragraph cannot be empty",
+                            )
+                        })?;
+                    Ok(serde_json::json!({ "target": target }))
+                })
+            })),
+            Vec::new(),
+            StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        )
+        .await
+        .map_err(|error| error.message)?;
+        Ok(ReviseSegmentOutput {
+            target: outcome
+                .result
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
     async fn review_chapter(
         &self,
         input: ReviewChapterInput<'_>,

@@ -809,6 +809,11 @@ pub fn router_books(
             "/api/v1/translations/:id/export",
             post(translation_routes::export_translation).with_state(books.clone()),
         )
+        // 971 号 P5：段落修订 HTTP 面（TS 修订走代理工具；Rust 自有扩展同错误码面）。
+        .route(
+            "/api/v1/translations/:id/revise",
+            post(translation_routes::revise_translation).with_state(books.clone()),
+        )
         // 71 号：play 域（互动世界游玩面）。
         .route(
             "/api/v1/play/runs/:worldId/:runId",

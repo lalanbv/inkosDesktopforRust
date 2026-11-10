@@ -133,6 +133,33 @@ pub trait TranslationModelPort: Send + Sync {
             observations: Vec::new(),
         })
     }
+
+    /// 971 号：段落修订（TS `reviseSegment?`——缺省不可用=端口未实现，
+    /// `TRANSLATION_REVISION_UNAVAILABLE`）。
+    async fn revise_segment(
+        &self,
+        _input: ReviseSegmentInput<'_>,
+    ) -> Result<ReviseSegmentOutput, String> {
+        Err("Translation model has no revision method".to_string())
+    }
+}
+
+/// 971 号：TS `reviseSegment` 入参（chapterTitle=译后标题；segment 带现 target；
+/// neighbors=源序前后邻段带现译；instruction=作者修订指令）。
+pub struct ReviseSegmentInput<'a> {
+    pub source_language: &'a str,
+    pub target_language: &'a str,
+    pub chapter_title: &'a str,
+    pub segment: &'a TranslationSegment,
+    pub neighbors: &'a [TranslationSegment],
+    pub glossary: &'a [TranslationGlossaryTerm],
+    pub instruction: &'a str,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReviseSegmentOutput {
+    /// trim 后非空（空即 `TRANSLATION_TARGET_EMPTY`）。
+    pub target: String,
 }
 
 pub struct TranslateSegmentsInput<'a> {
@@ -242,13 +269,15 @@ pub fn count_translated_segments(source: &[TranslationSegment], translated: &[Tr
     source.iter().filter(|segment| done.contains(&segment.index)).count()
 }
 
-/// export 产物（TranslationExportResult）。
+/// export 产物（TranslationExportResult）。971 号：+`exportSourcePaths`（TS 逐字——
+/// 参与导出的章译文路径）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationExportResult {
     pub output_path: String,
     pub format: TranslationExportFormat,
     pub chapters_exported: usize,
+    pub export_source_paths: Vec<String>,
 }
 
 pub type Json = Value;

@@ -8110,6 +8110,11 @@ mod translations70_e2e {
                 "/api/v1/translations/:id/export",
                 axum::routing::post(translation_routes::export_translation),
             )
+            // 971 号 P5：段落修订 HTTP 面。
+            .route(
+                "/api/v1/translations/:id/revise",
+                axum::routing::post(translation_routes::revise_translation),
+            )
             .with_state(rt70(root, llm))
     }
 
@@ -8510,6 +8515,120 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::OK);
         let ids: Vec<&str> = listed["translations"].as_array().unwrap().iter().map(|t| t["projectId"].as_str().unwrap()).collect();
         assert!(ids.contains(&project_id.as_str()) && ids.contains(&legacy_id), "{ids:?}");
+    }
+
+    /// 971 号 P5：段落修订——①改写成功（changed=true + 哈希面 + 审校面清空 +
+    /// work.json 工件账随写翻转）；②缺段 404 / 空白指令 400 错误面；③导出
+    /// exportSourcePaths（TS 逐字段）。
+    #[tokio::test]
+    async fn revise_paragraph_flow_and_export_source_paths() {
+        let calls: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&calls);
+        let app_llm = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    let tool = body["tools"][0]["function"]["name"].as_str().unwrap_or("").to_string();
+                    captured.lock().unwrap().push(body.clone());
+                    if tool == "submit_translation" {
+                        return tool_call_response(&translation_submission(&body, false));
+                    }
+                    if tool == "submit_translation_source_reading" {
+                        let fields: serde_json::Map<String, serde_json::Value> =
+                            body["tools"][0]["function"]["parameters"]["properties"].as_object().map(|p| p.keys().map(|k| (k.clone(), serde_json::json!(format!("读{k}")))).collect()).unwrap_or_default();
+                        return named_tool_calls_response(&[("submit_translation_source_reading", serde_json::Value::Object(fields))]);
+                    }
+                    if tool == "submit_translation_review" {
+                        let has_feedback = body["messages"].as_array().is_some_and(|m| m.iter().any(|m| m["role"] == "tool"));
+                        if !has_feedback {
+                            return named_tool_calls_response(&[("record_review_observation", serde_json::json!({
+                                "code": "glossary", "summary": "术语问题", "category": "quality", "assessment": "issue",
+                                "sourceRefs": [{ "sourceId": "original-1", "startLine": 1, "endLine": 1 }, { "sourceId": "target-1", "startLine": 1, "endLine": 1 }],
+                            }))]);
+                        }
+                        return named_tool_calls_response(&[("submit_translation_review", serde_json::json!({ "summary": "一处术语问题。", "observationCodes": ["glossary"] }))]);
+                    }
+                    if tool == "submit_translation_revision" {
+                        let request: serde_json::Value = serde_json::from_str(
+                            body["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap()["content"].as_str().unwrap(),
+                        ).unwrap();
+                        assert_eq!(request["segment"]["target"], "[译]Mana flowed.", "segment 带现译");
+                        assert_eq!(request["instruction"], "统一术语并润色");
+                        return named_tool_calls_response(&[(
+                            "submit_translation_revision",
+                            serde_json::json!({ "target": "魔力流淌。" }),
+                        )]);
+                    }
+                    sse_content_response("PASS")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
+        let app = app70(&root, &format!("http://{addr}"));
+        let project_id = seed_project(&root, &app).await;
+        // 先跑一轮（产生审校面：reviewSummary/observations 在 manifest）。
+        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        assert!(!run["observations"].as_array().unwrap().is_empty(), "前置审校有发现");
+        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
+
+        // 修订段 2。
+        let (status, revised) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/revise"),
+            Some(r#"{ "chapterNumber": 1, "paragraph": 2, "instruction": "统一术语并润色" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {revised}");
+        assert_eq!(revised["changed"], true);
+        assert_eq!(revised["paragraphNumber"], 2);
+        assert_eq!(revised["paragraphCount"], 2);
+        assert_eq!(revised["sourceSegmentIndex"], 2);
+        assert_eq!(revised["isLastParagraph"], true);
+        assert_eq!(revised["reviewRequired"], true);
+        assert_eq!(revised["sourceExcerpt"], "Mana flowed.");
+        assert_eq!(revised["previousTargetExcerpt"], "[译]Mana flowed.");
+        assert_eq!(revised["targetExcerpt"], "魔力流淌。");
+        assert_ne!(revised["previousTargetHash"], revised["targetHash"]);
+        assert!(revised["previousTargetHash"].as_str().unwrap().starts_with("sha256:"));
+        // 修订请求 system 逐字 + 技能块。
+        let revision_request = calls.lock().unwrap().iter().find(|b| b["tools"][0]["function"]["name"] == "submit_translation_revision").unwrap().clone();
+        assert!(revision_request["messages"][0]["content"].as_str().unwrap().starts_with("Revise only the supplied translated paragraph according to the instruction."));
+        assert!(revision_request["messages"][0]["content"].as_str().unwrap().contains("### inkos-translation — "));
+        // 盘面：译文更新 + manifest 审校面清空。
+        let translated: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&project_id).join("source").join("translated").join("chapter-0001.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(translated["segments"][1]["target"], "魔力流淌。");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&project_id).join("source").join("manifest.json")).unwrap(),
+        ).unwrap();
+        assert!(manifest["chapters"][0].get("reviewSummary").is_none(), "修订后审校面清空：{manifest}");
+        assert!(manifest["chapters"][0].get("observations").is_none());
+        // work.json 工件账随写翻转（translated/chapter-0001.json 有 current 修订）。
+        let work: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("works").join(&project_id).join("work.json")).unwrap()).unwrap();
+        let translated_artifact = work["artifacts"].as_array().unwrap().iter().find(|a| a["id"] == "translated-chapter-0001").expect("translated 工件在场");
+        assert!(!translated_artifact["revisions"].as_array().unwrap().is_empty());
+
+        // 错误面：缺章 404 / 空白指令 400。
+        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/revise"), Some(r#"{ "chapterNumber": 9, "paragraph": 1, "instruction": "x" }"#)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "TRANSLATION_CHAPTER_NOT_FOUND");
+        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/revise"), Some(r#"{ "chapterNumber": 1, "paragraph": 1, "instruction": "  " }"#)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "TRANSLATION_INSTRUCTION_REQUIRED");
+
+        // 导出：exportSourcePaths（TS 逐字段）。
+        let (status, exported) = call(app, "POST", &format!("/api/v1/translations/{project_id}/export"), Some(r#"{ "format": "md" }"#)).await;
+        assert_eq!(status, StatusCode::OK, "body: {exported}");
+        assert_eq!(exported["exportSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ pub mod export;
 pub mod llm_model;
 pub mod project;
 pub mod review;
+pub mod revision;
 pub mod run_store;
 pub mod runner;
 pub mod source;

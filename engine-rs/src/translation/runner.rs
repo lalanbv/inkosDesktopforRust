@@ -83,6 +83,11 @@ async fn run_translation_inner(
     let mut translated_segments = 0usize;
     let mut reviewed_chapters = 0usize;
     let mut review_source_paths: Vec<String> = Vec::new();
+    // 971 号：TS `captureWorkSourceState`——run 结尾按 changed-paths 把章译文/manifest/
+    // 报告翻到新工件修订（工件账不过期，revise/export 的 sync 无冲突窗口）。
+    let source_before = crate::harness::source_sync::capture_work_source_state(project_root, project_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let batch_size = batch_size.unwrap_or(8).clamp(1, 32);
 
     for chapter_info in manifest.chapters.clone() {
@@ -293,6 +298,26 @@ async fn run_translation_inner(
     )
     .await
     .map_err(|e| e.to_string())?;
+    // 971 号：TS `syncWorkSourceArtifacts({accept, acceptPaths: changed})`——run 期间
+    // 直写的章译文/manifest/报告按前后指纹翻到新工件修订（账实同步，revise/export
+    // 的后续 sync 无冲突窗口）。吞错对齐 TS（commit 失败仍返回结果？TS 上抛——此处
+    // 亦上抛：工件账失真会让 revise 永远冲突，fail-loud）。
+    let changed_paths = crate::harness::source_sync::changed_work_source_paths(project_root, project_id, &source_before)
+        .await
+        .map_err(|error| error.to_string())?;
+    crate::harness::source_sync::sync_work_source_artifacts(crate::harness::source_sync::SyncWorkSourceInput {
+        project_root,
+        work_id: project_id,
+        accept: true,
+        accept_paths: Some(changed_paths),
+        episode_id: None,
+        updated_at: Some(manifest.updated_at.clone()),
+        writes: Vec::new(),
+        title: None,
+        status: None,
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     // 967 号：TS 回执口径——total=源段总数、completed=已译段数（manifest 已逐章更新）。
     let total_segments: usize = manifest.chapters.iter().map(|chapter| chapter.segment_count).sum();
     let completed_segments: usize = manifest.chapters.iter().map(|chapter| chapter.translated_segments).sum();
