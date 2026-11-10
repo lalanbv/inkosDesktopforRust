@@ -410,7 +410,7 @@ fn creation_source_error(message: &str) -> (String, StatusCode) {
 
 /// 960 号：TS `resolveProfileSkillActivations(loadAvailableAgentSkills(root).skills,
 /// createBuiltInWorkProfileRegistry(root).require("translation"))`（required only）。
-async fn translation_skill_activations(
+pub(crate) async fn translation_skill_activations(
     root: &Path,
 ) -> Result<Vec<crate::skills::production_bindings::ActivatedSkillGuidance>, String> {
     let available = crate::skills::external_loader::load_available_agent_skills(

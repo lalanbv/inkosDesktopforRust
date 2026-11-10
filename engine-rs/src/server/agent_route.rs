@@ -1354,6 +1354,13 @@ pub async fn post_agent(
         // 102 号：导入链在章粒度安全点响应聊天轮中止（TS signal 注入）。
         abort: Some(abort_flag.clone()),
     });
+    // 973 号：translate 段落修订族（book 会话；与 import_registered 同面）。
+    let translation_deps = (session_kind == SessionKind::Chat || book_session).then_some(
+        crate::interaction::translation_tools::TranslationToolDeps {
+            runtime: &runtime,
+            active_book_id: agent_book_id.as_deref(),
+        },
+    );
     // sub_agent：book/book-create 会话（architect 建书走确认面）。
     let sub_agent_deps = book_session.then_some(crate::interaction::sub_agent_tool::SubAgentDeps {
         runtime: &runtime,
@@ -1410,6 +1417,7 @@ pub async fn post_agent(
             }),
             suppress_production: background_task.is_some(),
             session_id: Some(session_id),
+            translation_deps: translation_deps.as_ref(),
         },
         last_observation: std::sync::Mutex::new(None),
     };

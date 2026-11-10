@@ -31,6 +31,7 @@ pub mod propose_action_tool;
 pub mod registry;
 pub mod research_tool;
 pub mod sub_agent_tool;
+pub mod translation_tools;
 pub mod session;
 pub mod session_restore;
 pub mod skill_tool;

@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 use super::{
     author_skill_tool, book_edit_tools, book_reference_tool, film_authoring_tools, forecast_tools,
     import_chapters_tool, material_tools, play_tools, project_tools, propose_action_tool,
-    research_tool, skill_tool, sub_agent_tool,
+    research_tool, skill_tool, sub_agent_tool, translation_tools,
 };
 use super::project_tools::ToolResult;
 use crate::server::books_routes::BooksRuntime;
@@ -88,6 +88,8 @@ pub struct ToolCtx<'a> {
     /// 557 号 R42：会话标识（spill 落盘 session 作用域目录；root_only 兜底
     /// 链无会话上下文 → None → session-adhoc 目录）。
     pub session_id: Option<&'a str>,
+    /// 973 号：translate 段落修订族（runtime + 会话活动书；book 会话装配）。
+    pub translation_deps: Option<&'a translation_tools::TranslationToolDeps<'a>>,
 }
 
 impl<'a> ToolCtx<'a> {
@@ -107,6 +109,7 @@ impl<'a> ToolCtx<'a> {
             skill_deps: None,
             suppress_production: false,
             session_id: None,
+            translation_deps: None,
         }
     }
 }
@@ -381,6 +384,8 @@ impl ToolRegistry {
                 // R37（560 号）：自扩展技能写入件——项目级常驻（TS 全模式
                 // 常驻同构；catalog node-only 豁免同批出清）。
                 defs.extend(author_skill_tool::defs());
+                // 973 号：translate 段落修订（revise_paragraph，生产变更面）。
+                defs.extend(translation_tools::defs());
                 defs
             },
         })
@@ -478,11 +483,12 @@ mod tests {
     fn registry_total_count_and_name_uniqueness() {
         let registry = ToolRegistry::global();
         let names: Vec<&str> = registry.all().map(|def| def.name()).collect();
-        // 34 = film 7 + propose 1 + research 1 + import 1 + sub_agent 1
+        // 36 = film 7 + propose 1 + research 1 + import 1 + sub_agent 1
         //      + use_skill 1 + book_reference 1 + book_edit 7 + forecast 3
-        //      + play 3 + 文件三件双作用域 6 + material 2 + author_skill 1。
+        //      + play 3 + 文件三件双作用域 6 + material 2 + author_skill 1
+        //      + translation 1（973 号 revise_paragraph）。
         // 新族注册须同步此计数（施工图 §4.1 穷举测试思想：防漏登记）。
-        assert_eq!(names.len(), 35, "注册表总件数漂移：{names:?}");
+        assert_eq!(names.len(), 36, "注册表总件数漂移：{names:?}");
         let mut sorted = names;
         sorted.sort_unstable();
         let total = sorted.len();
@@ -558,6 +564,7 @@ mod tests {
                 "rename_entity",
                 "replace_chapter_text",
                 "resync_chapter_state",
+                "revise_paragraph",
                 "sub_agent",
                 "write_truth_file",
             ]
