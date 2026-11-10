@@ -2237,7 +2237,9 @@ async fn execute_translation_create(
     on_progress(format!("Creating translation project from {file_path}..."));
     let root = runtime.state.project_root();
     let input = CreateTranslationProjectInput {
-        file_path,
+        file_path: Some(file_path),
+        resolved: None,
+        glossary: &[],
         source_language,
         target_language,
         title: if title.is_empty() { None } else { Some(title) },

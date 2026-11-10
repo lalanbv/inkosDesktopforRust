@@ -222,19 +222,28 @@ pub struct ExtractedTranslationSource {
 }
 
 /// 创建项目入参。
+/// 创建项目入参。972 号：三输入形态（TS `CreateTranslationProjectInput`）——
+/// `sources`（registered 工件引用）/ `file_path`（项目内路径）三选一（歧义由
+/// `load_creation_source` 守卫）+ `glossary` 初始术语。`source_text` 经
+/// `load_creation_source` 归一后走 `source_text_pre`。
 pub struct CreateTranslationProjectInput<'a> {
-    pub file_path: &'a str,
+    pub file_path: Option<&'a str>,
+    /// 972 号：creation_source 解析产物（正文+名称+lineage）——来自 sources/
+    /// sourceText/filePath 任何一形态（create 端点先解析）。
+    pub resolved: Option<&'a crate::agent::creation_source::CreationSourceResolved>,
+    pub glossary: &'a [TranslationGlossaryTerm],
     pub source_language: &'a str,
     pub target_language: &'a str,
     pub title: Option<&'a str>,
     pub segment_max_chars: Option<usize>,
 }
 
-/// 创建项目产物。
+/// 创建项目产物。972 号：+`lineage`（registered 源的 derived-from，供 work.json）。
 pub struct TranslationProjectCreateResult {
     pub project_dir: String,
     pub manifest_path: String,
     pub manifest: TranslationProjectManifest,
+    pub lineage: Vec<crate::harness::contracts::WorkLineage>,
 }
 
 /// run 产物（RunTranslationProjectResult）。

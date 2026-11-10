@@ -1,4 +1,4 @@
-//! 翻译项目创建（project.ts，970 号 P4 对齐 2.0 存储）：
+//! 翻译项目创建（project.ts，970/972 号）：
 //! 源提取 → 分章分段 → `works/<id>/source/` 布局 + `works/<id>/work.json`。
 //!
 //! 970 号：存储从 `translations/<id>/` 迁至 TS 2.0 的 `works/<id>/source/`
@@ -7,15 +7,25 @@
 //! work.json 的 artifacts 由写入集构造（TS createCurrentArtifact 同形：id=文件名
 //! 去扩展换 '-'、kind=translationArtifactKind 逐字、checksum sha256、current 一枚）。
 //! 章节/术语/报告布局与 manifest 字段不变，仅根路径变。
+//!
+//! 972 号：三输入形态——file（原 extractTranslationSource）/ sources+sourceText
+//! （经 `agent::creation_source::load_creation_source` 归一，含歧义守卫+lineage）+
+//! 初始 glossary；registered 源的 lineage 进 work.json。
 
 use std::path::Path;
 
+use serde_json::json;
+
 use crate::harness::contracts::{ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus, WorkManifest};
 use crate::harness::source_sync::hex_sha256;
-use crate::translation::run_store::to_posix_path;
+use crate::translation::run_store::{merge_glossary_terms, to_posix_path};
 use crate::translation::source::extract_translation_source;
 use crate::translation::text::segment_translation_text_vec;
 use crate::translation::types::*;
+
+fn coded(code: &str, message: impl std::fmt::Display) -> String {
+    format!("{code}: {message}")
+}
 
 /// TS `translationArtifactKind` 逐字。
 fn translation_artifact_kind(work_relative_path: &str) -> &'static str {
@@ -97,12 +107,63 @@ pub async fn create_translation_project_from_file(
     project_root: &Path,
     input: &CreateTranslationProjectInput<'_>,
 ) -> Result<TranslationProjectCreateResult, String> {
-    let source = extract_translation_source(project_root, input).await?;
+    // 972 号：源解析——file 形态走原 extractTranslationSource（保 PDF/EPUB 章切与
+    // 972 号：源解析——file 形态走原 extractTranslationSource（保 PDF/EPUB 章切与
+    // totalPages）；sources/sourceText 形态走 creation_source 解析产物（纯文本单章），
+    // 正文落 `source/source-input.md`（TS sourceText 同款 writes），source.path 指向它。
+    let (mut source, lineage, source_input_content) = match input.resolved {
+        Some(resolved) => {
+            let chapter_text = crate::translation::text::TranslationTextChapter {
+                title: resolved.name.clone(),
+                content: resolved.text.clone(),
+            };
+            (
+                ExtractedTranslationSource {
+                    title: resolved.name.clone(),
+                    kind: TranslationSourceKind::Text,
+                    source_path: String::new(),
+                    char_count: resolved.text.chars().count() as u64,
+                    total_pages: None,
+                    chapters: vec![chapter_text],
+                },
+                resolved.lineage.clone(),
+                Some(resolved.text.clone()),
+            )
+        }
+        None => {
+            let Some(file_path) = input.file_path else {
+                return Err(coded(
+                    "CREATION_SOURCE_REQUIRED",
+                    "Select a source artifact, file path, or author-supplied text.",
+                ));
+            };
+            let file_input = CreateTranslationProjectInput {
+                file_path: Some(file_path),
+                resolved: None,
+                glossary: input.glossary,
+                source_language: input.source_language,
+                target_language: input.target_language,
+                title: input.title,
+                segment_max_chars: input.segment_max_chars,
+            };
+            (extract_translation_source(project_root, &file_input).await?, Vec::new(), None)
+        }
+    };
     let now = crate::utils::utc_time::utc_now_iso();
     let id = format!("{}-{}", now.replace([':', '.'], "-"), slug(&source.title));
     let base_dir_posix = format!("works/{id}/source");
     let base_dir_abs = project_root.join("works").join(&id).join("source");
     let mut writes: Vec<PendingWrite> = Vec::new();
+    // 972 号：sources/sourceText 形态的正文落 `source/source-input.md`（TS 同款 writes），
+    // manifest 的 source.path 指向它（此前空串致该形态无法以 file 再创建/追溯）。
+    if let Some(source_input) = source_input_content {
+        source.source_path = format!("{base_dir_posix}/source-input.md");
+        writes.push(PendingWrite::new(
+            &id,
+            source.source_path.clone(),
+            format!("{}\n", serde_json::to_string_pretty(&json!({ "text": source_input })).unwrap_or_default()),
+        ));
+    }
 
     let mut chapters: Vec<TranslationChapterManifest> = Vec::new();
     for (index, chapter) in source.chapters.iter().enumerate() {
@@ -185,10 +246,15 @@ pub async fn create_translation_project_from_file(
         manifest_path_posix.clone(),
         format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()),
     ));
+    // 972 号：初始 glossary（TS `input.glossary ?? []`）。
+    let initial_terms = merge_glossary_terms(input.glossary);
     writes.push(PendingWrite::new(
         &id,
         format!("{base_dir_posix}/glossary.json"),
-        "{\n  \"terms\": []\n}\n".to_string(),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&serde_json::json!({ "terms": initial_terms })).unwrap_or_default()
+        ),
     ));
     writes.push(PendingWrite::new(
         &id,
@@ -198,6 +264,7 @@ pub async fn create_translation_project_from_file(
 
     // work.json（TS `createWorkManifest`+artifacts 同形；WorkManifestSchema parse 面
     // 由 contracts validate 承载——version=2/profileId="translation"/language=目标语）。
+    // 972 号：lineage=registered 源的 derived-from；sourceOrigin=file/inline/references。
     let work = WorkManifest {
         version: 2,
         id: id.clone(),
@@ -205,13 +272,16 @@ pub async fn create_translation_project_from_file(
         profile_id: "translation".into(),
         language: manifest.target_language.clone(),
         status: crate::harness::contracts::WorkStatus::Active,
-        lineage: Vec::new(),
+        lineage: lineage.clone(),
         artifacts: writes.iter().map(|write| current_artifact(write, &now)).collect(),
         metadata: {
             let mut metadata = serde_json::Map::new();
             metadata.insert("sourceLanguage".into(), serde_json::json!(manifest.source_language));
             metadata.insert("targetLanguage".into(), serde_json::json!(manifest.target_language));
-            metadata.insert("sourceOrigin".into(), serde_json::json!("file"));
+            metadata.insert(
+                "sourceOrigin".into(),
+                serde_json::json!(if input.resolved.is_some() { "inline" } else { "file" }),
+            );
             metadata
         },
         created_at: now.clone(),
@@ -244,6 +314,7 @@ pub async fn create_translation_project_from_file(
         project_dir: to_posix_path(project_root, &base_dir_abs),
         manifest_path: to_posix_path(project_root, &manifest_path_abs),
         manifest,
+        lineage,
     })
 }
 

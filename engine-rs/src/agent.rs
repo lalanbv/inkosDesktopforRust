@@ -1,2 +1,6 @@
-//! agent 域（Phase P3 占位）。待自下而上移植：从 packages/core/src/agent 搬运逻辑 + golden 差分测试守门。
-//! 见迁移规划 v1 附录 A 的域→Phase 矩阵。
+//! agent 域：创建源解析（972 号：TS `agent/creation-source.ts` `loadCreationSource`
+//! 翻译域切片——registered 引用 / inline 文本 / 项目内文件 + 歧义守卫 + lineage）。
+
+pub mod creation_source;
+
+pub use creation_source::load_creation_source;

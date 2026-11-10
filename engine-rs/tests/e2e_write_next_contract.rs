@@ -9079,6 +9079,135 @@ mod translations70_e2e {
         let (_, detail) = call(app, "GET", &format!("/api/v1/translations/{project_id}"), None).await;
         assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 0, "坏批不落盘：{detail}");
     }
+
+    /// 972 号：create 三输入形态——①registered 引用（works 工件，lineage 进 work.json
+    /// +glossary 落池）；②sourceText inline（单章）；③歧义守卫（sources+filePath 并给 →
+    /// CREATION_SOURCE_CONFLICT 400；空 sources → CREATION_SOURCE_REQUIRED 400）；
+    /// ④file 形态回归不变。registered 工件 = 先建一个 file 项目再读其 source 章节工件。
+    #[tokio::test]
+    async fn create_three_source_forms_with_lineage_and_glossary() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_translation_llm().await;
+        let app = app70(&root, &llm);
+        // 底座：file 形态建一个项目（其 translated/chapter-0001.json 即 registered 工件）。
+        let base_id = seed_project(&root, &app).await;
+        let detail = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;
+        let translated_path = detail["manifest"]["chapters"][0]["translatedPath"].as_str().unwrap().to_string();
+        assert!(translated_path.starts_with(&format!("works/{base_id}/source/translated/")));
+
+        // ② sourceText inline + glossary 初始术语。
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(&serde_json::json!({
+                "sourceText": "Inline chapter body.",
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+                "title": "内联之书",
+                "glossary": [{ "source": "Mana", "target": "魔力" }],
+            }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        let inline_id = created["projectId"].as_str().unwrap().to_string();
+        assert!(created["projectDir"].as_str().unwrap().starts_with("works/"));
+        let glossary_raw = std::fs::read_to_string(
+            root.join("works").join(&inline_id).join("source").join("glossary.json"),
+        )
+        .unwrap();
+        assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
+        let work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(work["metadata"]["sourceOrigin"], "inline");
+        assert!(work["lineage"].as_array().unwrap().is_empty(), "inline 无 lineage");
+
+        // ① registered 引用（原项目 source 章节工件）+ lineage 进 work.json。
+        let artifact_path = translated_path
+            .strip_prefix(&format!("works/{base_id}/source/"))
+            .unwrap()
+            .to_string();
+        let artifact_id = artifact_path.replace('/', "-").replace(".json", "");
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(&serde_json::json!({
+                "sources": [{ "workId": base_id, "artifactId": artifact_id }],
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+                "title": "衍生之书",
+            }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        let derived_id = created["projectId"].as_str().unwrap().to_string();
+        let work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(work["metadata"]["sourceOrigin"], "inline", "registered 走 resolved 通道");
+        let lineage = work["lineage"].as_array().unwrap();
+        assert_eq!(lineage.len(), 1);
+        assert_eq!(lineage[0]["relation"], "derived-from");
+        assert_eq!(lineage[0]["sourceWorkId"], base_id.as_str());
+        assert_eq!(lineage[0]["sourceArtifactId"], artifact_id.as_str());
+        assert!(lineage[0]["sourceRevisionId"].is_string());
+
+        // ③ 歧义守卫：sources+filePath 并给 → CREATION_SOURCE_CONFLICT。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(&serde_json::json!({
+                "filePath": "novel.txt",
+                "sources": [{ "workId": base_id, "artifactId": artifact_id }],
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+            }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "CREATION_SOURCE_CONFLICT");
+
+        // ③ 空 sources → CREATION_SOURCE_REQUIRED。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(r#"{ "sources": [], "sourceLanguage": "en", "targetLanguage": "zh" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "CREATION_SOURCE_REQUIRED");
+
+        // ④ file 形态回归（novel.txt 为 fixture 预置的 uploads 文件——从 base 项目
+        // manifest.source.path 取真实上传路径）。
+        let base_manifest = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;
+        eprintln!("[972-probe] base source.path = {:?}", base_manifest["manifest"]["source"]["path"]);
+        let source_file = base_manifest["manifest"]["source"]["path"].as_str().unwrap().to_string();
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(&serde_json::json!({
+                "filePath": source_file,
+                "sourceLanguage": "en",
+                "targetLanguage": "zh",
+                "title": "文件之书",
+            }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        assert_eq!(created["manifest"]["source"]["kind"], "text");
+        // 列表：四项目全在（works 扫描）。
+        let listed = call(app.clone(), "GET", "/api/v1/translations", None).await.1;
+        let count = listed["translations"].as_array().unwrap().len();
+        assert!(count >= 4, "{count}");
+    }
 }
 
 mod play71_e2e {

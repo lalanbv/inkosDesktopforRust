@@ -30,7 +30,9 @@ mod tests {
 
     fn input<'a>(file_path: &'a str) -> CreateTranslationProjectInput<'a> {
         CreateTranslationProjectInput {
-            file_path,
+            file_path: Some(file_path),
+            resolved: None,
+            glossary: &[],
             source_language: "en",
             target_language: "zh",
             title: None,

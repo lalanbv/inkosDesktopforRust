@@ -15,8 +15,12 @@ pub async fn extract_translation_source(
     project_root: &Path,
     input: &CreateTranslationProjectInput<'_>,
 ) -> Result<ExtractedTranslationSource, String> {
-    // safeChildPath：必须落在项目根内。
-    let safe_path = safe_child_path(project_root, input.file_path)?;
+    // safeChildPath：必须落在项目根内。972 号：file_path 为 Option（sources/sourceText
+    // 形态不经此函数）。
+    let file_path = input
+        .file_path
+        .ok_or_else(|| "CREATION_SOURCE_REQUIRED: Select a source artifact, file path, or author-supplied text.".to_string())?;
+    let safe_path = safe_child_path(project_root, file_path)?;
     let buffer = tokio::fs::read(&safe_path)
         .await
         .map_err(|e| e.to_string())?;

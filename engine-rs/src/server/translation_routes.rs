@@ -182,13 +182,46 @@ pub async fn create_translation(
             .map(str::trim)
             .filter(|s| !s.is_empty())
     };
-    let Some(file_path) = field("filePath") else {
+    // 972 号：三输入形态——sources（registered 工件引用）/ sourceText / filePath。
+    // 歧义守卫与解析在 load_creation_source（TS 同码面）；空 filePath+无 sources/
+    // sourceText → MISSING_FILE_PATH（既有 70 号契约保留）。
+    let sources = payload.get("sources").and_then(Value::as_array).cloned();
+    let source_text = field("sourceText");
+    let file_path = field("filePath");
+    let glossary: Vec<crate::translation::types::TranslationGlossaryTerm> = payload
+        .get("glossary")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|term| {
+                    Some(crate::translation::types::TranslationGlossaryTerm {
+                        source: term.get("source")?.as_str()?.trim().to_string(),
+                        target: term.get("target")?.as_str()?.trim().to_string(),
+                        note: term.get("note").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(String::from),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // 972 号：缺失检查先于语言（70 号契约序）。形态判定按 TS 键存在性——
+    // `sources` 键在场（含空数组 → CREATION_SOURCE_REQUIRED）、sourceText/filePath
+    // 非空串；全缺 → MISSING_FILE_PATH；并给 → CREATION_SOURCE_CONFLICT。
+    let sources_key_present = payload.get("sources").is_some();
+    if file_path.is_none() && !sources_key_present && source_text.is_none() {
         return api_error(
             StatusCode::BAD_REQUEST,
             "MISSING_FILE_PATH",
             "filePath is required",
         );
-    };
+    }
+    if file_path.is_some() && (sources_key_present || source_text.is_some()) {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "CREATION_SOURCE_CONFLICT",
+            "Select one source input: a reference, ordered references, a file, or supplied text.",
+        );
+    }
     let (Some(source_language), Some(target_language)) =
         (field("sourceLanguage"), field("targetLanguage"))
     else {
@@ -198,8 +231,35 @@ pub async fn create_translation(
             "sourceLanguage and targetLanguage are required",
         );
     };
+    let root = runtime.state.project_root();
+    // 972 号：仅 sources/sourceText 走 creation_source 解析（registered 引用 / inline
+    // 文本，正文落 source-input.md）；filePath 保持 70 号原链（extractTranslationSource
+    // 直读——PDF/EPUB 章切不经 material 归一）。
+    let resolved = if file_path.is_none() {
+        let target_work_id = payload.get("workId").and_then(Value::as_str);
+        match crate::agent::creation_source::load_creation_source(
+            root,
+            target_work_id,
+            sources.as_deref(),
+            source_text,
+            None,
+            field("sourceName"),
+        )
+        .await
+        {
+            Ok(resolved) => Some(resolved),
+            Err(message) => {
+                let (code, status) = creation_source_error(&message);
+                return api_error(status, &code, message);
+            }
+        }
+    } else {
+        None
+    };
     let input = CreateTranslationProjectInput {
         file_path,
+        resolved: resolved.as_ref(),
+        glossary: &glossary,
         source_language,
         target_language,
         title: field("title"),
@@ -208,7 +268,6 @@ pub async fn create_translation(
             .and_then(Value::as_u64)
             .map(|v| v as usize),
     };
-    let root = runtime.state.project_root();
     match crate::translation::project::create_translation_project_from_file(root, &input).await {
         Ok(result) => {
             let manifest_json =
@@ -334,6 +393,20 @@ fn is_upstream_error(message: &str) -> bool {
 /// 967 号：run 失败错误码对齐 TS 2.0（server.ts ApiError 500
 /// `INKOS_TRANSLATION_ACTION_FAILED`；此前 Rust 为 `TRANSLATION_RUN_FAILED`）。
 const TRANSLATION_ACTION_FAILED: &str = "INKOS_TRANSLATION_ACTION_FAILED";
+
+/// 972 号：creation-source 码面 → 状态码（歧义/必填/类型守卫 400，工件缺失 404）。
+fn creation_source_error(message: &str) -> (String, StatusCode) {
+    let code = message.split(": ").next().unwrap_or("").to_string();
+    match code.as_str() {
+        "CREATION_SOURCE_CONFLICT"
+        | "CREATION_SOURCE_REQUIRED"
+        | "CREATION_SOURCE_PATH_ABSOLUTE"
+        | "CREATION_SOURCE_PATH_INVALID"
+        | "SOURCE_NOT_TEXT" => (code, StatusCode::BAD_REQUEST),
+        "SOURCE_ARTIFACT_REQUIRED" | "WORK_RESOURCE_ID_INVALID" => (code, StatusCode::NOT_FOUND),
+        _ => ("TRANSLATION_CREATE_FAILED".into(), StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
 
 /// 960 号：TS `resolveProfileSkillActivations(loadAvailableAgentSkills(root).skills,
 /// createBuiltInWorkProfileRegistry(root).require("translation"))`（required only）。
