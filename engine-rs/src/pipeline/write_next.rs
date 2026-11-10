@@ -1820,6 +1820,8 @@ pub(crate) async fn prepare_write_input(
             .join("series")
             .join(format!("{series_id}.json"))
     });
+    // 963 号：写法绑定读项目级档案池（340 号设计的唯一池）。
+    let style_profiles_dir = ctx.project_root.join(".inkos").join("style-profiles");
     let composed: ComposeChapterOutput = compose_governed_chapter(&ComposeChapterInput {
         book_language: book.language.as_deref(),
         book_dir,
@@ -1832,6 +1834,7 @@ pub(crate) async fn prepare_write_input(
         memory_semantic_selector: Some(memory_selector),
         on_context_compression: config.on_context_compression.clone(),
         series_canon_file: series_canon_file.as_deref(),
+        style_profiles_dir: Some(&style_profiles_dir),
     })
     .await?;
 

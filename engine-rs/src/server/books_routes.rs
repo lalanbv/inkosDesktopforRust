@@ -1257,6 +1257,8 @@ async fn run_compose(
             .join("series")
             .join(format!("{series_id}.json"))
     });
+    // 963 号：写法绑定读项目级档案池（与 write-next 链同款）。
+    let style_profiles_dir = runtime.state.project_root().join(".inkos").join("style-profiles");
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
     let on_context_compression: crate::agents::composer::CompressionCallback =
@@ -1281,6 +1283,7 @@ async fn run_compose(
             memory_semantic_selector: Some(&memory_selector),
             on_context_compression: Some(on_context_compression),
             series_canon_file: series_canon_file.as_deref(),
+            style_profiles_dir: Some(&style_profiles_dir),
         },
     )
     .await

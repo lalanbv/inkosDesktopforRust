@@ -128,6 +128,9 @@ pub struct ComposeChapterInput<'a> {
     pub on_context_compression: Option<CompressionCallback>,
     /// R20/390 号：系列正典文件路径（book.series_id 存在时由调用方解析，None 不注入）。
     pub series_canon_file: Option<&'a std::path::Path>,
+    /// 963 号：项目级写法档案池目录（`<root>/.inkos/style-profiles`，340 号设计的
+    /// 唯一池；None 不注入写法绑定）。
+    pub style_profiles_dir: Option<&'a std::path::Path>,
 }
 
 /// compose 出参。对齐 TS `ComposeChapterOutput`。
@@ -200,7 +203,9 @@ pub async fn compose_governed_chapter(
         selected_context.extend(reference.entries);
     }
     // G4/340 号：书级写法绑定 → style-asset 条目（垫底参考层）。
-    if let Some(binding_entry) = load_style_binding_entry(input.book_dir) {
+    if let Some(binding_entry) =
+        input.style_profiles_dir.and_then(|dir| load_style_binding_entry(input.book_dir, dir))
+    {
         selected_context.push(binding_entry);
     }
     // R5/366 号：反AI规则禁则块 + G13 经验条目（与写法同层 style-asset=20）。
@@ -2025,8 +2030,16 @@ pub fn load_rule_experience_entries(
 }
 
 /// G4/340 号：书级写法绑定 → style-asset 条目；任何缺失/解析失败返回 None。
+///
+/// 963 号：档案自项目级池 `profiles_dir/{profileName}.json` 读取——340 号设计「档案池
+/// = 项目级 .inkos/style-profiles（sourceName 即档案名）」，保存/列举/绑定探针三端点
+/// 一直落在该池，而读面自 340 号起误读书级 `story/style-profiles/`（无任何写面）=
+/// 绑定恒不注入。池条目以**文件名为身份**：池内档案的 sourceName 常为分析样本源名
+/// （≠档案名），按文件名命中后把身份归一为档案名，再走 golden 锁定的
+/// `resolve_style_binding`（按 sourceName 匹配）——旧版直匹配致改名保存的档案恒空。
 pub fn load_style_binding_entry(
     book_dir: &Path,
+    profiles_dir: &Path,
 ) -> Option<crate::models::input_governance::ContextSource> {
     let binding_raw = std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
     let binding: crate::utils::style_feature_engine::StyleBinding =
@@ -2041,14 +2054,10 @@ pub fn load_style_binding_entry(
     if !crate::utils::is_safe_book_id(&binding.profile_name) {
         return None;
     }
-    let profile_raw = std::fs::read_to_string(
-        book_dir
-            .join("story")
-            .join("style-profiles")
-            .join(format!("{}.json", binding.profile_name)),
-    )
-    .ok()?;
-    let profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
+    let profile_raw =
+        std::fs::read_to_string(profiles_dir.join(format!("{}.json", binding.profile_name))).ok()?;
+    let mut profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
+    profile.source_name = Some(binding.profile_name.clone());
     let resolution = crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
     if resolution.enabled.is_empty() {
         return None;
@@ -2402,6 +2411,7 @@ mod tests {
             memory_semantic_selector: None,
             on_context_compression: None,
             series_canon_file: None,
+            style_profiles_dir: None,
         })
         .await
         .unwrap();
@@ -2529,6 +2539,7 @@ mod tests {
             memory_semantic_selector: None,
             on_context_compression: None,
             series_canon_file: None,
+            style_profiles_dir: None,
         })
         .await
         .unwrap();
@@ -2572,6 +2583,7 @@ mod tests {
             memory_semantic_selector: None,
             on_context_compression: None,
             series_canon_file: None,
+            style_profiles_dir: None,
         })
         .await
         .unwrap();
@@ -2612,27 +2624,56 @@ mod tests {
     }
 
     /// 957 号：绑定文件 profile_name 穿越=读面越界——修复前 `../../outside` 经
-    /// `story/style-profiles/../../outside.json` 读出 book_dir 外 .json 并产 style 条目
-    /// 注入写作链（盘外内容进提示词）。正对照：合法名同夹具可解析（证 None 非夹具失效）。
+    /// `{池}/../../outside.json` 读出池外 .json 并产 style 条目注入写作链（盘外内容进
+    /// 提示词）。正对照：合法名同夹具可解析（证 None 非夹具失效）。
+    /// 963 号：读面=项目级池（参数注入），书级 `story/style-profiles/` 不再被读。
     #[test]
     fn style_binding_entry_rejects_traversal_profile_names() {
         let dir = tempfile::tempdir().unwrap();
-        let book_dir = dir.path();
+        let book_dir = dir.path().join("books").join("b1");
         let story = book_dir.join("story");
-        std::fs::create_dir_all(story.join("style-profiles")).unwrap();
+        let pool = dir.path().join(".inkos").join("style-profiles");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::create_dir_all(&pool).unwrap();
         let profile = |source: &str| {
             format!(
                 r#"{{"avgSentenceLength":18.0,"sentenceLengthStdDev":4.0,"avgParagraphLength":80.0,"paragraphLengthRange":{{"min":40,"max":120}},"vocabularyDiversity":0.6,"topPatterns":[],"rhetoricalFeatures":[],"sourceName":"{source}"}}"#
             )
         };
-        // 正对照：合法名（当前读面=书级 story/style-profiles，340 号形态）可解析。
-        std::fs::write(story.join("style-profiles").join("古风.json"), profile("古风")).unwrap();
+        std::fs::write(pool.join("古风.json"), profile("古风")).unwrap();
         std::fs::write(story.join("style_binding.json"), r#"{"profileName":"古风"}"#).unwrap();
-        let entry = load_style_binding_entry(book_dir).expect("safe profile name resolves");
+        let entry = load_style_binding_entry(&book_dir, &pool).expect("safe profile name resolves");
         assert_eq!(entry.source, "style/古风");
-        // 穿越名：目标 = book_dir/outside.json（存在且可解析）——一律 None 不读。
-        std::fs::write(book_dir.join("outside.json"), profile("../../outside")).unwrap();
-        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"../../outside"}"#).unwrap();
-        assert!(load_style_binding_entry(book_dir).is_none());
+        // 穿越名：目标 = 池外 `.inkos/outside.json`（存在且可解析）——一律 None 不读。
+        std::fs::write(dir.path().join(".inkos").join("outside.json"), profile("../outside")).unwrap();
+        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"../outside"}"#).unwrap();
+        assert!(load_style_binding_entry(&book_dir, &pool).is_none());
+    }
+
+    /// 963 号：绑定读面=项目级池（340 号设计，保存/列举/绑定探针三端点的同一池）+
+    /// 池条目以文件名为身份——①池中档案可注入（修复前读书级树恒空）；②sourceName
+    /// 为样本源名（≠档案名）的档案按文件名命中仍注入（修复前按 sourceName 直匹配
+    /// 恒 None）；③书级旧树上的同名文件不被读（池缺失即 None，不回退）。
+    #[test]
+    fn style_binding_entry_reads_project_pool_by_file_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path().join("books").join("b1");
+        let story = book_dir.join("story");
+        let pool = dir.path().join(".inkos").join("style-profiles");
+        std::fs::create_dir_all(story.join("style-profiles")).unwrap();
+        std::fs::create_dir_all(&pool).unwrap();
+        let profile = r#"{"avgSentenceLength":18.0,"sentenceLengthStdDev":4.0,"avgParagraphLength":80.0,"paragraphLengthRange":{"min":40,"max":120},"vocabularyDiversity":0.6,"topPatterns":["他抬头"],"rhetoricalFeatures":["比喻"],"sourceName":"斗破苍穹样章"}"#;
+        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"热血少年"}"#).unwrap();
+        // ③ 仅书级旧树有文件 → None（不回退读旧树）。
+        std::fs::write(story.join("style-profiles").join("热血少年.json"), profile).unwrap();
+        assert!(load_style_binding_entry(&book_dir, &pool).is_none());
+        // ①② 池中档案（sourceName=样本源名≠档案名）→ 按文件名命中注入。
+        std::fs::write(pool.join("热血少年.json"), profile).unwrap();
+        let entry = load_style_binding_entry(&book_dir, &pool).expect("pool profile resolves by file identity");
+        assert_eq!(entry.source, "style/热血少年");
+        let excerpt = entry.excerpt.expect("guidance");
+        assert!(excerpt.starts_with("## 写法特征（绑定档案——写作时遵循）"), "{excerpt}");
+        assert!(excerpt.contains("「他抬头」"), "{excerpt}");
+        assert!(excerpt.contains("「比喻」"), "{excerpt}");
     }
 }
