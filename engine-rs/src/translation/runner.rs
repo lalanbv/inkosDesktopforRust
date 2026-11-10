@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use serde_json::Value;
+
 use crate::production::{
     commit_production_artifacts, write_production_run_snapshot,
     CreateRunInput, ProductionKind, ProductionRunSnapshot, ProductionRunStatus,
@@ -80,6 +82,7 @@ async fn run_translation_inner(
     let mut report_lines: Vec<String> = vec!["# Translation Review".to_string(), String::new()];
     let mut translated_segments = 0usize;
     let mut reviewed_chapters = 0usize;
+    let mut review_source_paths: Vec<String> = Vec::new();
     let batch_size = batch_size.unwrap_or(8).clamp(1, 32);
 
     for chapter_info in manifest.chapters.clone() {
@@ -185,39 +188,56 @@ async fn run_translation_inner(
         let completed_chapter =
             load_translation_chapter(project_root, &chapter_info.translated_path).await?;
         let mut status = TranslationChapterStatus::Translated;
-        // 967 号：本章审校摘要/观察；968 号：未审校即清空（TS updateChapterProgress
-        // 以 undefined 覆写同语义）。
+        // 967/968 号：本章审校摘要/观察；969 号：passed=无 issue 级观察（TS 无 passed
+        // 字段）；未审校即清空（TS updateChapterProgress 以 undefined 覆写同语义）。
         let mut reviewed: Option<(String, Vec<serde_json::Value>)> = None;
         if completed_chapter
             .segments
             .iter()
             .any(|segment| segment.target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
         {
-            // 968 号：审校输入标题=译后标题（TS `chapterTitle: completedChapter.title`）。
+            // 968/969 号：审校输入=译后标题+原文标题（TS `chapterTitle: completedChapter.
+            // title, sourceChapterTitle: source.title`）；LLM 端口实现走审校 2.0 双段环
+            // （review.rs），注入模型（测试）走端口缺省。
             let review = model
                 .review_chapter(ReviewChapterInput {
                     source_language: &manifest.source_language,
                     target_language: &manifest.target_language,
                     chapter_title: &completed_chapter.title,
+                    source_chapter_title: Some(&source.title),
                     segments: &completed_chapter.segments,
                     glossary: &glossary,
                 })
                 .await?;
             reviewed_chapters += 1;
-            status = if review.passed {
+            review_source_paths.push(chapter_info.translated_path.clone());
+            status = if review.passed() {
                 TranslationChapterStatus::Reviewed
             } else {
                 TranslationChapterStatus::Translated
             };
+            // 969 号：报告行=TS 逐字（summary + code/evidence/source 引文块）。
             report_lines.push(format!("## {}", completed_chapter.title));
             report_lines.push(String::new());
-            report_lines.push(format!("- passed: {}", if review.passed { "yes" } else { "no" }));
             report_lines.push(format!("- summary: {}", review.summary));
             report_lines.push(String::new());
-            let observations: Vec<serde_json::Value> =
-                review.issues.iter().filter_map(|issue| review_issue_observation(issue)).collect();
-            for issue in review.issues {
-                report_lines.push(format!("- issue: {issue}"));
+            let observations: Vec<serde_json::Value> = review
+                .observations
+                .iter()
+                .map(|observation| serde_json::to_value(observation).unwrap_or(Value::Null))
+                .collect();
+            for observation in &review.observations {
+                report_lines.push(format!("- {}: {}", observation.code, observation.summary));
+                for evidence in &observation.evidence {
+                    report_lines.push(format!("  - evidence: {evidence}"));
+                }
+                for reference in observation.source_refs.iter().flatten() {
+                    report_lines.push(format!("  - source: {}", reference.source_id));
+                    report_lines.push(String::new());
+                    for line in reference.quote.split('\n') {
+                        report_lines.push(format!("    > {line}"));
+                    }
+                }
             }
             report_lines.push(String::new());
             reviewed = Some((review.summary, observations));
@@ -300,6 +320,7 @@ async fn run_translation_inner(
         project_id: project_id.to_string(),
         translated_segments,
         reviewed_chapters,
+        review_source_paths,
         report_path,
         total_segments,
         completed_segments,

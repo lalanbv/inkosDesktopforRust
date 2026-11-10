@@ -286,49 +286,9 @@ impl TranslationModelPort for LlmTranslationModel {
         &self,
         input: ReviewChapterInput<'_>,
     ) -> Result<ReviewChapterOutput, String> {
-        let system = [
-            "You are InkOS Translation Review Agent.",
-            "Check fidelity, omissions, terminology, pronouns, names, and target-language readability.",
-            "Return JSON only: {\"passed\":true,\"summary\":\"...\",\"issues\":[\"...\"]}.",
-        ]
-        .join("\n");
-        let user = serde_json::to_string_pretty(&json!({
-            "sourceLanguage": input.source_language,
-            "targetLanguage": input.target_language,
-            "chapterTitle": input.chapter_title,
-            "glossary": input.glossary,
-            "segments": input.segments.iter().map(|segment| {
-                json!({ "index": segment.index, "source": segment.source, "target": segment.target.clone().unwrap_or_default() })
-            }).collect::<Vec<_>>(),
-        }))
-        .unwrap_or_default();
-        let outcome = self
-            .router
-            .chat(
-                "translator",
-                vec![
-                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
-                ],
-                0.1,
-                Some(4096),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        let parsed = parse_json_object(&outcome.content)?;
-        Ok(ReviewChapterOutput {
-            passed: parsed.get("passed") == Some(&json!(true)),
-            summary: parsed
-                .get("summary")
-                .and_then(Value::as_str)
-                .map(String::from)
-                .unwrap_or_else(|| "Translation review completed.".to_string()),
-            issues: parsed
-                .get("issues")
-                .and_then(Value::as_array)
-                .map(|items| items.iter().filter_map(|issue| issue.as_str().map(String::from)).collect())
-                .unwrap_or_default(),
-        })
+        // 969 号：单轮 JSON 审校退役——LLM 审校走 review.rs 审校 2.0 双段环（独立源读 +
+        // 有源审校，auditor 端点）。
+        crate::translation::review::review_translation_chapter(&self.router, &input).await
     }
 }
 

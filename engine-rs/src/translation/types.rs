@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::models::observation::{Observation, ObservationAssessment};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TranslationSourceKind {
@@ -127,9 +129,8 @@ pub trait TranslationModelPort: Send + Sync {
         _input: ReviewChapterInput<'_>,
     ) -> Result<ReviewChapterOutput, String> {
         Ok(ReviewChapterOutput {
-            passed: true,
             summary: "Translation review completed.".to_string(),
-            issues: Vec::new(),
+            observations: Vec::new(),
         })
     }
 }
@@ -160,15 +161,26 @@ pub struct TranslatedSegmentItem {
 pub struct ReviewChapterInput<'a> {
     pub source_language: &'a str,
     pub target_language: &'a str,
+    /// 969 号：译后标题（TS `chapterTitle`——现译面身份）。
     pub chapter_title: &'a str,
+    /// 969 号：原文标题（TS `sourceChapterTitle?`——独立源读 chapterTitle 面）。
+    pub source_chapter_title: Option<&'a str>,
     pub segments: &'a [TranslationSegment],
     pub glossary: &'a [TranslationGlossaryTerm],
 }
 
+/// 969 号：审校 2.0 输出（TS `{summary, observations}`——passed 由「无 issue 级观察」
+/// 派生：passed=observations 无 assessment=issue；968 前的 issues:[String] 面退役）。
 pub struct ReviewChapterOutput {
-    pub passed: bool,
     pub summary: String,
-    pub issues: Vec<String>,
+    pub observations: Vec<Observation>,
+}
+
+impl ReviewChapterOutput {
+    /// TS 章节状态推进等价：有 issue 级发现 = 未通过（章停 translated）。
+    pub fn passed(&self) -> bool {
+        !self.observations.iter().any(|observation| observation.assessment == Some(ObservationAssessment::Issue))
+    }
 }
 
 /// 提取出的源（extractTranslationSource 产物）。
@@ -201,7 +213,8 @@ pub struct TranslationProjectCreateResult {
 /// run 产物（RunTranslationProjectResult）。
 ///
 /// 967 号：补 TS 2.0 回执形（harness/tools/translation.ts：kind/workId/total·completed·
-/// pendingSegments/observations）——`reviewSourcePaths` 属审校 2.0（P3）不在此期。
+/// pendingSegments/observations）；969 号：+`reviewSourcePaths`（本轮完成有源审校的
+/// 章译文路径，TS 同名）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunTranslationProjectResult {
@@ -210,28 +223,13 @@ pub struct RunTranslationProjectResult {
     pub project_id: String,
     pub translated_segments: usize,
     pub reviewed_chapters: usize,
+    pub review_source_paths: Vec<String>,
     pub report_path: String,
     pub total_segments: usize,
     pub completed_segments: usize,
     pub pending_segments: usize,
     /// 967 号：回执 observations=manifest 全章审校观察（TS flatMap 口径——非仅本次运行）。
     pub observations: Vec<Value>,
-}
-
-/// 967 号：审校问题 → TS ObservationSchema 形（strict 键集内：code/summary/evidence/
-/// category/assessment）；空白问题不产出（TS summary min(1)）。
-pub fn review_issue_observation(issue: &str) -> Option<Value> {
-    let summary = issue.trim();
-    if summary.is_empty() {
-        return None;
-    }
-    Some(serde_json::json!({
-        "code": "translation-review",
-        "summary": summary,
-        "evidence": [],
-        "category": "quality",
-        "assessment": "issue",
-    }))
 }
 
 /// 967 号：章节已译段数（源段在译文中有非空 target 的个数——TS translatedSegments 语义）。

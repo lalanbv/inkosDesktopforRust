@@ -9,6 +9,7 @@
 pub mod export;
 pub mod llm_model;
 pub mod project;
+pub mod review;
 pub mod run_store;
 pub mod runner;
 pub mod source;
@@ -250,9 +251,8 @@ mod tests {
             _input: ReviewChapterInput<'_>,
         ) -> Result<ReviewChapterOutput, String> {
             Ok(ReviewChapterOutput {
-                passed: true,
                 summary: "Looks good.".into(),
-                issues: Vec::new(),
+                observations: Vec::new(),
             })
         }
     }
@@ -351,7 +351,10 @@ mod tests {
         let manifest = run_store::load_translation_manifest(root, &id).await.unwrap();
         assert_eq!(manifest.chapters[0].status, TranslationChapterStatus::Reviewed);
         let report = std::fs::read_to_string(root.join("translations").join(&id).join("review-report.md")).unwrap();
-        assert!(report.contains("- passed: yes"), "{report}");
+        // 969 号：报告=TS 2.0 逐字形（`## 标题` + `- summary:`，passed 行退役）；EchoModel
+        // 不返回 chapterTitle → 标题保持原文。
+        assert!(report.contains("## Chapter 1\n\n- summary: Looks good.\n"), "{report}");
+        assert!(!report.contains("- passed:"), "{report}");
         let glossary = run_store::load_translation_glossary(root, &id).await;
         assert_eq!(glossary.len(), 1);
         assert_eq!(glossary[0].target, "魔力");

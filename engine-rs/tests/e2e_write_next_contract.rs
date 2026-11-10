@@ -8195,17 +8195,61 @@ mod translations70_e2e {
         ))
     }
 
-    /// 统一分流：翻译=工具调用；审校=`review` JSON（缺省全部通过）；其余 PASS。
+    /// 统一分流（969 号审校 2.0 协议）：翻译=submit_translation；独立源读=
+    /// submit_translation_source_reading（按 schema 字段逐段回填）；有源审校=首轮按
+    /// `review.findings` 逐条 record_review_observation、收到工具回执后终提交
+    /// submit_translation_review {summary, observationCodes}；其余 PASS。
+    /// `review` 缺省=全部通过零发现。
     fn translation_mock_response(body: &serde_json::Value, review: Option<&serde_json::Value>) -> axum::response::Response {
         if is_translation_tool_request(body) {
             return tool_call_response(&translation_submission(body, false));
         }
-        let system = body["messages"][0]["content"].as_str().unwrap_or("");
-        if system.contains("Translation Review Agent") {
-            let default_review = serde_json::json!({ "passed": true, "summary": "全部通过。", "issues": [] });
-            return sse_content_response(&review.unwrap_or(&default_review).to_string());
+        let result_tool = body["tools"][0]["function"]["name"].as_str().unwrap_or("");
+        if result_tool == "submit_translation_source_reading" {
+            let fields: serde_json::Map<String, serde_json::Value> = body["tools"][0]["function"]["parameters"]["properties"]
+                .as_object()
+                .map(|properties| properties.keys().map(|key| (key.clone(), serde_json::json!(format!("参照{key}")))).collect())
+                .unwrap_or_default();
+            return named_tool_calls_response(&[("submit_translation_source_reading", serde_json::Value::Object(fields))]);
+        }
+        if result_tool == "submit_translation_review" {
+            let default_review = serde_json::json!({ "summary": "全部通过。", "findings": [] });
+            let review = review.unwrap_or(&default_review);
+            let findings = review["findings"].as_array().cloned().unwrap_or_default();
+            let has_feedback = body["messages"]
+                .as_array()
+                .is_some_and(|messages| messages.iter().any(|m| m["role"] == "tool"));
+            if !has_feedback && !findings.is_empty() {
+                let calls: Vec<(&str, serde_json::Value)> =
+                    findings.iter().map(|finding| ("record_review_observation", finding.clone())).collect();
+                return named_tool_calls_response(&calls);
+            }
+            let codes: Vec<serde_json::Value> = findings.iter().map(|finding| finding["code"].clone()).collect();
+            return named_tool_calls_response(&[(
+                "submit_translation_review",
+                serde_json::json!({ "summary": review["summary"], "observationCodes": codes }),
+            )]);
         }
         sse_content_response("PASS")
+    }
+
+    fn named_tool_calls_response(calls: &[(&str, serde_json::Value)]) -> axum::response::Response {
+        let tool_calls: Vec<serde_json::Value> = calls
+            .iter()
+            .enumerate()
+            .map(|(position, (name, arguments))| {
+                serde_json::json!({ "id": format!("call-{position}"), "type": "function", "function": { "name": name, "arguments": arguments.to_string() } })
+            })
+            .collect();
+        let response = serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": null, "tool_calls": tool_calls }, "finish_reason": "tool_calls" }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30 },
+        });
+        axum::response::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(response.to_string()))
+            .unwrap()
     }
 
     /// 960 号：同分流 + 记录每次请求的 system 全文（技能注入面断言）。
@@ -8346,7 +8390,10 @@ mod translations70_e2e {
         assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
         assert_eq!(detail["chapters"][0]["reviewSummary"], "全部通过。");
         assert_eq!(detail["chapters"][0]["segments"][0]["target"], "[译]The mountain stood tall.");
-        assert!(detail["report"].as_str().unwrap().contains("- passed: yes"));
+        // 969 号：报告=TS 2.0 逐字形（`## 译后标题` + `- summary:`，passed 行退役）。
+        let report = detail["report"].as_str().unwrap();
+        assert!(report.contains("## [译]Chapter 1\n\n- summary: 全部通过。\n"), "{report}");
+        assert!(!report.contains("- passed:"), "{report}");
         let glossary_raw = std::fs::read_to_string(
             root.join("translations").join(&project_id).join("glossary.json"),
         )
@@ -8536,7 +8583,10 @@ mod translations70_e2e {
             systems.iter().any(|s| s.starts_with("Translate the chapter title and all segments with the activated translation Skill.")),
             "翻译调用在场"
         );
-        assert!(systems.iter().any(|s| s.contains("Translation Review Agent")), "审校调用在场");
+        // 969 号：审校 2.0 双段环——独立源读 + 有源审校（auditor 端点，旧单轮
+        // 「Translation Review Agent」JSON 提示退役）。
+        assert!(systems.iter().any(|s| s.contains("Prepare the independent source reading using the activated translation Skill.")), "独立源读在场");
+        assert!(systems.iter().any(|s| s.contains("Review the supplied segment pairs using the activated translation Skill.")), "有源审校在场");
         for system in &systems {
             assert!(system.contains("\n\n## Activated professional skills"), "{system}");
             assert!(system.contains("### inkos-translation — inkos-translation"), "{system}");
@@ -8544,14 +8594,35 @@ mod translations70_e2e {
         }
     }
 
-    /// 967 号：审校问题 → TS ObservationSchema 形 observations（manifest 落盘+详情+回执三处，
-    /// 空白问题不产出）；旧 manifest 无 translatedSegments 字段 → 详情按译文文件现场计数。
+    /// 967 号：审校发现 → TS ObservationSchema 形 observations（manifest 落盘+详情+回执
+    /// 三处，成对引证经宿主截取回填精确引文）；旧 manifest 无 translatedSegments 字段 →
+    /// 详情按译文文件现场计数。
     #[tokio::test]
     async fn review_issues_surface_as_observations_and_legacy_manifest_counts_live() {
         let review = serde_json::json!({
-            "passed": false,
             "summary": "两处问题。",
-            "issues": ["术语不一致：Mana 应统一为「魔力」", "  ", "第 2 段语气偏差"],
+            "findings": [
+                {
+                    "code": "glossary-consistency",
+                    "summary": "术语不一致：Mana 应统一为「魔力」",
+                    "category": "quality",
+                    "assessment": "issue",
+                    "sourceRefs": [
+                        { "sourceId": "original-2", "startLine": 1, "endLine": 1 },
+                        { "sourceId": "target-2", "startLine": 1, "endLine": 1 },
+                    ],
+                },
+                {
+                    "code": "tone-drift",
+                    "summary": "第 2 段语气偏差",
+                    "category": "quality",
+                    "assessment": "issue",
+                    "sourceRefs": [
+                        { "sourceId": "original-2", "startLine": 1, "endLine": 1 },
+                        { "sourceId": "target-2", "startLine": 1, "endLine": 1 },
+                    ],
+                },
+            ],
         });
         let app_llm = axum::Router::new().route(
             "/chat/completions",
@@ -8571,22 +8642,34 @@ mod translations70_e2e {
 
         let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
         assert_eq!(status, StatusCode::OK, "body: {run}");
+        // 969 号：宿主按行区间截取的精确引文（original-2=原文第 2 段，target-2=现译）。
+        let pair_refs = serde_json::json!([
+            { "sourceId": "original-2", "quote": "Mana flowed." },
+            { "sourceId": "target-2", "quote": "[译]Mana flowed." },
+        ]);
         let expected_observations = serde_json::json!([
-            { "code": "translation-review", "summary": "术语不一致：Mana 应统一为「魔力」", "evidence": [], "category": "quality", "assessment": "issue" },
-            { "code": "translation-review", "summary": "第 2 段语气偏差", "evidence": [], "category": "quality", "assessment": "issue" },
+            { "code": "glossary-consistency", "summary": "术语不一致：Mana 应统一为「魔力」", "evidence": [], "category": "quality", "assessment": "issue", "sourceRefs": pair_refs },
+            { "code": "tone-drift", "summary": "第 2 段语气偏差", "evidence": [], "category": "quality", "assessment": "issue", "sourceRefs": pair_refs },
         ]);
         // 968 号：回执层按 TS 补 scope 缺省（`chapter:N`）；manifest/详情为落盘原形。
         let mut receipt_observations = expected_observations.clone();
         for observation in receipt_observations.as_array_mut().unwrap() {
             observation["scope"] = serde_json::json!("chapter:1");
         }
-        assert_eq!(run["observations"], receipt_observations, "空白问题不产出");
+        assert_eq!(run["observations"], receipt_observations);
+        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("translations/{project_id}/translated/chapter-0001.json")]));
         let detail_uri = format!("/api/v1/translations/{project_id}");
         let (_, detail) = call(app.clone(), "GET", &detail_uri, None).await;
-        assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "审校未过不升 reviewed");
+        assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "有 issue 级发现不升 reviewed");
         assert_eq!(detail["manifest"]["chapters"][0]["reviewSummary"], "两处问题。");
         assert_eq!(detail["manifest"]["chapters"][0]["observations"], expected_observations);
         assert_eq!(detail["chapters"][0]["observations"], expected_observations);
+        // 969 号：报告 TS 逐字——code/summary 行 + source 引文块。
+        let report = detail["report"].as_str().unwrap();
+        assert!(
+            report.contains("- glossary-consistency: 术语不一致：Mana 应统一为「魔力」\n  - source: original-2\n\n    > Mana flowed.\n  - source: target-2\n\n    > [译]Mana flowed.\n"),
+            "{report}"
+        );
 
         // 旧 manifest（967 前落盘形态）：剥三字段 → 详情现场计数仍为 2。
         let manifest_path = root.join("translations").join(&project_id).join("manifest.json");
@@ -8664,6 +8747,121 @@ mod translations70_e2e {
         )
         .unwrap();
         assert!(translated.contains("\"title\": \"[译]Chapter 1\""), "{translated}");
+    }
+
+    /// 969 号：审校 2.0 双段协议面——①独立源读：每段一必填字段 schema、user 含
+    /// 原文标题/requestedIndices、先于有源审校；②有源审校：段块含编号源+独立读本，
+    /// issue 级发现仅引 target-* → TRANSLATION_REVIEW_PAIR_REQUIRED 回喂 → 成对重记 →
+    /// 终提交；审校端点=auditor（任务路由可独立配模型）。
+    #[tokio::test]
+    async fn review_two_stage_protocol_and_pair_requirement_feedback() {
+        let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let app_llm = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    captured.lock().unwrap().push(body.clone());
+                    if body["tools"][0]["function"]["name"] != "submit_translation_review" {
+                        return translation_mock_response(&body, None);
+                    }
+                    let tool_texts: Vec<String> = body["messages"]
+                        .as_array()
+                        .map(|messages| {
+                            messages
+                                .iter()
+                                .filter(|m| m["role"] == "tool")
+                                .filter_map(|m| m["content"].as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let finding = |refs: serde_json::Value| {
+                        serde_json::json!({ "code": "omission", "summary": "漏译「tall」", "category": "quality", "assessment": "issue", "sourceRefs": refs })
+                    };
+                    if tool_texts.is_empty() {
+                        return named_tool_calls_response(&[(
+                            "record_review_observation",
+                            finding(serde_json::json!([{ "sourceId": "target-1", "startLine": 1, "endLine": 1 }])),
+                        )]);
+                    }
+                    if !tool_texts.iter().any(|text| text.contains("source_resolved")) {
+                        return named_tool_calls_response(&[(
+                            "record_review_observation",
+                            finding(serde_json::json!([
+                                { "sourceId": "original-1", "startLine": 1, "endLine": 1 },
+                                { "sourceId": "target-1", "startLine": 1, "endLine": 1 },
+                            ])),
+                        )]);
+                    }
+                    named_tool_calls_response(&[(
+                        "submit_translation_review",
+                        serde_json::json!({ "summary": "一处漏译。", "observationCodes": ["omission"] }),
+                    )])
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        seed_translation_skill(&root);
+        let app = app70(&root, &format!("http://{addr}"));
+        let project_id = seed_project(&root, &app).await;
+
+        let (status, run) = call(app, "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        assert_eq!(status, StatusCode::OK, "body: {run}");
+        let requests = requests.lock().unwrap().clone();
+        let tool_of = |body: &serde_json::Value| body["tools"][0]["function"]["name"].as_str().unwrap_or("").to_string();
+        let reading_at = requests.iter().position(|b| tool_of(b) == "submit_translation_source_reading").expect("独立源读在场");
+        let review_at = requests.iter().position(|b| tool_of(b) == "submit_translation_review").expect("有源审校在场");
+        assert!(reading_at < review_at, "源读先于审校");
+        let reading = &requests[reading_at];
+        let schema = &reading["tools"][0]["function"]["parameters"];
+        assert_eq!(schema["required"], serde_json::json!(["segment_1_target", "segment_2_target"]));
+        assert_eq!(schema["additionalProperties"], false);
+        let reading_user: serde_json::Value = serde_json::from_str(
+            reading["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap()["content"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reading_user["chapterTitle"], "Chapter 1", "独立源读用原文标题");
+        assert_eq!(reading_user["requestedIndices"], serde_json::json!([1, 2]));
+        assert!(reading_user["originals"].as_array().unwrap().iter().all(|o| o.get("target").is_none()), "源读不暴露现译");
+        let review = &requests[review_at];
+        let segments_block = review["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str())
+            .find(|text| text.starts_with("## Segment 1"))
+            .unwrap()
+            .to_string();
+        assert!(
+            segments_block.contains("### Source: original-1\n1\tThe mountain stood tall.\n\n### Source: target-1\n1\t[译]The mountain stood tall.\n\n### Independent reading (comparison aid)\n参照segment_1_target"),
+            "{segments_block}"
+        );
+        let supporting: Vec<String> = review["tools"].as_array().unwrap().iter().skip(1).map(|t| tool_of(&serde_json::json!({ "tools": [t] }))).collect();
+        assert_eq!(supporting, ["record_review_observation", "calculate_review_values", "calculate_story_interval"]);
+        // 成对引证回喂：第二轮审校请求的工具回执含 PAIR_REQUIRED。
+        let pair_feedback = requests
+            .iter()
+            .filter(|b| tool_of(b) == "submit_translation_review")
+            .flat_map(|b| b["messages"].as_array().cloned().unwrap_or_default())
+            .filter(|m| m["role"] == "tool")
+            .filter_map(|m| m["content"].as_str().map(str::to_string))
+            .find(|text| text.contains("TRANSLATION_REVIEW_PAIR_REQUIRED"))
+            .expect("成对引证回喂在场");
+        assert!(pair_feedback.contains("\"observationCodes\":[\"omission\"]"), "{pair_feedback}");
+        assert_eq!(run["observations"][0]["code"], "omission");
+        assert_eq!(
+            run["observations"][0]["sourceRefs"],
+            serde_json::json!([
+                { "sourceId": "original-1", "quote": "The mountain stood tall." },
+                { "sourceId": "target-1", "quote": "[译]The mountain stood tall." },
+            ])
+        );
     }
 
     /// 968 号：模型持续漏译 → 环预算耗尽 → run 失败 500 INKOS_TRANSLATION_ACTION_FAILED
