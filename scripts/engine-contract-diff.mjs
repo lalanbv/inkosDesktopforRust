@@ -127,6 +127,8 @@ const VOLATILE = new Set([
   // 684 号：interaction/session 惰性建会话，sessionId=创建时刻毫秒戳——
   // 双腿各自起引擎天然不同（run-6 活体捕获 1ms 之差假分叉）。
   "sessionId",
+  // 964 号：写法档案指纹分析时刻（双腿各自落盘时刻天然不同）。
+  "analyzedAt",
 ]);
 const prune = (node) => {
   if (Array.isArray(node)) return node.map(prune);
@@ -716,6 +718,14 @@ try {
       // profile name，名字直拼盘路径守卫同判据同消息；真实档案写读面由双端
       // 套件锁定）。
       { path: "/api/v1/style-profiles", method: "POST", body: { name: "../evil", profile: {} } },
+      // 964 号：档案池文本写入形态——POST {name,text} 双端服务端算统计指纹落池，紧随
+      // GET 列表全 body 比对=跨引擎指纹逐字段同值活体锁（analyzedAt 入 VOLATILE；
+      // 指纹算法另由 style-fingerprint-vectors.json 双端 golden 锁）。
+      {
+        path: "/api/v1/style-profiles", method: "POST",
+        body: { name: "契约指纹", text: "　　夜色像是一张网，罩住了整座城。林动站在檐下，仿佛同雾气融在一起。\n\n　　“难道你还不明白？”她问。他笑了笑：“怎么可能不明白。”他看着远方，风很大，风很大，雨很急，雨很急。\"走吧\"他说。" },
+      },
+      "/api/v1/style-profiles",
       // 958 号：文风分析 2.0 形态（compileStyleGuide → {guide}）——walkthrough-mock
       // 回显 system 首段+激活技能标题行+user 全文，fullBody 全 body 比对即锁双端
       // 提示词/技能注入序/响应形态同形（55 号 Rust 旧形态返回 StyleProfile=文风页

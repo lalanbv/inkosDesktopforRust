@@ -205,6 +205,7 @@ import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
 import { listBackupSnapshots, runBackupImport, runBackupRollback } from "./backup-snapshot.js";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { isSafeBookId } from "./safety.js";
+import { analyzeStyleFingerprint } from "./style-fingerprint.js";
 import { ApiError } from "./errors.js";
 import { buildStudioBookConfig, normalizeStudioPlatform } from "./book-create.js";
 import {
@@ -4305,19 +4306,35 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.post("/api/v1/style-profiles", async (c) => {
-    const body = await c.req.json<{ name?: string; profile?: unknown }>();
+    const body = await c.req
+      .json<{ name?: unknown; profile?: unknown; text?: unknown; language?: unknown }>()
+      .catch(() => ({}) as { name?: unknown; profile?: unknown; text?: unknown; language?: unknown });
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name || !body.profile || typeof body.profile !== "object") {
-      return c.json({ error: "name and profile are required" }, 400);
+    // 964 号：两种写入形态——`profile`（StyleProfile 全文，340 号原形态）或 `text`
+    // （参考文本，服务端算统计指纹落池；文风页「保存为写法档案」入口）。Rust 同端点
+    // 同判据同消息同次序。
+    const profile = body.profile && typeof body.profile === "object" ? body.profile : null;
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!name || (!profile && !text)) {
+      return c.json({ error: "name and profile (or text) are required" }, 400);
     }
     // 957 号：档案名直拼 `{name}.json` 落盘——穿越名（`../../books/b1/book`）覆写项目
     // 内任意 .json、更深 `../` 写出项目根。复用 books id 段规范判据（201 号同一真源；
     // Rust 同端点同判据同消息）。
     if (!isSafeBookId(name)) return c.json({ error: "invalid profile name" }, 400);
+    // 文本形态：sourceName=档案名（340 号「sourceName 即档案名」不变式）；语言=请求
+    // language（"en" → en，其余 → zh）缺省回项目语言（958 号同规则）。
+    const saved = profile ?? analyzeStyleFingerprint(
+      text,
+      name,
+      body.language === undefined || body.language === null
+        ? (await currentProjectLanguage()) === "en" ? "en" : "zh"
+        : body.language === "en" ? "en" : "zh",
+    );
     const dir = join(root, ".inkos", "style-profiles");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `${name}.json`), JSON.stringify(body.profile, null, 2), "utf-8");
-    return c.json({ ok: true, name });
+    await writeTextAtomic(join(dir, `${name}.json`), JSON.stringify(saved, null, 2));
+    return c.json({ ok: true, name, profile: saved });
   });
 
   app.get("/api/v1/writing-stats", async (c) => {

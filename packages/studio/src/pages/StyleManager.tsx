@@ -3,7 +3,7 @@ import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
-import { Wand2, Upload, BarChart3 } from "lucide-react";
+import { Wand2, Upload, BarChart3, Save } from "lucide-react";
 
 interface StyleProfile {
   readonly guide: string;
@@ -28,8 +28,24 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
   const [profile, setProfile] = useState<StyleProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [importBookId, setImportBookId] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
   const [statusNotice, setStatusNotice] = useState<StyleStatusNotice | null>(null);
   const { data: booksData } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
+  // 964 号：写法档案池写入口——服务端以参考文本算统计指纹（无需模型）落项目级池，
+  // 档案名=来源名称（340 号「sourceName 即档案名」）；书籍页「写法绑定」卡即可选用。
+  const handleSaveProfile = async () => {
+    const name = sourceName.trim();
+    if (!name || !text.trim()) return;
+    setSavingProfile(true);
+    setStatusNotice(null);
+    try {
+      await postApi("/style-profiles", { name, text });
+      setStatusNotice({ tone: "success", message: t("style.profileSaved").replace("{name}", name) });
+    } catch (e) {
+      setStatusNotice({ tone: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+    setSavingProfile(false);
+  };
   const handleAnalyze = async () => {
     if (!text.trim()) return;
     setLoading(true);
@@ -104,7 +120,16 @@ export function StyleManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
               <BarChart3 size={14} />
               {loading ? t("style.analyzing") : t("style.analyze")}
             </button>
+            <button
+              onClick={handleSaveProfile}
+              disabled={!text.trim() || !sourceName.trim() || savingProfile}
+              className={`px-4 py-2 text-sm rounded-lg ${c.btnSecondary} disabled:opacity-30 flex items-center gap-2`}
+            >
+              <Save size={14} />
+              {savingProfile ? t("style.savingProfile") : t("style.saveProfile")}
+            </button>
           </div>
+          <p className="text-xs text-muted-foreground">{t("style.saveProfileHint")}</p>
         </div>
 
         {/* Results */}

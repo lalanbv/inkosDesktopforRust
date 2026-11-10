@@ -70,4 +70,29 @@ describe("StyleManager 写面交互（922 号）", () => {
     await waitFor(() => expect(screen.getByText(/style engine offline/)).toBeTruthy());
     expect(screen.getByText(/style engine offline/).className).toContain("text-destructive");
   });
+
+  it("964 号：保存为写法档案——来源名称与正文齐备才可点，postApi /style-profiles {name(trim), text} + success 回执", async () => {
+    render(<StyleManager nav={{ toDashboard: () => {} }} theme="dark" t={t} />);
+    const save = screen.getByRole("button", { name: /style\.saveProfile/ }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/style\.pasteHint/), { target: { value: "样例正文。" } });
+    expect(save.disabled, "缺来源名称（=档案名）不可存").toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/style\.sourceExample/), { target: { value: "  热血少年  " } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.getByText(/style\.profileSaved/)).toBeTruthy());
+    expect(postApiMock).toHaveBeenCalledWith("/style-profiles", { name: "热血少年", text: "样例正文。" });
+    // 存档案不触达 LLM 分析端点（统计指纹由服务端计算，无需模型）。
+    expect(fetchJsonMock.mock.calls.some(([path]) => path === "/style/analyze")).toBe(false);
+  });
+
+  it("964 号：保存失败（如不规范档案名）→ error notice destructive", async () => {
+    postApiMock.mockRejectedValue(new Error("invalid profile name"));
+    render(<StyleManager nav={{ toDashboard: () => {} }} theme="dark" t={t} />);
+    fireEvent.change(screen.getByPlaceholderText(/style\.pasteHint/), { target: { value: "样例正文。" } });
+    fireEvent.change(screen.getByPlaceholderText(/style\.sourceExample/), { target: { value: "a/b" } });
+    fireEvent.click(screen.getByRole("button", { name: /style\.saveProfile/ }));
+    await waitFor(() => expect(screen.getByText(/invalid profile name/)).toBeTruthy());
+    expect(screen.getByText(/invalid profile name/).className).toContain("text-destructive");
+  });
 });

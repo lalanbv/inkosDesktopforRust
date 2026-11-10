@@ -1542,19 +1542,29 @@ pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl In
 }
 
 /// G4/340 号：保存写法档案（覆盖写，原子）。
-#[derive(Debug, serde::Deserialize)]
-pub struct SaveStyleProfileBody {
-    pub name: String,
-    pub profile: Value,
-}
-
+///
+/// 964 号：两种写入形态——`profile`（StyleProfile 全文，340 号原形态）或 `text`（参考
+/// 文本，服务端 [`crate::agents::style_analyzer::analyze_style`] 算统计指纹落池；文风页
+/// 「保存为写法档案」入口）。TS 同端点同判据同消息同次序：name 空或二者皆缺 → 400
+/// `name and profile (or text) are required`；name 不规范 → 400 `invalid profile name`；
+/// 文本形态 sourceName=档案名、语言=请求 language（"en"→en，其余→zh）缺省回项目语言。
+/// 响应 `{ok, name, profile}`。此前 typed `Json` 提取器缺 profile 即 422（TS 400）、
+/// 空名报 `name is required`（TS 合并消息）——一并对齐。
 pub async fn save_style_profile(
     State(runtime): State<BooksRuntime>,
-    Json(body): Json<SaveStyleProfileBody>,
+    req: axum::extract::Request,
 ) -> impl IntoResponse {
-    let name = body.name.trim().to_string();
-    if name.is_empty() {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("name is required"));
+    // 参考文本可为整本样章——`Json` 提取器 2MB 默认上限会截断，改手工读（273 号同款）。
+    let raw = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+        Ok(raw) => raw,
+        Err(status) => return flat_error(status, String::from("request body too large")),
+    };
+    let body: Value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({}));
+    let name = body.get("name").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    let profile = body.get("profile").filter(|value| value.is_object() || value.is_array());
+    let text = body.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    if name.is_empty() || (profile.is_none() && text.is_empty()) {
+        return flat_error(StatusCode::BAD_REQUEST, String::from("name and profile (or text) are required"));
     }
     // 957 号：档案名直拼 `{name}.json` 落盘——`../../books/b1/book` 即覆写项目内任意
     // .json（secrets/inkos.json/他书 book.json），更深的 `../` 写出项目根。复用 201 号
@@ -1562,12 +1572,34 @@ pub async fn save_style_profile(
     if !crate::utils::is_safe_book_id(&name) {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid profile name"));
     }
-    let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
+    let root = runtime.state.project_root();
+    let saved = match profile {
+        Some(profile) => profile.clone(),
+        None => {
+            use crate::utils::language::WritingLanguage;
+            let language = match body.get("language") {
+                None | Some(Value::Null) => match crate::server::agent_production::current_project_language(root).await {
+                    crate::server::agent_production::StudioLang::En => WritingLanguage::En,
+                    crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
+                },
+                Some(Value::String(language)) if language == "en" => WritingLanguage::En,
+                Some(_) => WritingLanguage::Zh,
+            };
+            let fingerprint = crate::agents::style_analyzer::analyze_style(
+                text,
+                Some(&name),
+                language,
+                Some(&crate::utils::utc_time::utc_now_iso()),
+            );
+            serde_json::to_value(&fingerprint).unwrap_or(Value::Null)
+        }
+    };
+    let dir = root.join(".inkos").join("style-profiles");
     let _ = tokio::fs::create_dir_all(&dir).await;
     let path = dir.join(format!("{name}.json"));
-    match serde_json::to_string_pretty(&body.profile) {
+    match serde_json::to_string_pretty(&saved) {
         Ok(raw) => match crate::utils::atomic_file_set::write_file_atomic(&path, &raw).await {
-            Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name }))).into_response(),
+            Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name, "profile": saved }))).into_response(),
             Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         },
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -2441,6 +2473,84 @@ mod tests {
         for hit in fused {
             assert_eq!(hit["sources"], json!(["fts5"]), "纯词法命中不得标 semantic：{hit}");
         }
+    }
+
+    /// 964 号：档案池文本写入形态——`{name, text}` 服务端算指纹落池（与 TS 同端点同
+    /// golden：指纹逐字段等于向量表期望、sourceName=档案名）；`language` 显式 en 走英文
+    /// 指纹；profile 形态原样；错误面合并消息（name 空/二者皆缺/空白文本/profile null）。
+    #[tokio::test]
+    async fn save_style_profile_text_form_matches_fingerprint_golden() {
+        const GOLDEN: &str =
+            include_str!("../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json");
+        let golden: Value = serde_json::from_str(GOLDEN).unwrap();
+        let vector = |id: &str| {
+            golden["vectors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["id"] == id)
+                .cloned()
+                .unwrap()
+        };
+        fn same(a: &Value, b: &Value) -> bool {
+            match (a, b) {
+                (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+                (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(l, r)| same(l, r)),
+                (Value::Object(x), Value::Object(y)) => {
+                    x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+                }
+                _ => a == b,
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        book_fixture(dir.path(), "[]");
+        let app = || {
+            axum::Router::new()
+                .route("/api/v1/style-profiles", axum::routing::post(save_style_profile))
+                .with_state(runtime_for(dir.path()))
+        };
+        let pool = dir.path().join(".inkos/style-profiles");
+        for (name, id, language) in [("热血少年", "zh-dialogue-rhetoric", None), ("Noir", "en-prose", Some("en"))] {
+            let v = vector(id);
+            let mut payload = json!({ "name": name, "text": v["text"] });
+            if let Some(language) = language {
+                payload["language"] = json!(language);
+            }
+            let (status, body) = post_json(app(), "POST", "/api/v1/style-profiles", payload).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["name"], name);
+            let saved: Value =
+                serde_json::from_str(&std::fs::read_to_string(pool.join(format!("{name}.json"))).unwrap()).unwrap();
+            assert_eq!(saved, body["profile"], "响应 profile = 落盘全文");
+            assert!(saved["analyzedAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+            let mut fingerprint = saved.clone();
+            fingerprint.as_object_mut().unwrap().remove("analyzedAt");
+            let mut expected = v["expected"].clone();
+            expected["sourceName"] = json!(name);
+            assert!(same(&fingerprint, &expected), "{id}: saved={fingerprint} golden={expected}");
+        }
+        let (status, _) =
+            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "原形态", "profile": { "a": 1 } })).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_str::<Value>(&std::fs::read_to_string(pool.join("原形态.json")).unwrap()).unwrap(),
+            json!({ "a": 1 })
+        );
+        for payload in [
+            json!({}),
+            json!({ "name": "x" }),
+            json!({ "name": "x", "text": "   " }),
+            json!({ "name": "x", "profile": null }),
+            json!({ "name": "  ", "text": "有正文。" }),
+        ] {
+            let (status, body) = post_json(app(), "POST", "/api/v1/style-profiles", payload.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
+            assert_eq!(body["error"], "name and profile (or text) are required", "{payload}");
+        }
+        let (status, body) =
+            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "../evil", "text": "有正文。" })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid profile name");
     }
 
     /// 957 号：档案名穿越（`../../books/b1/book`）=覆写项目内任意 .json——400 且

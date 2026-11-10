@@ -301,6 +301,14 @@ const strings = {
   "style.selectBook": { zh: "选择书籍...", en: "Select book..." },
   "style.importGuide": { zh: "导入文风指南", en: "Import Style Guide" },
   "style.emptyHint": { zh: "粘贴文本并点击分析查看文风档案", en: "Paste text and click Analyze to see style profile" },
+  // 964 号：写法档案池写入口（统计指纹，无需模型）。
+  "style.saveProfile": { zh: "保存为写法档案", en: "Save as Style Profile" },
+  "style.savingProfile": { zh: "保存中...", en: "Saving..." },
+  "style.saveProfileHint": {
+    zh: "以「来源名称」为档案名存入写法档案池（统计指纹，无需模型），可在书籍页「写法绑定」中绑定到书。",
+    en: "Saves a statistical style fingerprint named after the source (no model needed); bind it to a book from the book page.",
+  },
+  "style.profileSaved": { zh: "已保存写法档案「{name}」。", en: "Saved style profile \"{name}\"." },
 
   // Import
   "import.title": { zh: "导入工具", en: "Import Tools" },

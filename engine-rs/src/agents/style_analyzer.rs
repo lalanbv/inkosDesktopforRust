@@ -89,13 +89,19 @@ pub fn analyze_style(
         if kept.is_empty() {
             0.0
         } else {
+            // 964 号：TS `new Set(chars).size / chars.length`——Set 按码点去重、length
+            // 计 UTF-16 码元（星平面字符计 2），分母取 UTF-16 长度对齐。
             let set: std::collections::HashSet<char> = kept.chars().collect();
-            set.len() as f64 / kept.chars().count() as f64
+            set.len() as f64 / kept.encode_utf16().count() as f64
         }
     };
 
     // 句子开头模式 top5（≥3 次）。
-    let mut opening_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // 964 号：TS `Object.entries(counts).sort(按次数降序)`——稳定排序下并列按键序：
+    // 数组索引形键（规范十进制 < 2^32-1，如「20」）数值升序居前，其余按首次出现序
+    //（此前 Rust 并列按字典序，「我们/他们」并列时与 TS 反序）。
+    let mut openings: Vec<(String, usize)> = Vec::new();
+    let mut slot_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for s in &sentences {
         let key = if is_en {
             en_first_word_re()
@@ -103,15 +109,30 @@ pub fn analyze_style(
                 .map(|m| m.as_str().to_lowercase())
                 .unwrap_or_default()
         } else {
-            let chars: String = s.chars().take(2).collect();
-            if s.chars().count() >= 2 { chars } else { String::new() }
+            // TS `s.length >= 2 ? s.slice(0, 2) : ""`（UTF-16 码元切片）。
+            let mut units = s.encode_utf16();
+            match (units.next(), units.next()) {
+                (Some(first), Some(second)) => String::from_utf16_lossy(&[first, second]),
+                _ => String::new(),
+            }
         };
-        if !key.is_empty() {
-            *opening_counts.entry(key).or_insert(0) += 1;
+        if key.is_empty() {
+            continue;
+        }
+        match slot_of.get(&key) {
+            Some(&slot) => openings[slot].1 += 1,
+            None => {
+                slot_of.insert(key.clone(), openings.len());
+                openings.push((key, 1));
+            }
         }
     }
-    let mut top_patterns: Vec<(String, usize)> = opening_counts.into_iter().collect();
-    top_patterns.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    type Openings = Vec<(String, usize)>;
+    let (mut top_patterns, insertion_ordered): (Openings, Openings) =
+        openings.into_iter().partition(|(key, _)| js_array_index(key).is_some());
+    top_patterns.sort_by_key(|(key, _)| js_array_index(key));
+    top_patterns.extend(insertion_ordered);
+    top_patterns.sort_by(|a, b| b.1.cmp(&a.1));
     let top_patterns: Vec<String> = top_patterns
         .into_iter()
         .take(5)
@@ -141,14 +162,24 @@ pub fn analyze_style(
     }
 }
 
-/// 计量单元：英文按词数，中文按非空白字符数。对齐 TS `measure`。
+/// 计量单元：英文按词数，中文按非空白字符数。对齐 TS `measure`（964 号：中文取
+/// UTF-16 码元数——TS `string.length` 语义，星平面字符计 2）。
 fn measure(s: &str, is_en: bool) -> usize {
     if is_en {
         en_word_re().find_iter(s).count()
     } else {
-        let stripped = whitespace_re().replace_all(s, "");
-        stripped.chars().count()
+        whitespace_re().replace_all(s, "").encode_utf16().count()
     }
+}
+
+/// JS 对象键序判定：规范十进制数组索引（"0" 或无前导零、值 < 2^32-1）返回其值。
+/// `Object.entries` 先按数值升序列出此类键，再按插入序列出其余键。
+fn js_array_index(key: &str) -> Option<u64> {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) || (bytes.len() > 1 && bytes[0] == b'0') {
+        return None;
+    }
+    key.parse::<u64>().ok().filter(|value| *value < u64::from(u32::MAX))
 }
 
 /// 修辞特征检测。排比用手动扫描，其余用 regex crate。
@@ -188,22 +219,26 @@ fn count_re(text: &str, re: &Regex) -> usize {
     re.find_iter(text).count()
 }
 
-/// 排比检测（手动扫描，等价 TS `[，。；]([^，。；]{2,6})[，。；]\1`）：
+/// 排比检测（手动扫描，等价 TS `[，。；]([^，。；]{2,6})[，。；]\1` 全局匹配计数）：
 /// 找「标点 X + 2-6 非标点串 S + 标点 + 同 S」的模式。
+///
+/// 964 号：命中后从匹配末尾**原位**续扫（JS 全局正则 lastIndex=匹配末尾）——此前
+/// `i = after_end` 后又 `i += 1`，跳过了紧随其后的标点，相邻两组排比
+/// （「，风很大，风很大，雨很急，雨很急」）只计 1 处、低于 2 处阈值而整项漏报。
 fn count_parallelism(text: &str) -> usize {
     const PUNCT: &[char] = &['，', '。', '；'];
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
     let mut count = 0usize;
     let mut i = 0;
-    while i < n {
+    'scan: while i < n {
         if PUNCT.contains(&chars[i]) {
             // 尝试在 i+1.. 起取 2-6 长度的非标点串 S，然后期望标点 + 同 S。
-            'len: for slen in 2..=6usize {
+            for slen in 2..=6usize {
                 let s_start = i + 1;
                 let s_end = s_start + slen;
                 if s_end >= n {
-                    break 'len;
+                    break;
                 }
                 let s_slice = &chars[s_start..s_end];
                 // S 内不得含 PUNCT。
@@ -222,9 +257,8 @@ fn count_parallelism(text: &str) -> usize {
                 }
                 if &chars[after..after_end] == s_slice {
                     count += 1;
-                    // 跳到匹配末尾避免重叠计数（与 JS `match` 全局非重叠语义接近）。
                     i = after_end;
-                    break 'len;
+                    continue 'scan;
                 }
             }
         }
@@ -269,8 +303,11 @@ fn en_first_word_re() -> &'static Regex {
 }
 fn zh_char_keep_re() -> &'static Regex {
     // TS: 剥离空白 + 标点 + 数字，保留中文字符。
+    // 964 号：引号取 ASCII 与弯引号并集（TS 恢复版同步；原 TS 字面仅 ASCII、旧 Rust
+    // 仅弯引号——双端早已分叉）；数字取 ASCII `[0-9]`（JS 非 u 模式 `\d` 语义，Rust
+    // `\d` 为 Unicode 数字会多剥全角数字）。
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"[\s\n\r，。！？、：；“”‘’（）【】《》\d]").expect("zh char keep"))
+    R.get_or_init(|| Regex::new(r#"[\s\n\r，。！？、：；"'“”‘’（）【】《》0-9]"#).expect("zh char keep"))
 }
 fn zh_simile_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -393,5 +430,43 @@ mod tests {
         let p = analyze_style(text, None, WritingLanguage::En, None);
         // 词 = [the, the, the, cat] → 2 unique / 4 = 0.5
         assert_eq!(p.vocabulary_diversity, 0.5);
+    }
+
+    /// 964 号：风格指纹双端 golden——TS 参考实现 packages/studio/src/api/style-fingerprint.ts
+    /// 产出的同一张向量表逐向量全等（数值按 f64 比较：JSON 整数 4 与 Rust 4.0 同值）。
+    #[test]
+    fn golden_vectors_match_ts_reference() {
+        const GOLDEN: &str =
+            include_str!("../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json");
+        fn same(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+            match (a, b) {
+                (serde_json::Value::Number(x), serde_json::Value::Number(y)) => x.as_f64() == y.as_f64(),
+                (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
+                    x.len() == y.len() && x.iter().zip(y).all(|(l, r)| same(l, r))
+                }
+                (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+                    x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+                }
+                _ => a == b,
+            }
+        }
+        let golden: serde_json::Value = serde_json::from_str(GOLDEN).unwrap();
+        let vectors = golden["vectors"].as_array().unwrap();
+        assert!(vectors.len() >= 8);
+        let mut failures = Vec::new();
+        for vector in vectors {
+            let language = if vector["language"] == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+            let profile = analyze_style(
+                vector["text"].as_str().unwrap(),
+                vector["sourceName"].as_str(),
+                language,
+                None,
+            );
+            let actual = serde_json::to_value(&profile).unwrap();
+            if !same(&actual, &vector["expected"]) {
+                failures.push(format!("{}: rust={actual} ts={}", vector["id"], vector["expected"]));
+            }
+        }
+        assert!(failures.is_empty(), "golden 分歧：\n{}", failures.join("\n"));
     }
 }

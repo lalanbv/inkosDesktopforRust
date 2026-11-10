@@ -1,0 +1,203 @@
+{
+  "$comment": "964 号：风格指纹双端 golden（TS packages/studio/src/api/style-fingerprint.ts ↔ Rust engine-rs/src/agents/style_analyzer.rs）。expected 由 TS 参考实现产出（analyzedAt 注入不入表）；双端测试逐向量全等断言。",
+  "vectors": [
+    {
+      "id": "zh-dialogue-rhetoric",
+      "language": "zh",
+      "sourceName": "源-zh-dialogue-rhetoric",
+      "text": "　　夜色像是一张网，罩住了整座城。林动站在檐下，仿佛同雾气融在一起。\n\n　　“难道你还不明白？”她问。他笑了笑：“怎么可能不明白。”\n\n　　风在檐角轻轻地叹。雨在窗外低低地吟。他抬头。他抬手。他抬脚。",
+      "expected": {
+        "avgSentenceLength": 7.3,
+        "sentenceLengthStdDev": 4.9,
+        "avgParagraphLength": 30,
+        "paragraphLengthRange": {
+          "min": 28,
+          "max": 32
+        },
+        "vocabularyDiversity": 0.753,
+        "topPatterns": [
+          "他抬...(3次)"
+        ],
+        "rhetoricalFeatures": [
+          "比喻(像/如/仿佛)(2处)",
+          "反问(2处)",
+          "拟人(2处)",
+          "短句节奏(3处)"
+        ],
+        "sourceName": "源-zh-dialogue-rhetoric"
+      }
+    },
+    {
+      "id": "zh-parallelism-adjacent",
+      "language": "zh",
+      "sourceName": "源-zh-parallelism-adjacent",
+      "text": "他看着远方，风很大，风很大，雨很急，雨很急。我们走吧。",
+      "expected": {
+        "avgSentenceLength": 12.5,
+        "sentenceLengthStdDev": 8.5,
+        "avgParagraphLength": 27,
+        "paragraphLengthRange": {
+          "min": 27,
+          "max": 27
+        },
+        "vocabularyDiversity": 0.667,
+        "topPatterns": [],
+        "rhetoricalFeatures": [
+          "排比(2处)"
+        ],
+        "sourceName": "源-zh-parallelism-adjacent"
+      }
+    },
+    {
+      "id": "zh-openings-tie-insertion-order",
+      "language": "zh",
+      "sourceName": "源-zh-openings-tie-insertion-order",
+      "text": "我们出发。我们战斗。我们胜利。他们追来。他们围堵。他们退去。",
+      "expected": {
+        "avgSentenceLength": 4,
+        "sentenceLengthStdDev": 0,
+        "avgParagraphLength": 30,
+        "paragraphLengthRange": {
+          "min": 30,
+          "max": 30
+        },
+        "vocabularyDiversity": 0.625,
+        "topPatterns": [
+          "我们...(3次)",
+          "他们...(3次)"
+        ],
+        "rhetoricalFeatures": [
+          "短句节奏(3处)"
+        ],
+        "sourceName": "源-zh-openings-tie-insertion-order"
+      }
+    },
+    {
+      "id": "zh-openings-integer-like-key-first",
+      "language": "zh",
+      "sourceName": "源-zh-openings-integer-like-key-first",
+      "text": "我们出发。我们战斗。我们胜利。20年前他来了。20年后他走了。20岁的少年。",
+      "expected": {
+        "avgSentenceLength": 5.3,
+        "sentenceLengthStdDev": 1.4,
+        "avgParagraphLength": 38,
+        "paragraphLengthRange": {
+          "min": 38,
+          "max": 38
+        },
+        "vocabularyDiversity": 0.692,
+        "topPatterns": [
+          "20...(3次)",
+          "我们...(3次)"
+        ],
+        "rhetoricalFeatures": [
+          "短句节奏(3处)"
+        ],
+        "sourceName": "源-zh-openings-integer-like-key-first"
+      }
+    },
+    {
+      "id": "zh-quotes-ascii-and-curly",
+      "language": "zh",
+      "sourceName": "源-zh-quotes-ascii-and-curly",
+      "text": "“你好”他说。\"再见\"她说。'嗯'他应。‘好’她答。",
+      "expected": {
+        "avgSentenceLength": 5.5,
+        "sentenceLengthStdDev": 0.5,
+        "avgParagraphLength": 26,
+        "paragraphLengthRange": {
+          "min": 26,
+          "max": 26
+        },
+        "vocabularyDiversity": 0.714,
+        "topPatterns": [],
+        "rhetoricalFeatures": [
+          "短句节奏(2处)"
+        ],
+        "sourceName": "源-zh-quotes-ascii-and-curly"
+      }
+    },
+    {
+      "id": "zh-emoji-utf16-measure",
+      "language": "zh",
+      "sourceName": "源-zh-emoji-utf16-measure",
+      "text": "今天很开心😀。我们去公园🌳玩。",
+      "expected": {
+        "avgSentenceLength": 7.5,
+        "sentenceLengthStdDev": 0.5,
+        "avgParagraphLength": 17,
+        "paragraphLengthRange": {
+          "min": 17,
+          "max": 17
+        },
+        "vocabularyDiversity": 0.867,
+        "topPatterns": [],
+        "rhetoricalFeatures": [],
+        "sourceName": "源-zh-emoji-utf16-measure"
+      }
+    },
+    {
+      "id": "zh-fullwidth-digits-kept",
+      "language": "zh",
+      "sourceName": "源-zh-fullwidth-digits-kept",
+      "text": "２０２３年，他十八岁。2023年，她十七岁。",
+      "expected": {
+        "avgSentenceLength": 10,
+        "sentenceLengthStdDev": 0,
+        "avgParagraphLength": 22,
+        "paragraphLengthRange": {
+          "min": 22,
+          "max": 22
+        },
+        "vocabularyDiversity": 0.714,
+        "topPatterns": [],
+        "rhetoricalFeatures": [],
+        "sourceName": "源-zh-fullwidth-digits-kept"
+      }
+    },
+    {
+      "id": "en-prose",
+      "language": "en",
+      "sourceName": "源-en-prose",
+      "text": "The night fell like a curtain. The wind moved as if it knew. The city slept.\n\nHow could she forget? Why would he leave? Bread, salt, and water.\n\nHe ran. She ran. They ran.",
+      "expected": {
+        "avgSentenceLength": 3.8,
+        "sentenceLengthStdDev": 1.7,
+        "avgParagraphLength": 11,
+        "paragraphLengthRange": {
+          "min": 6,
+          "max": 16
+        },
+        "vocabularyDiversity": 0.824,
+        "topPatterns": [
+          "the… (3)"
+        ],
+        "rhetoricalFeatures": [
+          "simile (like/as if) (2)",
+          "rhetorical question (2)",
+          "short punchy rhythm (4)"
+        ],
+        "sourceName": "源-en-prose"
+      }
+    },
+    {
+      "id": "empty",
+      "language": "zh",
+      "sourceName": "源-empty",
+      "text": "",
+      "expected": {
+        "avgSentenceLength": 0,
+        "sentenceLengthStdDev": 0,
+        "avgParagraphLength": 0,
+        "paragraphLengthRange": {
+          "min": 0,
+          "max": 0
+        },
+        "vocabularyDiversity": 0,
+        "topPatterns": [],
+        "rhetoricalFeatures": [],
+        "sourceName": "源-empty"
+      }
+    }
+  ]
+}
