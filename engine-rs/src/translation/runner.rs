@@ -18,11 +18,11 @@ pub async fn run_translation_project(
     model: &dyn TranslationModelPort,
     batch_size: Option<usize>,
 ) -> Result<RunTranslationProjectResult, String> {
-    // 143 号：TS 运行快照三点（running → 章级进度 → complete/failed）。
-    let run_path = format!("translations/{project_id}/status.json");
+    // 143 号：TS 运行快照三点（running → 章级进度 → complete/failed）。970 号：路径=works 布局。
+    let run_path = format!("works/{project_id}/source/status.json");
     let base_artifacts = vec![
-        format!("translations/{project_id}/manifest.json"),
-        format!("translations/{project_id}/glossary.json"),
+        format!("works/{project_id}/source/manifest.json"),
+        format!("works/{project_id}/source/glossary.json"),
     ];
     write_production_run_snapshot(
         project_root,
@@ -261,8 +261,8 @@ async fn run_translation_inner(
     }
 
     // 143 号：报告与 complete 快照同事务（TS commitProductionArtifacts——
-    // artifacts = base + 全部章译文 + 报告）。
-    let report_path = format!("translations/{project_id}/review-report.md");
+    // artifacts = base + 全部章译文 + 报告）。970 号：报告路径=works 布局。
+    let report_path = format!("works/{project_id}/source/review-report.md");
     let mut artifacts = base_artifacts.to_vec();
     artifacts.extend(manifest.chapters.iter().map(|chapter| chapter.translated_path.clone()));
     artifacts.push(report_path.clone());

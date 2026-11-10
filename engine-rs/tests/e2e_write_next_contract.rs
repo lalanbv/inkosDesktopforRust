@@ -8364,7 +8364,7 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::OK, "body: {run}");
         assert_eq!(run["translatedSegments"], 2);
         assert_eq!(run["reviewedChapters"], 1);
-        assert_eq!(run["reportPath"], format!("translations/{project_id}/review-report.md"));
+        assert_eq!(run["reportPath"], format!("works/{project_id}/source/review-report.md"));
         assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
         // 967 号：TS 2.0 回执形（kind/workId/total·completed·pending/observations）。
         assert_eq!(run["kind"], "translation_completed");
@@ -8395,7 +8395,7 @@ mod translations70_e2e {
         assert!(report.contains("## [译]Chapter 1\n\n- summary: 全部通过。\n"), "{report}");
         assert!(!report.contains("- passed:"), "{report}");
         let glossary_raw = std::fs::read_to_string(
-            root.join("translations").join(&project_id).join("glossary.json"),
+            root.join("works").join(&project_id).join("source").join("glossary.json"),
         )
         .unwrap();
         assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
@@ -8440,7 +8440,7 @@ mod translations70_e2e {
         }
         assert!(opf.contains("山河之书"), "{opf}");
 
-        // 列表：摘要形态。
+        // 列表：摘要形态（works/ 扫 work.json）。
         let (status, listed) = call(app, "GET", "/api/v1/translations", None).await;
         assert_eq!(status, StatusCode::OK);
         let translations = listed["translations"].as_array().unwrap();
@@ -8448,6 +8448,68 @@ mod translations70_e2e {
         assert_eq!(translations[0]["projectId"], project_id);
         assert_eq!(translations[0]["title"], "山河之书");
         assert_eq!(translations[0]["chapters"], 1);
+    }
+
+    /// 970 号 P4：存储迁移——旧 `translations/<id>/` 布局（970 前落盘）在首次读面
+    /// 自动重命名到 `works/<id>/source/`（搬前确认无 work.json）；跨引擎互读=Rust
+    /// 列表/详情/运行读 TS 2.0 布局项目（works + work.json，本测试自建即该布局）；
+    /// work.json artifacts 由写入集构造（TS createCurrentArtifact 同形）。
+    #[tokio::test]
+    async fn storage_migrates_legacy_layout_and_work_json_carries_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let llm = mock_translation_llm().await;
+        let app = app70(&root, &llm);
+        let project_id = seed_project(&root, &app).await;
+
+        // work.json：profileId=translation + artifacts 覆盖全部写入面。
+        let work: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("works").join(&project_id).join("work.json")).unwrap()).unwrap();
+        assert_eq!(work["profileId"], "translation");
+        assert_eq!(work["language"], "zh");
+        let kinds: Vec<&str> = work["artifacts"].as_array().unwrap().iter().map(|a| a["kind"].as_str().unwrap()).collect();
+        for kind in ["translation-manifest", "glossary", "review", "source-chapter", "translation-chapter"] {
+            assert!(kinds.contains(&kind), "artifact kind {kind} 在场：{kinds:?}");
+        }
+        for artifact in work["artifacts"].as_array().unwrap() {
+            assert!(artifact["currentRevisionId"].is_string(), "{}", artifact["id"]);
+            let revision = artifact["revisions"].as_array().unwrap().iter().find(|r| r["status"] == "current").unwrap();
+            assert!(revision["checksum"].as_str().unwrap().starts_with("sha256:"));
+        }
+
+        // 迁移：人工落一个旧布局项目（works 下无 work.json），首次详情读触发搬迁。
+        let legacy_id = "2026-01-01T00-00-00-000Z-旧布局";
+        let legacy = root.join("translations").join(legacy_id);
+        for sub in ["source", "translated"] {
+            std::fs::create_dir_all(legacy.join(sub)).unwrap();
+        }
+        std::fs::write(
+            legacy.join("manifest.json"),
+            r#"{"id":"2026-01-01T00-00-00-000Z-旧布局","title":"旧山河","sourceLanguage":"en","targetLanguage":"zh","createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","source":{"kind":"text","path":"in.txt","charCount":3},"chapters":[{"number":1,"title":"Chapter 1","sourcePath":"2026-01-01T00-00-00-000Z-旧布局/source/chapter-0001.json","translatedPath":"2026-01-01T00-00-00-000Z-旧布局/translated/chapter-0001.json","segmentCount":1,"charCount":4,"status":"pending"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            legacy.join("source").join("chapter-0001.json"),
+            r#"{"number":1,"title":"Chapter 1","sourceLanguage":"en","targetLanguage":"zh","segments":[{"index":1,"source":"Old","target":"[译]Old"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            legacy.join("translated").join("chapter-0001.json"),
+            r#"{"number":1,"title":"Chapter 1","sourceLanguage":"en","targetLanguage":"zh","segments":[{"index":1,"source":"Old","target":"[译]Old"}]}"#,
+        )
+        .unwrap();
+        let (status, detail) = call(app.clone(), "GET", &format!("/api/v1/translations/{legacy_id}"), None).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        assert_eq!(detail["manifest"]["title"], "旧山河");
+        assert!(!legacy.exists(), "旧目录已搬迁");
+        assert!(root.join("works").join(legacy_id).join("source").join("manifest.json").is_file());
+        assert!(root.join("works").join(legacy_id).join("source").join("translated").join("chapter-0001.json").is_file());
+
+        // 列表=新布局两项目都可见（跨引擎互读面：TS 2.0 建的项目 Rust 可列可读）。
+        let (status, listed) = call(app, "GET", "/api/v1/translations", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let ids: Vec<&str> = listed["translations"].as_array().unwrap().iter().map(|t| t["projectId"].as_str().unwrap()).collect();
+        assert!(ids.contains(&project_id.as_str()) && ids.contains(&legacy_id), "{ids:?}");
     }
 
     #[tokio::test]
@@ -8657,7 +8719,7 @@ mod translations70_e2e {
             observation["scope"] = serde_json::json!("chapter:1");
         }
         assert_eq!(run["observations"], receipt_observations);
-        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("translations/{project_id}/translated/chapter-0001.json")]));
+        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
         let detail_uri = format!("/api/v1/translations/{project_id}");
         let (_, detail) = call(app.clone(), "GET", &detail_uri, None).await;
         assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "有 issue 级发现不升 reviewed");
@@ -8671,8 +8733,10 @@ mod translations70_e2e {
             "{report}"
         );
 
-        // 旧 manifest（967 前落盘形态）：剥三字段 → 详情现场计数仍为 2。
-        let manifest_path = root.join("translations").join(&project_id).join("manifest.json");
+        // 970 号 P4：旧 manifest（967 前落盘形态）——manifest 在 works 新布局（本轮建），
+        // 直接剥三字段 → 详情现场计数仍为 2；旧 `translations/` 布局的搬迁由独立
+        // migrate 测试覆盖。
+        let manifest_path = root.join("works").join(&project_id).join("source").join("manifest.json");
         let mut legacy: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
         for chapter in legacy["chapters"].as_array_mut().unwrap() {
             let chapter = chapter.as_object_mut().unwrap();
@@ -10316,8 +10380,9 @@ mod translation75_e2e {
         assert_eq!(manifest["sourceLanguage"], "en");
         assert_eq!(manifest["chapters"].as_array().unwrap().len(), 1);
         assert_eq!(manifest["source"]["kind"], "text");
-        assert!(details["manifestPath"].as_str().unwrap().starts_with("translations/"));
-        assert!(details["projectDir"].as_str().unwrap().starts_with("translations/"));
+        // 970 号 P4：布局=works/<id>/source（TS 2.0 works 存储）。
+        assert!(details["manifestPath"].as_str().unwrap().starts_with("works/"));
+        assert!(details["projectDir"].as_str().unwrap().starts_with("works/"));
         // 结果文本五段。
         assert!(exec["result"].as_str().unwrap().contains("Translation project \"山之书\" created."));
         assert!(exec["result"].as_str().unwrap().contains("Chapters: 1"));

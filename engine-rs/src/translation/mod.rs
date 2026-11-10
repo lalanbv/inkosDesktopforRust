@@ -46,7 +46,8 @@ mod tests {
         let result = project::create_translation_project_from_file(root, &input("novel.txt"))
             .await
             .unwrap();
-        assert!(result.project_dir.starts_with("translations/"), "{}", result.project_dir);
+        // 970 号 P4：布局=works/<id>/source（TS 2.0 works 存储）+ work.json。
+        assert!(result.project_dir.starts_with("works/"), "{}", result.project_dir);
         assert_eq!(result.manifest.source_language, "en");
         assert_eq!(result.manifest.chapters.len(), 2);
         assert_eq!(result.manifest.chapters[0].status, TranslationChapterStatus::Pending);
@@ -56,12 +57,18 @@ mod tests {
         // 失配曾泄漏绝对路径（contract-diff translations/:id 活体捕获）。
         assert!(!std::path::Path::new(&result.manifest.source.path).is_absolute(), "{}", result.manifest.source.path);
         assert_eq!(result.manifest.source.path, "novel.txt");
-        // source/translated 章节文件 + manifest + glossary + review 报告。
-        assert!(root.join("translations").join(&result.manifest.id).join("manifest.json").is_file());
+        // source/translated 章节文件 + manifest + glossary + review 报告 + work.json。
+        let work_root = root.join("works").join(&result.manifest.id);
+        assert!(work_root.join("work.json").is_file());
+        let work: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(work_root.join("work.json")).unwrap()).unwrap();
+        assert_eq!(work["profileId"], "translation");
+        assert_eq!(work["version"], 2);
+        assert_eq!(work["artifacts"].as_array().unwrap().len(), 2 * result.manifest.chapters.len() + 3);
+        assert!(work_root.join("source").join("manifest.json").is_file());
         assert!(root.join(&result.manifest.chapters[0].source_path).is_file());
         assert!(root.join(&result.manifest.chapters[0].translated_path).is_file());
-        assert!(root.join("translations").join(&result.manifest.id).join("glossary.json").is_file());
-        assert!(root.join("translations").join(&result.manifest.id).join("review-report.md").is_file());
+        assert!(work_root.join("source").join("glossary.json").is_file());
+        assert!(work_root.join("source").join("review-report.md").is_file());
         // translated 章节空段起步。
         let translated: TranslationChapterFile = serde_json::from_str(
             &std::fs::read_to_string(root.join(&result.manifest.chapters[0].translated_path)).unwrap(),
@@ -275,7 +282,7 @@ mod tests {
 
         // 终态快照：complete / stage complete / artifacts = base + 章 + 报告。
         let run: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("translations").join(&id).join("status.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works").join(&id).join("source").join("status.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(run["version"], 1);
@@ -284,10 +291,10 @@ mod tests {
         assert_eq!(run["status"], "complete");
         assert_eq!(run["stage"], "complete");
         let artifacts: Vec<&str> = run["artifacts"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert!(artifacts.contains(&format!("translations/{id}/manifest.json").as_str()), "{artifacts:?}");
-        assert!(artifacts.contains(&format!("translations/{id}/glossary.json").as_str()), "{artifacts:?}");
+        assert!(artifacts.contains(&format!("works/{id}/source/manifest.json").as_str()), "{artifacts:?}");
+        assert!(artifacts.contains(&format!("works/{id}/source/glossary.json").as_str()), "{artifacts:?}");
         assert!(artifacts.iter().any(|a| a.contains("/translated/")), "章译文在清单：{artifacts:?}");
-        assert!(artifacts.contains(&format!("translations/{id}/review-report.md").as_str()), "{artifacts:?}");
+        assert!(artifacts.contains(&format!("works/{id}/source/review-report.md").as_str()), "{artifacts:?}");
         assert!(run.get("error").is_none());
     }
 
@@ -322,7 +329,7 @@ mod tests {
         assert!(err.contains("model exploded"), "{err}");
         // failed 快照落地（吞写错不覆盖原错）。
         let run: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("translations").join(&id).join("status.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works").join(&id).join("source").join("status.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(run["status"], "failed");
@@ -345,12 +352,12 @@ mod tests {
             .unwrap();
         assert_eq!(result.translated_segments, 1);
         assert_eq!(result.reviewed_chapters, 1);
-        assert_eq!(result.report_path, format!("translations/{id}/review-report.md"));
+        assert_eq!(result.report_path, format!("works/{id}/source/review-report.md"));
 
         // 状态推进 + 报告内容 + 术语表。
         let manifest = run_store::load_translation_manifest(root, &id).await.unwrap();
         assert_eq!(manifest.chapters[0].status, TranslationChapterStatus::Reviewed);
-        let report = std::fs::read_to_string(root.join("translations").join(&id).join("review-report.md")).unwrap();
+        let report = std::fs::read_to_string(root.join("works").join(&id).join("source").join("review-report.md")).unwrap();
         // 969 号：报告=TS 2.0 逐字形（`## 标题` + `- summary:`，passed 行退役）；EchoModel
         // 不返回 chapterTitle → 标题保持原文。
         assert!(report.contains("## Chapter 1\n\n- summary: Looks good.\n"), "{report}");
@@ -376,7 +383,9 @@ mod tests {
         let md = export::write_translation_export(root, &id, TranslationExportFormat::Md, None)
             .await
             .unwrap();
-        assert!(md.output_path.starts_with("translations/"), "{}", md.output_path);
+        // 970 号 P4：导出根=works/<id>/source/exports（TS 2.0 translationProjectDir）。
+        assert!(md.output_path.starts_with("works/"), "{}", md.output_path);
+        assert!(md.output_path.contains("/source/exports/"), "{}", md.output_path);
         assert!(md.output_path.ends_with(".md"));
         let text = std::fs::read_to_string(root.join(&md.output_path)).unwrap();
         assert!(text.starts_with("# in"), "{text}");

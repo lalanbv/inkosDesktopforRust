@@ -1,7 +1,9 @@
 //! translations 域端点（70 号）——翻译工作流。
 //!
 //! 契约来源 `packages/studio/src/api/server.ts` L6521-L6665：
-//! - `GET /translations`（L6521）：目录枚举 + manifest 摘要 + projectId 降序
+//! - `GET /translations`（L6521）：works/ 扫 work.json（profileId=translation，
+//!   970 号 P4——旧 `translations/` 布局由 load_translation_manifest 一次性搬迁）+
+//!   manifest 摘要 + projectId 降序
 //! - `POST /translations/upload`（L6553）：safeUploadFileName + dataUrl 解析 +
 //!   80MB 上限 + `.inkos/uploads/translation/{毫秒}-{name}` 落盘。
 //!   274 号起 dataUrl 解析收敛至 upload_common（TS `parseDataUrl` 逐字：
@@ -68,11 +70,13 @@ pub async fn list_translations(
     State(runtime): State<BooksRuntime>,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root();
-    let translations_dir = root.join("translations");
+    // 970 号 P4：列表=works/ 扫 work.json（profileId=translation）——TS `listWorkManifests
+    // (root, "translation")` 同面；`translations/` 旧项目由 load_translation_manifest 的
+    // 一次性搬迁并入。坏 manifest skip（TS catch 同语义）。
     let mut entries: Vec<String> = Vec::new();
-    if let Ok(mut dirents) = tokio::fs::read_dir(&translations_dir).await {
+    if let Ok(mut dirents) = tokio::fs::read_dir(root.join("works")).await {
         while let Ok(Some(entry)) = dirents.next_entry().await {
-            if tokio::fs::metadata(translations_dir.join(entry.file_name()))
+            if tokio::fs::metadata(root.join("works").join(entry.file_name()))
                 .await
                 .map(|m| m.is_dir())
                 .unwrap_or(false)
@@ -86,6 +90,16 @@ pub async fn list_translations(
     let mut translations: Vec<Value> = Vec::new();
     for project_id in entries {
         if !is_safe_book_id(&project_id) {
+            continue;
+        }
+        let manifest_path = root.join("works").join(&project_id).join("work.json");
+        let Ok(raw) = tokio::fs::read_to_string(&manifest_path).await else {
+            continue;
+        };
+        let Ok(work) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if work.get("profileId").and_then(Value::as_str) != Some("translation") {
             continue;
         }
         // 坏 manifest skip（TS catch 同语义）。
