@@ -1987,6 +1987,9 @@ enum PayloadField<'a> {
     StrArray { min: usize, max: usize },
     /// z.object(...)（如 connectChoice.node: StoryNodeSchema——结构校验由执行器承担）
     Object,
+    /// 975 号：z.array(z.object({...}).strict()).optional()——对象数组（元素结构
+    /// 校验由执行器承担；如 translationCreate.glossary / sources）。
+    ArrayObj,
 }
 
 const PAYLOAD_TOP_LEVEL_KEYS: &[&str] = &[
@@ -2068,8 +2071,16 @@ fn payload_schemas() -> Vec<PayloadSchema> {
             ("outDir", StrNonEmpty),
         ]),
         ("translationCreate", true, vec![
-            ("filePath", StrNonEmpty), ("sourceLanguage", StrNonEmpty),
-            ("targetLanguage", StrNonEmpty), ("title", StrNonEmpty),
+            // 975 号：三输入形态——sources 数组（CreationSourceReference strict，对象
+            // 结构校验由执行器承担同 connectChoice.node）、sourceText、glossary 数组；
+            // filePath 保留（file 形态）。sourceLanguage/targetLanguage/title/
+            // segmentMaxChars 同前。
+            ("filePath", StrNonEmpty),
+            ("sourceText", StrNonEmpty),
+            ("sources", ArrayObj),
+            ("glossary", ArrayObj),
+            ("sourceLanguage", StrNonEmpty), ("targetLanguage", StrNonEmpty),
+            ("title", StrNonEmpty),
             ("segmentMaxChars", IntRange { min: Some(1.0), max: None }),
         ]),
         // 301 号：四件创建域（action-envelope.ts L173-227 同构，全 .strict()；
@@ -2175,6 +2186,8 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
                                 .all(|item| item.as_str().is_some_and(|s| !s.is_empty()))
                     }),
                 PayloadField::Object => field_value.is_object(),
+                // 975 号：对象数组（元素结构由执行器承担）。
+                PayloadField::ArrayObj => field_value.is_array(),
             };
             if !valid {
                 return Err(format!("{domain}.{field}: invalid value {field_value}"));

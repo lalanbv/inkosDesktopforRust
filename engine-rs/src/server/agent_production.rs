@@ -2223,10 +2223,16 @@ pub(crate) async fn execute_generate_cover(
 }
 
 /// `createTranslationCreateTool`：createTranslationProjectFromFile 同链（70 号
-/// 域本体）——只摄取分段，翻译执行是独立长任务（run 端点）。
+/// 域本体）——只摄取分段，翻译执行是独立长任务（run 端点）。975 号：三输入形态
+/// （filePath / sourceText / sources）经 `load_creation_source` 解析（歧义守卫 +
+/// lineage），glossary 初始术语落池。
+#[allow(clippy::too_many_arguments)]
 async fn execute_translation_create(
     runtime: &BooksRuntime,
-    file_path: &str,
+    file_path: Option<&str>,
+    source_text: Option<&str>,
+    sources: Option<&Value>,
+    glossary: Option<&Value>,
     source_language: &str,
     target_language: &str,
     title: &str,
@@ -2234,12 +2240,41 @@ async fn execute_translation_create(
     mut on_progress: impl FnMut(String),
 ) -> Result<ToolOutcome, String> {
     use crate::translation::types::CreateTranslationProjectInput;
-    on_progress(format!("Creating translation project from {file_path}..."));
+    on_progress("Creating translation project...".to_string());
     let root = runtime.state.project_root();
+    let resolved = crate::agent::creation_source::load_creation_source(
+        root,
+        None,
+        sources.and_then(Value::as_array).map(|list| list.as_slice()),
+        source_text,
+        file_path,
+        None,
+    )
+    .await?;
+    let glossary_terms: Vec<crate::translation::types::TranslationGlossaryTerm> = glossary
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|term| {
+                    Some(crate::translation::types::TranslationGlossaryTerm {
+                        source: term.get("source")?.as_str()?.trim().to_string(),
+                        target: term.get("target")?.as_str()?.trim().to_string(),
+                        note: term
+                            .get("note")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|n| !n.is_empty())
+                            .map(String::from),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let input = CreateTranslationProjectInput {
-        file_path: Some(file_path),
-        resolved: None,
-        glossary: &[],
+        file_path: None,
+        resolved: Some(&resolved),
+        glossary: &glossary_terms,
         source_language,
         target_language,
         title: if title.is_empty() { None } else { Some(title) },
@@ -2977,16 +3012,21 @@ async fn run_confirmed_production_locked(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
             };
-            let file_path = field("filePath").ok_or_else(|| {
-                production_exec_error(
+            // 975 号：三输入形态（TS server.ts translation_create 同序）——filePath /
+            // sourceText / sources 任一在场即可（解析与歧义守卫在 load_creation_source）。
+            let file_path = field("filePath");
+            let source_text = field("sourceText");
+            let sources_present = payload.and_then(|p| p.get("sources")).is_some();
+            if file_path.is_none() && source_text.is_none() && !sources_present {
+                return Err(production_exec_error(
                     lang,
                     pick(
                         lang,
-                        "确认创建翻译项目缺少文件路径，请重新生成确认卡。",
-                        "The translation confirmation is missing a file path. Regenerate the confirmation card.",
+                        "确认创建翻译项目缺少文件路径或源文本，请重新生成确认卡。",
+                        "The translation confirmation is missing a file path or source text. Regenerate the confirmation card.",
                     ),
-                )
-            })?.to_string();
+                ));
+            }
             let source_language = field("sourceLanguage").ok_or_else(|| {
                 production_exec_error(
                     lang,
@@ -3007,7 +3047,18 @@ async fn run_confirmed_production_locked(
                     ),
                 )
             })?.to_string();
-            params.insert("filePath".into(), json!(file_path));
+            if let Some(path) = file_path {
+                params.insert("filePath".into(), json!(path));
+            }
+            if let Some(text) = source_text {
+                params.insert("sourceText".into(), json!(text));
+            }
+            if sources_present {
+                params.insert("sources".into(), json!(payload.and_then(|p| p.get("sources")).cloned().unwrap_or(Value::Null)));
+            }
+            if let Some(terms) = payload.and_then(|p| p.get("glossary")) {
+                params.insert("glossary".into(), terms.clone());
+            }
             params.insert("sourceLanguage".into(), json!(source_language));
             params.insert("targetLanguage".into(), json!(target_language));
             if let Some(title) = field("title") {
@@ -3686,9 +3737,16 @@ async fn run_confirmed_production_locked(
                     .unwrap_or_default()
                     .to_string()
             };
+            let file_path_owned = field("filePath");
+            let source_text_owned = field("sourceText");
+            let file_path = if file_path_owned.is_empty() { None } else { Some(file_path_owned.as_str()) };
+            let source_text = if source_text_owned.is_empty() { None } else { Some(source_text_owned.as_str()) };
             execute_translation_create(
                 runtime,
-                &field("filePath"),
+                file_path,
+                source_text,
+                args.get("sources").filter(|s| !s.as_array().map(|list| list.is_empty()).unwrap_or(true)),
+                args.get("glossary"),
                 &field("sourceLanguage"),
                 &field("targetLanguage"),
                 &field("title"),

@@ -10657,6 +10657,90 @@ mod translation75_e2e {
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
     }
 
+    /// 975 号：三输入形态确认卡（sourceText+glossary / registered sources / 歧义守卫）。
+    #[tokio::test]
+    async fn translation_create_three_forms_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("novel.txt"), "Chapter 1\n\nThe mountain stood.\n\nMana flowed.").unwrap();
+        let app = app75(rt75(&root));
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782993000000-tr03"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // ② sourceText inline + glossary。
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"内联翻译","sessionId":"1782993000000-tr03","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"sourceText":"Inline body.","sourceLanguage":"en","targetLanguage":"zh","title":"内联之书","glossary":[{"source":"Mana","target":"魔力"}]}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        let exec = &created["details"]["toolExecutions"][0];
+        assert_eq!(exec["details"]["kind"], "translation_project_created");
+        let inline_id = exec["details"]["manifest"]["id"].as_str().unwrap().to_string();
+        // 975 号：manifestPath 为项目根相对路径——与 root 拼接（e2e 进程 CWD 与项目根无关）。
+        let inline_dir = root.join(exec["details"]["manifestPath"].as_str().unwrap()).parent().unwrap().to_path_buf();
+        assert!(inline_dir.join("source-input.md").is_file(), "sourceText 形态 source-input.md 在场");
+        let glossary_raw = std::fs::read_to_string(inline_dir.join("glossary.json")).unwrap();
+        assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
+        let inline_work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(inline_work["metadata"]["sourceOrigin"], "inline");
+        assert!(inline_work["lineage"].as_array().unwrap().is_empty());
+
+        // ① registered sources：引用 ② 的 source 章节工件（lineage 进 work.json）。
+        let artifacts = inline_work["artifacts"].as_array().cloned().unwrap_or_default();
+        let artifact_id = artifacts.iter()
+            .find(|a| a["path"].as_str().map(|p| p.ends_with("chapter-0001.json") && p.contains("source/")).unwrap_or(false))
+            .and_then(|a| a["id"].as_str())
+            .map(String::from)
+            .unwrap_or_else(|| {
+                "source-chapter-0001".to_string()
+            });
+        let (status, created) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(&format!(r#"{{"instruction":"引用翻译","sessionId":"1782993000000-tr03","actionSource":"button","requestedIntent":"translation_create","actionPayload":{{"translationCreate":{{"sources":[{{"workId":"{inline_id}","artifactId":"{artifact_id}"}}],"sourceLanguage":"en","targetLanguage":"zh","title":"衍生之书"}}}}}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {created}");
+        // 975 号：manifest 在 toolExecutions[0].details.manifest（agent 路由响应形）。
+        let exec = &created["details"]["toolExecutions"][0];
+        let derived_id = exec["details"]["manifest"]["id"].as_str().unwrap().to_string();
+        let derived_work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json")).unwrap(),
+        ).unwrap();
+        let lineage = derived_work["lineage"].as_array().cloned().unwrap_or_default();
+        assert_eq!(lineage.len(), 1);
+        assert_eq!(lineage[0]["relation"], "derived-from");
+        assert_eq!(lineage[0]["sourceWorkId"], inline_id.as_str());
+        assert_eq!(lineage[0]["sourceArtifactId"], artifact_id);
+        assert!(lineage[0]["sourceRevisionId"].is_string());
+
+        // 歧义守卫：filePath + sourceText 并给 → 502（CREATION_SOURCE_CONFLICT 执行面）。
+        let (status, parsed) = call(
+            app,
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"歧义","sessionId":"1782993000000-tr03","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"filePath":"novel.txt","sourceText":"双给","sourceLanguage":"en","targetLanguage":"zh"}}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert!(
+            parsed["error"]["message"].as_str().unwrap_or_default().contains("CREATION_SOURCE_CONFLICT"),
+            "body: {parsed}"
+        );
+    }
+
     #[tokio::test]
     async fn action_payload_strict_endpoint_surface() {
         let dir = tempfile::tempdir().unwrap();

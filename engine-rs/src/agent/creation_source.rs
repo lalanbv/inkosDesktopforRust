@@ -94,8 +94,11 @@ pub async fn load_creation_source(
         let resolved = read_artifact_revision(project_root, work_id, artifact_id, revision_id.or(pinned.as_deref()))
             .await
             .map_err(|error| coded(error.code, &error.message))?;
+        // 975 号：xhtml 工件（章节文件，translation-create registered 源主形态）
+        // 属合法文本面——content-type 集与 JSON 一并放行。
         if !resolved.revision.content_type.starts_with("text/")
             && resolved.revision.content_type != "application/json"
+            && resolved.revision.content_type != "application/xhtml+xml"
         {
             return Err(coded(
                 "SOURCE_NOT_TEXT",
