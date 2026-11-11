@@ -676,16 +676,16 @@ mod tests {
                     .map(|message| message.content.clone())
                     .collect();
                 Box::pin(async move {
-                    me.captured.lock().unwrap().push(CapturedRequest {
+                    me.captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(CapturedRequest {
                         system_content,
                         tools,
                         tool_choice,
                         user_contents,
                     });
-                    if let Some(error) = me.errors.lock().unwrap().pop() {
+                    if let Some(error) = me.errors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop() {
                         return Err(error);
                     }
-                    let next = me.script.lock().unwrap().pop_front();
+                    let next = me.script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop_front();
                     match next {
                         Some(response) => Ok(response),
                         // 脚本耗尽 = 模型继续空转（应已被预算闸拦住）。
@@ -696,7 +696,7 @@ mod tests {
         }
 
         fn captured(&self) -> Vec<CapturedRequest> {
-            self.captured.lock().unwrap().clone()
+            self.captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
         }
     }
 
@@ -909,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn output_limit_error_maps_to_model_output_limit_code() {
         let fake = FakeChat::new(Vec::new());
-        fake.errors.lock().unwrap().push(ChatTurnError {
+        fake.errors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(ChatTurnError {
             message: "model reached the output limit (length)".into(),
             output_limit: true,
         });

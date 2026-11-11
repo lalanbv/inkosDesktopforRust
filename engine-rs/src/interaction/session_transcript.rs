@@ -439,8 +439,7 @@ fn session_lock(project_root: &Path, session_id: &str) -> Arc<tokio::sync::Mutex
     let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let key = format!("{}:{}", project_root.display(), session_id);
     locks
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .entry(key)
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()

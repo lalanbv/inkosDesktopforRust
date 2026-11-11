@@ -66,21 +66,19 @@ impl Default for MockStore {
 
 impl SecretStore for MockStore {
     fn read_all(&self) -> Result<HashMap<String, String>> {
-        Ok(self.map.lock().expect("MockStore mutex poisoned").clone())
+        Ok(self.map.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
     }
 
     fn upsert(&self, key: &str, value: &str) -> Result<()> {
         self.map
-            .lock()
-            .expect("MockStore mutex poisoned")
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         self.map
-            .lock()
-            .expect("MockStore mutex poisoned")
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(key);
         Ok(())
     }
@@ -187,7 +185,7 @@ impl KeyringStore {
 
 impl SecretStore for KeyringStore {
     fn read_all(&self) -> Result<HashMap<String, String>> {
-        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
+        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let keys = self.read_index()?;
         let mut out = HashMap::with_capacity(keys.len());
         for key in keys {
@@ -215,7 +213,7 @@ impl SecretStore for KeyringStore {
     }
 
     fn upsert(&self, key: &str, value: &str) -> Result<()> {
-        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
+        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // 1. 写 entry（即便后续 index 更新失败，secret 已落 keychain——下次 upsert 同 key 幂等覆盖）
         self.entry_for(key)?
             .set_password(value)
@@ -232,7 +230,7 @@ impl SecretStore for KeyringStore {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let _guard = self.index_lock.lock().expect("KeyringStore index_lock poisoned");
+        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // 1. 删 entry（不存在视为成功，与 MockStore::delete 语义一致）
         // 注：keyring v3 的方法名是 `delete_credential`（v2 是 `delete_password`，v3 改名）。
         match self.entry_for(key)?.delete_credential() {

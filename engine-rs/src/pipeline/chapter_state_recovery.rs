@@ -521,7 +521,7 @@ mod retry_tests {
     #[async_trait::async_trait]
     impl ValidatePort for ScriptValidate {
         async fn validate(&self, _params: ValidateRequest<'_>) -> Result<ValidationResult, String> {
-            Ok(self.results.lock().unwrap().remove(0))
+            Ok(self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0))
         }
     }
 

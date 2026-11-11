@@ -264,7 +264,7 @@ where
 pub fn activate_turn_skill(activation: ActivatedSkillGuidance) {
     let _ = TURN_SKILLS.try_with(|turn| {
         if let Some(turn) = turn.as_ref() {
-            let mut turn = turn.lock().unwrap();
+            let mut turn = turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(existing) = turn.iter_mut().find(|a| a.skill.id == activation.skill.id) {
                 *existing = activation;
             } else {
@@ -280,7 +280,7 @@ pub fn turn_skill_activations() -> Vec<ActivatedSkillGuidance> {
     TURN_SKILLS
         .try_with(|turn| {
             turn.as_ref()
-                .map(|turn| turn.lock().unwrap().clone())
+                .map(|turn| turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
                 .unwrap_or_default()
         })
         .unwrap_or_default()

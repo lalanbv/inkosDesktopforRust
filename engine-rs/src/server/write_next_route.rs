@@ -107,8 +107,7 @@ pub async fn write_next(
         let abort: AbortHandle = Arc::new(std::sync::Mutex::new(false));
         if let Some(entry) = &checkpoint {
             active_confirmed_tasks()
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(entry.execution_id.clone(), abort.clone());
             entry.persist_running(&task_runtime).await;
         }
@@ -141,8 +140,7 @@ pub async fn write_next(
                     entry.persist_finished(&task_runtime, StudioTaskExecutionStatus::Completed, None)
                         .await;
                     active_confirmed_tasks()
-                        .lock()
-                        .unwrap()
+                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                         .remove(&entry.execution_id);
                 }
             }
@@ -167,8 +165,7 @@ pub async fn write_next(
                     )
                     .await;
                     active_confirmed_tasks()
-                        .lock()
-                        .unwrap()
+                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                         .remove(&entry.execution_id);
                 }
             }
@@ -388,8 +385,7 @@ mod tests {
             Some(&serde_json::json!(800))
         );
         assert!(active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-bck"));
 
         // 放行 runner → 失败 → 终态快照 + 注销。
@@ -416,8 +412,7 @@ mod tests {
         // WriteNextError Display 包一层「write chapter failed: …」——断言消息本体。
         assert!(finished.execution.error.as_deref().unwrap().contains("boom"));
         assert!(!active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-bck"));
     }
 
@@ -434,7 +429,7 @@ mod tests {
                     // 模拟管线阶段边界轮询：置位即停，10s 兜底防挂死。
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                     loop {
-                        if *abort.lock().unwrap() {
+                        if *abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
                             return Err::<crate::pipeline::write_next::ChapterPipelineResult, _>(
                                 "Operation aborted: the user requested to stop this task."
                                     .to_string(),
@@ -482,7 +477,7 @@ mod tests {
         .expect("stop 端点应找到 write-next 句柄");
 
         // abort_session 的置位动作 → runner 在检查点退出。
-        *handle.lock().unwrap() = true;
+        *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
                 Ok(Ok(payload)) if payload.event == "write:error" => {
@@ -510,8 +505,7 @@ mod tests {
         };
         assert!(finished.execution.error.as_deref().unwrap().contains("已按您的要求停止"));
         assert!(!active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-stp"));
     }
 
@@ -549,8 +543,7 @@ mod tests {
         assert!(!dir.path().join(".inkos/tasks").exists());
         // 共享静态表——只断言本用例的 id 未入表（并行用例各自持有自己的 id）。
         assert!(!active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-b0"));
     }
 }

@@ -886,8 +886,7 @@ pub async fn load_reconciled_task_snapshot(
         StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
     );
     let locally_running = active_confirmed_tasks()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&task.execution.id);
     if !running || locally_running {
         return Some(task);
@@ -914,19 +913,17 @@ pub async fn find_running_task_controller(
     session_id: &str,
 ) -> Option<AbortHandle> {
     let reserved_task_id = reserved_production_sessions()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(session_id)
         .cloned();
     if let Some(task_id) = reserved_task_id {
-        if let Some(handle) = active_confirmed_tasks().lock().unwrap().get(&task_id) {
+        if let Some(handle) = active_confirmed_tasks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&task_id) {
             return Some(handle.clone());
         }
     }
     let task = load_reconciled_task_snapshot(root, session_id).await?;
     active_confirmed_tasks()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&task.execution.id)
         .cloned()
 }
@@ -940,8 +937,7 @@ pub async fn find_active_running_task(root: &Path, session_id: &str) -> Option<S
     );
     if running
         && active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key(&task.execution.id)
     {
         Some(task)
@@ -1020,8 +1016,7 @@ async fn append_production_assistant_message(
     session_kind: SessionKind,
 ) {
     if crate::server::session_routes::deleted_session_ids()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains(session_id)
     {
         return;
@@ -1532,7 +1527,7 @@ async fn execute_write_next(
         ));
         let mut results: Vec<ChapterPipelineResult> = Vec::new();
         for _ in 0..chapter_count {
-            if *abort.lock().unwrap() {
+            if *abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
                 let text = abort_text_with_partial(&results, lang);
                 crate::utils::log_file::append_log_event(
                     runtime.state.project_root(),
@@ -2750,7 +2745,7 @@ pub async fn run_confirmed_production(
 
     // ── 单任务闸门：任何 await 之前同步预留 ──
     {
-        let mut reserved = reserved_production_sessions().lock().unwrap();
+        let mut reserved = reserved_production_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if reserved.contains_key(request.session_id) {
             return Err(busy_error(request.language));
         }
@@ -2760,16 +2755,14 @@ pub async fn run_confirmed_production(
 
     let abort: AbortHandle = Arc::new(Mutex::new(false));
     active_confirmed_tasks()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(task_id.clone(), abort.clone());
 
     let result = run_confirmed_production_locked(runtime, &request, &task_id, &abort).await;
 
-    active_confirmed_tasks().lock().unwrap().remove(&task_id);
+    active_confirmed_tasks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&task_id);
     reserved_production_sessions()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&reserved_session_id);
     result
 }
@@ -3518,7 +3511,7 @@ async fn run_confirmed_production_locked(
         let source_id = request.source_request_id.map(String::from);
         move |message: String| {
             let handle = {
-                let mut sink = sink.lock().unwrap();
+                let mut sink = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 sink.0.push(message);
                 let mut entry = base.clone();
                 let mut logs = sink.0.clone();
@@ -3538,7 +3531,7 @@ async fn run_confirmed_production_locked(
                     .await;
                 })
             };
-            sink.lock().unwrap().1.push(handle);
+            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1.push(handle);
         }
     };
     let outcome = match request.intent {
@@ -3879,11 +3872,11 @@ async fn run_confirmed_production_locked(
 
     // 终态持久化前 drain 进度写入（保证快照终态不被滞后的进度快照覆盖）。
     {
-        let handles: Vec<_> = sink.lock().unwrap().1.drain(..).collect();
+        let handles: Vec<_> = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1.drain(..).collect();
         for handle in handles {
             let _ = handle.await;
         }
-        let mut logs = sink.lock().unwrap().0.clone();
+        let mut logs = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0.clone();
         logs.truncate(80);
         if !logs.is_empty() {
             exec.logs = Some(logs);
@@ -4055,8 +4048,7 @@ async fn persist_confirmed_task(
     source_request_id: Option<&str>,
 ) {
     if crate::server::session_routes::deleted_session_ids()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains(session_id)
     {
         return;
@@ -4236,8 +4228,7 @@ mod tests {
             .await
             .unwrap();
         active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
                 "write-next-deadbook".into(),
                 crate::interaction::agent_loop::AbortHandle::default(),
@@ -4248,8 +4239,7 @@ mod tests {
 
         // 死亡：同一执行 id 从注册表移除 → 改写中断终态落盘（默认 zh 文案）。
         active_confirmed_tasks()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove("write-next-deadbook");
         let dead = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
         assert_eq!(dead.execution.status, StudioTaskExecutionStatus::Error);

@@ -124,8 +124,8 @@ mod tests {
             temperature: f64,
             max_tokens: Option<u32>,
         ) -> Result<String, String> {
-            self.calls.lock().unwrap().push((temperature, max_tokens));
-            let index = self.calls.lock().unwrap().len() - 1;
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((temperature, max_tokens));
+            let index = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len() - 1;
             Ok(self.responses[index].clone())
         }
     }
@@ -157,9 +157,9 @@ mod tests {
         };
         let output = generate_branches(&chat, &input).await.unwrap();
         assert_eq!(output.branches.len(), 3);
-        assert_eq!(chat.calls.lock().unwrap().len(), 1);
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
         // maxTokens = max(8192, 3*(5*220+1600)) = max(8192, 8100) = 8192。
-        assert_eq!(chat.calls.lock().unwrap()[0].1, Some(8192));
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, Some(8192));
     }
 
     #[tokio::test]
@@ -178,9 +178,9 @@ mod tests {
         };
         let output = generate_branches(&chat, &input).await.unwrap();
         assert_eq!(output.branches.len(), 2);
-        assert_eq!(chat.calls.lock().unwrap().len(), 2);
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 2);
         // 重试降温 0.6 → 0.4。
-        assert!((chat.calls.lock().unwrap()[1].0 - 0.4).abs() < 1e-9);
+        assert!((chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[1].0 - 0.4).abs() < 1e-9);
     }
 
     #[tokio::test]

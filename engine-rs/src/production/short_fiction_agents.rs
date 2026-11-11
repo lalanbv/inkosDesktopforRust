@@ -948,8 +948,7 @@ pub async fn reviewer_review_draft(
                     "instruction": "These are the actual selected excerpts. Check that they support this finding before keeping its code in the final review.",
                 });
                 recorded
-                    .lock()
-                    .unwrap()
+                    .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                     .insert(submission.code.clone(), submission);
                 Ok(receipt)
             })
@@ -970,7 +969,7 @@ pub async fn reviewer_review_draft(
                     items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
                 })
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap();
+            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let unknown: Vec<String> = codes
                 .iter()
                 .filter(|code| !recorded.contains_key(*code))
@@ -1021,7 +1020,7 @@ pub async fn reviewer_review_draft(
     .await?;
 
     // 依最终 codes 顺序 resolve recorded 条目。
-    let recorded = recorded.lock().unwrap();
+    let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let codes: Vec<String> = outcome
         .result
         .get("observationCodes")
@@ -1230,8 +1229,7 @@ pub async fn reviewer_review_package(
                     "instruction": "These are the actual selected excerpts. Check that they support this finding before keeping its code in the final review.",
                 });
                 recorded
-                    .lock()
-                    .unwrap()
+                    .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                     .insert(submission.code.clone(), submission);
                 Ok(receipt)
             })
@@ -1250,7 +1248,7 @@ pub async fn reviewer_review_package(
                     items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
                 })
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap();
+            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let unknown: Vec<String> = codes
                 .iter()
                 .filter(|code| !recorded.contains_key(*code))
@@ -1301,7 +1299,7 @@ pub async fn reviewer_review_package(
     )
     .await?;
 
-    let recorded = recorded.lock().unwrap();
+    let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let codes: Vec<String> = outcome
         .result
         .get("observationCodes")
@@ -1370,13 +1368,13 @@ mod tests {
             let tools = request.tools.clone();
             let tool_choice = request.tool_choice.map(str::to_string);
             Box::pin(async move {
-                captured_for_fn.lock().unwrap().push(CapturedAgentCall {
+                captured_for_fn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(CapturedAgentCall {
                     system,
                     user,
                     tools,
                     tool_choice,
                 });
-                let mut queue = script.lock().unwrap();
+                let mut queue = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 queue.pop_front().ok_or_else(|| ChatTurnError {
                     message: "script exhausted".into(),
                     output_limit: false,
@@ -1445,7 +1443,7 @@ mod tests {
         assert_eq!(outcome.story_title, "雨夜碎镜");
         assert_eq!(outcome.raw_content, GOLDEN_OUTLINE_RAW);
         // 形态面：schema 的 chapter_N_plan 动态键 + tool_choice required。
-        let call = &captured.lock().unwrap()[0];
+        let call = &captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
         assert_eq!(call.tools[0]["function"]["name"], "submit_short_outline");
         assert!(call.tools[0]["function"]["parameters"]["properties"]
             .get("chapter_2_plan")
@@ -1524,7 +1522,7 @@ mod tests {
             "# 雨夜碎镜\n\n## 开篇钩子\n\n雨夜来客叩门。\n\n## 第1章 换名\n\n斋主以镜换名，来客留下一个再未使用的名字。\n\n## 第2章 窥影\n\n镜中人影与来客同貌，交易自此刻开始。"
         );
         // flat schema 的动态键面（chapter_N_title/content）+ openingHook 描述注入。
-        let call = &captured.lock().unwrap()[0];
+        let call = &captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
         assert_eq!(call.tools[0]["function"]["name"], "submit_short_draft_batch");
         assert!(call.tools[0]["function"]["parameters"]["properties"]
             .get("chapter_2_content")

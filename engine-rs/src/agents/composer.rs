@@ -2273,7 +2273,7 @@ mod tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         let callback: CompressionCallback = Arc::new(move |event: &ContextCompressionEvent| {
-            sink.lock().unwrap().push(event.phase);
+            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(event.phase);
         });
         let compiler = MockCompiler { output: "  编译后的紧凑上下文  ".into(), fail: false };
 
@@ -2305,7 +2305,7 @@ mod tests {
             Some("编译后的紧凑上下文")
         );
         assert_eq!(
-            *events.lock().unwrap(),
+            *events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec![
                 ContextCompressionPhase::Start,
                 ContextCompressionPhase::End
@@ -2334,7 +2334,7 @@ mod tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         let callback: CompressionCallback = Arc::new(move |event: &ContextCompressionEvent| {
-            sink.lock().unwrap().push(event.phase);
+            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(event.phase);
         });
         let compiler = MockCompiler { output: String::new(), fail: true };
         let result = apply_context_budget_if_needed(
@@ -2348,7 +2348,7 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(ComposeChapterError::Compiler(_))));
-        assert_eq!(*events.lock().unwrap(), vec![ContextCompressionPhase::Start, ContextCompressionPhase::Error]);
+        assert_eq!(*events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![ContextCompressionPhase::Start, ContextCompressionPhase::Error]);
     }
 
     #[tokio::test]

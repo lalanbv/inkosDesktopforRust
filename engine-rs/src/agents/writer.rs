@@ -2808,11 +2808,10 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap().push((messages, temperature));
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
             let response = self
                 .responses
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop()
                 .ok_or_else(|| "mock 队列耗尽".to_string())?;
             Ok(ChatOutcome {
@@ -2931,8 +2930,7 @@ mod tests {
         // 三次 chat 的温度对齐 0.7 / 0.5 / 0.3（先拷出再跨 await）。
         let temperatures: Vec<f64> = mock
             .calls
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .map(|(_, temperature)| *temperature)
             .collect();

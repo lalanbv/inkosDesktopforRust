@@ -328,7 +328,7 @@ mod tests {
     #[async_trait::async_trait]
     impl ResearchTransport for FakeTransport {
         async fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>, String> {
-            self.search_calls.lock().unwrap().push((query.to_string(), max_results));
+            self.search_calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((query.to_string(), max_results));
             if let Some(error) = &self.search_error {
                 return Err(error.clone());
             }

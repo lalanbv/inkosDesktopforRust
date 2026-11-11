@@ -87,7 +87,7 @@ mod tests {
     struct Count(Mutex<u32>);
     impl EventHandler for Count {
         fn handle(&self, _ev: &SseEvent) -> Result<()> {
-            *self.0.lock().unwrap() += 1;
+            *self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             Ok(())
         }
     }
@@ -118,8 +118,8 @@ mod tests {
         }
         r.dispatch(&ev("daemon:chapter"));
 
-        assert_eq!(*notifier.0.lock().unwrap(), 4); // 4 个用户事件双投递
-        assert_eq!(*badge.0.lock().unwrap(), 5); // 4 用户事件 + daemon:chapter
+        assert_eq!(*notifier.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 4); // 4 个用户事件双投递
+        assert_eq!(*badge.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 5); // 4 用户事件 + daemon:chapter
     }
 
     #[test]
@@ -130,8 +130,8 @@ mod tests {
 
         r.dispatch(&ev("daemon:chapter"));
 
-        assert_eq!(*notifier.0.lock().unwrap(), 0);
-        assert_eq!(*badge.0.lock().unwrap(), 1);
+        assert_eq!(*notifier.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0);
+        assert_eq!(*badge.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 1);
     }
 
     #[test]
@@ -144,8 +144,8 @@ mod tests {
         r.dispatch(&ev(""));
         r.dispatch(&ev("write:start"));
 
-        assert_eq!(*notifier.0.lock().unwrap(), 0);
-        assert_eq!(*badge.0.lock().unwrap(), 0);
+        assert_eq!(*notifier.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0);
+        assert_eq!(*badge.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0);
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
         r.dispatch(&ev("custom:event"));
         r.dispatch(&ev("custom:event"));
 
-        assert_eq!(*count.0.lock().unwrap(), 2);
+        assert_eq!(*count.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 2);
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
 
         r.dispatch(&ev("flaky:event"));
 
-        assert_eq!(*count.0.lock().unwrap(), 1);
+        assert_eq!(*count.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 1);
     }
 
     #[test]

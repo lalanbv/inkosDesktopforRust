@@ -68,13 +68,13 @@ mod tests {
         let last_cap = Arc::clone(&last);
         let b = TrayBadge {
             inc_badge: Arc::new(move || {
-                *last_cap.0.lock().unwrap() = Some("called".into());
+                *last_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some("called".into());
             }),
         };
 
         b.handle(&ev("anything")).unwrap();
 
-        assert_eq!(*last.0.lock().unwrap(), Some("called".into()));
+        assert_eq!(*last.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), Some("called".into()));
     }
 
     #[test]

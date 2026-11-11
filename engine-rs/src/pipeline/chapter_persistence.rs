@@ -226,7 +226,7 @@ mod tests {
         }
 
         fn record(&self, name: &'static str) {
-            self.calls.lock().unwrap().push(name);
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(name);
         }
     }
 
@@ -234,7 +234,7 @@ mod tests {
     impl PersistenceHooks for RecordingHooks {
         async fn load_chapter_index(&self) -> Result<Vec<ChapterMeta>, String> {
             self.record("load_index");
-            Ok(self.index.lock().unwrap().clone())
+            Ok(self.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
         }
         async fn save_chapter(&self) -> Result<(), String> {
             self.record("save_chapter");
@@ -246,7 +246,7 @@ mod tests {
         }
         async fn save_chapter_index(&self, index: &[ChapterMeta]) -> Result<(), String> {
             self.record("save_index");
-            *self.index.lock().unwrap() = index.to_vec();
+            *self.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = index.to_vec();
             Ok(())
         }
         async fn mark_book_active_if_needed(&self) -> Result<(), String> {
@@ -323,7 +323,7 @@ mod tests {
         assert_eq!(entry.audit_issues[0], "[warning] desc");
         assert_eq!(entry.review_note, None);
         // 完整链 + 漂移带 critical/warning 子集。
-        let calls = hooks.calls.lock().unwrap().clone();
+        let calls = hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         assert_eq!(
             calls,
             vec![
@@ -337,7 +337,7 @@ mod tests {
                 "fact_history"
             ]
         );
-        assert_eq!(hooks.index.lock().unwrap().len(), 1);
+        assert_eq!(hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
     }
 
     #[tokio::test]
@@ -359,7 +359,7 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("\"baseStatus\":\"ready-for-review\""));
-        let calls = hooks.calls.lock().unwrap().clone();
+        let calls = hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         assert_eq!(
             calls,
             vec!["save_chapter", "load_index", "save_index", "mark_active", "drift"]
@@ -398,9 +398,9 @@ mod tests {
         // map 进 index 的是 {...entry, createdAt: e.createdAt}）。
         assert_eq!(entry.created_at, "2026-08-15T00:00:00.000Z");
         assert_eq!(entry.updated_at, "2026-08-15T00:00:00.000Z");
-        assert_eq!(hooks.index.lock().unwrap().len(), 1);
+        assert_eq!(hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
         assert_eq!(
-            hooks.index.lock().unwrap()[0].created_at,
+            hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].created_at,
             "2020-01-01T00:00:00.000Z"
         );
     }
@@ -422,7 +422,7 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
-        assert!(hooks.calls.lock().unwrap().contains(&"snapshot"));
+        assert!(hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&"snapshot"));
     }
 
     #[test]

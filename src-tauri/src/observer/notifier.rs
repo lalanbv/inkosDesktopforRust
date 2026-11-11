@@ -48,7 +48,7 @@ mod tests {
     struct NotifySpy(Mutex<Vec<(String, String)>>);
     impl NotifySpy {
         fn captures(&self) -> Vec<(String, String)> {
-            self.0.lock().unwrap().clone()
+            self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
         }
     }
 
@@ -66,7 +66,7 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap().push((t.into(), b.into()))
+                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
             }),
         };
 
@@ -85,7 +85,7 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| false),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap().push((t.into(), b.into()))
+                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
             }),
         };
 
@@ -102,7 +102,7 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap().push((t.into(), b.into()))
+                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
             }),
         };
 
@@ -123,7 +123,7 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap().push((t.into(), b.into()))
+                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
             }),
         };
 

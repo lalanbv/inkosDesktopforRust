@@ -1704,11 +1704,11 @@ mod tests {
             self.inner.read_to_string(path).await
         }
         async fn write_string(&self, path: &str, content: &str) -> crate::Result<()> {
-            *self.writes.lock().unwrap() += 1;
+            *self.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             self.inner.write_string(path, content).await
         }
         async fn mkdir_p(&self, path: &str) -> crate::Result<()> {
-            *self.mkdirs.lock().unwrap() += 1;
+            *self.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             self.inner.mkdir_p(path).await
         }
         async fn list_dir(&self, path: &str) -> crate::Result<Vec<String>> {
@@ -1750,8 +1750,8 @@ mod tests {
             .unwrap();
         assert_eq!(first.created_files.len(), 4);
         assert_eq!(first.manifest.last_applied_chapter, 2);
-        let writes_after_first = *store.writes.lock().unwrap();
-        let mkdirs_after_first = *store.mkdirs.lock().unwrap();
+        let writes_after_first = *store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mkdirs_after_first = *store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(writes_after_first > 0, "首次 ensure 必须有写（四件 + manifest）");
         let manifest_before = store
             .inner
@@ -1767,11 +1767,11 @@ mod tests {
         assert!(second.created_files.is_empty());
         assert!(second.warnings.is_empty());
         assert_eq!(
-            *store.writes.lock().unwrap(),
+            *store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             writes_after_first,
             "快路径不得有任何写（含内容相同的 manifest 重写）"
         );
-        assert_eq!(*store.mkdirs.lock().unwrap(), mkdirs_after_first, "快路径不得 mkdir_p");
+        assert_eq!(*store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), mkdirs_after_first, "快路径不得 mkdir_p");
         let manifest_after = store
             .inner
             .read_to_string("book/story/state/manifest.json")
@@ -1864,7 +1864,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.manifest.last_applied_chapter, 5);
-        assert_eq!(*store.writes.lock().unwrap(), 0, "目标态即达 → 零写");
-        assert_eq!(*store.mkdirs.lock().unwrap(), 0);
+        assert_eq!(*store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0, "目标态即达 → 零写");
+        assert_eq!(*store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0);
     }
 }

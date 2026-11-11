@@ -116,13 +116,13 @@ impl StaticFace {
         let index_path = self.dir.join("index.html");
         let mtime = std::fs::metadata(&index_path).ok().and_then(|m| m.modified().ok());
         {
-            let cached = self.index.read().unwrap();
+            let cached = self.index.read().unwrap_or_else(|poisoned| poisoned.into_inner());
             if cached.mtime == mtime {
                 return cached.body.clone();
             }
         }
         let body = std::fs::read(&index_path).ok().map(axum::body::Bytes::from);
-        let mut cached = self.index.write().unwrap();
+        let mut cached = self.index.write().unwrap_or_else(|poisoned| poisoned.into_inner());
         if cached.mtime != mtime {
             *cached = CachedIndex { mtime, body: body.clone() };
         }

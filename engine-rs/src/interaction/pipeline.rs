@@ -337,7 +337,7 @@ mod tests {
         }
         async fn execute(&self, _ctx: &ToolCtx<'_>, _args: &Value) -> ToolResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let outcome = self.script.lock().unwrap().remove(0);
+            let outcome = self.script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0);
             match outcome {
                 MockOutcome::Ok(text) => ToolResult { text: text.into(), details: None, is_error: false },
                 MockOutcome::Err(text) => ToolResult { text: text.into(), details: None, is_error: true },

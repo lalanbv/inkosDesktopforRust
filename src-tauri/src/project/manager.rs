@@ -67,7 +67,7 @@ impl ProjectManager {
                         .context(format!("Failed to insert project: {:?}", meta.path))?;
 
                     // 更新缓存
-                    self.cache.lock().expect("cache mutex 中毒").insert(meta.id.clone(), meta.clone());
+                    self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
 
                     tracing::info!("添加项目: {} ({:?})", meta.name, meta.path);
                     added.push(meta);
@@ -97,7 +97,7 @@ impl ProjectManager {
             .context("Failed to insert project")?;
 
         // 更新缓存
-        self.cache.lock().expect("cache mutex 中毒").insert(meta.id.clone(), meta.clone());
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
 
         tracing::info!("添加项目: {} ({:?})", meta.name, meta.path);
         Ok(meta)
@@ -110,7 +110,7 @@ impl ProjectManager {
             .context("Failed to update project")?;
 
         // 更新缓存
-        self.cache.lock().expect("cache mutex 中毒").insert(meta.id.clone(), meta.clone());
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
 
         tracing::debug!("更新项目: {}", meta.id);
         Ok(())
@@ -123,7 +123,7 @@ impl ProjectManager {
             .context("Failed to delete project")?;
 
         // 清除缓存
-        self.cache.lock().expect("cache mutex 中毒").remove(id);
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(id);
 
         tracing::info!("删除项目: {}", id);
         Ok(())
@@ -133,7 +133,7 @@ impl ProjectManager {
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectMeta>> {
         // 先查缓存
         {
-            let cache = self.cache.lock().expect("cache mutex 中毒");
+            let cache = self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(meta) = cache.get(id) {
                 return Ok(Some(meta.clone()));
             }
@@ -144,7 +144,7 @@ impl ProjectManager {
 
         // 更新缓存
         if let Some(ref m) = meta {
-            self.cache.lock().expect("cache mutex 中毒").insert(id.to_string(), m.clone());
+            self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), m.clone());
         }
 
         Ok(meta)
@@ -159,8 +159,7 @@ impl ProjectManager {
 
         if let Some(ref m) = meta {
             self.cache
-                .lock()
-                .expect("cache mutex 中毒")
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(m.id.clone(), m.clone());
         }
 
@@ -194,7 +193,7 @@ impl ProjectManager {
             .context("Failed to update last_opened_at")?;
 
         // 刷新缓存
-        self.cache.lock().expect("cache mutex 中毒").insert(id.to_string(), meta.clone());
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), meta.clone());
 
         tracing::info!("打开项目: {} ({})", meta.name, id);
         Ok(meta)
@@ -228,7 +227,7 @@ impl ProjectManager {
             .context("Failed to update favorite status")?;
 
         // 刷新缓存
-        self.cache.lock().expect("cache mutex 中毒").insert(id.to_string(), meta.clone());
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), meta.clone());
 
         tracing::debug!("切换收藏状态: {} -> {}", id, meta.is_favorite);
         Ok(())
@@ -283,7 +282,7 @@ impl ProjectManager {
     /// 清空缓存（仅测试用）
     #[cfg(test)]
     pub fn clear_cache(&self) {
-        self.cache.lock().expect("cache mutex 中毒").clear();
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
     }
 }
 

@@ -1422,8 +1422,8 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap().push((messages, temperature));
-            let index = self.calls.lock().unwrap().len() - 1;
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
+            let index = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len() - 1;
             let content = self
                 .responses
                 .get(index)
@@ -1604,7 +1604,7 @@ mod tests {
         // planner_inputs 含 story 真相文件清单。
         assert!(out.planner_inputs.iter().any(|p| p.ends_with("pending_hooks.md")));
         // user prompt 含外部指令块与卷纲节点。
-        let (messages, temperature) = &chat.calls.lock().unwrap()[0];
+        let (messages, temperature) = &chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
         assert_eq!(*temperature, 0.7);
         assert_eq!(messages[0].role, LLMRole::System);
         assert!(messages[1].content.contains("## 本章用户指令（本章最高优先级）\n本章加入新导师"));
@@ -1645,7 +1645,7 @@ mod tests {
         .unwrap();
         assert_eq!(memo.goal, "推进主线，兑现玉符第一步");
         // 第二次调用的 user message 含错误反馈块。
-        let calls = chat.calls.lock().unwrap();
+        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
         assert!(calls[1].0[1].content.contains("## 上次输出的错误"));
     }
@@ -1678,7 +1678,7 @@ mod tests {
         .unwrap();
         assert_eq!(memo.goal, "兜底目标");
         assert!(memo.body.contains("## Planner warning"));
-        assert_eq!(chat.calls.lock().unwrap().len(), MEMO_RETRY_LIMIT);
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), MEMO_RETRY_LIMIT);
 
         // en 版 fallback。
         let chat_en = MockChat::new(vec!["junk".to_string()]);
@@ -1746,7 +1746,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(memo.goal, "潜入厂主办公室拍下账本内页");
-        let calls = chat.calls.lock().unwrap();
+        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
         assert!(calls[1].0[1].content.contains("本章目标复读门"));
     }
@@ -1783,7 +1783,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(memo.goal, "追查七号门异常");
-        assert_eq!(chat.calls.lock().unwrap().len(), 2);
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 2);
     }
 
     #[test]

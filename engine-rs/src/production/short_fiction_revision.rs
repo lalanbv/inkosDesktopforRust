@@ -396,7 +396,7 @@ async fn merge_improved_candidates(
     for candidate in candidates {
         let count = count_chapter_length(candidate, mode);
         let improves = {
-            let mut draft = draft_state.lock().unwrap();
+            let mut draft = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let current = draft
                 .chapters
                 .iter()
@@ -420,7 +420,7 @@ async fn merge_improved_candidates(
             improves
         };
         if improves {
-            let snapshot = draft_state.lock().unwrap().clone();
+            let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
             on_revision_progress(&snapshot, completed)
                 .await
                 .map_err(|message| RevisionPlanError {
@@ -525,7 +525,7 @@ pub async fn apply_revision_plan(
                 ));
             };
             let mut content = {
-                let guard = draft_state.lock().unwrap();
+                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard
                     .chapters
                     .iter()
@@ -544,7 +544,7 @@ pub async fn apply_revision_plan(
                     details: None,
                 })?;
                 let other_chapters: Vec<ShortFictionChapter> = {
-                    let guard = draft_state.lock().unwrap();
+                    let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     guard
                         .chapters
                         .iter()
@@ -596,10 +596,10 @@ pub async fn apply_revision_plan(
                     )
                 };
                 // guard 临时不跨 await（for 头临时活整个循环——先取 owned）。
-                let candidates = sink.lock().unwrap().clone();
+                let candidates = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
                 for candidate in candidates {
                     let (current_content, original_content) = {
-                        let guard = draft_state.lock().unwrap();
+                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         let current = guard
                             .chapters
                             .iter()
@@ -612,13 +612,13 @@ pub async fn apply_revision_plan(
                         || distance(&candidate) < distance(&current_content);
                     if improves {
                         {
-                            let mut guard = draft_state.lock().unwrap();
+                            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                             if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                                 slot.content = candidate.clone();
                                 slot.char_count = count_chapter_length(&candidate, mode);
                             }
                         }
-                        let snapshot = draft_state.lock().unwrap().clone();
+                        let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
                         (context.on_revision_progress)(&snapshot, &[]).await.map_err(|message| {
                             RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
                         })?;
@@ -633,8 +633,7 @@ pub async fn apply_revision_plan(
             {
                 // 章题提交（TS L315-321 逐字）。
                 let current_title = draft_state
-                    .lock()
-                    .unwrap()
+                    .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                     .chapters
                     .iter()
                     .find(|item| item.number == number)
@@ -698,7 +697,7 @@ pub async fn apply_revision_plan(
                     .to_string();
             }
             // 严格单章校验（TS L323）+ 并槽 + 进度。
-            let story_title = draft_state.lock().unwrap().story_title.clone();
+            let story_title = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).story_title.clone();
             let bound = serde_json::json!({
                 "storyTitle": story_title,
                 "number": number,
@@ -714,7 +713,7 @@ pub async fn apply_revision_plan(
                 true,
             )?;
             {
-                let mut guard = draft_state.lock().unwrap();
+                let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                     slot.title = title;
                     slot.content = content;
@@ -722,7 +721,7 @@ pub async fn apply_revision_plan(
                 }
             }
             let completed: Vec<u32> = {
-                let guard = draft_state.lock().unwrap();
+                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 plan.chapters
                     .iter()
                     .filter(|item| {
@@ -735,7 +734,7 @@ pub async fn apply_revision_plan(
                     .collect()
             };
             {
-                let snapshot = draft_state.lock().unwrap().clone();
+                let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
                 (context.on_revision_progress)(&snapshot, &completed).await.map_err(|message| {
                     RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
                 })?;
@@ -745,7 +744,7 @@ pub async fn apply_revision_plan(
         if !has_instruction {
             // 无 instruction 且非 scoped：原章复制（TS 非 scoped 复制分支）。
             if let Some(source_chapter) = original_chapter {
-                let mut guard = draft_state.lock().unwrap();
+                let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                     slot.title = source_chapter.title;
                     slot.content = source_chapter.content;
@@ -756,7 +755,7 @@ pub async fn apply_revision_plan(
         }
         let instruction = chapter_plan.instruction.clone().unwrap_or_default();
         let (chapter, story_title, other_chapters) = {
-            let guard = draft_state.lock().unwrap();
+            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let current = guard
                 .chapters
                 .iter()
@@ -777,7 +776,7 @@ pub async fn apply_revision_plan(
             .iter()
             .filter(|item| item.number != number)
             .filter(|item| {
-                let guard = draft_state.lock().unwrap();
+                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard
                     .chapters
                     .iter()
@@ -798,7 +797,7 @@ pub async fn apply_revision_plan(
                 message: "SHORT_CHAPTER_TOO_LONG requires maxChapterLength".into(),
                 details: None,
             })?;
-            let guard = draft_state.lock().unwrap();
+            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let pending = guard
                 .chapters
                 .iter()
@@ -906,7 +905,7 @@ pub async fn apply_revision_plan(
                 Box::pin(async move {
                     let title = value.get("title").and_then(Value::as_str).unwrap_or_default().to_string();
                     let content = value.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let story_title = draft_state.lock().unwrap().story_title.clone();
+                    let story_title = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).story_title.clone();
                     let bound = serde_json::json!({
                         "storyTitle": story_title,
                         "number": number,
@@ -924,7 +923,7 @@ pub async fn apply_revision_plan(
                     .map_err(|error| StructuredToolError::coded(error.code, error.message))?;
                     // 候选改良（TS L368-384）：distance 改善即并入。
                     let candidate = {
-                        let guard = draft_state.lock().unwrap();
+                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         super::short_fiction::merge_short_fiction_batch(
                             Some(&guard),
                             &guard.story_title,
@@ -975,7 +974,7 @@ pub async fn apply_revision_plan(
                         )
                     };
                     let (current_content, original_snapshot) = {
-                        let guard = draft_state.lock().unwrap();
+                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         let current = guard
                             .chapters
                             .iter()
@@ -995,14 +994,14 @@ pub async fn apply_revision_plan(
                         && (first_replacement || distance(&changed.content) < distance(&current_content))
                     {
                         {
-                            let mut guard = draft_state.lock().unwrap();
+                            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                             if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                                 slot.title = changed.title.clone();
                                 slot.content = changed.content.clone();
                                 slot.char_count = changed.char_count;
                             }
                         }
-                        let snapshot = draft_state.lock().unwrap().clone();
+                        let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
                         on_revision_progress(&snapshot, &completed).await.map_err(|message| {
                             StructuredToolError::coded("SHORT_REVISION_PROGRESS_FAILED", message)
                         })?;
@@ -1072,7 +1071,7 @@ pub async fn apply_revision_plan(
             Err(error) => {
                 // TS catch：SHORT_CHAPTER_TOO_LONG 且 pending 超上限 → compress 回退。
                 let too_long_pending = {
-                    let guard = draft_state.lock().unwrap();
+                    let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     let pending = guard.chapters.iter().find(|item| item.number == number).cloned().unwrap();
                     context
                         .max_chapter_length
@@ -1099,7 +1098,7 @@ pub async fn apply_revision_plan(
                 .await?;
                 // 严格校验（TS compressCandidate 出口）。
                 let bound = serde_json::json!({
-                    "storyTitle": draft_state.lock().unwrap().story_title,
+                    "storyTitle": draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).story_title,
                     "number": number,
                     "title": pending.title,
                     "content": revised_content,
@@ -1116,7 +1115,7 @@ pub async fn apply_revision_plan(
             }
         };
         {
-            let mut guard = draft_state.lock().unwrap();
+            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                 slot.title = title;
                 slot.content = content;
@@ -1124,7 +1123,7 @@ pub async fn apply_revision_plan(
             }
         }
         let completed: Vec<u32> = {
-            let guard = draft_state.lock().unwrap();
+            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             plan.chapters
                 .iter()
                 .filter(|item| {
@@ -1137,14 +1136,14 @@ pub async fn apply_revision_plan(
                 .collect()
         };
         {
-            let snapshot = draft_state.lock().unwrap().clone();
+            let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
             (context.on_revision_progress)(&snapshot, &completed).await.map_err(|message| {
                 RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
             })?;
         }
     }
     let mut final_draft = {
-        let guard = draft_state.lock().unwrap();
+        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.clone()
     };
     final_draft.story_title = plan

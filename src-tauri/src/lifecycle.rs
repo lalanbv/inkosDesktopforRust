@@ -35,13 +35,13 @@ impl SidecarState {
 
     /// 存入新 child；覆盖此前未清理的 child（调用方应确保已先 `take` 并清理）。
     pub fn insert(&self, child: Child) {
-        let mut guard = self.0.lock().expect("SidecarState mutex 中毒");
+        let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = Some(child);
     }
 
     /// 取出当前 child（若存在）；此后 state 为空。
     pub fn take(&self) -> Option<Child> {
-        let mut guard = self.0.lock().expect("SidecarState mutex 中毒");
+        let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.take()
     }
 }

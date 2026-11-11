@@ -1257,12 +1257,12 @@ mod tests {
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = events.clone();
         let mut monitor = StreamMonitor::new(std::sync::Arc::new(move |progress: &StreamProgress| {
-            sink.lock().unwrap().push(progress.clone());
+            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(progress.clone());
         }));
         monitor.on_delta("你好abc世界");
         monitor.on_delta("x");
         monitor.finish();
-        let events = events.lock().unwrap();
+        let events = events.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // <30s 节流 → 无 streaming 心跳，仅终态 done（TS 同款默认间隔语义）。
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0].status, StreamStatus::Done);
@@ -1599,7 +1599,7 @@ mod tests {
                     let parts = parts.clone();
                     async move {
                         {
-                            let mut sink = seen.lock().unwrap();
+                            let mut sink = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                             for (name, value) in headers.iter() {
                                 sink.push((
                                     name.to_string(),
@@ -1636,7 +1636,7 @@ mod tests {
         ));
         let completion = client.stream_chat(&params).await.unwrap();
         assert_eq!(completion.content, "正文");
-        let headers = seen.lock().unwrap();
+        let headers = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let inkos_headers: Vec<&(String, String)> = headers
             .iter()
             .filter(|(name, _)| name.to_lowercase().starts_with("x-inkos-"))

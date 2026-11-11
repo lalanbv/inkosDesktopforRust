@@ -67,19 +67,19 @@ impl LoopbackGuardState {
         Self::default()
     }
     fn set_guard(&self, guard: Box<dyn LoopbackGuard>) {
-        let mut g = self.guard.lock().expect("LoopbackGuardState guard mutex 中毒");
+        let mut g = self.guard.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *g = Some(guard);
     }
     fn record_port(&self, port: u16) {
-        let mut p = self.port.lock().expect("LoopbackGuardState port mutex 中毒");
+        let mut p = self.port.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *p = port;
     }
     fn take_guard(&self) -> Option<Box<dyn LoopbackGuard>> {
-        let mut g = self.guard.lock().expect("LoopbackGuardState guard mutex 中毒");
+        let mut g = self.guard.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         g.take()
     }
     fn current_port(&self) -> u16 {
-        *self.port.lock().expect("LoopbackGuardState port mutex 中毒")
+        *self.port.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -94,8 +94,7 @@ impl SecretsWritebackState {
         self.shutdown.store(true, Ordering::SeqCst);
         let mut guard = self
             .handle
-            .lock()
-            .expect("SecretsWritebackState handle mutex 中毒");
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(handle) = guard.take() {
             if let Err(e) = handle.join() {
                 eprintln!("[main] secrets-writeback watcher join 失败: panic={e:?}");
@@ -911,7 +910,7 @@ fn cmd_get_launch_state(
     state: tauri::State<LaunchState>,
     app_handle: tauri::AppHandle,
 ) -> LaunchStateDto {
-    let recents = state.recents.lock().expect("LaunchState recents mutex 中毒");
+    let recents = state.recents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let project_state = app_handle.try_state::<inkos_desktop::project::commands::AppState>();
     let enriched = inkos_desktop::project::enrich_recents(&recents.recent, |path| {
@@ -991,7 +990,7 @@ fn cmd_choose_project(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     {
-        let mut recents = state.recents.lock().expect("LaunchState recents mutex 中毒");
+        let mut recents = state.recents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let next = recents.record_open(&path, &name);
         *recents = next.clone();
         if let Err(e) = next.write(&state.projects_path) {

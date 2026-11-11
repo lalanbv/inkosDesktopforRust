@@ -111,7 +111,7 @@ pub fn compress_revise_chapter_fn(
                 })
                 .map_err(|error| error.message)?;
             let accepted = sink
-                .map(|sink| sink.lock().unwrap().clone())
+                .map(|sink| sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
                 .unwrap_or_default();
             Ok(ReviseChapterOutcome {
                 revised_content: output.revised_content,
@@ -178,7 +178,7 @@ pub async fn writer_continue_draft(
         let state: Arc<Mutex<ShortFictionBatchDraft>> = Arc::new(Mutex::new(current));
             let system = "Write the requested independent opening scene before chapter one. Preserve the supplied title, story events and first chapter. Submit only the opening scene through the tool.";
             let user = {
-                let guard = state.lock().unwrap();
+                let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 serde_json::json!({
                     "title": guard.story_title,
                     "targetLength": target,
@@ -214,19 +214,19 @@ pub async fn writer_continue_draft(
                         )
                     };
                     let improves = {
-                        let guard = state.lock().unwrap();
+                        let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         distance(Some(&candidate)) <= distance(guard.opening_hook.as_deref())
                     };
                     if improves {
                         {
-                            let mut guard = state.lock().unwrap();
+                            let mut guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                             guard.opening_hook = Some(candidate.clone());
                             guard.raw_content = render_short_fiction_draft_markdown(&guard, language_for_validate)
                                 .map_err(|error| WriterChainError::new("SHORT_RENDER_FAILED", error.message))
                                 .map_err(|error| StructuredToolError::coded(&error.code, error.message))?;
                         }
                         let (snapshot, completed) = {
-                            let guard = state.lock().unwrap();
+                            let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                             let invalid: std::collections::BTreeSet<u32> =
                                 find_incomplete_short_fiction_chapters(
                                     &guard,
@@ -297,7 +297,7 @@ pub async fn writer_continue_draft(
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let mut guard = state.lock().unwrap();
+            let mut guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.opening_hook = Some(hook);
             guard.raw_content = render_short_fiction_draft_markdown(&guard, input.language)
                 .map_err(|error| WriterChainError::new("SHORT_RENDER_FAILED", error.message))?;
@@ -563,7 +563,7 @@ pub fn scoped_or_compress_revise_chapter_fn(
             let output = super::short_fiction_reviser::revise_chapter(&agents, input, resolved.as_ref()).await?;
             let accepted = request
                 .candidate_sink
-                .map(|sink| sink.lock().unwrap().clone())
+                .map(|sink| sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
                 .unwrap_or_default();
             Ok(ReviseChapterOutcome {
                 revised_content: output.revised_content,
@@ -929,7 +929,7 @@ mod tests {
         let chat: crate::production::structured_agent::ChatTurnFn = Arc::new(move |_request| {
             let script = Arc::clone(&script);
             Box::pin(async move {
-                let mut guard = script.lock().unwrap();
+                let mut guard = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard.pop_front().ok_or_else(|| {
                     crate::production::structured_agent::ChatTurnError {
                         message: "script exhausted".into(),
@@ -1004,7 +1004,7 @@ mod tests {
                     draft.chapters.iter().map(|chapter| chapter.content.clone()).collect::<Vec<_>>();
                 let completed: Vec<u32> = completed.to_vec();
                 Box::pin(async move {
-                    notified_for_cb.lock().unwrap().push((contents, completed));
+                    notified_for_cb.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((contents, completed));
                     Ok(())
                 })
             },
@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(result.chapters[1].title, "第二章");
         assert!(!result.chapters[1].content.trim().is_empty());
         assert!(result.raw_content.contains("第二章"));
-        let notifications = notified.lock().unwrap();
+        let notifications = notified.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(!notifications.is_empty());
     }
 

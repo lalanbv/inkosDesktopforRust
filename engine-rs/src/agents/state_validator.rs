@@ -400,8 +400,7 @@ mod tests {
     impl StateValidatorChat for MockChat {
         async fn chat(&self, messages: Vec<LLMMessage>, temperature: f64) -> Result<ChatOutcome, String> {
             self.calls
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push((messages[1].content.clone(), temperature));
             Ok(ChatOutcome { content: self.content.clone(), usage: None })
         }
@@ -427,7 +426,7 @@ mod tests {
         .unwrap();
         assert!(result.passed);
         assert!(result.warnings.is_empty());
-        assert!(chat.calls.lock().unwrap().is_empty());
+        assert!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
     }
 
     #[tokio::test]
@@ -456,7 +455,7 @@ mod tests {
         assert_eq!(result.warnings[0].category, "unsupported_change");
         assert_eq!(result.warnings[1].category, "general");
         // 温度 0.1。
-        assert_eq!(chat.calls.lock().unwrap()[0].1, 0.1);
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, 0.1);
     }
 
     #[tokio::test]

@@ -118,7 +118,7 @@ impl InMemoryStateStore {
 
     /// 预置一个文件内容（测试 setup 用）。
     pub fn set(&self, path: &str, content: &str) {
-        self.files.lock().expect("files mutex").insert(path.to_string(), content.to_string());
+        self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path.to_string(), content.to_string());
     }
 }
 
@@ -133,16 +133,14 @@ impl StateStore for InMemoryStateStore {
     async fn read_to_string(&self, path: &str) -> Result<Option<String>> {
         Ok(self
             .files
-            .lock()
-            .expect("files mutex")
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(path)
             .cloned())
     }
 
     async fn write_string(&self, path: &str, content: &str) -> Result<()> {
         self.files
-            .lock()
-            .expect("files mutex")
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(path.to_string(), content.to_string());
         Ok(())
     }
@@ -158,7 +156,7 @@ impl StateStore for InMemoryStateStore {
         } else {
             format!("{path}/")
         };
-        let files = self.files.lock().expect("files mutex");
+        let files = self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut children: Vec<String> = files
             .keys()
             .filter_map(|k| k.strip_prefix(&prefix))
@@ -177,12 +175,12 @@ impl StateStore for InMemoryStateStore {
     }
 
     async fn remove_file(&self, path: &str) -> Result<()> {
-        self.files.lock().expect("files mutex").remove(path);
+        self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(path);
         Ok(())
     }
 
     async fn exists(&self, path: &str) -> Result<bool> {
-        let files = self.files.lock().expect("files mutex");
+        let files = self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // 文件存在，或作为某文件路径前缀（目录语义）。
         Ok(files.contains_key(path) || files.keys().any(|k| k.starts_with(&format!("{path}/"))))
     }

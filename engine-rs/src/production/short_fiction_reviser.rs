@@ -500,7 +500,7 @@ async fn submit_spot_fix(
             let candidate = plan_for_validate.apply_replacements(&replacements)
                 .map_err(super::structured_agent::StructuredToolError::plain)?;
             if let Some(sink) = &candidate_sink {
-                sink.lock().unwrap().push(candidate.clone());
+                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(candidate.clone());
             }
             if assert_chapter_length(&candidate, spec_for_validate.as_ref()).is_err() {
                 let source_length =
@@ -612,7 +612,7 @@ async fn submit_rewrite(
                 ));
             }
             if let Some(sink) = &candidate_sink {
-                sink.lock().unwrap().push(revised_content.clone());
+                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(revised_content.clone());
             }
             assert_chapter_length(&revised_content, spec.as_ref())
                 .map_err(|error| super::structured_agent::StructuredToolError::coded(
@@ -705,8 +705,8 @@ mod tests {
             });
             payload["lastUser"] = request.messages.last().map(|message| message.content.clone()).into();
             Box::pin(async move {
-                captured_for_fn.lock().unwrap().push(payload);
-                let next = script.lock().unwrap().pop_front();
+                captured_for_fn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(payload);
+                let next = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop_front();
                 next.ok_or_else(|| ChatTurnError { message: "script exhausted".into(), output_limit: false })
             })
         });
@@ -764,7 +764,7 @@ mod tests {
         .unwrap();
         assert_eq!(output.revised_content, "第一章标题行\n\n正文第一段。\n\n修订后的第二段。\n");
         // 双段：轮 1=submit_chapter_edit_ranges，轮 2=submit_chapter_range_replacements
-        let calls = captured.lock().unwrap();
+        let calls = captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["tools"][0]["function"]["name"], "submit_chapter_edit_ranges");
         assert_eq!(calls[1]["tools"][0]["function"]["name"], "submit_chapter_range_replacements");

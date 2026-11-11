@@ -638,7 +638,7 @@ pub(crate) const IMPORT_ABORTED_MESSAGE: &str =
     "Operation aborted: the user requested to stop this task.";
 
 fn import_check_aborted(abort: Option<&crate::interaction::agent_loop::AbortHandle>) -> Result<(), String> {
-    if abort.is_some_and(|flag| *flag.lock().unwrap()) {
+    if abort.is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner())) {
         return Err(IMPORT_ABORTED_MESSAGE.to_string());
     }
     Ok(())

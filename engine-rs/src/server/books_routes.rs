@@ -88,7 +88,7 @@ impl BooksRuntime {
             std::sync::Arc::as_ptr(&self.router) as usize,
         );
         {
-            let cache = effective_router_cache().lock().unwrap();
+            let cache = effective_router_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = cache.get(&root) {
                 if entry.key == key {
                     return entry.router.clone();
@@ -181,8 +181,7 @@ impl BooksRuntime {
             None => self.router.clone(),
         };
         effective_router_cache()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(root, EffectiveRouterEntry { key, router: router.clone() });
         router
     }

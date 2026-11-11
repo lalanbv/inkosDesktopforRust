@@ -96,7 +96,7 @@ fn write_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>
 
 async fn path_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
     let lock = {
-        let mut locks = write_locks().lock().unwrap();
+        let mut locks = write_locks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         locks.entry(path.to_path_buf()).or_default().clone()
     };
     // 持锁期间移除空闲条目会破坏排队语义（新写入者拿新锁绕过队列）；

@@ -209,7 +209,7 @@ async fn write_one_chapter(
 
 async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
     let (cap_reached, max_per_day) = {
-        let state = write_cycle_state().lock().unwrap();
+        let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         (state.daily_counts.get(&today_key()).copied().unwrap_or(0) >= config.max_chapters_per_day, config.max_chapters_per_day)
     };
     if cap_reached {
@@ -219,8 +219,7 @@ async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
     let mut active_books = Vec::new();
     for book_id in book_ids {
         let paused = write_cycle_state()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .paused_books
             .contains(&book_id);
         if paused {
@@ -285,7 +284,7 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             return;
         }
         {
-            let state = write_cycle_state().lock().unwrap();
+            let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if state.daily_counts.get(&today_key()).copied().unwrap_or(0) >= config.max_chapters_per_day {
                 return;
             }
@@ -300,8 +299,7 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
         // TS writeOneChapter：返回值 = 是否继续写下一章（成功或 defer-and-continue）。
         if !write_one_chapter_governed(runtime, config, book_id, book_governance.as_ref()).await {
             let failures = write_cycle_state()
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .consecutive_failures
                 .get(book_id)
                 .copied()
@@ -332,8 +330,7 @@ async fn write_one_chapter_governed(
     book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
 ) -> bool {
     let failures = write_cycle_state()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .consecutive_failures
         .get(book_id)
         .copied()
@@ -349,7 +346,7 @@ async fn write_one_chapter_governed(
     match write_one_chapter(runtime, book_id, temperature).await {
         Ok((true, chapter_number, status, _categories)) => {
             {
-                let mut state = write_cycle_state().lock().unwrap();
+                let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.consecutive_failures.remove(book_id);
                 let today = today_key();
                 let count = state.daily_counts.get(&today).copied().unwrap_or(0) + 1;
@@ -417,7 +414,7 @@ async fn handle_audit_failure(
     book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
 ) -> bool {
     let failures = {
-        let mut state = write_cycle_state().lock().unwrap();
+        let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let failures = state
             .consecutive_failures
             .entry(book_id.to_string())
@@ -431,7 +428,7 @@ async fn handle_audit_failure(
     // 失败维度聚类（111 号：任一维度 ≥3 → diagnostic-alert webhook）。
     if !issue_categories.is_empty() {
         let clustered: Vec<(String, u32)> = {
-            let mut state = write_cycle_state().lock().unwrap();
+            let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let dimensions = state
                 .failure_dimensions
                 .entry(book_id.to_string())
@@ -546,8 +543,7 @@ async fn handle_audit_failure(
     if verdict.continues_pipeline() {
         // defer-and-continue：降债继续——清空失败计数，本书写下一章不中断。
         write_cycle_state()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .remove(book_id);
         return true;
@@ -559,8 +555,7 @@ async fn handle_audit_failure(
         verdict.as_str()
     );
     write_cycle_state()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .paused_books
         .insert(book_id.to_string());
     // pipeline-error webhook（111 号；540 号起 data 带 verdict 字段，对齐 TS）。
@@ -629,8 +624,7 @@ async fn run_detection(
 
 fn scheduler_running() -> bool {
     scheduler_slot()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
         .is_some_and(|handle| handle.running.load(std::sync::atomic::Ordering::SeqCst))
 }
@@ -708,7 +702,7 @@ pub async fn post_daemon_start(
         }
     });
 
-    scheduler_slot().lock().unwrap().replace(SchedulerHandle {
+    scheduler_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).replace(SchedulerHandle {
         running: flag,
         tasks: vec![write_task, radar_task],
     });
@@ -722,7 +716,7 @@ pub async fn post_daemon_start(
 
 pub async fn post_daemon_stop(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let stopped = {
-        let mut slot = scheduler_slot().lock().unwrap();
+        let mut slot = scheduler_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match slot.as_ref() {
             Some(handle) if handle.running.load(std::sync::atomic::Ordering::SeqCst) => {
                 handle
@@ -2240,7 +2234,7 @@ mod tests {
         let config = DaemonConfig::default();
         let continues = handle_audit_failure(&runtime, &config, "vr-retry", 1, &[], None).await;
         assert!(!continues);
-        let state = write_cycle_state().lock().unwrap();
+        let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(state.consecutive_failures.get("vr-retry"), Some(&1));
         assert!(!state.paused_books.contains("vr-retry"));
     }
@@ -2257,8 +2251,7 @@ mod tests {
         // 预置 2 次失败 → 本轮第 3 次（默认 maxAuditRetries=2 出窗）：
         // consecutive_debts=2，2+1>=3 → replan-required。
         write_cycle_state()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-replan".to_string(), 2);
         let continues = handle_audit_failure(
@@ -2273,8 +2266,7 @@ mod tests {
         assert!(!continues);
         assert!(
             write_cycle_state()
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .paused_books
                 .contains("vr-replan")
         );
@@ -2308,15 +2300,14 @@ mod tests {
             ..Default::default()
         };
         write_cycle_state()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-defer".to_string(), 2);
         let continues =
             handle_audit_failure(&runtime, &config, "vr-defer", 3, &[], Some(&governance)).await;
         assert!(continues);
         {
-            let state = write_cycle_state().lock().unwrap();
+            let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             assert!(!state.consecutive_failures.contains_key("vr-defer"));
             assert!(!state.paused_books.contains("vr-defer"));
         }
@@ -2343,8 +2334,7 @@ mod tests {
             ..Default::default()
         };
         write_cycle_state()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-qfirst".to_string(), 2);
         let continues =
@@ -2352,8 +2342,7 @@ mod tests {
         assert!(!continues);
         assert!(
             write_cycle_state()
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .paused_books
                 .contains("vr-qfirst")
         );

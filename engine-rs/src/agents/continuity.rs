@@ -2053,7 +2053,7 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap().push((messages, temperature));
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
             Ok(ChatOutcome {
                 content: self.response.clone(),
                 usage: self.usage,
@@ -2158,7 +2158,7 @@ mod tests {
         );
 
         // prompt 断言：单次调用、默认温度。
-        let calls = mock.calls.lock().unwrap();
+        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, 0.3);
         let (system, user) = {
@@ -2275,7 +2275,7 @@ mod tests {
         // eraResearch → chat_with_search 路由。
         assert!(mock.search_used.load(Ordering::SeqCst));
 
-        let calls = mock.calls.lock().unwrap();
+        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let system = &calls[0].0[0].content;
         let user = &calls[0].0[1].content;
         // en genre label：profileName "General" 无中文 → 用 profileName。
@@ -2325,7 +2325,7 @@ mod tests {
             .await
             .expect("应成功");
 
-        let calls = mock.calls.lock().unwrap();
+        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let user = &calls[0].0[1].content;
         // governed hooks 块替代 disk 伏笔池。
         assert!(user.contains("H1 玉佩悬念未解"));
@@ -2378,7 +2378,7 @@ mod tests {
             .await
             .expect("应成功");
 
-        let calls = mock.calls.lock().unwrap();
+        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls[0].1, 0.7); // 自定义温度
         let user = &calls[0].0[1].content;
         // 真相文件覆盖生效。

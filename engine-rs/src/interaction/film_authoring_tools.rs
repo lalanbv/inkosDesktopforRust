@@ -899,7 +899,7 @@ mod tests {
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
                 .join("\n---\n");
-            self.calls.lock().unwrap().push((system, user));
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((system, user));
             Ok(self.response.clone())
         }
     }
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(details["promptPacks"], json!(["interactive-film.script"]));
         assert_eq!(details["skillIds"], json!([]));
 
-        let (system, user) = llm.calls.lock().unwrap()[0].clone();
+        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].clone();
         assert!(system.contains("你是互动影游编剧"), "zh system: {system}");
         assert!(user.contains("要填的节点 id：n1"));
         assert!(user.contains("指令：写抉择场景"));
@@ -958,7 +958,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.text, "Node n1 filled (rev 2).");
-        let (system, user) = llm.calls.lock().unwrap()[1].clone();
+        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[1].clone();
         assert!(system.contains("You are an interactive film scriptwriter"));
         assert!(!system.contains("你是互动影游编剧"));
         assert!(user.contains("Node id to fill: n1"));
@@ -985,7 +985,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.text, "Node n1 revised (rev 1).");
-        let (system, user) = llm.calls.lock().unwrap()[0].clone();
+        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].clone();
         assert!(system.contains("你是互动影游编剧"));
         assert!(user.contains("要修改的节点 id：n1"));
         assert!(user.contains("现有内容："));

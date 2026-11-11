@@ -1116,8 +1116,7 @@ mod tests {
             surface_nodes: 25,
         };
         crate::server::agent_route::context_meter_registry()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(("meter-test-session".into(), seed));
 
         let resp = app()
@@ -1166,8 +1165,7 @@ mod tests {
 
         // 清理注册表（全局态，防跨测试污染）。
         crate::server::agent_route::context_meter_registry()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|(id, _)| id != "meter-test-session");
     }
 

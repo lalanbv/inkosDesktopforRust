@@ -3615,7 +3615,7 @@ async fn revise_short_fiction_with_lock(
                 let draft = draft.clone();
                 Box::pin(async move {
                     {
-                        let mut guard = checkpoint_state.lock().unwrap();
+                        let mut guard = checkpoint_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         guard.progress = Some(ShortRevisionProgress {
                             plan: guard.progress.as_ref().map(|progress| progress.plan.clone()).unwrap_or_else(|| crate::production::short_fiction::ShortRevisionPlan {
                                 story_title: None,
@@ -3629,7 +3629,7 @@ async fn revise_short_fiction_with_lock(
                         });
                     }
                     let payload = {
-                        let guard = checkpoint_state.lock().unwrap();
+                        let guard = checkpoint_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         serde_json::to_string_pretty(&*guard).unwrap_or_default()
                     };
                     commit_atomic_file_set(&AtomicFileSet {
@@ -3643,7 +3643,7 @@ async fn revise_short_fiction_with_lock(
                     .await
                     .map_err(|error| error.to_string())?;
                     if let Some(notify) = &progress_message {
-                        let snapshot = checkpoint_state.lock().unwrap();
+                        let snapshot = checkpoint_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                         if let Some(state_progress) = &snapshot.progress {
                             notify(&format!(
                                 "Short revision progress: {}/{} chapters",
@@ -3891,7 +3891,7 @@ mod tests {
             let chat: crate::production::structured_agent::ChatTurnFn = Arc::new(move |_request| {
                 let queue = Arc::clone(&queue_for_fn);
                 Box::pin(async move {
-                    let mut guard = queue.lock().unwrap();
+                    let mut guard = queue.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     guard.pop_front().ok_or_else(|| ChatTurnError {
                         message: "script exhausted".into(),
                         output_limit: false,
@@ -3912,7 +3912,7 @@ mod tests {
         }
 
         fn remaining(&self) -> usize {
-            self.script.lock().unwrap().len()
+            self.script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len()
         }
     }
 

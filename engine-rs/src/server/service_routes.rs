@@ -692,7 +692,7 @@ pub async fn delete_service(
     let mut secrets = load_secrets(root).unwrap_or_default();
     secrets.services.remove(&service);
     let _ = save_secrets(root, &secrets);
-    model_list_cache().lock().unwrap().clear();
+    model_list_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
     (StatusCode::OK, Json(json!({ "ok": true, "service": service })))
 }
 

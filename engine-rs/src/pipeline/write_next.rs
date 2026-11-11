@@ -245,7 +245,7 @@ fn check_aborted(config: &WriteNextConfig) -> Result<(), WriteNextError> {
     if config
         .abort
         .as_ref()
-        .is_some_and(|flag| *flag.lock().unwrap())
+        .is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
     {
         return Err(WriteNextError::Aborted);
     }
@@ -475,7 +475,7 @@ async fn publish_failed_run_snapshot(
     let cancelled = config
         .abort
         .as_ref()
-        .is_some_and(|flag| *flag.lock().unwrap());
+        .is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     let snapshot = crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
         kind: crate::production::ProductionKind::LongFiction,
         id: run_id.to_string(),
@@ -2022,7 +2022,7 @@ mod tests {
                 .unwrap_or_default();
             for (marker, content) in &self.responses {
                 if system_head.contains(marker.as_str()) {
-                    self.calls.lock().unwrap().push(marker.clone());
+                    self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(marker.clone());
                     return content.clone();
                 }
             }
@@ -2318,7 +2318,7 @@ mod tests {
             notify_channels: None,
             on_context_compression: None,
             on_log: Some(std::sync::Arc::new(move |level: &str, message: &str| {
-                sink.lock().unwrap().push((level.to_string(), message.to_string()));
+                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((level.to_string(), message.to_string()));
             })),
         };
 
@@ -2326,7 +2326,7 @@ mod tests {
             .await
             .expect("write-next 应成功");
 
-        let logs = logs.lock().unwrap();
+        let logs = logs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // manual 链四阶段（无审核环），zh 书 → 阶段前缀 + info 级。
         let messages: Vec<&str> = logs.iter().map(|(_, message)| message.as_str()).collect();
         assert_eq!(
@@ -2364,7 +2364,7 @@ mod tests {
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
             let is_first = {
-                let mut calls = self.calls.lock().unwrap();
+                let mut calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 *calls += 1;
                 *calls == 1
             };
@@ -2411,7 +2411,7 @@ mod tests {
             .await
             .expect("重试后应成功");
         // 重试恰好一次后成功：writer 链上多处复用端口，调用数 ≥ 2（原 + 重试）。
-        assert!(*flaky.calls.lock().unwrap() >= 2);
+        assert!(*flaky.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) >= 2);
         assert_eq!(chapters_md_count(&project.join("books").join("b1")), 1);
     }
 
@@ -2455,7 +2455,7 @@ mod tests {
             messages: Vec<LLMMessage>,
             _temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            *self.flag.lock().unwrap() = true;
+            *self.flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             Ok(ChatOutcome {
                 content: self.script.dispatch(&messages),
                 usage: Some(AuditTokenUsage {
@@ -2521,7 +2521,7 @@ mod tests {
 
         assert!(matches!(error, WriteNextError::Aborted));
         // 入口即停：零 LLM 调用、零章节落盘。
-        assert!(chat.calls.lock().unwrap().is_empty(), "不应发起任何 LLM 调用");
+        assert!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty(), "不应发起任何 LLM 调用");
         assert_eq!(chapters_md_count(&project.join("books").join("b1")), 0);
         assert_eq!(state.get_next_chapter_number("b1").await.unwrap(), 1);
     }
@@ -2567,7 +2567,7 @@ mod tests {
         assert!(matches!(error, WriteNextError::Aborted));
         // 草稿已生成（planner/composer/writer 均被调用）但零落盘——安全点
         // 语义：检查点之间不存在部分写盘，中止即全书保持原样。
-        let calls = chat.calls.lock().unwrap().clone();
+        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         assert!(
             calls.iter().any(|c| c.contains("作家")),
             "草稿调用应已发生：{calls:?}"
@@ -2717,7 +2717,7 @@ mod tests {
             &self,
             req: crate::agents::timeline_settler::BeatsRequest<'_>,
         ) -> Result<Vec<crate::models::timeline::PlotlineBeat>, String> {
-            self.calls.lock().unwrap().push(req.chapter_title.to_string());
+            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(req.chapter_title.to_string());
             self.result.clone()
         }
     }
@@ -2821,7 +2821,7 @@ mod tests {
             .expect("write-next 应成功");
         assert_eq!(result.chapter_number, 1);
         // 端口拿到落盘后的章节标题（传参 = 生产语义）。
-        assert_eq!(beats.calls.lock().unwrap().as_slice(), ["风起"]);
+        assert_eq!(beats.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(), ["风起"]);
 
         // 节拍合并进时间线并落盘。
         let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
@@ -2892,7 +2892,7 @@ mod tests {
             .expect("write-next 应成功");
         assert_eq!(result.chapter_number, 1);
         // 默认关：端口从未被调用，时间线未被改写。
-        assert!(beats.calls.lock().unwrap().is_empty());
+        assert!(beats.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
         let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
         let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());

@@ -223,7 +223,7 @@ async fn begin_chat_turn(
 ) -> Option<String> {
     // 220 号：删除守卫（TS appendSessionMessagesUnlessDeleted）——轮进行中
     // 会话被删时跳过追加，防 transcript 复活「已删除」会话。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
         return None;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -282,7 +282,7 @@ async fn commit_chat_turn(
     tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
 ) {
     // 220 号：删除守卫（收尾持久化同样不得复活已删除会话）。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
         return;
     }
     let now = utc_now_ms();
@@ -426,7 +426,7 @@ async fn commit_chat_turn(
 /// request_failed 终态标记；derive 对未提交轮仍整体排除（与 TS 一致）。
 async fn fail_chat_turn(project_root: &std::path::Path, session_id: &str, request_id: &str, error: &str) {
     // 同上：删除守卫（失败收尾的持久化同样不得复活已删除会话）。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap().contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
         return;
     }
     let now = utc_now_ms();
@@ -511,13 +511,13 @@ fn pending_session_aborts() -> &'static std::sync::Mutex<std::collections::HashM
 pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &str) {
     let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let key = format!("{}\0{}", project_root.display(), session_id);
-    pending_session_aborts().lock().unwrap().insert(key, seq);
+    pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, seq);
 }
 
 /// 受理点裁决：取走标记；入队序早于标记序返回 true（本轮受理即中止）。
 fn take_pending_session_abort(project_root: &std::path::Path, session_id: &str, enqueued_seq: u64) -> bool {
     let key = format!("{}\0{}", project_root.display(), session_id);
-    match pending_session_aborts().lock().unwrap().remove(&key) {
+    match pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&key) {
         Some(marked_seq) => enqueued_seq < marked_seq,
         None => false,
     }
@@ -849,7 +849,7 @@ pub async fn post_agent(
     // 排队拿到锁后刷新注册表句柄与全新 abort flag（前一轮的中止不波及新轮；
     // 轮结束 remove 条目，本轮重插保证 abort 可达）。
     let handle = {
-        let mut registry = running_agent_sessions().lock().unwrap();
+        let mut registry = running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         registry
             .entry(session_id.to_string())
             .or_insert_with(|| {
@@ -861,15 +861,14 @@ pub async fn post_agent(
             .clone()
     };
     // std guard 不得跨 await（future Send）：先 clone Arc，再取 owned guard。
-    let queue = handle.lock().unwrap().queue.clone();
+    let queue = handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
     // 640 号：入队序在等待点前捕获（受理点据此裁决 pending-abort）。
     let enqueued_seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _queue_guard = queue.lock_owned().await;
     let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
-    handle.lock().unwrap().abort_flag = abort_flag.clone();
+    handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag = abort_flag.clone();
     running_agent_sessions()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(session_id.to_string(), handle.clone());
 
     // 640 号受理边界：排队等待期间被 abort 的轮（入队序早于标记序）在此裁决
@@ -880,7 +879,7 @@ pub async fn post_agent(
         if let Some(request_id) = &request_id {
             fail_chat_turn(root, session_id, request_id, "aborted").await;
         }
-        running_agent_sessions().lock().unwrap().remove(session_id);
+        running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(session_id);
         runtime.hub.broadcast(
             "agent:error",
             &json!({
@@ -1486,7 +1485,7 @@ pub async fn post_agent(
         })
         .await;
 
-    running_agent_sessions().lock().unwrap().remove(session_id);
+    running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(session_id);
 
     // R41/563 号：末轮计量快照留痕（成功/失败/中止路径同点，尽力而为——
     // 观测面不阻断主链）。
@@ -1699,12 +1698,12 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
             args,
         )
         .await;
-        *self.last_observation.lock().expect("router observation lock") = Some(observation);
+        *self.last_observation.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observation);
         result
     }
 
     fn last_observation(&self) -> Option<crate::interaction::pipeline::PipelineObservation> {
-        *self.last_observation.lock().expect("router observation lock")
+        *self.last_observation.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -2570,8 +2569,7 @@ mod payload_strict_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         crate::server::session_routes::deleted_session_ids()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert("sess-deleted".to_string());
         let guarded = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat).await;
         assert!(guarded.is_none(), "删除守卫应拦截写前落盘");
@@ -2582,8 +2580,7 @@ mod payload_strict_tests {
         );
         // 同名重建 → 清除标记 → 追加恢复。
         crate::server::session_routes::deleted_session_ids()
-            .lock()
-            .unwrap()
+            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove("sess-deleted");
         let request_id = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat)
             .await
@@ -2608,11 +2605,11 @@ mod payload_strict_tests {
         let h1 = handle.clone();
         let o1 = order.clone();
         let first = tokio::spawn(async move {
-            let guard = h1.lock().unwrap().queue.clone();
+            let guard = h1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
             let _q = guard.lock_owned().await;
-            o1.lock().unwrap().push("first-start");
+            o1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("first-start");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            o1.lock().unwrap().push("first-end");
+            o1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("first-end");
         });
         // 首轮先拿锁。
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -2620,16 +2617,16 @@ mod payload_strict_tests {
         let h2 = handle.clone();
         let o2 = order.clone();
         let second = tokio::spawn(async move {
-            let guard = h2.lock().unwrap().queue.clone();
+            let guard = h2.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
             let _q = guard.lock_owned().await;
-            o2.lock().unwrap().push("second-start");
+            o2.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("second-start");
         });
 
         first.await.unwrap();
         // 首轮未结束时第二轮不应进入临界区（first-end 先于 second-start）。
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         second.await.unwrap();
-        let sequence = order.lock().unwrap().clone();
+        let sequence = order.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         assert_eq!(
             sequence,
             vec!["first-start", "first-end", "second-start"],
@@ -2644,12 +2641,12 @@ mod payload_strict_tests {
             abort_flag: Arc::new(Mutex::new(true)), // 模拟前轮被中止
             queue: Arc::new(tokio::sync::Mutex::new(())),
         }));
-        let queue = handle.lock().unwrap().queue.clone();
+        let queue = handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
         let _q = queue.lock_owned().await;
         let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
-        handle.lock().unwrap().abort_flag = abort_flag.clone();
+        handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag = abort_flag.clone();
         assert!(
-            !*abort_flag.lock().unwrap(),
+            !*abort_flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             "新轮 flag 必须为未中止"
         );
     }
@@ -2686,7 +2683,10 @@ mod pending_abort_tests {
     //! 全链受理中止接线由 TS session-pending-abort.test.ts 集成镜像 +
     //! abort 契约既有回归（624/625）共同兜底。
 
-    use super::{mark_pending_session_abort, take_pending_session_abort};
+    use super::{
+        mark_pending_session_abort, pending_session_aborts, take_pending_session_abort,
+        SESSION_QUEUE_SEQ,
+    };
     use std::path::PathBuf;
 
     fn root_of(dir: &tempfile::TempDir) -> PathBuf {
@@ -2744,5 +2744,41 @@ mod pending_abort_tests {
         assert!(!take_pending_session_abort(&root_b, "s1", 0));
         assert!(!take_pending_session_abort(&root_a, "s2", 0));
         assert!(take_pending_session_abort(&root_a, "s1", 0));
+    }
+
+    #[test]
+    fn pending_session_aborts_registry_survives_poison() {
+        // 979 号：poison 恢复惯用形活体——探针线程持锁 panic 使标记表中毒，
+        // mark_pending_session_abort 内恢复形（unwrap_or_else into_inner）继续
+        // insert 成功且裁决语义不变。裸 unwrap 形（979 前）此处 panic → 本例红；
+        // NEUTER979 中和点 = mark_pending_session_abort 内 env 分支回退 unwrap 形。
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let sid = "poison-979-probe";
+        // 清场：取走同 key 旧标记（若有），保证断言起点干净
+        let key = format!("{}\0{}", root.display(), sid);
+        pending_session_aborts()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&key);
+        // 探针线程：拿锁后 panic（制造 poison）
+        let h = std::thread::spawn(|| {
+            let _g = pending_session_aborts()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            panic!("979 poison probe");
+        });
+        assert!(h.join().is_err(), "探针线程应 panic（制造 poison）");
+        // 入队序在先（K），标记序在后（K+1）——受理裁决应命中
+        let enqueued_seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        mark_pending_session_abort(&root, sid); // poison 表上恢复形 insert
+        assert!(
+            take_pending_session_abort(&root, sid, enqueued_seq),
+            "poison 恢复后标记应可达且受理命中",
+        );
+        assert!(
+            !take_pending_session_abort(&root, sid, enqueued_seq),
+            "取走后不重复命中",
+        );
     }
 }

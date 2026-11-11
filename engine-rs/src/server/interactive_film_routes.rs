@@ -152,7 +152,7 @@ async fn with_project_lock<T>(
 ) -> T {
     let key = format!("{}::{}", project_root.display(), project_id);
     let lock = {
-        let mut locks = project_locks().lock().unwrap();
+        let mut locks = project_locks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         locks.entry(key).or_default().clone()
     };
     let _guard = lock.lock().await;

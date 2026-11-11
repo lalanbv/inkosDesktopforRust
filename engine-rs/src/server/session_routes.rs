@@ -224,7 +224,7 @@ pub async fn create_session(
     )
     .await;
     // 同 id 重建 → 复活（清除删除标记）
-    deleted_session_ids().lock().unwrap().remove(&session.session_id);
+    deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&session.session_id);
     (StatusCode::OK, Json(json!({ "session": session.to_response_json() }))).into_response()
 }
 
@@ -286,8 +286,7 @@ pub async fn branch_session(
             .await
             .is_some();
     let chat_running = crate::server::agent_route::running_agent_sessions()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&session_id);
     if task_running || chat_running {
         return api_error(
@@ -374,7 +373,7 @@ pub async fn delete_session(
     let root = runtime.state.project_root();
     // 先标记（中止后的错误持久化检查该标记）；运行中任务控制器随 65 号
     // agent 执行体接入注册表——当前无生产者，abort 为 no-op。
-    deleted_session_ids().lock().unwrap().insert(session_id.clone());
+    deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(session_id.clone());
     delete_book_session(root, &session_id).await;
     delete_studio_task_snapshot(root, &session_id).await;
     (StatusCode::OK, Json(json!({ "ok": true })))
@@ -404,7 +403,7 @@ pub async fn abort_session(
             )
             .await
         {
-            *handle.lock().unwrap() = true;
+            *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             task_aborted = true;
         }
     }
@@ -415,8 +414,7 @@ pub async fn abort_session(
     // :829 会新建 abort_flag 冲掉此前置位）由受理点按入队序裁决受理即中止。
     // 空闲时置位无害：标记在下一次受理时因入队序更新而未命中并自清除。
     if crate::server::agent_route::running_agent_sessions()
-        .lock()
-        .unwrap()
+        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&session_id)
     {
         crate::server::agent_route::mark_pending_session_abort(runtime.state.project_root(), &session_id);
@@ -432,10 +430,10 @@ pub async fn abort_session(
 /// 共享同一 Arc）；返回是否存在活跃条目。
 fn abort_agent_session(session_id: &str) -> bool {
     let registry = crate::server::agent_route::running_agent_sessions();
-    let guard = registry.lock().unwrap();
+    let guard = registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(session_id) {
         Some(handle) => {
-            *handle.lock().unwrap().abort_flag.lock().unwrap() = true;
+            *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             true
         }
         None => false,

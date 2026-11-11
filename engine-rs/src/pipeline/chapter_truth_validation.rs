@@ -270,10 +270,9 @@ mod tests {
     impl ValidatePort for ScriptValidate {
         async fn validate(&self, params: ValidateRequest<'_>) -> Result<ValidationResult, String> {
             self.seen
-                .lock()
-                .unwrap()
+                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(params.new_state.to_string());
-            self.results.lock().unwrap().remove(0)
+            self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0)
         }
     }
 
@@ -364,7 +363,7 @@ mod tests {
         assert_eq!(outcome.persistence_output.updated_state, "retried-state");
         // 两次校验：初始产物 + 重试产物。
         assert_eq!(
-            *validator.seen.lock().unwrap(),
+            *validator.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec!["new-state".to_string(), "retried-state".to_string()]
         );
     }

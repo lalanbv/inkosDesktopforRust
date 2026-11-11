@@ -316,7 +316,7 @@ pub async fn review_translation_chapter(
                         "sourceRefs": resolved[0].source_refs,
                         "instruction": "These are the actual selected excerpts. Check that they support this finding before keeping its code in the final review.",
                     });
-                    recorded.lock().unwrap().insert(submission.code.clone(), submission);
+                    recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(submission.code.clone(), submission);
                     Ok(receipt)
                 })
             }),
@@ -333,7 +333,7 @@ pub async fn review_translation_chapter(
                 .and_then(Value::as_array)
                 .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap();
+            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let unknown: Vec<String> = codes.iter().filter(|code| !recorded.contains_key(*code)).cloned().collect();
             if !unknown.is_empty() || codes.iter().collect::<std::collections::BTreeSet<_>>().len() != codes.len() {
                 return Err(StructuredToolError::coded(
@@ -383,7 +383,7 @@ pub async fn review_translation_chapter(
         .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
     let submissions: Vec<ReviewObservationSubmission> = {
-        let recorded = recorded.lock().unwrap();
+        let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         codes.iter().filter_map(|code| recorded.get(code).cloned()).collect()
     };
     let observations = resolve_and_check(&submissions, &sources).map_err(|error| error.message)?;

@@ -201,7 +201,7 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
         if deps
             .abort
             .as_ref()
-            .is_some_and(|flag| *flag.lock().unwrap())
+            .is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
         {
             return error_result(aborted_message());
         }

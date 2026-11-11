@@ -73,7 +73,7 @@ mod tests {
     #[async_trait::async_trait]
     impl TimelineBeatsChat for MockBeats {
         async fn beats(&self, req: BeatsRequest<'_>) -> Result<Vec<PlotlineBeat>, String> {
-            self.requests.lock().unwrap().push((
+            self.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((
                 req.chapter_number,
                 req.plotlines.to_vec(),
             ));
@@ -118,7 +118,7 @@ mod tests {
         .unwrap();
         assert_eq!(applied, Some(1));
         // 名册透传给端口（测试传参 = 生产传参：id+name 全量）。
-        assert_eq!(mock.requests.lock().unwrap()[0].1, vec![("main".into(), "主线".into())]);
+        assert_eq!(mock.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, vec![("main".into(), "主线".into())]);
         let raw = tokio::fs::read_to_string(dir.path().join("story/timeline.json")).await.unwrap();
         let timeline: Timeline = serde_json::from_str(&raw).unwrap();
         assert_eq!(timeline.plotlines[0].cells[0].title.as_deref(), Some("风起"));
@@ -132,7 +132,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(applied, None);
-        assert!(mock.requests.lock().unwrap().is_empty()); // 未发起 LLM 调用
+        assert!(mock.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty()); // 未发起 LLM 调用
     }
 
     #[tokio::test]

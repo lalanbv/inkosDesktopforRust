@@ -304,7 +304,7 @@ mod tests {
     impl LoopChat for ScriptedChat {
         async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
             let index = {
-                let mut calls = self.calls.lock().unwrap();
+                let mut calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let index = calls.len();
                 calls.push(index);
                 index
@@ -361,7 +361,7 @@ mod tests {
         assert!(outcome.aborted);
         assert!(outcome.response_text.is_empty());
         assert_eq!(outcome.usage, LoopUsage::default(), "abort 后无 usage 累加");
-        assert_eq!(chat.calls.lock().unwrap().len(), 0, "abort 后未发起 LLM 调用");
+        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 0, "abort 后未发起 LLM 调用");
     }
 
     /// 624 号：模拟在飞 LLM 调用——chat() 内部置位 abort（用户点停止）后
@@ -373,7 +373,7 @@ mod tests {
     #[async_trait::async_trait]
     impl LoopChat for InflightAbortChat {
         async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
-            *self.abort.lock().unwrap() = true;
+            *self.abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             std::future::pending::<()>().await;
             unreachable!("pending future 不应解析")
         }

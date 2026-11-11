@@ -556,7 +556,7 @@ mod tests {
             _control: Option<&ChapterReviewCycleControlInput<'_>>,
             _temperature: Option<f64>,
         ) -> Result<AuditResult, String> {
-            Ok(self.results.lock().unwrap().remove(0))
+            Ok(self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0))
         }
     }
 
@@ -575,7 +575,7 @@ mod tests {
             _control: Option<&ChapterReviewCycleControlInput<'_>>,
             _spec: &LengthSpec,
         ) -> Result<ReviseOutput, String> {
-            self.seen_issue_count.lock().unwrap().push(issues.len());
+            self.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(issues.len());
             Ok(ReviseOutput {
                 revised_content: self.revised.clone(),
                 ..Default::default()
@@ -653,7 +653,7 @@ mod tests {
         assert!(!result.revised);
         assert_eq!(result.final_content, PASS_CONTENT);
         assert_eq!(result.post_revise_count, 0);
-        assert!(reviser.seen_issue_count.lock().unwrap().is_empty());
+        assert!(reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
     }
 
     #[tokio::test]
@@ -681,7 +681,7 @@ mod tests {
         assert!(!result.revised);
         assert_eq!(result.final_content, PASS_CONTENT);
         assert!(result.audit_result.parse_failed.unwrap_or(false));
-        assert!(reviser.seen_issue_count.lock().unwrap().is_empty());
+        assert!(reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
     }
 
     #[tokio::test]
@@ -706,7 +706,7 @@ mod tests {
         .await
         .unwrap();
         // 修订器收到 postWriteErrors 转来的 critical issue。
-        assert_eq!(*reviser.seen_issue_count.lock().unwrap(), vec![1]);
+        assert_eq!(*reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![1]);
         assert!(result.revised);
         assert!(result.final_content.contains("修复后追加"));
         // 环结果汇总里包含该 critical。
@@ -769,7 +769,7 @@ mod tests {
         .unwrap();
         // 61 < 60 + 3 → 无净提升退出；修订稿因 >= 当前被保留为 final（同区间无 ε 提升
         // 不触发快照回退——快照择优仅当 best >= current + ε）。
-        assert_eq!(*reviser.seen_issue_count.lock().unwrap(), vec![0]);
+        assert_eq!(*reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![0]);
         // 无净提升退出：final 保持当前版（60），61 的快照不足 ε 不置换。
         assert_eq!(result.audit_result.overall_score, Some(60));
     }
