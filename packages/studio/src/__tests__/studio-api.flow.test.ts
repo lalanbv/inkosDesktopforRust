@@ -205,6 +205,68 @@ describe("Studio API mini-flows", () => {
     expect((await readFile(exportBody.outputPath)).byteLength).toBeGreaterThan(0);
   });
 
+  it("creates a translation work from inline sourceText with glossary and enforces creation-source guards", async () => {
+    const app = createStudioServer({} as never, root);
+    // 981 号：TS HTTP create 三形态（对齐 Rust 972）——inline 创建 + 歧义/空
+    // sources 守卫码面 + 状态码映射。
+    const inline = await app.request("/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceText: "# 第一章 雨夜\n\n雨水落在旧码头。\n",
+        glossary: [{ source: "码头", target: "dock", note: "harbor front" }],
+        sourceLanguage: "zh",
+        targetLanguage: "en",
+        title: "Inline Translation",
+      }),
+    });
+    expect(inline.status).toBe(200);
+    const inlineBody = await inline.json() as { projectId: string };
+    // 981 号：sourceOrigin/glossary 落盘面（works/<id>/work.json metadata +
+    // glossary.json——与 Rust 972 落盘布局同形，跨引擎互读基底）。
+    const workJson = JSON.parse(await readFile(join(root, "works", inlineBody.projectId, "work.json"), "utf8")) as {
+      metadata: { sourceOrigin: string };
+    };
+    expect(workJson.metadata.sourceOrigin).toBe("inline");
+    const glossaryJson = JSON.parse(await readFile(join(root, "works", inlineBody.projectId, "source", "glossary.json"), "utf8")) as {
+      terms: Array<{ source: string; target: string }>;
+    };
+    expect(glossaryJson.terms).toEqual([{ source: "码头", target: "dock", note: "harbor front" }]);
+
+    const conflict = await app.request("/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filePath: "translations-src.md",
+        sourceText: "文本",
+        sourceLanguage: "zh",
+        targetLanguage: "en",
+      }),
+    });
+    expect(conflict.status).toBe(400);
+    expect(await conflict.json()).toMatchObject({ error: { code: "CREATION_SOURCE_CONFLICT" } });
+
+    const emptySources = await app.request("/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sources: [],
+        sourceLanguage: "zh",
+        targetLanguage: "en",
+      }),
+    });
+    expect(emptySources.status).toBe(400);
+    expect(await emptySources.json()).toMatchObject({ error: { code: "CREATION_SOURCE_REQUIRED" } });
+
+    const missing = await app.request("/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceLanguage: "zh", targetLanguage: "en" }),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: { code: "MISSING_FILE_PATH" } });
+  });
+
   it("turns a server-interrupted task snapshot into a terminal session result", async () => {
     const sessionId = "flow-session";
     await createAndPersistBookSession(root, null, sessionId, "short");

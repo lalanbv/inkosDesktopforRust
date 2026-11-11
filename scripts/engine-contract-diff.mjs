@@ -734,6 +734,24 @@ try {
         path: "/api/v1/style/analyze", method: "POST", fullBody: true,
         body: { text: "  林动握紧了拳。他抬起头，灵气涌动。  ", sourceName: "契约样本" },
       },
+      // 981 号：翻译 create 三形态探针（972/981 漂移清偿锁——TS HTTP 面此前仅
+      // filePath 单形态，sourceText/sources 键被静默忽略）。①inline 快乐路径
+      // （sourceText+glossary→双腿 200，各自落 works/<id>，只比状态码=写面口径）；
+      // ②歧义 filePath+sourceText→双腿 400 CREATION_SOURCE_CONFLICT（守卫先于
+      // 文件访问，零副作用）；③空 sources→双腿 400 CREATION_SOURCE_REQUIRED
+      // （TS 面在 handler 先拦——工具链 schema minItems:1 会 500 包装取不到码面）。
+      {
+        path: "/api/v1/translations/create", method: "POST",
+        body: { sourceText: "# 第一章 雨夜\n\n雨水落在旧码头。\n", glossary: [{ source: "码头", target: "dock" }], sourceLanguage: "zh", targetLanguage: "en", title: "契约探针" },
+      },
+      {
+        path: "/api/v1/translations/create", method: "POST",
+        body: { filePath: "translations-src.md", sourceText: "文本", sourceLanguage: "zh", targetLanguage: "en" },
+      },
+      {
+        path: "/api/v1/translations/create", method: "POST",
+        body: { sources: [], sourceLanguage: "zh", targetLanguage: "en" },
+      },
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
       // 703 号：genre 写面 + experience 读面回收（第三批）。

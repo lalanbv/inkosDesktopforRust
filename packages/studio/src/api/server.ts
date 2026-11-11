@@ -8427,40 +8427,79 @@ function yamlScalar(value: unknown): string {
 
   app.post("/api/v1/translations/create", async (c) => {
     const body: {
+      sources?: Array<{ workId?: string; artifactId?: string; revisionId?: string }>;
       filePath?: string;
+      sourceText?: string;
+      glossary?: Array<{ source?: string; target?: string; note?: string }>;
       sourceLanguage?: string;
       targetLanguage?: string;
       title?: string;
       segmentMaxChars?: number;
     } = await c.req.json().catch(() => ({}));
-    if (!body.filePath?.trim()) {
+    // 981 号：TS HTTP 面对齐 Rust 972 三形态（漂移清偿——Rust translation
+    // 路由先行支持 sources/sourceText/glossary，TS HTTP 面此前仅 filePath 单
+    // 形态，三键被静默忽略）。形态判定按键存在性：`sources` 键在场（含空数
+    // 组→工具链 CREATION_SOURCE_REQUIRED）、filePath/sourceText 非空串；全缺
+    // → MISSING_FILE_PATH（70 号契约保留）；并给 → CREATION_SOURCE_CONFLICT；
+    // 缺失检查先于语言（70 号契约序）。
+    const filePath = body.filePath?.trim() || undefined;
+    const sourceText = body.sourceText?.trim() || undefined;
+    const sourcesKeyPresent = body.sources !== undefined;
+    if (!filePath && !sourcesKeyPresent && !sourceText) {
       return c.json({ error: { code: "MISSING_FILE_PATH", message: "filePath is required" } }, 400);
+    }
+    if (filePath && (sourcesKeyPresent || sourceText)) {
+      return c.json({ error: { code: "CREATION_SOURCE_CONFLICT", message: "Select one source input: a reference, ordered references, a file, or supplied text." } }, 400);
+    }
+    // 981 号：空 sources 在 handler 先拦（对齐 Rust load_creation_source 的
+    // CREATION_SOURCE_REQUIRED 400）——工具链 schema minItems:1 会先行 500
+    // 包装，取不到 REQUIRED 码面。
+    if (sourcesKeyPresent && (!Array.isArray(body.sources) || body.sources.length === 0)) {
+      return c.json({ error: { code: "CREATION_SOURCE_REQUIRED", message: "Select at least one source artifact." } }, 400);
     }
     if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
       return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
     }
-    const result = await executeExplicitCapabilityTool({
-      projectRoot: root,
-      binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
-      tool: createTranslationCreateTool(root),
-      parameters: {
-        filePath: body.filePath,
-        sourceLanguage: body.sourceLanguage,
-        targetLanguage: body.targetLanguage,
-        title: body.title,
-        segmentMaxChars: body.segmentMaxChars,
-      },
-    });
-    const details = result.data as {
-      manifest: { id: string; title: string };
-      manifestPath: string;
-      sourcePath: string;
-    };
-    return c.json({
-      ...details,
-      projectId: details.manifest.id,
-      title: details.manifest.title,
-    });
+    try {
+      const result = await executeExplicitCapabilityTool({
+        projectRoot: root,
+        binding: { capabilityId: "translation", actionId: "translation_create", profileId: "translation", risk: "recoverable-write" },
+        tool: createTranslationCreateTool(root),
+        parameters: {
+          filePath,
+          sourceText,
+          sources: body.sources,
+          glossary: body.glossary,
+          sourceLanguage: body.sourceLanguage,
+          targetLanguage: body.targetLanguage,
+          title: body.title,
+          segmentMaxChars: body.segmentMaxChars,
+        },
+      });
+      const details = result.data as {
+        manifest: { id: string; title: string };
+        manifestPath: string;
+        sourcePath: string;
+      };
+      return c.json({
+        ...details,
+        projectId: details.manifest.id,
+        title: details.manifest.title,
+      });
+    } catch (error) {
+      // 981 号：creation-source 码面 → 状态码（对齐 Rust creation_source_error
+      // 972 映射：守卫码 400 / 工件缺失 404 / 其余 500 兜底；此前 TS 面未捕
+      // 获，非法 filePath 走全局 500 无码面）。
+      const code = (error as { code?: string }).code ?? "";
+      const message = error instanceof Error ? error.message : String(error);
+      if (["CREATION_SOURCE_CONFLICT", "CREATION_SOURCE_REQUIRED", "CREATION_SOURCE_PATH_ABSOLUTE", "CREATION_SOURCE_PATH_INVALID", "SOURCE_NOT_TEXT"].includes(code)) {
+        return c.json({ error: { code, message } }, 400);
+      }
+      if (["SOURCE_ARTIFACT_REQUIRED", "WORK_RESOURCE_ID_INVALID"].includes(code)) {
+        return c.json({ error: { code, message } }, 404);
+      }
+      return c.json({ error: { code: "TRANSLATION_CREATE_FAILED", message } }, 500);
+    }
   });
 
   app.get("/api/v1/translations/:id", async (c) => {
