@@ -7,6 +7,7 @@ import { gzipSync } from "node:zlib";
 import { randomUUID } from "node:crypto";
 import { recoverSessionAfterAgentFailure, workSessionResponseMetadata } from "./work-session.js";
 import { ChatRequestStore } from "./chat-request-store.js";
+import { insertWithOldestEviction } from "./bounded-map.js";
 import type { ChatAttachmentPayload, StudioCompletionStatus } from "../shared/session-request.js";
 import {
   StateManager,
@@ -1562,6 +1563,16 @@ interface StudioBookListSummary {
 type EventHandler = (event: string, data: unknown) => void;
 const subscribers = new Set<EventHandler>();
 const bookCreateStatus = new Map<string, { status: "creating" | "error"; error?: string }>();
+// 985 号：写入面有界（cap 64 最旧逐出，contextMeterRegistry/引擎侧 984 同族）
+// ——成功终态已有 delete；error 终态此前无删除路径（读者 404 歧义消解走磁盘
+// isBookFoundationComplete 兜底），逐出安全。
+const BOOK_CREATE_STATUS_CAP = 64;
+function setBookCreateStatus(
+  bookId: string,
+  status: { status: "creating" | "error"; error?: string },
+): void {
+  insertWithOldestEviction(bookCreateStatus, bookId, status, BOOK_CREATE_STATUS_CAP);
+}
 
 // ── R41/564 号（713 号回收）：会话 token 计量观测面（与 Rust agent_route
 // context_meter_registry 同构）——sessionId → 末轮快照；cap 64 逐出最旧；
@@ -1570,12 +1581,9 @@ const CONTEXT_METER_REGISTRY_CAP = 64;
 const contextMeterRegistry = new Map<string, TokenMeterSnapshot>();
 
 function storeContextMeterSnapshot(sessionId: string, snapshot: TokenMeterSnapshot): void {
-  contextMeterRegistry.delete(sessionId); // Map 保序：删旧再插 = 最新在尾
-  if (contextMeterRegistry.size >= CONTEXT_METER_REGISTRY_CAP) {
-    const oldest = contextMeterRegistry.keys().next().value;
-    if (oldest !== undefined) contextMeterRegistry.delete(oldest);
-  }
-  contextMeterRegistry.set(sessionId, snapshot);
+  // 985 号：内联逐出收敛到 bounded-map helper（语义与 713 号原形逐字等价
+  // ——delete+超 cap 逐最旧+set；同文件双轨统一，bounded-map.test.ts 锁形）。
+  insertWithOldestEviction(contextMeterRegistry, sessionId, snapshot, CONTEXT_METER_REGISTRY_CAP);
 }
 
 // 内存缓存：service -> 模型列表 + 更新时间戳；避免每次 sidebar 挂载时都打真实 LLM /models
@@ -2924,7 +2932,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
 
     broadcast("book:creating", { bookId, title: body.title });
-    bookCreateStatus.set(bookId, { status: "creating" });
+    setBookCreateStatus(bookId, { status: "creating" });
 
     const pipeline = new PipelineRunner(await buildPipelineConfig());
     const foundationSkills = await resolveStudioProfileSkills(root, "longform-novel");
@@ -2963,13 +2971,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         const createdBookId = resolveCreatedBookIdFromDetails(details);
         if (!createdBookId) {
           const error = "Book creation did not produce a completed book artifact.";
-          bookCreateStatus.set(bookId, { status: "error", error });
+          setBookCreateStatus(bookId, { status: "error", error });
           broadcast("book:error", { bookId, error });
           return;
         }
         if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
-          bookCreateStatus.set(createdBookId, { status: "error", error });
+          setBookCreateStatus(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, error });
           return;
         }
@@ -2979,7 +2987,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       },
       (e: unknown) => {
         const error = e instanceof Error ? e.message : String(e);
-        bookCreateStatus.set(bookId, { status: "error", error });
+        setBookCreateStatus(bookId, { status: "error", error });
         broadcast("book:error", { bookId, error });
       },
     );
@@ -6600,6 +6608,12 @@ function yamlScalar(value: unknown): string {
       if (request.snapshot.status !== "failed") request.snapshot = { ...request.snapshot, retry: undefined };
       if (!deletedSessionIds.has(sessionId)) await chatRequestStore.save(request.snapshot);
       broadcast("request:snapshot", request.snapshot);
+      // 985 号：终态即逐出（live=在飞 only）——快照已落盘（上一行 save），全
+      // 部读面已核兜底安全：loadChatRequest 先 live 后磁盘双检、retry previous
+      // 走 `previous?.snapshot ?? store.load`、abort/busy 只关心在飞条目。守卫
+      // 防 retry 校验失败恢复形（previous 已 restore，map 指向≠request）误删。
+      // 此前每会话终态条目永久滞留=长驻进程无界（984 号 Rust 同族镜像）。
+      if (chatRequests.get(sessionId) === request) chatRequests.delete(sessionId);
     }
   });
 
@@ -6975,7 +6989,7 @@ function yamlScalar(value: unknown): string {
             ? deriveBookIdFromTitle(actionPayload.createBook.title)
             : null;
           if (pendingBookId) {
-            bookCreateStatus.set(pendingBookId, { status: "creating" });
+            setBookCreateStatus(pendingBookId, { status: "creating" });
             broadcast("book:creating", {
               bookId: pendingBookId,
               title: actionPayload?.createBook?.title ?? pendingBookId,
@@ -7027,7 +7041,7 @@ function yamlScalar(value: unknown): string {
             if (createdBookId) {
               if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
                 const message = pick(surfaceLanguage, "创作工具返回了建书结果，但磁盘上的书籍工件不完整。", "The creation tool returned a book result, but the on-disk book artifact is incomplete.");
-                bookCreateStatus.set(createdBookId, { status: "error", error: message });
+                setBookCreateStatus(createdBookId, { status: "error", error: message });
                 broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error: message });
                 throw new ApiError(500, "BOOK_CREATION_INCOMPLETE", message);
               }
@@ -7186,7 +7200,7 @@ function yamlScalar(value: unknown): string {
           const message = error instanceof Error ? error.message : String(error);
           const failure = formatAgentActionFailure(error, surfaceLanguage);
           if (pendingBookId) {
-            bookCreateStatus.set(pendingBookId, { status: "error", error: message });
+            setBookCreateStatus(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
           }
           if (error instanceof ApiError) {
@@ -7304,7 +7318,7 @@ function yamlScalar(value: unknown): string {
                   const title = typeof args?.title === "string" && args.title.trim()
                     ? args.title.trim()
                     : bookId;
-                  bookCreateStatus.set(bookId, { status: "creating" });
+                  setBookCreateStatus(bookId, { status: "creating" });
                   broadcast("book:creating", { bookId, title, sessionId: streamSessionId });
                 }
               }
@@ -7334,7 +7348,7 @@ function yamlScalar(value: unknown): string {
                   const bookId = resolveCreatedBookIdFromArgs(exec.args);
                   if (bookId) {
                     const error = exec.error ?? "Book creation failed";
-                    bookCreateStatus.set(bookId, { status: "error", error });
+                    setBookCreateStatus(bookId, { status: "error", error });
                     broadcast("book:error", { bookId, sessionId: streamSessionId, error });
                   }
                 }
@@ -7385,7 +7399,7 @@ function yamlScalar(value: unknown): string {
         if (broadcastedCreatedBookId === createdBookId) return createdBookId;
         if (!await completeBookExists(join(workDirectory(root, createdBookId), "source"))) {
           const error = "Book creation artifact is incomplete on disk.";
-          bookCreateStatus.set(createdBookId, { status: "error", error });
+          setBookCreateStatus(createdBookId, { status: "error", error });
           broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
           throw new Error(error);
         }
@@ -8184,7 +8198,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
     }
     broadcast("spinoff:start", { bookId, title: body.title, parentBookId: body.parentBookId });
-    bookCreateStatus.set(bookId, { status: "creating" });
+    setBookCreateStatus(bookId, { status: "creating" });
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
@@ -8212,7 +8226,7 @@ function yamlScalar(value: unknown): string {
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
-        bookCreateStatus.set(bookId, { status: "error", error });
+        setBookCreateStatus(bookId, { status: "error", error });
         broadcast("spinoff:error", { bookId, error });
         broadcast("book:error", { bookId, error });
       }
@@ -8248,7 +8262,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
     }
     broadcast("imitation:start", { bookId, title: body.title });
-    bookCreateStatus.set(bookId, { status: "creating" });
+    setBookCreateStatus(bookId, { status: "creating" });
     void (async () => {
       try {
         const pipeline = new PipelineRunner(await buildPipelineConfig());
@@ -8277,7 +8291,7 @@ function yamlScalar(value: unknown): string {
         broadcast("book:created", { bookId, ...(book ? { book } : {}) });
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
-        bookCreateStatus.set(bookId, { status: "error", error });
+        setBookCreateStatus(bookId, { status: "error", error });
         broadcast("imitation:error", { bookId, error });
         broadcast("book:error", { bookId, error });
       }
