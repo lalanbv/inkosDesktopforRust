@@ -4,6 +4,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Pencil, Save, X } from "lucide-react";
+import { tr } from "../lib/app-language";
 
 interface TruthFile {
   readonly name: string;
@@ -162,6 +163,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                 <textarea
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
+                  aria-label={tr("编辑设定内容", "Edit truth content")}
                   className={`${c.input} flex-1 rounded-md p-3 text-sm font-mono leading-relaxed resize-none min-h-[360px]`}
                 />
               ) : (

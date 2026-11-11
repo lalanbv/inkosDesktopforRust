@@ -22,6 +22,9 @@ import { TabStrip } from "../components/TabStrip";
 import { StoryGraphTree } from "../pages/StoryGraphTree";
 import { ImportManager } from "../pages/ImportManager";
 import { WorkInspector } from "../pages/WorkInspector";
+import { StyleManager } from "../pages/StyleManager";
+import { TranslationManager } from "../pages/TranslationManager";
+import { TruthFiles } from "../pages/TruthFiles";
 import type { TFunction } from "../hooks/use-i18n";
 
 const GRAPH = StoryGraphSchema.parse({
@@ -60,6 +63,12 @@ const API_DATA: Record<string, unknown> = {
     episodes: [],
   },
   "/profiles": { profiles: [] },
+  // 986 号扩面：翻译管理（列表空态壳面）+ 设定文件（一文件列表+选中内容）
+  "/translations": { translations: [] },
+  "/books/b1/truth": {
+    files: [{ name: "characters.md", size: 12, preview: "苏檀出身书香门第。" }],
+  },
+  "/books/b1/truth/characters.md": { file: "characters.md", content: "苏檀出身书香门第。" },
 };
 
 vi.mock("../hooks/use-api", async (importOriginal) => ({
@@ -178,6 +187,41 @@ describe("a11y 结构性防回归（874）", () => {
     const editButton = Array.from(drawer.querySelectorAll("button")).find((b) => (b.textContent ?? "").includes("编辑"));
     await user.click(editButton!);
     await vi.waitFor(() => expect(drawer.querySelector("textarea")).not.toBeNull());
+    expect(await violationsOf(container)).toEqual([]);
+  });
+});
+
+describe("a11y 结构性扩面（986：874 后新增/变更 UI 面）", () => {
+  it("StyleManager：来源名称/样例正文两字段均有可访问名称 + 964 保存档案钮在位", async () => {
+    const { container } = render(<StyleManager nav={nav} theme="light" t={t} />);
+    const saveButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes(t("style.saveProfile")),
+    );
+    expect(saveButton).toBeDefined();
+    expect(await violationsOf(container)).toEqual([]);
+  });
+
+  it("TranslationManager：上传/创建表单壳面（空列表态）全部字段有名称", async () => {
+    const { container } = render(<TranslationManager nav={nav} theme="light" t={t} />);
+    expect(container.querySelector("input[type=file]")).not.toBeNull();
+    expect(await violationsOf(container)).toEqual([]);
+  });
+
+  it("TruthFiles：文件钮有名称 + 编辑 textarea 有可访问名称（873 同族 critical）", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<TruthFiles bookId="b1" nav={nav} theme="light" t={t} />);
+    const fileButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("characters.md"),
+    );
+    expect(fileButton).toBeDefined();
+    await user.click(fileButton!);
+    await vi.waitFor(() => expect(container.querySelector("pre")).not.toBeNull());
+    const editButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("Edit"),
+    );
+    expect(editButton).toBeDefined();
+    await user.click(editButton!);
+    await vi.waitFor(() => expect(container.querySelector("textarea")).not.toBeNull());
     expect(await violationsOf(container)).toEqual([]);
   });
 });
