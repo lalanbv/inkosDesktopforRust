@@ -752,6 +752,13 @@ try {
         path: "/api/v1/translations/create", method: "POST",
         body: { sources: [], sourceLanguage: "zh", targetLanguage: "en" },
       },
+      // 982 号：registry 坏元素负路径锁定（缺 artifactId——serde 契约
+      // deny_unknown_fields+三键；双腿同码 WORK_RESOURCE_ID_INVALID 404，
+      // TS 面在 handler 先拦对齐 Rust 状态码）。
+      {
+        path: "/api/v1/translations/create", method: "POST",
+        body: { sources: [{ workId: "w1" }], sourceLanguage: "zh", targetLanguage: "en" },
+      },
       "/api/v1/books/:id/best-of-n",
       "/api/v1/books/:id/anti-ai-rules",
       // 703 号：genre 写面 + experience 读面回收（第三批）。

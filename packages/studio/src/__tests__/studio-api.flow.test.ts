@@ -258,6 +258,22 @@ describe("Studio API mini-flows", () => {
     expect(emptySources.status).toBe(400);
     expect(await emptySources.json()).toMatchObject({ error: { code: "CREATION_SOURCE_REQUIRED" } });
 
+    // 982 号：registry 坏元素逐元素守卫（对齐 Rust serde deny_unknown_fields+
+    // camelCase 三键契约——双腿同码 WORK_RESOURCE_ID_INVALID 404）。
+    for (const badSources of [
+      [{ workId: "w1" }],
+      [{ workId: "w1", artifactId: "a1", extra: 1 }],
+      [{ workId: "w1", artifactId: "a1", revisionId: 7 }],
+    ]) {
+      const bad = await app.request("/api/v1/translations/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sources: badSources, sourceLanguage: "zh", targetLanguage: "en" }),
+      });
+      expect(bad.status).toBe(404);
+      expect(await bad.json()).toMatchObject({ error: { code: "WORK_RESOURCE_ID_INVALID" } });
+    }
+
     const missing = await app.request("/api/v1/translations/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

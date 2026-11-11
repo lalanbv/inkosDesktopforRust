@@ -8457,6 +8457,22 @@ function yamlScalar(value: unknown): string {
     if (sourcesKeyPresent && (!Array.isArray(body.sources) || body.sources.length === 0)) {
       return c.json({ error: { code: "CREATION_SOURCE_REQUIRED", message: "Select at least one source artifact." } }, 400);
     }
+    // 982 号：registry 坏元素逐元素守卫（对齐 Rust serde 契约
+    // deny_unknown_fields+camelCase 三键——坏元素在 handler 先拦
+    // WORK_RESOURCE_ID_INVALID 404，Rust 面同码 404 双端对称；工具链 schema
+    // 校验会 500 包装取不到码面。空串键放行=Rust serde 同语义，双腿同落
+    // 工件查找面）。
+    for (const item of body.sources ?? []) {
+      const record = item as Record<string, unknown> | null;
+      const invalid = record === null || typeof record !== "object" || Array.isArray(record)
+        || typeof record.workId !== "string"
+        || typeof record.artifactId !== "string"
+        || ("revisionId" in record && typeof record.revisionId !== "string")
+        || Object.keys(record).some((key) => !["workId", "artifactId", "revisionId"].includes(key));
+      if (invalid) {
+        return c.json({ error: { code: "WORK_RESOURCE_ID_INVALID", message: "invalid source reference" } }, 404);
+      }
+    }
     if (!body.sourceLanguage?.trim() || !body.targetLanguage?.trim()) {
       return c.json({ error: { code: "MISSING_LANGUAGES", message: "sourceLanguage and targetLanguage are required" } }, 400);
     }

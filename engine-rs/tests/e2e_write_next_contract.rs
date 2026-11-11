@@ -9184,6 +9184,42 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
         assert_eq!(parsed["error"]["code"], "CREATION_SOURCE_REQUIRED");
 
+        // 982 号：registry 坏元素 → WORK_RESOURCE_ID_INVALID 404（serde 契约
+        // deny_unknown_fields+camelCase 三键；TS 面同码 404 对齐=982 双端锁定）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(r#"{ "sources": [{ "workId": "w1" }], "sourceLanguage": "en", "targetLanguage": "zh" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "WORK_RESOURCE_ID_INVALID");
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(
+                r#"{ "sources": [{ "workId": "w1", "artifactId": "a1", "extra": 1 }], "sourceLanguage": "en", "targetLanguage": "zh" }"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "WORK_RESOURCE_ID_INVALID");
+
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(
+                r#"{ "sources": [{ "workId": "w1", "artifactId": "a1", "revisionId": 7 }], "sourceLanguage": "en", "targetLanguage": "zh" }"#,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "WORK_RESOURCE_ID_INVALID");
+
         // ④ file 形态回归（novel.txt 为 fixture 预置的 uploads 文件——从 base 项目
         // manifest.source.path 取真实上传路径）。
         let base_manifest = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;
