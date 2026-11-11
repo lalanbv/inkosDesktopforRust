@@ -9220,6 +9220,20 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
         assert_eq!(parsed["error"]["code"], "WORK_RESOURCE_ID_INVALID");
 
+        // 983 号：空串键负路径一致性锁（serde 放行空串→工件查找失败
+        // ARTIFACT_NOT_FOUND→creation_source_error 兜底换码；TS 面 Zod min(1)
+        // 拒→catch 兜底——双腿同落 500 TRANSLATION_CREATE_FAILED，982「语义
+        // 同源」定性经码面级勘察后用例锁定）。
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/translations/create",
+            Some(r#"{ "sources": [{ "workId": "", "artifactId": "" }], "sourceLanguage": "en", "targetLanguage": "zh" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{parsed}");
+        assert_eq!(parsed["error"]["code"], "TRANSLATION_CREATE_FAILED");
+
         // ④ file 形态回归（novel.txt 为 fixture 预置的 uploads 文件——从 base 项目
         // manifest.source.path 取真实上传路径）。
         let base_manifest = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;

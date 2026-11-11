@@ -274,6 +274,17 @@ describe("Studio API mini-flows", () => {
       expect(await bad.json()).toMatchObject({ error: { code: "WORK_RESOURCE_ID_INVALID" } });
     }
 
+    // 983 号：空串键负路径一致性锁（982 备案清偿——TS Zod min(1) 拒空串→
+    // catch 兜底；Rust serde 放行→工件查找失败兜底换码。双腿同落 500
+    // TRANSLATION_CREATE_FAILED，码面级一致用例锁定）。
+    const emptyKey = await app.request("/api/v1/translations/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sources: [{ workId: "", artifactId: "" }], sourceLanguage: "zh", targetLanguage: "en" }),
+    });
+    expect(emptyKey.status).toBe(500);
+    expect(await emptyKey.json()).toMatchObject({ error: { code: "TRANSLATION_CREATE_FAILED" } });
+
     const missing = await app.request("/api/v1/translations/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
