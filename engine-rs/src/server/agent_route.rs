@@ -497,7 +497,10 @@ async fn debug_assert_model_surface_is_logged(
 // 序数而非毫秒时间戳：同一毫秒内「先入队后置标记」与「先置标记后入队」（换
 // 向流）无法靠时钟区分，AtomicU64 给出严格全序。消费语义：受理点取标记即
 // 清除（FIFO 下第一个受理者是唯一可能早于标记的轮；未命中说明标记已无目标，
-// 同样清除自愈）。TS 对应物 = packages/core agent-session.ts pendingSessionAborts。
+// 同样清除自愈）。984 号勘误：640 时 TS 对应物（agent-session.ts
+// pendingSessionAborts）已随上游 2.0 合并移除——2.0 架构 chat 无服务端队列
+// （忙到达即 409 CHAT_REQUEST_ALREADY_RUNNING 拒绝，studio server.ts 6563 区），
+// 排队态取消契约 Rust 独占。
 
 static SESSION_QUEUE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -508,10 +511,25 @@ fn pending_session_aborts() -> &'static std::sync::Mutex<std::collections::HashM
 }
 
 /// abort 路由在会话忙（registry 在飞或排队——Rust 到达即注册）时置位。
+/// 984 号：标记表有界（cap 64，context_meter_registry 同例）——未被受理点
+/// take 消费的标记（mark 后无新请求的会话）按最旧 seq 逐出，长驻进程内存
+/// 有界；被逐出标记的语义=该 abort 不再 pending（消费自愈同族；排队态取消
+/// 契约 Rust 独占——TS 2.0 无队列，忙到达即 409 拒绝）。
 pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &str) {
+    const PENDING_ABORTS_CAP: usize = 64;
     let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let key = format!("{}\0{}", project_root.display(), session_id);
-    pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(key, seq);
+    let mut map = pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if map.len() >= PENDING_ABORTS_CAP && !map.contains_key(&key) {
+        if let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, marked_seq)| **marked_seq)
+            .map(|(evicted_key, _)| evicted_key.clone())
+        {
+            map.remove(&oldest);
+        }
+    }
+    map.insert(key, seq);
 }
 
 /// 受理点裁决：取走标记；入队序早于标记序返回 true（本轮受理即中止）。
@@ -2779,6 +2797,39 @@ mod pending_abort_tests {
         assert!(
             !take_pending_session_abort(&root, sid, enqueued_seq),
             "取走后不重复命中",
+        );
+    }
+
+    #[test]
+    fn pending_session_aborts_cap_evicts_oldest() {
+        // 984 号：标记表有界——mark 超过 cap 后按最旧 seq 逐出（长驻进程
+        // 内存有界）。并发鲁棒断言（其他测试可能并发 mark 全局表）：
+        // ①最后 mark 的 key 必可达（淘汰只删最旧）；②本测试 key 命中数
+        // 不超过 cap（被逐的 take 返回 false=不再 pending）。
+        const PROBE_COUNT: usize = 80;
+        let dir = tempfile::tempdir().unwrap();
+        let root = root_of(&dir);
+        let sids: Vec<String> = (0..PROBE_COUNT).map(|i| i.to_string()).collect();
+        for sid in sids.iter() {
+            mark_pending_session_abort(&root, sid);
+        }
+        let mut hits = 0usize;
+        let last_sid = sids.last().unwrap().clone();
+        for sid in sids.iter() {
+            if sid == &last_sid {
+                continue; // last 单独断言（hits 循环会消费条目，先消费则复断言必空）
+            }
+            if take_pending_session_abort(&root, sid, 0) {
+                hits += 1;
+            }
+        }
+        assert!(
+            take_pending_session_abort(&root, &last_sid, 0),
+            "最后 mark 的 key 必可达",
+        );
+        assert!(
+            hits <= 64,
+            "命中数不得超过 cap（其余按最旧 seq 逐出），实际 {hits}",
         );
     }
 }
