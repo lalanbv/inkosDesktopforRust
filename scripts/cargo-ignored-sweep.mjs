@@ -10,22 +10,29 @@
 //
 //   pnpm cargo:ignored-sweep
 //
-// 覆盖面（与 988 号实跑证据对齐）：
+// 覆盖面（988 号 lib+watcher 实跑清偿；989 号扩面桌面 e2e 三 scope）：
 // - lib 单测 7 枚：pfctl bail（C5 回归）+ keychain 真实四枚（roundtrip/
 //   delete-missing/stale-tolerant/concurrent）+ updater 双通道网络面（GitHub
 //   release 探测 + node 二进制真实下载校验）。
 // - tests/sync_watcher_io 3 枚：notify watcher 端到端（988 号已改探针自同步，
 //   固定 sleep 注册竞态已清偿）。
+// - tests/e2e_updater 1 枚：is_newer 版本比较（988 号勘误：旧 ignore 理由
+//   「需网络」已过时，实为纯逻辑，0.00s 级）。
+// - tests/supervisor_integration 1 枚：真实 inkos sidecar 拉起→SPA 可达→
+//   kill_tree 端口释放（自动先跑 desktop-package-engine.sh 组装；需 :4567
+//   空闲——桌面应用在跑会假红）。
+// - tests/e2e_startup 2 枚（--release）：桌面应用启动冒烟×2——**会闪现应用
+//   窗口各 ~5s**（超时击杀即预期）；release profile 陈旧时本 scope 触发增量
+//   release 编译（首次数分钟）。
 //
 // 已知豁免（不在本脚本，理由备案于变更记录 988 号）：
 // - tests/e2e_secrets（9 枚）：真实 keychain e2e，注释明示「dark wake 时首次
 //   访问弹授权框阻塞」——无人值守跑会挂会话。
-// - tests/e2e_startup(2)/e2e_updater(1)/supervisor_integration：需 release
-//   二进制（desktop-build-inkos.sh），专项轮清偿。
 //
 // 纪律：**勿与其它 cargo test 并行跑**——同机双 cargo 实例会因 target 锁 +
 // securityd/keychain 跨进程串行化造成分钟级停滞假象（988 号自身双跑实测）。
-// 网络面两枚需外网可达；pfctl 枚需非 root macOS。全程约 40-60s。
+// 网络面两枚需外网可达；pfctl 枚需非 root macOS。全程约 40-60s（release
+// 陈旧时另计编译）。
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -65,6 +72,21 @@ const INVENTORY = [
       "watcher_shutdown_flag_exits_thread_cleanly",
     ],
   },
+  {
+    scope: "--test e2e_updater",
+    tests: ["test_is_newer_version_check"],
+  },
+  {
+    scope: "--test supervisor_integration",
+    tests: ["real_inkos_sidecar_serves_spa"],
+    // 真实 sidecar 前置：src-tauri/engine 组装（幂等；TS dist 缺失时脚本内
+    // 自行触发 pnpm build）。缺组装时用例自带「engine 未组装」panic。
+    pre: [join(repoRoot, "scripts", "desktop-package-engine.sh")],
+  },
+  {
+    scope: "--release --test e2e_startup",
+    tests: ["test_startup_smoke", "test_startup_logs_version"],
+  },
 ];
 
 function cargoAvailable() {
@@ -84,6 +106,16 @@ if (!cargoAvailable()) {
 let failed = false;
 
 for (const inv of INVENTORY) {
+  if (inv.pre) {
+    const pre = spawnSync("bash", inv.pre, { cwd: repoRoot, stdio: "inherit" });
+    if (pre.status !== 0) {
+      console.error(
+        `✗ [${inv.scope}] 前置脚本失败（exit ${pre.status ?? 1}）：bash ${inv.pre.join(" ")}`,
+      );
+      failed = true;
+      continue;
+    }
+  }
   console.log(`\n== cargo test ${inv.scope} -- --ignored ==`);
   // 统计落盘再解析——cargo 管道统计伪象两次实证（532/552 号），禁 |grep|awk。
   const logFile = join(mkdtempSync(join(tmpdir(), "cargo-ignored-sweep-")), "output.log");

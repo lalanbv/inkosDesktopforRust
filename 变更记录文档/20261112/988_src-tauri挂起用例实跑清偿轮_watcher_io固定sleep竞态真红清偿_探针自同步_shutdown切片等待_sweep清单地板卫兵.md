@@ -4,8 +4,10 @@
 
 ## ① 普查：src-tauri 全树挂起用例 25 枚盘点
 
+> **989 号勘误**：`grep -c "#\[ignore\]"` 把 supervisor_integration.rs 头注释与 doc 注释里的两处 `` `#[ignore]` `` 字样误计入——实际该文件仅 1 枚挂起（`real_inkos_sidecar_serves_spa`）。真实总数 **23 枚**（lib 7 + tests/ 16），下文数字以此为准。
+
 - lib 单测 7 枚：`pf_guard_lock_bails_without_root`（C5 回归，pfctl 非 root bail）+ keychain 真实四枚（roundtrip / delete-missing-noop / stale-tolerated / concurrent-20-线程无丢键）+ updater 网络双通道两枚（`real_engine_channel_check` GitHub release 探测 + `real_bootstrap_downloads_and_verifies` node 二进制真实下载校验——166 号双通道活体）。
-- tests/ 集成 18 枚：`sync_watcher_io` 3（notify watcher 端到端）+ `e2e_secrets` 9（真实 keychain e2e，注释明示 dark wake 弹授权框阻塞）+ `e2e_startup` 2 + `e2e_updater` 1 + `supervisor_integration` 3（需 release 二进制）。
+- tests/ 集成 16 枚：`sync_watcher_io` 3（notify watcher 端到端）+ `e2e_secrets` 9（真实 keychain e2e，注释明示 dark wake 弹授权框阻塞）+ `e2e_startup` 2 + `e2e_updater` 1 + `supervisor_integration` 1（需打包引擎）。
 - engine-rs 零挂起（884 号清偿口径维持）。首查漏了 tests/ 目录（只扫 src/）——盲区普查自身也曾是盲区，复扫补齐。
 
 ## ② lib 7 枚实跑全绿（本机 macOS 前置全备：keychain 可达 + pfctl 内置 + 非 root + 有网）
@@ -51,7 +53,7 @@ clippy:gate 双 0（engine-rs 0 告警含并行会话在途树 + src-tauri 0 告
 
 ## 备案
 
-1. e2e_secrets 9 枚（授权框阻塞）与 release 二进制族 6 枚维持挂起；触发条件 = 专项轮或 CI 环境具备。
+1. e2e_secrets 9 枚（授权框阻塞）与 release 二进制族（e2e_startup 2 + supervisor 1）989 号前维持挂起——**989 号已将后者清偿并入 sweep**（含 is_newer 假挂起理由勘误：旧注「需网络」实为纯逻辑）；e2e_secrets 维持豁免，触发条件 = 专项轮或 CI 环境具备。
 2. shutdown 满载调度尾 620ms 实测已写入测试界注释；若未来出现 >1s 退出再归因。
 3. 987（resync 审计占位分）并行在途未收口；本轮证据未依赖其改动面。
 
