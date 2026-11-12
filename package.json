@@ -42,6 +42,7 @@
     "change-no": "node scripts/next-change-no.mjs",
     "clippy:gate": "node scripts/clippy-gate.mjs",
     "cargo:testgate": "node scripts/cargo-test-gate.mjs",
+    "cargo:ignored-sweep": "node scripts/cargo-ignored-sweep.mjs",
     "review-matrix": "node scripts/review-cycle-matrix.mjs",
     "review-matrix:rust": "node scripts/review-cycle-matrix.mjs --engine rust"
   },

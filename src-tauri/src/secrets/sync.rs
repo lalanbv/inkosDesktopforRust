@@ -131,7 +131,10 @@ pub const POLL_TIMEOUT_MS: u64 = 100;
 ///   （atomic_write tmp+rename 两次事件都会落在目标文件名上）。
 /// - 收到目标文件事件 → 进入 `DEBOUNCE_MS` 静默窗聚合连续写。
 /// - 静默满窗后触发 `process_writeback`：查 `syncing`，false 才 diff 回写。
-/// - `shutdown` 为 true → 线程退出（下次循环检查，延迟 ≤ `POLL_TIMEOUT_MS`）。
+/// - `shutdown` 为 true → 线程退出，延迟 ≤ `POLL_TIMEOUT_MS`（窗内等待按 poll
+///   切片，主循环与 debounce 窗内的检查点密度一致）+ 一次 flush——break 后仍执行
+///   `process_writeback`，即 **flush-on-shutdown**：退出前排掉悬置回写，避免
+///   「SPA 末写未回写 + 下次启动 keychain 主覆盖」丢密钥。988 号 IO 测实证。
 /// - 任何 IO/notify 错误 → `eprintln!` log，watcher 继续（不 panic、不退出）。
 ///
 /// 返回 `JoinHandle` 供调用方（测试或 shutdown 同步）可选 join。
@@ -185,6 +188,9 @@ fn run_writeback_loop(
         );
         return;
     }
+    // 988 号：成功路径此前全静默——「watcher 活体」与「注册竞态丢事件」在排障时
+    // 不可区分。一行 ready 日志把两者分开（对应 IO 测的探针自同步改造）。
+    eprintln!("[secrets-writeback] watching {}", watch_dir.display());
 
     let target_file = path
         .file_name()
@@ -227,12 +233,18 @@ fn debounce_and_process(
     syncing: &AtomicBool,
 ) {
     let mut deadline = Instant::now() + debounce;
+    let poll = Duration::from_millis(POLL_TIMEOUT_MS);
     while !shutdown.load(Ordering::SeqCst) {
         let remaining = match deadline.checked_duration_since(Instant::now()) {
             Some(d) => d,
             None => break, // 静默期满 → 触发处理
         };
-        match rx.recv_timeout(remaining) {
+        // 以 poll 为上限切片等待：shutdown 检查点在窗内每 POLL 到达一次。整段
+        // recv_timeout(remaining) 会让置位落在窗中的 shutdown 白等满剩余窗才响应
+        // （988 号实测尾延迟 492ms/1.16s——回写 chmod 0600 自身触发事件的尾随
+        // 周期放大了暴露面）。
+        let wait = remaining.min(poll);
+        match rx.recv_timeout(wait) {
             Ok(Ok(_ev)) => {
                 // 聚合：重置 deadline（继续等静默期）。
                 deadline = Instant::now() + debounce;
@@ -240,7 +252,13 @@ fn debounce_and_process(
             Ok(Err(e)) => {
                 eprintln!("[secrets-writeback] notify event error during debounce: {e}");
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // poll 切片的 Timeout ≠ 静默期满——只有真满窗才触发处理，
+                // debounce「聚合连续写」的语义不变。
+                if Instant::now() >= deadline {
+                    break;
+                }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
     }
