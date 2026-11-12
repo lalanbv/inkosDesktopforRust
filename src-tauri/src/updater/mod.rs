@@ -3,11 +3,15 @@
 //! - **engine 通道**（[`engine::EngineChannel`]）：GitHub Releases latest `v{semver}` →
 //!   下载 engine bundle → SHA256 校验 → 原子替换 + engine.bak 回滚。见 [`engine`]。
 //! - **shell 通道**：`tauri-plugin-updater` + Ed25519（pubkey 嵌 tauri.conf.json，
-//!   M3e CI 用 private key 签 release）。命令 `cmd_check_updates`/`cmd_apply_shell_update`。
+//!   私钥由发布方本地保管、发版时签名）。命令 `cmd_check_updates`/`cmd_apply_shell_update`。
 //!
-//! 上游同步链路：M3e `desktop-sync-regression.yml` 定时 `git merge upstream/master` →
-//! bump 版本 → tag → `desktop-build.yml` 构建 + 发布 engine bundle 到**本仓** Releases →
-//! 本机 updater 拉本仓 release（单一可信源）。不直接拉 Narcooo/inkos。
+//! 发布链路（995 号勘误：原文「M3e desktop-sync-regression.yml 定时同步 +
+//! desktop-build.yml 构建发布」已随 2026-08-23 workflows 全量移除失效）——
+//! 当前为本地脚本发版：发布者本地 bump 版本 → tag → `desktop-build-inkos.sh`
+//! 与 `desktop-package-engine.sh` 构建打包 → （可选 `sign-bundle` 签名，见
+//! docs/signing-procurement.md）→ 手动上传**本仓** Releases → 本机 updater
+//! 拉本仓 release（单一可信源）。不直接拉 Narcooo/inkos。上游同步为人工
+//! `git merge upstream/master`（无定时任务）。
 
 pub mod delta;
 pub mod engine;

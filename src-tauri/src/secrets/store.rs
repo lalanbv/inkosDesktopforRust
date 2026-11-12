@@ -296,11 +296,12 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // KeyringStore 真实 keychain 测试（#[ignore]：需 OS keychain 可达；
-    // CI / headless 环境常无 keychain，默认不跑）
+    // headless 环境常无 keychain，默认不跑；已收编 pnpm cargo:ignored-sweep）
     // -----------------------------------------------------------------------
-    // 跑法：`cargo test -- --ignored keyring_real`
-    // macOS：首次会弹钥匙串授权；GitHub Actions macOS runner 可用，Linux 需 D-Bus +
-    // gnome-keyring（CI 跑不动 → 默认 ignore）。
+    // 跑法：`pnpm cargo:ignored-sweep`（或 cargo test -- --ignored keyring_real）
+    // macOS：桌面解锁会话可用（unique_service 无跨构建 ACL 弹框，990 号；
+    // keychain 锁定/dark wake 时 securityd 阻塞——sweep 超时哨兵兜底）；
+    // Linux 需 D-Bus + gnome-keyring（headless 跑不动 → 默认 ignore）。
     //
     // service 名带 `__test__` 前缀 + 测试名后缀，避免与生产数据撞键。
 
