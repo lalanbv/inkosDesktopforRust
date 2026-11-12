@@ -1,14 +1,18 @@
-//! engine bundle Ed25519 签名工具（发布方 / CI 用）—— M4c
+//! engine bundle Ed25519 签名工具（发布方本地发版用）—— M4c
 //!
 //! 用法：
 //!   sign-bundle <bundle-path> <private-key-hex>
 //!
 //! 读取 bundle 文件 + 32 字节私钥（hex），输出 <bundle>.sig（签名 hex 文本，
-//! 与 .sha256 资产格式一致）。CI 在发版时调用本工具签 engine bundle，
-//! 上传 .sig 到 release；客户端 updater 下载 .sig 用 sig::verify 验证。
+//! 与 .sha256 资产格式一致）。发布方在本地发版时手动调用本工具签 engine
+//! bundle，.sig 随 bundle 上传 release；客户端 updater 下载 .sig 用
+//! sig::verify 验证。
 //!
-//! 私钥来源：CI secret INKOS_ENGINE_SIGNING_KEY（见密钥采购指引文档）。
-//! 本工具不读取任何网络/环境，只处理命令行参数 → 适合 CI 沙箱。
+//! 私钥来源：发布方本机保管（发版时经环境变量/密钥服务传入，勿入仓、勿进
+//! shell 历史；见 docs/signing-procurement.md）。本工具不读取任何网络/环境，
+//! 只处理命令行参数——纯函数式，便于沙箱与测试。
+//! （994 号勘误：原文「CI secret INKOS_ENGINE_SIGNING_KEY / CI 发版调用」
+//! 已随 workflows 移除失效。）
 
 use anyhow::{bail, Context, Result};
 use inkos_desktop::updater::sig::{decode_hex, encode_hex, sign, PUBKEY_LEN};

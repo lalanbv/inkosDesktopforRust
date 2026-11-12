@@ -3,7 +3,7 @@
 //! 用法：cargo run --example gen-keypair
 //!
 //! 输出 Ed25519 密钥对：
-//!   - 私钥 hex → GitHub secret `INKOS_ENGINE_SIGNING_KEY`（保密，不入仓）
+//!   - 私钥 hex → 发布方本机保管（密钥服务/加密盘；勿入仓、勿进 shell 历史）
 //!   - 公钥 hex → 编译期环境变量 `INKOS_ENGINE_PUBKEY`（公开，内嵌客户端）
 //!
 //! 作为 example 而非 bin：只在发布方本地生成密钥时运行，不进 release 产物，
@@ -20,7 +20,7 @@ fn main() {
     let pk = encode_hex(&pubkey.to_bytes());
 
     println!("=== engine bundle 签名密钥对（Ed25519）===\n");
-    println!("私钥 → GitHub secret INKOS_ENGINE_SIGNING_KEY（保密，切勿入仓）:");
+    println!("私钥（本机密钥服务/加密盘保管，勿入仓、勿进 shell 历史）:");
     println!("{sk}\n");
     println!("公钥 → 编译期 INKOS_ENGINE_PUBKEY（公开，内嵌客户端验证用）:");
     println!("{pk}\n");
