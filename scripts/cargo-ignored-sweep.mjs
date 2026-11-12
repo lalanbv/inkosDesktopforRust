@@ -34,6 +34,14 @@
 // securityd/keychain 跨进程串行化造成分钟级停滞假象（988 号自身双跑实测）。
 // 网络面两枚需外网可达；pfctl 枚需非 root macOS。全程约 60-80s（release
 // 陈旧时另计编译）。
+//
+// **超时哨兵**（992 号，清偿 990 备案①已知边界）：每 scope 带按面定的预算
+// （timeoutMs）。keychain 锁定（dark wake）/securityd 异常会让 e2e_secrets
+// 阻塞无限期（898「无界等待」教训同族）——哨兵把无限挂死变成有限超时 + 红报
+// + 孤儿清理指引。预算含编译余量：release scope 最宽（陈旧缓存时数分钟）。
+// 已知边界：spawnSync 的 kill 只达 cargo 直接子进程，测试二进制可能成孤儿
+// （903 族）——超时报文自带特征清理指引；下次 sweep 的 supervisor 端口预检
+// 与 e2e_startup 独占启动也会暴露残留。
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -55,6 +63,8 @@ if (!existsSync(join(tauriDir, "Cargo.toml"))) {
 const INVENTORY = [
   {
     scope: "--lib",
+    // 网络两枚（GitHub API + node 下载）+ keychain 四枚 + 冷编译余量
+    timeoutMs: 300_000,
     tests: [
       "isolation::macos::tests::pf_guard_lock_bails_without_root",
       "secrets::store::tests::keyring_real_roundtrip_upsert_read_delete",
@@ -67,6 +77,8 @@ const INVENTORY = [
   },
   {
     scope: "--test sync_watcher_io",
+    // 三枚 IO 测 ~6s + 冷编译余量
+    timeoutMs: 180_000,
     tests: [
       "watcher_anti_loop_programmatic_write_does_not_writeback",
       "watcher_spa_write_writebacks_to_keychain",
@@ -75,10 +87,14 @@ const INVENTORY = [
   },
   {
     scope: "--test e2e_updater",
+    // 纯逻辑一枚 0.00s 级（990 勘误），预算=编译余量
+    timeoutMs: 120_000,
     tests: ["test_is_newer_version_check"],
   },
   {
     scope: "--test supervisor_integration",
+    // 真实 sidecar 60s 探测上限 + 端口重试 5s + 组装余量
+    timeoutMs: 240_000,
     tests: ["real_inkos_sidecar_serves_spa"],
     // 真实 sidecar 前置：src-tauri/engine 组装（幂等；TS dist 缺失时脚本内
     // 自行触发 pnpm build）。缺组装时用例自带「engine 未组装」panic。
@@ -86,10 +102,16 @@ const INVENTORY = [
   },
   {
     scope: "--release --test e2e_startup",
+    // 最宽预算：release profile 陈旧时触发数分钟级增量编译（989 号实测 10s 级
+    // 是热缓存态；冷态另计）
+    timeoutMs: 1_200_000,
     tests: ["test_startup_smoke", "test_startup_logs_version"],
   },
   {
     scope: "--test e2e_secrets",
+    // 本哨兵主目标：9 枚 ~19s，但 keychain 锁定（dark wake）时 securityd
+    // 阻塞无上限（990 备案①）——预算到点 SIGKILL，挂死变红报
+    timeoutMs: 240_000,
     // --test-threads=1：keychain 操作串行（原文件头惯例），防 securityd 并发抖动
     extraTestArgs: ["--test-threads=1"],
     tests: [
@@ -141,8 +163,28 @@ for (const inv of INVENTORY) {
     cwd: tauriDir,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    // 992 号超时哨兵：预算到点 SIGKILL cargo（无限挂死→有限超时+红报）
+    timeout: inv.timeoutMs,
+    killSignal: "SIGKILL",
   });
   const output = `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
+
+  // 超时分支先行：SIGKILL 非零退出 + 无完整 test result 可解析——keychain
+  // 锁定（dark wake）/securityd 异常/编译器僵死都是此形状。测试二进制可能
+  // 成孤儿（spawnSync kill 只达 cargo 直接子进程，903 族），红报自带清理指引。
+  if (run.signal === "SIGKILL" || run.error?.code === "ETIMEDOUT") {
+    console.error(
+      [
+        `✗ [${inv.scope}] 超时哨兵触发（预算 ${inv.timeoutMs}ms 被 SIGKILL）：`,
+        "  高概率根因 = keychain 锁定（dark wake）/securityd 异常（e2e_secrets、lib keyring 面）/编译僵死。",
+        "  解锁屏幕确认 keychain 可达后重跑；孤儿清理特征：",
+        "    pkill -f inkos-desktop; pkill -f inkos-engine-server; pkill -f 'sync_watcher_io|e2e_secrets|inkos_desktop-'",
+        output.slice(-800),
+      ].join("\n"),
+    );
+    failed = true;
+    continue;
+  }
   try {
     writeFileSync(logFile, output);
   } catch {
