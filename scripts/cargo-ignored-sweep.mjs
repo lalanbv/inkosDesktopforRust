@@ -24,14 +24,15 @@
 // - tests/e2e_startup 2 枚（--release）：桌面应用启动冒烟×2——**会闪现应用
 //   窗口各 ~5s**（超时击杀即预期）；release profile 陈旧时本 scope 触发增量
 //   release 编译（首次数分钟）。
+// - tests/e2e_secrets 9 枚（--test-threads=1）：真实 keychain 契约面（990 号
+//   unique_service 修复后无 ACL 弹框；需桌面解锁会话——keychain 锁定/dark wake
+//   时 securityd 调用会阻塞）。
 //
-// 已知豁免（不在本脚本，理由备案于变更记录 988 号）：
-// - tests/e2e_secrets（9 枚）：真实 keychain e2e，注释明示「dark wake 时首次
-//   访问弹授权框阻塞」——无人值守跑会挂会话。
+// 豁免：无——src-tauri 全部 23 枚挂起用例已全量收编（988/989/990 三轮）。
 //
 // 纪律：**勿与其它 cargo test 并行跑**——同机双 cargo 实例会因 target 锁 +
 // securityd/keychain 跨进程串行化造成分钟级停滞假象（988 号自身双跑实测）。
-// 网络面两枚需外网可达；pfctl 枚需非 root macOS。全程约 40-60s（release
+// 网络面两枚需外网可达；pfctl 枚需非 root macOS。全程约 60-80s（release
 // 陈旧时另计编译）。
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -87,6 +88,22 @@ const INVENTORY = [
     scope: "--release --test e2e_startup",
     tests: ["test_startup_smoke", "test_startup_logs_version"],
   },
+  {
+    scope: "--test e2e_secrets",
+    // --test-threads=1：keychain 操作串行（原文件头惯例），防 securityd 并发抖动
+    extraTestArgs: ["--test-threads=1"],
+    tests: [
+      "test_keychain_upsert",
+      "test_keychain_read_all",
+      "test_keychain_delete",
+      "test_keychain_read_empty",
+      "test_keychain_overwrite",
+      "test_secrets_full_cycle",
+      "test_multiple_keys",
+      "test_empty_value",
+      "test_unicode_value",
+    ],
+  },
 ];
 
 function cargoAvailable() {
@@ -119,7 +136,7 @@ for (const inv of INVENTORY) {
   console.log(`\n== cargo test ${inv.scope} -- --ignored ==`);
   // 统计落盘再解析——cargo 管道统计伪象两次实证（532/552 号），禁 |grep|awk。
   const logFile = join(mkdtempSync(join(tmpdir(), "cargo-ignored-sweep-")), "output.log");
-  const args = inv.scope.split(" ").concat(["--", "--ignored"]);
+  const args = inv.scope.split(" ").concat(["--", "--ignored"], inv.extraTestArgs ?? []);
   const run = spawnSync("cargo", ["test", ...args], {
     cwd: tauriDir,
     encoding: "utf8",
