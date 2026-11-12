@@ -30,13 +30,46 @@ function hookTypeColor(type: string): string {
   return HOOK_TYPE_COLOR[type] ?? "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400";
 }
 
+// 996 号：筛选态 localStorage 持久化——本组件挂在 ContextDock 的
+// `visible` 条件渲染下（ContextDock:96 `if (!visible) return null`），dock
+// 开合或 ArtifactView 重拉（loading 分支替换）都会卸载重建本组件，内部
+// useState 重置导致「点筛选后列表还原全量」（987 走查备案：首轮点击后
+// ~800ms 还原全量）。持久化对齐仓库 UI 偏好惯例（usePanelWidth 的
+// DOCK_WIDTH_STORAGE_KEY 同形）。SSR（renderToString 测试）下 localStorage
+// 未定义 → typeof 卫兵回落 "all"。
+const HOOKS_KIND_FILTER_STORAGE_KEY = "inkos.hooksKindFilter";
+
+function loadKindFilter(): HookKind | "all" {
+  try {
+    if (typeof localStorage === "undefined") return "all";
+    const raw = localStorage.getItem(HOOKS_KIND_FILTER_STORAGE_KEY);
+    if (raw === null || raw === "all") return "all";
+    return (HOOK_KIND_IDS as readonly string[]).includes(raw) ? (raw as HookKind) : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function saveKindFilter(value: HookKind | "all"): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(HOOKS_KIND_FILTER_STORAGE_KEY, value);
+  } catch {
+    // 隐私模式/配额满：筛选态回退为会话内态，不影响主功能
+  }
+}
+
 // Renders pending_hooks.md (a 14-column tracking table) as browsable cards:
 // the actual foreshadow text up front, with kind / type / core / payoff as
 // small tags, plus a kind filter (R23/396 号 — 选择器按分类筛选子集).
 // Bookkeeping columns (half-life, dependencies, …) are intentionally dropped.
 export function PendingHooksView({ content }: PendingHooksViewProps) {
   const hooks = parsePendingHooks(content);
-  const [kindFilter, setKindFilter] = useState<HookKind | "all">("all");
+  const [kindFilter, setKindFilterState] = useState<HookKind | "all">(loadKindFilter);
+  const setKindFilter = (value: HookKind | "all") => {
+    setKindFilterState(value);
+    saveKindFilter(value);
+  };
 
   // 台账里实际出现的分类（保持词表序）——空类不占筛选位。
   const presentKinds = HOOK_KIND_IDS.filter((kind) =>
