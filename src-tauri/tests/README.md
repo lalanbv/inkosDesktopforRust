@@ -6,27 +6,65 @@ E2E（End-to-End）回归测试验证关键路径完整性：
 - **启动冒烟**：app 启动 + 日志初始化
 - **Updater 契约**：版本解析 + SHA256 校验 + 原子替换
 - **Secrets 契约**：跨平台 keychain 读写删
+- **Watchers 端到端**：secrets.json 文件监听回写（防回环 + debounce）
+- **Supervisor**：真实 sidecar 拉起 + 健康探测 + 干净退出
+
+> 993 号对齐：本文档与 988-992 三轮挂起清偿后的真实形态同步——全部挂起用例
+> （23 枚，含 lib 单测与全部集成目标）已收编一键跑法，`#[ignore]` 不再等于
+> 「不跑」。
 
 ## 本地运行
 
-### 前置条件
+### 一键跑法（推荐）
 
-1. **构建 release binary**
 ```bash
-cargo build --release --manifest-path src-tauri/Cargo.toml
+pnpm cargo:ignored-sweep
 ```
 
-2. **平台特定设置**
+全清单 23 枚六 scope（lib 7 + sync_watcher_io 3 + e2e_updater 1 +
+supervisor_integration 1 + e2e_startup 2 + e2e_secrets 9），带：
+- **清单地板卫兵**：实测集合与登记清单精确匹配，静默缩水（用例被删/改名/
+  过滤器失效）即红；
+- **超时哨兵**（992 号）：每 scope 按面定预算，keychain 锁定（dark wake）等
+  无限挂死变有限红报（含根因指引与孤儿清理命令）；
+- supervisor scope 前自动跑 `desktop-package-engine.sh` 组装引擎（幂等）。
 
-**macOS**:
+约束：勿与其它 `cargo test` 并行跑（同机双实例 = target 锁 + securityd
+跨进程串行化，分钟级停滞假象，988 号实测）；supervisor 需 :4567 空闲；
+keychain 面需桌面解锁会话。
+
+### 手动单跑
+
+release binary **仅 e2e_startup 需要**（`Command::cargo_bin` 找 release 产物；
+sweep 会自动触发 `--release` 编译）。其余目标 debug 即可：
+
 ```bash
-# 授予 keychain 访问权限（首次运行可能需要）
-security unlock-keychain -p "" ~/Library/Keychains/login.keychain-db
+# 启动冒烟测试（唯一需要 release 的目标）
+cargo test --release --test e2e_startup -- --ignored --nocapture
+
+# Updater 测试（is_newer 纯逻辑 + SHA256 + 原子替换；无需 release）
+cargo test --test e2e_updater -- --ignored --nocapture
+
+# Secrets 测试（990 号起 unique_service：无 ACL 弹框；无需 release）
+cargo test --test e2e_secrets -- --ignored --test-threads=1 --nocapture
+
+# Watcher 端到端（988 号起探针自同步：无固定 sleep 竞态）
+cargo test --test sync_watcher_io -- --ignored --nocapture
+
+# 真实 sidecar（需先 pnpm cargo:ignored-sweep 或手动跑
+# ./scripts/desktop-package-engine.sh 组装 src-tauri/engine）
+cargo test --test supervisor_integration -- --ignored real_inkos --nocapture
 ```
+
+**参数说明**:
+- `--ignored`: 运行标记为 `#[ignore]` 的测试
+- `--test-threads=1`: keychain 面串行（securityd 并发抖动防护）
+- `--nocapture`: 显示测试输出（含 `[secrets-writeback]` watcher 日志）
+
+### 平台构建依赖（构建 src-tauri 时需要，跑测试本身不需要）
 
 **Linux**:
 ```bash
-# 安装 Tauri 依赖
 sudo apt-get update
 sudo apt-get install -y \
   libwebkit2gtk-4.1-dev \
@@ -36,39 +74,9 @@ sudo apt-get install -y \
   librsvg2-dev
 ```
 
-**Windows**:
-```powershell
-# 确保 MSVC 工具链已安装（Visual Studio Build Tools）
-```
+**Windows**: MSVC 工具链（Visual Studio Build Tools）。
 
-### 运行所有 E2E 测试
-
-```bash
-cargo test --release \
-  --manifest-path src-tauri/Cargo.toml \
-  --test 'e2e_*' \
-  -- --ignored --test-threads=1 --nocapture
-```
-
-**参数说明**:
-- `--release`: 使用 release binary（E2E 测试标记为 `#[ignore]`，需要 release 模式）
-- `--test 'e2e_*'`: 只运行 E2E 测试文件
-- `--ignored`: 运行标记为 `#[ignore]` 的测试
-- `--test-threads=1`: 串行运行（避免并发 keychain/temp 目录冲突）
-- `--nocapture`: 显示测试中的 `println!` 输出
-
-### 运行单个测试文件
-
-```bash
-# 启动冒烟测试
-cargo test --release --test e2e_startup -- --ignored --nocapture
-
-# Updater 测试
-cargo test --release --test e2e_updater -- --ignored --nocapture
-
-# Secrets 测试
-cargo test --release --test e2e_secrets -- --ignored --nocapture
-```
+**macOS**: 无额外依赖（keychain 系统自带；测试用 unique_service 不弹授权框）。
 
 ### 运行特定测试用例
 
@@ -79,48 +87,35 @@ cargo test --release \
   -- --ignored --nocapture
 ```
 
-## CI 验证
+## 失败时调试
 
-E2E 测试在以下情况自动触发：
-- **Pull Request**：修改 `src-tauri/**` 或 `engine/**`
-- **Push to master**：合并后回归验证
-- **手动触发**：GitHub Actions → "Desktop E2E Tests" → "Run workflow"
+本仓无 CI（2026-08-23 起移除全部 GitHub Actions/workflows，回归走本地脚本
++ `pnpm cargo:ignored-sweep` 常备）。失败时本地复现：
 
-### 查看 CI 日志
-
-1. 打开 PR 或 commit 页面
-2. 点击 **Checks** 标签
-3. 选择 **Desktop E2E Tests**
-4. 点击对应平台查看详细日志：
-   - `E2E (macOS ARM64)`
-   - `E2E (Linux x64)`
-   - `E2E (Windows x64)`
-
-### 失败时调试
-
-CI 失败时，自动上传两类 artifacts（保留 7 天）：
-
-1. **日志文件**（`e2e-logs-<platform>`）：
-   - 包含 `logs/inkos-*.log`（tracing 输出）
-   - 包含 `target/release/*.log`（构建日志）
-
-2. **崩溃 dump**（`e2e-crashes-<platform>`）：
-   - 包含 `crashes/crash-*.json`（panic dump）
-
-**下载步骤**:
-1. GitHub Actions 页面 → 失败的 workflow run
-2. 滚动到底部 **Artifacts** 区域
-3. 下载对应平台的 zip 文件
-
-**本地复现**:
 ```bash
 # 设置相同环境变量
 export RUST_BACKTRACE=1
 export RUST_LOG=info
 
 # 运行失败的测试
-cargo test --release --test e2e_<name> <test_function> -- --ignored --nocapture
+cargo test --test e2e_<name> <test_function> -- --ignored --nocapture
 ```
+
+sweep 超时哨兵红报（992 号）自带诊断路径：预算值 → 高概率根因（keychain
+锁定 / securityd 异常 / 编译僵死）→ 孤儿清理 pkill 命令。
+
+## 已知问题（历史误诊备案，993 号勘误）
+
+旧版本文档记载「keyring 3.6.3 在 macOS 上 set_password 只写内存不落盘，
+跨实例读不到」——**988/990 两轮实测否定**：lib 四枚 keyring 真实测试
+（roundtrip 跨实例读回 / 并发 20 线程无丢键）与 e2e_secrets 九枚全部绿
+（990 号 9/9 ×2 活体）。当时「读不到」的真实机制是**固定 service 名跨构建
+ACL 授权框**：keychain 条目按创建时二进制签名授权访问者，重构建后的测试
+二进制访问旧条目 → securityd 拒绝/弹框被误读为「没写进去」。990 号
+unique_service（PID+纳秒唯一命名空间）修复后问题不复存在。
+
+当前唯一真实环境门控：**keychain 锁定（dark wake/锁屏）时 securityd 调用
+阻塞**——由 sweep 超时哨兵兜底（挂死变有限红报），解锁后重跑即可。
 
 ## 已知问题
 
@@ -148,49 +143,43 @@ cargo test --release --test e2e_<name> <test_function> -- --ignored --nocapture
 
 ## 常见问题
 
-### 1. keychain 权限错误（macOS）
+### 1. keychain 问题（macOS）
 
-**错误**: `keyring error: No password found`
+**错误**: `keyring error: No password found` 或 sweep 超时哨兵红报
 
-**解决**:
-```bash
-# 解锁 keychain
-security unlock-keychain -p "" ~/Library/Keychains/login.keychain-db
+**语义（990 号后）**: 测试用 unique_service 唯一命名空间，无跨构建 ACL
+弹框；真实风险只剩 **keychain 锁定**（dark wake/锁屏时 securityd 阻塞）。
 
-# 或：允许测试 app 访问 keychain（首次运行时弹窗，点击"始终允许"）
-```
+**解决**: 解锁屏幕（保持桌面会话活跃）后重跑；sweep 哨兵红报自带孤儿清理
+命令。
 
 ### 2. 超时失败
 
-**错误**: `test result: FAILED. 0 passed; 1 failed; 0 ignored; timeout`
+**错误**: sweep 红报 `超时哨兵触发（预算 Xms 被 SIGKILL）`
 
 **原因**:
-- Sidecar 启动慢（端口占用？Node 下载慢？）
-- 系统资源不足
+- keychain 锁定 / securityd 异常（secrets、lib keyring 面）
+- Sidecar 启动慢 / 端口占用（supervisor 面）
+- release 缓存陈旧触发长编译（startup 面，预算 1200s 最宽）
 
-**解决**:
+**解决**: 按红报根因指引处理；孤儿清理：
 ```bash
-# 1. 检查端口占用
-lsof -i :3000  # 默认 sidecar 端口
-
-# 2. 清理旧进程
-pkill -f inkos-desktop
-pkill -f node
-
-# 3. 增加超时（修改测试代码）
-.timeout(Duration::from_secs(120))  // 默认 30s → 120s
+pkill -f inkos-desktop; pkill -f inkos-engine-server
+lsof -i :4567  # supervisor 端口预检也会暴露残留
 ```
 
 ### 3. 并发冲突
 
-**错误**: `已锁定` 或 `文件正在使用`
+**错误**: `已锁定` 或 `文件正在使用`，或同机双 cargo 出现分钟级停滞
 
-**原因**: 多个测试并发写入同一 temp 目录或 keychain
+**原因**: 多个测试并发写 keychain；或双 cargo 实例 target 锁 +
+securityd 跨进程串行化（988 号实测假象）
 
 **解决**:
 ```bash
-# 强制串行运行
-cargo test --release --test 'e2e_*' -- --ignored --test-threads=1
+# sweep 已内置串行与单跑约束；手动跑时：
+cargo test --test 'e2e_*' -- --ignored --test-threads=1
+# 且勿与其它 cargo test 并行
 ```
 
 ### 4. Windows: `taskkill` 失败
@@ -220,13 +209,16 @@ echo -n "test" | gnome-keyring-daemon --unlock
 
 **CI 环境**: 使用 file-based fallback（已在代码中实现）
 
-## 测试覆盖范围
+## 测试覆盖范围（挂起清偿面全量，988-990 三轮收编）
 
-| 测试文件 | 覆盖模块 | 关键场景 |
-|---------|---------|---------|
-| `e2e_startup.rs` | main.rs, observability | 启动成功 + 日志创建 + 版本记录 |
-| `e2e_updater.rs` | updater::engine | 版本解析 + SHA256 + 原子替换 + 回滚 |
-| `e2e_secrets.rs` | secrets::store | keychain 读写删 + 多 key + Unicode |
+| Scope | 覆盖模块 | 关键场景 | 枚数 |
+|-------|---------|---------|------|
+| `--lib` | isolation/pfctl、secrets/keyring、updater 双通道、engine/node | C5 bail、keychain 真实四枚、GitHub 探测、node 下载校验 | 7 |
+| `sync_watcher_io` | secrets::sync | 防回环中途断言、SPA 回写+删除传播、shutdown 切片 | 3 |
+| `e2e_updater` | updater | is_newer 版本比较（纯逻辑，990 勘误去假挂起） | 1 |
+| `supervisor_integration` | supervisor | 真实 sidecar 拉起→SPA 可达→kill_tree 端口释放 | 1 |
+| `e2e_startup`（release） | main、observability | 启动冒烟 + 版本日志（闪现窗口 ~5s×2 预期） | 2 |
+| `e2e_secrets` | secrets::store | keychain 契约面（unique_service，990 号修复） | 9 |
 
 ## 添加新测试
 
@@ -238,32 +230,37 @@ touch src-tauri/tests/e2e_<feature>.rs
 2. **添加测试标记**:
 ```rust
 #[test]
-#[ignore]  // E2E 测试必须标记 #[ignore]
+#[ignore = "环境门控理由（须写明触发条件与跑法）"]
 fn test_new_feature() {
     // ...
 }
 ```
 
-3. **本地验证**:
+3. **登记进 sweep 清单**: 把用例名加入 `scripts/cargo-ignored-sweep.mjs`
+   的 `INVENTORY` 对应 scope（清单地板卫兵会让「有测试不登记」显形为红），
+   并按面定 `timeoutMs` 预算。
+
+4. **本地验证**:
 ```bash
-cargo test --release --test e2e_<feature> -- --ignored
+pnpm cargo:ignored-sweep
 ```
 
-4. **更新此文档**: 添加新测试到"测试覆盖范围"表格
+5. **更新此文档**: 添加新测试到"测试覆盖范围"表格
 
-## 性能基准
+## 性能基准（993 号对齐 988-990 实测，macOS M 系热缓存）
 
-参考执行时间（macOS M1 Max）：
-- `e2e_startup`: ~5s
-- `e2e_updater`: ~3s
-- `e2e_secrets`: ~2s
-- **总计**: ~10s
-
-CI 环境可能慢 2-3 倍（虚拟机性能）。
+- `--lib`（7 枚）: ~33s（含 keychain 并发用例与网络两枚）
+- `sync_watcher_io`（3 枚）: ~6s
+- `e2e_updater`（1 枚）: 0.00s（纯逻辑）
+- `supervisor_integration`（1 枚）: ~1s（引擎已组装时）
+- `e2e_startup`（2 枚，release 热缓存）: ~10s
+- `e2e_secrets`（9 枚，串行）: ~19s
+- **sweep 全量**: ~60-80s（release 缓存陈旧时另计编译）
 
 ## 维护清单
 
-- [ ] 每次添加新功能后，评估是否需要新 E2E 测试
-- [ ] 每月检查 CI artifacts 是否有遗留（应保留 7 天后自动删除）
-- [ ] 版本发布前，手动运行三平台 E2E（`workflow_dispatch`）
+- [ ] 每次添加新功能后，评估是否需要新 E2E 测试（并登记 sweep 清单）
+- [ ] 挂起用例增删须同步 `scripts/cargo-ignored-sweep.mjs` INVENTORY（地板
+      卫兵强制）与本表格
+- [ ] sweep 哨兵红报出现时按根因处理，禁为绕红放宽预算洗哨兵
 - [ ] 更新此文档当添加新测试或修改运行方式

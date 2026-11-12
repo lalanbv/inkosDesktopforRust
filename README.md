@@ -181,7 +181,7 @@ cd src-tauri && pnpm dlx @tauri-apps/cli@2 build           # 4. 打 .app / .msi 
 
 ```bash
 cd src-tauri && cargo test                 # 单测 + 集成测 + doctest（mock，全绿）
-cd src-tauri && cargo test -- --ignored    # 真实 sidecar / keychain 集成测（需真机）
+pnpm cargo:ignored-sweep                   # 全部 23 枚挂起测试（真实 sidecar / keychain / 启动冒烟；带卫兵 sweep，需真机）
 cd engine-rs && cargo test                 # 引擎单测 + golden 差分 + strangler duel
 pnpm test && pnpm typecheck                # studio / core / cli 的 vitest 与类型检查
 cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/html   # 覆盖率

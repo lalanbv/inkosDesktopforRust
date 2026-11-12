@@ -152,7 +152,7 @@ Other scripts: `package-rust-engine.sh` (standalone Rust-engine tarball release 
 
 ```bash
 cd src-tauri && cargo test                 # unit + integration + doctests (mocked, all green)
-cd src-tauri && cargo test -- --ignored    # real sidecar / keychain integration tests (real machine only)
+pnpm cargo:ignored-sweep                   # all 23 ignored tests (real sidecar / keychain / startup; guarded sweep, real machine only)
 cd engine-rs && cargo test                 # engine units + golden differentials + strangler duels
 pnpm test && pnpm typecheck                # vitest and type checks for studio / core / cli
 cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/html   # coverage

@@ -152,7 +152,7 @@ cd src-tauri && pnpm dlx @tauri-apps/cli@2 build           # 4. .app / .msi / .d
 
 ```bash
 cd src-tauri && cargo test                 # 単体 + 結合 + doctest（モック、全緑）
-cd src-tauri && cargo test -- --ignored    # 実 sidecar / keychain 結合テスト（実機のみ）
+pnpm cargo:ignored-sweep                   # 全23件の ignored テスト（実 sidecar / keychain / 起動；ガード付き sweep、実機のみ）
 cd engine-rs && cargo test                 # エンジン単体 + golden 差分 + strangler duel
 pnpm test && pnpm typecheck                # studio / core / cli の vitest と型検査
 cd src-tauri && cargo llvm-cov --workspace --html --output-dir target/llvm-cov/html   # カバレッジ
