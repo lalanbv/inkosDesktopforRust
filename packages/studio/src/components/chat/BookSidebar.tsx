@@ -18,6 +18,12 @@ import {
   presentCurrentState,
   roleFromPath,
 } from "../../lib/truth-display";
+import {
+  artifactEditDraftKey,
+  clearArtifactEditDraft,
+  loadArtifactEditDraft,
+  saveArtifactEditDraft,
+} from "../../lib/artifact-edit-draft";
 
 export interface BookSidebarProps {
   readonly bookId: string;
@@ -74,8 +80,14 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
     : artifactFile ? artifactLabel(artifactFile) : "";
 
   useEffect(() => {
-    setEditing(false);
     setLoading(true);
+    // 998 号：目标切换时恢复该目标的编辑草稿（dock 开合/面板切换卸载重建后
+    // 编辑中状态与未保存内容不丢——996 同族第二面）。无草稿 → 非编辑态
+    // （与原 setEditing(false) 切换语义一致）。
+    const draftKey = artifactEditDraftKey(bookId, isChapter, artifactChapter, artifactFile);
+    const draft = loadArtifactEditDraft(draftKey);
+    setEditing(draft?.editing ?? false);
+    setEditContent(draft?.content ?? "");
     if (isChapter) {
       fetchJson<{ content: string }>(`/books/${bookId}/chapters/${artifactChapter}`)
         .then((data) => setContent(data.content ?? ""))
@@ -96,7 +108,30 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
   const handleEdit = useCallback(() => {
     setEditContent(content ?? "");
     setEditing(true);
-  }, [content]);
+    // 998 号：进入编辑即建草稿（此后每次输入实时更新——卸载不丢）
+    saveArtifactEditDraft(
+      artifactEditDraftKey(bookId, isChapter, artifactChapter, artifactFile),
+      { editing: true, content: content ?? "" },
+    );
+  }, [content, bookId, artifactFile, artifactChapter, isChapter]);
+
+  const handleDraftChange = useCallback(
+    (value: string) => {
+      setEditContent(value);
+      saveArtifactEditDraft(
+        artifactEditDraftKey(bookId, isChapter, artifactChapter, artifactFile),
+        { editing: true, content: value },
+      );
+    },
+    [bookId, artifactFile, artifactChapter, isChapter],
+  );
+
+  const handleCancelEdit = useCallback(() => {
+    setEditing(false);
+    clearArtifactEditDraft(
+      artifactEditDraftKey(bookId, isChapter, artifactChapter, artifactFile),
+    );
+  }, [bookId, artifactFile, artifactChapter, isChapter]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -116,8 +151,12 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
       }
       setContent(editContent);
       setEditing(false);
+      // 998 号：保存成功清草稿（会话内该目标回到非编辑态）
+      clearArtifactEditDraft(
+        artifactEditDraftKey(bookId, isChapter, artifactChapter, artifactFile),
+      );
     } catch {
-      // keep editing state on error
+      // keep editing state on error（草稿保留——失败不丢未保存内容）
     } finally {
       setSaving(false);
     }
@@ -151,7 +190,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             </button>
             <button
-              onClick={() => setEditing(false)}
+              onClick={handleCancelEdit}
               className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
             >
               <X size={12} />
@@ -169,7 +208,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
         ) : editing ? (
           <textarea
             value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
+            onChange={(e) => handleDraftChange(e.target.value)}
             className="w-full h-full min-h-[300px] bg-transparent text-[15px] leading-7 px-4 py-3 resize-none outline-none border-0 font-mono"
           />
         ) : (
