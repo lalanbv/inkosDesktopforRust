@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { Loader2, Check } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -32,50 +31,57 @@ const WRITE_CHAPTER_STEPS: ReadonlyArray<ProgressStep> = [
 
 type StepStatus = "pending" | "active" | "done";
 
-interface ProgressSectionProps {
-  readonly sse: { messages: ReadonlyArray<SSEMessage>; connected: boolean };
+// 999 号：进度态全量重放（消除增量累积形态）——本组件同挂 ContextDock 的
+// visible 条件渲染下（996/998 同族第三面）：dock 开合卸载期间 sse.messages
+// 在 store 继续累积，旧增量形 effect 重挂载后只看最后一条，中间 log 步骤的
+// 完成态全部丢失（进度条回退显示不完整）。进度态本就是消息流的纯派生——
+// 全量重放幂等且卸载期事件不丢；单次写作 log 数十条，O(n) 重放远优于易丢
+// 增量态。
+interface DerivedProgress {
+  readonly operation: "idle" | "init" | "write";
+  readonly completedSteps: ReadonlySet<string>;
+  readonly activeStep: string | null;
 }
 
-export function ProgressSection({ sse }: ProgressSectionProps) {
-  const [operation, setOperation] = useState<"idle" | "init" | "write">("idle");
-  const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set());
-  const [activeStep, setActiveStep] = useState<string | null>(null);
+export function deriveProgressState(messages: ReadonlyArray<SSEMessage>): DerivedProgress {
+  let operation: DerivedProgress["operation"] = "idle";
+  let completedSteps = new Set<string>();
+  let activeStep: string | null = null;
 
-  useEffect(() => {
-    const latest = sse.messages;
-    if (latest.length === 0) return;
-    const last = latest[latest.length - 1];
-
+  for (const last of messages) {
     if (last.event === "book:creating") {
-      setOperation("init");
-      setCompletedSteps(new Set());
-      setActiveStep(null);
+      operation = "init";
+      completedSteps = new Set();
+      activeStep = null;
     } else if (last.event === "write:start") {
-      setOperation("write");
-      setCompletedSteps(new Set());
-      setActiveStep(null);
+      operation = "write";
+      completedSteps = new Set();
+      activeStep = null;
     } else if (last.event === "book:created" || last.event === "write:complete") {
       // Mark all steps done (the set stores zh keys / raw backend messages)
       const steps = operation === "init" ? INIT_BOOK_STEPS : WRITE_CHAPTER_STEPS;
-      setCompletedSteps(new Set(steps.map((s) => s.zh)));
-      setActiveStep(null);
+      completedSteps = new Set(steps.map((s) => s.zh));
+      activeStep = null;
     } else if (last.event === "log") {
       const data = last.data as { message?: string } | null;
       const message = data?.message;
       if (message && operation !== "idle") {
         // Mark previous active step as done, set new active
-        setCompletedSteps((prev) => {
-          if (activeStep) {
-            const next = new Set(prev);
-            next.add(activeStep);
-            return next;
-          }
-          return prev;
-        });
-        setActiveStep(message);
+        if (activeStep) completedSteps.add(activeStep);
+        activeStep = message;
       }
     }
-  }, [sse.messages]);
+  }
+  return { operation, completedSteps, activeStep };
+}
+
+interface ProgressSectionProps {
+  readonly sse: { messages: ReadonlyArray<SSEMessage>; connected: boolean };
+}
+
+export function ProgressSection({ sse }: ProgressSectionProps) {
+  // 999 号：消息流全量重放派生（原三段增量 useState 形卸载期丢中间 log 步骤）
+  const { operation, completedSteps, activeStep } = deriveProgressState(sse.messages);
 
   const steps = operation === "init" ? INIT_BOOK_STEPS
     : operation === "write" ? WRITE_CHAPTER_STEPS
