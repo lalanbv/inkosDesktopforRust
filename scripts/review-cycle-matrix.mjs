@@ -11,6 +11,8 @@
 // 再判读；682 号收紧：uncertified/skipped 亦拒绝出具活体证据））。
 //
 // 七场景（各起独立 walkthrough-env 实例，串行；双腿同一场景表）：
+// 分序列消费序（987 号）= resync/1 审计段占位 1 枚（45，RESYNC_AUDIT_PLACEHOLDER_SCORE）
+// + 下表场景分序列（write-next 审核环）——815 号 resync 审计段起序列含占位枚：
 //   B 达标退出    local "45,91"   retries=1  → 修复轮次 1/1→复审 91 达标退出，
 //                                               落盘 PATCH 版（含替换句）
 //   C 未净提升    local "45,47,91" retries=2 → 修复轮次 1 未净提升（45→47）退出，
@@ -65,6 +67,16 @@ if (engine === "rust") {
     process.exit(1);
   }
 }
+
+// 987 号：resync 审计段占位分——815 号起 POST /resync/:chapter 带
+// record_resync_audit（FullCycleAuditor 真实审稿，对齐 TS resyncChapterStateAndAudit
+// 语义），fixture 流 = resync/1（消费一枚 AUDIT_SCORES）→ write-next（审核环）。
+// 缺占位时审核环分序列整体右移一位（B：91 提前→无修复轮；G2：55→55 未净提升
+// →PATCH1 被弃），rust 腿 7/7 假红（潜伏红自 815 起——706 教训复演：合并大轮后
+// 矩阵未复跑）。双腿统一前置：TS 2.0 resync 同样审计（fork 契约恢复严格化时
+// 同样需要）。占位值 <85 任意皆可——resync 审计结果只沉淀 review_metrics，
+// 不影响审核环裁决；取 45 与场景首分对齐便于日志判读。
+const RESYNC_AUDIT_PLACEHOLDER_SCORE = "45";
 
 const SCENARIOS = [
   {
@@ -206,7 +218,12 @@ for (let i = 0; i < SCENARIOS.length; i++) {
 
   const child = spawn(process.execPath, [join(scriptDir, "walkthrough-env.mjs"), "--engine", engine, "--port", String(port), "--mock-port", String(mockPort), "--root", root], {
     cwd: repoRoot,
-    env: { ...process.env, ...sc.env },
+    env: {
+      ...process.env,
+      ...sc.env,
+      // 987 号：分序列前置 resync 审计占位分（见 RESYNC_AUDIT_PLACEHOLDER_SCORE 注释）。
+      WALKTHROUGH_MOCK_AUDIT_SCORES: `${RESYNC_AUDIT_PLACEHOLDER_SCORE},${sc.env.WALKTHROUGH_MOCK_AUDIT_SCORES}`,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => {

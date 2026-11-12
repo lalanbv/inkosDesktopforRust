@@ -2236,7 +2236,25 @@ macro_rules! write_next_assembly {
         let agent_ports = $crate::server::books_routes::WriteNextAgentPorts::build($runtime).await;
         let ports = $crate::server::books_routes::WriteNextPorts::build($runtime).await;
         let settler = agent_ports.settler(0);
-        let $agents = agent_ports.agents(&settler);
+        let mut $agents = agent_ports.agents(&settler);
+        // 987 号：全周期审计器统一装配（Auto 审核面消费 645 JSON 契约）。
+        // `WriteNextAgentPorts::agents()` 缺省 full_auditor=None（01f2e259 起），
+        // 审核环回退 RoutedAgent 文本协议审稿（PASS/FAIL 行协议，agent_router
+        // RoutedAgent::audit_chapter）——与审计路由/resync（815 号 FullCycleAuditor）
+        // 及 bin 装配层（123 号「full_auditor 挂有效 router 不降级」）同实体
+        // 多端口错配：815 号教训「CycleAuditor 两实现 错配即假阴性」，walkthrough
+        // 活体实锤 UI 写作链 JSON 契约响应下恒 50 分假阴性（audit-failed）。
+        // book_dir/chapter_number/genre 为占位——write_next_chapter 内
+        // for_chapter 按章重绑（与 bin 手写展开同构）。
+        $agents.full_auditor =
+            Some($crate::llm::agent_router::FullCycleAuditor {
+                router: $runtime.effective_router().await,
+                project_root: $runtime.state.project_root().to_path_buf(),
+                builtin_genres_dir: $runtime.builtin_genres_dir.clone(),
+                book_dir: $runtime.state.project_root().join("books"),
+                chapter_number: 0,
+                genre: String::new(),
+            });
         let $ctx = ports.ctx();
         let _ = (&agent_ports, &ports, &settler);
     };
@@ -2332,6 +2350,24 @@ mod tests {
         let budget = ctx.context_budget.expect("budget must be wired (441)");
         assert_eq!(budget.context_window_tokens, 128_000);
         assert_eq!(budget.reserved_output_tokens, 1024);
+    }
+
+    /// 987 号：write_next_assembly! 统一装配全周期审计器——full_auditor 必为
+    /// Some（缺省 None 时审核环回退 RoutedAgent 文本协议审稿：PASS/FAIL 行
+    /// 协议在 645 JSON 契约响应下恒 passed=false+分值回落 50 = 假阴性
+    /// audit-failed，与审计路由/resync/bin 装配层同实体多端口错配——815 号
+    /// 「CycleAuditor 两实现 错配即假阴性」教训）。占位形态与 bin 手写展开
+    /// 同构：for_chapter 在 write_next_chapter 内按章重绑。
+    #[tokio::test]
+    async fn write_next_assembly_fills_full_auditor() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = runtime_for(dir.path());
+        crate::write_next_assembly!(&runtime, agents, ctx);
+        let full = agents
+            .full_auditor
+            .expect("full_auditor must be wired by assembly (987)");
+        assert_eq!(full.chapter_number, 0, "占位章号（for_chapter 按章重绑）");
+        let _ = &ctx;
     }
 
     fn fixture(root: &std::path::Path) {

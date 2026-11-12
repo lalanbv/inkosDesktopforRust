@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, LlmEndpointConfig, RoutedAgent, RoutedSettler};
+use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, FullCycleAuditor, LlmEndpointConfig, RoutedAgent, RoutedSettler};
 use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextAgents, WriteNextConfig, WriteNextCtx};
 use inkos_engine::server::sse::BroadcastHub;
 use inkos_engine::server::write_next_route::{write_next, WriteNextRuntime};
@@ -22,6 +22,14 @@ use inkos_engine::state::manager::StateManager;
 use inkos_engine::state::store::FsStateStore;
 
 // ---- mock LLM 服务 ----
+
+/// 987 号：审改循环 JSON 契约审稿响应（FullCycleAuditor → continuity::
+/// audit_chapter 的 parse_audit_result 四策略面）。生产装配
+/// （write_next_assembly!）自本号起恒挂 FullCycleAuditor——mock 对审稿
+/// 提示（「审稿」锚）须回 645 JSON 契约而非文本协议 PASS/FAIL 行；文本
+/// 协议审稿官仅存于手工装配 fallback（build_agents full_auditor: None 形）。
+pub(crate) const AUDIT_JSON_PASS: &str = "\
+{\"passed\": true, \"overall_score\": 88, \"issues\": [], \"summary\": \"结构完成度达标，无硬矛盾。\"}";
 
 /// 230/234 号：聊天面 system 提示词判定（mock 分发共享锚点）——
 /// build_system_prompt 各面产物的识别词集中于此，提示词变更只改一处。
@@ -67,7 +75,9 @@ async fn mock_llm_chat(
     } else if system.contains("作家") || system.contains("写手") {
         WRITER_RESPONSE.to_string()
     } else if system.contains("审稿") {
-        "PASS\n95".to_string()
+        // 987 号：生产装配审核环走 FullCycleAuditor JSON 契约（原文本协议
+        // "PASS\n95" 面随 write_next_assembly! 统一装配退役）。
+        AUDIT_JSON_PASS.to_string()
     } else if system.contains("参考资产语义选段器") {
         // 216 号：引用选段（命中 fixture 绑定素材的人物关系节）。
         "{\"selectedSources\":[\"reference/mat1#人物关系\"]}".to_string()
@@ -118,7 +128,12 @@ fn fixture_project(root: &std::path::Path) {
 }
 
 /// 九路端口经 AgentRouter 装配（真实 StreamingChatClient 网络面）。
-fn build_agents(base_url: &str) -> WriteNextAgents<'static> {
+/// 987 号：full_auditor 同生产装配（write_next_assembly!）——审核环消费
+/// 645 JSON 契约（mock 审稿分支已对齐），不再走 RoutedAgent 文本协议
+/// fallback（该面由 src 单测覆盖）。project_root/builtin_genres_dir 供
+/// AuditChapterCtx 读取；book_dir/chapter_number/genre 占位——for_chapter
+/// 在 write_next_chapter 内按章重绑。
+fn build_agents(base_url: &str, root: &std::path::Path) -> WriteNextAgents<'static> {
     let router = AgentRouter::new(
         LlmEndpointConfig {
             context_window_tokens: 128_000,
@@ -154,7 +169,14 @@ fn build_agents(base_url: &str) -> WriteNextAgents<'static> {
         composer: leak("composer"),
         reviser: leak("reviser"),
         auditor: leak("auditor"),
-        full_auditor: None,
+        full_auditor: Some(FullCycleAuditor {
+            router: std::sync::Arc::new(router.clone()),
+            project_root: root.to_path_buf(),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            book_dir: root.join("books").join("b1"),
+            chapter_number: 0,
+            genre: String::new(),
+        }),
         analyzer: leak("chapter-analyzer"),
         state_validator: leak("state-validator"),
         settler,
@@ -195,7 +217,7 @@ async fn e2e_write_next_contract_matches_node_shape() {
         let llm_url = runner_url.clone();
         let _ = &runner_state;
         Box::pin(async move {
-            let agents = build_agents(&llm_url);
+            let agents = build_agents(&llm_url, &project);
             let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
             let project_ref: &'static std::path::Path =
                 Box::leak(project.into_boxed_path());
@@ -353,7 +375,7 @@ async fn e2e_write_next_injects_reference_context() {
 
     let (llm_url, _llm_calls, _llm) = spawn_mock_llm().await;
     let state = Arc::new(StateManager::new(project.clone()));
-    let agents = build_agents(&llm_url);
+    let agents = build_agents(&llm_url, &project);
     let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
     let project_ref: &'static std::path::Path = Box::leak(project.clone().into_boxed_path());
     let builtin: &'static std::path::Path =
@@ -434,7 +456,7 @@ async fn e2e_llm_unreachable_pushes_write_error() {
         let project = runner_project.clone();
         Box::pin(async move {
             // 端口 9（discard）——不可达端点。
-            let agents = build_agents("http://127.0.0.1:9");
+            let agents = build_agents("http://127.0.0.1:9", &project);
             let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
             let project_ref: &'static std::path::Path =
                 Box::leak(project.into_boxed_path());
@@ -3842,6 +3864,9 @@ name: 林动
             ARCHITECT_OUTPUT.to_string()
         } else if system.contains("资深小说编辑") {
             REVIEW_PASS.to_string()
+        } else if system.contains("审稿") {
+            // 987 号：审核环 FullCycleAuditor JSON 契约（else-"PASS" 文本协议面退役）。
+            AUDIT_JSON_PASS.to_string()
         } else if system.contains("连续性分析") || system.contains("continuity analyst") {
             ANALYZER_OUTPUT.to_string()
         } else {
@@ -9638,6 +9663,9 @@ mod ops72_e2e {
                         super::books58_e2e::ARCHITECT_OUTPUT.to_string()
                     } else if system.contains("资深小说编辑") {
                         super::books58_e2e::REVIEW_PASS.to_string()
+                    } else if system.contains("审稿") {
+                        // 987 号：审核环 FullCycleAuditor JSON 契约（else-"PASS" 文本协议面退役）。
+                        AUDIT_JSON_PASS.to_string()
                     } else {
                         "PASS".to_string()
                     };
@@ -14508,7 +14536,8 @@ mod sub87_e2e {
                     } else if system.contains("作家") || system.contains("写手") {
                         Some(WRITER_RESPONSE.to_string())
                     } else if system.contains("审稿") {
-                        Some("PASS\n95".to_string())
+                        // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                        Some(AUDIT_JSON_PASS.to_string())
                     } else {
                         None
                     };
@@ -16902,7 +16931,8 @@ mod sub101_e2e {
                             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                             WRITER_RESPONSE.to_string()
                         } else if system.contains("审稿") {
-                            "PASS\n95".to_string()
+                            // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                            AUDIT_JSON_PASS.to_string()
                         } else {
                             "PASS".to_string()
                         };
@@ -18256,7 +18286,8 @@ mod sub111_e2e {
                     } else if system.contains("作家") || system.contains("写手") {
                         WRITER_RESPONSE.to_string()
                     } else if system.contains("审稿") {
-                        "PASS\n95".to_string()
+                        // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                        AUDIT_JSON_PASS.to_string()
                     } else {
                         "PASS".to_string()
                     };
@@ -19198,7 +19229,7 @@ mod sub136_e2e {
         let (llm_url, _calls, _llm) = spawn_mock_llm().await;
 
         let state = Arc::new(StateManager::new(root.clone()));
-        let agents = build_agents(&llm_url);
+        let agents = build_agents(&llm_url, &root);
         let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
         let ctx = WriteNextCtx {
             project_root: Box::leak(root.clone().into_boxed_path()),
@@ -19317,7 +19348,8 @@ mod sub139_e2e {
                     } else if system.contains("作家") || system.contains("写手") {
                         WRITER_RESPONSE.to_string()
                     } else if system.contains("审") {
-                        "PASS\n95".to_string()
+                        // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                        AUDIT_JSON_PASS.to_string()
                     } else {
                         "PASS".to_string()
                     };
@@ -19365,7 +19397,7 @@ mod sub139_e2e {
         assert_eq!(worker.len(), 1);
 
         let state = Arc::new(StateManager::new(root.clone()));
-        let agents = build_agents(&llm);
+        let agents = build_agents(&llm, &root);
         let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
         let ctx = WriteNextCtx {
             project_root: Box::leak(root.clone().into_boxed_path()),
@@ -19853,7 +19885,8 @@ mod sub303_creation_domains_e2e {
                 } else if system.contains("作家") || system.contains("写手") {
                     "林动握紧手中长剑，踏入风雪。".to_string()
                 } else if system.contains("审稿") {
-                    "PASS\n95".to_string()
+                    // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                    AUDIT_JSON_PASS.to_string()
                 } else {
                     "PASS".to_string()
                 };
