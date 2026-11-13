@@ -228,28 +228,41 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
   );
 }
 
+// 1003 号：写作活动指示全量重放（999 同族补位）——PanelView 挂在移动端抽屉
+// BookSidebarToggle 的 `{open && ...}` 条件挂载下，旧「只看最后一条」增量形
+// effect 在抽屉开合卸载期间 store 累积的中间事件被跳过：write:start 之后落到
+// log 等未映射类型时重挂载 activeOp 保持 null，「正在写作中」指示丢失。指示
+// 本就是消息流的纯派生——全量重放幂等且卸载期事件不丢（与 999
+// deriveProgressState 同形；挂载中逐事件语义等价，未映射事件不动累加器）。
+export type ActiveOp = "write" | "audit" | "revise";
+
+export function deriveActiveOp(messages: ReadonlyArray<SSEMessage>): ActiveOp | null {
+  let activeOp: ActiveOp | null = null;
+  for (const message of messages) {
+    if (message.event === "write:start") {
+      activeOp = "write";
+    } else if (message.event === "tool:start") {
+      const data = message.data as { tool?: string } | null;
+      const action = data?.tool?.split("__").at(-1);
+      if (action === "write_chapters") activeOp = "write";
+      else if (action === "review_chapter") activeOp = "audit";
+      else if (action === "revise_chapter") activeOp = "revise";
+    } else if (message.event === "write:complete" || message.event === "tool:end") {
+      activeOp = null;
+    }
+    // 其余事件（log/…）：不改变活动操作——与旧增量形逐事件语义一致
+  }
+  return activeOp;
+}
+
 // P3-4：内部视图导出给 ContextDock（面板注册表复用）；BookSidebar 本体保留
 // 为旧轨（P4 走查后随双轨清理一并删除）。
 export function PanelView({ bookId, theme: _theme, t, sse }: BookSidebarProps) {
   const isZh = t("nav.connected") === "\u5DF2\u8FDE\u63A5";
 
   // Show writing indicator only during pipeline operations (write/audit/revise)
-  const [activeOp, setActiveOp] = useState<string | null>(null);
-  useEffect(() => {
-    const latest = sse.messages;
-    if (latest.length === 0) return;
-    const last = latest[latest.length - 1];
-    if (last.event === "write:start") setActiveOp("write");
-    else if (last.event === "tool:start") {
-      const data = last.data as { tool?: string } | null;
-      const action = data?.tool?.split("__").at(-1);
-      if (action === "write_chapters") setActiveOp("write");
-      else if (action === "review_chapter") setActiveOp("audit");
-      else if (action === "revise_chapter") setActiveOp("revise");
-    } else if (last.event === "write:complete" || last.event === "tool:end") {
-      setActiveOp(null);
-    }
-  }, [sse.messages]);
+  // 1003 号：增量 useState+useEffect → 消息流全量重放派生（卸载期事件不丢）
+  const activeOp = deriveActiveOp(sse.messages);
 
   const OP_LABELS: Record<string, string> = {
     write: isZh ? "正在写作中..." : "Writing...",
@@ -351,8 +364,17 @@ export function BookSidebarToggle({ bookId, theme, t, sse }: BookSidebarProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
-              <span className="text-[15px] leading-6 font-medium text-muted-foreground">书籍信息</span>
-              <button onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
+              <span className="text-[15px] leading-6 font-medium text-muted-foreground">
+                {t("nav.mobilePanelTitle")}
+              </span>
+              {/* 1003 号：873/1002 同族补位——纯图标关闭钮补可访问名称。1002 备案
+                  「SR 用户走关闭钮路径」的前提此前并不成立（该钮自身无名）；遮罩
+                  div 仍维持备案不设名。 */}
+              <button
+                onClick={() => setOpen(false)}
+                aria-label={t("nav.closeContextPanel")}
+                className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground"
+              >
                 <PanelRightClose size={14} />
               </button>
             </div>

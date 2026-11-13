@@ -250,6 +250,8 @@ const strings = {
     en: "Manual review: stop after the draft; you run audit / revise / approve (faster, more control). Click to switch back to auto.",
   },
   "nav.openContextPanel": { zh: "打开上下文面板", en: "Open context panel" },
+  "nav.closeContextPanel": { zh: "关闭上下文面板", en: "Close context panel" },
+  "nav.mobilePanelTitle": { zh: "书籍信息", en: "Book info" },
   "book.backToFileList": { zh: "返回文件列表", en: "Back to file list" },
   "book.editFileContent": { zh: "编辑文件内容", en: "Edit file content" },
   "book.saveChanges": { zh: "保存修改", en: "Save changes" },
