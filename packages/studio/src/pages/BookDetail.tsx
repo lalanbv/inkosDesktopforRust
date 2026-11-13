@@ -1,5 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatAuditOutcome, summarizeAuditResult } from "../lib/audit-outcome";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
 import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
@@ -48,6 +48,11 @@ import { GitBranch,
   BookOpen
  } from "lucide-react";
 import { genreLabel } from "../lib/genre-labels";
+import {
+  clearBookSettingsDraft,
+  loadBookSettingsDraft,
+  saveBookSettingsDraft,
+} from "../lib/book-settings-draft";
 
 interface ChapterMeta {
   readonly number: number;
@@ -175,9 +180,29 @@ export function BookDetail({
   const [revisingChapters, setRevisingChapters] = useState<ReadonlyArray<number>>([]);
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsWordCount, setSettingsWordCount] = useState<number | null>(null);
-  const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(null);
-  const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(null);
+  // 1001 号：settings 表单草稿 sessionStorage 持久化（998 同族第三面，条件挂载
+  // 域第二族）——BookDetail 挂在 App 层 view.page 条件渲染下，页面切换卸载后
+  // 覆盖层 state 重置 null = 未保存修改丢失。惰性初始化从草稿恢复（无草稿
+  // 回落 null=真源值，原语义）；onChange 同步写草稿；保存成功清草稿。
+  const [settingsWordCount, setSettingsWordCount] = useState<number | null>(
+    () => loadBookSettingsDraft(bookId)?.wordCount ?? null,
+  );
+  const [settingsTargetChapters, setSettingsTargetChapters] = useState<number | null>(
+    () => loadBookSettingsDraft(bookId)?.targetChapters ?? null,
+  );
+  const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(
+    () => (loadBookSettingsDraft(bookId)?.status as BookStatus | undefined) ?? null,
+  );
+  const persistSettingsDraft = useCallback(
+    (patch: { wordCount?: number; targetChapters?: number; status?: string }) => {
+      saveBookSettingsDraft(bookId, {
+        wordCount: patch.wordCount ?? settingsWordCount ?? undefined,
+        targetChapters: patch.targetChapters ?? settingsTargetChapters ?? undefined,
+        status: patch.status ?? settingsStatus ?? undefined,
+      });
+    },
+    [bookId, settingsWordCount, settingsTargetChapters, settingsStatus],
+  );
   const [exportFormat, setExportFormat] = useState<ExportFormat>("txt");
   const [exportApprovedOnly, setExportApprovedOnly] = useState(false);
   const [bookActionPending, setBookActionPending] = useState<string | null>(null);
@@ -450,8 +475,11 @@ export function BookDetail({
         body: JSON.stringify(body),
       });
       refetch();
+      // 1001 号：保存成功清草稿（真源已更新，覆盖层语义一致）
+      clearBookSettingsDraft(bookId);
     } catch (e) {
       alert(e instanceof Error ? e.message : "Save failed");
+      // 失败草稿保留（不丢未保存修改）
     } finally {
       setSavingSettings(false);
     }
@@ -884,7 +912,11 @@ export function BookDetail({
               id="settings-word-count"
               type="number"
               value={currentWordCount}
-              onChange={(e) => setSettingsWordCount(Number(e.target.value))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSettingsWordCount(v);
+                persistSettingsDraft({ wordCount: v });
+              }}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
             />
           </div>
@@ -894,7 +926,11 @@ export function BookDetail({
               id="settings-target-chapters"
               type="number"
               value={currentTargetChapters}
-              onChange={(e) => setSettingsTargetChapters(Number(e.target.value))}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setSettingsTargetChapters(v);
+                persistSettingsDraft({ targetChapters: v });
+              }}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50 w-32"
             />
           </div>
@@ -903,7 +939,11 @@ export function BookDetail({
             <select
               id="settings-status"
               value={currentStatus}
-              onChange={(e) => setSettingsStatus(e.target.value as BookStatus)}
+              onChange={(e) => {
+                const v = e.target.value as BookStatus;
+                setSettingsStatus(v);
+                persistSettingsDraft({ status: v });
+              }}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
             >
               <option value="active">{t("book.statusActive")}</option>
