@@ -626,7 +626,9 @@ export function assertWithinContextWindow(params: {
 
 // === Error Wrapping ===
 
-function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string }): Error {
+// 1007 号：导出——studio error-copy.test 以本函数派生 zh 映射活体样例（与生产
+// 字面同源；手打样例漂移曾致 5xx 无 detail 映射静默失效）。行为不变，仅扩公开面。
+export function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; readonly model?: string; readonly service?: string }): Error {
   const msg = String(error);
   const ctxLine = context
     ? `\n  (baseUrl: ${context.baseUrl}, model: ${context.model})`

@@ -24,7 +24,9 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
   // zh 展示映射回「上游详情：」。多行诊断块不被后续消费方二次解析（仅展示），
   // 行级 token 一一对应回 zh 原文。
   {
-    pattern: /API returned 400 \(invalid request parameters\)\. Upstream details: ([^\n]*)\.\nCommon causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
+    // 1007 号：detail 捕获组跨行化（[\s\S]*? 惰性 + 尾锚定）——上游 body
+    // message 可含换行，[^\n]* 会让整块映射失效回落 EN 原文。
+    pattern: /API returned 400 \(invalid request parameters\)\. Upstream details: ([\s\S]*?)\.\nCommon causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
     replacement: "API 返回 400（请求参数错误）。上游详情：$1。\n常见原因：\n  1. temperature / max_tokens 超出模型约束（如 Moonshot kimi-k2.X 强制 temperature=1）\n  2. 模型名称不正确或未上架\n  3. 消息格式不兼容（部分服务不支持 system role 或 developer role）",
   },
   {
@@ -48,12 +50,14 @@ const KNOWN_RUNTIME_REPLACEMENTS: ReadonlyArray<{
     replacement: "无法连接到 API 服务。可能原因：\n  1. baseUrl 地址不正确（当前：$1）\n  2. 网络不通或被防火墙拦截\n  3. API 服务暂时不可用\n  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）",
   },
   {
-    pattern: /API returned 5xx \(upstream service error\)\. Upstream details: ([^\n]*)\.\nPossible causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
+    // 1007 号：detail 捕获组跨行化（同 400 块）。
+    pattern: /API returned 5xx \(upstream service error\)\. Upstream details: ([\s\S]*?)\.\nPossible causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
     replacement: "API 返回 5xx（上游服务异常）。上游详情：$1。\n可能原因：\n  1. 模型在 /models 列表但 inference 未上架（如 PPIO 返回 MODEL_NOT_AVAILABLE）\n  2. 服务端临时故障，稍后重试\n  3. 当前 apikey 无权限调用该模型",
   },
   {
-    // 5xx 无 detail 段分型。
-    pattern: /API returned 5xx \(upstream service error\)\.\nPossible causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
+    // 1007 号：生产模板无 detail 形态为 "error). \n"（句点后有空格再换行）——
+    // 原正则漏空格致永不命中（手打样例同漂假绿，测试样例派生化后现形）。
+    pattern: /API returned 5xx \(upstream service error\)\. \nPossible causes:\n  1\.[^\n]*\n  2\.[^\n]*\n  3\.[^\n]*/g,
     replacement: "API 返回 5xx（上游服务异常）。\n可能原因：\n  1. 模型在 /models 列表但 inference 未上架（如 PPIO 返回 MODEL_NOT_AVAILABLE）\n  2. 服务端临时故障，稍后重试\n  3. 当前 apikey 无权限调用该模型",
   },
 ];
