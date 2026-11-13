@@ -2161,7 +2161,9 @@ function formatServiceProbeError(args: {
   const rawDetail = args.error
     .replace(/\n\s*\(baseUrl:[\s\S]*?\)$/m, "")
     .trim();
-  const upstreamDetail = rawDetail.includes("上游详情：")
+  // 1006 号：provider.ts 诊断块 EN 基准化后解析标记转「Upstream details: 」，
+  // 保留 zh 旧标记识别（旧快照/旧日志数据兼容）。
+  const upstreamDetail = rawDetail.includes("Upstream details: ") || rawDetail.includes("上游详情：")
     ? rawDetail
     : "";
   const protocol = args.apiFormat === "anthropic"

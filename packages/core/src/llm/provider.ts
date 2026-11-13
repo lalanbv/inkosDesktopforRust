@@ -645,30 +645,34 @@ function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; rea
       }
     }
     return new Error(
-      `API 返回 400（请求参数错误）。${detail ? `上游详情：${detail}。\n` : ""}` +
-      `常见原因：\n` +
-      `  1. temperature / max_tokens 超出模型约束（如 Moonshot kimi-k2.X 强制 temperature=1）\n` +
-      `  2. 模型名称不正确或未上架\n` +
-      `  3. 消息格式不兼容（部分服务不支持 system role 或 developer role）${ctxLine}`,
+      // 1006 号：错误协议面 EN 基准化（对齐 effective-llm-config INKOS_LLM_API_KEY
+      // 消息与 1004/1005 号错误协议全 EN 族判据）；zh 展示由 studio error-copy
+      // 行级映射承接。「Upstream details: 」为跨端解析标记（engine-rs
+      // service_routes 与 studio server 双解析点已认两形）。
+      `API returned 400 (invalid request parameters). ${detail ? `Upstream details: ${detail}.\n` : ""}` +
+      `Common causes:\n` +
+      `  1. temperature / max_tokens exceed the model's constraints (e.g. Moonshot kimi-k2.X forces temperature=1)\n` +
+      `  2. Model name is incorrect or not available\n` +
+      `  3. Incompatible message format (some services do not support the system or developer role)${ctxLine}`,
     );
   }
   if (msg.includes("403")) {
     return new Error(
-      `API 返回 403 (请求被拒绝)。可能原因：\n` +
-      `  1. API Key 无效或过期\n` +
-      `  2. API 提供方的内容审查拦截了请求（公益/免费 API 常见）\n` +
-      `  3. 账户余额不足\n` +
-      `  建议：用 inkos doctor 测试 API 连通性，或换一个不限制内容的 API 提供方${ctxLine}`,
+      `API returned 403 (request rejected). Possible causes:\n` +
+      `  1. API key is invalid or expired\n` +
+      `  2. The provider's content moderation blocked the request (common with free/community APIs)\n` +
+      `  3. Insufficient account balance\n` +
+      `  Suggestion: run inkos doctor to test API connectivity, or switch to a provider without content restrictions${ctxLine}`,
     );
   }
   if (msg.includes("401")) {
     return new Error(
-      `API 返回 401 (未授权)。请检查 .env 中的 INKOS_LLM_API_KEY 是否正确。${ctxLine}`,
+      `API returned 401 (unauthorized). Check INKOS_LLM_API_KEY in the project .env file.${ctxLine}`,
     );
   }
   if (msg.includes("429")) {
     return new Error(
-      `API 返回 429 (请求过多)。请稍后重试，或检查 API 配额。${ctxLine}`,
+      `API returned 429 (too many requests). Retry later or check your API quota.${ctxLine}`,
     );
   }
   if (
@@ -683,11 +687,11 @@ function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; rea
     || msg.includes("EPIPE")
   ) {
     return new Error(
-      `无法连接到 API 服务。可能原因：\n` +
-      `  1. baseUrl 地址不正确（当前：${context?.baseUrl ?? "未知"}）\n` +
-      `  2. 网络不通或被防火墙拦截\n` +
-      `  3. API 服务暂时不可用\n` +
-      `  建议：检查 INKOS_LLM_BASE_URL 是否包含完整路径（如 /v1）`,
+      `Cannot connect to the API service. Possible causes:\n` +
+      `  1. Incorrect baseUrl (current: ${context?.baseUrl ?? "unknown"})\n` +
+      `  2. Network unreachable or blocked by a firewall\n` +
+      `  3. The API service is temporarily unavailable\n` +
+      `  Suggestion: check that INKOS_LLM_BASE_URL includes the full path (e.g. /v1)`,
     );
   }
   // R4 Bug 2: 5xx "status code (no body)" — 尝试从 OpenAI SDK APIError 里抽 body 给用户看具体原因
@@ -704,11 +708,11 @@ function wrapLLMError(error: unknown, context?: { readonly baseUrl?: string; rea
       }
     }
     return new Error(
-      `API 返回 5xx（上游服务异常）。${detail ? `上游详情：${detail}。` : ""}\n` +
-      `可能原因：\n` +
-      `  1. 模型在 /models 列表但 inference 未上架（如 PPIO 返回 MODEL_NOT_AVAILABLE）\n` +
-      `  2. 服务端临时故障，稍后重试\n` +
-      `  3. 当前 apikey 无权限调用该模型${ctxLine}`,
+      `API returned 5xx (upstream service error). ${detail ? `Upstream details: ${detail}.` : ""}\n` +
+      `Possible causes:\n` +
+      `  1. Model listed in /models but inference unavailable (e.g. PPIO returns MODEL_NOT_AVAILABLE)\n` +
+      `  2. Temporary server-side failure; retry later\n` +
+      `  3. The current API key lacks permission for this model${ctxLine}`,
     );
   }
   return error instanceof Error ? error : new Error(msg);

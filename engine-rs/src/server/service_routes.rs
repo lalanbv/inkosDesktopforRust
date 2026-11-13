@@ -1104,7 +1104,13 @@ fn format_service_probe_error(args: &FormatProbeErrorArgs<'_>) -> String {
         .get_or_init(|| regex::Regex::new(r"(?m)
 \s*\(baseUrl:[\s\S]*?\)$").unwrap());
     let raw_detail = tail_re.replace_all(args.error.trim(), "").trim().to_string();
-    let upstream_detail = if raw_detail.contains("上游详情：") { raw_detail.clone() } else { String::new() };
+    // 1006 号：provider.ts 诊断块 EN 基准化后解析标记转「Upstream details: 」，
+    // 保留 zh 旧标记识别（旧快照/旧日志数据兼容）。
+    let upstream_detail = if raw_detail.contains("Upstream details: ") || raw_detail.contains("上游详情：") {
+        raw_detail.clone()
+    } else {
+        String::new()
+    };
 
     let protocol = if args.api_format == "responses" { "Responses" } else { "Chat / Completions" };
     let stream_suffix = match args.stream {
@@ -1827,6 +1833,35 @@ mod probe_error_tests {
         // baseUrl 尾注被剥 + 上游详情前缀保留。
         assert!(!message.contains("(baseUrl:https://x)"), "{message}");
         assert!(message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"), "{message}");
+    }
+
+    #[test]
+    fn upstream_detail_marker_dual_form() {
+        // 1006 号：provider.ts 诊断块 EN 基准化后「Upstream details: 」为主形态，
+        // zh 旧标记保留兼容（旧快照/旧日志数据）。两形都进 upstream detail 通道。
+        let en_message = format_service_probe_error(&FormatProbeErrorArgs {
+            service: "google",
+            label: Some("Google Gemini"),
+            base_url: "https://generativelanguage.googleapis.com",
+            model: "gemini-2.5-flash",
+            api_format: "chat",
+            stream: Some(true),
+            error: "API returned 400 (invalid request parameters). Upstream details: invalid key.\nCommon causes:\n  1. x\n  2. y\n  3. z  (baseUrl:https://x)",
+            language: "zh",
+        });
+        assert!(en_message.contains("\n上游返回：API returned 400 (invalid request parameters). Upstream details: invalid key."), "{en_message}");
+
+        let legacy_message = format_service_probe_error(&FormatProbeErrorArgs {
+            service: "google",
+            label: Some("Google Gemini"),
+            base_url: "https://generativelanguage.googleapis.com",
+            model: "gemini-2.5-flash",
+            api_format: "chat",
+            stream: Some(true),
+            error: "HTTP 400\n上游详情：invalid key\n  (baseUrl:https://x)",
+            language: "zh",
+        });
+        assert!(legacy_message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"), "{legacy_message}");
     }
 
     #[test]

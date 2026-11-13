@@ -54,7 +54,9 @@ const LEDGER: Readonly<Record<string, { readonly budget: number; readonly reason
   // 创作语言选择卡：卡片内容即所选语言的样本展示（自指设计）。
   "pages/LanguageSelector.tsx": { budget: 4, reason: "自指语言选择卡（内容=所选语言样本）" },
   // error-copy 职能即 EN 协议 → zh 展示的本地化映射，replacement 本身是 zh 目标文本。
-  "lib/error-copy.ts": { budget: 3, reason: "zh 本地化映射目标文本（本文件职能）" },
+  // 1006 号：provider.ts 六条 HTTP 诊断块 EN 基准化后，zh 承接映射整块迁入
+  // （8 条整块正则：400/5xx 各分有/无 detail 两型）。
+  "lib/error-copy.ts": { budget: 11, reason: "zh 本地化映射目标文本（本文件职能；1006 号 provider 诊断块承接 8 条 + 既有 3 条）" },
   // 时间线节拍注入 write-next 的 context（引擎规划输入，语言随书创作语言语义）。
   "pages/BookTimeline.tsx": { budget: 3, reason: "引擎输入 context（创作语言语义面）" },
   // 崩溃边界刻意零 i18n 依赖（文件头注释备案：崩溃源可能是任意 import 链）。
