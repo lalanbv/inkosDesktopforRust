@@ -701,17 +701,20 @@ export function App() {
           )}
           {view.page === "book-timeline" && (
             <div className="mx-auto w-full max-w-[1400px] px-4 py-12 sm:px-6 lg:px-10 lg:py-16 2xl:px-12 fade-in">
-              <BookTimeline bookId={view.bookId} nav={nav} theme={theme} t={t} />
+              {/* 1011 号：id 键页 key 重挂载（1010 BookDetail 同族判据延伸） */}
+              <BookTimeline key={view.bookId} bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {view.page === "chapter" && (
             <div className="mx-auto w-full max-w-[1400px] px-4 py-12 sm:px-6 lg:px-10 lg:py-16 2xl:px-12 fade-in">
-              <ChapterReader bookId={view.bookId} chapterNumber={view.chapterNumber} nav={nav} theme={theme} t={t} />
+              {/* 1011 号：复合 id 键（书+章节号）重挂载 */}
+              <ChapterReader key={`${view.bookId}-${view.chapterNumber}`} bookId={view.bookId} chapterNumber={view.chapterNumber} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {view.page === "analytics" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <Analytics bookId={view.bookId} nav={nav} theme={theme} t={t} />
+              {/* 1011 号：id 键页 key 重挂载（1010 BookDetail 同族判据延伸） */}
+              <Analytics key={view.bookId} bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {view.page === "onboarding" && (
@@ -731,12 +734,14 @@ export function App() {
           )}
           {view.page === "service-detail" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <ServiceDetailPage serviceId={view.serviceId} nav={nav} />
+              {/* 1011 号：id 键页 key 重挂载（1010 BookDetail 同族判据延伸） */}
+              <ServiceDetailPage key={view.serviceId} serviceId={view.serviceId} nav={nav} />
             </div>
           )}
           {view.page === "truth" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <TruthFiles bookId={view.bookId} nav={nav} theme={theme} t={t} />
+              {/* 1011 号：id 键页 key 重挂载（1010 BookDetail 同族判据延伸） */}
+              <TruthFiles key={view.bookId} bookId={view.bookId} nav={nav} theme={theme} t={t} />
             </div>
           )}
           {view.page === "daemon" && (

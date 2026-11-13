@@ -1,4 +1,9 @@
 //! 项目健康检查器
+//!
+//! 1011 号备案：本模块 Issue.message/suggestion 为中文直显形态（~58 处），
+//! 但 `cmd_check_project_health` 当前无前端消费（picker/studio 均 0 invoke
+//! 命中=预留命令，零用户可见影响）。未来接入 settings/诊断页时，直显字面
+//! 必须按 `crate::locale::pick` 双语化（1009 号机制）——见 error.rs 同形。
 
 use crate::project::{
     HealthIssue, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta,
