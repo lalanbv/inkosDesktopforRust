@@ -80,7 +80,7 @@ mod tests {
         EngineManifest {
             engine_version: "1.7.2".to_string(),
             engine_sha256: "abc123".to_string(),
-            node_min: "22.0.0".to_string(),
+            node_min: "22.19.0".to_string(),
             built_at: "2026-08-06T00:00:00Z".to_string(),
         }
     }

@@ -20,7 +20,10 @@ use crate::engine::manifest::sha256_file;
 
 /// bootstrap 下载的 Node 版本（LTS 22.x，可复现 + 可校验）。
 /// 升级：改此常量 + M3e CI 验证。比"拉 latest"更安全（固定 SHASUMS 可校验）；mirror 给区域速度。
-pub const NODE_BOOTSTRAP_VERSION: &str = "22.11.0";
+/// 1016 号：22.11.0 → 22.19.0——pi 1.5.2 engines 下界 22.19（1014 号勘察，
+/// node_min 冲突族 vite 22.12/pi 22.19/unpdf 24 的先行解锁）；与打包脚本
+/// desktop-package-engine.sh 的 NODE_MIN 声明必须同值（防漂移卫兵测试锁定）。
+pub const NODE_BOOTSTRAP_VERSION: &str = "22.19.0";
 
 /// 官方 nodejs.org dist 根（SHASUMS + 二进制权威源）。始终用于 SHASUMS 校验。
 pub const OFFICIAL_DIST_URL: &str = "https://nodejs.org/dist";

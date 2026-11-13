@@ -75,7 +75,7 @@ fi
 
 # 4) 写 manifest.json（EngineManifest）。
 ENGINE_VERSION="$(node -p "require('./packages/cli/package.json').version")"
-NODE_MIN="22.0.0"
+NODE_MIN="22.19.0"
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # engine_sha256：本地组装备注为空；M3e 发布 CI 打包 engine tarball 后回填真实 SHA256
 # （updater 下载校验用）。EngineManifest.engine_sha256 为必填字符串，空串合法。

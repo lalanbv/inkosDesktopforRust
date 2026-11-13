@@ -1,5 +1,41 @@
     use super::*;
 
+    // 1016 号：bootstrap Node 实体与 manifest node_min 声明的防漂移卫兵——
+    // 两处声明（本常量 + scripts/desktop-package-engine.sh 的 NODE_MIN）必须
+    // 同值：bootstrap 实体低于声明=纸面 node_min 是谎言（pi 1.5.2 engines
+    // 22.19 下界不满足却宣称支持）。版本有意变更时本测试同步改=审阅点。
+    #[test]
+    fn bootstrap_version_matches_packager_node_min_declaration() {
+        let script = include_str!("../../../../scripts/desktop-package-engine.sh");
+        let declared = script
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("NODE_MIN=\""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("打包脚本应声明 NODE_MIN=\"<version>\"");
+        assert_eq!(
+            NODE_BOOTSTRAP_VERSION, declared,
+            "bootstrap 实体版本与打包脚本 NODE_MIN 声明漂移（845 号同族双声明教训）"
+        );
+    }
+
+    #[test]
+    fn bootstrap_version_satisfies_pi_1_5_engines_floor() {
+        // pi 1.5.2（1014 号勘察）engines node>=22.19.0——bundled bootstrap
+        // 是引擎的 Node 实体来源，必须满足下界；未来 pi 再抬 engines 时
+        // 本测试红=提醒复核 bootstrap 版本。
+        let (major, minor, patch): (u64, u64, u64) = {
+            let parts: Vec<u64> = NODE_BOOTSTRAP_VERSION
+                .split('.')
+                .map(|p| p.parse().expect("NODE_BOOTSTRAP_VERSION 应为 x.y.z 形态"))
+                .collect();
+            (parts[0], parts[1], parts[2])
+        };
+        assert!(
+            (major, minor, patch) >= (22, 19, 0),
+            "bootstrap Node {NODE_BOOTSTRAP_VERSION} 低于 pi 1.5.2 engines 下界 22.19.0"
+        );
+    }
+
     #[test]
     fn platformarch_detect_matches_target() {
         let pa = PlatformArch::detect();
