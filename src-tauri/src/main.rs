@@ -270,6 +270,7 @@ fn main() {
             cmd_apply_engine_update,
             cmd_apply_shell_update,
             cmd_get_diagnostics,
+            cmd_set_locale,
             workspace::cmd_list_workspaces,
             workspace::cmd_create_workspace,
             workspace::cmd_switch_workspace,
@@ -940,10 +941,14 @@ async fn cmd_pick_project_dialog(
     app_handle: tauri::AppHandle,
 ) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
+    // 1009 号：dialog 标题为用户直显面，随桌面壳 locale 双语输出。
     app_handle
         .dialog()
         .file()
-        .set_title("选择 inkos 项目目录")
+        .set_title(inkos_desktop::locale::pick(
+            "选择 inkos 项目目录",
+            "Choose an InkOS project directory",
+        ))
         .pick_folder(move |picked| {
             // 回调在主线程派发：只 send，不做任何重活。
             let _ = tx.send(picked);
@@ -953,6 +958,13 @@ async fn cmd_pick_project_dialog(
         .map_err(|e| format!("目录选择对话框未返回结果: {e}"))?;
     // FilePath::as_path() 对本地 Path 变体返回 Some（远程 Url 变体返回 None）。
     Ok(picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned())))
+}
+
+/// 1009 号：前端上报桌面壳 UI 语言（picker/settings 启动即调，信号源=
+/// navigator.language，与前端字典同一判据）。未上报时 Rust 侧默认 zh。
+#[tauri::command]
+fn cmd_set_locale(tag: String) {
+    inkos_desktop::locale::set_locale(inkos_desktop::locale::Locale::parse(&tag));
 }
 
 /// 打开插件管理窗口（独立窗口加载 settings.html）。
@@ -981,9 +993,20 @@ fn cmd_choose_project(
     if !p.is_dir() {
         // 重置 chosen 允许重试（此次未真正启动）。
         state.chosen.store(false, Ordering::SeqCst);
-        return Err(AppError::project("项目目录不存在")
-            .with_details(format!("路径: {}", path))
-            .with_suggestion("请选择一个有效的 InkOS 项目目录（包含 inkos.json）"));
+        // 1009 号：直显面双语化（details 前缀同步，动态路径片段保留）
+        return Err(AppError::project(inkos_desktop::locale::pick(
+            "项目目录不存在",
+            "Project directory does not exist",
+        ))
+        .with_details(format!(
+            "{}{}",
+            inkos_desktop::locale::pick("路径: ", "Path: "),
+            path
+        ))
+        .with_suggestion(inkos_desktop::locale::pick(
+            "请选择一个有效的 InkOS 项目目录（包含 inkos.json）",
+            "Choose a valid InkOS project directory (containing inkos.json)",
+        )));
     }
     let name = p
         .file_name()
@@ -1118,13 +1141,27 @@ async fn cmd_apply_engine_update(
     let engine_ch = EngineChannel::new(state.repo.clone(), current_version).with_flavor(flavor);
 
     // 先 check 确认有更新（友好错误）；apply 内部再 fetch release + 下载 + 校验 + 替换。
+    // 1009 号：更新命令全部直显文案随桌面壳 locale 双语输出。
     let latest_tag = engine_ch
         .check()
         .await
-        .map_err(|e| AppError::update("检查 Engine 更新失败")
+        .map_err(|e| {
+            AppError::update(inkos_desktop::locale::pick(
+                "检查 Engine 更新失败",
+                "Failed to check for Engine updates",
+            ))
             .with_details(format!("{e:#}"))
-            .with_suggestion("请检查网络连接，或稍后重试"))?
-        .ok_or_else(|| AppError::update("Engine 已是最新版本"))?;
+            .with_suggestion(inkos_desktop::locale::pick(
+                "请检查网络连接，或稍后重试",
+                "Check your network connection and try again later",
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::update(inkos_desktop::locale::pick(
+                "Engine 已是最新版本",
+                "Engine is already up to date",
+            ))
+        })?;
 
     let ver = latest_tag.trim_start_matches('v');
     engine_ch
@@ -1144,11 +1181,23 @@ async fn cmd_apply_engine_update(
             >),
         )
         .await
-        .map_err(|e| AppError::update("Engine 更新失败")
+        .map_err(|e| {
+            AppError::update(inkos_desktop::locale::pick(
+                "Engine 更新失败",
+                "Engine update failed",
+            ))
             .with_details(format!("{e:#}"))
-            .with_suggestion("请稍后重试，或手动下载最新 Engine"))?;
+            .with_suggestion(inkos_desktop::locale::pick(
+                "请稍后重试，或手动下载最新 Engine",
+                "Try again later, or download the latest Engine manually",
+            ))
+        })?;
 
-    Ok(format!("engine 已更新至 {ver}（重启 app 生效）"))
+    // 直显返回值：settings 页 toast 展示
+    Ok(inkos_desktop::locale::pick_owned(
+        format!("engine 已更新至 {ver}（重启 app 生效）"),
+        format!("Engine updated to {ver} (restart the app to take effect)"),
+    ))
 }
 
 /// 应用 shell 更新（Tauri updater：下载 + Ed25519 验签 + 安装）。完成后提示重启。
@@ -1158,26 +1207,56 @@ async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> inkos_desktop::
     use tauri_plugin_updater::UpdaterExt;
 
     let updater = app_handle.updater()
-        .map_err(|e| AppError::update("初始化 updater 失败")
-            .with_details(e.to_string()))?;
+        .map_err(|e| {
+            AppError::update(inkos_desktop::locale::pick(
+                "初始化 updater 失败",
+                "Failed to initialize the updater",
+            ))
+            .with_details(e.to_string())
+        })?;
 
     let update = updater
         .check()
         .await
-        .map_err(|e| AppError::update("检查应用更新失败")
+        .map_err(|e| {
+            AppError::update(inkos_desktop::locale::pick(
+                "检查应用更新失败",
+                "Failed to check for app updates",
+            ))
             .with_details(e.to_string())
-            .with_suggestion("请检查网络连接，或稍后重试"))?
-        .ok_or_else(|| AppError::update("应用已是最新版本"))?;
+            .with_suggestion(inkos_desktop::locale::pick(
+                "请检查网络连接，或稍后重试",
+                "Check your network connection and try again later",
+            ))
+        })?
+        .ok_or_else(|| {
+            AppError::update(inkos_desktop::locale::pick(
+                "应用已是最新版本",
+                "App is already up to date",
+            ))
+        })?;
 
     let ver = update.version.clone();
     update
         .download_and_install(|_chunk, _total| {}, || {})
         .await
-        .map_err(|e| AppError::update("应用更新失败")
+        .map_err(|e| {
+            AppError::update(inkos_desktop::locale::pick(
+                "应用更新失败",
+                "App update failed",
+            ))
             .with_details(e.to_string())
-            .with_suggestion("请稍后重试，或手动下载最新安装包"))?;
+            .with_suggestion(inkos_desktop::locale::pick(
+                "请稍后重试，或手动下载最新安装包",
+                "Try again later, or download the latest installer manually",
+            ))
+        })?;
 
-    Ok(format!("shell 已更新至 {ver}，请重启 app"))
+    // 直显返回值：settings 页 toast 展示
+    Ok(inkos_desktop::locale::pick_owned(
+        format!("shell 已更新至 {ver}，请重启 app"),
+        format!("App updated to {ver}; please restart the app"),
+    ))
 }
 
 /// M4a：获取诊断信息（版本/平台/路径/manifest/最近崩溃）。

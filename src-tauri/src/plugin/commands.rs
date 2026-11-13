@@ -23,7 +23,11 @@ pub fn open_manager_window(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("settings.html".into()))
-        .title("inkosDesktop · 插件管理")
+        // 1009 号：窗口标题为用户直显面，随桌面壳 locale 双语输出。
+        .title(crate::locale::pick(
+            "inkosDesktop · 插件管理",
+            "inkosDesktop · Plugin Manager",
+        ))
         .inner_size(720.0, 560.0)
         .min_inner_size(480.0, 360.0)
         .build()

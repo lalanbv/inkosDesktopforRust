@@ -2,7 +2,8 @@
 <html lang="zh">
   <head>
     <meta charset="utf-8" />
-    <title>inkosDesktop · 插件管理</title>
+    <!-- 1009 号：title 由 JS 按 locale 设置（静态 HTML 无法查字典） -->
+    <title>inkosDesktop</title>
     <style>
       html, body {
         margin: 0; min-height: 100%;
@@ -85,7 +86,7 @@
         <button id="install" class="primary" data-i18n="settings.install">从目录安装…</button>
         <button id="refresh" data-i18n="settings.refresh">刷新</button>
       </div>
-      <p class="metrics" id="metrics">加载指标中…</p>
+      <p class="metrics" id="metrics" data-i18n="metrics.loading">加载指标中…</p>
       <p class="err" id="err"></p>
 
       <ul id="plugins" role="list" aria-label="已安装插件列表"><!-- 插件列表由 JS 注入 --></ul>
@@ -94,7 +95,7 @@
       <section id="diagnostics" style="margin-top:2rem; text-align:left;">
         <h2 style="font-size:1rem; margin:0 0 0.5rem;" data-i18n="diag.title">系统诊断</h2>
         <p class="muted" style="margin:0 0 0.5rem;" data-i18n="diag.muted">聚合应用版本、引擎、插件/项目遥测、崩溃记录，便于排障。可复制报告附到 issue。</p>
-        <pre id="diag-output" role="status" aria-live="polite" aria-atomic="true" style="background:#f3f4f6; padding:0.8rem; border-radius:8px; font-size:0.78rem; line-height:1.4; overflow-x:auto; max-height:20rem;">加载中…</pre>
+        <pre id="diag-output" role="status" aria-live="polite" aria-atomic="true" style="background:#f3f4f6; padding:0.8rem; border-radius:8px; font-size:0.78rem; line-height:1.4; overflow-x:auto; max-height:20rem;" data-i18n="diag.loading">加载中…</pre>
         <div class="toolbar" style="margin-top:0.5rem;">
           <button id="diag-refresh" class="small" data-i18n="diag.refresh">刷新诊断</button>
           <button id="diag-copy" class="small" data-i18n="diag.copy">复制报告</button>
@@ -288,6 +289,45 @@
           "market.other_versions": "其他版本",
           "market.install_this": "安装此版本",
           "market.no_other_versions": "无其他版本",
+          // 1009 号：字典外残留清偿（动态 JS 文案面）
+          "cap.read_project": "读项目",
+          "cap.write_project": "写项目",
+          "cap.filesystem": "文件系统",
+          "cap.network": "网络",
+          "cap.system_command": "系统命令",
+          "cap.environment": "环境变量",
+          "cap.database": "数据库",
+          "sensitive.network": "网络访问",
+          "sensitive.system_command": "系统命令执行",
+          "sensitive.filesystem": "任意文件系统路径",
+          "sensitive.environment": "环境变量",
+          "plugin.badge_on": "已启用",
+          "plugin.badge_off": "已禁用",
+          "plugin.no_caps": "无权限声明",
+          "plugin.author_unknown": "未知",
+          "plugin.disable": "禁用",
+          "plugin.enable": "启用",
+          "plugin.uninstall": "卸载",
+          "plugin.toggle_fail": "失败：",
+          "plugin.uninstall_confirm": "确定卸载插件「{name}」？此操作会删除插件文件。",
+          "plugin.uninstall_fail": "卸载失败：",
+          "plugin.load_fail": "加载插件失败：",
+          "plugin.install_fail": "安装失败：",
+          "plugin.install_ok": "安装成功：",
+          "plugin.warn_declares": "\n⚠ 此插件声明：",
+          "plugin.warn_tail": "。请确认来源可信（进程隔离插件不受宿主沙箱限制）。",
+          "warn_join": "、",
+          "metrics.calls": "调用 {n} 次 · 均耗时 {avg}μs · 失败 {fail} 次",
+          "metrics.auto_disabled": " · ⛔ 自动禁用 {n} 次",
+          "metrics.consec_fail": " · ⚠ 连续失败：{list}",
+          "metrics.recent_disabled": " · 🔴 最近禁用：{list}",
+          "metrics.loading": "加载指标中…",
+          "diag.loading": "加载中…",
+          "diag.partial_fail": "诊断部分失败：",
+          "diag.load_fail": "诊断加载失败：",
+          "diag.copied": "已复制到剪贴板",
+          "diag.copy_fail": "复制失败：",
+          "error.fallback": "操作失败",
         },
         en: {
           "settings.title": "Plugin Manager",
@@ -358,6 +398,45 @@
           "market.other_versions": "Other Versions",
           "market.install_this": "Install This Version",
           "market.no_other_versions": "No other versions.",
+          // 1009 号：字典外残留清偿（动态 JS 文案面）
+          "cap.read_project": "Read project",
+          "cap.write_project": "Write project",
+          "cap.filesystem": "Filesystem",
+          "cap.network": "Network",
+          "cap.system_command": "System command",
+          "cap.environment": "Environment",
+          "cap.database": "Database",
+          "sensitive.network": "Network access",
+          "sensitive.system_command": "System command execution",
+          "sensitive.filesystem": "Arbitrary filesystem paths",
+          "sensitive.environment": "Environment variables",
+          "plugin.badge_on": "Enabled",
+          "plugin.badge_off": "Disabled",
+          "plugin.no_caps": "No capabilities declared",
+          "plugin.author_unknown": "unknown",
+          "plugin.disable": "Disable",
+          "plugin.enable": "Enable",
+          "plugin.uninstall": "Uninstall",
+          "plugin.toggle_fail": " failed: ",
+          "plugin.uninstall_confirm": "Uninstall plugin \"{name}\"? This deletes the plugin files.",
+          "plugin.uninstall_fail": "Uninstall failed: ",
+          "plugin.load_fail": "Failed to load plugins: ",
+          "plugin.install_fail": "Install failed: ",
+          "plugin.install_ok": "Installed: ",
+          "plugin.warn_declares": "\n⚠ This plugin declares: ",
+          "plugin.warn_tail": ". Make sure you trust the source (process-isolated plugins run outside the host sandbox).",
+          "warn_join": ", ",
+          "metrics.calls": "{n} calls · avg {avg}μs · {fail} failures",
+          "metrics.auto_disabled": " · ⛔ auto-disabled {n} time(s)",
+          "metrics.consec_fail": " · ⚠ consecutive failures: {list}",
+          "metrics.recent_disabled": " · 🔴 recently disabled: {list}",
+          "metrics.loading": "Loading metrics…",
+          "diag.loading": "Loading…",
+          "diag.partial_fail": "Diagnostics partially failed: ",
+          "diag.load_fail": "Failed to load diagnostics: ",
+          "diag.copied": "Copied to clipboard",
+          "diag.copy_fail": "Copy failed: ",
+          "error.fallback": "Operation failed",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -368,18 +447,28 @@
         });
       }
       applyI18n();
+      // 1009 号：窗口标题/lang 标注随 locale + Rust 侧直显面（dialog/通知/
+      // AppError）上报同一信号源（未上报时 Rust 默认 zh）。
+      document.title = `inkosDesktop · ${t("settings.title")}`;
+      document.documentElement.lang = LANG;
+      invoke("cmd_set_locale", { tag: navigator.language || "zh" }).catch((e) =>
+        console.warn("[inkos] set_locale 失败:", e)
+      );
 
-      // 插件能力（capability）→ 中文标签。未知值原样回显，不抛错。
-      const CAP_LABELS = {
-        read_project: "读项目",
-        write_project: "写项目",
-        filesystem: "文件系统",
-        network: "网络",
-        system_command: "系统命令",
-        environment: "环境变量",
-        database: "数据库",
-        ui: "UI",
-      };
+      // 插件能力（capability）→ 本地化标签（1009 号：双语字典化）。未知值原样回显，不抛错。
+      function capLabel(tag) {
+        const labels = {
+          read_project: t("cap.read_project"),
+          write_project: t("cap.write_project"),
+          filesystem: t("cap.filesystem"),
+          network: t("cap.network"),
+          system_command: t("cap.system_command"),
+          environment: t("cap.environment"),
+          database: t("cap.database"),
+          ui: "UI",
+        };
+        return labels[tag];
+      }
 
       // 取 capability 的判别名（tag）。serde 对无字段变体序列化成字符串
       // ("read_project")，带字段变体序列化成单键对象
@@ -408,29 +497,32 @@
       }
 
       function capabilityLabel(cap) {
-        if (typeof cap === "string") return CAP_LABELS[cap] || cap;
+        if (typeof cap === "string") return capLabel(cap) || cap;
         if (cap && typeof cap === "object") {
           const key = capabilityTag(cap);
-          if (!CAP_LABELS[key]) return JSON.stringify(cap);
+          if (!capLabel(key)) return JSON.stringify(cap);
           const detail = capabilityDetail(cap[key]);
-          return detail ? `${CAP_LABELS[key]}(${detail})` : CAP_LABELS[key];
+          return detail ? `${capLabel(key)}(${detail})` : capLabel(key);
         }
         return String(cap);
       }
 
       // 敏感权限 → 用户可读描述。进程隔离插件是原生进程，宿主无法强制这些边界
       // （能力声明对它只是声明性的），故安装时须让用户做信任决策。
-      const SENSITIVE_CAPS = {
-        network: "网络访问",
-        system_command: "系统命令执行",
-        filesystem: "任意文件系统路径",
-        environment: "环境变量",
-      };
+      // 1009 号：双语字典化（函数取值——LANG 在脚本顶部已定，取值顺序不变）。
+      function sensitiveCaps() {
+        return [
+          ["network", t("sensitive.network")],
+          ["system_command", t("sensitive.system_command")],
+          ["filesystem", t("sensitive.filesystem")],
+          ["environment", t("sensitive.environment")],
+        ];
+      }
 
-      // 返回该 capabilities 列表中的敏感项描述（去重、保持 SENSITIVE_CAPS 顺序）。
+      // 返回该 capabilities 列表中的敏感项描述（去重、保持 sensitiveCaps 顺序）。
       function sensitiveCapWarnings(caps) {
         const tags = new Set((caps || []).map(capabilityTag));
-        return Object.entries(SENSITIVE_CAPS)
+        return sensitiveCaps()
           .filter(([tag]) => tags.has(tag))
           .map(([, label]) => label);
       }
@@ -441,9 +533,9 @@
         const warnings = sensitiveCapWarnings(meta.capabilities);
         const warnText =
           warnings.length > 0
-            ? `\n⚠ 此插件声明：${warnings.join("、")}。请确认来源可信（进程隔离插件不受宿主沙箱限制）。`
+            ? `${t("plugin.warn_declares")}${warnings.join(t("warn_join"))}${t("plugin.warn_tail")}`
             : "";
-        alert(`安装成功：${meta.name || meta.id} v${meta.version || ""}${warnText}`);
+        alert(`${t("plugin.install_ok")}${meta.name || meta.id} v${meta.version || ""}${warnText}`);
       }
 
       async function loadPlugins() {
@@ -452,7 +544,7 @@
           const plugins = await invoke("list_plugins");
           renderPlugins(plugins || []);
         } catch (e) {
-          showErr("加载插件失败：" + String(e));
+          showErr(t("plugin.load_fail") + String(e));
         }
       }
 
@@ -463,21 +555,24 @@
           const m = await invoke("get_plugin_metrics");
           const el = document.getElementById("metrics");
           if (m && typeof m.exec_count === "number") {
-            let text = `调用 ${m.exec_count} 次 · 均耗时 ${m.avg_us}μs · 失败 ${m.exec_failures} 次`;
+            let text = t("metrics.calls")
+              .replace("{n}", m.exec_count)
+              .replace("{avg}", m.avg_us)
+              .replace("{fail}", m.exec_failures);
             // 自动禁用计数（> 0 = 插件系统不稳定）
             if (m.auto_disabled_count > 0) {
-              text += ` · ⛔ 自动禁用 ${m.auto_disabled_count} 次`;
+              text += t("metrics.auto_disabled").replace("{n}", m.auto_disabled_count);
             }
             // per-plugin 连续失败预警：consec_failures > 0 说明插件处于故障累积中
             if (Array.isArray(m.per_plugin) && m.per_plugin.length > 0) {
               const warns = m.per_plugin
                 .map((p) => `${p.plugin_id}(${p.consecutive_failures}/${5})`)
                 .join(", ");
-              text += ` · ⚠ 连续失败：${warns}`;
+              text += t("metrics.consec_fail").replace("{list}", warns);
             }
             // 最近自动禁用插件列表（最新在末尾）：精确到具体插件，帮助快速定位不稳定源
             if (Array.isArray(m.recently_auto_disabled) && m.recently_auto_disabled.length > 0) {
-              text += ` · 🔴 最近禁用：${m.recently_auto_disabled.join(", ")}`;
+              text += t("metrics.recent_disabled").replace("{list}", m.recently_auto_disabled.join(", "));
             }
             el.textContent = text;
           }
@@ -507,14 +602,14 @@
 
           const badge = document.createElement("span");
           badge.className = p.enabled ? "plugin-badge badge-on" : "plugin-badge badge-off";
-          badge.textContent = p.enabled ? "已启用" : "已禁用";
+          badge.textContent = p.enabled ? t("plugin.badge_on") : t("plugin.badge_off");
           name.appendChild(badge);
           info.appendChild(name);
 
           const meta = document.createElement("div");
           meta.className = "plugin-meta";
-          const caps = (p.capabilities || []).map(capabilityLabel).join("、") || "无权限声明";
-          meta.textContent = `${p.id} · v${p.version || "?"} · ${p.author || "未知"} · ${caps}`;
+          const caps = (p.capabilities || []).map(capabilityLabel).join(t("warn_join")) || t("plugin.no_caps");
+          meta.textContent = `${p.id} · v${p.version || "?"} · ${p.author || t("plugin.author_unknown")} · ${caps}`;
           info.appendChild(meta);
 
           li.appendChild(info);
@@ -524,13 +619,13 @@
 
           const toggleBtn = document.createElement("button");
           toggleBtn.className = "small";
-          toggleBtn.textContent = p.enabled ? "禁用" : "启用";
+          toggleBtn.textContent = p.enabled ? t("plugin.disable") : t("plugin.enable");
           toggleBtn.addEventListener("click", () => togglePlugin(p.id, p.enabled));
           actions.appendChild(toggleBtn);
 
           const uninstallBtn = document.createElement("button");
           uninstallBtn.className = "small danger";
-          uninstallBtn.textContent = "卸载";
+          uninstallBtn.textContent = t("plugin.uninstall");
           uninstallBtn.addEventListener("click", () => uninstallPlugin(p.id, p.name || p.id));
           actions.appendChild(uninstallBtn);
 
@@ -552,12 +647,12 @@
           }).catch((e) => console.warn(`[inkos] broadcast ${event} 失败:`, e));
           await loadPlugins();
         } catch (e) {
-          showErr(`${currentlyEnabled ? "禁用" : "启用"}失败：` + String(e));
+          showErr(`${currentlyEnabled ? t("plugin.disable") : t("plugin.enable")}${t("plugin.toggle_fail")}` + String(e));
         }
       }
 
       async function uninstallPlugin(id, name) {
-        if (!confirm(`确定卸载插件「${name}」？此操作会删除插件文件。`)) return;
+        if (!confirm(t("plugin.uninstall_confirm").replace("{name}", name))) return;
         showErr("");
         try {
           await invoke("uninstall_plugin", { id });
@@ -568,7 +663,7 @@
           }).catch((e) => console.warn("[inkos] broadcast plugin.uninstalled 失败:", e));
           await loadPlugins();
         } catch (e) {
-          showErr("卸载失败：" + String(e));
+          showErr(t("plugin.uninstall_fail") + String(e));
         }
       }
 
@@ -595,7 +690,7 @@
           // （WASM 插件则由 host_api 强制白名单，这是强隔离的安全替代。）
           alertInstalled(meta);
         } catch (e) {
-          showErr("安装失败：" + String(e));
+          showErr(t("plugin.install_fail") + String(e));
         } finally {
           pickingDir = false;
         }
@@ -607,12 +702,12 @@
         const out = document.getElementById("diag-output");
         const errEl = document.getElementById("diag-err");
         errEl.textContent = "";
-        out.textContent = "加载中…";
+        out.textContent = t("diag.loading");
         try {
           // 并行拉取，单项失败返回 null 不拖垮整体
           const [diag, plugMetrics, projMetrics, config] = await Promise.all([
             invoke("cmd_get_diagnostics").catch((e) => {
-              errEl.textContent = "诊断部分失败：" + String(e);
+              errEl.textContent = t("diag.partial_fail") + String(e);
               return null;
             }),
             invoke("get_plugin_metrics").catch(() => null),
@@ -640,7 +735,7 @@
           out.textContent = JSON.stringify(report, null, 2);
         } catch (e) {
           out.textContent = "";
-          errEl.textContent = "诊断加载失败：" + String(e);
+          errEl.textContent = t("diag.load_fail") + String(e);
         }
       }
 
@@ -821,7 +916,7 @@
           info.appendChild(name);
           const meta = document.createElement("div");
           meta.className = "plugin-meta";
-          const caps = (e.capabilities || []).map(capabilityLabel).join("、") || "无权限声明";
+          const caps = (e.capabilities || []).map(capabilityLabel).join(t("warn_join")) || t("plugin.no_caps");
           meta.textContent = `${e.id} · ${e.author || "?"} · ${caps}`;
           info.appendChild(meta);
           if (e.description) {
@@ -974,15 +1069,15 @@
         const text = document.getElementById("diag-output").textContent;
         try {
           await navigator.clipboard.writeText(text);
-          document.getElementById("diag-err").textContent = "已复制到剪贴板";
+          document.getElementById("diag-err").textContent = t("diag.copied");
         } catch (e) {
-          document.getElementById("diag-err").textContent = "复制失败：" + String(e);
+          document.getElementById("diag-err").textContent = t("diag.copy_fail") + String(e);
         }
       });
 
       // 全局错误兜底
       window.addEventListener("unhandledrejection", (event) => {
-        showErr(String(event.reason || "操作失败"));
+        showErr(String(event.reason || t("error.fallback")));
         event.preventDefault();
       });
 

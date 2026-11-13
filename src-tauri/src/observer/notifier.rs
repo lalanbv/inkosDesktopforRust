@@ -26,10 +26,18 @@ pub struct NativeNotifier {
 impl EventHandler for NativeNotifier {
     fn handle(&self, ev: &SseEvent) -> Result<()> {
         if (self.is_unfocused)() {
+            // 1009 号：通知标题为用户直显面，随桌面壳 locale 双语输出。
             let title = match ev.event.as_str() {
-                "write:complete" | "draft:complete" => "inkos：章节写完",
-                "book:created" => "inkos：已创建新书",
-                "agent:complete" => "inkos：agent 完成",
+                "write:complete" | "draft:complete" => crate::locale::pick(
+                    "inkos：章节写完",
+                    "InkOS: chapter finished",
+                ),
+                "book:created" => {
+                    crate::locale::pick("inkos：已创建新书", "InkOS: new book created")
+                }
+                "agent:complete" => {
+                    crate::locale::pick("inkos：agent 完成", "InkOS: agent finished")
+                }
                 _ => "inkos",
             };
             (self.notify)(title, &ev.data);
@@ -61,6 +69,9 @@ mod tests {
 
     #[test]
     fn notifies_when_unfocused() {
+        // 通知标题随 locale：持锁（locale.rs 1009 号）
+        let _g = crate::locale::tests::test_locale_lock();
+        crate::locale::set_locale(crate::locale::Locale::Zh);
         let spy = Arc::new(NotifySpy::default());
         let spy_cap = Arc::clone(&spy);
         let n = NativeNotifier {
@@ -76,6 +87,32 @@ mod tests {
         assert_eq!(caps.len(), 1);
         assert_eq!(caps[0].0, "inkos：章节写完");
         assert_eq!(caps[0].1, "{\"id\":12}");
+    }
+
+    // 1009 号：通知标题随桌面壳 locale 双语输出（en 形态锚例；zh 形态由
+    // 既有用例锚定——默认 locale=Zh 零行为漂移）。测试后复位全局态。
+    #[test]
+    fn title_mapping_follows_locale() {
+        let _g = crate::locale::tests::test_locale_lock();
+        let spy = Arc::new(NotifySpy::default());
+        let spy_cap = Arc::clone(&spy);
+        let n = NativeNotifier {
+            is_unfocused: Arc::new(|| true),
+            notify: Arc::new(move |t: &str, b: &str| {
+                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+            }),
+        };
+
+        crate::locale::set_locale(crate::locale::Locale::En);
+        n.handle(&ev("write:complete", "w1")).unwrap();
+        n.handle(&ev("book:created", "b1")).unwrap();
+        n.handle(&ev("agent:complete", "a1")).unwrap();
+        crate::locale::set_locale(crate::locale::Locale::Zh);
+
+        let caps = spy.captures();
+        assert_eq!(caps[0].0, "InkOS: chapter finished");
+        assert_eq!(caps[1].0, "InkOS: new book created");
+        assert_eq!(caps[2].0, "InkOS: agent finished");
     }
 
     #[test]
@@ -97,6 +134,9 @@ mod tests {
 
     #[test]
     fn title_mapping_covers_known_events() {
+        // 通知标题随 locale：持锁（locale.rs 1009 号）
+        let _g = crate::locale::tests::test_locale_lock();
+        crate::locale::set_locale(crate::locale::Locale::Zh);
         let spy = Arc::new(NotifySpy::default());
         let spy_cap = Arc::clone(&spy);
         let n = NativeNotifier {

@@ -114,6 +114,23 @@
           "picker.select": "选择项目",
           "launching.title": "inkosDesktop 启动中…",
           "launching.desc": "正在拉起 inkos Studio sidecar，请稍候。",
+          // 1009 号：字典外残留清偿（错误展示面）
+          "error.retry": "重试",
+          "error.dismiss": "知道了",
+          "error.fallbackTitle": "操作失败",
+          "error.detailsPrefix": "技术细节: ",
+          "error.fallbackString": "操作失败：",
+          "error.unexpectedMessage": "应用发生了意外错误",
+          "error.unexpectedSuggestion": "请刷新页面重试，或报告此问题",
+          "error.rejectionMessage": "操作失败",
+          "error.rejectionSuggestion": "请重试此操作",
+          "type.generic": "通用",
+          "fav.updateFail": "收藏状态更新失败：",
+          "fav.title": "收藏/取消收藏",
+          "fav.ariaLabel": "收藏 ",
+          "plugins.openFail": "打开插件管理失败：",
+          "error.initMessage": "应用初始化失败",
+          "error.initSuggestion": "请重启应用，或检查应用日志",
         },
         en: {
           "picker.title": "Choose inkos Project Directory",
@@ -123,6 +140,23 @@
           "picker.select": "Select project",
           "launching.title": "inkosDesktop Starting…",
           "launching.desc": "Launching inkos Studio sidecar, please wait.",
+          // 1009 号：字典外残留清偿（错误展示面）
+          "error.retry": "Retry",
+          "error.dismiss": "OK",
+          "error.fallbackTitle": "Operation failed",
+          "error.detailsPrefix": "Technical details: ",
+          "error.fallbackString": "Operation failed: ",
+          "error.unexpectedMessage": "An unexpected error occurred",
+          "error.unexpectedSuggestion": "Refresh the page and try again, or report this issue",
+          "error.rejectionMessage": "Operation failed",
+          "error.rejectionSuggestion": "Please try this operation again",
+          "type.generic": "Generic",
+          "fav.updateFail": "Failed to update favorite status: ",
+          "fav.title": "Favorite / Unfavorite",
+          "fav.ariaLabel": "Favorite ",
+          "plugins.openFail": "Failed to open plugin manager: ",
+          "error.initMessage": "Application failed to initialize",
+          "error.initSuggestion": "Restart the app, or check the app logs",
         },
       };
       const LANG = (navigator.language || "zh").toLowerCase().startsWith("en") ? "en" : "zh";
@@ -135,11 +169,16 @@
         });
       }
       applyI18n();
+      // 1009 号：Rust 侧直显面（dialog 标题/通知/AppError）随同一信号源双语
+      // ——前端启动即上报 navigator.language（未上报时 Rust 默认 zh）。
+      invoke("cmd_set_locale", { tag: navigator.language || "zh" }).catch((e) =>
+        console.warn("[inkos] set_locale 失败:", e)
+      );
 
       // 显示结构化错误（AppError）。retryLabel：按钮文案——用户操作链路传
       // "重试"（可重发 invoke）；非用户链路（unhandledrejection）传"知道了"，
       // 此类错误无操作可重试，"重试"按钮是误导。
-      function showStructuredError(error, retryLabel = "重试") {
+      function showStructuredError(error, retryLabel = t("error.retry")) {
         // 如果是字符串，直接显示
         if (typeof error === "string") {
           showErr(error);
@@ -152,7 +191,7 @@
           banner.className = "err-banner";
 
           const title = document.createElement("h3");
-          title.textContent = error.message || "操作失败";
+          title.textContent = error.message || t("error.fallbackTitle");
           banner.appendChild(title);
 
           if (error.suggestion) {
@@ -164,7 +203,7 @@
           if (error.details) {
             const details = document.createElement("p");
             details.className = "details";
-            details.textContent = "技术细节: " + error.details;
+            details.textContent = t("error.detailsPrefix") + error.details;
             banner.appendChild(details);
           }
 
@@ -179,7 +218,7 @@
           // 插入到错误区域前
           errEl.parentNode.insertBefore(banner, errEl);
         } else {
-          showErr("操作失败：" + String(error));
+          showErr(t("error.fallbackString") + String(error));
         }
       }
 
@@ -187,9 +226,9 @@
       window.addEventListener("error", (event) => {
         console.error("全局错误:", event.error);
         showStructuredError({
-          message: "应用发生了意外错误",
+          message: t("error.unexpectedMessage"),
           details: event.error?.message || String(event.error),
-          suggestion: "请刷新页面重试，或报告此问题",
+          suggestion: t("error.unexpectedSuggestion"),
         });
         event.preventDefault();
       });
@@ -198,11 +237,11 @@
         console.error("未处理的 Promise 拒绝:", event.reason);
         showStructuredError(
           {
-            message: "操作失败",
+            message: t("error.rejectionMessage"),
             details: event.reason?.message || String(event.reason),
-            suggestion: "请重试此操作",
+            suggestion: t("error.rejectionSuggestion"),
           },
-          "知道了"
+          t("error.dismiss")
         );
         event.preventDefault();
       });
@@ -236,7 +275,7 @@
         go: "Go",
         java: "Java",
         dotnet: ".NET",
-        generic: "通用",
+        generic: t("type.generic"),
       };
 
       // 收藏切换：仅当该项已被 M6 索引收录（有 project_id）时可用。
@@ -251,7 +290,7 @@
           console.error("切换收藏失败:", e);
           btn.classList.toggle("on", wasOn);
           btn.setAttribute("aria-pressed", String(wasOn));
-          showErr("收藏状态更新失败：" + String(e));
+          showErr(t("fav.updateFail") + String(e));
         }
       }
 
@@ -286,8 +325,8 @@
             const fav = document.createElement("button");
             fav.className = r.is_favorite ? "fav on" : "fav";
             fav.textContent = "★";
-            fav.title = "收藏/取消收藏";
-            fav.setAttribute("aria-label", "收藏 " + r.name);
+            fav.title = t("fav.title");
+            fav.setAttribute("aria-label", t("fav.ariaLabel") + r.name);
             fav.setAttribute("aria-pressed", String(!!r.is_favorite));
             // 阻止冒泡：点星标不应触发 li 的「选择项目」。
             fav.addEventListener("click", (event) => {
@@ -353,7 +392,7 @@
                 await invoke("cmd_open_plugin_manager");
               } catch (e) {
                 console.error("打开插件管理失败:", e);
-                showErr("打开插件管理失败：" + String(e));
+                showErr(t("plugins.openFail") + String(e));
               }
             });
           } else {
@@ -362,9 +401,9 @@
         } catch (e) {
           console.error("初始化失败:", e);
           showStructuredError({
-            message: "应用初始化失败",
+            message: t("error.initMessage"),
             details: String(e),
-            suggestion: "请重启应用，或检查应用日志",
+            suggestion: t("error.initSuggestion"),
           });
         }
       })();

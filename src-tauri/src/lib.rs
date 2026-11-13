@@ -3,6 +3,7 @@ pub mod engine;
 pub mod error;
 pub mod isolation;
 pub mod lifecycle;
+pub mod locale;
 pub mod observability;
 pub mod observer;
 pub mod paths;
