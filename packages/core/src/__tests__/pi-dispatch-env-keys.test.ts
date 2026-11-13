@@ -7,6 +7,9 @@ import type { Api, Context, Model } from "@earendil-works/pi-ai";
 // 子路径中 env-api-keys 与 streamSimple 分发的自持替代。本测试锁两模块的
 // 行为面：env 键表（含 anthropic 特判）与 dispatch 表（api 键分发+未知抛错）。
 
+// 1015/1017 号：测试凭据治理——env 表值走 env 注入+非凭据回退（855 惯用形）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+
 const { completionsStreamSimple, responsesStreamSimple, anthropicStreamSimple } = vi.hoisted(() => ({
   completionsStreamSimple: vi.fn(() => "completions-stream"),
   responsesStreamSimple: vi.fn(() => "responses-stream"),
@@ -46,12 +49,12 @@ afterEach(() => {
 
 describe("getEnvApiKey（上游 env-api-keys 自持镜像）", () => {
   it("resolves single-key providers from the upstream table", () => {
-    expect(getEnvApiKey("openai", { OPENAI_API_KEY: "k1" })).toBe("k1");
-    expect(getEnvApiKey("deepseek", { DEEPSEEK_API_KEY: "k2" })).toBe("k2");
-    expect(getEnvApiKey("zai", { ZAI_API_KEY: "k3" })).toBe("k3");
-    expect(getEnvApiKey("openrouter", { OPENROUTER_API_KEY: "k4" })).toBe("k4");
-    expect(getEnvApiKey("moonshotai", { MOONSHOT_API_KEY: "k5" })).toBe("k5");
-    expect(getEnvApiKey("google", { GEMINI_API_KEY: "k6" })).toBe("k6");
+    expect(getEnvApiKey("openai", { OPENAI_API_KEY: `${TEST_KEY}-1` })).toBe(`${TEST_KEY}-1`);
+    expect(getEnvApiKey("deepseek", { DEEPSEEK_API_KEY: `${TEST_KEY}-2` })).toBe(`${TEST_KEY}-2`);
+    expect(getEnvApiKey("zai", { ZAI_API_KEY: `${TEST_KEY}-3` })).toBe(`${TEST_KEY}-3`);
+    expect(getEnvApiKey("openrouter", { OPENROUTER_API_KEY: `${TEST_KEY}-4` })).toBe(`${TEST_KEY}-4`);
+    expect(getEnvApiKey("moonshotai", { MOONSHOT_API_KEY: `${TEST_KEY}-5` })).toBe(`${TEST_KEY}-5`);
+    expect(getEnvApiKey("google", { GEMINI_API_KEY: `${TEST_KEY}-6` })).toBe(`${TEST_KEY}-6`);
   });
 
   it("falls back to process.env when the scoped env omits the key", () => {
@@ -70,8 +73,8 @@ describe("getEnvApiKey（上游 env-api-keys 自持镜像）", () => {
     expect(getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer" })).toBeUndefined();
     // AUTH_TOKEN 在场时跳过，取 API_KEY。
     expect(
-      getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer", ANTHROPIC_API_KEY: "sk" }),
-    ).toBe("sk");
+      getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer", ANTHROPIC_API_KEY: TEST_KEY }),
+    ).toBe(TEST_KEY);
     // 仅 AUTH_TOKEN 在场时跳过后无候选。
     expect(getEnvApiKey("anthropic", { ANTHROPIC_OAUTH_TOKEN: "oauth" })).toBe("oauth");
   });

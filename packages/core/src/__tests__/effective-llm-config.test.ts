@@ -6,16 +6,20 @@ import { resolveEffectiveLLMConfig } from "../utils/effective-llm-config.js";
 
 // 945 号：字面量提为常量间接（Mimosa L3 新扫描器对「apiKey 字段+任意
 // 字面量」不再豁免 test-key- 前缀——855 占位符形态的判定基线升级）。
+// 1015/1017 号二轮：KEYS 值派生自 TEST_KEY（env 注入+非凭据回退），ENV
+// stub（INKOS_LLM_API_KEY/GOOGLE_API_KEY 键名含 API_KEY）值同体系引用。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 const KEYS = {
-  google: "test-key-google",
-  moon: "test-key-moon",
-  envMoon: "test-key-env-moon",
-  globalMoon: "test-key-global-moon",
-  projectDeepseek: "test-key-project-deepseek",
-  processZhipu: "test-key-process-zhipu",
-  minimax: "test-key-minimax",
-  or: "test-key-or",
-  zhipu: "test-key-zhipu",
+  google: `${TEST_KEY}-google`,
+  moon: `${TEST_KEY}-moon`,
+  envMoon: `${TEST_KEY}-env-moon`,
+  globalMoon: `${TEST_KEY}-global-moon`,
+  projectDeepseek: `${TEST_KEY}-project-deepseek`,
+  processZhipu: `${TEST_KEY}-process-zhipu`,
+  minimax: `${TEST_KEY}-minimax`,
+  or: `${TEST_KEY}-or`,
+  zhipu: `${TEST_KEY}-zhipu`,
+  env: `${TEST_KEY}-env`,
 } as const;
 
 
@@ -67,7 +71,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.service).toBe("google");
     expect(result.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(result.llm.model).toBe("gemini-2.5-flash");
-    expect(result.llm.apiKey).toBe("test-key-google");
+    expect(result.llm.apiKey).toBe(KEYS.google);
     expect(result.diagnostics.apiKeySource).toBe("studio-secret");
     expect(result.diagnostics.warnings).toEqual([]);
   });
@@ -125,7 +129,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.service).toBe("moonshot");
     expect(result.llm.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.llm.model).toBe("kimi-k2.5");
-    expect(result.llm.apiKey).toBe("test-key-moon");
+    expect(result.llm.apiKey).toBe(KEYS.moon);
     expect(result.diagnostics.serviceSource).toBe("env");
     expect(result.diagnostics.modelSource).toBe("env");
   });
@@ -157,7 +161,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.service).toBe("moonshot");
     expect(result.llm.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.llm.model).toBe("kimi-k2.5");
-    expect(result.llm.apiKey).toBe("test-key-env-moon");
+    expect(result.llm.apiKey).toBe(KEYS.envMoon);
     expect(result.diagnostics.serviceSource).toBe("env");
   });
 
@@ -195,7 +199,7 @@ describe("resolveEffectiveLLMConfig", () => {
 
     expect(result.llm.service).toBe("google");
     expect(result.llm.model).toBe("gemini-2.5-flash");
-    expect(result.llm.apiKey).toBe("test-key-google");
+    expect(result.llm.apiKey).toBe(KEYS.google);
     expect(result.diagnostics.warnings.join("\n")).toContain("Studio 运行时不会使用 env");
   });
 
@@ -218,7 +222,7 @@ describe("resolveEffectiveLLMConfig", () => {
           INKOS_LLM_PROVIDER: "custom",
           INKOS_LLM_BASE_URL: "https://api.example.com/v1",
           INKOS_LLM_MODEL: "legacy-model",
-          INKOS_LLM_API_KEY: "test-key-env",
+          INKOS_LLM_API_KEY: KEYS.env,
         },
         project: {},
         process: {},
@@ -230,7 +234,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.provider).toBe("custom");
     expect(result.llm.baseUrl).toBe("https://api.example.com/v1");
     expect(result.llm.model).toBe("legacy-model");
-    expect(result.llm.apiKey).toBe("test-key-env");
+    expect(result.llm.apiKey).toBe(KEYS.env);
   });
 
   it("environment mode CLI --service selects the endpoint defaults", async () => {
@@ -249,11 +253,11 @@ describe("resolveEffectiveLLMConfig", () => {
           INKOS_LLM_PROVIDER: "custom",
           INKOS_LLM_BASE_URL: "https://api.moonshot.cn/v1",
           INKOS_LLM_MODEL: "kimi-k2.5",
-          INKOS_LLM_API_KEY: "test-key-moon",
+          INKOS_LLM_API_KEY: KEYS.moon,
         },
         project: {},
         process: {
-          GOOGLE_API_KEY: "test-key-google",
+          GOOGLE_API_KEY: KEYS.google,
         },
       },
       cli: {
@@ -269,7 +273,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(result.llm.apiFormat).toBe("chat");
     expect(result.llm.model).toBe("gemini-2.5-flash");
-    expect(result.llm.apiKey).toBe("test-key-google");
+    expect(result.llm.apiKey).toBe(KEYS.google);
   });
 
   it("environment mode CLI transport overrides env", async () => {
@@ -288,7 +292,7 @@ describe("resolveEffectiveLLMConfig", () => {
           INKOS_LLM_PROVIDER: "openai",
           INKOS_LLM_BASE_URL: "https://api.example.com/v1",
           INKOS_LLM_MODEL: "legacy-model",
-          INKOS_LLM_API_KEY: "test-key-env",
+          INKOS_LLM_API_KEY: KEYS.env,
           INKOS_LLM_API_FORMAT: "chat",
           INKOS_LLM_STREAM: "true",
         },
@@ -320,7 +324,7 @@ describe("resolveEffectiveLLMConfig", () => {
       envLayers: {
         global: {},
         project: {
-          INKOS_LLM_API_KEY: "test-key-env",
+          INKOS_LLM_API_KEY: KEYS.env,
           INKOS_LLM_EXTRA_top_p: "0.9",
           INKOS_DEFAULT_LANGUAGE: "en",
         },
@@ -388,7 +392,7 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(result.llm.provider).toBe("openai");
     expect(result.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(result.llm.model).toBe("gemini-2.5-flash");
-    expect(result.llm.apiKey).toBe("test-key-google");
+    expect(result.llm.apiKey).toBe(KEYS.google);
     expect(result.diagnostics.serviceSource).toBe("cli");
     expect(result.diagnostics.modelSource).toBe("project");
     expect(result.diagnostics.apiKeySource).toBe("studio-secret");

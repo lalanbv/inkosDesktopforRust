@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { createBuiltInWorkProfileRegistry } from "../builtin-profiles.js";
 import { createInitialWorkManifestWrite } from "../source-sync.js";
@@ -19,7 +19,9 @@ export function createProfileWorkTools(root: string, capabilities: CapabilityReg
       execute: async () => ({ content: [{ type: "text", text: JSON.stringify(createBuiltInWorkProfileRegistry(root).list()) }], details: { kind: "work_profiles" } }),
     },
     { name: "create_work", label: "Create work from profile", description: "Create and bind a Work using an installed Profile, persist the user's brief, and activate the Profile's production actions for the next step. For derivation, supply source or ordered sources covering all author-requested material. inspect_work returns sourceSets for complete manuscripts; use their source references when the author requests written content, rather than a brief or plan.", parameters: CreateParameters,
-      execute: async (_id, params) => {
+      // 1017 号：mz 0.73.1 收紧 AgentTool.execute params 到 Static<TParameters>——
+      // AgentTool<any> 归档面下推断回落 unknown，显式注解静态化。
+      execute: async (_id, params: Static<typeof CreateParameters>) => {
         const profile = createBuiltInWorkProfileRegistry(root).require(params.profileId);
         capabilities.forProfile(profile);
         return withWorkMutationScope(root, params.workId, () => new StateManager(root).acquireBookLock(params.workId), async () => {
