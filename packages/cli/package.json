@@ -53,21 +53,21 @@
   "dependencies": {
     "@actalk/inkos-core": "workspace:*",
     "@actalk/inkos-studio": "workspace:*",
-    "commander": "^13.0.0",
-    "dotenv": "^16.4.0",
-    "epub-gen-memory": "^1.0.10",
+    "commander": "^13.1.0",
+    "dotenv": "^16.6.1",
+    "epub-gen-memory": "^1.1.2",
     "ink": "7.0.0",
     "ink-text-input": "^6.0.0",
     "marked": "^15.0.12",
-    "marked-terminal": "^7.3.0",
-    "react": "^19.2.4"
+    "marked-terminal": "^7.3.1",
+    "react": "^19.3.1"
   },
   "devDependencies": {
     "@types/marked-terminal": "^6.1.1",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.2.14",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
     "ink-testing-library": "^4.0.0",
-    "typescript": "^5.8.0",
+    "typescript": "^5.9.3",
     "vitest": "^5.1.0"
   },
   "overrides": {
