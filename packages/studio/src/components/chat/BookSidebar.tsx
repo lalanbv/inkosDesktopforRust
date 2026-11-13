@@ -4,6 +4,7 @@ import type { TFunction } from "../../hooks/use-i18n";
 import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
+import { useI18n } from "../../hooks/use-i18n";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
@@ -65,6 +66,7 @@ function renderTruthBody(
 }
 
 export function ArtifactView({ bookId }: { readonly bookId: string }) {
+  const { t } = useI18n();
   const artifactFile = useChatStore((s) => s.artifactFile);
   const artifactChapter = useChatStore((s) => s.artifactChapter);
   const closeArtifact = useChatStore((s) => s.closeArtifact);
@@ -167,6 +169,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-border/20 shrink-0">
         <button
           onClick={closeArtifact}
+          aria-label={t("book.backToFileList")}
           className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
         >
           <ArrowLeft size={14} />
@@ -175,6 +178,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
         {!loading && content !== null && !editing && (
           <button
             onClick={handleEdit}
+            aria-label={t("book.editFileContent")}
             className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
           >
             <Pencil size={12} />
@@ -185,12 +189,14 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
             <button
               onClick={handleSave}
               disabled={saving}
+              aria-label={t("book.saveChanges")}
               className="w-6 h-6 rounded-md flex items-center justify-center text-emerald-500 hover:bg-emerald-500/10 transition-colors"
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             </button>
             <button
               onClick={handleCancelEdit}
+              aria-label={t("book.cancelEditing")}
               className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
             >
               <X size={12} />
@@ -209,6 +215,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
           <textarea
             value={editContent}
             onChange={(e) => handleDraftChange(e.target.value)}
+            aria-label={t("book.editFileContent")}
             className="w-full h-full min-h-[300px] bg-transparent text-[15px] leading-7 px-4 py-3 resize-none outline-none border-0 font-mono"
           />
         ) : (

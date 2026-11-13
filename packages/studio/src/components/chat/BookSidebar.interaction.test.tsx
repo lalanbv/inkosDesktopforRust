@@ -24,10 +24,12 @@ function mockTruthFetch() {
   );
 }
 
-function iconButton(container: HTMLElement, iconClass: string): HTMLElement {
-  const icon = container.querySelector(`.lucide-${iconClass}`);
-  if (!icon) throw new Error(`icon ${iconClass} not found`);
-  return icon.closest("button") as HTMLElement;
+function iconButton(container: HTMLElement, accessibleName: string): HTMLElement {
+  // 1002 号：按可访问名称定位（aria-label 注册后升级）——本测试即 a11y 回归
+  // 守卫：按钮若退化为无 aria-label，getByRole 查询失败即红。
+  const btn = document.querySelector(`button[aria-label="${accessibleName}"]`);
+  if (!btn) throw new Error(`button with aria-label "${accessibleName}" not found`);
+  return btn as HTMLElement;
 }
 
 describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
@@ -48,8 +50,8 @@ describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
     const first = render(<ArtifactView bookId="b1" />);
     await waitFor(() => expect(first.container.textContent).toContain(TRUTH_CONTENT));
 
-    // 进入编辑态（铅笔钮）并追加输入
-    await user.click(iconButton(first.container, "pencil"));
+    // 进入编辑态（铅笔钮——按可访问名称定位，a11y 回归守卫）
+    await user.click(iconButton(first.container, "编辑文件内容"));
     const textarea = (await waitFor(() => {
       const el = first.container.querySelector("textarea");
       if (!el) throw new Error("textarea not yet rendered");
@@ -77,7 +79,7 @@ describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
     const user = userEvent.setup();
     const first = render(<ArtifactView bookId="b1" />);
     await waitFor(() => expect(first.container.textContent).toContain(TRUTH_CONTENT));
-    await user.click(iconButton(first.container, "pencil"));
+    await user.click(iconButton(first.container, "编辑文件内容"));
     const textarea = (await waitFor(() => {
       const el = first.container.querySelector("textarea");
       if (!el) throw new Error("textarea not yet rendered");
@@ -85,7 +87,7 @@ describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
     })) as HTMLTextAreaElement;
     await user.type(textarea, "已保存新增");
 
-    await user.click(iconButton(first.container, "save"));
+    await user.click(iconButton(first.container, "保存修改"));
     // PUT 已发生（第二次 fetch 调用），body 含草稿全文
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThanOrEqual(2));
     const putCall = vi.mocked(fetch).mock.calls.find(([, init]) => (init as RequestInit)?.method === "PUT");
@@ -105,14 +107,14 @@ describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
     const user = userEvent.setup();
     const first = render(<ArtifactView bookId="b1" />);
     await waitFor(() => expect(first.container.textContent).toContain(TRUTH_CONTENT));
-    await user.click(iconButton(first.container, "pencil"));
+    await user.click(iconButton(first.container, "编辑文件内容"));
     const textarea = (await waitFor(() => {
       const el = first.container.querySelector("textarea");
       if (!el) throw new Error("textarea not yet rendered");
       return el;
     })) as HTMLTextAreaElement;
     await user.type(textarea, "将被丢弃");
-    await user.click(iconButton(first.container, "x"));
+    await user.click(iconButton(first.container, "取消编辑"));
     expect(sessionStorage.getItem(artifactEditDraftKey("b1", false, null, FILE))).toBeNull();
 
     first.unmount();

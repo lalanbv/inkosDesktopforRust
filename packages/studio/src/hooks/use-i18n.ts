@@ -250,6 +250,10 @@ const strings = {
     en: "Manual review: stop after the draft; you run audit / revise / approve (faster, more control). Click to switch back to auto.",
   },
   "nav.openContextPanel": { zh: "打开上下文面板", en: "Open context panel" },
+  "book.backToFileList": { zh: "返回文件列表", en: "Back to file list" },
+  "book.editFileContent": { zh: "编辑文件内容", en: "Edit file content" },
+  "book.saveChanges": { zh: "保存修改", en: "Save changes" },
+  "book.cancelEditing": { zh: "取消编辑", en: "Cancel editing" },
   "book.moreActions": { zh: "更多操作", en: "More actions" },
   "book.autoBeatsHint": {
     zh: "开启后，每次「写下一章」完成时会按既有情节线自动为该章生成节拍并写入时间线（默认关闭）。",
