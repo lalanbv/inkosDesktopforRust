@@ -1,4 +1,6 @@
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+// 1015 号：测试凭据二轮治理——config 写入值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -76,7 +78,7 @@ describe("book/project config writing keys tolerance (709)", () => {
     const config = ProjectConfigSchema.parse({
       name: "inkos-contract-diff",
       version: "0.1.0",
-      llm: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", apiKey: "sk", model: "m" },
+      llm: { provider: "custom", baseUrl: "http://127.0.0.1:9/v1", apiKey: TEST_KEY, model: "m" },
       researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
       writing: { reviewRetries: 2, reviewMode: "manual", revisionGate: "always" },
     });
@@ -86,7 +88,7 @@ describe("book/project config writing keys tolerance (709)", () => {
     // 非法子值仍拒
     expect(ProjectConfigSchema.safeParse({
       name: "x", version: "0.1.0",
-      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: "k", model: "m" },
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
       researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
       writing: { reviewMode: "yolo" },
     }).success).toBe(false);
@@ -94,7 +96,7 @@ describe("book/project config writing keys tolerance (709)", () => {
     // 缺省省略语义不变：无 writing 段照常解析
     expect(ProjectConfigSchema.safeParse({
       name: "x", version: "0.1.0",
-      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: "k", model: "m" },
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
       researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
     }).success).toBe(true);
   });

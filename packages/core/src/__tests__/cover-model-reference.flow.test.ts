@@ -1,4 +1,6 @@
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it, expect, vi } from "vitest";
@@ -30,11 +32,11 @@ it("keeps provider credentials on its own origin when an image URL requires auth
     // 900 号 origin 策略：异 origin 环回目标默认发送前拒绝；allowlist 显式
     // 放行以保持原凭据卫生断言（fetch 必须真实发生才能断言无 Authorization）。
     vi.stubEnv("INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS", new URL(remoteUrl).origin);
-    const request = {api:"images" as const,baseUrl:`http://127.0.0.1:${(provider.address() as {port:number}).port}/v1`,model:"image-fixture",apiKey:"fixture-key"};
+    const request = {api:"images" as const,baseUrl:`http://127.0.0.1:${(provider.address() as {port:number}).port}/v1`,model:"image-fixture",apiKey:TEST_KEY};
     await expect(generateImageFromPrompt(request, "A lantern", "1024x1024")).rejects.toMatchObject({code:"IMAGE_DOWNLOAD_FAILED",status:403});
     expect(remoteHeaders).toEqual([undefined]);
     expect((await generateImageFromPrompt(request, "A lantern", "1024x1024")).buffer).toEqual(image);
-    expect(localHeaders).toEqual([undefined,"Bearer fixture-key"]);
+    expect(localHeaders).toEqual([undefined,`Bearer ${TEST_KEY}`]);
   } finally {
     vi.unstubAllEnvs();
     for (const server of [provider, remote]) {server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));}
@@ -49,7 +51,7 @@ it("resolves configured service labels to model IDs while preserving other expli
     const config = { name: "fixture", version: "0.1.0", language: "zh", notify: [],
       llm: { provider: "openai", model: "fixture", baseUrl: "https://api.kkaiapi.com/v1", cover: { service: "kkaiapi", model: "gpt-image-2" } } };
     await writeFile(join(root, "inkos.json"), JSON.stringify(config));
-    await saveSecrets(root, { services: { kkaiapi: { apiKey: "fixture-key" } } });
+    await saveSecrets(root, { services: { kkaiapi: { apiKey: TEST_KEY } } });
     const requests = [];
     for (const coverModel of [undefined, "gpt-image-2", "kkaiapi gpt-image-2", "kkaiapi/gpt-image-2", "kkaiapi · gpt-image-2", "vendor/custom-image"]) {
       requests.push(await resolveCoverGenerationRequest({ root, coverModel }));
@@ -57,13 +59,13 @@ it("resolves configured service labels to model IDs while preserving other expli
     expect(requests.map(request => request.model)).toEqual([
       "gpt-image-2", "gpt-image-2", "gpt-image-2", "gpt-image-2", "gpt-image-2", "vendor/custom-image",
     ]);
-    expect(requests.every(request => request.baseUrl === "https://api.kkaiapi.com/v1" && request.apiKey === "fixture-key")).toBe(true);
+    expect(requests.every(request => request.baseUrl === "https://api.kkaiapi.com/v1" && request.apiKey === TEST_KEY)).toBe(true);
     config.llm.cover.model = "vendor/custom-image";
     await writeFile(join(root, "inkos.json"), JSON.stringify(config));
     expect((await resolveCoverGenerationRequest({ root, coverModel: "kkaiapi/vendor/custom-image" })).model).toBe("vendor/custom-image");
     expect((await resolveCoverGenerationRequest({ root, coverModel: "kkaiapi/unknown-model" })).model).toBe("kkaiapi/unknown-model");
     vi.stubEnv("INKOS_COVER_BASE_URL", "https://api.kkaiapi.com/v1");
-    vi.stubEnv("INKOS_COVER_API_KEY", "fixture-key");
+    vi.stubEnv("INKOS_COVER_API_KEY", TEST_KEY);
     expect((await resolveCoverGenerationRequest({ root, coverModel: "kkaiapi/gpt-image-2" })).model).toBe("gpt-image-2");
     expect((await resolveCoverGenerationRequest({ root, coverBaseUrl: "https://custom.example/v1", coverModel: "kkaiapi/gpt-image-2" })).model).toBe("kkaiapi/gpt-image-2");
   } finally {
@@ -78,7 +80,7 @@ it("ends a stalled cover generation at the fallback total window even without a 
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   try {
     vi.stubEnv("INKOS_COVER_REQUEST_TIMEOUT_MS", "100");
-    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: "fixture-key" };
+    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: TEST_KEY };
     const started = Date.now();
     // 关键回归锚：不传 caller signal——修复前这是 signal-less 裸 fetch。
     await expect(generateImageFromPrompt(request, "A lantern", "1024x1024")).rejects.toThrow();
@@ -107,7 +109,7 @@ it("blocks a model-returned loopback URL before any request leaves the process (
   });
   provider.listen(0, "127.0.0.1"); await once(provider, "listening");
   try {
-    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: "fixture-key" };
+    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: TEST_KEY };
     await expect(generateImageFromPrompt(request, "A lantern", "1024x1024")).rejects.toMatchObject({
       code: "COVER_DOWNLOAD_ORIGIN_BLOCKED",
       reason: "private-or-reserved-address",
@@ -144,7 +146,7 @@ it("rejects a redirect that lands on a private address and keeps its response ou
   });
   provider.listen(0, "127.0.0.1"); await once(provider, "listening");
   try {
-    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: "fixture-key" };
+    const request = { api: "images" as const, baseUrl: `http://127.0.0.1:${(provider.address() as { port: number }).port}/v1`, model: "image-fixture", apiKey: TEST_KEY };
     await expect(generateImageFromPrompt(request, "A lantern", "1024x1024")).rejects.toMatchObject({
       code: "COVER_DOWNLOAD_ORIGIN_BLOCKED",
       reason: "private-or-reserved-address",

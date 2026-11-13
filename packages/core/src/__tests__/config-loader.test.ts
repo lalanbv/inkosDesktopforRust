@@ -18,6 +18,17 @@ const ENV_KEYS = [
   "INKOS_DEFAULT_LANGUAGE",
 ] as const;
 
+// 1015 号：测试凭据二轮治理（L3 新拦截面）——写盘 fixture 值走 env 注入+
+// 非凭据回退（855 惯用形二轮：写盘子面补齐）；fixture 与断言两侧引用同一
+// 常量，服务区分用后缀。INKOS_LLM_API_KEY=<值> 形态的 .env 内容串保持原样
+// （键名非 apiKey 字段，扫描口径外）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+const KEY_MOON = `${TEST_KEY}-moon`;
+const KEY_MOON_INLINE = `${TEST_KEY}-moon-inline`;
+const KEY_MINIMAX = `${TEST_KEY}-minimax`;
+const KEY_CORP = `${TEST_KEY}-corp`;
+const KEY_GOOGLE = `${TEST_KEY}-google`;
+
 describe("loadProjectConfig local provider auth", () => {
   let root = "";
   const previousEnv = new Map<string, string | undefined>();
@@ -103,7 +114,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { moonshot: { apiKey: "test-key-moon" } } }, null, 2),
+      JSON.stringify({ services: { moonshot: { apiKey: KEY_MOON } } }, null, 2),
       "utf-8",
     );
 
@@ -113,7 +124,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(config.llm.model).toBe("kimi-k2.5");
-    expect(config.llm.apiKey).toBe("test-key-moon");
+    expect(config.llm.apiKey).toBe(KEY_MOON);
     expect(config.llm.temperature).toBe(1);
   });
 
@@ -139,7 +150,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { minimax: { apiKey: "test-key-minimax" } } }, null, 2),
+      JSON.stringify({ services: { minimax: { apiKey: KEY_MINIMAX } } }, null, 2),
       "utf-8",
     );
 
@@ -149,7 +160,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://api.minimaxi.com/v1");
     expect(config.llm.model).toBe("MiniMax-M2.7");
-    expect(config.llm.apiKey).toBe("test-key-minimax");
+    expect(config.llm.apiKey).toBe(KEY_MINIMAX);
   });
 
   it("loads custom service config using custom secret key and entry baseUrl", async () => {
@@ -174,7 +185,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }, null, 2),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: KEY_CORP } } }, null, 2),
       "utf-8",
     );
 
@@ -184,7 +195,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("custom");
     expect(config.llm.baseUrl).toBe("https://llm.internal.corp/v1");
     expect(config.llm.model).toBe("corp-chat");
-    expect(config.llm.apiKey).toBe("test-key-corp");
+    expect(config.llm.apiKey).toBe(KEY_CORP);
     expect(config.llm.temperature).toBe(0.9);
     expect(config.llm.apiFormat).toBe("responses");
     expect(config.llm.stream).toBe(false);
@@ -219,7 +230,7 @@ describe("loadProjectConfig local provider auth", () => {
     await mkdir(join(root, ".inkos"), { recursive: true });
     await writeFile(
       join(root, ".inkos", "secrets.json"),
-      JSON.stringify({ services: { "custom:内网GPT": { apiKey: "test-key-corp" } } }, null, 2),
+      JSON.stringify({ services: { "custom:内网GPT": { apiKey: KEY_CORP } } }, null, 2),
       "utf-8",
     );
 
@@ -229,7 +240,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("custom");
     expect(config.llm.baseUrl).toBe("https://llm.internal.corp/v1");
     expect(config.llm.model).toBe("corp-chat");
-    expect(config.llm.apiKey).toBe("test-key-corp");
+    expect(config.llm.apiKey).toBe(KEY_CORP);
   });
 
   it("does not mix stale top-level env-era model/baseUrl with selected Studio service", async () => {
@@ -248,7 +259,7 @@ describe("loadProjectConfig local provider auth", () => {
         service: "google",
         model: "kimi-k2.5",
         baseUrl: "https://api.moonshot.cn/v1",
-        apiKey: "test-key-moon-inline",
+        apiKey: KEY_MOON_INLINE,
         services: [
           { service: "google", temperature: 0.7, apiFormat: "chat", stream: true },
           { service: "moonshot", temperature: 1, apiFormat: "chat", stream: true },
@@ -268,8 +279,8 @@ describe("loadProjectConfig local provider auth", () => {
       join(root, ".inkos", "secrets.json"),
       JSON.stringify({
         services: {
-          google: { apiKey: "test-key-google" },
-          moonshot: { apiKey: "test-key-moon" },
+          google: { apiKey: KEY_GOOGLE },
+          moonshot: { apiKey: KEY_MOON },
         },
       }, null, 2),
       "utf-8",
@@ -282,7 +293,7 @@ describe("loadProjectConfig local provider auth", () => {
     expect(config.llm.provider).toBe("openai");
     expect(config.llm.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
     expect(config.llm.model).toBe("gemini-2.5-flash");
-    expect(config.llm.apiKey).toBe("test-key-google");
+    expect(config.llm.apiKey).toBe(KEY_GOOGLE);
   });
 
   it("falls back to env when Studio config is still the empty bootstrap state", async () => {

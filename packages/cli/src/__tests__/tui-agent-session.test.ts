@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// 1015 号：测试凭据二轮治理——mock client 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -44,7 +46,7 @@ vi.mock("@actalk/inkos-core", async () => {
         contextWindow: 128000,
         maxTokens: 8192,
       },
-      _apiKey: "secret",
+      _apiKey: TEST_KEY,
     })),
     PipelineRunner: PipelineRunnerMock as any,
     runAgentSession: runAgentSessionMock,

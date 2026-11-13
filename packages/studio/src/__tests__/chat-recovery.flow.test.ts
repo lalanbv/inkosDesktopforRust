@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +26,7 @@ it("retains a failed submission across server recreation and exposes an interrup
     await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "fixture", version: "0.1.0", language: "en", llm: {
       defaultModel: "fixture-model", services: [{ service: "custom", name: "fixture", baseUrl, apiFormat: "chat", stream: false, models: ["fixture-model"] }],
     } }));
-    await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { "custom:fixture": { apiKey: "fixture" } } }));
+    await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { "custom:fixture": { apiKey: TEST_KEY } } }));
     const app = createStudioServer({} as never, root);
     const post = (body: unknown) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const { session } = await (await app.request("/api/v1/sessions", post({ sessionKind: "chat" }))).json();

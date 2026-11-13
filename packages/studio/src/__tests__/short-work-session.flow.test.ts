@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +27,7 @@ it("runs a book-route session against a short Work with no long-form book.json",
     await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "fixture", version: "0.1.0", language: "en", llm: {
       defaultModel: "fixture-model", services: [{ service: "custom", name: "fixture", baseUrl, apiFormat: "chat", stream: false, models: ["fixture-model"] }],
     } }));
-    await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { "custom:fixture": { apiKey: "fixture" } } }));
+    await writeFile(join(root, ".inkos/secrets.json"), JSON.stringify({ services: { "custom:fixture": { apiKey: TEST_KEY } } }));
     const writes = [{ relativePath: "works/short/source/brief.md", content: "A short story." }];
     const initial = createInitialWorkManifestWrite({ workId: "short", title: "Short", profileId: "short-fiction", language: "en", writes });
     await commitAtomicFileSet({ rootDir: root, writes: [...writes, initial.write] });

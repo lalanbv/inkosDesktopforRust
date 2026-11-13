@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,7 +79,7 @@ it("answers a question, rejects an unevidenced delivery, creates a Work and rest
     baseUrl: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`, input: ["text"], reasoning: false,
     contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   const config = { projectRoot: root, sessionId: "completion", bookId: null, workId: null, profileId: "workspace-default",
-    sessionKind: "chat" as const, language: "en" as const, model, apiKey: "fixture", stream: false, pipeline: {} as never };
+    sessionKind: "chat" as const, language: "en" as const, model, apiKey: TEST_KEY, stream: false, pipeline: {} as never };
   try {
     const answer = await runAgentSession(config, "Explain a scene in one sentence.");
     expect(answer.completion?.status).toBe("answered");
@@ -119,7 +121,7 @@ it("keeps a nonterminal provider response out of the completed answer after the 
   });
   upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
   try {
-    const result = await runAgentSession({ projectRoot: root, sessionId: "missing", bookId: null, language: "en", apiKey: "fixture", stream: false, pipeline: {} as never,
+    const result = await runAgentSession({ projectRoot: root, sessionId: "missing", bookId: null, language: "en", apiKey: TEST_KEY, stream: false, pipeline: {} as never,
       model: { id: "fixture", name: "Fixture", provider: "openai", api: "openai-completions", baseUrl: `http://127.0.0.1:${(upstream.address() as { port: number }).port}/v1`, reasoning: false,
         input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     }, "Create an empty script Work.");

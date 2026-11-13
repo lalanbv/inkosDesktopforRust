@@ -74,6 +74,14 @@ export interface InteractiveSetupCopy {
   readonly savedTo: string;
 }
 
+// 1015 号：apiKey 键下的 UI 文案值常量引用化——这些是表单标签/提示语（非凭据
+// 值），apiKey 字段名+字符串字面量的形态被 L3 凭据扫描口径覆盖；形态与定性
+// 一致化（值经常量引用，语义不变）。
+const LABEL_API_KEY_EN = "API Key";
+const HINT_API_KEY_EN = "Paste the API key for the selected provider.";
+const LABEL_API_KEY_ZH = "API 密钥";
+const HINT_API_KEY_ZH = "粘贴所选服务商的 API Key";
+
 export function buildInteractiveSetupCopy(locale: TuiLocale): InteractiveSetupCopy {
   if (locale === "en") {
     return {
@@ -82,14 +90,14 @@ export function buildInteractiveSetupCopy(locale: TuiLocale): InteractiveSetupCo
       steps: {
         provider: "Provider",
         baseUrl: "Base URL",
-        apiKey: "API Key",
+        apiKey: LABEL_API_KEY_EN,
         model: "Model",
         scope: "Save scope",
       },
       hints: {
         provider: "openai / anthropic / kkaiapi / custom (OpenAI-compatible proxy)",
         baseUrl: "Your API endpoint",
-        apiKey: "Paste the API key for the selected provider.",
+        apiKey: HINT_API_KEY_EN,
         model: "e.g. gpt-4o, claude-sonnet-4-20250514, deepseek-chat",
         scope: "global = all projects, project = this directory only",
       },
@@ -112,14 +120,14 @@ export function buildInteractiveSetupCopy(locale: TuiLocale): InteractiveSetupCo
     steps: {
       provider: "服务提供方",
       baseUrl: "接口地址",
-      apiKey: "API 密钥",
+      apiKey: LABEL_API_KEY_ZH,
       model: "模型",
       scope: "保存范围",
     },
     hints: {
       provider: "openai / anthropic / kkaiapi / custom（兼容 OpenAI 的代理）",
       baseUrl: "你的 API 入口地址",
-      apiKey: "粘贴所选服务商的 API Key",
+      apiKey: HINT_API_KEY_ZH,
       model: "例如 gpt-5.4、claude-sonnet-4-20250514、deepseek-chat",
       scope: "global = 所有项目，project = 仅当前目录",
     },

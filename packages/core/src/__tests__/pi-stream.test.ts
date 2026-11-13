@@ -1,4 +1,6 @@
 import {fixtureToolCalls} from './tool-call-fixtures.js';
+// 1015 号：测试凭据二轮治理——客户端构造值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import {createHash} from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model } from "@mariozechner/pi-ai";
@@ -537,7 +539,7 @@ describe("guardedPiNonStreaming", () => {
     const draft = { storyTitle: "Story", openingHook: "An unanswered knock.", rawContent: "", chapters: [1, 2].map(number => ({ number, title: `Chapter ${number}`, content: "An original complete scene.", charCount: 5 })) };
     const reply = (name: string, args: unknown) => new Response(JSON.stringify({ choices: [{ finish_reason: "tool_calls", message: { tool_calls: [{ id: `call-${name}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] }), { status: 200 });
     fetchWithProxyMock.mockResolvedValueOnce(reply("submit_short_revision_chapter", { title: "Chapter 1", content: "The revised scene resolves the missing handoff." }));
-    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: model.id, apiKey: "test", apiFormat: "chat", stream: false, temperature: 0.7, thinkingBudget: 0 });
+    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: model.id, apiKey: TEST_KEY, apiFormat: "chat", stream: false, temperature: 0.7, thinkingBudget: 0 });
     const result = await new ShortFictionWriterAgent({ client, model: model.id, projectRoot: "/tmp" }).reviseDraft({ direction: "Fix chapter one", chapterCount: 2, chapterNumbers: [1], charsPerChapter: 10, minChapterLength: 1, openingHookChars:20, language: "en", draft, outlineMarkdown: "Original outline", review: "Missing handoff in chapter one" });
     expect(fetchWithProxyMock).toHaveBeenCalledTimes(1);
     expect(result.draft.chapters.map(chapter => chapter.number)).toEqual([1, 2]);
@@ -767,7 +769,7 @@ describe("guardedPiNonStreaming", () => {
       }] } }] }), { status: 200 }));
     }
     const modelId = "deepseek-v4-flash";
-    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: modelId, apiKey: "test", apiFormat: "chat", stream: false, temperature: 0.7, thinkingBudget: 0 });
+    const client = createLLMClient({ provider: "openai", service: "custom", configSource: "studio", baseUrl: model.baseUrl, model: modelId, apiKey: TEST_KEY, apiFormat: "chat", stream: false, temperature: 0.7, thinkingBudget: 0 });
     const result = await new ShortFictionOutlineAgent({ client, model: modelId, projectRoot: "/tmp" }).createOutline({ direction: "Write a story", chapterCount: 2, charsPerChapter: 900, language: "en" });
     expect(fetchWithProxyMock).toHaveBeenCalledTimes(2);
     expect(result.storyTitle).toBe("Story");
@@ -805,7 +807,7 @@ describe("guardedPiNonStreaming", () => {
     };
 
     const thinkingModel = { ...model, id: "deepseek-v4-pro", reasoning: true };
-    const stream = guardedPiNonStreaming(thinkingModel, context, { apiKey: "test-key", maxTokens: 1024 });
+    const stream = guardedPiNonStreaming(thinkingModel, context, { apiKey: TEST_KEY, maxTokens: 1024 });
     const eventTypes: string[] = [];
     for await (const event of stream) eventTypes.push(event.type);
     const result = await stream.result();

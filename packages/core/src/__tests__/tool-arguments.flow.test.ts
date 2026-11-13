@@ -1,4 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@mariozechner/pi-agent-core";
@@ -31,7 +33,7 @@ it("persists original scalar types through Pi and rejects coercible invalid inpu
     calls.push({ type: "toolCall", id: "invalid", name: "set_world_anchor", arguments: { durationMinutes: "12" } });
     const client = createLLMClient({
       service: "custom", provider: "openai", configSource: "studio", model: "fixture",
-      baseUrl: "https://example.invalid/v1", apiKey: "fixture", apiFormat: "chat",
+      baseUrl: "https://example.invalid/v1", apiKey: TEST_KEY, apiFormat: "chat",
       temperature: 0, stream: true, thinkingBudget: 0,
     });
     let turns = 0;

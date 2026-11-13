@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
+// 1015 号：测试凭据二轮治理——fixture 值走 env 注入+非凭据回退（855 惯用形二轮）。
+const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,7 +178,7 @@ it.each(["chat", "responses", "anthropic"] as const)("carries the required resul
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   try {
     const address = server.address() as { port: number };
-    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "deepseek-v4-flash", baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: "fixture-key", apiFormat, stream: true, temperature: 0, thinkingBudget: 0 });
+    const client = createLLMClient({ service: "custom", configSource: "studio", provider: "openai", model: "deepseek-v4-flash", baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: TEST_KEY, apiFormat, stream: true, temperature: 0, thinkingBudget: 0 });
     const progress: StreamProgress[] = [];
     class FixtureAgent extends BaseAgent {
       get name() { return "fixture"; }

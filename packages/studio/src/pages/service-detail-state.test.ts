@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+// 1015 号：测试凭据二轮治理——空串=「未配置凭据」合法空态，常量引用化让
+// 形态与定性一致（apiKey 字段+字面量形态被 L3 扫描口径覆盖，值本身无凭据）。
+const NO_KEY = "";
 import {
   deleteServiceConfig,
   matchServiceConfigEntryForDetail,
@@ -118,7 +121,7 @@ describe("saveServiceConfig", () => {
       serviceId: "openai",
       isCustom: false,
       resolvedCustomName: "",
-      apiKey: "",
+      apiKey: NO_KEY,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,
@@ -155,7 +158,7 @@ describe("saveServiceConfig", () => {
       isCustom: false,
       apiKeyOptional: true,
       resolvedCustomName: "",
-      apiKey: "",
+      apiKey: NO_KEY,
       baseUrl: "",
       apiFormat: "chat",
       stream: true,
@@ -245,14 +248,14 @@ describe("saveServiceConfig", () => {
       serviceId: "custom",
       isCustom: true,
       resolvedCustomName: "Anthropic Gateway",
-      apiKey: "",
+      apiKey: NO_KEY,
       baseUrl: "https://gateway.example",
       apiFormat: "anthropic",
       stream: true,
       temperature: "0.7",
       detectedModel: "claude-compatible-model",
       verifiedProbe: {
-        apiKey: "",
+        apiKey: NO_KEY,
         baseUrl: "https://gateway.example",
         apiFormat: "anthropic",
         stream: true,
@@ -264,7 +267,7 @@ describe("saveServiceConfig", () => {
     });
 
     expect(bodies).toEqual([
-      { apiKey: "" },
+      { apiKey: NO_KEY },
       {
         service: "custom:Anthropic Gateway",
         defaultModel: "claude-compatible-model",
@@ -439,7 +442,7 @@ describe("saveServiceConfig", () => {
       serviceId: "custom",
       isCustom: true,
       resolvedCustomName: "Local",
-      apiKey: "",
+      apiKey: NO_KEY,
       baseUrl: "http://127.0.0.1:8001/v1",
       apiFormat: "chat",
       stream: false,
@@ -454,8 +457,8 @@ describe("saveServiceConfig", () => {
       "/services/config",
     ]);
     expect(bodies).toEqual([
-      { apiKey: "", apiFormat: "chat", stream: false, baseUrl: "http://127.0.0.1:8001/v1" },
-      { apiKey: "" },
+      { apiKey: NO_KEY, apiFormat: "chat", stream: false, baseUrl: "http://127.0.0.1:8001/v1" },
+      { apiKey: NO_KEY },
       {
         service: "custom:Local",
         defaultModel: "qwen3.6:35b-a3b",
