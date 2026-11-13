@@ -1,5 +1,8 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
+// 1008 号：BookStatus 枚举真源=core（本地手打 union 曾漂移丢 "incubating"）；
+// subpath 导入同 book-settings-draft（主入口拖 node:async_hooks 链进浏览器面）
+import type { BookStatus } from "@actalk/inkos-core/models/book";
 import { formatAuditOutcome, summarizeAuditResult } from "../lib/audit-outcome";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
 import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
@@ -113,7 +116,6 @@ interface BookData {
 
 type ReviseMode = "spot-fix" | "polish" | "rewrite" | "rework" | "anti-detect";
 type ExportFormat = "txt" | "md" | "epub";
-type BookStatus = "active" | "paused" | "outlining" | "completed" | "dropped";
 
 interface Nav {
   toDashboard: () => void;
@@ -191,10 +193,11 @@ export function BookDetail({
     () => loadBookSettingsDraft(bookId)?.targetChapters ?? null,
   );
   const [settingsStatus, setSettingsStatus] = useState<BookStatus | null>(
-    () => (loadBookSettingsDraft(bookId)?.status as BookStatus | undefined) ?? null,
+    // 1008 号：草稿库已按 core BookStatusSchema 校验返回，盲 `as` 转型撤销
+    () => loadBookSettingsDraft(bookId)?.status ?? null,
   );
   const persistSettingsDraft = useCallback(
-    (patch: { wordCount?: number; targetChapters?: number; status?: string }) => {
+    (patch: { wordCount?: number; targetChapters?: number; status?: BookStatus }) => {
       saveBookSettingsDraft(bookId, {
         wordCount: patch.wordCount ?? settingsWordCount ?? undefined,
         targetChapters: patch.targetChapters ?? settingsTargetChapters ?? undefined,

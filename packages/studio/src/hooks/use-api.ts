@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { localizeKnownRuntimeMessage } from "../lib/error-copy";
 
 const BASE = "/api/v1";
@@ -126,8 +126,14 @@ export function useApi<T>(path: string) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 1008 号：响应竞态守卫（latest-wins）。refetch 是多入口共同漏斗（挂载
+  // effect / path 变化 / API 失效事件 / 消费者手动调用），旧请求晚到不得覆盖
+  // 新请求的 data / error / loading 终态。seq 比较 + 三分支卫兵，早退不掉
+  // loading（新请求在途时由新请求自己的 finally 收口）。
+  const seqRef = useRef(0);
 
   const refetch = useCallback(async () => {
+    const seq = ++seqRef.current;
     const url = buildApiUrl(path);
     if (!url) {
       setData(null);
@@ -140,11 +146,13 @@ export function useApi<T>(path: string) {
     setError(null);
     try {
       const json = await fetchJson<T>(url);
+      if (seq !== seqRef.current) return;
       setData(json);
     } catch (e) {
+      if (seq !== seqRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
   }, [path]);
 

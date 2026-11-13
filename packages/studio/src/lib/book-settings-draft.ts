@@ -12,11 +12,21 @@
 //!
 //! 同 998 号 artifact-edit-draft：表单草稿是易失工作数据——sessionStorage 会话
 //! 级（页面切换保留、应用重启丢弃）。键含 bookId，多书互不串扰。
+//!
+//! ## status 枚举防御（1008 号）
+//!
+//! status 用 core `BookStatusSchema` 校验：sessionStorage 被篡改 / 旧协议残留
+//! 的非法值被逐字段过滤，不进表单、不污染真源。枚举真源=core，BookDetail
+//! 曾因本地手打 union 漂移丢过 "incubating"。
+
+// 1008 号：走 core subpath 导入——主入口会拖 node:async_hooks 链进浏览器
+// bundle（rollup 拒绝）；subpath 只拉 models/book.js（纯 zod，浏览器安全）。
+import { BookStatusSchema, type BookStatus } from "@actalk/inkos-core/models/book";
 
 export interface BookSettingsDraft {
   readonly wordCount?: number;
   readonly targetChapters?: number;
-  readonly status?: string;
+  readonly status?: BookStatus;
 }
 
 const PREFIX = "inkos.bookSettingsDraft:";
@@ -25,21 +35,23 @@ export function bookSettingsDraftKey(bookId: string): string {
   return `${PREFIX}${bookId}`;
 }
 
-/** 读草稿；无存储 / 无草稿 / 字段类型错 → null（回落真源值）。 */
+/** 读草稿；无存储 / 无草稿 / 字段类型错 / status 非法枚举值 → null（回落真源值）。 */
 export function loadBookSettingsDraft(bookId: string): BookSettingsDraft | null {
   try {
     if (typeof sessionStorage === "undefined") return null;
     const raw = sessionStorage.getItem(bookSettingsDraftKey(bookId));
     if (raw === null) return null;
     const parsed = JSON.parse(raw) as Partial<BookSettingsDraft>;
-    const draft: { wordCount?: number; targetChapters?: number; status?: string } = {};
+    const draft: { wordCount?: number; targetChapters?: number; status?: BookStatus } = {};
     if (typeof parsed.wordCount === "number" && Number.isFinite(parsed.wordCount)) {
       draft.wordCount = parsed.wordCount;
     }
     if (typeof parsed.targetChapters === "number" && Number.isFinite(parsed.targetChapters)) {
       draft.targetChapters = parsed.targetChapters;
     }
-    if (typeof parsed.status === "string") draft.status = parsed.status;
+    // 1008 号：枚举真源校验（非法值过滤，不进表单）
+    const status = BookStatusSchema.safeParse(parsed.status);
+    if (status.success) draft.status = status.data;
     return Object.keys(draft).length > 0 ? draft : null;
   } catch {
     return null;

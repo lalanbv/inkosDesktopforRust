@@ -159,13 +159,25 @@ export function TranslationManager({ nav, theme, t }: { nav: Nav; theme: Theme; 
       return;
     }
     setDetailLoading(true);
+    // 1008 号：响应竞态守卫——selected 项目在页面挂载中 in-place 切换，旧项目
+    // 详情响应晚到不得覆盖新项目；旧失败晚到不得误报到新项目状态条。
+    let cancelled = false;
     fetchJson<TranslationDetailResponse>(`/translations/${encodeURIComponent(selected.projectId)}`)
       .then((nextDetail) => {
+        if (cancelled) return;
         setDetail(nextDetail);
         setPreviewChapterNumber(nextDetail.chapters?.[0]?.number ?? nextDetail.manifest.chapters[0]?.number ?? null);
       })
-      .catch((err) => setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) }))
-      .finally(() => setDetailLoading(false));
+      .catch((err) => {
+        if (cancelled) return;
+        setStatus({ tone: "error", message: err instanceof Error ? err.message : String(err) });
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selected?.projectId]);
 
   const previewChapter = useMemo(() => {

@@ -343,9 +343,15 @@ export function PlayHud(props: {
     props.onImageStatusChange?.({pending:generating.size>0,error:imageError});
   }, [generating, imageError, props.onImageStatusChange]);
 
+  // 1008 号：响应竞态守卫——load 有四个调用点（挂载/开面板/回合收尾/操作后
+  // 重取），turn 推进时 base 变化 + 多点触发可交错；seq latest-wins，旧回合
+  // 快照晚到不得覆盖新回合状态。
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     try {
       const data = await fetchJson<PlayRunResponse>(base);
+      if (seq !== loadSeqRef.current) return;
       setRun(data);
       setImageError(data.sceneImageError ?? null);
       if (data.imageSettings) setSettings(data.imageSettings);

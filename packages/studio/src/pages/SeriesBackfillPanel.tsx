@@ -74,9 +74,19 @@ export function SeriesBackfillPanel({ t }: { t: TFunction }) {
       setExisting(null);
       return;
     }
+    // 1008 号：响应竞态守卫——target in-place 切换，旧书内容晚到不得覆盖
+    // 新书；旧失败晚到不得清空新书已到手内容。
+    let cancelled = false;
     void fetchJson<{ content: string | null }>(`/books/${target}/series-backfill/existing`)
-      .then((res) => setExisting(res.content))
-      .catch(() => setExisting(null));
+      .then((res) => {
+        if (!cancelled) setExisting(res.content);
+      })
+      .catch(() => {
+        if (!cancelled) setExisting(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [target]);
 
   const categoryGrouped = useMemo(() => {

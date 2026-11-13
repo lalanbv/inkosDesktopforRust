@@ -59,11 +59,17 @@ export function BackupPanel() {
   // 语义不变，删除是用户显式选择）。
   const [deleteIntroduced, setDeleteIntroduced] = useState(false);
 
+  // 1008 号：响应竞态守卫——挂载+操作后重取多入口共用（seq latest-wins），
+  // 旧列举响应晚到不得覆盖新列表；旧失败晚到不得清空新列表。
+  const loadSeqRef = useRef(0);
   const loadSnapshots = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     try {
       const result = await fetchJson<{ snapshots?: ReadonlyArray<SnapshotItem> }>("/backup/snapshots");
+      if (seq !== loadSeqRef.current) return;
       setSnapshots(result.snapshots ?? []);
     } catch {
+      if (seq !== loadSeqRef.current) return;
       setSnapshots([]); // 列举失败不阻断面板主功能（导出/导入不受影响）
     }
   }, []);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 
@@ -38,11 +38,17 @@ export function AssetLibraryPanel({ bookId }: { bookId?: string }) {
     name: "", body: "", expectations: "", taboos: "",
   });
 
+  // 1008 号：响应竞态守卫——kind 切换/操作后重取多入口共用 load（seq
+  // latest-wins），旧库快照晚到不得覆盖新库；旧失败晚到不得清空新快照。
+  const loadSeqRef = useRef(0);
   const load = async (target: LibraryAsset["kind"] = kind) => {
+    const seq = ++loadSeqRef.current;
     try {
       const data = await fetchJson<Snapshot>(`/asset-library/${target}`);
+      if (seq !== loadSeqRef.current) return;
       setSnapshot(data);
     } catch {
+      if (seq !== loadSeqRef.current) return;
       setSnapshot(null);
     }
   };

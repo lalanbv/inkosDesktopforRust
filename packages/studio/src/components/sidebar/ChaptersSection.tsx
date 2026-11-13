@@ -23,9 +23,20 @@ export function ChaptersSection({ bookId, isZh }: ChaptersSectionProps) {
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
+    // 1008 号：响应竞态守卫——deps 在 dock 挂载中 in-place 变化（Sidebar 换书
+    // 不卸载 ContextDock + SSE bump bookDataVersion），旧响应晚到不得覆盖
+    // 新列表；旧请求失败晚到不得清空已到手的好数据。
+    let cancelled = false;
     fetchJson<{ chapters: ChapterMeta[] }>(`/books/${bookId}`)
-      .then((data) => setChapters(data.chapters))
-      .catch(() => setChapters([]));
+      .then((data) => {
+        if (!cancelled) setChapters(data.chapters);
+      })
+      .catch(() => {
+        if (!cancelled) setChapters([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, bookDataVersion]);
 
   return (

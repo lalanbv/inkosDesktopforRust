@@ -41,6 +41,10 @@
       "types": "./dist/llm/api-format.d.ts",
       "import": "./dist/llm/api-format.js"
     },
+    "./models/book": {
+      "types": "./dist/models/book.d.ts",
+      "import": "./dist/models/book.js"
+    },
     "./utils/author-error-catalog": {
       "types": "./dist/utils/author-error-catalog.d.ts",
       "import": "./dist/utils/author-error-catalog.js"

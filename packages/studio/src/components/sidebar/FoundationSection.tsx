@@ -21,9 +21,18 @@ export function FoundationSection({ bookId }: FoundationSectionProps) {
   const bookDataVersion = useChatStore((s) => s.bookDataVersion);
 
   useEffect(() => {
+    // 1008 号：响应竞态守卫——同 ChaptersSection（dock 挂载中 in-place deps）。
+    let cancelled = false;
     fetchJson<{ files: TruthFileInfo[] }>(`/books/${bookId}/truth`)
-      .then((data) => setFiles(data.files))
-      .catch(() => setFiles([]));
+      .then((data) => {
+        if (!cancelled) setFiles(data.files);
+      })
+      .catch(() => {
+        if (!cancelled) setFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, bookDataVersion]);
 
   const available = files

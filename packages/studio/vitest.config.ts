@@ -17,6 +17,8 @@ export default defineConfig({
       "@actalk/inkos-core/utils/author-report": resolve(__dirname, "../core/src/utils/author-report.ts"),
       "@actalk/inkos-core/utils/author-error-catalog": resolve(__dirname, "../core/src/utils/author-error-catalog.ts"),
       "@actalk/inkos-core/llm/api-format": resolve(__dirname, "../core/src/llm/api-format.ts"),
+      // 1008 号：models/book subpath（BookStatusSchema 枚举真源，草稿库校验用）
+      "@actalk/inkos-core/models/book": resolve(__dirname, "../core/src/models/book.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

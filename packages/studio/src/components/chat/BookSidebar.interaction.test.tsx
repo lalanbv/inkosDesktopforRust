@@ -6,7 +6,7 @@
 //! 断言：①进入编辑+输入后卸载重挂载，编辑态与草稿内容恢复；
 //! ②保存成功清草稿（会话内回到非编辑态）；③取消清草稿。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ArtifactView } from "./BookSidebar";
 import { useChatStore } from "../../store/chat";
@@ -122,5 +122,105 @@ describe("ArtifactView 编辑草稿卸载恢复（998）", () => {
     await waitFor(() => expect(second.container.textContent).toContain(TRUTH_CONTENT));
     expect(second.container.querySelector("textarea")).toBeNull();
     expect(second.container.textContent).not.toContain("将被丢弃");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1008 号：ArtifactView 响应竞态守卫。目标切换（artifactFile / 章节号）在
+// dock 挂载中 in-place 发生，旧目标响应晚到会覆盖新目标内容；旧目标失败晚到
+// 会把新目标的正文清成空态。ArtifactView 是 1007 号备案「stale-response 防护」
+// 主缺陷面。
+// ---------------------------------------------------------------------------
+describe("ArtifactView 响应竞态守卫（1008）", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  function deferredJson(): {
+    promise: Promise<Response>;
+    resolve: (r: Response) => void;
+    reject: (e: unknown) => void;
+  } {
+    let resolve!: (r: Response) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<Response>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  function routeFetch(routes: ReadonlyArray<{ match: string; promise: Promise<Response> }>) {
+    return vi.fn((input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
+      const hit = routes.find((r) => url.includes(r.match));
+      if (!hit) {
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 404 }));
+      }
+      return hit.promise;
+    });
+  }
+
+  it("切换目标竞态：旧文件慢响应晚到不得覆盖新文件内容", async () => {
+    const fileA = deferredJson();
+    const fileB = deferredJson();
+    vi.stubGlobal(
+      "fetch",
+      routeFetch([
+        { match: "/truth/a.md", promise: fileA.promise },
+        { match: "/truth/b.md", promise: fileB.promise },
+      ]),
+    );
+
+    useChatStore.getState().openArtifact("a.md");
+    const view = render(<ArtifactView bookId="b1" />);
+    // a.md 请求在途（慢）——此时切换目标到 b.md
+    await act(async () => {
+      useChatStore.getState().openArtifact("b.md");
+      fileB.resolve(jsonResponse({ content: "B目标内容" }));
+    });
+    await waitFor(() => expect(view.container.textContent).toContain("B目标内容"));
+
+    // a.md 旧响应晚到——不得覆盖
+    await act(async () => {
+      fileA.resolve(jsonResponse({ content: "A旧内容" }));
+    });
+    expect(view.container.textContent).toContain("B目标内容");
+    expect(view.container.textContent).not.toContain("A旧内容");
+  });
+
+  it("过期失败不清空新目标正文：旧文件请求失败晚于新文件成功 → 内容保持", async () => {
+    const fileA = deferredJson();
+    const fileB = deferredJson();
+    vi.stubGlobal(
+      "fetch",
+      routeFetch([
+        { match: "/truth/a.md", promise: fileA.promise },
+        { match: "/truth/b.md", promise: fileB.promise },
+      ]),
+    );
+
+    useChatStore.getState().openArtifact("a.md");
+    const view = render(<ArtifactView bookId="b1" />);
+    await act(async () => {
+      useChatStore.getState().openArtifact("b.md");
+      fileB.resolve(jsonResponse({ content: "B目标内容" }));
+    });
+    await waitFor(() => expect(view.container.textContent).toContain("B目标内容"));
+
+    // 旧目标失败晚到——catch 不得把正文清成 null/空态
+    await act(async () => {
+      fileA.reject(new Error("late boom"));
+    });
+    expect(view.container.textContent).toContain("B目标内容");
   });
 });

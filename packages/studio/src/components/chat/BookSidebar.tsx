@@ -86,6 +86,10 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
     : artifactFile ? artifactLabel(artifactFile) : "";
 
   useEffect(() => {
+    // 1008 号：响应竞态守卫——目标（artifactFile/章节号）在 dock 挂载中
+    // in-place 切换，旧目标响应晚到不得覆盖新目标内容；旧目标失败晚到
+    // 不得把新目标正文清成空态。
+    let cancelled = false;
     setLoading(true);
     // 998 号：目标切换时恢复该目标的编辑草稿（dock 开合/面板切换卸载重建后
     // 编辑中状态与未保存内容不丢——996 同族第二面）。无草稿 → 非编辑态
@@ -96,19 +100,32 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
     setEditContent(draft?.content ?? "");
     if (isChapter) {
       fetchJson<{ content: string }>(`/books/${bookId}/chapters/${artifactChapter}`)
-        .then((data) => setContent(data.content ?? ""))
-        .catch(() => setContent(null))
-        .finally(() => setLoading(false));
+        .then((data) => {
+          if (!cancelled) setContent(data.content ?? "");
+        })
+        .catch(() => {
+          if (!cancelled) setContent(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     } else if (artifactFile) {
       fetchJson<{ content: string | null }>(
         `/books/${bookId}/truth/${artifactFile}`,
       )
         .then((data) => {
-          setContent(data.content ?? "");
+          if (!cancelled) setContent(data.content ?? "");
         })
-        .catch(() => setContent(null))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (!cancelled) setContent(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [bookId, artifactFile, artifactChapter, isChapter]);
 
   const handleEdit = useCallback(() => {
