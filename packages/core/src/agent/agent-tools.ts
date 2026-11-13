@@ -661,27 +661,30 @@ export function createProposeActionTool(
       "For an allowed recoverable action that the user already requested, call the corresponding action directly.",
     label: "Confirm Action",
     parameters,
-    async execute(_toolCallId: string, params: ProposeActionParamsType): Promise<AgentToolResult<unknown>> {
-      if (allowed && !allowed.includes(params.action)) {
+    // 1019 号：mz 0.73.1 逆变位不可窄化注解（同 work-creation）——推断 unknown
+    // 体内一次 cast 具体化。
+    async execute(_toolCallId, params): Promise<AgentToolResult<unknown>> {
+      const p = params as ProposeActionParamsType;
+      if (allowed && !allowed.includes(p.action)) {
         throw Object.assign(new Error("This action is not available for a confirmation proposal in the current Profile."), { code: "ACTION_PROPOSAL_NOT_AVAILABLE" });
       }
-      const targetSessionKind = proposedActionSessionKind(params.action);
-      const title = params.title.trim();
-      const summary = params.summary.trim();
-      const instruction = params.instruction.trim();
+      const targetSessionKind = proposedActionSessionKind(p.action);
+      const title = p.title.trim();
+      const summary = p.summary.trim();
+      const instruction = p.instruction.trim();
       if (!title || !summary || !instruction) {
         throw new Error("propose_action requires non-empty title, summary, and instruction.");
       }
       const proposedPayload = validateProposedActionPayload(withSingleAttachmentFallback(
-        params,
-        proposedActionPayload(params, language),
+        p,
+        proposedActionPayload(p, language),
         options.attachmentPaths?.() ?? [],
       ));
       if (proposedPayload.error) {
         throw new Error(`Invalid proposed action payload: ${proposedPayload.error}`);
       }
       const actionPayload = proposedPayload.payload;
-      assertExecutableProposedAction(params, actionPayload);
+      assertExecutableProposedAction(p, actionPayload);
       const requestedSkills = normalizeProposedSkillIds(options.requestedSkillIds?.());
       return textResult(
         [
@@ -692,7 +695,7 @@ export function createProposeActionTool(
         ].join("\n"),
         {
           kind: "proposed_action",
-          action: params.action,
+          action: p.action,
           targetSessionKind,
           sameSession: options.sameSession === true,
           title,

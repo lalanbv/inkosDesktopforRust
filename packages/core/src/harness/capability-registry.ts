@@ -106,12 +106,21 @@ export class CapabilityRegistry {
     if (context.signal?.aborted) throw context.signal.reason;
     let input: Static<typeof action.parameters>;
     try {
+      // 1019 号：typebox 1.x 的 Value.Decode 带**清理语义**（additionalProperties
+      // 越权字段被静默剥除——探针实锤 Decode({maxShots,projectId})→{maxShots}）。
+      // additionalProperties:false 的 schema 上越权字段必须 fail-loud（如
+      // bound-production 的 WORK_TARGET_BOUND 防线依赖 projectId/title 在场
+      // 触发），故先 Check（严格拒绝）后 Decode。
+      if (!Value.Check(action.parameters, rawInput)) {
+        throw new Error("schema validation failed");
+      }
       input = Value.Decode(action.parameters, rawInput);
     } catch (error) {
       // 794 号：decode 失败带原始载荷与 TypeBox 错误明细——裸
       // "Unable to decode value" 无法定位调用方与 schema 的偏差面。
       const errors = [...Value.Errors(action.parameters, rawInput)].map(
-        (issue) => `${issue.path}: ${issue.message}`,
+        // 1019 号：typebox 1.x 错误形态 instancePath（0.x 为 path）
+        (issue) => `${(issue as { instancePath?: string }).instancePath ?? ""}: ${issue.message}`,
       );
       throw new Error(
         `Capability ${capabilityId}.${actionId} params decode failed: ${errors.join("; ") || String(error)} | check=${Value.Check(action.parameters, rawInput)} | schema=${JSON.stringify(action.parameters)?.slice(0, 600)} | raw=${JSON.stringify(rawInput)?.slice(0, 400)}`,

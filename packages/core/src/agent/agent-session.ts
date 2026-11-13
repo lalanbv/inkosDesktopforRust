@@ -1430,7 +1430,9 @@ async function runAgentSessionUnlocked(
     const role = transcriptRoleForMessage(event.message);
     if (!role) return;
 
-    if (assistantInvokesSkill(event.message)) skillTurnActive = true;
+    // 1018/1019 号：双栈边界 cast——assistantInvokesSkill 与 sanitize 同为
+    // earendil 型签名，mz 消息经边界进入（消费面只读核心字段同形）。
+    if (assistantInvokesSkill(event.message as unknown as Parameters<typeof assistantInvokesSkill>[0])) skillTurnActive = true;
     // 1018 号：双 pi scope 缝合边界（mz 0.73.1 的 AgentMessage 传入 earendil 型
     // sanitize）——sanitize 消费面只读 role/content 等核心字段（0.73.1/0.87.1
     // 同形），边界 cast 同 1519 先例形。

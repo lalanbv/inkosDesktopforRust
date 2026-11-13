@@ -376,7 +376,9 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
       }
       return {
         content: [{ type: "text", text: "Structured result received by the host." }],
-        details: submitted,
+        // 1019 号：0.73.1 AgentToolResult.details 非可选——本分支 submitted 已
+        // 必然赋值（前置 if (submitted !== undefined) throw 保证）。
+        details: submitted as Static<TParameters>,
       };
     },
   };

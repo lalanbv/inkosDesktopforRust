@@ -74,7 +74,9 @@ it('produces and edits a composed Work by its capabilities while protecting exis
     runtime.finishEpisode(handle,'completed');
     const boundRegistry = createProductionCapabilityRegistry({pipeline,projectRoot:root,sessionId:'production',profileId:created.profileId,work:created,language:'en',playWorldExists:false,sameSessionProposal:false,allowSystemFileRead:false});
     expect(boundRegistry.get('visual')!.actions.map(action=>action.id)).toContain('generate_cover');
-    const sourceParameters=boundRegistry.get('storyboard')!.actions.find(action=>action.id==='generate')!.parameters.properties;
+    // 1019 号：typebox 1.x TSchema 基接口无 properties（TObject 子类才有）——
+    // 双版本兼容 cast（0.34 的 TSchema 带可选 properties）。
+    const sourceParameters=(boundRegistry.get('storyboard')!.actions.find(action=>action.id==='generate')!.parameters as unknown as { properties: Record<string, unknown> }).properties;
     expect(sourceParameters.sourceText).toBeUndefined();
     expect(sourceParameters.sourcePath).toBeUndefined();
     const bound = new CreativeHarnessRuntime(root,boundRegistry,profiles,ledger);

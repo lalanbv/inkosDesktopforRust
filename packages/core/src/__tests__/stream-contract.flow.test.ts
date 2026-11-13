@@ -258,9 +258,18 @@ it('bounds invalid structured submissions and returns schema paths instead of ec
     expect(failure).toMatchObject({code:'WORKER_SCHEMA_INVALID',attempts:3,resultTool:'submit_chapters'});
     expect(requests).toHaveLength(3);
     const feedback=JSON.parse(requests[1].messages.find(message=>message.role==='tool')!.content);
-    expect(feedback).toMatchObject({code:'WORKER_SCHEMA_INVALID',issues:[{path:'/chapters',expectedType:'array',actualType:'string'},{path:'/state',actualType:'string',allowedValues:['draft','ready']}]});
+    // 1019 号：typebox 1.x 的 Union-of-Literal 校验错误展开为多条（type/const/
+    // anyOf 分列）——issues 按语义面断言（find by path）而非逐索引精确形态。
+    // 1019 号：0.73.1 下 beforeToolCall 抛错的 fallback 形态差异——错误对象
+    // 不再携带 attempts（0.67.1 为 3），诊断字段差异备案；语义面（code+工具+
+    // issues 同形反馈给模型）不变。
+    expect(feedback).toMatchObject({code:'WORKER_SCHEMA_INVALID',resultTool:'submit_chapters'});
+    const chapterIssue=feedback.issues.find((issue:{path:string})=>issue.path==='/chapters');
+    const stateIssue=feedback.issues.find((issue:{path:string})=>issue.path==='/state');
+    expect(chapterIssue).toMatchObject({path:'/chapters',expectedType:'array',actualType:'string'});
+    expect(stateIssue).toMatchObject({actualType:'string',allowedValues:['draft','ready']});
     expect(failure.issues).toEqual(feedback.issues);
-    expect(Object.keys(feedback.issues[0]).sort()).toEqual(['actualType','expectedType','instruction','message','path','type']);
+    expect(Object.keys(chapterIssue!).sort()).toEqual(['actualType','expectedType','instruction','message','path','type']);
   }finally{server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 },15000);
 
