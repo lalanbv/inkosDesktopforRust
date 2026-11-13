@@ -692,7 +692,11 @@ export function App() {
           )}
           {view.page === "book-settings" && (
             <div className="max-w-4xl mx-auto px-6 py-12 md:px-12 lg:py-16 fade-in">
-              <BookDetail bookId={view.bookId} nav={nav} theme={theme} t={t} sse={sse} />
+              {/* 1010 号（落 1008 备案）：key 按 bookId 重挂载——跨书 in-place
+                  （book-settings(A)→(B) 不卸载）当前 UI 不可达，但 BookDetail
+                  的惰性 useState 初始化器（草稿覆盖层恢复）只跑一次，in-place
+                  换 bookId 会跨书串扰覆盖层；id 键页按 id 重挂载是防御基线。 */}
+              <BookDetail key={view.bookId} bookId={view.bookId} nav={nav} theme={theme} t={t} sse={sse} />
             </div>
           )}
           {view.page === "book-timeline" && (

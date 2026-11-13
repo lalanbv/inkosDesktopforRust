@@ -962,9 +962,15 @@ async fn cmd_pick_project_dialog(
 
 /// 1009 号：前端上报桌面壳 UI 语言（picker/settings 启动即调，信号源=
 /// navigator.language，与前端字典同一判据）。未上报时 Rust 侧默认 zh。
+/// 1010 号：locale 变化时立即重建托盘菜单（macOS/Win；Linux once-set 备案）。
 #[tauri::command]
-fn cmd_set_locale(tag: String) {
-    inkos_desktop::locale::set_locale(inkos_desktop::locale::Locale::parse(&tag));
+fn cmd_set_locale(tag: String, tray: tauri::State<'_, TrayController>) {
+    let next = inkos_desktop::locale::Locale::parse(&tag);
+    let changed = next != inkos_desktop::locale::current_locale();
+    inkos_desktop::locale::set_locale(next);
+    if changed {
+        tray.refresh_locale();
+    }
 }
 
 /// 打开插件管理窗口（独立窗口加载 settings.html）。

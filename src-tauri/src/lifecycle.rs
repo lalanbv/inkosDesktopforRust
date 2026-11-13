@@ -251,6 +251,28 @@ impl TrayController {
         self.badge.current()
     }
 
+    /// 1010 号：locale 变化后立即重建菜单（清去抖窗口）。
+    /// macOS/Win 即时生效；Linux once-set 限制下保持初始形态（tooltip
+    /// fallback 同样保持首次语言——GTK 限制的已知边界，备案）。
+    pub fn refresh_locale(&self) {
+        if let Ok(mut last) = self.last_refresh.lock() {
+            *last = None; // 清去抖：locale 变化必须立即生效
+        }
+        if let Err(e) = self.refresh() {
+            eprintln!("[lifecycle] refresh_locale: refresh 失败: {e:#}");
+        }
+    }
+
+    /// Linux set_menu 失败时的 tooltip 兜底串（双语）。
+    fn fallback_tooltip(&self) -> String {
+        use crate::locale::{current_locale, Locale};
+        let unread = self.badge.current();
+        match current_locale() {
+            Locale::En => format!("inkosDesktop · Unread {unread}"),
+            Locale::Zh => format!("inkosDesktop · 未读 {unread}"),
+        }
+    }
+
     /// best-effort 重建菜单并挂回托盘。500ms 内重复调用去抖跳过。
     ///
     /// Linux 上 `set_menu` 一旦设置无法替换（GTK 限制）——错误以 log 形式
@@ -273,7 +295,7 @@ impl TrayController {
         if let Err(e) = self.tray.set_menu(Some(menu)) {
             // Linux 上 set_menu 一旦设置无法替换——日志噪声 + 角标永不更新。
             // 降级 set_tooltip 表达未读数（best-effort，失败仅 log 不抛错）。
-            let tooltip = format!("inkosDesktop · 未读 {}", self.badge.current());
+            let tooltip = self.fallback_tooltip();
             if let Err(te) = self.tray.set_tooltip(Some(&tooltip)) {
                 eprintln!(
                     "[lifecycle] refresh: set_menu 失败 ({e:#}) 且 set_tooltip fallback 也失败 ({te:#})"
@@ -288,26 +310,49 @@ impl TrayController {
 }
 
 /// 构建菜单：`未读:N`（disabled） / `显示窗口` / `退出`。
+/// 1010 号：菜单文案为托盘直显面，随桌面壳 locale 双语输出（macOS/Win 每次
+/// refresh 重建菜单即生效；Linux once-set 限制保持初始形态，见 refresh）。
 fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<tauri::Wry>> {
-    let badge_label = if badge > 0 {
-        format!("未读: {badge}")
-    } else {
-        "未读: 0".to_owned()
-    };
+    use crate::locale::pick;
+    let badge_label = tray_badge_label(badge);
     // badge 项 disabled=true 表示灰显不可点（纯展示）；show/quit enabled。
     let badge_item = tauri::menu::MenuItem::new(app, &badge_label, false, None::<&str>)
         .context("badge MenuItem 构建失败")?;
-    let show_item = tauri::menu::MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)
-        .context("show MenuItem 构建失败")?;
-    let plugins_item =
-        tauri::menu::MenuItem::with_id(app, "plugins", "插件管理…", true, None::<&str>)
-            .context("plugins MenuItem 构建失败")?;
-    let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
+    let show_item =
+        tauri::menu::MenuItem::with_id(app, "show", pick("显示窗口", "Show Window"), true, None::<&str>)
+            .context("show MenuItem 构建失败")?;
+    let plugins_item = tauri::menu::MenuItem::with_id(
+        app,
+        "plugins",
+        pick("插件管理…", "Plugin Manager…"),
+        true,
+        None::<&str>,
+    )
+    .context("plugins MenuItem 构建失败")?;
+    let quit_item = tauri::menu::MenuItem::with_id(app, "quit", pick("退出", "Quit"), true, None::<&str>)
         .context("quit MenuItem 构建失败")?;
     tauri::menu::MenuBuilder::new(app)
         .items(&[&badge_item, &show_item, &plugins_item, &quit_item])
         .build()
         .context("MenuBuilder build 失败")
+}
+
+/// 托盘角标菜单项文案（纯函数，供单测双形态锚定）。
+fn tray_badge_label(badge: u32) -> String {
+    use crate::locale::pick;
+    if badge > 0 {
+        pick_owned_badge(badge)
+    } else {
+        pick("未读: 0", "Unread: 0").to_owned()
+    }
+}
+
+fn pick_owned_badge(badge: u32) -> String {
+    use crate::locale::current_locale;
+    match current_locale() {
+        crate::locale::Locale::En => format!("Unread: {badge}"),
+        crate::locale::Locale::Zh => format!("未读: {badge}"),
+    }
 }
 
 /// 菜单事件：show → [`show_main_window`]；quit → app.exit(0)。
@@ -517,6 +562,20 @@ mod tests {
     #[test]
     fn cleanup_sidecar_none_is_noop() {
         cleanup_sidecar(None);
+    }
+
+    // 1010 号：托盘菜单/tooltip 文案随桌面壳 locale 双语输出（纯函数锚定，
+    // 持 locale 锁防并行线程改全局态——locale.rs 1009 号惯例）。
+    #[test]
+    fn tray_badge_label_follows_locale() {
+        let _g = crate::locale::tests::test_locale_lock();
+        crate::locale::set_locale(crate::locale::Locale::Zh);
+        assert_eq!(tray_badge_label(0), "未读: 0");
+        assert_eq!(tray_badge_label(3), "未读: 3");
+        crate::locale::set_locale(crate::locale::Locale::En);
+        assert_eq!(tray_badge_label(0), "Unread: 0");
+        assert_eq!(tray_badge_label(3), "Unread: 3");
+        crate::locale::set_locale(crate::locale::Locale::Zh);
     }
 
     /// 新建状态 `take` 应返回 `None`。
