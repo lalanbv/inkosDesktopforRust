@@ -434,7 +434,10 @@ export function createDraftStructureTool(
 const ConnectChoiceParams = Type.Object({
   nodeId: Type.Optional(Type.String({minLength:1,description:'Existing node whose connections should change; its scene and dialogue are preserved.'})),
   choices: Type.Optional(Type.Array(ChoiceToolSchema)),
-  node: Type.Optional(Type.Composite([StoryNodeToolSchema], { description: "Full StoryNode for creating a node, or an existing full node with updated choices. Existing scene and dialogue are preserved." })),
+  // 1018 号：typebox 1.x 移除 Type.Composite——单元素 Composite 等价于展开
+  // properties 的 Type.Object（StoryNodeToolSchema 为纯 Type.Object 产物，
+  // additionalProperties 语义保留）。
+  node: Type.Optional(Type.Object({ ...StoryNodeToolSchema.properties }, { description: "Full StoryNode for creating a node, or an existing full node with updated choices. Existing scene and dialogue are preserved.", additionalProperties: false })),
 });
 
 export function createConnectChoiceTool(

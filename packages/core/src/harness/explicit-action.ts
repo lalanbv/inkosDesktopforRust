@@ -7,11 +7,12 @@ import { createSingleToolCapabilityRegistry, type ConfirmedCapabilityBinding } f
 import { CreativeHarnessRuntime } from "./runtime.js";
 import { loadWorkManifest } from "./work-store.js";
 import { opaqueConversationId, runWithAgentTrajectory } from "../llm/agent-trajectory.js";
+import type { AnyAgentTool } from "../agent/pi-compat.js";
 
 export async function executeExplicitCapabilityTool(input: {
   readonly projectRoot: string;
   readonly binding: ConfirmedCapabilityBinding;
-  readonly tool: AgentTool<any, any>;
+  readonly tool: AnyAgentTool;
   readonly parameters: unknown;
   readonly workId?: string | null;
   readonly episodeId?: string;

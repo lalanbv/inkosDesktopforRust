@@ -1,4 +1,5 @@
 import { createProfileWorkTools } from "./tools/work-creation.js";
+import type { AnyAgentTool } from "../agent/pi-compat.js";
 import {existsSync} from "node:fs";
 import { readdir } from "node:fs/promises";
 import {join} from "node:path";
@@ -110,7 +111,7 @@ export interface ProductionCapabilityEnvironment {
   readonly playWorldExists: boolean;
   readonly sameSessionProposal: boolean;
   readonly allowSystemFileRead: boolean;
-  readonly intentSkillTool?: AgentTool<any, any>;
+  readonly intentSkillTool?: AnyAgentTool;
   readonly requestedSkillIds?: () => ReadonlyArray<string>;
   readonly attachmentPaths?: () => ReadonlyArray<string>;
   readonly activeSkills?: () => ReadonlyArray<ActivatedSkillGuidance>;
@@ -124,7 +125,7 @@ export interface ProductionCapabilityEnvironment {
   readonly confirmedCreation?: boolean;
 }
 
-type ProductionAgentTool = AgentTool<any, any> & { readonly artifactsCommitted?: boolean; readonly managesWorkLock?: boolean; readonly draftSourcePaths?:ReadonlyArray<string> };
+type ProductionAgentTool = AnyAgentTool & { readonly artifactsCommitted?: boolean; readonly managesWorkLock?: boolean; readonly draftSourcePaths?:ReadonlyArray<string> };
 
 function withoutInlineImportSource(tool:ReturnType<typeof createImportChaptersTool>):ProductionAgentTool {
   return {...tool,parameters:Type.Omit(tool.parameters,['sourceText'],{additionalProperties:false})};
@@ -170,7 +171,7 @@ export function confirmedCapabilityBinding(intent: RequestedIntent): ConfirmedCa
 
 export function createSingleToolCapabilityRegistry(input: {
   readonly binding: ConfirmedCapabilityBinding;
-  readonly tool: AgentTool<any, any>;
+  readonly tool: AnyAgentTool;
 }): CapabilityRegistry {
   const registry = new CapabilityRegistry();
   registerToolCapability(

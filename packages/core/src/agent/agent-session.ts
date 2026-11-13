@@ -1431,7 +1431,13 @@ async function runAgentSessionUnlocked(
     if (!role) return;
 
     if (assistantInvokesSkill(event.message)) skillTurnActive = true;
-    const persistedMessage = sanitizeSkillTurnMessage(event.message, skillTurnActive);
+    // 1018 号：双 pi scope 缝合边界（mz 0.73.1 的 AgentMessage 传入 earendil 型
+    // sanitize）——sanitize 消费面只读 role/content 等核心字段（0.73.1/0.87.1
+    // 同形），边界 cast 同 1519 先例形。
+    const persistedMessage = sanitizeSkillTurnMessage(
+      event.message as unknown as Parameters<typeof sanitizeSkillTurnMessage>[0],
+      skillTurnActive,
+    );
     const controlCalls=role==='assistant'?(event.message as AssistantMessage).content.filter(part=>part.type==='toolCall'):[];
     const controlMessage = role === "assistant"
       ? controlCalls.length>0&&controlCalls.every(part=>part.type==='toolCall'&&[TURN_COMPLETION_TOOL,REQUEST_DELIVERY_TOOL].includes(part.name))
@@ -1516,7 +1522,8 @@ async function runAgentSessionUnlocked(
     // 结构同形，仅名义包身份不同——边界 cast。
     agent.state.messages = agent.state.messages.map((message, index) => (
       sanitizeSkillTurnMessage(
-        message,
+        // 1018 号：同上——双栈边界 cast（参数面），1519 先例形。
+        message as unknown as Parameters<typeof sanitizeSkillTurnMessage>[0],
         skillTurnActive && index >= turnMessageStartIndex,
       )
     )) as typeof agent.state.messages;

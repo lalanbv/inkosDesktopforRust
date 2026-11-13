@@ -5,7 +5,16 @@ import { decodeStructuredFields } from "./structured-arguments.js";
 
 /** Bounded repair facts from the declared schema, without echoing submitted prose. */
 export function toolArgumentIssues(schema: TSchema, value: unknown) {
-  return [...Value.Errors(schema, value)].slice(0, 16).map(({path,type,message,schema: failed,value: received}) => {
+  return [...Value.Errors(schema, value)].slice(0, 16).map(({path,type,message,schema: rawFailed,value: received}) => {
+    // 1017/1018 号：failed（错误所在子 schema）的结构消费面用结构类型——
+    // typebox 1.x 的错误对象 schema 字段类型与 0.x 不同，运行时字段
+    // （anyOf/enum/const/type）双版本同在（duck-typing 与 1.x 实测一致）。
+    const failed = rawFailed as unknown as {
+      readonly type?: unknown;
+      readonly const?: unknown;
+      readonly enum?: unknown;
+      readonly anyOf?: ReadonlyArray<Record<string, unknown>>;
+    };
     const branches = failed.anyOf as Array<Record<string, unknown>> | undefined;
     const choices: unknown[] | undefined = Array.isArray(failed.enum) ? failed.enum
       : branches?.every(branch => Object.hasOwn(branch, "const")) ? branches.map(branch => branch.const)
