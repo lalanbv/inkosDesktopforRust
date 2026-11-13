@@ -24,7 +24,16 @@ function renderBanner(props: { writing?: boolean; drafting?: boolean; lastError?
 describe("WriteStatusBanner 三态（644 号回归）", () => {
   afterEach(() => cleanup());
 
-  it("642 号中性停止文案 → 中性形态（旧判定红：被失败分支包裹）", () => {
+  it("1005 号 EN 契约字面 → 中性形态（协议面 EN 化后的主形态）", () => {
+    const { container } = renderBanner({ lastError: "Writing stopped at your request." });
+    const banner = container.querySelector("div.rounded-2xl");
+    expect(banner).not.toBeNull();
+    expect(banner!.className).not.toContain("border-destructive");
+    expect(banner!.className).toContain("bg-secondary/30");
+    expect(banner!.textContent).toBe("book.writeStopped");
+  });
+
+  it("642 号 zh 旧广播字面 → 中性形态（1005 号前的旧快照/旧广播兼容）", () => {
     const { container } = renderBanner({ lastError: "写作已按您的要求停止。" });
     const banner = container.querySelector("div.rounded-2xl");
     expect(banner).not.toBeNull();

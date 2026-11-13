@@ -236,14 +236,18 @@ export function buildTaskReport(
   // Rust 引擎对中止轮以 agent:error{error:"aborted"} 广播（Node 同场景走
   // agent:aborted，本就不在通知表）；按引擎侧标记精确拦截，真实失败不受扰。
   // 644 号对偶清偿（write-next 面）：用户停止 write-next 双端以 :error + 中性
-  // 文案「写作已按您的要求停止。」广播（TS 直连端点与 Rust write_next_route
-  // 字面同形，642 号契约）——走查实证它在通知中心落「写章失败 [必须处理]」
-  // 错误级噪音。中止/停止是作者意图的收敛，不是任务失败，一律不出报告。
+  // 文案广播（TS 直连端点与 Rust write_next_route 字面同形，642 号契约）——
+  // 走查实证它在通知中心落「写章失败 [必须处理]」错误级噪音。中止/停止是
+  // 作者意图的收敛，不是任务失败，一律不出报告。
+  // 1005 号：Rust 协议面 EN 化（"Writing stopped at your request."），判定面
+  // 扩 EN 新形全等；zh 旧形保留（旧快照/旧广播数据兼容）。TS 直连端点广播
+  // 原始 abort 长句（"Operation aborted: …"），以 startsWith 认前缀。
   const errorPayload = optionalString("error");
   if (
     event.endsWith(":error")
     && (errorPayload === "aborted"
-      || errorPayload === "Operation aborted"
+      || errorPayload?.startsWith("Operation aborted") === true
+      || errorPayload === "Writing stopped at your request."
       || errorPayload === "写作已按您的要求停止。")
   ) {
     return null;

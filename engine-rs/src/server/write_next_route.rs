@@ -148,8 +148,11 @@ pub async fn write_next(
                 let message = error.to_string();
                 // 188 号：用户主动停止（175 号 abort）不是「失败」——快照与
                 // 广播改用中性文案，UI 据此以「已停止」而非红色失败呈现。
+                // 1005 号：协议面转 EN（对齐 IMPORT_ABORTED_MESSAGE「英文锚文本；
+                // 展示层本地化」既存先例与 1004 号错误协议全 EN 族判据）——
+                // TS 判定面 isWriteStoppedMessage 认 EN 新形/zh 旧形/abort 遗留三形。
                 let user_message = if message.contains("Operation aborted") {
-                    "写作已按您的要求停止。".to_string()
+                    "Writing stopped at your request.".to_string()
                 } else {
                     message.clone()
                 };
@@ -482,7 +485,8 @@ mod tests {
             match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
                 Ok(Ok(payload)) if payload.event == "write:error" => {
                     // 188 号：用户停止的广播文案已友好化（不再含 "Operation aborted" 前缀包装）。
-                    assert!(payload.data.contains("写作已按您的要求停止"));
+                    // 1005 号：协议面 EN 化后契约字面为 EN 形态。
+                    assert!(payload.data.contains("Writing stopped at your request."));
                     break;
                 }
                 Ok(Ok(_)) => continue,
@@ -503,7 +507,8 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         };
-        assert!(finished.execution.error.as_deref().unwrap().contains("已按您的要求停止"));
+        // 1005 号：快照 error 与广播同源（user_message），契约字面同步 EN 化。
+        assert!(finished.execution.error.as_deref().unwrap().contains("Writing stopped at your request."));
         assert!(!active_confirmed_tasks()
             .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-stp"));

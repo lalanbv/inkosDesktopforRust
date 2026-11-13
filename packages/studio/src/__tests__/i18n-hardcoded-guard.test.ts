@@ -69,9 +69,10 @@ const LEDGER: Readonly<Record<string, { readonly budget: number; readonly reason
   "components/RosterCandidatesCard.tsx": { budget: 1, reason: "zh 后缀手术（EN 路径无害）" },
   // 字数单位按内容语言选择（progress.chineseChars>0 即 zh 书显示「字」）非 UI 语言。
   "components/chat/ToolExecutionSteps.tsx": { budget: 1, reason: "内容语言条件（chineseChars>0）非 UI 语言" },
-  // WRITE_STOPPED_MESSAGE 与 Rust write_next_route 字面同形（642 号跨端契约），
-  // 改文需双栈同步轮，单侧改会破坏契约锚定测试。
-  "shared/write-stopped.ts": { budget: 1, reason: "双端契约字面（642 号，须双栈同步轮）" },
+  // 1005 号：WRITE_STOPPED_MESSAGE 协议面已 EN 化（与 Rust write_next_route
+  // 字面同形契约）；zh 旧字面仅存于 LEGACY_ZH_WRITE_STOPPED_MESSAGE 兼容判定
+  // （zh-named 通道豁免），文件实况 0 处硬编码——预算 0=台账外零容忍同权。
+  "shared/write-stopped.ts": { budget: 0, reason: "已清偿（1005 号协议面 EN 化；zh 旧字面为兼容判定常量经 zh-named 通道豁免）" },
 };
 
 function classify(node: ts.Node, sf: ts.SourceFile): string {

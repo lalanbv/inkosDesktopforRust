@@ -132,8 +132,17 @@ describe("author report contract (G8b)", () => {
     // （TS 直连端点与 Rust write_next_route 字面同形）。644 号活体走查实证
     // 该形态在通知中心落「写章失败 [必须处理]」错误级噪音（188 号语义回归
     // 的通知面对偶）——停止不是失败，不出报告；真实失败不受扰。
+    // 1005 号：Rust 协议面 EN 化后的新契约字面同免（主形态）。
+    expect(
+      buildTaskReport("write:error", { bookId: "b1", error: "Writing stopped at your request." }),
+    ).toBeNull();
+    // 642 号 zh 旧广播字面同免（1005 号前的旧快照/旧广播数据兼容）。
     expect(
       buildTaskReport("write:error", { bookId: "b1", error: "写作已按您的要求停止。" }),
+    ).toBeNull();
+    // TS 直连端点广播原始 abort 长句，前缀匹配同免（1005 号扩面）。
+    expect(
+      buildTaskReport("write:error", { bookId: "b1", error: "Operation aborted: the user requested to stop this task." }),
     ).toBeNull();
     // 遗留 abort 字面同免（与 WriteStatusBanner 判定同口径）。
     expect(buildTaskReport("write:error", { bookId: "b1", error: "Operation aborted" })).toBeNull();
