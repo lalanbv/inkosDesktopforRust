@@ -8,6 +8,7 @@ import {
 import { HoldingSlot } from "./play-hud/HoldingSlot";
 import { HoldingInspect } from "./play-hud/HoldingInspect";
 import { StateGauge } from "./play-hud/StateGauge";
+import { tr } from "../../lib/app-language";
 
 // The HUD is genre-neutral: it renders whatever the world graph contains,
 // grouped into "what I face" (world/here-now) and "what I hold" (backpack).
@@ -195,7 +196,7 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
       .map((e) => {
         const other = e.fromId === id ? labelOf.get(e.toId) : labelOf.get(e.fromId);
         const strength = typeof e.strength === "number" ? ` ${e.strength}` : "";
-        return { label: "关系", text: `${e.type}${strength}${other ? ` · ${other}` : ""}` };
+        return { label: tr("关系", "Relation"), text: `${e.type}${strength}${other ? ` · ${other}` : ""}` };
       });
 
   const locations: HudRow[] = entities
@@ -284,7 +285,7 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
       return {
         id: slot.id, glyph: SLOT_GLYPH[slot.kind] ?? "•", label: slot.label, kind: slot.kind,
         value: text, ratio, note: null,
-        details: cause ? [{ label: "因为", text: cause }] : [],
+        details: cause ? [{ label: tr("因为", "Because"), text: cause }] : [],
       };
     });
   const latestTime = run.currentState?.timeAdvance
@@ -294,12 +295,12 @@ export function buildView(run: PlayRunResponse | null): HudView | null {
     ? {
         id: "world-time",
         glyph: "⏳",
-        label: "世界时间",
+        label: tr("世界时间", "World time"),
         value: latestTime.anchor || latestTime.elapsed || "",
         note: latestTime.rationale || null,
         details: [
-          ...(latestTime.elapsed && latestTime.anchor ? [{ label: "经过", text: latestTime.elapsed }] : []),
-          ...(latestTime.synchronized ?? []).map((text) => ({ label: "同步", text })),
+          ...(latestTime.elapsed && latestTime.anchor ? [{ label: tr("经过", "Elapsed"), text: latestTime.elapsed }] : []),
+          ...(latestTime.synchronized ?? []).map((text) => ({ label: tr("同步", "Synced"), text })),
         ],
       }
     : null;

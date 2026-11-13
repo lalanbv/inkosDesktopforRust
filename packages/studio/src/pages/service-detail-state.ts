@@ -1,4 +1,5 @@
 import { fetchJson } from "../hooks/use-api";
+import { tr } from "../lib/app-language";
 import type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 
 export type { LLMApiFormat } from "@actalk/inkos-core/llm/api-format";
@@ -172,19 +173,19 @@ export async function saveServiceConfig(args: {
   const trimmedBaseUrl = args.baseUrl.trim();
   const temperature = args.temperature.trim() ? Number(args.temperature) : undefined;
   if (temperature !== undefined && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) {
-    return { status: { state: "error", message: "温度须为 0 到 2，留空使用模型默认值" }, detectedModel: "", detectedConfig: null };
+    return { status: { state: "error", message: tr("温度须为 0 到 2，留空使用模型默认值", "Temperature must be 0 to 2; leave empty to use the model default") }, detectedModel: "", detectedConfig: null };
   }
 
   if (!trimmedKey && !args.isCustom && !args.apiKeyOptional) {
     return {
-      status: { state: "error", message: "请先输入 API Key" },
+      status: { state: "error", message: tr("请先输入 API Key", "Enter an API key first") },
       detectedModel: "",
       detectedConfig: null,
     };
   }
   if (args.isCustom && !trimmedBaseUrl) {
     return {
-      status: { state: "error", message: "请先填写 Base URL" },
+      status: { state: "error", message: tr("请先填写 Base URL", "Fill in the Base URL first") },
       detectedModel: "",
       detectedConfig: null,
     };
@@ -222,7 +223,7 @@ export async function saveServiceConfig(args: {
       }, { fetchJsonImpl });
     } catch (error) {
       return {
-        status: { state: "error", message: error instanceof Error ? error.message : "连接失败" },
+        status: { state: "error", message: error instanceof Error ? error.message : tr("连接失败", "Connection failed") },
         detectedModel: "",
         detectedConfig: null,
       };
@@ -231,7 +232,7 @@ export async function saveServiceConfig(args: {
 
   if (!probe.ok) {
     return {
-      status: { state: "error", message: probe.error ?? "连接失败" },
+      status: { state: "error", message: probe.error ?? tr("连接失败", "Connection failed") },
       detectedModel: "",
       detectedConfig: null,
     };

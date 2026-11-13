@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
+import { useI18n } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { fetchJson, postApi, useApi } from "../hooks/use-api";
 import { useSkillsInvalidation } from "../hooks/use-skills-invalidation";
@@ -1379,6 +1380,7 @@ function ModelPickerContent({
   onManage: () => void;
 }) {
   const [search, setSearch] = useState("");
+  const { t } = useI18n();
   const filtered = useMemo(() => filterModelGroups(groupedModels, search), [groupedModels, search]);
 
   return (
@@ -1388,7 +1390,7 @@ function ModelPickerContent({
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索模型..."
+          placeholder={t("model.searchPlaceholder")}
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
@@ -1419,13 +1421,13 @@ function ModelPickerContent({
         ))}
         {filtered.length === 0 && (
           <div className="px-3 py-4 text-xs text-muted-foreground/50 text-center italic">
-            无匹配模型
+            {t("model.noMatch")}
           </div>
         )}
       </div>
       <div className="border-t border-border/30">
         <DropdownMenuItem onClick={onManage} className="text-primary">
-          管理服务商
+          {t("model.manageServices")}
         </DropdownMenuItem>
       </div>
     </DropdownMenuContent>

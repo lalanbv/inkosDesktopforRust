@@ -614,7 +614,7 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
               {ch.type === "webhook" && (
                 <div className="grid grid-cols-2 gap-2">
                   <input value={ch.url ?? ""} onChange={(e) => updateChannel(i, { url: e.target.value })} placeholder="url" className={`${fieldClass} font-mono`} />
-                  <input value={ch.secret ?? ""} onChange={(e) => updateChannel(i, { secret: e.target.value })} placeholder="secret (可选)" className={`${fieldClass} font-mono`} />
+                  <input value={ch.secret ?? ""} onChange={(e) => updateChannel(i, { secret: e.target.value })} placeholder={t("settings.secretOptional")} className={`${fieldClass} font-mono`} />
                 </div>
               )}
             </div>

@@ -1,5 +1,6 @@
 import { buildApiUrl } from "../../hooks/use-api";
 import { useColors } from "../../hooks/use-colors";
+import { tr } from "../../lib/app-language";
 import type { Theme } from "../../hooks/use-theme";
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ export function ExportBar({ projectId, theme }: ExportBarProps) {
 
   return (
     <div className="border border-border bg-card rounded p-3" data-testid="export-bar">
-      <div className={`text-sm font-medium mb-2 ${c.muted}`}>导出 / 交付</div>
+      <div className={`text-sm font-medium mb-2 ${c.muted}`}>{tr("导出 / 交付", "Export / Delivery")}</div>
       <div className="flex flex-wrap gap-2">
         <a
           href={jsonUrl}
@@ -44,7 +45,7 @@ export function ExportBar({ projectId, theme }: ExportBarProps) {
           data-testid="export-json"
           className={`inline-flex items-center rounded px-3 py-1.5 text-sm font-medium no-underline ${c.btnSecondary}`}
         >
-          导出 JSON
+          {tr("导出 JSON", "Export JSON")}
         </a>
         <a
           href={inkUrl}
@@ -52,7 +53,7 @@ export function ExportBar({ projectId, theme }: ExportBarProps) {
           data-testid="export-ink"
           className={`inline-flex items-center rounded px-3 py-1.5 text-sm font-medium no-underline ${c.btnSecondary}`}
         >
-          导出 Ink
+          {tr("导出 Ink", "Export Ink")}
         </a>
         <a
           href={htmlUrl}
@@ -60,7 +61,7 @@ export function ExportBar({ projectId, theme }: ExportBarProps) {
           data-testid="export-html"
           className={`inline-flex items-center rounded px-3 py-1.5 text-sm font-medium no-underline ${c.btnSecondary}`}
         >
-          导出可玩网页（HTML）
+          {tr("导出可玩网页（HTML）", "Export playable web (HTML)")}
         </a>
       </div>
     </div>

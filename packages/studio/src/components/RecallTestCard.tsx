@@ -87,7 +87,7 @@ export function RecallTestCard({ bookId }: { bookId: string }) {
                   <span className="font-mono text-muted-foreground">{hit.id}</span>
                   <span className="text-muted-foreground/70">
                     {hit.score.toFixed(4)}
-                    {hit.sources.map((s) => (s === "semantic" ? " ·语义" : " ·词法")).join("")}
+                    {hit.sources.map((s) => (s === "semantic" ? tr(" ·语义", " ·semantic") : tr(" ·词法", " ·lexical"))).join("")}
                   </span>
                 </li>
               ))}

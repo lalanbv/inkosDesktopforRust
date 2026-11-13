@@ -6559,7 +6559,9 @@ function yamlScalar(value: unknown): string {
     if (!sessionId || confirmed) return next();
     const previous = chatRequests.get(sessionId);
     if (previous?.snapshot.status === "running") return c.json({
-      error: { code: "CHAT_REQUEST_ALREADY_RUNNING", message: "当前会话仍在运行，请等待完成或先停止。" },
+      // 1004 号：错误协议面以 EN 为基准（对齐 2509/5449/6733 族惯例），zh 展示由
+      // error-copy 本地化映射承接（use-api/runtime 统一入口）。
+      error: { code: "CHAT_REQUEST_ALREADY_RUNNING", message: "This session is still running. Wait for it to finish or stop it first." },
       chatRequest: previous.snapshot,
     }, 409);
     const request: NonNullable<ReturnType<typeof chatRequests.get>> = {

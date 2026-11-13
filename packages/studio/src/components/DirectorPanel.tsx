@@ -111,9 +111,9 @@ export function DirectorPanel({ bookId }: { bookId: string }) {
         body: JSON.stringify({ patch: { selectedDirection: candidate } }),
       });
       setSelectedTitle(candidate.title);
-      setNotice(`已选用方向：${candidate.title}`);
+      setNotice(tr(`已选用方向：${candidate.title}`, `Selected direction: ${candidate.title}`));
     } catch {
-      setNotice("选用失败，请重试");
+      setNotice(tr("选用失败，请重试", "Failed to select; please retry"));
     }
   };
 

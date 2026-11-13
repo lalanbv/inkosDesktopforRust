@@ -228,8 +228,8 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
       {!hasServices && (
         <div className="rounded-lg border border-border/60 bg-card px-5 py-4 mb-8 flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-medium">还没有配置 AI 模型</div>
-            <div className="text-xs text-muted-foreground mt-0.5">配好一个服务商才能开始创作</div>
+            <div className="text-sm font-medium">{t("dash.noModelTitle")}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">{t("dash.noModelHint")}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {/* R9/370 号：新手创作向导入口（三步探测放行 AI 功能）。 */}
@@ -237,13 +237,13 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
               onClick={nav.toOnboarding}
               className="px-4 py-2 text-xs rounded-lg border border-border font-medium hover:bg-primary/10 transition-colors"
             >
-              新手向导
+              {t("nav.onboarding")}
             </button>
             <button
               onClick={nav.toServices}
               className="px-4 py-2 text-xs rounded-lg bg-primary text-primary-foreground font-medium hover:bg-primary/90 transition-colors"
             >
-              去配置
+              {t("dash.goToConfig")}
             </button>
           </div>
         </div>

@@ -65,7 +65,7 @@ export function WritingStatsCard() {
             {slots.map((slot) => (
               <div
                 key={slot.key}
-                title={`${slot.date}: ${slot.words} 字 / ${slot.chapters} 章`}
+                title={tr(`${slot.date}: ${slot.words} 字 / ${slot.chapters} 章`, `${slot.date}: ${slot.words} words / ${slot.chapters} chapters`)}
                 className="flex-1 bg-primary/70 rounded-t"
                 style={{
                   height: `${slot.words > 0 ? Math.max(6, Math.round((slot.words / maxWords) * 60)) : 2}px`,

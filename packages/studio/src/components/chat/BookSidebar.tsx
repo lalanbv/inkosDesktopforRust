@@ -5,6 +5,7 @@ import type { SSEMessage } from "../../hooks/use-sse";
 import { useChatStore } from "../../store/chat";
 import { fetchJson } from "../../hooks/use-api";
 import { useI18n } from "../../hooks/use-i18n";
+import { tr } from "../../lib/app-language";
 import { PanelRightClose, PanelRightOpen, ArrowLeft, Loader2, Pencil, Save, X } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
@@ -56,7 +57,10 @@ function renderTruthBody(
     const { isEmpty, body: stateBody } = presentCurrentState(content);
     return isEmpty ? (
       <p className="text-[14px] leading-6 text-muted-foreground/60 italic">
-        还没有运行状态。开始写作后，每写完一章这里会自动记录最新的故事进展。
+        {tr(
+          "还没有运行状态。开始写作后，每写完一章这里会自动记录最新的故事进展。",
+          "No run status yet. Once writing starts, each finished chapter is logged here automatically.",
+        )}
       </p>
     ) : (
       <Streamdown plugins={streamdownPlugins} mode="static">{stateBody}</Streamdown>
@@ -78,7 +82,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
 
   const isChapter = artifactChapter !== null;
   const label = isChapter
-    ? `第 ${artifactChapter} 章`
+    ? t("artifact.chapterLabel").replace("{n}", String(artifactChapter))
     : artifactFile ? artifactLabel(artifactFile) : "";
 
   useEffect(() => {
@@ -210,7 +214,7 @@ export function ArtifactView({ bookId }: { readonly bookId: string }) {
             <Loader2 size={16} className="text-muted-foreground animate-spin" />
           </div>
         ) : content === null ? (
-          <p className="text-[14px] leading-6 text-foreground/70 italic px-4 py-3">文件不存在</p>
+          <p className="text-[14px] leading-6 text-foreground/70 italic px-4 py-3">{t("artifact.fileMissing")}</p>
         ) : editing ? (
           <textarea
             value={editContent}

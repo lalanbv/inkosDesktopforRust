@@ -758,7 +758,7 @@ export function BookDetail({
           {/* G11/373 号：best-of-N 多版选优（书籍级开关，默认关）。 */}
           <button
             onClick={handleToggleBestOfN}
-            title="best-of-N：首版审查分数低于门槛时自动多版生成并选优"
+            title={t("book.bestOfNHint")}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border transition-all ${
               bestOfN
                 ? "bg-primary/10 text-primary border-primary/30"

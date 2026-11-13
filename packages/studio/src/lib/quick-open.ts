@@ -1,4 +1,5 @@
 import type { HashRoute } from "@/hooks/use-hash-route";
+import { tr } from "./app-language.js";
 
 /**
  * Cmd+P 快速打开（P2-5）：内容层索引与过滤的纯函数。
@@ -64,7 +65,7 @@ export function buildQuickOpenItems(input: QuickOpenInput): QuickOpenItem[] {
     (input.chaptersByBook[book.id] ?? []).map((chapter) => ({
       id: `chapter:${book.id}:${chapter.number}`,
       kind: "chapter" as const,
-      label: chapter.title?.trim() ? chapter.title : `第 ${chapter.number} 章`,
+      label: chapter.title?.trim() ? chapter.title : tr(`第 ${chapter.number} 章`, `Chapter ${chapter.number}`),
       detail: book.title,
       searchable: String(chapter.number),
       route: { page: "chapter", bookId: book.id, chapterNumber: chapter.number },

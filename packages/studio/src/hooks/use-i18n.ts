@@ -556,6 +556,24 @@ const strings = {
   "empty.newSession": { zh: "新建会话", en: "New session" },
   "empty.noSessions": { zh: "还没有会话", en: "No sessions yet" },
   "empty.createFilmHint": { zh: "启动一个新的互动影游项目。", en: "Start a new interactive film project." },
+
+  // 1004 号：硬编码 CJK 普查修复批——侧栏/播放器/首页/模型选择/设置提示。
+  "artifact.emptyRunStatus": { zh: "还没有运行状态。开始写作后，每写完一章这里会自动记录最新的故事进展。", en: "No run status yet. Once writing starts, each finished chapter is logged here automatically." },
+  "artifact.fileMissing": { zh: "文件不存在", en: "File not found" },
+  "artifact.chapterLabel": { zh: "第 {n} 章", en: "Chapter {n}" },
+  "player.start": { zh: "开始游玩", en: "Start" },
+  "player.nodeMissing": { zh: "节点缺失：", en: "Node missing: " },
+  "player.unlockedEndings": { zh: "已解锁结局 {n} / {total}", en: "Endings unlocked {n} / {total}" },
+  "player.restart": { zh: "重新开始", en: "Restart" },
+  "player.deadEnd": { zh: "此路不通", en: "Dead end" },
+  "dash.noModelTitle": { zh: "还没有配置 AI 模型", en: "No AI model configured" },
+  "dash.noModelHint": { zh: "配好一个服务商才能开始创作", en: "Configure a provider to start creating" },
+  "dash.goToConfig": { zh: "去配置", en: "Configure" },
+  "model.searchPlaceholder": { zh: "搜索模型...", en: "Search models..." },
+  "model.noMatch": { zh: "无匹配模型", en: "No matching models" },
+  "model.manageServices": { zh: "管理服务商", en: "Manage services" },
+  "book.bestOfNHint": { zh: "best-of-N：首版审查分数低于门槛时自动多版生成并选优", en: "Best-of-N: when the first draft scores below the gate, multiple versions are generated and the best is selected" },
+  "settings.secretOptional": { zh: "secret (可选)", en: "secret (optional)" },
 } as const;
 
 export type StringKey = keyof typeof strings;
