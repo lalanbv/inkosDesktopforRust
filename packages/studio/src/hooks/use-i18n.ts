@@ -276,6 +276,9 @@ const strings = {
   "book.rework": { zh: "重作", en: "Rework" },
   "book.antiDetect": { zh: "反检测", en: "Anti-Detect" },
   "book.statusActive": { zh: "进行中", en: "Active" },
+  // 1028 号：core BookStatus 六值补齐（1008 备案——incubating 曾被 UI 面
+  // 遗漏；当前建书默认 active 无产生点，防御性完备化）。
+  "book.statusIncubating": { zh: "孵化中", en: "Incubating" },
   "book.statusPaused": { zh: "已暂停", en: "Paused" },
   "book.statusOutlining": { zh: "大纲中", en: "Outlining" },
   "book.statusCompleted": { zh: "已完成", en: "Completed" },

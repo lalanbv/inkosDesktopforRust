@@ -339,6 +339,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                       }`} />
                       <span>{
                         book.status === "active" ? t("book.statusActive") :
+                        book.status === "incubating" ? t("book.statusIncubating") :
                         book.status === "paused" ? t("book.statusPaused") :
                         book.status === "outlining" ? t("book.statusOutlining") :
                         book.status === "completed" ? t("book.statusCompleted") :

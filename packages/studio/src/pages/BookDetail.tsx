@@ -949,6 +949,8 @@ export function BookDetail({
               }}
               className="px-3 py-2 text-sm rounded-lg border border-border/50 bg-secondary/30 outline-none focus:border-primary/50"
             >
+              {/* 1028 号：core BookStatus 六值对齐（1008 备案——incubating 补齐） */}
+              <option value="incubating">{t("book.statusIncubating")}</option>
               <option value="active">{t("book.statusActive")}</option>
               <option value="paused">{t("book.statusPaused")}</option>
               <option value="outlining">{t("book.statusOutlining")}</option>
