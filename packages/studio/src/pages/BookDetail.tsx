@@ -1,5 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 // 1008 号：BookStatus 枚举真源=core（本地手打 union 曾漂移丢 "incubating"）；
 // subpath 导入同 book-settings-draft（主入口拖 node:async_hooks 链进浏览器面）
 import type { BookStatus } from "@actalk/inkos-core/models/book";
@@ -181,6 +181,9 @@ export function BookDetail({
   const [rewritingChapters, setRewritingChapters] = useState<ReadonlyArray<number>>([]);
   const [revisingChapters, setRevisingChapters] = useState<ReadonlyArray<number>>([]);
   const [syncingChapters, setSyncingChapters] = useState<ReadonlyArray<number>>([]);
+  // 1162 号：审计按章在途守卫——同排 rewrite/revise/sync 全有按章数组守卫+
+  // disabled+spinner，唯 audit 裸奔（955 双提交族补扫的本排最后一块）。
+  const [auditingChapters, setAuditingChapters] = useState<ReadonlyArray<number>>([]);
   const [savingSettings, setSavingSettings] = useState(false);
   // 1001 号：settings 表单草稿 sessionStorage 持久化（998 同族第三面，条件挂载
   // 域第二族）——BookDetail 挂在 App 层 view.page 条件渲染下，页面切换卸载后
@@ -614,6 +617,25 @@ export function BookDetail({
     });
   };
 
+  // 审计是秒级重流（run_audit_flow + hub 双广播 + 章节索引回写）：裸 onClick 下
+  // 双击/长窗口重按会并发双审计流（双倍算力 + 索引回写竞态 + 双 alert）。
+  // handleRewrite 同形按章数组守卫（add / finally remove）+ 原生双击手势吞没
+  // （evt.detail>=2：本地 mock 快路径飞行 < 双击间隙，飞行守卫覆盖不了规范双击）。
+  const handleAudit = async (chapterNum: number, evt?: ReactMouseEvent<HTMLButtonElement>) => {
+    if (evt && evt.detail >= 2) return;
+    setAuditingChapters((prev) => [...prev, chapterNum]);
+    try {
+      // 961 号：双形态归一（Rust {passed,issues} / TS 2.0 {summary,observations}）。
+      const auditResult = await fetchJson<unknown>(`/books/${bookId}/audit/${chapterNum}`, { method: "POST" });
+      alert(formatAuditOutcome(summarizeAuditResult(auditResult)));
+      refetch();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Audit failed");
+    } finally {
+      setAuditingChapters((prev) => prev.filter((n) => n !== chapterNum));
+    }
+  };
+
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
       <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -1030,20 +1052,14 @@ export function BookDetail({
                         </>
                       )}
                       <button
-                        onClick={async () => {
-                          try {
-                            // 961 号：双形态归一（Rust {passed,issues} / TS 2.0 {summary,observations}）。
-                            const auditResult = await fetchJson<unknown>(`/books/${bookId}/audit/${ch.number}`, { method: "POST" });
-                            alert(formatAuditOutcome(summarizeAuditResult(auditResult)));
-                            refetch();
-                          } catch (e) {
-                            alert(e instanceof Error ? e.message : "Audit failed");
-                          }
-                        }}
-                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm"
+                        onClick={(e) => handleAudit(ch.number, e)}
+                        disabled={auditingChapters.includes(ch.number)}
+                        className="p-2 rounded-lg bg-secondary text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all shadow-sm disabled:opacity-50"
                         title={t("book.audit")}
                       >
-                        <ShieldCheck size={14} />
+                        {auditingChapters.includes(ch.number)
+                          ? <div className="w-3.5 h-3.5 border-2 border-muted-foreground/20 border-t-muted-foreground rounded-full animate-spin" />
+                          : <ShieldCheck size={14} />}
                       </button>
                       <button
                         onClick={() => handleRewrite(ch.number)}

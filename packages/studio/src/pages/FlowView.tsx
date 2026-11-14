@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import {
   ReactFlow,
   Background,
@@ -119,6 +119,10 @@ export default function FlowView({
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  // 1162 号：delta 在途互斥（955 双提交族补扫）——「加节点」双击手势两发都在
+  // 响应前入队，genNodeId() 每次生成新 id → 两个节点重复入图。post 期间禁用
+  // 加节点入口（CreativeMethodsEditor perform+disabled={busy} 同形）。
+  const [posting, setPosting] = useState(false);
 
   // Re-seed controlled state whenever graph data changes (e.g. after refetch)
   useEffect(() => {
@@ -190,6 +194,7 @@ export default function FlowView({
   }, [graph]);
 
   const post = async (body: { delta: unknown }) => {
+    setPosting(true);
     setEditError(null);
     try {
       await fetchJson(`/projects/${projectId}/story-graph/delta`, {
@@ -200,6 +205,8 @@ export default function FlowView({
       await refetch();
     } catch (e) {
       setEditError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPosting(false);
     }
   };
 
@@ -241,7 +248,11 @@ export default function FlowView({
     }
   };
 
-  const onAddNode = async () => {
+  const onAddNode = async (evt: ReactMouseEvent<HTMLButtonElement>) => {
+    // 原生双击手势吞没：delta 本地飞行仅毫秒级（< 真实双击第二发 ~80-150ms 间隙），
+    // posting 飞行互斥覆盖不了规范双击的时序；浏览器原生 detail 计数精确识别
+    // 双击第二发（两次有意单击 detail=1 各自放行，不误伤、零定时器）。
+    if (evt.detail >= 2) return;
     // 878 号：节点必须带全展示字段（sceneDesc/dialogue）——2.0 delta 端点对
     // upsert 节点跑 assertDisplayText（sceneDesc.trim / dialogue.forEach），
     // 残缺节点 500（`as never` 曾把这里的类型逃逸掩盖掉，一并移除）。
@@ -294,7 +305,8 @@ export default function FlowView({
           <button
             data-testid="flow-add-node"
             onClick={onAddNode}
-            className={`px-3 py-1 rounded text-xs ${c.btnSecondary}`}
+            disabled={posting}
+            className={`px-3 py-1 rounded text-xs ${c.btnSecondary} disabled:opacity-50`}
           >
             {tr("加节点", "Add node")}
           </button>
