@@ -111,17 +111,26 @@ async function waitReady(name, url, timeoutMs) {
 
 const children = [];
 let shuttingDown = false;
+// 1087 号（903/817 判例对齐 export-epub-smoke 形态）：SIGTERM 兜底形态实证
+// 不可靠（Node 26 detached 语境子进程信号免疫——1086 实测 3 孤儿残留）——
+// 进程组 SIGKILL + exit 钩子收尸 + spawn 前清场。
+function killAllTrackedChildren() {
+  for (const child of children) {
+    try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
+  }
+}
+// spawn 前清场：回收上一轮泄漏孤儿（1086 号实测 3 个 tsx studio server 残留）。
+try { spawnSync("pkill", ["-f", "tsx/dist/cli.mjs"], { stdio: "ignore" }); } catch { /* 无匹配 */ }
 function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[env] 收到 ${signal}，停止子进程…`);
-  for (const child of children) {
-    try { child.kill("SIGTERM"); } catch {}
-  }
+  killAllTrackedChildren();
   process.exit(0);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("exit", killAllTrackedChildren);
 
 // ── 1. mock ──
 const mock = spawn(process.execPath, [mockScript, args.mockPort], { stdio: "inherit" });
