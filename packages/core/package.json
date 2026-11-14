@@ -41,6 +41,10 @@
       "types": "./dist/llm/api-format.d.ts",
       "import": "./dist/llm/api-format.js"
     },
+    "./llm/error-copy": {
+      "types": "./dist/llm/error-copy.d.ts",
+      "import": "./dist/llm/error-copy.js"
+    },
     "./models/book": {
       "types": "./dist/models/book.d.ts",
       "import": "./dist/models/book.js"

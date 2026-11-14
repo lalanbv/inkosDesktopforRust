@@ -14,6 +14,7 @@ import { renderMarkdown } from "./markdown.js";
 import { buildDashboardViewModel, type DashboardMessageRow } from "./dashboard-model.js";
 import { buildInputHistory, moveHistoryCursor } from "./input-history.js";
 import { getTuiCopy, type TuiLocale } from "./i18n.js";
+import { localizeTuiRuntimeMessage } from "../localization.js";
 import { loadProjectSession, persistProjectSession, resolveSessionActiveBook } from "./session-store.js";
 import { classifyLocalTuiCommand, parseDepthCommand, parseModelCommand } from "./local-commands.js";
 import {
@@ -393,7 +394,9 @@ export function InkTuiApp(props: InkTuiAppProps): React.JSX.Element {
       });
       setSession(result.session);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // 1057 号（1007 备案②清偿）：provider EN 诊断块按 CLI 语言承接展示。
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const message = localizeTuiRuntimeMessage(rawMessage);
       const failedSession = await loadProjectSession(props.projectRoot);
       setSession(failedSession);
       setLastError(message);

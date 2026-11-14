@@ -1,4 +1,5 @@
 import { formatLengthCount, resolveLengthCountingMode, type Observation } from "@actalk/inkos-core";
+import { localizeKnownRuntimeMessage } from "@actalk/inkos-core/llm/error-copy";
 
 export type CliLanguage = "zh" | "en";
 
@@ -508,4 +509,13 @@ export function formatBookRestoreDone(
     zh: `已把 ${params.bookId} 恢复到备份 ${params.backupId}。${preNote}`,
     en: `Restored ${params.bookId} to backup ${params.backupId}. ${preNote}`,
   });
+}
+
+/**
+ * 1057 号（1007 备案②清偿）：TUI 运行时错误消息 zh 承接。映射表单源在 core
+ * （@actalk/inkos-core/llm/error-copy——1004/1006 号 EN 基准政策的展示端承接），
+ * 此处按 CLI 语言门控接线：en 保持 EN 原文，zh 映射回 zh 展示文案。
+ */
+export function localizeTuiRuntimeMessage(message: string): string {
+  return localizeKnownRuntimeMessage(message, resolveCliLanguage());
 }
