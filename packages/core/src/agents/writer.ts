@@ -383,7 +383,21 @@ export class WriterAgent extends BaseAgent {
         expire: result.factOps.expire,
       },
       hookOps: {
-        upsert: result.hookOps.upsert,
+        // 1020 号：LLM 参数进入存储 schema 前显式投影（HookRecordToolSchema
+        // 八字段白名单）——mz 0.73.1 的 agent loop 不再剥离 unknown 参数键
+        // （0.67.1 隐式剥离），HookRecordSchema.strict() 对越权键 fail-loud；
+        // 显式投影=边界卫生不依赖上游 loop 的清理行为。
+        upsert: result.hookOps.upsert.map((hook) => ({
+          hookId: hook.hookId,
+          startChapter: hook.startChapter,
+          type: hook.type,
+          status: hook.status,
+          lastAdvancedChapter: hook.lastAdvancedChapter,
+          expectedPayoff: hook.expectedPayoff,
+          notes: hook.notes,
+          ...(hook.dependsOn !== undefined ? { dependsOn: hook.dependsOn } : {}),
+          ...(hook.paysOffInArc !== undefined ? { paysOffInArc: hook.paysOffInArc } : {}),
+        })),
         mention: result.hookOps.mention,
         resolve: result.hookOps.resolve,
         defer: result.hookOps.defer,
