@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 
@@ -43,7 +43,14 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
     }
   };
 
+  // 1092 号：响应竞态守卫——seriesId 原位变化（绑定保存→loadBinding→setSeriesId
+  // 重发 [seriesId] 效果）+ 保存/新增后手动重取多点共用 loadCanon；旧 series 的
+  // canon 快照晚到不得覆写新条目，旧失败晚到不得清空新快照（1008 号
+  // ChaptersSection 同族，惯用形同 AssetLibraryPanel/PlayHud 的 seq latest-wins）。
+  // seq 在 !id 早退分支前递增：解绑清空也占号，压住在途旧 id 响应晚到复活条目。
+  const canonSeqRef = useRef(0);
   const loadCanon = async (id: string) => {
+    const seq = ++canonSeqRef.current;
     if (!id) {
       setEntries([]);
       setSelected("");
@@ -53,6 +60,7 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
       const data = await fetchJson<{ entries: ReadonlyArray<SeriesCanonEntry> }>(
         `/series/${encodeURIComponent(id)}/canon`,
       );
+      if (seq !== canonSeqRef.current) return;
       setEntries(data.entries);
       const next = data.entries.some((entry) => entry.name === selected)
         ? selected
@@ -62,6 +70,7 @@ export function SeriesCanonPanel({ bookId }: { bookId: string }) {
       // 直接「保存条目」会把 aliases/summary/facts 静默清空。
       populateFields(data.entries.find((entry) => entry.name === next));
     } catch {
+      if (seq !== canonSeqRef.current) return;
       setEntries([]);
     }
   };
