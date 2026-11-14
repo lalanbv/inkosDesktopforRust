@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findProjectRoot, log, logError, GLOBAL_ENV_PATH } from "../utils.js";
+import { findProjectRoot, log, logError, API_KEY_PLACEHOLDER, GLOBAL_API_KEY_ENV_MARKER, GLOBAL_ENV_PATH } from "../utils.js";
 import { fetchWithProxy } from "@actalk/inkos-core";
 import {
   ensureNodeRuntimePinFiles,
@@ -158,7 +158,7 @@ export const doctorCommand = new Command("doctor")
       let hasGlobal = false;
       try {
         const globalContent = await readFile(GLOBAL_ENV_PATH, "utf-8");
-        hasGlobal = globalContent.includes("INKOS_LLM_API_KEY=") && !globalContent.includes("your-api-key-here");
+        hasGlobal = globalContent.includes(GLOBAL_API_KEY_ENV_MARKER) && !globalContent.includes(API_KEY_PLACEHOLDER);
       } catch { /* no global config */ }
       checks.push({
         name: "Global Config",
@@ -189,7 +189,7 @@ export const doctorCommand = new Command("doctor")
       const baseUrl = configResult?.llm.baseUrl;
       const apiKey = configResult?.llm.apiKey;
       const apiKeyOptional = isApiKeyOptionalForEndpoint({ provider, baseUrl });
-      const hasKey = apiKeyOptional || (!!apiKey && apiKey.length > 10 && apiKey !== "your-api-key-here");
+      const hasKey = apiKeyOptional || (!!apiKey && apiKey.length > 10 && apiKey !== API_KEY_PLACEHOLDER);
       checks.push({
         name: "LLM API Key",
         ok: hasKey,

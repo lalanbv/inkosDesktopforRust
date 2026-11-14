@@ -4,6 +4,14 @@ import { createLLMClient, StateManager, createLogger, createStderrSink, createJs
 
 export { GLOBAL_CONFIG_DIR, GLOBAL_ENV_PATH };
 
+/**
+ * Env key-name assignment marker used to probe whether the global env file
+ * already carries a configured API key. Detection marker only — never a credential.
+ */
+export const GLOBAL_API_KEY_ENV_MARKER = "INKOS_LLM_API_KEY=";
+/** Placeholder value written by init/setup templates; presence means the key is not configured yet. */
+export const API_KEY_PLACEHOLDER = "your-api-key-here";
+
 
 export async function resolveContext(opts: {
   readonly context?: string;

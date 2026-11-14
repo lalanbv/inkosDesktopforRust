@@ -1,6 +1,6 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { GLOBAL_ENV_PATH } from "./utils.js";
+import { API_KEY_PLACEHOLDER, GLOBAL_API_KEY_ENV_MARKER, GLOBAL_ENV_PATH } from "./utils.js";
 
 export interface ProjectBootstrapOptions {
   readonly language?: "zh" | "en";
@@ -10,7 +10,7 @@ export interface ProjectBootstrapOptions {
 async function hasGlobalConfig(): Promise<boolean> {
   try {
     const content = await readFile(GLOBAL_ENV_PATH, "utf-8");
-    return content.includes("INKOS_LLM_API_KEY=") && !content.includes("your-api-key-here");
+    return content.includes(GLOBAL_API_KEY_ENV_MARKER) && !content.includes(API_KEY_PLACEHOLDER);
   } catch {
     return false;
   }
