@@ -43,6 +43,13 @@ describe("localizeTuiRuntimeMessage (1057 TUI zh bridge wiring)", () => {
     vi.stubEnv("INKOS_LOCALE", "zh");
     expect(localizeTuiRuntimeMessage("some unknown failure")).toBe("some unknown failure");
   });
+
+  it("模板拼接前缀形态（1081 写链命令面）→ 块仍命中映射（子串替换锚）", () => {
+    vi.stubEnv("INKOS_LOCALE", "zh");
+    const en = wrapLLMError(new Error("Request failed with status code 401"), ctx).message;
+    const zh = localizeTuiRuntimeMessage(`Auto-write failed: ${en}`);
+    expect(zh).toContain("Auto-write failed: API 返回 401 (未授权)。");
+  });
 });
 
 /**

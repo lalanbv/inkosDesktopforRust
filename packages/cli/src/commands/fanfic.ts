@@ -12,6 +12,7 @@ import {
   type FanficMode,
 } from "@actalk/inkos-core";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
+import { localizeTuiRuntimeMessage } from "../localization.js";
 import {
   formatFanficCanonMissingError,
   formatFanficSourceDirEmptyError,
@@ -110,7 +111,9 @@ fanficCommand
       if (opts.json) {
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Failed to create fanfic: ${e}`);
+        // 1081 号：同 auto.ts——写链命令面诊断块承接（模板拼接不影响整块映射，
+        // 映射为子串替换）。
+        logError(`Failed to create fanfic: ${localizeTuiRuntimeMessage(String(e))}`);
       }
       process.exit(1);
     }

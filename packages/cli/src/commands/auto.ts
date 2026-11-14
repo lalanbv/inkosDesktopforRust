@@ -7,6 +7,7 @@ import {
   type Observation,
 } from "@actalk/inkos-core";
 import { loadConfig, buildPipelineConfig, findProjectRoot, resolveBookId, log, logError, resolveCliProfileSkills } from "../utils.js";
+import { localizeTuiRuntimeMessage } from "../localization.js";
 import {
   formatAutoWriteAlreadyComplete,
   formatAutoWriteStart,
@@ -139,7 +140,9 @@ export const autoCommand = new Command("auto")
       if (opts.json) {
         log(JSON.stringify({ error: String(e) }));
       } else {
-        logError(`Auto-write failed: ${e}`);
+        // 1081 号：写链命令面 provider 诊断块（chatCompletion HTTP 错误出口
+        // wrapLLMError 统一产出）按 CLI 语言承接展示。
+        logError(`Auto-write failed: ${localizeTuiRuntimeMessage(String(e))}`);
       }
       process.exit(1);
     }
