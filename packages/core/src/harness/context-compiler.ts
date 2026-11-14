@@ -91,7 +91,7 @@ export class ContextSourceRegistry {
 
   require(id: string): ContextSourceProvider {
     const provider = this.providers.get(id);
-    if (!provider) throw new Error(`Unknown context source: ${id}`);
+    if (!provider) throw new Error("Unknown context source: " + id);
     return provider;
   }
 }

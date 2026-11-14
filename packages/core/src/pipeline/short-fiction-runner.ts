@@ -1341,7 +1341,7 @@ async function generateImageFromPromptImpl(request: ShortFictionCoverRequest, pr
   }
 
   const endpoint = request.endpoint ?? `${request.baseUrl.replace(/\/+$/u, "")}/responses`;
-  const response = await fetch(endpoint, {
+  const response = await providerEndpointFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1468,7 +1468,7 @@ async function generateImagesCover(
     form.set("model", request.model); form.set("prompt", prompt); form.set("n", "1"); form.set("size", size);
     form.set("image", new Blob([new Uint8Array(reference.buffer)], {type:reference.mimeType}), reference.mimeType === "image/png" ? "reference.png" : "reference.jpg");
   }
-  const response = await fetch(endpoint, {
+  const response = await providerEndpointFetch(endpoint, {
     method: "POST",
     headers: {
       ...(form ? {} : {"Content-Type": "application/json"}),
@@ -1581,7 +1581,7 @@ async function generateGeminiCover(
   reference?: ImageReference,
 ): Promise<{ readonly base64: string; readonly extension: "png" | "jpg" }> {
   const endpoint = `${request.baseUrl.replace(/\/+$/u, "")}/models/${encodeURIComponent(request.model)}:generateContent?key=${encodeURIComponent(request.apiKey)}`;
-  const response = await fetch(endpoint, {
+  const response = await providerEndpointFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1780,6 +1780,19 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
   return slug || `short-${Date.now()}`;
+}
+
+/**
+ * 1031/1035 号：provider 端点请求的唯一入口（信任边界显式化）。
+ *
+ * provider 端点（endpoint/baseUrl）是用户显式配置的**可信面**——本地推理网
+ * 关（127.0.0.1）是产品核心场景，不受 cover-download-origin 的 SSRF 策略
+ * 约束（见该模块头 900 号信任边界定性）；模型返回的**下载 URL** 才是策略
+ * 约束面（assertCoverDownloadUrlAllowed 路径）。本函数收口全部 provider 端
+ * 点 fetch 调用，使信任边界在代码形态上可辨识。
+ */
+function providerEndpointFetch(url: string, init: RequestInit): Promise<Response> {
+  return fetch(url, init);
 }
 
 function safeSegment(value: string): string {

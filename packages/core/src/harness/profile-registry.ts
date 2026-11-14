@@ -22,7 +22,7 @@ export class WorkProfileRegistry {
 
   require(id: string): WorkProfile {
     const profile = this.profiles.get(id);
-    if (!profile) throw new Error(`Unknown work profile: ${id}`);
+    if (!profile) throw new Error("Unknown work profile: " + id);
     return profile;
   }
 

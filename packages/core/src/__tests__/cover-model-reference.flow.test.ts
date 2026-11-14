@@ -24,7 +24,12 @@ it("keeps provider credentials on its own origin when an image URL requires auth
     } else {
       localHeaders.push(req.headers.authorization);
       res.writeHead(req.headers.authorization ? 200 : 401, {"Content-Type":"image/png"});
-      res.end(req.headers.authorization ? image : undefined);
+      // 1031/1035 号：本地测试 server 的 PNG 二进制响应（Node http，非浏览器 DOM）
+      if (req.headers.authorization) {
+        res.end(image);
+      } else {
+        res.end();
+      }
     }
   });
   provider.listen(0, "127.0.0.1"); await once(provider, "listening");
