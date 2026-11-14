@@ -1213,11 +1213,14 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                 >
                   <Paperclip size={16} strokeWidth={2.3} />
                 </button>
+                {/* 1169 号：IME 组合期回车（中文选词上屏）key 同为 "Enter"——
+                    无 isComposing 守卫会把未上屏的组合文本整句发出（聊天主输入
+                    面中文高频路径）。prompt-input 规范形同款 native 守卫。 */}
                 <textarea
                   ref={textareaRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void onSend(input); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void onSend(input); } }}
                   placeholder={isZh ? "输入指令..." : "Enter command..."}
                   disabled={!activeSessionId || !sessionMatchesRoute || creatingWorkSession}
                   rows={1}

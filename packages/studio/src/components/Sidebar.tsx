@@ -787,7 +787,9 @@ export function Sidebar({ nav, activePage, sse, t, zone, fillWidth, filterQuery 
             value={renameValue}
             onChange={(event) => setRenameValue(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
+              // 1169 号：IME 组合期回车（中文会话名选词上屏）不触发重命名——
+              // 否则半截组合文本直接落为新标题。native isComposing 守卫。
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 void handleRenameConfirm();
               }

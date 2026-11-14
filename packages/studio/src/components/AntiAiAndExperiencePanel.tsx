@@ -249,7 +249,9 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
             value={entryText}
             onChange={(event) => setEntryText(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") void saveEntry();
+              // 1169 号：IME 组合期回车（中文手法文本选词上屏）不触发沉淀——
+              // 否则半截组合文本经 merge PUT 永久写入 experience.json。
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) void saveEntry();
             }}
             aria-label={tr("沉淀一条有效手法…", "Learn a technique…")}
             placeholder={tr("沉淀一条有效手法…", "Learn a technique…")}

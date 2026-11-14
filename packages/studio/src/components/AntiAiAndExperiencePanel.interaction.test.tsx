@@ -3,7 +3,7 @@
 //! 三条 CRUD 链载荷断言（该面板状态自持无陈旧 props 风险，测试目的为锁定
 //! 合并与切换语义）。
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AntiAiAndExperiencePanel } from "./AntiAiAndExperiencePanel";
 
@@ -102,5 +102,23 @@ describe("AntiAiAndExperiencePanel 交互（456 号）", () => {
     expect(putCall).toBeDefined();
     const payload = JSON.parse((putCall![1] as { body: string }).body);
     expect(payload.entries[0].text).toBe("用镜面倒影切换视角制造悬念");
+  });
+
+  // 1169 号：IME 组合期回车（选词上屏）不触发沉淀——否则半截组合文本经
+  // merge PUT 永久写入 experience.json；普通回车照常沉淀。
+  it("IME 组合期回车不沉淀，普通回车沉淀（1169 号）", async () => {
+    const user = userEvent.setup();
+    render(<AntiAiAndExperiencePanel bookId="b1" />);
+    const input = screen.getByPlaceholderText("沉淀一条有效手法…");
+    await user.type(input, "以静写动");
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    const experiencePuts = () =>
+      fetchJsonMock.mock.calls.filter(
+        ([path, init]) => String(path).includes("/experience") && (init as { method?: string })?.method === "PUT",
+      );
+    expect(experiencePuts()).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("经验已沉淀（同文本自动去重）")).toBeTruthy();
+    expect(experiencePuts()).toHaveLength(1);
   });
 });

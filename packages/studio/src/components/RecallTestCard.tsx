@@ -25,7 +25,9 @@ export function RecallTestCard({ bookId }: { bookId: string }) {
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
-    if (!query.trim()) return;
+    // 1169 号：busy 飞行互斥——按钮 disabled 有此守卫，但 Enter 路径（下方
+    // onKeyDown）不经过 disabled，直呼 run() 会绕开按钮的禁用面。
+    if (busy || !query.trim()) return;
     setBusy(true);
     try {
       const data = await fetchJson<Payload>(`/books/${encodeURIComponent(bookId)}/hybrid-search`, {
@@ -50,7 +52,9 @@ export function RecallTestCard({ bookId }: { bookId: string }) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") void run();
+            // 1169 号：IME 组合期回车（中文查询选词上屏）不触发检索——否则
+            // 半截组合文本被当作查询发出。
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) void run();
           }}
           aria-label={tr("输入测试查询…", "Type a test query…")}
           placeholder={tr("输入测试查询…", "Type a test query…")}

@@ -2,7 +2,7 @@
 //! 457 号：RecallTestCard 交互测试——召回测试查询载荷与融合结果渲染
 //! （语义+词法双源标记 / 词法降级模式 / 无命中空态）。
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecallTestCard } from "./RecallTestCard";
 
@@ -68,4 +68,47 @@ describe("RecallTestCard 交互（457 号）", () => {
       (b) => b.textContent?.trim() === "检索",
     ) as HTMLElement;
   }
+});
+
+// 1169 号：键盘路径守卫——IME 组合期回车吞没 + 普通回车放行 + busy 飞行互斥
+// （Enter 路径不经过按钮 disabled，run() 入口互斥是唯一在途闸门）。
+describe("RecallTestCard 键盘守卫（1169 号）", () => {
+  function hybridCalls(): number {
+    return fetchJsonMock.mock.calls.filter(([path]) => String(path).includes("/hybrid-search")).length;
+  }
+
+  it("IME 组合期回车（选词上屏）不触发检索，普通回车触发", async () => {
+    const user = userEvent.setup();
+    render(<RecallTestCard bookId="b1" />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    await user.type(input, "碎镜之谜");
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(hybridCalls()).toBe(0);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await vi.waitFor(() => {
+      expect(hybridCalls()).toBe(1);
+    });
+  });
+
+  it("busy 飞行互斥——在途回车不重复发检索（run() 入口守卫）", async () => {
+    let release!: (v: unknown) => void;
+    fetchJsonMock.mockImplementationOnce(
+      // resolve 形参类型比 unknown 窄（逆变失败），断言放行（测试门栓）。
+      () => new Promise((resolve) => { release = resolve as unknown as (v: unknown) => void; }),
+    );
+    const user = userEvent.setup();
+    render(<RecallTestCard bookId="b1" />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    await user.type(input, "镜中影");
+    fireEvent.keyDown(input, { key: "Enter" });
+    // 真实双击/双按=两个独立事件任务——任务间让 React 完成重渲染，
+    // 第二发 handler 才读到 fresh busy=true（同任务连发不构成真实输入面）。
+    await act(async () => {});
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(hybridCalls()).toBe(1);
+    release({ fts: [], fused: [], mode: "semantic" });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("语义+词法混合");
+    });
+  });
 });
