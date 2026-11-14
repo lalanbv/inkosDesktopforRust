@@ -358,7 +358,15 @@ export async function runWorkerAgentTool<TParameters extends TSchema>(
     prepareArguments: params => prepareArguments(resultTool.parameters, resultTool.name, params) as Static<TParameters>,
     execute: async (_toolCallId, params): Promise<AgentToolResult<Static<TParameters>>> => {
       if (submitted !== undefined) throw Object.assign(new Error('The final result is already recorded; later tool calls cannot change it.'),{code:'WORKER_RESULT_ALREADY_FINALIZED'});
-      const parsed = Value.Parse(resultTool.parameters, params) as Static<TParameters>;
+      // 1030 号：Parse 后统一 Clean——typebox 1.x 的 Parse 保留未知键（探针：
+      // 默认对象额外键穿透），下游 zod .strict() 存储面（writer settle 的
+      // HookRecordSchema 等）对越权键 fail-loud；Clean 按 schema 剥除 unknown
+      // 键（无声明/strict 双形态探针均剥），系统性消除 LLM 越权键穿透面
+      // （1020 的 writer 投影为语义面保留，本 Clean 为源头防线）。
+      const parsed = Value.Clean(
+        resultTool.parameters,
+        Value.Parse(resultTool.parameters, params),
+      ) as Static<TParameters>;
       try {
         if (lastSupportingTurn === modelTurns) throw Object.assign(new Error(JSON.stringify({
           code:'WORKER_RESULT_READBACK_REQUIRED',
