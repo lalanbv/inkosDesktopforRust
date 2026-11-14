@@ -1,6 +1,7 @@
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { Type, type Static } from "@earendil-works/pi-ai";
+// 1022 号：earendil 1.5.2 归并——工具 schema 统一走 typebox alias 面（同上）。
+import { Type, type Static } from "@sinclair/typebox";
 import type { AgentMessage, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentSkill, SkillRegistry } from "../skills/index.js";
 import { safeChildPath } from "../utils/path-safety.js";

@@ -1,4 +1,7 @@
-import { Type, type Static } from "@earendil-works/pi-ai";
+// 1022 号：earendil 1.5.2 归并——pi-ai 1.5.2 不再 re-export Type/Static（迁
+// 其自带 pi-schema 系统，与 mz 的 typebox 校验链不互通）；工具 schema 统一走
+// typebox 1.4.7（@sinclair/typebox alias 面，与仓内 35 文件及 mz 0.73.1 同源）。
+import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { PipelineRunner } from "../pipeline/runner.js";
 import {
