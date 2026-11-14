@@ -5,7 +5,7 @@ import {
   runAgentSession,
 } from "@actalk/inkos-core";
 import { buildPipelineConfig, createClient, findProjectRoot, loadConfig } from "../utils.js";
-import { localizeAgentFailure } from "../localization.js";
+import { localizeAgentFailure, buildAgentFailureHints } from "../localization.js";
 
 export interface InteractCommandHooks {
   readonly readInput?: () => Promise<string>;
@@ -127,6 +127,13 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
 
       if (responseText) {
         process.stdout.write(`${responseText}\n`);
+      }
+      // 1070 号：failure 存状态路径的操作建议双语 hint（1069 缺口补齐；json
+      // 模式为机器消费面不加行）。
+      if (failure) {
+        for (const hint of buildAgentFailureHints(failure)) {
+          process.stdout.write(`${hint}\n`);
+        }
       }
     });
 }

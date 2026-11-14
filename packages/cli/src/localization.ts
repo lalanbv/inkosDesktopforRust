@@ -531,3 +531,29 @@ export function localizeAgentFailure(
 ): string | undefined {
   return failure === undefined ? undefined : localizeTuiRuntimeMessage(failure);
 }
+
+/**
+ * 1070 号（1069 缺口备案清偿）：agent 链 failure 存状态路径的操作建议双语 hint。
+ * agent 链 errorMessage=SDK/传输层原文族（1069 活体定性——映射表不覆盖），用户
+ * 辅助由本函数按特征追加（判据族与 doctor.ts catch 分支同源复用，非新造正则）。
+ * 仅命令面一次性输出消费（agent.ts/interact.ts）；TUI 面不接线（responseText
+ * 进 session 持久化，hint 会污染对话历史——agent-input.ts 备案）。
+ */
+export function buildAgentFailureHints(failure: string): string[] {
+  const language = resolveCliLanguage();
+  const hints: string[] = [];
+  if (/Connection error|ECONNREFUSED|fetch failed/i.test(failure)) {
+    hints.push(formatDoctorHintBaseUrl(language));
+  }
+  if (/\b400\b/.test(failure)) {
+    hints.push(formatDoctorHintStreamRequirement(language));
+    hints.push(formatDoctorHintModelName(language));
+  }
+  if (/\b401\b|unauthorized/i.test(failure)) {
+    hints.push(formatDoctorHintInvalidApiKey(language));
+  }
+  if (/\b403\b|\b429\b|quota|balance|insufficient|额度|余额|配额/i.test(failure)) {
+    hints.push(formatDoctorHintQuota(language));
+  }
+  return hints;
+}

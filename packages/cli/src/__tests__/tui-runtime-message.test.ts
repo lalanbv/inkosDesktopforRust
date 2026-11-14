@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { localizeTuiRuntimeMessage, localizeAgentFailure } from "../localization.js";
+import { localizeTuiRuntimeMessage, localizeAgentFailure, buildAgentFailureHints } from "../localization.js";
 import { wrapLLMError } from "@actalk/inkos-core";
 
 /**
@@ -64,5 +64,33 @@ describe("localizeAgentFailure (1067 agent failure bridge)", () => {
     const en = wrapLLMError(new Error("Request failed with status code 429"), ctx).message;
     expect(localizeAgentFailure(en))
       .toContain("API 返回 429 (请求过多)。请稍后重试，或检查 API 配额。");
+  });
+});
+
+/**
+ * 1070 号（1069 缺口备案清偿）：failure 存状态路径的操作建议双语 hint 判据——
+ * 判据族与 doctor.ts catch 分支同源（1069 活体定性：agent 链 errorMessage=SDK
+ * 原文族，"Connection error." 为最高频形态）。锚定：连接类→baseUrl 建议；
+ * 401→Key 建议；无关文案→空数组不误伤。
+ */
+describe("buildAgentFailureHints (1070 failure hints)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("Connection error.（SDK 最高频形态）→ baseUrl 建议（zh）", () => {
+    vi.stubEnv("INKOS_LOCALE", "zh");
+    const hints = buildAgentFailureHints("Connection error.");
+    expect(hints.length).toBeGreaterThan(0);
+    expect(hints[0]).toContain("INKOS_LLM_BASE_URL");
+  });
+
+  it("401 形态 → API Key 建议", () => {
+    vi.stubEnv("INKOS_LOCALE", "zh");
+    const hints = buildAgentFailureHints("Request failed with status code 401");
+    expect(hints.some((hint) => hint.includes("API Key"))).toBe(true);
+  });
+
+  it("无关失败文案 → 空数组不误伤", () => {
+    vi.stubEnv("INKOS_LOCALE", "zh");
+    expect(buildAgentFailureHints("some unrelated failure")).toEqual([]);
   });
 });
