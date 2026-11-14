@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { toolArgumentIssues } from "../agent/tool-arguments.js";
 
 // 1021 号：toolArgumentIssues 适配层直接契约单测（1019 重写为 typebox 1.x
@@ -61,5 +62,21 @@ describe("toolArgumentIssues（1019 适配层契约）", () => {
       state: Type.Union([Type.Literal("draft"), Type.Literal("ready")]),
     });
     expect(toolArgumentIssues(schema, { chapters: ["a"], state: "draft" })).toEqual([]);
+  });
+
+  // 1030/1031 号：worker-agent 的 Parse→Clean 源头防线管道契约——1.x 的
+  // Value.Parse 保留未知键（探针实锤，穿透到下游 zod .strict() 存储面），
+  // Clean 按 schema 剥除（双版本行为一致）。NEUTER=摘 Clean 步骤时本例红。
+  it("Parse→Clean 管道：额外键在 Clean 步剥除（源头防线契约）", () => {
+    const schema = Type.Object({ hookId: Type.String(), startChapter: Type.Integer() });
+    const raw = { hookId: "h1", startChapter: 2, kind: "setup" };
+    // Parse 保留额外键（穿透形态实锤）
+    const parsed = Value.Parse(schema, raw) as Record<string, unknown>;
+    expect(parsed.kind).toBe("setup");
+    // Clean 剥除（worker-agent:Parse 后统一执行的防线步骤语义）
+    const cleaned = Value.Clean(schema, parsed) as Record<string, unknown>;
+    expect(cleaned.kind).toBeUndefined();
+    expect(cleaned.hookId).toBe("h1");
+    expect(cleaned.startChapter).toBe(2);
   });
 });
