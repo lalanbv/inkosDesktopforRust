@@ -519,3 +519,15 @@ export function formatBookRestoreDone(
 export function localizeTuiRuntimeMessage(message: string): string {
   return localizeKnownRuntimeMessage(message, resolveCliLanguage());
 }
+
+/**
+ * 1067 号（1057 清偿补全）：agent 链失败路径的 zh 承接。errorMessage 生产链
+ * （provider.ts:211 / pi-stream.ts:177 捕获存状态而非抛出）携带 provider EN
+ * 诊断块，与抛异常路径（dashboard catch → localizeTuiRuntimeMessage）同一
+ * 展示承接：zh 映射回 zh 文案，en 保持 EN；undefined（无失败）原样透传。
+ */
+export function localizeAgentFailure(
+  failure: string | undefined,
+): string | undefined {
+  return failure === undefined ? undefined : localizeTuiRuntimeMessage(failure);
+}

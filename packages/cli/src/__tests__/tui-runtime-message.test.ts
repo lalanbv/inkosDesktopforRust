@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { localizeTuiRuntimeMessage } from "../localization.js";
+import { localizeTuiRuntimeMessage, localizeAgentFailure } from "../localization.js";
 import { wrapLLMError } from "@actalk/inkos-core";
 
 /**
@@ -42,5 +42,27 @@ describe("localizeTuiRuntimeMessage (1057 TUI zh bridge wiring)", () => {
   it("未知消息 zh 下原样透传（非已知块不误伤）", () => {
     vi.stubEnv("INKOS_LOCALE", "zh");
     expect(localizeTuiRuntimeMessage("some unknown failure")).toBe("some unknown failure");
+  });
+});
+
+/**
+ * 1067 号（1057 清偿补全）：agent 链失败路径（errorMessage/completion.blocked
+ * 捕获存状态面）的承接契约——undefined（无失败）透传、字符串走同款映射。
+ * 消费点：tui/agent-input.ts / commands/interact.ts / commands/agent.ts。
+ */
+describe("localizeAgentFailure (1067 agent failure bridge)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const ctx = { baseUrl: "https://api.example.com/v1", model: "test-model" } as const;
+
+  it("undefined（无失败）透传为 undefined", () => {
+    expect(localizeAgentFailure(undefined)).toBeUndefined();
+  });
+
+  it("provider EN 诊断块 → zh 承接（生产派生样例，与 TUI 抛异常路径同款）", () => {
+    vi.stubEnv("INKOS_LOCALE", "zh");
+    const en = wrapLLMError(new Error("Request failed with status code 429"), ctx).message;
+    expect(localizeAgentFailure(en))
+      .toContain("API 返回 429 (请求过多)。请稍后重试，或检查 API 配额。");
   });
 });

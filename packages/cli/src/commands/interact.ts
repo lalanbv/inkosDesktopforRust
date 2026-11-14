@@ -5,6 +5,7 @@ import {
   runAgentSession,
 } from "@actalk/inkos-core";
 import { buildPipelineConfig, createClient, findProjectRoot, loadConfig } from "../utils.js";
+import { localizeAgentFailure } from "../localization.js";
 
 export interface InteractCommandHooks {
   readonly readInput?: () => Promise<string>;
@@ -104,7 +105,7 @@ export function createInteractCommand(hooks: InteractCommandHooks = {}): Command
         proxyUrl: client.proxyUrl,
       }, input);
 
-      const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+      const failure = localizeAgentFailure(result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined));
       const responseText = failure ?? result.responseText;
       if (failure) process.exitCode = 1;
       const session = {

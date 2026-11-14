@@ -19,6 +19,7 @@ import {
 } from "@actalk/inkos-core";
 import { join } from "node:path";
 import { persistProjectSession } from "./session-store.js";
+import { localizeAgentFailure } from "../localization.js";
 import { buildPipelineConfig, loadConfig } from "../utils.js";
 
 interface TuiAgentRoute {
@@ -158,7 +159,7 @@ export async function processTuiAgentInput(params: {
   const createdBookId = extractCreatedBookId(result.messages);
   const activeBookId = createdBookId ?? resolvedBookId;
   const proposedAction = extractProposedAction(result.messages);
-  const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+  const failure = localizeAgentFailure(result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined));
   const responseText = failure ?? (proposedAction
     ? formatProposedAction(proposedAction, language)
     : result.responseText);

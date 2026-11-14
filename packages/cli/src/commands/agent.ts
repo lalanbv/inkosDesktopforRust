@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { loadWorkManifest, PipelineRunner, runAgentSession } from "@actalk/inkos-core";
 import { buildPipelineConfig, loadConfig, createClient, findProjectRoot, resolveBookId, resolveContext, log, logError } from "../utils.js";
+import { localizeAgentFailure } from "../localization.js";
 
 export const agentCommand = new Command("agent")
   .description("Natural language agent mode (LLM orchestrates via tool-use)")
@@ -67,7 +68,7 @@ export const agentCommand = new Command("agent")
         fullInstruction,
       );
 
-      const failure = result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined);
+      const failure = localizeAgentFailure(result.errorMessage ?? (result.completion?.status === "blocked" ? result.completion.message : undefined));
       if (opts.json) {
         log(JSON.stringify({ result }));
       } else if (failure) {
