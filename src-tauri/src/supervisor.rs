@@ -110,6 +110,22 @@ pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
         .envs(spec.env.iter())
         .current_dir(&spec.cwd);
 
+    // 1431 号：stdio 三面 null 化——sidecar 与 app 终端/管道解耦。
+    // ①挂死根除：app 被 SIGKILL 时 RunEvent::Exit 的 cleanup_sidecar/kill_tree
+    //   不可达（signal hooks 只盖 TERM/INT），sidecar 成孤儿且**继承的
+    //   stdout/stderr 写端永不关闭**——任何等待管道 EOF 的消费方
+    //   （assert_cmd output()：e2e_startup 冒烟 1200s 哨兵红实证 / launchd
+    //   console 收集器）被孤儿写端挂死。null 化后 app 亡故即 EOF 必达。
+    // ②污染根除：sidecar 的 eprintln（引擎 4 处低频诊断行）不再混进 app
+    //   stdout（生产 launchd/console 噪音面）。
+    // 边界备案：独立直跑 sidecar（dev 手动 `inkos-engine-server` / CLI）不经
+    // 本路径，终端观测不受影响；孤儿**进程**残留仍可能（SIGKILL 不可捕获是
+    // OS 边界），由 sweep 清理指引与下次启动 pick_free_port 容错兜底，
+    // parent-watchdog env 形态留作工项。
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
     // 子进程成新进程组 leader（跨平台分置，避免方法不存在导致 Windows 编译失败）。
     #[cfg(unix)]
     {
