@@ -41,10 +41,13 @@
 // + 孤儿清理指引。预算含编译余量：release scope 最宽（陈旧缓存时数分钟）。
 // 已知边界：spawnSync 的 kill 只达 cargo 直接子进程，测试二进制可能成孤儿
 // （903 族）——超时报文自带特征清理指引；下次 sweep 的 supervisor 端口预检
-// 与 e2e_startup 独占启动也会暴露残留。
+// 与 e2e_startup 独占启动也会暴露残留。孤儿自愈由脚本头尾的 recoverOrphans
+// 承担（1435 号补）：Node 回退 sidecar 走 pkill 特征（路径+tmp 根参数），引擎
+// 孤儿走 ps 扫描 PPID=1 过滤（本仓路径特征，用户拉起的引擎 PPID≠1 不误伤）；
+// 无差别 pkill 引擎/桌面 app 仍不做——误伤用户进程面。
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -146,6 +149,56 @@ if (!cargoAvailable()) {
   process.exit(3);
 }
 
+// 903 号纪律：spawn 前清场——上一轮异常死亡留下的孤儿下一轮回收，不依赖信号
+// 语义。1435 号实证缺口有两族：
+// ①Node 回退 sidecar：e2e_startup 挂死被超时哨兵 SIGKILL 时，app 的 tsx
+//   sidecar（src/api/index.ts <tmp 根>）整组孤儿化（PPID=1，tsx cli+loader 成
+//   对），超时指引的 inkos-desktop/engine 特征盖不住，18 枚存活 12h。特征限定
+//   本仓绝对路径 + tmp 根参数（/var/folders|/tmp 下 .tmp* 目录=Rust tempfile
+//   TempDir 形态）——dev:server（相对路径无参）与用户真项目根运行不匹配。
+// ②引擎孤儿：e2e_startup 按设计「超时击杀即预期」（assert_cmd SIGKILL app，
+//   cleanup 不可达）——release 引擎每轮必孤儿化并占默认 4567，上一轮残留让
+//   下一轮 supervisor_integration（要求 :4567 空闲）假红=自毒化循环（1435 双
+//   轮复现实证）。特征=本仓引擎路径 + PPID=1（父已亡）；用户 shell/桌面应用
+//   拉起的引擎 PPID≠1 不误伤——自动 pkill 做不了的 PPID 过滤用 ps 扫描补齐。
+// 头尾双清：开头回收上一轮残留，结尾自收本轮新增，运行后零孤儿。
+const tsOrphanPattern = `${repoRoot}/packages/studio/src/api/index\\.ts (/var/folders/|/tmp/)[^ ]*\\.tmp`;
+const engineOrphanNeedle = "src-tauri/target/release/engine-rust/inkos-engine-server";
+
+function recoverOrphans(label) {
+  try {
+    execFileSync("pkill", ["-f", tsOrphanPattern], { stdio: "ignore" });
+  } catch {
+    /* 无匹配=正常（pkill 无匹配时非零退出） */
+  }
+  const engineOrphans = [];
+  try {
+    const out = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+    for (const line of out.split("\n")) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+      if (!m) continue;
+      const [, pid, ppid, command] = m;
+      if (ppid === "1" && command.includes(repoRoot) && command.includes(engineOrphanNeedle)) {
+        engineOrphans.push(Number(pid));
+      }
+    }
+  } catch {
+    return; // ps 不可用=环境异常，降级跳过（后续 supervisor_integration 的端口预检兜底）
+  }
+  for (const pid of engineOrphans) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* 已亡=正常 */
+    }
+  }
+  if (engineOrphans.length > 0) {
+    console.log(`[${label}] 引擎孤儿回收 ${engineOrphans.length} 枚（PPID=1 + 本仓路径特征）：${engineOrphans.join(", ")}`);
+  }
+}
+
+recoverOrphans("pre-clean");
+
 let failed = false;
 
 for (const inv of INVENTORY) {
@@ -161,7 +214,8 @@ for (const inv of INVENTORY) {
   }
   console.log(`\n== cargo test ${inv.scope} -- --ignored ==`);
   // 统计落盘再解析——cargo 管道统计伪象两次实证（532/552 号），禁 |grep|awk。
-  const logFile = join(mkdtempSync(join(tmpdir(), "cargo-ignored-sweep-")), "output.log");
+  const logDir = mkdtempSync(join(tmpdir(), "cargo-ignored-sweep-"));
+  const logFile = join(logDir, "output.log");
   const args = inv.scope.split(" ").concat(["--", "--ignored"], inv.extraTestArgs ?? []);
   const run = spawnSync("cargo", ["test", ...args], {
     cwd: tauriDir,
@@ -183,9 +237,12 @@ for (const inv of INVENTORY) {
         "  高概率根因 = keychain 锁定（dark wake）/securityd 异常（e2e_secrets、lib keyring 面）/编译僵死。",
         "  解锁屏幕确认 keychain 可达后重跑；孤儿清理特征：",
         "    pkill -f inkos-desktop; pkill -f inkos-engine-server; pkill -f 'sync_watcher_io|e2e_secrets|inkos_desktop-'",
+        `    pkill -f '${tsOrphanPattern}'  # Node 回退 sidecar 孤儿组（1435 号，spawn 前清场同款特征）`,
         output.slice(-800),
       ].join("\n"),
     );
+    // 哨兵路径日志目录是空的（writeFileSync 在此分支之后），直接回收
+    rmSync(logDir, { recursive: true, force: true });
     failed = true;
     continue;
   }
@@ -225,7 +282,12 @@ for (const inv of INVENTORY) {
     continue;
   }
 
-  console.log(`✓ [${inv.scope}] ${okTests.length}/${inv.tests.length} 枚挂起用例全绿，清单精确匹配（日志 ${logFile}）`);
+  // 绿档不留盘（1435 号）：成功即删日志目录——988 号创建以来每轮残留一个
+  // （实测 149 个/588K），红档路径不删，保留日志供事后取证。
+  rmSync(logDir, { recursive: true, force: true });
+  console.log(`✓ [${inv.scope}] ${okTests.length}/${inv.tests.length} 枚挂起用例全绿，清单精确匹配（绿档日志已清盘）`);
 }
+
+recoverOrphans("post-clean");
 
 process.exit(failed ? 1 : 0);
