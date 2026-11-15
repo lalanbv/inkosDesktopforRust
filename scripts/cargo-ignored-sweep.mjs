@@ -183,7 +183,7 @@ function recoverOrphans(label) {
       }
     }
   } catch {
-    return; // ps 不可用=环境异常，降级跳过（后续 supervisor_integration 的端口预检兜底）
+    return; // ps 不可用=环境异常，降级跳过（supervisor_integration 用例内 :4567 端口重试兜底）
   }
   for (const pid of engineOrphans) {
     try {
@@ -242,7 +242,12 @@ for (const inv of INVENTORY) {
       ].join("\n"),
     );
     // 哨兵路径日志目录是空的（writeFileSync 在此分支之后），直接回收
-    rmSync(logDir, { recursive: true, force: true });
+    // （1436 号硬化：删失败不致命，红报已出，空目录残留无害）
+    try {
+      rmSync(logDir, { recursive: true, force: true });
+    } catch {
+      /* 目录删不掉不致命 */
+    }
     failed = true;
     continue;
   }
@@ -284,8 +289,19 @@ for (const inv of INVENTORY) {
 
   // 绿档不留盘（1435 号）：成功即删日志目录——988 号创建以来每轮残留一个
   // （实测 149 个/588K），红档路径不删，保留日志供事后取证。
-  rmSync(logDir, { recursive: true, force: true });
-  console.log(`✓ [${inv.scope}] ${okTests.length}/${inv.tests.length} 枚挂起用例全绿，清单精确匹配（绿档日志已清盘）`);
+  // 1436 号硬化：rmSync 的 force 只吞 ENOENT，EPERM/EACCES 类 throw 在裸调用
+  // 下会把全绿跑崩成伪红——失败退化为老行为（残留一目录）并如实入讯息。
+  let logDirCleaned = true;
+  try {
+    rmSync(logDir, { recursive: true, force: true });
+  } catch {
+    logDirCleaned = false;
+  }
+  console.log(
+    `✓ [${inv.scope}] ${okTests.length}/${inv.tests.length} 枚挂起用例全绿，清单精确匹配${
+      logDirCleaned ? "（绿档日志已清盘）" : `（绿档日志清理失败，保留 ${logDir}）`
+    }`,
+  );
 }
 
 recoverOrphans("post-clean");
