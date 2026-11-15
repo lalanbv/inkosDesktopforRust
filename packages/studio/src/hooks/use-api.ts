@@ -22,12 +22,19 @@ export function buildApiUrl(path: string): string | null {
 // fetch、WebKit(Safari/WKWebView)=Load failed、undici(Node)=fetch failed、
 // Firefox=NetworkError。这类错误与 inkos.json 无关——启动门若仍引导用户去
 // 检查配置文件就是误导（1426 实证：inkos.json 合法仍见此卡）。
+// 1427 号补充（活体实证）：dev 工作流（vite dev :4567 → 代理 :4569）在后端
+// ECONNREFUSED 时返回 HTTP 500 + 空 text/plain 体（非 TypeError）——
+// readErrorMessage 回退成裸 `${status} ${statusText}`。裸网关类 5xx（500/502/
+// 503/504 + 通用 statusText 整串锚定）只在中间代理产生：双端引擎自身 500 恒
+// 带 JSON 详情（如 18801 实采 PROJECT_CONFIG_INVALID 人话串），裸 5xx 即
+// 「上游不可达」签名，同样不该怪 inkos.json。
 // 注意：useApi 只透传 message（Error 实例在 hook 内部已降为字符串），故按
 // message 判定而非 instanceof TypeError。
-// 样例为四大引擎的固定文案（引擎常量，仓内无生产函数可派生——按 1007 号
-// 「不可派生才手打并注明理由」契约纪律备案手打）。
+// 网络层样例为四大引擎固定文案（引擎常量，仓内无生产函数可派生——按 1007 号
+// 「不可派生才手打并注明理由」契约纪律备案手打）；裸 5xx 样例为 1427 活体
+// curl 实采生产派生。
 const BACKEND_UNREACHABLE_PATTERN =
-  /failed to fetch|load failed|fetch failed|networkerror|network error/i;
+  /failed to fetch|load failed|fetch failed|networkerror|network error|^5(00|02|03|04) (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)$/i;
 
 export function isBackendUnreachableMessage(message: string | null | undefined): boolean {
   if (!message) return false;

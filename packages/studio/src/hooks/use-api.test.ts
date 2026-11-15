@@ -33,10 +33,12 @@ function deferredResponse(): DeferredResponse {
 
 // 1426 号：后端不可达分类器。正例=四大引擎网络层失败的固定文案（引擎常量，
 // 仓内无生产函数可派生——按 1007 号「不可派生才手打并注明理由」契约纪律手打）；
-// 反例含 18801 实采的服务端真实形态（PROJECT_CONFIG_INVALID 500 的人类可读串）
-// 与 readErrorMessage 回退形态——服务端可达的错误恰恰不该归入「不可达」，
+// 1427 号补正例=裸网关类 5xx（1427 活体 curl 实采：vite dev 代理 ECONNREFUSED
+// 返回 HTTP 500 + 空 text/plain 体 → readErrorMessage 回退裸串，生产派生）。
+// 反例含 18801 实采的服务端真实形态（PROJECT_CONFIG_INVALID 500 带详情人话串）
+// 与非网关类回退形态——服务端可达的错误恰恰不该归入「不可达」，
 // 否则启动门会把两类指引（重启引擎 vs 检查 inkos.json）发反。
-describe("isBackendUnreachableMessage（1426）", () => {
+describe("isBackendUnreachableMessage（1426/1427）", () => {
   it("四大引擎网络层失败文案均判为不可达", () => {
     // Blink（Edge/Chrome，1426 号用户截图原文）
     expect(isBackendUnreachableMessage("Failed to fetch")).toBe(true);
@@ -48,16 +50,29 @@ describe("isBackendUnreachableMessage（1426）", () => {
     expect(isBackendUnreachableMessage("NetworkError when attempting to fetch resource.")).toBe(true);
   });
 
+  it("裸网关类 5xx（代理签名）判为不可达（1427 活体样例）", () => {
+    // vite dev 代理 ECONNREFUSED 实采（1427 浏览器活体 curl 同形）
+    expect(isBackendUnreachableMessage("500 Internal Server Error")).toBe(true);
+    // 同族网关态（代理产生；双端引擎自身从不返回）
+    expect(isBackendUnreachableMessage("502 Bad Gateway")).toBe(true);
+    expect(isBackendUnreachableMessage("503 Service Unavailable")).toBe(true);
+    expect(isBackendUnreachableMessage("504 Gateway Timeout")).toBe(true);
+    // 整串锚定：只匹配裸回退串，带详情/前后缀不误判
+    expect(isBackendUnreachableMessage("HTTP/1.1 500 Internal Server Error")).toBe(false);
+    expect(isBackendUnreachableMessage("500 Internal Server Error (details)")).toBe(false);
+  });
+
   it("服务端可达的错误不判为不可达（分流边界）", () => {
-    // 18801 实采：PROJECT_CONFIG_INVALID 500 的 message（生产派生样例）
+    // 18801 实采：PROJECT_CONFIG_INVALID 500 的 message（生产派生样例——
+    // 引擎自身 500 恒带 JSON 详情，落进 inkos.json 指引分支）
     expect(
       isBackendUnreachableMessage(
         "Failed to load inkos.json: inkos.json not found in /tmp/inkos1087.\nMake sure you are inside an InkOS project directory (cd into the project created by 'inkos init').",
       ),
     ).toBe(false);
-    // readErrorMessage 回退形态："<status> <statusText>"
-    expect(isBackendUnreachableMessage("500 Internal Server Error")).toBe(false);
+    // 非网关类回退形态：路由缺失面（引擎契约恒有 /project，404=非引擎面）
     expect(isBackendUnreachableMessage("404 Not Found")).toBe(false);
+    expect(isBackendUnreachableMessage("403 Forbidden")).toBe(false);
   });
 
   it("空值安全", () => {
