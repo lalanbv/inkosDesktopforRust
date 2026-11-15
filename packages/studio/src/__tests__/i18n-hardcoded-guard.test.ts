@@ -47,8 +47,9 @@ const LEDGER: Readonly<Record<string, { readonly budget: number; readonly reason
   // 系列回填落盘 markdown 头（story/series_backfill.md 引擎文件格式）。
   "pages/series-backfill-diff.ts": { budget: 6, reason: "落盘 markdown 格式（引擎文件）" },
   // 启动错误屏刻意中英并排（App.tsx:478 注释备案：语言未知故双语并排）+
-  // 语言切换钮「中」自指标签。
-  "App.tsx": { budget: 4, reason: "启动错误屏刻意双语（语言未知）+语言钮自指" },
+  // 语言切换钮「中」自指标签。1426 号：错误屏按错误性质分流为两个双语分支
+  // （后端不可达 / 配置无效），同一豁免设计扩一支，预算 4→5。
+  "App.tsx": { budget: 5, reason: "启动错误屏刻意双语（语言未知）两分支（1426 不可达/配置分流）+语言钮自指" },
   // 伏笔类型 → CSS 类映射，键为引擎伏笔类型中文名，值为样式非文案。
   "components/sidebar/PendingHooksView.tsx": { budget: 4, reason: "CSS 类映射键（非展示文本）" },
   // 创作语言选择卡：卡片内容即所选语言的样本展示（自指设计）。

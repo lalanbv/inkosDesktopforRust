@@ -6,7 +6,7 @@
 //! 新终态（data / error / loading 三面）；含 path 变更触发形态。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useApi } from "./use-api";
+import { isBackendUnreachableMessage, useApi } from "./use-api";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -30,6 +30,42 @@ function deferredResponse(): DeferredResponse {
   });
   return { promise, resolve, reject };
 }
+
+// 1426 号：后端不可达分类器。正例=四大引擎网络层失败的固定文案（引擎常量，
+// 仓内无生产函数可派生——按 1007 号「不可派生才手打并注明理由」契约纪律手打）；
+// 反例含 18801 实采的服务端真实形态（PROJECT_CONFIG_INVALID 500 的人类可读串）
+// 与 readErrorMessage 回退形态——服务端可达的错误恰恰不该归入「不可达」，
+// 否则启动门会把两类指引（重启引擎 vs 检查 inkos.json）发反。
+describe("isBackendUnreachableMessage（1426）", () => {
+  it("四大引擎网络层失败文案均判为不可达", () => {
+    // Blink（Edge/Chrome，1426 号用户截图原文）
+    expect(isBackendUnreachableMessage("Failed to fetch")).toBe(true);
+    // WebKit（Safari / 桌面壳 WKWebView 同故障的真实措辞）
+    expect(isBackendUnreachableMessage("Load failed")).toBe(true);
+    // undici（Node 侧 fetch）
+    expect(isBackendUnreachableMessage("fetch failed")).toBe(true);
+    // Firefox 完整形态
+    expect(isBackendUnreachableMessage("NetworkError when attempting to fetch resource.")).toBe(true);
+  });
+
+  it("服务端可达的错误不判为不可达（分流边界）", () => {
+    // 18801 实采：PROJECT_CONFIG_INVALID 500 的 message（生产派生样例）
+    expect(
+      isBackendUnreachableMessage(
+        "Failed to load inkos.json: inkos.json not found in /tmp/inkos1087.\nMake sure you are inside an InkOS project directory (cd into the project created by 'inkos init').",
+      ),
+    ).toBe(false);
+    // readErrorMessage 回退形态："<status> <statusText>"
+    expect(isBackendUnreachableMessage("500 Internal Server Error")).toBe(false);
+    expect(isBackendUnreachableMessage("404 Not Found")).toBe(false);
+  });
+
+  it("空值安全", () => {
+    expect(isBackendUnreachableMessage(null)).toBe(false);
+    expect(isBackendUnreachableMessage(undefined)).toBe(false);
+    expect(isBackendUnreachableMessage("")).toBe(false);
+  });
+});
 
 describe("useApi 响应竞态守卫（1008）", () => {
   afterEach(() => {

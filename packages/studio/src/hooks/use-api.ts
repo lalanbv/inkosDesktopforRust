@@ -17,6 +17,23 @@ export function buildApiUrl(path: string): string | null {
   return normalized.startsWith("/") ? `${BASE}${normalized}` : `${BASE}/${normalized}`;
 }
 
+// 1426 号：后端不可达分类器。fetch 在网络层失败（引擎未启动/已退出/端口无人
+// 监听）时抛 TypeError，但各引擎 message 不同：Blink(Edge/Chrome)=Failed to
+// fetch、WebKit(Safari/WKWebView)=Load failed、undici(Node)=fetch failed、
+// Firefox=NetworkError。这类错误与 inkos.json 无关——启动门若仍引导用户去
+// 检查配置文件就是误导（1426 实证：inkos.json 合法仍见此卡）。
+// 注意：useApi 只透传 message（Error 实例在 hook 内部已降为字符串），故按
+// message 判定而非 instanceof TypeError。
+// 样例为四大引擎的固定文案（引擎常量，仓内无生产函数可派生——按 1007 号
+// 「不可派生才手打并注明理由」契约纪律备案手打）。
+const BACKEND_UNREACHABLE_PATTERN =
+  /failed to fetch|load failed|fetch failed|networkerror|network error/i;
+
+export function isBackendUnreachableMessage(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return BACKEND_UNREACHABLE_PATTERN.test(message);
+}
+
 export function deriveInvalidationPaths(path: string): ReadonlyArray<string> {
   const normalized = buildApiUrl(path);
   if (!normalized) return [];

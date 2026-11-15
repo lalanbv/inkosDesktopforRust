@@ -47,7 +47,7 @@ import { useTheme, cycleThemeMode } from "./hooks/use-theme";
 import { useI18n } from "./hooks/use-i18n";
 import { setAppLanguage, tr, getAppLanguage } from "./lib/app-language";
 import { buildTaskReport } from "@actalk/inkos-core/utils/author-report";
-import { postApi, putApi, useApi } from "./hooks/use-api";
+import { isBackendUnreachableMessage, postApi, putApi, useApi } from "./hooks/use-api";
 import { Sun, Moon, Monitor, Search } from "lucide-react";
 import { AppShellSkeleton } from "./components/AppShellSkeleton";
 import { CommandPalette } from "./components/CommandPalette";
@@ -464,6 +464,10 @@ export function App() {
   const startupGate = deriveStartupGate({ ready, projectError });
 
   if (startupGate === "error") {
+    // 1426 号：按错误性质分流指引。「Failed to fetch / Load failed」族=网络层
+    // 失败（引擎未启动/已退出/端口无人监听），与 inkos.json 无关——实测桌面端
+    // inkos.json 合法仍会走到这张卡，旧文案引导用户检查配置文件是误导。
+    const backendUnreachable = isBackendUnreachableMessage(projectError);
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-destructive/5 p-6 space-y-4">
@@ -472,11 +476,22 @@ export function App() {
             <p className="mt-2 text-sm text-muted-foreground break-all">{projectError}</p>
           </div>
           {/* 项目配置没加载出来，语言未知，所以这屏中英双语并排展示。 */}
-          <p className="text-sm text-muted-foreground">
-            请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。
-            <br />
-            Check that inkos.json in the project root exists and is valid JSON, then retry.
-          </p>
+          {backendUnreachable ? (
+            <p className="text-sm text-muted-foreground">
+              后端服务连接失败：InkOS 引擎当前不可达（可能未启动、已退出或端口被占用）。
+              请重新启动应用，或确认引擎服务运行后重试。
+              <br />
+              Backend unreachable: the InkOS engine service is not responding (it may not be running,
+              may have exited, or its port is taken). Restart the app, or make sure the engine service
+              is running, then retry.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              请检查项目根目录下的 inkos.json 是否存在且为合法 JSON，然后重试。
+              <br />
+              Check that inkos.json in the project root exists and is valid JSON, then retry.
+            </p>
+          )}
           <button
             type="button"
             onClick={() => refetchProject()}
