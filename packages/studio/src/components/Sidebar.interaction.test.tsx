@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-//! 1426 号：Sidebar 会话改名 IME 组合回车守卫逐功能回归（1169 修复面站 2
+//! 1428 号：Sidebar 会话改名 IME 组合回车守卫逐功能回归（1169 修复面站 2
 //! 专属自动化——此前仅有活体走查证据无单测兜底）。
 //! 双腿断言：①组合期回车（isComposing，中文会话名选词上屏）吞没——renameSession
 //! 0 调用+改名 Dialog 不误关；②普通回车——恰 1 次重命名（sessionId+新标题逐参
@@ -23,7 +23,7 @@ vi.mock("../hooks/use-api", () => ({
   buildApiUrl: (path: string) => path,
 }));
 
-describe("Sidebar 改名 IME 组合回车守卫（1169 修复面·1426 逐功能补测）", () => {
+describe("Sidebar 改名 IME 组合回车守卫（1169 修复面·1428 逐功能补测）", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();

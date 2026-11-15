@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-//! 1426 号：ChatPage 聊天主输入 IME 组合回车守卫逐功能回归（1169 修复面站 1
+//! 1428 号：ChatPage 聊天主输入 IME 组合回车守卫逐功能回归（1169 修复面站 1
 //! 专属自动化——此前仅有活体走查证据，无单测兜底）。
 //! 三腿断言（守卫面 `!e.shiftKey && !e.nativeEvent.isComposing` 全覆盖）：
 //! ①组合期回车（isComposing，中文选词上屏）吞没——sendMessage 0 调用+输入保留；
@@ -36,7 +36,7 @@ const theme = "light" as const;
 const t = (key: string) => key;
 const sse = { messages: [], connected: true };
 
-describe("ChatPage IME 组合回车守卫（1169 修复面·1426 逐功能补测）", () => {
+describe("ChatPage IME 组合回车守卫（1169 修复面·1428 逐功能补测）", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
