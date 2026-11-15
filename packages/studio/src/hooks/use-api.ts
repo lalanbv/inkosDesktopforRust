@@ -33,8 +33,14 @@ export function buildApiUrl(path: string): string | null {
 // 网络层样例为四大引擎固定文案（引擎常量，仓内无生产函数可派生——按 1007 号
 // 「不可派生才手打并注明理由」契约纪律备案手打）；裸 5xx 样例为 1427 活体
 // curl 实采生产派生。
+// 1429 号补（逐功能审查发现的同族残余）：readErrorMessage 回退串
+// `${status} ${statusText}`.trim() 在 statusText 为空（HTTP/2 响应无 reason
+// phrase，或不回 reason phrase 的裸代理）时恰为裸状态码（"500 "→trim→"500"），
+// 整串锚定不命中→仍误指 inkos.json。statusText 段改可选后裸码与带短语两形
+// 同锚定；引擎自身 500 恒带 JSON 详情（不落回退串），裸码仍只在中间层产生，
+// 放宽不改变分流边界（带详情/前后缀依旧不误判）。
 const BACKEND_UNREACHABLE_PATTERN =
-  /failed to fetch|load failed|fetch failed|networkerror|network error|^5(00|02|03|04) (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)$/i;
+  /failed to fetch|load failed|fetch failed|networkerror|network error|^5(00|02|03|04)( (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout))?$/i;
 
 export function isBackendUnreachableMessage(message: string | null | undefined): boolean {
   if (!message) return false;

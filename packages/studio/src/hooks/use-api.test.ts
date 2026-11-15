@@ -6,7 +6,7 @@
 //! 新终态（data / error / loading 三面）；含 path 变更触发形态。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { isBackendUnreachableMessage, useApi } from "./use-api";
+import { ApiResponseError, fetchJson, isBackendUnreachableMessage, useApi } from "./use-api";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -38,7 +38,7 @@ function deferredResponse(): DeferredResponse {
 // 反例含 18801 实采的服务端真实形态（PROJECT_CONFIG_INVALID 500 带详情人话串）
 // 与非网关类回退形态——服务端可达的错误恰恰不该归入「不可达」，
 // 否则启动门会把两类指引（重启引擎 vs 检查 inkos.json）发反。
-describe("isBackendUnreachableMessage（1426/1427）", () => {
+describe("isBackendUnreachableMessage（1426/1427/1429）", () => {
   it("四大引擎网络层失败文案均判为不可达", () => {
     // Blink（Edge/Chrome，1426 号用户截图原文）
     expect(isBackendUnreachableMessage("Failed to fetch")).toBe(true);
@@ -60,6 +60,33 @@ describe("isBackendUnreachableMessage（1426/1427）", () => {
     // 整串锚定：只匹配裸回退串，带详情/前后缀不误判
     expect(isBackendUnreachableMessage("HTTP/1.1 500 Internal Server Error")).toBe(false);
     expect(isBackendUnreachableMessage("500 Internal Server Error (details)")).toBe(false);
+  });
+
+  it("裸状态码（空 statusText）判为不可达——fetchJson 真链路生产派生（1429）", async () => {
+    // 1429 号（逐功能审查发现）：readErrorMessage 回退串 `${status} ${statusText}`.trim()
+    // 在 statusText 为空（HTTP/2 无 reason phrase / 裸代理不回 reason phrase）
+    // 时恰为裸状态码——样例经 fetchJson→readErrorMessage→localizeKnownRuntimeMessage
+    // 真链路取样（1007 契约纪律：样例生产派生，防手打与实现双漂假绿）。
+    for (const status of [500, 502, 503, 504]) {
+      let thrown: unknown;
+      try {
+        await fetchJson(`/bare-${status}`, {}, {
+          fetchImpl: (async () => new Response(null, { status })) as typeof fetch,
+        });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, `${status} 应抛 ApiResponseError`).toBeInstanceOf(ApiResponseError);
+      const message = (thrown as ApiResponseError).message;
+      expect(message, `${status} 空 statusText 应回退裸状态码`).toBe(String(status));
+      expect(isBackendUnreachableMessage(message), `${message} 应判不可达`).toBe(true);
+    }
+    // 放宽不破坏锚定边界：裸码收尾形态不误吞带前后缀/非网关串
+    expect(isBackendUnreachableMessage("5001")).toBe(false);
+    expect(isBackendUnreachableMessage("500 Internal Server Error (details)")).toBe(false);
+    expect(isBackendUnreachableMessage("HTTP/1.1 500 Internal Server Error")).toBe(false);
+    expect(isBackendUnreachableMessage("404")).toBe(false);
+    expect(isBackendUnreachableMessage("403")).toBe(false);
   });
 
   it("服务端可达的错误不判为不可达（分流边界）", () => {

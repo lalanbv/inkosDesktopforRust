@@ -146,6 +146,18 @@ export const ProjectConfigSchema = z.object({
     reviewMode: z.enum(["auto", "manual"]).optional(),
     revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
   }).optional(),
+  // ── 1429 号：inputGovernanceMode 遗留键容忍（686 号删管线遗留，709 同族）──
+  // 686 号随 TS 上游 e7c04465 删除 legacy 输入治理管线，Rust 侧
+  //（engine-rs project_config_routes.rs 头注）对齐备案「inkos.json 遗留
+  // inputGovernanceMode 键双端同为未知键忽略」——但 TS strict 根实际拒收
+  //（ZodError unrecognized_keys 裸抛未经人话包装），与该契约注释漂移：
+  // 8/6 起仓根实采 inkos.json 即带此键（值 "v2"），TS dev:server 与 Node
+  // 回退腿 loadProjectConfig 必挂、Rust 引擎同文件 200（活体 1429 实证）。
+  // 修法沿 709 先例=schema 单源容键（effective-llm-config 与
+  // short-fiction-runner 两 parse 点同获覆盖），不动 strict 根设计；
+  // z.unknown().optional() 不冻结已死管线的历史值域（Rust serde 未知键
+  // 忽略同语义）。写回面直读 raw JSON 不经 schema，零写面副作用。
+  inputGovernanceMode: z.unknown().optional(),
 }).strict();
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

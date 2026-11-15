@@ -100,4 +100,40 @@ describe("book/project config writing keys tolerance (709)", () => {
       researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
     }).success).toBe(true);
   });
+
+  it("ProjectConfigSchema：inputGovernanceMode 遗留键容忍——686 删管线遗留不再毒化 TS 腿（1429）", () => {
+    // 样例 = 仓根实采 inkos.json 键形（8/6 起在位，值 "v2"；1429 活体实证：
+    // TS dev:server 对该文件 ZodError 拒启、Rust 引擎同文件 200）。
+    // 契约面：Rust project_config_routes.rs 头注备案「双端同为未知键忽略」，
+    // 本腿把 TS 侧拉齐该契约——strict 根设计不变，仅此遗留键显式容忍。
+    const config = ProjectConfigSchema.parse({
+      name: "inkosDesktopforRust",
+      version: "0.1.0",
+      language: "zh",
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m", configSource: "studio", apiFormat: "chat", stream: true },
+      notify: [],
+      inputGovernanceMode: "v2",
+      daemon: { schedule: { radarCron: "0 */6 * * *", writeCron: "*/15 * * * *" }, maxConcurrentBooks: 3 },
+      researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
+    });
+    // 键值原样透传（z.unknown 不冻结已死管线的历史值域）
+    expect(config.inputGovernanceMode).toBe("v2");
+
+    // 值域全容忍：legacy 项目里可能是任意历史值（非字符串也放行）
+    expect(ProjectConfigSchema.safeParse({
+      name: "x", version: "0.1.0",
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
+      researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
+      inputGovernanceMode: 1,
+    }).success).toBe(true);
+
+    // 缺省省略语义不变；其余未知键仍拒（strict 根护栏不松动）
+    const base = {
+      name: "x", version: "0.1.0",
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
+      researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
+    };
+    expect(ProjectConfigSchema.safeParse(base).success).toBe(true);
+    expect(ProjectConfigSchema.safeParse({ ...base, someFutureLegacyKey: true }).success).toBe(false);
+  });
 });
