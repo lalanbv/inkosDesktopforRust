@@ -135,14 +135,32 @@
         assert_eq!(short_host("https://nodejs.org/dist"), "nodejs.org");
     }
 
-    // 真实下载冒烟（需网络 + nodejs.org 可达）。CI 可选跑。
+    // 真实下载冒烟（需网络 + nodejs.org 官方源可达）。CI 可选跑。
+    // 1424 号：SHASUMS 安全设计永远走官方源（mirror 不可伪造），官方源
+    // connect_timeout=2s（H3 审计预算）恰压在 CN 网络 TLS 握手波动带（实测
+    // 1.3~2.5s）上——单发在 sweep 门禁下必偶发抖红（988 绿/1424 红同网实证）。
+    // 三发退避（间隔 2s/4s）只吸收瞬时抖动；持续不可达三发全败仍 panic——
+    // 地板卫兵必红语义不弱化。每发独立 tempdir：半途失败缓存残留绝不参与
+    // 下一发判定（partial unpack 不得伪装 cache hit）。
     #[tokio::test]
     #[ignore]
     async fn real_bootstrap_downloads_and_verifies() {
-        let tmp = tempfile::tempdir().unwrap();
-        let r = BootstrappingResolver::new(tmp.path().to_path_buf(), Box::new(LocaleMirrorSelector));
-        let bin = r.resolve().await.expect("bootstrap 应成功");
-        assert!(bin.is_file(), "node 二进制应存在: {}", bin.display());
+        let mut last_err = String::new();
+        for attempt in 1..=3u64 {
+            if attempt > 1 {
+                tokio::time::sleep(std::time::Duration::from_secs(2 * (attempt - 1))).await;
+            }
+            let tmp = tempfile::tempdir().unwrap();
+            let r = BootstrappingResolver::new(tmp.path().to_path_buf(), Box::new(LocaleMirrorSelector));
+            match r.resolve().await {
+                Ok(bin) => {
+                    assert!(bin.is_file(), "node 二进制应存在: {}", bin.display());
+                    return;
+                }
+                Err(e) => last_err = format!("第 {attempt} 发失败: {e:#}"),
+            }
+        }
+        panic!("bootstrap 应成功（3 发退避后官方源仍不可达=持续网络故障）: {last_err}");
     }
 
     /// 构造 tar.gz：`(路径, 内容, unix mode)` 列表。

@@ -63,8 +63,12 @@ if (!existsSync(join(tauriDir, "Cargo.toml"))) {
 const INVENTORY = [
   {
     scope: "--lib",
-    // 网络两枚（GitHub API + node 下载）+ keychain 四枚 + 冷编译余量
-    timeoutMs: 300_000,
+    // 网络两枚（GitHub API + node 下载）+ keychain 四枚 + 冷编译余量。
+    // 1424 号：node 下载枚加三发退避（SHASUMS 官方源 TLS 握手波动带单发必
+    // 抖），失败路径合法最坏 ≈ 首发超时 30s + 退避 6s + 慢网全量下载 ~190s ≈
+    // 230s——300s 旧预算余量不足，放宽到 420s；真挂死仍远低于此（哨兵语义
+    // 不弱化：预算到点照旧 SIGKILL 变红报）。
+    timeoutMs: 420_000,
     tests: [
       "isolation::macos::tests::pf_guard_lock_bails_without_root",
       "secrets::store::tests::keyring_real_roundtrip_upsert_read_delete",
