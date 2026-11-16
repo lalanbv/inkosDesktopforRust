@@ -206,11 +206,29 @@ pub struct PlanChapterResult {
     pub conflicts: Vec<String>,
 }
 
+/// id 路径安全校验（`session::is_safe_book_id` 路径安全子集；ops_routes 同形）。
+/// 1444 号：books 面 8 入口对称补缺——TS 腿 `normalizeApiBookId`/`isSafeBookId`
+/// 早已 400 INVALID_BOOK_ID（server.ts:408），genre 面 632 先例同族。
+fn book_id_is_unsafe(id: &str) -> bool {
+    !crate::interaction::session::is_safe_book_id(id)
+}
+
+/// ApiError 400 响应（onError 形状逐字，对齐 TS INVALID_BOOK_ID）。
+fn invalid_book_id_response(id: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": { "code": "INVALID_BOOK_ID", "message": format!("Invalid book ID: \"{id}\"") } })),
+    )
+}
+
 pub async fn plan(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
     body: Option<Json<PlanBody>>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     let Json(body) = body.unwrap_or_default();
     match run_plan(&runtime, &book_id, body.context.as_deref()).await {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
@@ -285,6 +303,9 @@ pub async fn settle(
     Path(book_id): Path<String>,
     Json(body): Json<SettleBody>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     match run_settle(&runtime, &book_id, &body).await {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
         Err(error) => (
@@ -356,7 +377,10 @@ pub async fn draft(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
     body: Option<Json<DraftBody>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id).into_response();
+    }
     let Json(body) = body.unwrap_or_default();
     runtime.hub.broadcast("draft:start", &serde_json::json!({ "bookId": book_id }));
 
@@ -391,6 +415,7 @@ pub async fn draft(
         StatusCode::OK,
         Json(DraftResponse { status: "drafting", book_id }),
     )
+    .into_response()
 }
 
 async fn run_draft(
@@ -1158,6 +1183,9 @@ pub async fn compose(
     Path(book_id): Path<String>,
     body: Option<Json<ComposeBody>>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     let Json(body) = body.unwrap_or_default();
     match run_compose(&runtime, &book_id, body.context.as_deref()).await {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
@@ -1306,6 +1334,9 @@ pub async fn consolidate_endpoint(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     let book_dir = runtime.state.book_dir(&book_id.clone());
     let consolidator = RoutedAgent {
         router: runtime.effective_router().await,
@@ -1966,6 +1997,9 @@ pub async fn analytics(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     // TS 契约：loadChapterIndex 缺书不抛错（返回 []）→ 200 空统计；
     // 意外错误才 404（`Book "id" not found`）。
     match runtime.state.load_chapter_index(&book_id).await {
@@ -1998,6 +2032,9 @@ pub async fn eval(
     Path(book_id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<EvalQuery>,
 ) -> impl IntoResponse {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id);
+    }
     match crate::utils::book_eval::evaluate_book_quality(&runtime.state, &book_id, query.chapters.as_deref())
         .await
     {
@@ -2028,6 +2065,9 @@ pub async fn export(
     Path(book_id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<ExportQuery>,
 ) -> axum::response::Response {
+    if book_id_is_unsafe(&book_id) {
+        return invalid_book_id_response(&book_id).into_response();
+    }
     let format = crate::interaction::export_artifact::ExportFormat::parse(query.format.as_deref());
     let approved_only = query.approved_only.as_deref() == Some("true");
     match crate::interaction::export_artifact::build_export_artifact(
@@ -2420,6 +2460,23 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(parsed["error"].as_str().unwrap().contains("chat"));
+    }
+
+    #[tokio::test]
+    async fn settle_rejects_path_traversal_book_id() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let runtime = runtime_for(dir.path());
+        // 1444 号：books 面对称缺口必红锁——`..%2F` 穿越 id 恰红 400
+        // INVALID_BOOK_ID（genre 632 先例同族；TS 腿 server.ts:408 同码）。
+        let response = app(runtime)
+            .oneshot(post("/api/v1/books/..%2F..%2Fescape/plan", "{}"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"]["code"], "INVALID_BOOK_ID");
     }
 
     #[tokio::test]
