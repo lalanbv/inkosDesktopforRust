@@ -26,14 +26,14 @@ describe("EngineStatusBanner recovery edge (1469)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6_200);
     });
-    expect(queryByText("引擎连接中断，正在自动恢复…")).not.toBeNull();
+    expect(queryByText("引擎连接中断")).not.toBeNull();
 
     // 恢复沿：down 态 2s 轮询捕获 → 横幅消失 + 恢复 toast。
     fetchAlive = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_200);
     });
-    expect(queryByText("引擎连接中断，正在自动恢复…")).toBeNull();
+    expect(queryByText("引擎连接中断")).toBeNull();
     expect(queryByText("引擎连接已恢复")).not.toBeNull();
 
     // toast 3s 自消。

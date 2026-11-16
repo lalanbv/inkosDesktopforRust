@@ -106,6 +106,9 @@ export function useEngineHealth(onRecover?: () => void): EngineHealthState {
 
 /** 横幅文案（导出供测试锚定）。 */
 export const BANNER_TEXT = {
-  down: tr("引擎连接中断，正在自动恢复…", "Engine connection lost — recovering automatically…"),
+  // 1485：中性化——原「正在自动恢复…」对用户过度承诺：SPA 无法区分
+  // 「壳自愈中/已达上限放弃」（无壳事件通道，1484 备案），Halt 态下
+  // 「自动恢复」是误导（等待不会到来的自愈）。B/C 方案维持备案。
+  down: tr("引擎连接中断", "Engine connection lost"),
   recovered: tr("引擎连接已恢复", "Engine connection restored"),
 };
