@@ -70,7 +70,10 @@ nfs 保留条件初版含 `softFailCount > 0`——**700 号软失败=记账非�
 
 TMPDIR 残 2823 条 inkos-*：`inkos-book-backup-`×1400（writer=book-backup.test.ts）/
 `inkos-plan-`×608（persisted-governed-plan + request-delivery.flow 的
-`inkos-plan-before-draft-`）/`inkos-chapter-cmd-`×~790（writer 待定谳）/小族
+`inkos-plan-before-draft-`）/`inkos-chapter-workspace-`×765（writer=
+chapter-workspace.test.ts 待定谳；1439 号勘误：原记「chapter-cmd×~790」系裸
+桶误并——sed 把 6+ 字符族名剥成裸桶所致）/`inkos-chapter-cmd-`×24（writer
+待定谳）/小族
 （short×7、play-edit×6、play-image×3、m1-demo×1=supervisor 用例设计内、
 diff-mock.log×1=固定名覆写）——同机械族，下轮逐写入者清偿。
 
