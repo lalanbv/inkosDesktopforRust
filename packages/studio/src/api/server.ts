@@ -8832,7 +8832,14 @@ export async function startStudioServer(
           json: "application/json",
         };
         return new Response(content, {
-          headers: { "Content-Type": contentTypes[ext] ?? "application/octet-stream" },
+          // 1457：三安全头对齐 Rust serve_asset（static_routes.rs）——
+          // assets 无 no-store（内容寻址可长缓存，与 Rust 同策略）。
+          headers: {
+            "Content-Type": contentTypes[ext] ?? "application/octet-stream",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "X-Frame-Options": "DENY",
+          },
         });
       } catch {
         return c.notFound();
@@ -8848,6 +8855,12 @@ export async function startStudioServer(
         // 469 号 TS 对称：SPA 入口禁缓存——陈旧入口会让整站跑旧 bundle
         //（assets 内容寻址可长缓存，不受影响；Rust 腿 spa_fallback 同款）。
         c.header("Cache-Control", "no-store");
+        // 1457：三安全头对齐 Rust spa_fallback（static_routes.rs）——
+        // nosniff 防 MIME 嗅探、no-referrer 防引用泄漏、DENY 防点击劫持
+        // 嵌入；before-response c.header 形态（1455 活体定案可靠形）。
+        c.header("X-Content-Type-Options", "nosniff");
+        c.header("Referrer-Policy", "no-referrer");
+        c.header("X-Frame-Options", "DENY");
         return c.html(indexHtml);
       });
     }
