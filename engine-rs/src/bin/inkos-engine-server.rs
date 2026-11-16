@@ -242,6 +242,9 @@ async fn shutdown_signal(hub: Arc<BroadcastHub>) {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
+    // parent-watchdog（1459）：壳被 SIGKILL 时本进程自退（env 缺失=关闭）。
+    // 置于 bind 之前——父亡时连端口都不必占。
+    inkos_engine::server::parent_watchdog::spawn_from_env();
     let port: u16 = env("INKOS_PORT", "8787").parse().unwrap_or(8787);
     let (app, hub) = build_router();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;

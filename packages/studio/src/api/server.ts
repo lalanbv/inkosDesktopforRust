@@ -8867,6 +8867,24 @@ export async function startStudioServer(
   }
 
   const hostname = options?.hostname?.trim() || "127.0.0.1";
+  // 1431/1459 对称：parent-watchdog——壳（Tauri app）被 SIGKILL 时本 TS
+  // server（Node 回退腿）自退。env INKOS_PARENT_PID 由壳 supervisor 注入
+  // （与 Rust 引擎腿 parent_watchdog 同契约）；env 缺失=功能关闭（duel/
+  // smoke/直跑零影响）。探测 process.kill(pid, 0) 抛 ESRCH=父亡（fail-open：
+  // pid 复用最多漏判不退，不误杀；反向误判不存在）。
+  const parentPid = Number(process.env.INKOS_PARENT_PID);
+  if (Number.isInteger(parentPid) && parentPid > 0) {
+    const watchdog = setInterval(() => {
+      try {
+        process.kill(parentPid, 0);
+      } catch {
+        console.error(`[studio] parent ${parentPid} gone, exiting`);
+        process.exit(0);
+      }
+    }, 2000);
+    // 不阻进程自然退出（无活跃句柄时 Node 可退）。
+    watchdog.unref?.();
+  }
   console.log(`InkOS Studio running on http://${hostname}:${port}`);
   serve({ fetch: app.fetch, port, hostname });
 }

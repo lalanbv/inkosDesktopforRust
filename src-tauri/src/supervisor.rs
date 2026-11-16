@@ -66,6 +66,13 @@ pub fn build_launch<R: PathResolver>(paths: &R, port: u16, node_bin: &str) -> La
     let cli_entry = paths.launch_engine_dir().join(CLI_ENTRY_REL);
     let mut env = HashMap::new();
     env.insert("INKOS_STUDIO_PORT".to_string(), port.to_string());
+    // 1459：parent-watchdog 契约——注入 app 自身 pid，sidecar（引擎直接形态
+    // 或经 CLI 的 TS 回退形态）探测父亡即自退；env 缺失=功能关闭（duel/
+    // smoke/直跑零影响）。值=十进制串（两侧 parse 契约）。
+    env.insert(
+        "INKOS_PARENT_PID".to_string(),
+        std::process::id().to_string(),
+    );
     LaunchSpec {
         program: node_bin.to_string(),
         args: vec![
@@ -120,8 +127,9 @@ pub fn spawn(spec: &LaunchSpec) -> anyhow::Result<std::process::Child> {
     //   stdout（生产 launchd/console 噪音面）。
     // 边界备案：独立直跑 sidecar（dev 手动 `inkos-engine-server` / CLI）不经
     // 本路径，终端观测不受影响；孤儿**进程**残留仍可能（SIGKILL 不可捕获是
-    // OS 边界），由 sweep 清理指引与下次启动 pick_free_port 容错兜底，
-    // parent-watchdog env 形态留作工项。
+    // OS 边界）——三层兜底：sweep 清理（1435 自愈闭环）+ 下次启动
+    // pick_free_port 容错 + parent-watchdog env 自退（1459 落地：build_launch
+    // 注入 INKOS_PARENT_PID，引擎/TS 腿探测父亡 ≤2s 自退，env 缺失=关闭）。
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -311,7 +319,8 @@ mod tests {
     fn build_launch_sets_studio_port_env_only() {
         // M1 清理：INKOS_PROJECT_ROOT env 已移除——它与 cwd 在 supervisor 路径下
         // 等价（见 build_launch 文档与架构 §6.1/§14 Q4），保留 cwd=project_root 即足够。
-        // 验证 env 仅含 INKOS_STUDIO_PORT；cwd 仍 = project_root 由独立测试覆盖。
+        // 验证 env 仅含 INKOS_STUDIO_PORT+INKOS_PARENT_PID（1459 watchdog 契约）；
+        // cwd 仍 = project_root 由独立测试覆盖。
         let paths = dummy();
         let spec = build_launch(&paths, 4567, "/usr/bin/node");
         assert!(
@@ -319,6 +328,11 @@ mod tests {
             "INKOS_PROJECT_ROOT env 应已移除"
         );
         assert_eq!(spec.env.get("INKOS_STUDIO_PORT").unwrap(), "4567");
+        // 1459：parent-watchdog 注入本 app pid（十进制串），sidecar 探测父亡自退。
+        assert_eq!(
+            spec.env.get("INKOS_PARENT_PID").unwrap(),
+            &std::process::id().to_string()
+        );
     }
 
     #[test]

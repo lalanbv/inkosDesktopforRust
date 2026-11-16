@@ -22,6 +22,7 @@ pub mod series_backfill_routes;
 pub mod genre_routes;
 pub mod loopback_guard;
 pub mod ops_routes;
+pub mod parent_watchdog;
 pub mod play_routes;
 pub mod interactive_film_routes;
 pub mod project_config_routes;
