@@ -1,7 +1,7 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWorkManifest, saveWorkManifest, workDirectory } from "@actalk/inkos-core";
 import { createBookBackup, listBookBackups, restoreBookBackup } from "../book-backup.js";
 
@@ -20,8 +20,15 @@ async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
 }
 
+// 1440 号：setupBook 每调用泄漏一根（10 用例 × 每跑，累计 1410 个）——台账+afterAll 清盘。
+const createdRoots: string[] = [];
+afterAll(async () => {
+  await Promise.all(createdRoots.map((root) => rm(root, { recursive: true, force: true })));
+});
+
 async function setupBook(bookId: string): Promise<string> {
   projectRoot = await mkdtemp(join(tmpdir(), "inkos-book-backup-"));
+  createdRoots.push(projectRoot);
   await saveWorkManifest(projectRoot, createWorkManifest({
     id: bookId,
     title: bookId,

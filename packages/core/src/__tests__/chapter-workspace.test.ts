@@ -1,7 +1,7 @@
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   archiveChapterVersion,
   listChapterVersions,
@@ -16,8 +16,16 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe("chapter workspace", () => {
+  // 1440 号：五用例各泄漏一根、零清理钩子（累计 765 个）——台账+afterAll 清盘。
+  const createdBookDirs: string[] = [];
+  afterAll(async () => {
+    await Promise.all(createdBookDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
   it("persists, reads, and clears a per-chapter user brief", async () => {
     const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    createdBookDirs.push(bookDir);
+    createdBookDirs.push(bookDir);
 
     await expect(readChapterUserBrief(bookDir, 3)).resolves.toBe("");
     await saveChapterUserBrief(bookDir, 3, "  保留雨夜证词，重写结尾。  ");
@@ -31,6 +39,7 @@ describe("chapter workspace", () => {
 
   it("reads the persisted system plan without requiring one to exist", async () => {
     const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    createdBookDirs.push(bookDir);
     await expect(readChapterPlanDocument(bookDir, 2)).resolves.toBeNull();
 
     const runtimeDir = join(bookDir, "story", "runtime");
@@ -43,6 +52,7 @@ describe("chapter workspace", () => {
 
   it("archives immutable chapter versions and lists newest first", async () => {
     const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    createdBookDirs.push(bookDir);
     const first = await archiveChapterVersion(
       bookDir,
       4,
@@ -79,12 +89,14 @@ describe("chapter workspace", () => {
 
   it("rejects unsafe version ids instead of reading outside the archive", async () => {
     const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    createdBookDirs.push(bookDir);
     await expect(readChapterVersion(bookDir, 1, "../book.json"))
       .rejects.toThrow(/invalid chapter version id/i);
   });
 
   it("does not expose archives from another chapter", async () => {
     const bookDir = await mkdtemp(join(tmpdir(), "inkos-chapter-workspace-"));
+    createdBookDirs.push(bookDir);
     const version = await archiveChapterVersion(
       bookDir,
       1,

@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   loadPersistedPlan,
   savePersistedPlan,
@@ -59,8 +59,14 @@ function buildPlan(chapter: number): PlanChapterOutput {
 }
 
 describe("persisted-governed-plan round trip", () => {
+  // 1440 号：四用例各泄漏一根、零清理钩子（plan 族 612 个的主力写入者）——台账+afterAll 清盘。
+  const createdDirs: string[] = [];
+  afterAll(async () => {
+    await Promise.all(createdDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  });
   it("savePersistedPlan + loadPersistedPlan returns equal memo", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
+    createdDirs.push(dir);
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
     // Write the sibling intent.md so loader reads it back.
     await writeFile(
@@ -85,6 +91,7 @@ describe("persisted-governed-plan round trip", () => {
 
   it("returns null when plan file does not exist", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
+    createdDirs.push(dir);
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
     const loaded = await loadPersistedPlan(dir, 1);
     expect(loaded).toBeNull();
@@ -92,6 +99,7 @@ describe("persisted-governed-plan round trip", () => {
 
   it("rejects an invalid typed cache", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
+    createdDirs.push(dir);
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
 
     await writeFile(
@@ -105,6 +113,7 @@ describe("persisted-governed-plan round trip", () => {
 
   it("returns null when chapter number does not match", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inkos-plan-"));
+    createdDirs.push(dir);
     await mkdir(join(dir, "story", "runtime"), { recursive: true });
     const plan = buildPlan(2);
     await savePersistedPlan(dir, plan);

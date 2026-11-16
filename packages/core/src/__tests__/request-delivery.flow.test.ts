@@ -1,7 +1,7 @@
 import {mkdtemp,mkdir,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {it,expect} from 'vitest';
+import {afterAll,it,expect} from 'vitest';
 import {RequestDeliveryLedger} from '../agent/request-delivery.js';
 import {createWorkManifest,saveWorkManifest,loadWorkManifest} from '../harness/work-store.js';
 import {syncWorkSourceArtifacts} from '../harness/source-sync.js';
@@ -11,8 +11,13 @@ import {createLLMClient} from '../llm/provider.js';
 import {PipelineRunner} from '../pipeline/runner.js';
 import {runAgentSession,evictAgentCache} from '../agent/agent-session.js';
 
+// 1440 号：plan 族第二写入者（before-draft 每跑一根）——台账+afterAll 清盘。
+const createdRoots:string[]=[];
+afterAll(async()=>{ await Promise.all(createdRoots.map(r=>rm(r,{recursive:true,force:true}))); });
+
 it('reviews the current planning source before drafting and repeats the prerequisite after a plan version changes',async()=>{
   const root=await mkdtemp(join(tmpdir(),'inkos-plan-before-draft-'));
+  createdRoots.push(root);
   await saveWorkManifest(root,createWorkManifest({id:'short',title:'The Key',profileId:'short-fiction',language:'en'}));
   await mkdir(join(root,'works/short/source'),{recursive:true});
   const quote='Review the plan before drafting the prose.';
