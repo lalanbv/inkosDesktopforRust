@@ -12,6 +12,7 @@ import { TabStrip } from "./components/TabStrip";
 import { ContextDock } from "./components/ContextDock";
 import { BottomPanel } from "./components/BottomPanel";
 import { StatusBar } from "./components/StatusBar";
+import { EngineStatusBanner } from "./components/EngineStatusBanner";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { useNotificationsStore } from "./store/notifications";
 import { usePerPageVisibility } from "./hooks/use-per-page-visibility";
@@ -510,6 +511,9 @@ export function App() {
 
   return (
     <div className={`h-screen bg-background text-foreground flex overflow-hidden font-sans ${focusMode ? "focus-mode" : ""} ${density === "compact" ? "density-compact" : ""}`.trim()}>
+      {/* 1463：引擎连接横幅——运行中死亡/自愈期间的全局用户信号（启动
+          不可达由上方 backendUnreachable 错误屏覆盖，此处只管运行中态）。 */}
+      <EngineStatusBanner />
       {/* 首启语言选择：主布局之上的强制 Dialog（P1-3），选完壳直接填内容，无整屏切换 */}
       {showLanguageSelector && (
         <LanguageSelector
