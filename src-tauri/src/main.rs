@@ -1370,13 +1370,16 @@ fn spawn_supervision_watcher(
     project_root: PathBuf,
 ) {
     tauri::async_runtime::spawn(async move {
-        let mut failures: u32 = 0;
+        // 1461：判定逻辑收敛到 SupervisorCore（纯状态机，全判定可测）；
+        // 此处只留接线（sleep/探测/通知/重跑）。policy 跨代持久在
+        // RespawnState；core 的代内 failures 随本 watcher 生灭。
+        let mut core = supervisor::SupervisorCore::default();
         loop {
             tokio::time::sleep(supervisor::RESUPERVISE_INTERVAL).await;
-            if supervisor::probe_once(port, probe_path).await {
-                failures = 0;
-                // 健康存活上报：满 RESPAWN_HEALTHY_RESET 重置重启计数
-                //（偶发崩溃 ≠ 持续故障）。
+            let alive = supervisor::probe_once(port, probe_path).await;
+            // 健康存活上报：满 RESPAWN_HEALTHY_RESET 重置重启计数
+            //（偶发崩溃 ≠ 持续故障）。
+            if alive {
                 if let Some(since) = app_handle.try_state::<SidecarHealthySince>() {
                     let elapsed = {
                         let guard = since
@@ -1393,49 +1396,52 @@ fn spawn_supervision_watcher(
                         }
                     }
                 }
-                continue;
             }
-            failures += 1;
-            if failures < supervisor::RESUPERVISE_FAILURE_THRESHOLD {
-                tracing::debug!(port, failures, "监督探测失败（未达阈值，容忍瞬态）");
-                continue;
+            let action = app_handle
+                .try_state::<RespawnState>()
+                .map(|s| {
+                    let mut policy =
+                        s.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    core.step(alive, &mut policy)
+                })
+                .unwrap_or(supervisor::SupervisionAction::Continue);
+            match action {
+                supervisor::SupervisionAction::Continue => {
+                    if !alive {
+                        tracing::debug!(port, "监督探测失败（未达阈值，容忍瞬态）");
+                    }
+                }
+                supervisor::SupervisionAction::Respawn { cooldown, attempt } => {
+                    // 死亡判定+允许重启：通知（第 n 次）→ 冷却 → 清场 → 重跑整链。
+                    eprintln!(
+                        "[main] sidecar 死亡判定：port={port} 连续 {} 次探测失败",
+                        supervisor::RESUPERVISE_FAILURE_THRESHOLD
+                    );
+                    let msg = inkos_desktop::locale::pick_owned(
+                        format!("inkos 引擎意外退出，正在自动重启（第 {attempt} 次）"),
+                        format!("The inkos engine exited unexpectedly; restarting automatically (attempt {attempt})"),
+                    );
+                    eprintln!("[main] {msg}");
+                    notify_sidecar_event(&app_handle, &msg);
+                    tokio::time::sleep(cooldown).await;
+                    teardown_sidecar_generation(&app_handle);
+                    spawn_sidecar_task(app_handle.clone(), project_root);
+                    // 本代 watcher 使命结束：新代健康后起自己的 watcher 接力。
+                    return;
+                }
+                supervisor::SupervisionAction::Halt => {
+                    // 上限：通知 + title 回显，停监督（用户重启 app 是唯一恢复路径）。
+                    eprintln!("[main] sidecar 死亡判定且重启达上限，停止自动重启");
+                    let msg = inkos_desktop::locale::pick(
+                        "inkos 引擎多次退出，已停止自动重启。请检查日志或重启应用。",
+                        "The inkos engine exited repeatedly; auto-restart stopped. Check logs or restart the app.",
+                    );
+                    eprintln!("[main] {msg}");
+                    notify_sidecar_event(&app_handle, msg);
+                    set_window_title_suffix(&app_handle, msg);
+                    return;
+                }
             }
-
-            // 死亡判定。
-            eprintln!(
-                "[main] sidecar 死亡判定：port={port} 连续 {failures} 次探测失败"
-            );
-            let decision = app_handle.try_state::<RespawnState>().and_then(|s| {
-                let mut policy =
-                    s.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let next = policy.record_death();
-                let attempts = policy.attempts();
-                next.map(|cooldown| (cooldown, attempts))
-            });
-            let Some((cooldown, attempts)) = decision else {
-                // 上限：通知 + title 回显，停监督（用户重启 app 是唯一恢复路径）。
-                let msg = inkos_desktop::locale::pick(
-                    "inkos 引擎多次退出，已停止自动重启。请检查日志或重启应用。",
-                    "The inkos engine exited repeatedly; auto-restart stopped. Check logs or restart the app.",
-                );
-                eprintln!("[main] {msg}");
-                notify_sidecar_event(&app_handle, msg);
-                set_window_title_suffix(&app_handle, msg);
-                return;
-            };
-
-            // 允许重启：通知（第 n/上限 次）→ 冷却 → 清场 → 重跑整链。
-            let msg = inkos_desktop::locale::pick_owned(
-                format!("inkos 引擎意外退出，正在自动重启（第 {attempts} 次）"),
-                format!("The inkos engine exited unexpectedly; restarting automatically (attempt {attempts})"),
-            );
-            eprintln!("[main] {msg}");
-            notify_sidecar_event(&app_handle, &msg);
-            tokio::time::sleep(cooldown).await;
-            teardown_sidecar_generation(&app_handle);
-            spawn_sidecar_task(app_handle.clone(), project_root);
-            // 本代 watcher 使命结束：新代健康后起自己的 watcher 接力。
-            return;
         }
     });
 }

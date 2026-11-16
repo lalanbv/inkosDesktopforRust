@@ -342,6 +342,58 @@ impl RespawnPolicy {
     }
 }
 
+/// 1461：监督循环决策核心（watcher 每轮一步的纯状态机）。
+///
+/// 1460 的 watcher 本体（探测循环→判定→换代接力）此前是自由 async 任务
+/// ——仅 RespawnPolicy 有单测，循环判定零验证（#[ignore] 用例=零测试路径
+/// 记忆：未验证路径潜伏缺陷全在）。抽离决策面后，main.rs 只留接线（sleep/
+/// 探测/通知/重跑），全部判定逻辑在此可测。
+///
+/// 状态分置（1461 编写中定案的关键语义）：core 只持**代内**连续失败计数
+/// （判死→换代→新 core 自然归零）；[`RespawnPolicy`]（重启计数+上限）由
+/// 调用方跨代持久持有（main.rs 的 `RespawnState` 托管）——若 policy 随
+/// core 换代重建，上限永不触发=崩溃风暴防护失效。
+#[derive(Default)]
+pub struct SupervisorCore {
+    failures: u32,
+}
+
+/// 每轮探测后的决策。
+#[derive(Debug, PartialEq, Eq)]
+pub enum SupervisionAction {
+    /// 继续监督（探测活，或失败未达 [`RESUPERVISE_FAILURE_THRESHOLD`]）。
+    Continue,
+    /// 判死且允许重启：冷却后重跑启动链；`attempt`=已用重启次数（通知
+    /// 「第 n 次」用）。
+    Respawn { cooldown: std::time::Duration, attempt: u32 },
+    /// 判死且达重启上限：停监督，用户重启 app 是唯一恢复路径。
+    Halt,
+}
+
+impl SupervisorCore {
+    /// 喂入本轮探测结果，产出决策。`policy` 为跨代持久的重启策略
+    ///（判死时经它决策冷却/上限——见类型文档「状态分置」）。
+    pub fn step(&mut self, alive: bool, policy: &mut RespawnPolicy) -> SupervisionAction {
+        if alive {
+            self.failures = 0;
+            return SupervisionAction::Continue;
+        }
+        self.failures += 1;
+        if self.failures < RESUPERVISE_FAILURE_THRESHOLD {
+            return SupervisionAction::Continue;
+        }
+        // 达阈值=判死：本代 core 使命即将结束（Respawn/Halt 均终态），
+        // failures 无需清——换代即新 core。
+        match policy.record_death() {
+            Some(cooldown) => SupervisionAction::Respawn {
+                cooldown,
+                attempt: policy.attempts(),
+            },
+            None => SupervisionAction::Halt,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +515,92 @@ mod tests {
         p.note_healthy_uptime(RESPAWN_HEALTHY_RESET);
         assert_eq!(p.attempts(), 0);
         assert_eq!(p.record_death(), Some(RESPAWN_COOLDOWN), "清零后恢复允许");
+    }
+
+    /// 1461：监督状态机——瞬态失败（未达阈值）恢复全程 Continue。
+    #[test]
+    fn supervision_core_tolerates_transient_failures() {
+        let mut core = SupervisorCore::default();
+        let mut policy = RespawnPolicy::default();
+        // 阈值-1 次连续失败后恢复：永远 Continue（不误判死）。
+        for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert_eq!(core.step(false, &mut policy), SupervisionAction::Continue);
+        }
+        assert_eq!(core.step(true, &mut policy), SupervisionAction::Continue);
+        // 代内计数已清：再次阈值-1 次失败仍不判死，须满阈值。
+        for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert_eq!(core.step(false, &mut policy), SupervisionAction::Continue);
+        }
+        assert_eq!(
+            core.step(false, &mut policy),
+            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 },
+            "恢复后代内计数清零，须再满阈值才判死"
+        );
+    }
+
+    /// 1461：监督状态机——跨代接力（代内 failures 随换代归零 + policy 计数
+    /// 跨代持久）直到上限 Halt。锁「状态分置」语义：若 policy 误随 core
+    /// 换代重建，上限永不触发=崩溃风暴防护失效。
+    ///
+    /// 判死时机=第 [`RESUPERVISE_FAILURE_THRESHOLD`] **次**连续失败当轮
+    ///（failures==阈值即判死，非第 N+1 轮——与 1460 watcher 原语义一致）。
+    #[test]
+    fn supervision_core_generations_until_halt() {
+        let mut policy = RespawnPolicy::new(2); // 跨代持久（生产=RespawnState）
+        // 第 1 代：阈值-1 次容忍 → 第阈值 次判死 Respawn(attempt=1)。
+        let mut gen0 = SupervisorCore::default();
+        for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert_eq!(gen0.step(false, &mut policy), SupervisionAction::Continue);
+        }
+        assert_eq!(
+            gen0.step(false, &mut policy),
+            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 }
+        );
+        // 换代：新 core（failures 归零）+ 同一 policy（attempt 累计）。
+        let mut gen1 = SupervisorCore::default();
+        for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert_eq!(
+                gen1.step(false, &mut policy),
+                SupervisionAction::Continue,
+                "新代 failures 归零，须重新满阈值（复用旧 failures 会即刻误判）"
+            );
+        }
+        assert_eq!(
+            gen1.step(false, &mut policy),
+            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 2 },
+            "policy 跨代持久：第 2 次判死 attempt=2"
+        );
+        // 第 3 代：policy 已达上限 2 → 第阈值 次判死即 Halt。
+        let mut gen2 = SupervisorCore::default();
+        for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert_eq!(gen2.step(false, &mut policy), SupervisionAction::Continue);
+        }
+        assert_eq!(gen2.step(false, &mut policy), SupervisionAction::Halt);
+    }
+
+    /// 1461：probe_once 判活语义——真 TcpListener 2xx 服务=活；无服务端口=死。
+    #[tokio::test]
+    async fn probe_once_http_semantics() {
+        use std::io::Write as _;
+        // 真 2xx 服务（手工最小 HTTP 响应，不引依赖）。
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut buf = [0u8; 256];
+                let _ = std::io::Read::read(&mut conn, &mut buf);
+                let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            }
+        });
+        assert!(probe_once(port, "/api/v1/health").await, "2xx 服务应判活");
+        server.join().unwrap();
+
+        // 无服务端口（刚释放的 ephemeral）：连接拒绝=死。
+        let dead_port = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            l.local_addr().unwrap().port()
+        };
+        assert!(!probe_once(dead_port, "/api/v1/health").await, "无服务端口应判死");
     }
 
     #[test]
