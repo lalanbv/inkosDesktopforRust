@@ -2640,13 +2640,22 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // 静默失效（cors 中间件 before-next 的 c.res getter 副作用竞态）——单测
   // app.request 绿而真 HTTP 丢。重建 Response（换对象身份）是全组合可靠形，
   // 四案例矩阵（origin 有无 × c.json/裸 Response）实证。
+  // 1456 补洞（SSE 形态）：重建形仍盖不住 streamSSE——helper 自设
+  // `Cache-Control: no-cache`，而 @hono/node-server 的 Response2 `body`
+  // getter 会丢弃头缓存快照并按 #init 原始头重建，Hono `set res` 又用旧
+  // 响应头逐键回写覆盖新响应——旧值 no-cache 恰把 no-store 盖回。修复=
+  // 顺序敏感三步：①先固化 body（此后旧响应的头操作落在重建后的实例上）；
+  // ②从旧响应摘除该键（回写链无旧值可写）；③再重建。端点自设同值
+  // （project/files 单点）走早退零开销。
   app.use("/api/v1/*", async (c, next) => {
     await next();
     const res = c.res;
     if (res.headers.get("Cache-Control") === "no-store") return;
+    const body = res.body;
+    res.headers.delete("Cache-Control");
     const headers = new Headers(res.headers);
     headers.set("Cache-Control", "no-store");
-    c.res = new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+    c.res = new Response(body, { status: res.status, statusText: res.statusText, headers });
   });
 
   // Structured error handler — ApiError returns typed JSON, others return 500

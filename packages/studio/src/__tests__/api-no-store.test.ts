@@ -44,6 +44,17 @@ describe("API no-store unified layer (445 TS parity)", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
+  // 1456 锁测：streamSSE helper 自设 `Cache-Control: no-cache`，Hono `set res`
+  // 用旧响应头逐键回写新响应——重建形若不先摘键，旧值 no-cache 恰把
+  // no-store 盖回（1455 四案例矩阵漏此形态，活体暴露）。本测在 dispatch 层
+  // 锁定摘键序；node-server Response2 叠加面由活体探针矩阵覆盖（1456）。
+  it("overrides streamSSE's self-set no-cache on the events endpoint", async () => {
+    const app = createStudioServer({} as never, root);
+    const response = await app.request("/api/v1/events");
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("leaves non-API paths without the header (assets/SPA face stays cache-eligible)", async () => {
     const app = createStudioServer({} as never, root);
     const response = await app.request("/non-api-path");
