@@ -75,8 +75,12 @@ export function useEngineHealth(onRecover?: () => void): EngineHealthState {
       }
       stateRef.current = next;
       setState(next);
-      // 自适应周期：判 down 后提频快捕恢复；否则低频保活。
-      timer = setTimeout(tick, next === "down" ? PROBE_INTERVAL_MS : HEALTHY_INTERVAL_MS);
+      // 自适应周期（1464 活体走查修正）：只要**出现失败**（failures>0，含
+      // 未达阈值的中间态）就提频——首版误把提频绑在「已判 down」上，
+      // 中间态仍在等 30s 健康周期，3 连失败要 90s 才判死（活体横幅不
+      // 出现的根因）。failures=0 且健康才回低频保活。
+      const fast = failures > 0 || next === "down";
+      timer = setTimeout(tick, fast ? PROBE_INTERVAL_MS : HEALTHY_INTERVAL_MS);
     };
 
     timer = setTimeout(tick, PROBE_INTERVAL_MS);
