@@ -50,6 +50,7 @@ pub fn resolve_server_bin(
     if let Some(rd) = resource_dir {
         let candidate = rd.join(RUST_ENGINE_DIR_NAME).join(RUST_SERVER_BIN_NAME);
         if candidate.is_file() {
+            warn_if_stale(&candidate, _dev_repo_root);
             return Some(candidate);
         }
     }
@@ -65,6 +66,53 @@ pub fn resolve_server_bin(
         }
     }
     None
+}
+
+/// 1480：引擎二进制陈旧告警（1479 教训机制化）。
+///
+/// 1479 实证：`cargo build --release --bin inkos-desktop` **不刷新** tauri
+/// 的 resource 拷贝（`target/release/engine-rust/`）——直跑形态（非正式
+/// bundle）可能命中数月前的引擎二进制，watchdog 等引擎侧改动全部缺席
+/// 且零信号。正式打包链无此面（打包脚本自带 engine release 重编）。
+///
+/// 比对：engine-rs/src 树最新 mtime > 候选二进制 mtime → 告警提醒重跑
+/// `desktop-package-rust-engine.sh`。仅告警不阻断（ updater 落点的
+/// app_data 副本不比对——updater 自管新鲜度；本面只盖 resource 拷贝）。
+fn warn_if_stale(bin: &Path, dev_repo_root: &Path) {
+    let src_root = dev_repo_root.join("engine-rs").join("src");
+    if engine_bin_is_stale(bin, &src_root) {
+        eprintln!(
+            "[main] 警告: 引擎二进制陈旧于源码（bin={}），直跑形态可能缺最新引擎改动——重跑 scripts/desktop-package-rust-engine.sh",
+            bin.display()
+        );
+    }
+}
+
+/// 陈旧判定纯函数（1480 可测化）：src 树（浅层目录 mtime 汇总——改码必
+/// 动其所在模块目录 mtime）最新时刻 > 二进制 mtime → true。源码树或
+/// 二进制不可达 → false（无从比对=不告警，部署形态静默）。
+pub(crate) fn engine_bin_is_stale(bin: &Path, src_root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(src_root) else {
+        return false;
+    };
+    let mut newest_src: Option<std::time::SystemTime> = None;
+    for entry in entries.flatten() {
+        if let Ok(md) = entry.metadata() {
+            if let Ok(t) = md.modified() {
+                newest_src = Some(match newest_src {
+                    Some(cur) if cur >= t => cur,
+                    _ => t,
+                });
+            }
+        }
+    }
+    let (Some(newest_src), Ok(bin_md)) = (newest_src, std::fs::metadata(bin)) else {
+        return false;
+    };
+    let Ok(bin_time) = bin_md.modified() else {
+        return false;
+    };
+    newest_src > bin_time
 }
 
 /// 解析 Rust 引擎的静态前端目录（`INKOS_STATIC_DIR`）。
@@ -283,6 +331,31 @@ mod tests {
                 Some(dev_dist)
             );
         }
+    }
+
+    /// 1480：陈旧判定三形态——src 新于 bin（陈旧=true）/bin 新（false）/
+    /// src 不可达（false 静默）。
+    #[test]
+    fn engine_bin_is_stale_three_forms() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("inkos-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let src_root = dir.join("src");
+        fs::create_dir_all(&src_root).unwrap();
+        let bin = dir.join("server");
+        fs::write(&bin, b"bin").unwrap();
+
+        // bin 刚写=新于空 src 树目录 mtime 基线 → false。
+        assert!(!engine_bin_is_stale(&bin, &src_root));
+
+        // 触新 src（sleep 保证 mtime 严格大于 bin）→ true。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(src_root.join("mod.rs"), b"x").unwrap();
+        assert!(engine_bin_is_stale(&bin, &src_root));
+
+        // src 不可达 → false（部署形态静默）。
+        assert!(!engine_bin_is_stale(&bin, &dir.join("nope")));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
