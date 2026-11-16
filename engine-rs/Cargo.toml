@@ -95,3 +95,5 @@ criterion = "0.5"
 serde_json = "1"
 # HTTP handler 单测（oneshot，不绑端口）
 tower = { version = "0.5", features = ["util"] }
+# duel TS sidecar 进程组收割（strangler_duel Drop killpg；1453 号）
+libc = "0.2"

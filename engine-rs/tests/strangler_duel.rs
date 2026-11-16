@@ -9,6 +9,7 @@
 //! （缺 env 直接跳过——不进基线六项）。
 
 use serde_json::{json, Value};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -233,7 +234,47 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
 }
 
 /// TS sidecar 真实进程（tsx 直跑 server 入口；dist/index.html 预置跳过前端构建）。
-async fn spawn_ts_sidecar(root: &Path, port: u16) -> String {
+/// TS sidecar 句柄：Drop 即进程组整树收割（1453 号）。
+///
+/// 旧形态=600s sleep 兜底线程——但每个 `#[tokio::test]` 是独立进程，测试
+/// 进程退出线程随之消亡，兜底 kill 永不执行；且 `.bin/tsx` 是 shell 包装
+/// （tsx→node cli→exec 重执行三层），顶层 kill 杀不掉组内后续进程——两因
+/// 叠加使每轮 testgate（INKOS_DUEL=1 强制真跑）泄漏双层孤儿（实测形态：
+/// tsx 包装 PPID=1 + node server 挂高位随机口，PGID 留守已死组长）。
+///
+/// 修复=spawn 前 `process_group(0)` 令 sidecar 自成进程组（exec 重执行不
+/// 换组，实测 PGID 留守语义）+ RAII Drop `killpg(SIGKILL)` 整树收割（含
+/// panic 路径；SIGKILL 级杀掉测试进程的场景 Drop 同死=903 族已知边界，
+/// 与旧兜底语义等价不损失）。
+struct TsSidecar {
+    base: String,
+    child: std::process::Child,
+}
+
+impl Drop for TsSidecar {
+    fn drop(&mut self) {
+        // 安全性：pgid 来自本函数 spawn 时 process_group(0) 设定的自有进程
+        // 组（组长=child pid，活着），非外部进程组，无误伤面。
+        unsafe { libc::kill(-(self.child.id() as i32), libc::SIGKILL) };
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl std::ops::Deref for TsSidecar {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.base
+    }
+}
+
+impl std::fmt::Display for TsSidecar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.base)
+    }
+}
+
+async fn spawn_ts_sidecar(root: &Path, port: u16) -> TsSidecar {
     let repo = repo_root();
     let studio = repo.join("packages").join("studio");
     // 跳过 vite 前端自动构建：index.ts 以 dist/index.html 存在性判断。
@@ -244,7 +285,9 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> String {
     if !index_path.exists() {
         std::fs::write(&index_path, "<!doctype html><title>duel</title>").unwrap();
     }
-    let mut command = std::process::Command::new(studio.join("node_modules").join(".bin").join("tsx"))
+    let command = std::process::Command::new("node")
+        .process_group(0)
+        .arg(studio.join("node_modules").join("tsx").join("dist").join("cli.mjs"))
         .arg(studio.join("src").join("api").join("index.ts"))
         .arg(root)
         .env("INKOS_STUDIO_PORT", port.to_string())
@@ -253,14 +296,11 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> String {
         .stdout(std::process::Stdio::from(std::fs::File::create("/tmp/duel-tsx-out.log").unwrap()))
         .stderr(std::process::Stdio::from(std::fs::File::create("/tmp/duel-tsx-err.log").unwrap()))
         .spawn()
-        .expect("tsx 起动失败（先确认 packages/studio 依赖已安装）");
-    // 测试进程退出前 kill + wait 收割（防僵尸/端口滞留）。
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(600));
-        let _ = command.kill();
-        let _ = command.wait();
-    });
-    format!("http://127.0.0.1:{port}")
+        .expect("node+tsx 起动失败（先确认 packages/studio 依赖已安装）");
+    TsSidecar {
+        base: format!("http://127.0.0.1:{port}"),
+        child: command,
+    }
 }
 
 async fn get_json(base: &str, path: &str) -> (u16, Value) {
@@ -420,7 +460,7 @@ async fn strangler_cross_write_read_duel() {
         .unwrap();
     assert_eq!(response.status().as_u16(), 200);
     // 双端读：book 详情的章节摘要 status=approved（index.json 跨端可见）。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let (status, body) = get_json(base, "/api/v1/books/b1").await;
         assert_eq!(status, 200, "base={base} body={body}");
         let approved = body
@@ -445,7 +485,7 @@ async fn strangler_cross_write_read_duel() {
         .unwrap();
     assert_eq!(response.status().as_u16(), 200, "TS PUT review-mode 失败");
     // 双端读：GET 同路径 manual。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let (status, body) = get_json(base, "/api/v1/books/b1/chapter-review-mode").await;
         if status != 200 {
             let written = std::fs::read_to_string(root.join("books").join("b1").join("book.json")).unwrap_or_default();
@@ -546,7 +586,7 @@ async fn strangler_session_domain_duel() {
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 200, "TS rename 失败");
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let (status, body) = get_json(base, &format!("/api/v1/sessions/{ts_session}")).await;
         assert_eq!(status, 200, "base={base} body={body}");
         assert_eq!(
@@ -999,7 +1039,7 @@ async fn bin_process_static_face_duel() {
     // 403 且无 CORS 头（bin/TS 侧守卫均在 CORS 之外先行短路）；preflight
     // （回环）双端 2xx 且反射 + 方法/头语义一致。
     let client = reqwest::Client::new();
-    for base in [&bin, &ts] {
+    for base in [&bin, &ts.base] {
         // GET 用双端同位的 /api/v1/books（TS 侧无 /api/v1/health——404 面
         // 不在本 duel 断言范围）。
         let response = client
@@ -1340,7 +1380,7 @@ async fn strangler_timeline_duel() {
     let mut diffs: Vec<String> = Vec::new();
 
     // A) 缺文件 → 双端 200 + timeline:null。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .get(format!("{base}/api/v1/books/b1/timeline"))
             .send()
@@ -1355,7 +1395,7 @@ async fn strangler_timeline_duel() {
     }
 
     // B) PUT 合法 → 双端 200 ok；PUT 非法 version → 双端 400。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let client = reqwest::Client::new();
         let ok = client
             .put(format!("{base}/api/v1/books/b1/timeline"))
@@ -1381,7 +1421,7 @@ async fn strangler_timeline_duel() {
 
     // C) roundtrip：双端 GET（normalize 后等价——plotlines/cells 结构一致）。
     let mut bodies: Vec<(u16, Value)> = Vec::new();
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .get(format!("{base}/api/v1/books/b1/timeline"))
             .send()
@@ -1438,7 +1478,7 @@ async fn strangler_series_backfill_duel() {
     let mut diffs: Vec<String> = Vec::new();
 
     // A) apply 无草稿 → 双端 400。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .post(format!("{base}/api/v1/books/b1/series-backfill/apply"))
             .json(&json!({}))
@@ -1451,7 +1491,7 @@ async fn strangler_series_backfill_duel() {
     }
 
     // B) extract 缺 sourceBookId → 双端 400。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .post(format!("{base}/api/v1/books/b1/series-backfill/extract"))
             .json(&json!({}))
@@ -1465,7 +1505,7 @@ async fn strangler_series_backfill_duel() {
 
     // C) extract 合法（走 mock LLM）→ 双端 200，草稿 normalize 后等价。
     let mut drafts: Vec<(u16, Value)> = Vec::new();
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .post(format!("{base}/api/v1/books/b2/series-backfill/extract"))
             .json(&json!({ "sourceBookId": "b1" }))
@@ -1496,7 +1536,7 @@ async fn strangler_series_backfill_duel() {
     }
 
     // D) apply 勾选子集 → 双端 200 + applied:1。
-    for base in [&rust, &ts] {
+    for base in [&rust, &ts.base] {
         let response = reqwest::Client::new()
             .post(format!("{base}/api/v1/books/b2/series-backfill/apply"))
             .json(&json!({ "itemIds": ["it-1"] }))
