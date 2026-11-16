@@ -611,4 +611,117 @@ mod tests {
         let cloned = spec.clone();
         assert_eq!(spec, cloned);
     }
+
+    /// 1462：多连接 2xx 微服务（监督整链活体的被监督体——listener 线程
+    /// 循环 accept，drop 句柄即「服务死亡」，端口判死真实可感）。返回
+    /// (port, 停机句柄)：drop 停机句柄=杀服务。
+    struct MiniServer {
+        port: u16,
+        shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: std::thread::JoinHandle<()>,
+    }
+
+    impl MiniServer {
+        fn start() -> Self {
+            use std::io::Write as _;
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = std::sync::Arc::clone(&shutdown);
+            let handle = std::thread::spawn(move || {
+                listener.set_nonblocking(true).unwrap();
+                while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut conn, _)) => {
+                            let mut buf = [0u8; 256];
+                            let _ = std::io::Read::read(&mut conn, &mut buf);
+                            let _ = conn.write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+                            );
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                port,
+                shutdown,
+                handle,
+            }
+        }
+
+        fn stop(self) {
+            self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            // 非阻塞 accept 轮询 20ms 一拍：join 前多等一拍保证循环退出。
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let _ = self.handle.join();
+        }
+    }
+
+    /// 1462：监督整链活体——真探测 × 真服务死亡 × 真状态机，多代接力
+    /// 直到上限 Halt（1460 接线外的全链验证：生产形态=杀 sidecar 进程，
+    /// 此处以「drop 服务句柄」等价模拟——监督面感知的是端口判死，被监督
+    /// 体的进程身份不是被测面）。
+    #[tokio::test]
+    async fn supervision_full_cycle_alive_dead_respawn_halt() {
+        let mut policy = RespawnPolicy::new(2); // 上限 2：两代 Respawn→Halt
+        let mut server = MiniServer::start();
+
+        // 第 1 代：健康起跑 → 判活 Continue。
+        let mut core = SupervisorCore::default();
+        assert!(probe_once(server.port, "/api/v1/health").await);
+        assert_eq!(core.step(true, &mut policy), SupervisionAction::Continue);
+
+        // 杀服务 → 真探测连续判死 → 阈值当轮 Respawn(attempt=1)。
+        let dead_port = server.port;
+        server.stop();
+        for i in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
+            assert!(
+                !probe_once(dead_port, "/api/v1/health").await,
+                "服务已停，探测应连续判死（第 {} 轮）",
+                i + 1
+            );
+            assert_eq!(core.step(false, &mut policy), SupervisionAction::Continue);
+        }
+        assert!(!probe_once(dead_port, "/api/v1/health").await);
+        assert_eq!(
+            core.step(false, &mut policy),
+            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 }
+        );
+
+        // 换代重启：新服务（新端口）→ 新 core → 判活。
+        server = MiniServer::start();
+        let mut core = SupervisorCore::default();
+        assert!(probe_once(server.port, "/api/v1/health").await);
+        assert_eq!(core.step(true, &mut policy), SupervisionAction::Continue);
+
+        // 第 2 代再死 → Respawn(attempt=2)；第 3 代死 → Halt（上限 2）。
+        for generation in 2..=3 {
+            let port = server.port;
+            server.stop();
+            let mut core_g = SupervisorCore::default();
+            for i in 0..RESUPERVISE_FAILURE_THRESHOLD {
+                assert!(!probe_once(port, "/api/v1/health").await);
+                let action = core_g.step(false, &mut policy);
+                // Halt 只在第阈值次出现（前阈值-1 次为 Continue 容忍段）。
+                if generation == 3 && i == RESUPERVISE_FAILURE_THRESHOLD - 1 {
+                    assert_eq!(action, SupervisionAction::Halt, "上限 2 后应 Halt");
+                }
+            }
+            if generation == 2 {
+                // 本轮最后一次 step 已在循环内判死；此处只断言 policy 计数。
+                assert_eq!(policy.attempts(), 2);
+            }
+            // Halt 后无新代：循环结束前服务句柄已 stop，无泄漏。
+            if generation == 3 {
+                break;
+            }
+            server = MiniServer::start();
+            // 健康探活（新代起跑在产线由 spawn 链负责，此处只验证可恢复）。
+            assert!(probe_once(server.port, "/api/v1/health").await);
+        }
+    }
 }
