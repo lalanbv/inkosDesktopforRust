@@ -1,11 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BANNER_TEXT, useEngineHealth } from "@/hooks/use-engine-health";
 
 // 1463：引擎连接横幅——down 态固定顶条（role=alert 无障碍播报）；恢复沿
 // 短 toast（3s 自消）。checking 态零渲染（首探 2s 内无打扰）。
 export function EngineStatusBanner() {
+  const health = useEngineHealth();
   const [toast, setToast] = useState(false);
-  const health = useEngineHealth(() => setToast(true));
+
+  // 1469：恢复沿改为 health 派生（useEffect 监听 down→up 转变）——原
+  // 形态经 hook onRecover 回调（async 轮询 tick 内直调），jsdom 行为测
+  // 全绿但真浏览器（IAB/Chromium+RUM fetch 包装层）恢复沿 toast 从未
+  // 渲染（MutationObserver 回溯零命中）；派生形态在 React 数据流内
+  // commit 后必达，不依赖 async 回调链路。
+  const prevHealthRef = useRef(health);
+  useEffect(() => {
+    if (prevHealthRef.current === "down" && health === "up") {
+      setToast(true);
+    }
+    prevHealthRef.current = health;
+  }, [health]);
 
   useEffect(() => {
     if (!toast) return;
