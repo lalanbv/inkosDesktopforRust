@@ -21,6 +21,21 @@ const PROBE_INTERVAL_MS = 2_000;
 export const FAILURE_THRESHOLD = 3;
 
 /**
+ * 下一轮探测延迟（1466 抽纯函数回归锁）：**只要出现失败**（failures>0，
+ * 含未达阈值的中间态）即提频 2s；failures=0 且健康才回 30s 低频。
+ *
+ * 1464 活体走查教训：首版把提频绑在「已判 down」上——中间态仍等 30s，
+ * 3 连失败需 ≈90s（比设计慢 15 倍），「失败提频」意图从未生效且纯函数
+ * 测试测不到（周期是接线层内联）——抽离后四格单测锁死防回归。
+ */
+export function nextProbeDelayMs(
+  failures: number,
+  state: EngineHealthState,
+): number {
+  return failures > 0 || state === "down" ? PROBE_INTERVAL_MS : HEALTHY_INTERVAL_MS;
+}
+
+/**
  * 状态机纯函数（可测核心）：喂入单次探测结果，产出下一状态与失败计数。
  * 恢复沿（down→up）单列返回，供横幅 toast 一次性消费。
  */
@@ -75,12 +90,8 @@ export function useEngineHealth(onRecover?: () => void): EngineHealthState {
       }
       stateRef.current = next;
       setState(next);
-      // 自适应周期（1464 活体走查修正）：只要**出现失败**（failures>0，含
-      // 未达阈值的中间态）就提频——首版误把提频绑在「已判 down」上，
-      // 中间态仍在等 30s 健康周期，3 连失败要 90s 才判死（活体横幅不
-      // 出现的根因）。failures=0 且健康才回低频保活。
-      const fast = failures > 0 || next === "down";
-      timer = setTimeout(tick, fast ? PROBE_INTERVAL_MS : HEALTHY_INTERVAL_MS);
+      // 自适应周期：决策见 nextProbeDelayMs（1466 抽离，四格单测锁定）。
+      timer = setTimeout(tick, nextProbeDelayMs(failures, next));
     };
 
     timer = setTimeout(tick, PROBE_INTERVAL_MS);

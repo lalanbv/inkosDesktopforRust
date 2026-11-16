@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { EngineStatusBanner } from "@/components/EngineStatusBanner";
-import { BANNER_TEXT, FAILURE_THRESHOLD, nextHealth } from "@/hooks/use-engine-health";
+import {
+  BANNER_TEXT,
+  FAILURE_THRESHOLD,
+  nextHealth,
+  nextProbeDelayMs,
+} from "@/hooks/use-engine-health";
 
 // 1463：状态机纯函数三面 + 横幅渲染两态（renderToString 惯例——hook 轮询
 // 在 SSR 下不跑，横幅经 props 间接验证：down 文案/role 与恢复 toast 由
@@ -36,6 +41,17 @@ describe("nextHealth state machine", () => {
     expect(r.recovered).toBe(true);
     // 恢复后再失败：从 up 重新计（failures 已清）。
     expect(nextHealth(false, 0).state).toBe("up");
+  });
+});
+
+describe("nextProbeDelayMs (1464 regression lock)", () => {
+  it("four-grid: any failure or down fast-probes; clean+healthy stays low-frequency", () => {
+    // 1464 缺陷形态：中间态（failures>0 未达阈值）若回 30s，3 连失败需
+    // 90s——四格锁死「出现失败即提频」。
+    expect(nextProbeDelayMs(0, "up")).toBe(30_000);
+    expect(nextProbeDelayMs(1, "up")).toBe(2_000);
+    expect(nextProbeDelayMs(FAILURE_THRESHOLD - 1, "up")).toBe(2_000);
+    expect(nextProbeDelayMs(0, "down")).toBe(2_000);
   });
 });
 
