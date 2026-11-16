@@ -150,6 +150,14 @@ pub fn build_launch<R: PathResolver>(
         "INKOS_PROJECT_ROOT".to_string(),
         paths.project_root().to_string_lossy().into_owned(),
     );
+    // 1459/1479：parent-watchdog 契约——与 supervisor::build_launch（Node
+    // 回退腿）同款注入。首版（1459）漏此形态：引擎侧 watchdog 已就位
+    //（bin 级集成测绿）但 Rust 直启（产品默认）不喂 pid=死契约面，1479
+    // 壳级活体（SIGKILL app 后引擎残留 PPID=1）抓出。
+    env.insert(
+        "INKOS_PARENT_PID".to_string(),
+        std::process::id().to_string(),
+    );
     if let Some(dir) = static_dir {
         env.insert(
             "INKOS_STATIC_DIR".to_string(),
@@ -290,6 +298,12 @@ mod tests {
         assert!(spec.args.is_empty(), "Rust 引擎配置全走 env，无 args");
         assert_eq!(spec.env.get("INKOS_PORT").unwrap(), "7788");
         assert_eq!(spec.env.get("INKOS_PROJECT_ROOT").unwrap(), "/tmp/proj");
+        // 1479：parent-watchdog 注入契约（Rust 直启形态——首版 1459 漏，
+        // 死契约面由壳级活体抓出，此断言锁防回归）。
+        assert_eq!(
+            spec.env.get("INKOS_PARENT_PID").unwrap(),
+            &std::process::id().to_string()
+        );
         assert_eq!(
             spec.env.get("INKOS_STATIC_DIR").unwrap(),
             "/opt/engine-rust/static"
