@@ -183,7 +183,7 @@ function recoverOrphans(label) {
       }
     }
   } catch {
-    return; // ps 不可用=环境异常，降级跳过（supervisor_integration 用例内 :4567 端口重试兜底）
+    return; // ps 不可用=环境异常，降级跳过（残留由下一轮 supervisor_integration 端口预检 panic 指认——989 号实测形态）
   }
   for (const pid of engineOrphans) {
     try {
@@ -289,8 +289,8 @@ for (const inv of INVENTORY) {
 
   // 绿档不留盘（1435 号）：成功即删日志目录——988 号创建以来每轮残留一个
   // （实测 149 个/588K），红档路径不删，保留日志供事后取证。
-  // 1436 号硬化：rmSync 的 force 只吞 ENOENT，EPERM/EACCES 类 throw 在裸调用
-  // 下会把全绿跑崩成伪红——失败退化为老行为（残留一目录）并如实入讯息。
+  // 1436 号硬化：rmSync 的 force 只吞 ENOENT，EPERM/EACCES 等非 ENOENT throw
+  // 在裸调用下会把全绿跑崩成伪红——失败退化为老行为（残留一目录）并如实入讯息。
   let logDirCleaned = true;
   try {
     rmSync(logDir, { recursive: true, force: true });
