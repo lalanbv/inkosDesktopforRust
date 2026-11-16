@@ -257,6 +257,91 @@ pub async fn health_probe(
     false
 }
 
+/// 1460：单发健康探测（监督 watcher 用——非启动期轮询）。
+///
+/// 与 [`health_probe`] 共享判活语义（2xx=活；任何错误=死），但只发一次、
+/// 2s 超时——watcher 周期（`RESUPERVISE_INTERVAL`）自带节律，无需内部轮询。
+pub async fn probe_once(port: u16, probe_path: &str) -> bool {
+    let url = format!("http://127.0.0.1:{port}{probe_path}");
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("probe_once: reqwest Client 构建失败: {:#}", e);
+            return false;
+        }
+    };
+    match client.get(&url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+/// 1460：sidecar 死亡重启决策器（监督 watcher 用，纯逻辑便于单测）。
+///
+/// 策略：死亡 → 固定冷却 [`RESPAWN_COOLDOWN`] 后允许重启；连续死亡达到
+/// `max_attempts` 停止重启（防崩溃风暴——引擎若因环境问题必崩，反复拉起
+/// 只会持续烧 CPU/刷日志，停下+通知用户才是正确行为）；健康存活满
+/// [`RESPAWN_HEALTHY_RESET`]（5 分钟）后计数清零（偶发崩溃≠持续故障）。
+pub struct RespawnPolicy {
+    attempts: u32,
+    max_attempts: u32,
+}
+
+/// 重启冷却：覆盖典型端口 TIME_WAIT/僵尸收尾窗口，且不给用户「卡死」感。
+pub const RESPAWN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 监督探测周期（watcher 单发探测节律）。
+pub const RESUPERVISE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 连续探测失败判定阈值：3 次（≈6s 窗口）——既容忍引擎瞬态重启/请求排队，
+/// 又在用户可感知前完成死亡判定+重启。
+pub const RESUPERVISE_FAILURE_THRESHOLD: u32 = 3;
+
+/// 连续重启上限（默认）：一个 app 会话内最多自动拉起 5 次。
+pub const RESPAWN_MAX_ATTEMPTS: u32 = 5;
+
+/// 健康存活多久后重置计数：5 分钟稳定运行=上一轮崩溃是偶发。
+pub const RESPAWN_HEALTHY_RESET: std::time::Duration = std::time::Duration::from_secs(300);
+
+impl Default for RespawnPolicy {
+    fn default() -> Self {
+        Self::new(RESPAWN_MAX_ATTEMPTS)
+    }
+}
+
+impl RespawnPolicy {
+    pub fn new(max_attempts: u32) -> Self {
+        Self {
+            attempts: 0,
+            max_attempts,
+        }
+    }
+
+    /// 当前已连续重启次数（诊断/测试用）。
+    pub fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
+    /// 记录一次死亡：返回 `Some(cooldown)`=冷却后允许重启；`None`=已达上限。
+    pub fn record_death(&mut self) -> Option<std::time::Duration> {
+        if self.attempts >= self.max_attempts {
+            return None;
+        }
+        self.attempts += 1;
+        Some(RESPAWN_COOLDOWN)
+    }
+
+    /// 健康存活上报：uptime ≥ [`RESPAWN_HEALTHY_RESET`] 时计数清零。
+    pub fn note_healthy_uptime(&mut self, uptime: std::time::Duration) {
+        if uptime >= RESPAWN_HEALTHY_RESET {
+            self.attempts = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +444,25 @@ mod tests {
         let paths = dummy();
         let spec = build_launch(&paths, 7654, "/usr/bin/node");
         assert_eq!(spec.port, 7654);
+    }
+
+    /// 1460：重启决策器——冷却允许/上限拒绝/健康清零三面。
+    #[test]
+    fn respawn_policy_allows_until_cap_then_resets_on_health() {
+        let mut p = RespawnPolicy::new(2);
+        assert_eq!(p.record_death(), Some(RESPAWN_COOLDOWN), "第 1 次死亡允许");
+        assert_eq!(p.attempts(), 1);
+        assert_eq!(p.record_death(), Some(RESPAWN_COOLDOWN), "第 2 次死亡允许");
+        assert_eq!(p.record_death(), None, "第 3 次死亡达上限拒绝");
+        assert_eq!(p.attempts(), 2, "达上限后计数不再涨");
+        // 健康存活不足阈值：不清零。
+        p.note_healthy_uptime(RESPAWN_HEALTHY_RESET - std::time::Duration::from_secs(1));
+        assert_eq!(p.attempts(), 2);
+        assert_eq!(p.record_death(), None, "未清零仍拒绝");
+        // 健康存活满阈值：清零恢复。
+        p.note_healthy_uptime(RESPAWN_HEALTHY_RESET);
+        assert_eq!(p.attempts(), 0);
+        assert_eq!(p.record_death(), Some(RESPAWN_COOLDOWN), "清零后恢复允许");
     }
 
     #[test]

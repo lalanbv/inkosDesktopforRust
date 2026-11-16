@@ -83,15 +83,37 @@ impl LoopbackGuardState {
     }
 }
 
-/// secrets.json → keychain 回写 watcher 的关闭句柄（同 M2b，未改）。
+/// secrets.json → keychain 回写 watcher 的关闭句柄（M2b；1460 可重入化——
+/// setup 预托管空实例，spawn 链装载，respawn 复用不重复 manage。shutdown
+/// 随装载换代：Exit 清理必须打到运行中 watcher 实际监听的标志上）。
 struct SecretsWritebackState {
-    shutdown: Arc<AtomicBool>,
+    shutdown: Mutex<Arc<AtomicBool>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+impl Default for SecretsWritebackState {
+    fn default() -> Self {
+        Self {
+            shutdown: Mutex::new(Arc::new(AtomicBool::new(false))),
+            handle: Mutex::new(None),
+        }
+    }
+}
+
 impl SecretsWritebackState {
+    /// watcher 是否在跑（spawn 链判断装载 or 复用——respawn 场景保留运行）。
+    #[allow(dead_code)] // 诊断/后续消费预留；装载路径经 handle 锁内联判断
+    fn is_running(&self) -> bool {
+        self.handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
     fn shutdown_and_join(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        self.shutdown
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .store(true, Ordering::SeqCst);
         let mut guard = self
             .handle
             .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -102,6 +124,16 @@ impl SecretsWritebackState {
         }
     }
 }
+
+/// 1460：sidecar 重启决策托管（监督 watcher 消费；纯逻辑见
+/// [`inkos_desktop::supervisor::RespawnPolicy`]）。
+#[derive(Default)]
+struct RespawnState(Mutex<supervisor::RespawnPolicy>);
+
+/// 1460：本代 sidecar 健康起跑时刻（健康 uptime 计算——满
+/// [`supervisor::RESPAWN_HEALTHY_RESET`] 重置重启计数）。
+#[derive(Default)]
+struct SidecarHealthySince(Mutex<Option<std::time::Instant>>);
 
 /// M3b：项目选择 + 启动决策状态（setup 写入，picker 命令读取）。
 ///
@@ -315,6 +347,13 @@ fn main() {
         .manage(LoopbackGuardState::new())
         .manage(ExitingFlag::new())
         .manage(config_state)
+        // 1460：可重入托管——spawn/respawn 链多次进入时替换内容而非重复
+        // manage（Tauri 同类型二次 manage 会 panic，这是 respawn 链此前
+        // 不可重入的结构性障碍）。
+        .manage(SecretsWritebackState::default())
+        .manage(ObserverShutdown::default())
+        .manage(RespawnState::default())
+        .manage(SidecarHealthySince::default())
         .on_window_event(|window, event| {
             // 关窗 → 隐藏保活（除非来自"退出"意图）。
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -357,7 +396,7 @@ fn main() {
                     flag.set();
                 }
                 if let Some(obs_shutdown) = sig_app.try_state::<ObserverShutdown>() {
-                    obs_shutdown.0.store(true, Ordering::SeqCst);
+                    obs_shutdown.current().store(true, Ordering::SeqCst);
                 }
                 if let Some(state) = sig_app.try_state::<SidecarState>() {
                     let child = state.take();
@@ -640,6 +679,9 @@ fn select_engine_backend(app_handle: &tauri::AppHandle) -> inkos_desktop::config
 /// 共用此入口。所有失败仅 log + 窗口 title 回显，不 panic（与 M1/M2 一致的降级纪律）。
 fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
     tauri::async_runtime::spawn(async move {
+        // 1460：监督 watcher 的 respawn 根预克隆（链内 AppPaths/目录操作
+        // 可能 move 走 project_root；死亡重启需原根重跑整链）。
+        let respawn_root = project_root.clone();
         let window = match app_handle.get_webview_window("main") {
             Some(w) => w,
             None => {
@@ -843,17 +885,29 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                 }
 
                 // M2b：spawn sidecar 后启动 secrets writeback watcher。
-                let wb_shutdown = Arc::new(AtomicBool::new(false));
-                let wb_handle = secrets::spawn_writeback(
-                    store.clone(),
-                    Arc::new(secrets_path),
-                    syncing.clone(),
-                    wb_shutdown.clone(),
-                );
-                app_handle.manage(SecretsWritebackState {
-                    shutdown: wb_shutdown,
-                    handle: Mutex::new(Some(wb_handle)),
-                });
+                // 1460 可重入化：仅首次装载（respawn 复用运行中的 watcher——
+                // 它 watch 的是 secrets.json 文件而非引擎进程，换代无需重建；
+                // 且预托管后二次 manage 会 panic）。
+                {
+                    let state = app_handle.state::<SecretsWritebackState>();
+                    let mut guard = state
+                        .handle
+                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if guard.is_none() {
+                        let wb_shutdown = Arc::new(AtomicBool::new(false));
+                        let wb_handle = secrets::spawn_writeback(
+                            store.clone(),
+                            Arc::new(secrets_path),
+                            syncing.clone(),
+                            wb_shutdown.clone(),
+                        );
+                        *state
+                            .shutdown
+                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = wb_shutdown;
+                        *guard = Some(wb_handle);
+                        eprintln!("[main] secrets writeback watcher 已装载");
+                    }
+                }
 
                 let healthy = supervisor::health_probe(
                     port,
@@ -875,6 +929,19 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                         eprintln!("[main] eval navigate 失败: {e}");
                     }
                     wire_observer_and_lifecycle(&app_handle, port);
+                    // 1460：健康起点 + 监督 watcher 接力（死亡自愈链）。
+                    if let Some(state) = app_handle.try_state::<SidecarHealthySince>() {
+                        let mut since = state
+                            .0
+                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        *since = Some(std::time::Instant::now());
+                    }
+                    spawn_supervision_watcher(
+                        app_handle.clone(),
+                        port,
+                        probe_path,
+                        respawn_root,
+                    );
                 } else {
                     let secs = config::HEALTH_PROBE_TIMEOUT.as_secs();
                     let _ = window.eval(format!(
@@ -1271,6 +1338,132 @@ async fn cmd_get_diagnostics(app: tauri::AppHandle) -> inkos_desktop::error::Res
     inkos_desktop::observability::diagnostics::cmd_get_diagnostics(app).await
 }
 
+/// 1460：清场本代 sidecar（respawn 前调用）——收尸 child + 释放 loopback
+/// guard（新代 lock 新端口前必须放掉旧规则；kill_tree 对已死进程幂等）。
+fn teardown_sidecar_generation(app_handle: &tauri::AppHandle) {
+    if let Some(state) = app_handle.try_state::<SidecarState>() {
+        cleanup_sidecar(state.take());
+    }
+    if let Some(guard_state) = app_handle.try_state::<LoopbackGuardState>() {
+        let port = guard_state.current_port();
+        if let Some(guard) = guard_state.take_guard() {
+            if let Err(e) = guard.release(port) {
+                eprintln!(
+                    "[main] respawn teardown: loopback release port={port} 失败: {e:#}"
+                );
+            }
+        }
+    }
+}
+
+/// 1460：监督 watcher——周期单发探测本代 sidecar；连续失败达阈值判定死亡
+/// → [`supervisor::RespawnPolicy`] 决策 → 冷却后清场本代并重跑启动链（新
+/// watcher 随新代接力，本代 return）；达上限则通知用户+停监督（崩溃风暴
+/// 防护——环境性问题反复拉起只会烧 CPU 刷日志）。
+///
+/// 探测选 HTTP 而非进程 wait：连「进程在但挂死」面同覆盖，且不与
+/// `SidecarState` 的 Child 所有权纠缠（watcher 全程零触碰 Child）。
+fn spawn_supervision_watcher(
+    app_handle: tauri::AppHandle,
+    port: u16,
+    probe_path: &'static str,
+    project_root: PathBuf,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut failures: u32 = 0;
+        loop {
+            tokio::time::sleep(supervisor::RESUPERVISE_INTERVAL).await;
+            if supervisor::probe_once(port, probe_path).await {
+                failures = 0;
+                // 健康存活上报：满 RESPAWN_HEALTHY_RESET 重置重启计数
+                //（偶发崩溃 ≠ 持续故障）。
+                if let Some(since) = app_handle.try_state::<SidecarHealthySince>() {
+                    let elapsed = {
+                        let guard = since
+                            .0
+                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        guard.map(|t0| t0.elapsed())
+                    };
+                    if let Some(uptime) = elapsed {
+                        if let Some(policy) = app_handle.try_state::<RespawnState>() {
+                            policy
+                                .0
+                                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .note_healthy_uptime(uptime);
+                        }
+                    }
+                }
+                continue;
+            }
+            failures += 1;
+            if failures < supervisor::RESUPERVISE_FAILURE_THRESHOLD {
+                tracing::debug!(port, failures, "监督探测失败（未达阈值，容忍瞬态）");
+                continue;
+            }
+
+            // 死亡判定。
+            eprintln!(
+                "[main] sidecar 死亡判定：port={port} 连续 {failures} 次探测失败"
+            );
+            let decision = app_handle.try_state::<RespawnState>().and_then(|s| {
+                let mut policy =
+                    s.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let next = policy.record_death();
+                let attempts = policy.attempts();
+                next.map(|cooldown| (cooldown, attempts))
+            });
+            let Some((cooldown, attempts)) = decision else {
+                // 上限：通知 + title 回显，停监督（用户重启 app 是唯一恢复路径）。
+                let msg = inkos_desktop::locale::pick(
+                    "inkos 引擎多次退出，已停止自动重启。请检查日志或重启应用。",
+                    "The inkos engine exited repeatedly; auto-restart stopped. Check logs or restart the app.",
+                );
+                eprintln!("[main] {msg}");
+                notify_sidecar_event(&app_handle, msg);
+                set_window_title_suffix(&app_handle, msg);
+                return;
+            };
+
+            // 允许重启：通知（第 n/上限 次）→ 冷却 → 清场 → 重跑整链。
+            let msg = inkos_desktop::locale::pick_owned(
+                format!("inkos 引擎意外退出，正在自动重启（第 {attempts} 次）"),
+                format!("The inkos engine exited unexpectedly; restarting automatically (attempt {attempts})"),
+            );
+            eprintln!("[main] {msg}");
+            notify_sidecar_event(&app_handle, &msg);
+            tokio::time::sleep(cooldown).await;
+            teardown_sidecar_generation(&app_handle);
+            spawn_sidecar_task(app_handle.clone(), project_root);
+            // 本代 watcher 使命结束：新代健康后起自己的 watcher 接力。
+            return;
+        }
+    });
+}
+
+/// 1460：sidecar 生命周期事件系统通知（用户可感知面——引擎重启期间 UI
+/// 无反馈，通知是唯一可见信号）。
+fn notify_sidecar_event(app_handle: &tauri::AppHandle, msg: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app_handle
+        .notification()
+        .builder()
+        .title("inkosDesktop")
+        .body(msg)
+        .show()
+    {
+        eprintln!("[main] sidecar 事件通知失败: {e}");
+    }
+}
+
+/// 1460：窗口 title 回显（webview 内 SPA 无法感知引擎死亡——title 是壳层
+/// 独立可见面）。eval 在 webview 未加载完成/已关闭时静默失败可接受。
+fn set_window_title_suffix(app_handle: &tauri::AppHandle, msg: &str) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let literal = to_js_string_literal(msg);
+        let _ = window.eval(format!("document.title={literal}"));
+    }
+}
+
 /// M2a Task 6 接线：health_probe 通过后构建 observer（SSE 路由）。
 /// 托盘自 148 起提前到 setup 构建（关窗唤回通道需全程存在），不在此处。
 fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
@@ -1310,8 +1503,11 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     let shutdown = Arc::new(AtomicBool::new(false));
     let events_url = format!("http://127.0.0.1:{}/api/v1/events", port);
 
-    let observer_shutdown = ObserverShutdown(Arc::clone(&shutdown));
-    app_handle.manage(observer_shutdown);
+    // 1460：换代式托管（setup 预托管空壳，此处装本代标志并停旧代）——
+    // respawn 重启引擎后旧 watcher 指向死端口，rotate 停旧、新 wire 起新。
+    if let Some(state) = app_handle.try_state::<ObserverShutdown>() {
+        state.rotate(Arc::clone(&shutdown));
+    }
 
     let watcher_router = Arc::clone(&router);
     let watcher_shutdown = Arc::clone(&shutdown);
@@ -1341,9 +1537,25 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
     });
 }
 
-/// observer 任务的 shutdown 标志（同 M2a，未改）。
-#[derive(Default, Clone)]
-struct ObserverShutdown(Arc<AtomicBool>);
+/// observer 任务的 shutdown 标志（M2a；1460 可轮换化——respawn 重启引擎后
+/// 旧 SSE watcher 指向死端口空转，需换代：`rotate` 装新标志并停旧代）。
+#[derive(Default)]
+struct ObserverShutdown(Mutex<Arc<AtomicBool>>);
+
+impl ObserverShutdown {
+    /// 当前代 shutdown 标志（signal/Exit 清理消费）。
+    fn current(&self) -> Arc<AtomicBool> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    }
+    /// 换代：装新代标志，旧代置停（旧 watcher 500ms 重试循环内退出）。
+    fn rotate(&self, next: Arc<AtomicBool>) {
+        let prev = {
+            let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::replace(&mut *guard, next)
+        };
+        prev.store(true, Ordering::SeqCst);
+    }
+}
 
 /// 编译期断言：managed state 必须 Send + Sync。
 const _: fn() = || {
