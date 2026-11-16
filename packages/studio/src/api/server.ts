@@ -2630,6 +2630,25 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   // reach readers, mutations or preflight handling.
   app.use("/*", cors({ origin: origin => origin || undefined }));
 
+  // 445 号 TS 对称：API 响应统一 no-store——读取/遥测面（run-log 等）响应缺
+  // 缓存头时，浏览器启发式缓存会把跨会话的陈旧响应当新鲜用（Rust 腿实测
+  // RunLogPanel 间歇消失机制）。Rust 腿 api_no_store 中间件（engine-rs
+  // server/mod.rs）行为级对称：覆盖语义（端点自设同值被覆盖无害，如
+  // project/files 单点），assets 面不盖（内容寻址可长缓存）。
+  // 实现形态注记（1455 活体定案）：after-next 直接 `c.res.headers.set`
+  // 在 @hono/node-server 下对「无 Origin 请求 + 裸 new Response 端点」组合
+  // 静默失效（cors 中间件 before-next 的 c.res getter 副作用竞态）——单测
+  // app.request 绿而真 HTTP 丢。重建 Response（换对象身份）是全组合可靠形，
+  // 四案例矩阵（origin 有无 × c.json/裸 Response）实证。
+  app.use("/api/v1/*", async (c, next) => {
+    await next();
+    const res = c.res;
+    if (res.headers.get("Cache-Control") === "no-store") return;
+    const headers = new Headers(res.headers);
+    headers.set("Cache-Control", "no-store");
+    c.res = new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+  });
+
   // Structured error handler — ApiError returns typed JSON, others return 500
   app.onError((error, c) => {
     if (error instanceof ApiError) {
@@ -8817,6 +8836,9 @@ export async function startStudioServer(
       const indexHtml = await readFileFs(indexPath, "utf-8");
       app.get("*", (c) => {
         if (c.req.path.startsWith("/api/v1/")) return c.notFound();
+        // 469 号 TS 对称：SPA 入口禁缓存——陈旧入口会让整站跑旧 bundle
+        //（assets 内容寻址可长缓存，不受影响；Rust 腿 spa_fallback 同款）。
+        c.header("Cache-Control", "no-store");
         return c.html(indexHtml);
       });
     }
