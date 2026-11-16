@@ -62,6 +62,8 @@ let failures = 0;
 // TS 恢复 fork 契约后自动回到严格计数，无需改码。
 let softFailMode = false;
 let softFailCount = 0;
+// 1438 号：腿根台账——此前零清根，两腿每跑泄漏一根（实测 75 个残留）。
+const legRoots = [];
 
 const check = (name, ok, detail = "") => {
   console.log(`${ok ? "✓" : "✗"} ${name}${detail ? `（${detail}）` : ""}`);
@@ -113,6 +115,7 @@ async function runEngineLeg(engine) {
   const base = `http://127.0.0.1:${legPort}`;
   const api = apiFor(base);
   const root = mkdtempSync(join(tmpdir(), `inkos-smoke-${engine}-`));
+  legRoots.push(root);
 
   // 环境预置：最小项目配置（与 walkthrough-fixture 同构）。
   mkdirSync(join(root, ".inkos"), { recursive: true });
@@ -416,6 +419,26 @@ for (const child of sharedChildren.splice(0)) {
   } catch {
     // already exited
   }
+}
+
+// 1438 号清根（1435 sweep 绿档清盘同族）：纯绿即删、红档保留现场取证；
+// --keep 保留现场供人工排查（头注释既有承诺）；删失败非致命（force 只吞
+// ENOENT），保留并如实入讯息。700 软失败是记账非判定（2.0 基线下每跑必现），
+// 不入保留条件——否则泄漏换个借口永续；软失败腿现场走 --keep。
+if (keep) {
+  if (legRoots.length > 0) console.log(`[smoke] --keep：根保留 ${legRoots.join(" , ")}`);
+} else if (failures > 0) {
+  if (legRoots.length > 0) console.error(`[smoke] 红档保留现场：${legRoots.join(" , ")}`);
+} else {
+  const kept = [];
+  for (const root of legRoots) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      kept.push(root);
+    }
+  }
+  if (kept.length > 0) console.error(`[smoke] 清理失败，保留现场：${kept.join(" , ")}`);
 }
 
 if (failures > 0) {

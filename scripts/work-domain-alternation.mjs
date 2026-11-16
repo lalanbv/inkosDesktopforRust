@@ -256,7 +256,14 @@ await seedWorkEntity(root);
 seedRunnerArtifacts(root);
 if (process.exitCode === 1) {
   stopAll();
-  if (!keep) rmSync(root, { recursive: true, force: true });
+  if (!keep) {
+    // 1438 号硬化：红档路径删失败不致命（exit 码不因清理翻面），保留现场。
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      console.error(`[alt] 清理失败，保留现场：${root}`);
+    }
+  }
   process.exit(process.exitCode);
 }
 
@@ -615,8 +622,15 @@ try {
 } finally {
   await stopEngines();
   if (!keep) {
-    rmSync(root, { recursive: true, force: true });
-    console.log("[alt] 临时根已清理（--keep 可保留现场）");
+    // 1438 号硬化：删失败不致命（force 只吞 ENOENT），保留现场并如实入讯息
+    // （cargo-ignored-sweep 1436 同族——finally 内 throw 会崩在 failed 汇总前成伪红）。
+    let cleaned = true;
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      cleaned = false;
+    }
+    console.log(cleaned ? "[alt] 临时根已清理（--keep 可保留现场）" : `[alt] 临时根清理失败，保留现场：${root}`);
   } else {
     console.log(`[alt] 现场保留：${root}`);
   }

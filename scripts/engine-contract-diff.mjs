@@ -2187,7 +2187,17 @@ try {
     try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
   }
   if (!keep) {
-    for (const root of Object.values(roots)) rmSync(root, { recursive: true, force: true });
+    // 1438 号硬化：force 只吞 ENOENT，删失败退化为保留现场并如实入讯息
+    // （cargo-ignored-sweep 1436 同族——finally 内裸调用 throw 会把绿判崩成伪红）。
+    const kept = [];
+    for (const root of Object.values(roots)) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        kept.push(root);
+      }
+    }
+    if (kept.length > 0) console.error(`[diff] 清理失败，保留现场：${kept.join(" , ")}`);
   } else {
     console.log(`[diff] --keep：根保留 ${Object.values(roots).join(" , ")}`);
   }

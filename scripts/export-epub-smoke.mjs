@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // EPUB 导出链结构冒烟（494 号，214 号方法学的活体固化）：
-//   node scripts/export-epub-smoke.mjs [--engine node|rust|both] [--port 8893] [--mock-port 1234]
+//   node scripts/export-epub-smoke.mjs [--engine node|rust|both] [--port 8893] [--mock-port 1234] [--keep]
 //
 // 每个引擎腿：临时根 + fixture + POST /books/:id/export-save（epub）→
 // 结构校验（mimetype 首位且 stored / container / OPF 解析 / spine≥2 /
@@ -45,6 +45,8 @@ const killAllTrackedChildren = () => {
 };
 process.on("exit", killAllTrackedChildren);
 let failures = 0;
+// 1438 号：腿根台账——此前零清根，两腿每跑泄漏一根（实测 77 个残留）。
+const legRoots = [];
 
 const startChild = (cmd, cmdArgs, opts, logPath, shared = false) => {
   const out = openSync(logPath, "a");
@@ -119,6 +121,7 @@ async function runLeg(engine) {
   const legPort = Number(port) + legs.indexOf(engine) * 10;
   const base = `http://127.0.0.1:${legPort}`;
   const root = mkdtempSync(join(tmpdir(), `inkos-epub-smoke-${engine}-`));
+  legRoots.push(root);
   mkdirSync(join(root, ".inkos"), { recursive: true });
   writeFileSync(
     join(root, "inkos.json"),
@@ -238,6 +241,24 @@ try {
   }
   for (const child of sharedChildren.splice(0)) {
     try { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }; } catch { /* exited */ }
+  }
+  // 1438 号清根（1435 sweep 绿档清盘同族）：绿档即删、红档保留现场取证；
+  // --keep 保留现场供人工排查（node-fallback-smoke 同语义，旗标本就承诺）；
+  // 删失败非致命（force 只吞 ENOENT），保留并如实入讯息。
+  if (keep) {
+    if (legRoots.length > 0) console.log(`[epub-smoke] --keep：根保留 ${legRoots.join(" , ")}`);
+  } else if (failures > 0) {
+    if (legRoots.length > 0) console.error(`[epub-smoke] 红档保留现场：${legRoots.join(" , ")}`);
+  } else {
+    const kept = [];
+    for (const root of legRoots) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        kept.push(root);
+      }
+    }
+    if (kept.length > 0) console.error(`[epub-smoke] 清理失败，保留现场：${kept.join(" , ")}`);
   }
 }
 

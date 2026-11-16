@@ -55,8 +55,20 @@ const zipMeta = `<container version="1.0" xmlns="urn:oasis:names:tc:opendocument
 const zipOpf = `<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>`;
 
 describe("epub entity declaration rejection (926)", () => {
+  // 1438 号：此前两枚样例 epub 直写 tmpdir 根且零清理（实测各 152 个残留）——
+  // 收编进 per-test 根，随 afterEach 清盘（次 describe 同款惯用形）。
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-epub-reject-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("extracts EPUBs carrying DOCTYPE but rejects <!ENTITY> declarations (fail-loud)", async () => {
-    const path = join(tmpdir(), `inkos-epub-entity-${Date.now()}.epub`);
+    const path = join(root, "entity.epub");
     const zip = new JSZip();
     zip.file("mimetype", "application/epub+zip");
     zip.file(
@@ -74,7 +86,7 @@ describe("epub entity declaration rejection (926)", () => {
     expect(ok.chapters.length).toBe(1);
 
     // XXE 注入源拔除：`<!ENTITY` 声明显式拒绝（fail-loud）。
-    const xxePath = join(tmpdir(), `inkos-epub-xxe-${Date.now()}.epub`);
+    const xxePath = join(root, "xxe.epub");
     const xxeZip = new JSZip();
     xxeZip.file("mimetype", "application/epub+zip");
     xxeZip.file("META-INF/container.xml", zipMeta);
