@@ -20,10 +20,13 @@
 ## 待办二：正式打包三脚本重烤
 
 **背景**：桌面应用 UI 与引擎二进制都是**打包时快照**（烤入面），
-不是实时源码。当前快照已陈旧两层：
+不是实时源码。当前快照已陈旧三层：
 - **1486 依赖刷新**（engine-rs 6 包+src-tauri 44 包 patch 级）——
   烤入的引擎二进制还是旧依赖树产物；
-- **1487 fmt 全仓清偿**（6223 处，语义保持但二进制需要重建）。
+- **1487 fmt 全仓清偿**（6223 处，语义保持但二进制需要重建）；
+- **1496 npm 面刷新**（hono 4.13.19 生产依赖+5 条 dev）——TS 侧
+  server 框架与构建链产物需随重烤更新（desktop-build-inkos.sh
+  全量构建自动覆盖）。
 
 **脚本清单与顺序**（仓库根执行）：
 
@@ -54,5 +57,8 @@ static 面会带着数月前的旧引擎二进制打包（当时 watchdog 特性
 - audit:npm **5 条白名单**全定性（dev 工具链已接受风险，含 1489 号
   picomatch GHSA-fc5q-39xc-vjpf id 钉定——上游发布 4.0.8+ 补丁线后
   随 vite bump 出清）；
+- npm outdated：6 条 patch/minor 已刷（1496，hono 4.13.19 含内）；
+  跨 major ~20 条 978 钉定制维持；@mariozechner/pi 族 2 条 Deprecated
+  备案（earendil 出口联动）；
 - testgate 2120+599 / gate:ts 十腿 / clippy / fmt:gate / bench 全绿
-  （1487-1491 终证链）。
+  （1487-1491 终证链；1496 npm 刷新后 gate:ts 复绿）。
