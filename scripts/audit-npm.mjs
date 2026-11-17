@@ -97,6 +97,14 @@ const ACCEPTED = new Map([
   // glob 模式入参，单机引擎无该输入面。ejs/ts-morph 升级到改用 minimatch 11
   // 的版本时移除本条即恢复拦截。
   ["minimatch", { ids: ["GHSA-g3hv-75wg-m249"], reason: "moderate；补丁线 11.0.1 跨 major（filelist 锁 ^5、@ts-morph/common 锁 ^10，override 强提破坏传递契约）；运行时零执行（jake/filelist 为 ejs 构建工具链，引擎仅 ejs render；ts-morph 纯 dev）且无攻击者可控 glob 入参面", since: "784" }],
+  // 1489 号：picomatch GHSA-fc5q-39xc-vjpf（CVE-2026-112366，high，单分支重复
+  // extglob 致 ReDoS）——漏洞区间 <=4.0.7 全线且 patched: None（无补丁线，
+  // 4.0.7 即最新终态，758 deepmerge 同型）。引入链 vite→fdir/tinyglobby→
+  // picomatch 与 shadcn→dotenvx→fdir 等全为 devDependencies 构建工具链；
+  // 暴露面定性=ReDoS 须攻击者可控 glob 模式入参，构建工具的 glob 输入为本仓
+  // 自家源码文件名/配置，无不可信输入面；运行时（桌面应用/引擎）零执行。
+  // 上游发布补丁线（4.0.8+）随 vite/fdir/tinyglobby bump 出清时移除本条。
+  ["picomatch", { ids: ["GHSA-fc5q-39xc-vjpf"], reason: "high；无补丁线（patched None，4.0.7 即终态）；dev 构建链（vite/fdir/tinyglobby/shadcn）且 glob 输入为自家源码面，运行时零执行", since: "1489" }],
 ]);
 
 const args = process.argv.slice(2);
