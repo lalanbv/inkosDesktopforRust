@@ -196,6 +196,7 @@ pnpm gate:ts           # TS 十步门禁：build / typecheck / 全量测试 / np
                        # 路由注册完整性哨
 pnpm cargo:testgate    # engine-rs + src-tauri 双 crate 全量测试
 pnpm clippy:gate       # 双 crate clippy（-D warnings，--all-targets）
+pnpm fmt:gate          # 双 crate rustfmt 格式门禁（必红夹具自检活体）
 pnpm audit:rust        # cargo-audit（必红夹具自检活体）
 pnpm audit:npm         # npm 审计（白名单语义）
 pnpm bench:gate        # 性能基准门禁（对照基线阈值，巡检周期跑）
